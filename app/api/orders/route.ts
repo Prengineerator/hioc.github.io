@@ -34,7 +34,8 @@ function shapeMenuItem(row: MenuItemRow): MenuItem {
     .map((g) => ({
       ...g,
       options: [...(g.options ?? [])].sort((a, b) => a.sort_order - b.sort_order),
-    }));
+    }))
+    .sort((a, b) => a.sort_order - b.sort_order);
   return { ...rest, variants, addon_groups } as MenuItem;
 }
 

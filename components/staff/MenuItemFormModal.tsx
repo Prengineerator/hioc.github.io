@@ -94,7 +94,10 @@ export function MenuItemFormModal({
         return;
       }
       const price = Number(row.price);
-      if (!Number.isInteger(price) || price < 0) {
+      // Number('') and Number('   ') both evaluate to 0, not NaN — checked
+      // separately so a blank price field is rejected instead of silently
+      // becoming a free (₹0) variant.
+      if (row.price.trim() === '' || !Number.isInteger(price) || price < 0) {
         setError(`Price for "${row.label}" must be a non-negative whole number.`);
         return;
       }
