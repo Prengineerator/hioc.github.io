@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Brand palette as CSS custom properties, mirroring tailwind.config.ts
+ * theme.extend.colors so non-Tailwind contexts (inline SVG, third-party
+ * iframe wrapper styling, etc.) can reference the same values.
+ * Exact hex values reused from the legacy site's css/style.css.
+ */
+:root {
+  --color-charcoal: #232325;
+  --color-tan: #ad825e;
+  --color-tan-dark: #96714f;
+  --color-cream: #ffffff;
+  --color-muted: #828282;
+}
+
+/*
+ * The brand is light-background only for the MVP. Set color-scheme
+ * explicitly so browser chrome (form controls, scrollbars) renders light
+ * regardless of the visitor's OS theme, rather than relying on
+ * prefers-color-scheme to toggle colors unpredictably.
+ */
+html {
+  color-scheme: light;
+}
+
+body {
+  background-color: var(--color-cream);
+  color: var(--color-charcoal);
+  font-size: 16px;
+}
