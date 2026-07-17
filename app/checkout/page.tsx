@@ -3,8 +3,10 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { CartProvider, useCart } from '@/lib/cart/CartContext';
+import { useStoreSettings } from '@/lib/cart/useStoreSettings';
 import { CartSummary } from '@/components/cart/CartSummary';
 import { CheckoutForm } from '@/components/checkout/CheckoutForm';
+import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
 
 export default function CheckoutPage() {
   return (
@@ -17,6 +19,7 @@ export default function CheckoutPage() {
 function CheckoutPageContent() {
   const router = useRouter();
   const { items, hydrated } = useCart();
+  const { settings, openState } = useStoreSettings();
 
   // Deliberately only depends on `hydrated`, not `items.length`: this guard
   // exists to bounce someone who *lands* on /checkout with nothing in their
@@ -42,9 +45,10 @@ function CheckoutPageContent() {
       <h1 className="mb-8 text-2xl font-bold text-charcoal md:text-3xl">
         Checkout
       </h1>
+      <StoreStatusBanner openState={openState} />
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        <CartSummary />
-        <CheckoutForm />
+        <CartSummary settings={settings} />
+        <CheckoutForm settings={settings} openState={openState} />
       </div>
     </div>
   );

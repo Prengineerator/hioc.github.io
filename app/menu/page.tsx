@@ -3,13 +3,16 @@
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CartProvider } from '@/lib/cart/CartContext';
+import { useStoreSettings } from '@/lib/cart/useStoreSettings';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { MenuItemCard } from '@/components/menu/MenuItemCard';
+import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
 import { FloatingCartBar } from '@/components/cart/FloatingCartBar';
 import { CartDrawer } from '@/components/cart/CartDrawer';
 import { Spinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { MENU_CATEGORIES } from '@/lib/constants';
+import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import type { MenuItem } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
@@ -40,6 +43,7 @@ function MenuPageContent() {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const { settings, openState } = useStoreSettings();
 
   useEffect(() => {
     // Default to `coffee` in the URL when no/invalid category is present,
@@ -52,14 +56,15 @@ function MenuPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryParam]);
 
-  useEffect(() => {
+  const fetchItems = useCallback(() => {
     let cancelled = false;
-    setLoading(true);
-    fetch(`/api/menu?category=${encodeURIComponent(category)}`)
+    // includeUnavailable=true (C3): 86'd items still render, greyed out and
+    // disabled, rather than silently disappearing from the menu.
+    fetch(`/api/menu?category=${encodeURIComponent(category)}&includeUnavailable=true`)
       .then((res) => res.json())
       .then((data: { items?: MenuItem[] }) => {
         if (cancelled) return;
-        setItems((data.items ?? []).filter((i) => i.is_available));
+        setItems(data.items ?? []);
       })
       .catch(() => {
         if (!cancelled) setItems([]);
@@ -72,6 +77,15 @@ function MenuPageContent() {
     };
   }, [category]);
 
+  useEffect(() => {
+    setLoading(true);
+    return fetchItems();
+  }, [fetchItems]);
+
+  // Live availability (C3, XC-011): a staff 86/un-86 anywhere refetches the
+  // current category so the grey-out state updates in under ~5s.
+  useMenuAvailabilityRealtime(fetchItems);
+
   const handleCategoryChange = useCallback(
     (next: string) => {
       const params = new URLSearchParams(searchParams.toString());
@@ -80,6 +94,11 @@ function MenuPageContent() {
     },
     [router, searchParams],
   );
+
+  const checkoutDisabledReason =
+    openState && !openState.acceptingOrders
+      ? 'Checkout is unavailable right now — see notice above.'
+      : null;
 
   return (
     <>
@@ -96,6 +115,8 @@ function MenuPageContent() {
             Pay at the counter when you pick up — no online payment needed.
           </p>
         </div>
+
+        <StoreStatusBanner openState={openState} />
 
         <MenuCategoryTabs active={category} onChange={handleCategoryChange} />
 
@@ -118,7 +139,12 @@ function MenuPageContent() {
       </div>
 
       <FloatingCartBar onOpen={() => setDrawerOpen(true)} />
-      <CartDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <CartDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        settings={settings}
+        checkoutDisabledReason={checkoutDisabledReason}
+      />
     </>
   );
 }

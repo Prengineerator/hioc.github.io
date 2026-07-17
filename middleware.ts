@@ -25,8 +25,11 @@ export async function middleware(request: NextRequest) {
 
   const isLoginRoute = pathname.startsWith('/staff/login');
   const isStaffRoute = pathname.startsWith('/staff');
+  const isOwnerRoute = pathname.startsWith('/owner');
 
-  if (!isStaffRoute || isLoginRoute) {
+  // Only /staff/** and /owner/** are gated; /staff/login is the sole
+  // unauthenticated entry point.
+  if ((!isStaffRoute && !isOwnerRoute) || isLoginRoute) {
     return response;
   }
 
@@ -48,10 +51,10 @@ export async function middleware(request: NextRequest) {
     },
   );
 
-  // Redirects to /staff/login. Copies any cookies already queued on
-  // `response` (e.g. a session token getUser() transparently refreshed)
-  // onto the redirect response — building a bare `NextResponse.redirect()`
-  // instead would silently drop those.
+  // Redirects to /staff/login (the shared auth entry point for both back-office
+  // surfaces). Copies any cookies already queued on `response` (e.g. a session
+  // token getUser() transparently refreshed) onto the redirect response —
+  // building a bare `NextResponse.redirect()` would silently drop those.
   function redirectToLogin(errorCode?: string) {
     const loginUrl = new URL('/staff/login', request.url);
     loginUrl.searchParams.set('next', pathname);
@@ -79,7 +82,7 @@ export async function middleware(request: NextRequest) {
 
   // Customers authenticate through the same Supabase Auth user pool as
   // staff (see supabase/schema.sql's `profiles` table), so a valid session
-  // alone isn't enough to grant access here — it must belong to a staff
+  // alone isn't enough to grant access here — it must belong to a privileged
   // profile, or any logged-in customer could reach the back office.
   const { data: profile, error: profileError } = await supabase
     .from('profiles')
@@ -95,10 +98,15 @@ export async function middleware(request: NextRequest) {
     console.error('middleware: profiles role lookup failed', profileError);
   }
 
-  if (profile?.role !== 'staff') {
-    // 'not_staff' tells /staff/login the session IS valid but lacks staff
-    // access, so it can show a real explanation instead of silently
-    // bouncing back to a blank form after a technically-successful login.
+  const role = profile?.role;
+  // /owner/** is owner-only. /staff/** allows staff AND owner (owner has full
+  // read/write access to staff ops, OWN-002).
+  const allowed = isOwnerRoute ? role === 'owner' : role === 'staff' || role === 'owner';
+
+  if (!allowed) {
+    // 'not_staff' tells /staff/login the session IS valid but lacks the needed
+    // access, so it can show a real explanation instead of silently bouncing
+    // back to a blank form after a technically-successful login.
     return redirectToLogin('not_staff');
   }
 
@@ -106,5 +114,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/staff', '/staff/:path*'],
+  matcher: ['/staff', '/staff/:path*', '/owner', '/owner/:path*'],
 };

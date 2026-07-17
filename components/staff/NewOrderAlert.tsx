@@ -7,33 +7,43 @@ const CHIME_INTERVAL_MS = 5000;
 
 type AudioContextCtor = typeof AudioContext;
 
-/** Plays a short, two-tone "ding" using the Web Audio API. Synth only — no audio asset. */
+/**
+ * Plays a loud, urgent alarm designed to be heard over cafe noise. Uses
+ * square-wave pulses (rich in harmonics, so they cut through ambient sound far
+ * better than a soft sine tone) at high gain, in an alternating four-pulse
+ * "nee-naw" pattern (~0.9s). Synth only — no audio asset.
+ */
 function playChime(ctx: AudioContext) {
   const now = ctx.currentTime;
-  const tones = [
-    { freq: 880, start: 0, duration: 0.15 },
-    { freq: 1320, start: 0.15, duration: 0.15 },
+  const pulses = [
+    { freq: 988, start: 0.0, duration: 0.2 },
+    { freq: 1319, start: 0.22, duration: 0.2 },
+    { freq: 988, start: 0.44, duration: 0.2 },
+    { freq: 1319, start: 0.66, duration: 0.26 },
   ];
 
-  tones.forEach(({ freq, start, duration }) => {
+  for (const { freq, start, duration } of pulses) {
     const oscillator = ctx.createOscillator();
     const gain = ctx.createGain();
-    oscillator.type = 'sine';
+    // Square wave + high sustain = maximum audibility. A dedicated peak limiter
+    // isn't needed since the pulses don't overlap in time.
+    oscillator.type = 'square';
     oscillator.frequency.value = freq;
 
     const startTime = now + start;
     const endTime = startTime + duration;
 
-    // Quick fade in/out so the tone is soft rather than a hard click.
+    // Fast attack to a loud sustain, quick release — loud but click-free.
     gain.gain.setValueAtTime(0, startTime);
-    gain.gain.linearRampToValueAtTime(0.2, startTime + 0.02);
+    gain.gain.linearRampToValueAtTime(0.55, startTime + 0.015);
+    gain.gain.setValueAtTime(0.55, endTime - 0.03);
     gain.gain.linearRampToValueAtTime(0, endTime);
 
     oscillator.connect(gain);
     gain.connect(ctx.destination);
     oscillator.start(startTime);
     oscillator.stop(endTime + 0.02);
-  });
+  }
 }
 
 /**
@@ -43,8 +53,13 @@ function playChime(ctx: AudioContext) {
  */
 export function NewOrderAlert({ count }: { count: number }) {
   const audioCtxRef = useRef<AudioContext | null>(null);
+  // Previous count, so we chime on a NEW arrival (count goes up) but stay quiet
+  // when the count drops because staff accepted/cleared one of several orders.
+  const prevCountRef = useRef(0);
 
   useEffect(() => {
+    const prevCount = prevCountRef.current;
+    prevCountRef.current = count;
     if (count <= 0) return undefined;
 
     const getContext = (): AudioContext | null => {
@@ -88,7 +103,9 @@ export function NewOrderAlert({ count }: { count: number }) {
       }
     };
 
-    chime();
+    // Only sound immediately when a new order actually arrived; accepting one
+    // of several pending orders (a count decrease) must not trigger a buzz.
+    if (count > prevCount) chime();
     const interval = setInterval(chime, CHIME_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [count]);
@@ -114,8 +131,7 @@ export function NewOrderAlert({ count }: { count: number }) {
     >
       <span aria-hidden="true">🔔</span>
       <span>
-        {count} new order{count === 1 ? '' : 's'} waiting — tap &ldquo;Start
-        Preparing&rdquo; to clear
+        {count} new order{count === 1 ? '' : 's'} waiting — Accept or Reject to clear
       </span>
     </div>
   );

@@ -3,6 +3,8 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import type { StoreOpenState } from '@/lib/store/hours';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -12,6 +14,23 @@ const TABS = [
 export function StaffHeader() {
   const pathname = usePathname();
   const router = useRouter();
+  const [openState, setOpenState] = useState<StoreOpenState | null>(null);
+
+  // S7: live "is the store taking orders" badge, doubling as a quick link to
+  // the Store controls section on the Menu page. Best-effort — a failed
+  // fetch just leaves the badge hidden.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/store-settings', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled) setOpenState(data.openState ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
@@ -55,13 +74,28 @@ export function StaffHeader() {
             </ul>
           </nav>
         </div>
-        <button
-          type="button"
-          onClick={handleLogout}
-          className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-3">
+          {openState ? (
+            <Link
+              href="/staff/menu#store"
+              className={
+                'rounded-md px-3 py-2 text-xs font-bold transition-colors ' +
+                (openState.acceptingOrders
+                  ? 'bg-[#e8f3ea] text-[#2f6b38] hover:opacity-80'
+                  : 'bg-[#f6efe9] text-tan-dark hover:opacity-80')
+              }
+            >
+              {openState.acceptingOrders ? 'Store: Accepting' : 'Store: Paused'}
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+          >
+            Logout
+          </button>
+        </div>
       </div>
     </header>
   );

@@ -3,7 +3,10 @@
 import { useState } from 'react';
 import { useCart } from '@/lib/cart/CartContext';
 import { computeCartKey } from '@/lib/cart/cartKey';
+import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { formatIstTime } from '@/lib/store/hours';
 import { MenuItemCustomizeModal } from '@/components/menu/MenuItemCustomizeModal';
+import { MenuItemImage } from '@/components/menu/MenuItemImage';
 import type { MenuItem } from '@/lib/types';
 
 function priceLabel(item: MenuItem): string {
@@ -13,17 +16,34 @@ function priceLabel(item: MenuItem): string {
   return min === max ? `₹${min}` : `₹${min}–₹${max}`;
 }
 
+// "Currently unavailable" for a manual 86, or "Back at 6:30 PM" for a timed
+// snooze (unavailable_until) — matches the staff-side snooze semantics in
+// lib/menu/availability.ts.
+function unavailableLabel(item: MenuItem): string {
+  if (item.unavailable_until) {
+    return `Back at ${formatIstTime(new Date(item.unavailable_until))}`;
+  }
+  return 'Currently unavailable';
+}
+
 export function MenuItemCard({ item }: { item: MenuItem }) {
   const { getQty, addItem, increment, decrement } = useCart();
   const [customizing, setCustomizing] = useState(false);
 
+  const available = isMenuItemAvailable(item);
   const isSimple = item.variants.length === 1 && item.addon_groups.length === 0;
   const onlyVariant = item.variants[0];
-  const simpleKey = onlyVariant ? computeCartKey(item.id, onlyVariant.id, []) : '';
+  const simpleKey = onlyVariant ? computeCartKey(item.id, onlyVariant.id, [], '') : '';
   const qty = isSimple ? getQty(simpleKey) : 0;
 
   return (
-    <div className="flex flex-col rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+    <div
+      className={
+        'flex flex-col rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition-opacity ' +
+        (available ? '' : 'opacity-60')
+      }
+    >
+      <MenuItemImage item={item} />
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2">
           <span
@@ -44,8 +64,21 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
       {item.description ? (
         <p className="mt-1 line-clamp-2 text-sm text-muted">{item.description}</p>
       ) : null}
+
+      {!available ? (
+        <p className="mt-2 text-sm font-bold text-muted">{unavailableLabel(item)}</p>
+      ) : null}
+
       <div className="mt-4">
-        {isSimple && onlyVariant ? (
+        {!available ? (
+          <button
+            type="button"
+            disabled
+            className="w-full cursor-not-allowed rounded-md bg-[#e5e5e5] px-4 py-2 text-sm font-bold text-muted"
+          >
+            Unavailable
+          </button>
+        ) : isSimple && onlyVariant ? (
           qty === 0 ? (
             <button
               type="button"
@@ -57,6 +90,7 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
                   variantLabel: onlyVariant.label,
                   unitPriceInr: onlyVariant.price_inr,
                   addons: [],
+                  specialInstructions: '',
                 })
               }
               className="w-full rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
@@ -95,7 +129,7 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
         )}
       </div>
 
-      {customizing ? (
+      {customizing && available ? (
         <MenuItemCustomizeModal item={item} onClose={() => setCustomizing(false)} />
       ) : null}
     </div>

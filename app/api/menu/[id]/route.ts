@@ -63,7 +63,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const updates: Partial<
     Pick<
       MenuItem,
-      'name' | 'description' | 'category' | 'parent_category' | 'is_veg' | 'is_available' | 'sort_order'
+      | 'name'
+      | 'description'
+      | 'category'
+      | 'parent_category'
+      | 'is_veg'
+      | 'is_available'
+      | 'sort_order'
+      | 'image_url'
+      | 'unavailable_until'
     >
   > = {};
 
@@ -117,6 +125,24 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       return errorResponse(400, 'sort_order must be an integer');
     }
     updates.sort_order = body.sort_order;
+  }
+
+  if ('image_url' in body) {
+    if (typeof body.image_url !== 'string') {
+      return errorResponse(400, 'image_url must be a string');
+    }
+    updates.image_url = body.image_url;
+  }
+
+  // unavailable_until (S6 86/snooze): ISO date string or null (re-enable).
+  if ('unavailable_until' in body) {
+    if (
+      body.unavailable_until !== null &&
+      (typeof body.unavailable_until !== 'string' || Number.isNaN(Date.parse(body.unavailable_until)))
+    ) {
+      return errorResponse(400, 'unavailable_until must be an ISO date string or null');
+    }
+    updates.unavailable_until = body.unavailable_until as string | null;
   }
 
   let variants: { label: string; price_inr: number }[] | undefined;

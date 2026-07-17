@@ -1,98 +1,77 @@
 'use client';
 
+// A single order card on the staff queue board (S1). Tap to open the detail
+// view; the primary button advances one step along the happy path.
+
 import { timeAgo } from '@/lib/utils/timeAgo';
+import { formatOrderNumber } from '@/lib/utils/orderNumber';
+import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
 
-const NEXT_ACTION: Partial<Record<OrderStatus, { label: string; next: OrderStatus }>> = {
-  received: { label: 'Start Preparing', next: 'preparing' },
-  preparing: { label: 'Mark Ready', next: 'ready' },
-  ready: { label: 'Complete Order', next: 'completed' },
+const PRIMARY_LABEL: Partial<Record<OrderStatus, string>> = {
+  received: 'Accept',
+  accepted: 'Start',
+  preparing: 'Ready',
+  ready: 'Complete',
 };
 
-const BADGE_CLASSES: Record<OrderStatus, string> = {
-  received: 'bg-charcoal text-cream',
-  preparing: 'bg-tan text-cream',
-  ready: 'bg-[#e5e5e5] text-charcoal',
-  completed: 'bg-[#e5e5e5] text-muted',
-};
-
-const BADGE_LABEL: Record<OrderStatus, string> = {
-  received: 'Received',
-  preparing: 'Preparing',
-  ready: 'Ready',
-  completed: 'Completed',
+const TYPE_LABEL: Record<Order['order_type'], string> = {
+  takeaway: 'Takeaway',
+  dine_in: 'Dine-in',
+  delivery: 'Delivery',
 };
 
 export function OrderCard({
   order,
-  onAdvance,
+  onOpen,
+  onPrimary,
 }: {
   order: Order & { items: OrderItem[] };
-  onAdvance: (id: string, next: OrderStatus) => void;
+  onOpen: (order: Order & { items: OrderItem[] }) => void;
+  onPrimary: (order: Order & { items: OrderItem[] }) => void;
 }) {
-  const action = NEXT_ACTION[order.status];
-  const isCompleted = order.status === 'completed';
+  const next = PRIMARY_NEXT[order.status];
+  const itemCount = order.items.reduce((n, i) => n + i.quantity, 0);
   const isReady = order.status === 'ready';
 
   return (
     <div
+      onClick={() => onOpen(order)}
       className={
-        'flex flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm ' +
-        (isReady ? 'border-l-4 border-l-tan ' : '') +
-        (isCompleted ? 'opacity-60' : '')
+        'flex cursor-pointer flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition hover:shadow-md ' +
+        (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >
       <div className="flex items-center justify-between">
-        <span className="font-bold text-charcoal">
-          #HIOC-{String(order.order_number).padStart(6, '0')}
-        </span>
-        <span
-          className={
-            'rounded-full px-3 py-1 text-xs font-bold ' + BADGE_CLASSES[order.status]
-          }
-        >
-          {BADGE_LABEL[order.status]}
+        <span className="font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</span>
+        <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
+          {TYPE_LABEL[order.order_type]}
         </span>
       </div>
 
       <div className="text-sm text-charcoal">
         <p className="font-bold">{order.customer_name}</p>
-        <a href={`tel:${order.customer_phone}`} className="text-tan hover:underline">
-          {order.customer_phone}
-        </a>
+        <p className="text-xs text-muted">
+          {itemCount} item{itemCount === 1 ? '' : 's'} · ₹{order.total_inr ?? order.subtotal_inr} ·{' '}
+          {order.pickup_slot_label || order.pickup_time}
+        </p>
       </div>
 
-      <ul className="text-sm text-charcoal">
-        {order.items.map((item) => (
-          <li key={item.id} className="py-0.5">
-            <span>
-              {item.quantity}× {item.name_snapshot}
-              {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
-            </span>
-            {item.addons.length > 0 ? (
-              <p className="pl-4 text-xs text-muted">
-                {item.addons.map((a) => a.option_name_snapshot).join(', ')}
-              </p>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+      <div className="flex items-center justify-between text-xs text-muted">
+        <span>{timeAgo(order.created_at)}</span>
+        <span>{STATUS_LABELS[order.status]}</span>
+      </div>
 
-      <p className="text-sm text-charcoal">Pickup: {order.pickup_time}</p>
-
-      {order.notes ? (
-        <p className="text-sm italic text-muted">Note: {order.notes}</p>
-      ) : null}
-
-      <p className="text-xs text-muted">{timeAgo(order.created_at)}</p>
-
-      {action ? (
+      {next && PRIMARY_LABEL[order.status] ? (
         <button
           type="button"
-          onClick={() => onAdvance(order.id, action.next)}
-          className="mt-2 rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPrimary(order);
+          }}
+          className="mt-1 rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
         >
-          {action.label}
+          {PRIMARY_LABEL[order.status]}
         </button>
       ) : null}
     </div>

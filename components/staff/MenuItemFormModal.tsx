@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
@@ -13,6 +13,7 @@ export interface MenuItemFormValues {
   is_veg: boolean;
   is_available: boolean;
   sort_order: number;
+  image_url: string;
   variants: { label: string; price_inr: number }[];
   addon_group_ids: string[];
 }
@@ -36,6 +37,8 @@ export function MenuItemFormModal({
   const [isVeg, setIsVeg] = useState(initial?.is_veg ?? true);
   const [isAvailable, setIsAvailable] = useState(initial?.is_available ?? true);
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
+  const [imageUrl, setImageUrl] = useState(initial?.image_url ?? '');
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [variantRows, setVariantRows] = useState<VariantRow[]>(
     initial?.variants && initial.variants.length > 0
       ? initial.variants.map((v) => ({ label: v.label, price: String(v.price_inr) }))
@@ -78,6 +81,38 @@ export function MenuItemFormModal({
     });
   }
 
+  // S6 photo: upload immediately on file select so the preview reflects the
+  // stored URL; the form only ever holds the resulting image_url string.
+  async function handlePhotoChange(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Photo must be an image file.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setError('Photo must be 2MB or smaller.');
+      return;
+    }
+
+    setError(null);
+    setUploadingPhoto(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/menu/upload', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Failed to upload photo');
+      setImageUrl(data.url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload photo');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
@@ -116,6 +151,7 @@ export function MenuItemFormModal({
         is_veg: isVeg,
         is_available: isAvailable,
         sort_order: Number(sortOrder) || 0,
+        image_url: imageUrl,
         variants,
         addon_group_ids: [...selectedGroupIds],
       });
@@ -176,6 +212,47 @@ export function MenuItemFormModal({
                   rows={2}
                   className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
                 />
+              </div>
+
+              <div>
+                <span className="mb-1 block text-sm font-bold text-charcoal">Photo</span>
+                <div className="flex items-center gap-3">
+                  {imageUrl ? (
+                    // Supabase Storage public URL — plain <img>, no next.config domain to configure.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={imageUrl}
+                      alt=""
+                      className="h-16 w-16 rounded-md border border-[#e5e5e5] object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-[#e5e5e5] text-xs text-muted">
+                      No photo
+                    </span>
+                  )}
+                  <div className="flex flex-col items-start gap-1">
+                    <label className="cursor-pointer rounded-md border border-[#e5e5e5] px-3 py-2 text-sm font-bold text-charcoal hover:border-tan">
+                      {uploadingPhoto ? 'Uploading…' : imageUrl ? 'Change photo' : 'Upload photo'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePhotoChange}
+                        disabled={uploadingPhoto}
+                        className="hidden"
+                      />
+                    </label>
+                    {imageUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => setImageUrl('')}
+                        className="text-xs font-bold text-charcoal hover:text-tan"
+                      >
+                        Remove photo
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                <p className="mt-1 text-xs text-muted">JPEG, PNG, WEBP, or GIF. Up to 2MB.</p>
               </div>
 
               <div>
@@ -312,7 +389,7 @@ export function MenuItemFormModal({
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || uploadingPhoto}
               className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {mode === 'create' ? 'Save Item' : 'Save Changes'}

@@ -4,6 +4,8 @@ import { useMemo, useState } from 'react';
 import { useCart, type CartAddonSelection } from '@/lib/cart/CartContext';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 
+const MAX_INSTRUCTIONS_LEN = 200; // mirrors app/api/orders/route.ts MAX_INSTRUCTION_LENGTH
+
 function selectionLabel(group: AddonGroup): string {
   if (group.min_select === group.max_select) {
     return `Choose exactly ${group.min_select}`;
@@ -25,6 +27,7 @@ export function MenuItemCustomizeModal({
   const [variantId, setVariantId] = useState(item.variants[0]?.id ?? '');
   const [selected, setSelected] = useState<Record<string, string[]>>({});
   const [qty, setQty] = useState(1);
+  const [instructions, setInstructions] = useState('');
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
@@ -83,6 +86,7 @@ export function MenuItemCustomizeModal({
         variantLabel: variant.label,
         unitPriceInr: unitPrice,
         addons: addonsFlat,
+        specialInstructions: instructions.trim(),
       },
       qty,
     );
@@ -173,6 +177,21 @@ export function MenuItemCustomizeModal({
               </div>
             </div>
           ))}
+
+          <div className="mb-2">
+            <h3 className="mb-2 text-sm font-bold text-charcoal">
+              Special instructions (optional)
+            </h3>
+            <textarea
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value.slice(0, MAX_INSTRUCTIONS_LEN))}
+              maxLength={MAX_INSTRUCTIONS_LEN}
+              rows={2}
+              placeholder="e.g. less sugar, no ice"
+              aria-label="Special instructions for this item"
+              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
+            />
+          </div>
         </div>
 
         <div className="border-t border-[#e5e5e5] px-6 py-4">

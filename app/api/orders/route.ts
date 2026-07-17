@@ -2,15 +2,19 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getStaffUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
-import { isOrderStatus, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
+import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
-import type { AddonGroup, MenuItem } from '@/lib/types';
+import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { getStoreSettings } from '@/lib/store/settings';
+import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
+import type { AddonGroup, MenuItem, OrderType } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 const MAX_CUSTOMER_NAME_LENGTH = 100;
+const MAX_INSTRUCTION_LENGTH = 200;
 const MAX_ALL_ORDERS_ROWS = 200;
 const MENU_ITEM_SELECT = `
   *,
@@ -44,6 +48,7 @@ type IncomingOrderItem = {
   variant_id: string;
   quantity: number;
   addon_option_ids: string[];
+  special_instructions: string;
 };
 
 function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
@@ -57,7 +62,8 @@ function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
     if (typeof entry !== 'object' || entry === null) {
       return `items[${i}] must be an object`;
     }
-    const { menu_item_id, variant_id, quantity, addon_option_ids } = entry as Record<string, unknown>;
+    const { menu_item_id, variant_id, quantity, addon_option_ids, special_instructions } =
+      entry as Record<string, unknown>;
     if (!isUuid(menu_item_id)) {
       return `items[${i}].menu_item_id must be a valid uuid`;
     }
@@ -74,9 +80,29 @@ function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
       }
       addonIds = addon_option_ids as string[];
     }
-    parsed.push({ menu_item_id, variant_id, quantity, addon_option_ids: addonIds });
+    let instructions = '';
+    if (special_instructions !== undefined) {
+      if (typeof special_instructions !== 'string') {
+        return `items[${i}].special_instructions must be a string`;
+      }
+      instructions = special_instructions.trim().slice(0, MAX_INSTRUCTION_LENGTH);
+    }
+    parsed.push({
+      menu_item_id,
+      variant_id,
+      quantity,
+      addon_option_ids: addonIds,
+      special_instructions: instructions,
+    });
   }
   return parsed;
+}
+
+// 4-digit counter pickup code shown to the customer and verified at pickup
+// (CUS-056). Not a security token — the opaque order id is the access control;
+// this is just a short human-readable confirmation number.
+function generatePickupCode(): string {
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 // POST /api/orders — public (guest checkout).
@@ -86,7 +112,16 @@ export async function POST(request: Request) {
     return errorResponse(400, 'Request body must be a JSON object');
   }
 
-  const { customer_name, customer_phone, pickup_time, notes, items: rawItems } = body;
+  const {
+    customer_name,
+    customer_phone,
+    pickup_time,
+    pickup_slot_start,
+    pickup_slot_label,
+    order_type: rawOrderType,
+    notes,
+    items: rawItems,
+  } = body;
 
   if (typeof customer_name !== 'string' || customer_name.trim().length === 0) {
     return errorResponse(400, 'customer_name is required and must be a non-empty string');
@@ -103,13 +138,36 @@ export async function POST(request: Request) {
   if (!normalizedPhone) {
     return errorResponse(400, 'customer_phone must be a valid 10-digit Indian mobile number');
   }
-  // Stored in E.164 form — components/staff/OrderCard.tsx renders it as a
-  // tel: link, and E.164 is the only format that's portable across devices
-  // regardless of the device's own region setting.
+  // Stored in E.164 form (see components/staff/OrderCard.tsx tel: link).
   const trimmedPhone = `+91${normalizedPhone}`;
 
-  if (typeof pickup_time !== 'string' || pickup_time.trim().length === 0) {
-    return errorResponse(400, 'pickup_time is required and must be a non-empty string');
+  // Structured pickup slot (C4/CUS-026) with legacy free-text fallback. The
+  // label is what surfaces on the confirmation + staff card; the ISO start (if
+  // any) drives per-slot capacity and owner slot analytics.
+  const slotLabel =
+    typeof pickup_slot_label === 'string' && pickup_slot_label.trim().length > 0
+      ? pickup_slot_label.trim()
+      : typeof pickup_time === 'string'
+        ? pickup_time.trim()
+        : '';
+  if (slotLabel.length === 0) {
+    return errorResponse(400, 'A pickup time (pickup_slot_label or pickup_time) is required');
+  }
+  let slotStartIso: string | null = null;
+  if (typeof pickup_slot_start === 'string' && pickup_slot_start.length > 0) {
+    const t = Date.parse(pickup_slot_start);
+    if (Number.isNaN(t)) {
+      return errorResponse(400, 'pickup_slot_start must be an ISO timestamp');
+    }
+    slotStartIso = new Date(t).toISOString();
+  }
+
+  let orderType: OrderType = 'takeaway';
+  if (rawOrderType !== undefined) {
+    if (!isOrderType(rawOrderType)) {
+      return errorResponse(400, 'order_type must be takeaway, dine_in, or delivery');
+    }
+    orderType = rawOrderType;
   }
 
   if (notes !== undefined && typeof notes !== 'string') {
@@ -122,6 +180,21 @@ export async function POST(request: Request) {
   }
 
   const admin = createAdminSupabaseClient();
+
+  // Store-state gate (C3/S7): reject checkout when we're not accepting orders
+  // (closed, paused, past last-order cutoff). Staff accept existing orders via a
+  // separate flow, so this only blocks new customer checkouts.
+  const settings = await getStoreSettings();
+  const openState = computeStoreOpenState(settings);
+  if (!openState.acceptingOrders) {
+    const msg =
+      openState.reason === 'paused'
+        ? 'We are not accepting online orders right now.'
+        : openState.reason === 'after_cutoff'
+          ? 'Online orders for today are closed. Please try again tomorrow.'
+          : 'The store is currently closed. Please order during opening hours.';
+    return errorResponse(409, msg);
+  }
 
   const menuItemIds = [...new Set(items.map((item) => item.menu_item_id))];
   const { data: menuRows, error: menuError } = await admin
@@ -147,6 +220,7 @@ export async function POST(request: Request) {
     price_inr_snapshot: number;
     quantity: number;
     line_total_inr: number;
+    special_instructions: string;
     addons: { addon_option_id: string; group_name_snapshot: string; option_name_snapshot: string; price_inr_snapshot: number }[];
   };
 
@@ -158,7 +232,9 @@ export async function POST(request: Request) {
     if (!menuItem) {
       return errorResponse(400, `Menu item ${item.menu_item_id} does not exist`);
     }
-    if (!menuItem.is_available) {
+    // Effective availability includes 86/snooze (unavailable_until), so an item
+    // 86'd while sitting in the cart is rejected here with a clear message (C3).
+    if (!isMenuItemAvailable(menuItem)) {
       return errorResponse(400, `"${menuItem.name}" is currently unavailable`);
     }
 
@@ -167,8 +243,6 @@ export async function POST(request: Request) {
       return errorResponse(400, `"${menuItem.name}" has no such variant`);
     }
 
-    // Every addon option requested must belong to one of this item's
-    // associated addon groups.
     const optionById = new Map<string, { option: AddonGroup['options'][number]; group: AddonGroup }>();
     for (const group of menuItem.addon_groups) {
       for (const option of group.options) {
@@ -187,8 +261,6 @@ export async function POST(request: Request) {
       selectedByGroup.set(found.group.id, list);
     }
 
-    // Enforce every associated group's min/max selection count, including
-    // required groups (min_select > 0) the customer didn't touch at all.
     for (const group of menuItem.addon_groups) {
       const count = selectedByGroup.get(group.id)?.length ?? 0;
       if (count < group.min_select || count > group.max_select) {
@@ -226,28 +298,54 @@ export async function POST(request: Request) {
       price_inr_snapshot: unitPrice,
       quantity: item.quantity,
       line_total_inr,
+      special_instructions: item.special_instructions,
       addons: addonsFlat,
     });
   }
 
-  // Insert the order, then its line items and their addons — if anything
-  // downstream fails, delete the order (cascades clean up the rest) so we
-  // never leave a partially-written order behind.
+  // Per-slot capacity (C4 edge case): if a real slot was chosen and capacity is
+  // capped, reject when it's already full (excludes rejected/cancelled orders).
+  if (slotStartIso && settings.pickup_slot_capacity > 0) {
+    const { count } = await admin
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('pickup_slot_start', slotStartIso)
+      .not('status', 'in', '("rejected","cancelled")');
+    if ((count ?? 0) >= settings.pickup_slot_capacity) {
+      return errorResponse(409, 'That pickup slot is full — please choose another time.');
+    }
+  }
+
+  // Authoritative bill snapshot (C5/CUS-031): GST + packaging + grand total.
+  const bill = computeBill(subtotal_inr, settings);
+
   const { data: orderRow, error: orderError } = await admin
     .from('orders')
     .insert({
       customer_name: trimmedName,
       customer_phone: trimmedPhone,
-      pickup_time: pickup_time.trim(),
+      pickup_time: slotLabel, // legacy column kept in sync with the slot label
+      pickup_slot_start: slotStartIso,
+      pickup_slot_label: slotLabel,
+      order_type: orderType,
       status: 'received',
-      subtotal_inr,
+      subtotal_inr: bill.subtotal_inr,
+      tax_inr: bill.tax_inr,
+      packaging_inr: bill.packaging_inr,
+      discount_inr: bill.discount_inr,
+      total_inr: bill.total_inr,
+      pickup_code: generatePickupCode(),
       notes: notes ?? '',
     })
     .select()
     .single();
 
   if (orderError || !orderRow) {
-    return errorResponse(500, 'Failed to create order');
+    // Surface the underlying Postgres message (e.g. a missing column when the
+    // migration hasn't been applied) so the failure is diagnosable rather than
+    // an opaque 500 — this app has no PII in the error path.
+    console.error('orders insert failed', orderError);
+    return errorResponse(500, orderError?.message ? `Failed to create order: ${orderError.message}` : 'Failed to create order');
   }
 
   for (const line of resolvedLines) {
@@ -259,8 +357,9 @@ export async function POST(request: Request) {
       .single();
 
     if (orderItemError || !orderItemRow) {
+      console.error('order_items insert failed', orderItemError);
       await admin.from('orders').delete().eq('id', orderRow.id);
-      return errorResponse(500, 'Failed to create order items');
+      return errorResponse(500, orderItemError?.message ? `Failed to create order items: ${orderItemError.message}` : 'Failed to create order items');
     }
 
     if (addons.length > 0) {
@@ -269,11 +368,23 @@ export async function POST(request: Request) {
         .insert(addons.map((a) => ({ ...a, order_item_id: orderItemRow.id })));
 
       if (addonsError) {
+        console.error('order_item_addons insert failed', addonsError);
         await admin.from('orders').delete().eq('id', orderRow.id);
-        return errorResponse(500, 'Failed to create order item addons');
+        return errorResponse(500, addonsError?.message ? `Failed to create order item addons: ${addonsError.message}` : 'Failed to create order item addons');
       }
     }
   }
+
+  // Seed the lifecycle event log with the initial system transition (F1) so
+  // SLA metrics have a 'received' anchor for every order.
+  await admin.from('order_status_events').insert({
+    order_id: orderRow.id,
+    from_status: null,
+    to_status: 'received',
+    actor_id: null,
+    actor_role: 'system',
+    reason: '',
+  });
 
   const { data: fullOrder, error: fetchError } = await admin
     .from('orders')
