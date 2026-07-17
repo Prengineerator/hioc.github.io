@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Space_Mono } from 'next/font/google';
+import { Analytics } from '@vercel/analytics/next';
 import { SiteHeader } from '@/components/site/SiteHeader';
 import { SiteFooter } from '@/components/site/SiteFooter';
 import './globals.css';
@@ -33,6 +34,7 @@ export default function RootLayout({
         <SiteHeader />
         <main className="flex-1">{children}</main>
         <SiteFooter />
+        <Analytics />
       </body>
     </html>
   );
