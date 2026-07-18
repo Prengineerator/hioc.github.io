@@ -25,6 +25,13 @@ const ORDER_TYPE_OPTIONS: { value: OrderType; label: string }[] = [
 // counter, matching Phase-1 behavior exactly (FND-1 "gateway unset" fallback).
 const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID);
 
+// Guest phone verification (ACC-4). When enabled, a customer who is NOT logged
+// in must verify their mobile via a WhatsApp code before the order is placed
+// (the verification logs them in via the shared phone-OTP flow). Off by default
+// so checkout keeps working until Supabase phone-OTP + the WhatsApp hook are
+// configured.
+const GUEST_OTP_REQUIRED = process.env.NEXT_PUBLIC_FLAG_GUEST_OTP === 'true';
+
 interface QuoteResponse {
   bill: BillBreakdown;
   coupon: { ok: boolean; discountInr: number; reason?: string } | null;
@@ -54,6 +61,14 @@ export function CheckoutForm({
 
   const [paymentMode, setPaymentMode] = useState<'online' | 'counter'>('counter');
   const [userId, setUserId] = useState<string | null>(null);
+
+  // Guest WhatsApp-OTP verification (ACC-4). `otpStep === 'sent'` reveals the
+  // code input; `phoneVerified` lets the just-verified guest place the order.
+  const [otpStep, setOtpStep] = useState<'idle' | 'sent'>('idle');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpError, setOtpError] = useState<string | null>(null);
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [phoneVerified, setPhoneVerified] = useState(false);
 
   const [couponInput, setCouponInput] = useState('');
   const [couponApplied, setCouponApplied] = useState<string | null>(null);
@@ -252,13 +267,53 @@ export function CheckoutForm({
   const canSubmit =
     storeAcceptingOrders && unavailableNames.length === 0 && (slots.length === 0 || slotStart !== null);
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setServerError(null);
+  // Send the WhatsApp verification code to the entered mobile (guest flow).
+  async function sendOtp() {
+    setOtpError(null);
+    setOtpBusy(true);
+    try {
+      const res = await fetch('/api/auth/customer/phone-otp/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Could not send the verification code.');
+      setOtpStep('sent');
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'Could not send the verification code.');
+    } finally {
+      setOtpBusy(false);
+    }
+  }
 
-    const phoneOk = validatePhone(phone);
-    if (!phoneOk || !canSubmit) return;
+  // Verify the code (which sets the session cookies / logs the guest in), then
+  // place the order — now attributed to that account server-side.
+  async function verifyAndPlace() {
+    if (!otpCode.trim()) {
+      setOtpError('Enter the code sent to your WhatsApp.');
+      return;
+    }
+    setOtpError(null);
+    setOtpBusy(true);
+    try {
+      const res = await fetch('/api/auth/customer/phone-otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, token: otpCode.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Invalid or expired code.');
+      setPhoneVerified(true);
+      await placeOrder();
+    } catch (err) {
+      setOtpError(err instanceof Error ? err.message : 'Invalid or expired code.');
+    } finally {
+      setOtpBusy(false);
+    }
+  }
 
+  async function placeOrder() {
     const selectedSlot = slots.find((s) => s.start === slotStart) ?? slots[0];
 
     setSubmitting(true);
@@ -319,6 +374,22 @@ export function CheckoutForm({
     } finally {
       setSubmitting(false);
     }
+  }
+
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setServerError(null);
+
+    const phoneOk = validatePhone(phone);
+    if (!phoneOk || !canSubmit) return;
+
+    // Guests must verify their mobile via a WhatsApp OTP first (which logs them
+    // in); logged-in customers are already verified and place directly.
+    if (GUEST_OTP_REQUIRED && !userId && !phoneVerified) {
+      await sendOtp();
+      return;
+    }
+    await placeOrder();
   }
 
   const displayBill: BillBreakdown = bill ?? {
@@ -590,19 +661,72 @@ export function CheckoutForm({
           marketing.
         </p>
 
-        <button
-          type="submit"
-          disabled={submitting || !canSubmit}
-          className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {submitting
-            ? 'Placing Order…'
-            : !storeAcceptingOrders
-              ? 'Checkout Unavailable'
-              : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
-                ? `Pay ₹${displayBill.total_inr} & Place Order`
-                : 'Place Order'}
-        </button>
+        {GUEST_OTP_REQUIRED && !userId && otpStep === 'sent' && !phoneVerified ? (
+          <div className="flex flex-col gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
+            <p className="text-sm text-charcoal">
+              Enter the 6-digit code sent to your WhatsApp on{' '}
+              <span className="font-bold">{phone}</span> to confirm your number.
+            </p>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={6}
+              value={otpCode}
+              onChange={(e) => setOtpCode(e.target.value)}
+              placeholder="6-digit code"
+              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            />
+            {otpError ? <p className="text-xs text-red-700">{otpError}</p> : null}
+            <button
+              type="button"
+              onClick={verifyAndPlace}
+              disabled={otpBusy || submitting}
+              className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {otpBusy || submitting ? 'Verifying…' : 'Verify & Place Order'}
+            </button>
+            <div className="flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={sendOtp}
+                disabled={otpBusy}
+                className="font-bold text-tan underline disabled:opacity-50"
+              >
+                Resend code
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOtpStep('idle');
+                  setOtpCode('');
+                  setOtpError(null);
+                }}
+                className="text-muted underline"
+              >
+                Change number
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="submit"
+            disabled={submitting || otpBusy || !canSubmit}
+            className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {otpBusy
+              ? 'Sending code…'
+              : submitting
+                ? 'Placing Order…'
+                : !storeAcceptingOrders
+                  ? 'Checkout Unavailable'
+                  : GUEST_OTP_REQUIRED && !userId
+                    ? 'Verify Number & Place Order'
+                    : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
+                      ? `Pay ₹${displayBill.total_inr} & Place Order`
+                      : 'Place Order'}
+          </button>
+        )}
       </form>
     </div>
   );
