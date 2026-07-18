@@ -23,7 +23,9 @@ export interface SendInput {
 function whatsappTemplateName(event: NotificationEvent): string {
   const map: Record<NotificationEvent, string> = {
     accepted: process.env.WHATSAPP_TPL_ACCEPTED || 'order_accepted',
-    ready: process.env.WHATSAPP_TPL_READY || 'order_ready',
+    // Approved as 'order_ready_1' (the name 'order_ready' was taken by the
+    // earlier rejected version). Override with WHATSAPP_TPL_READY if renamed.
+    ready: process.env.WHATSAPP_TPL_READY || 'order_ready_1',
     rejected: process.env.WHATSAPP_TPL_REJECTED || 'order_rejected',
     cancelled: process.env.WHATSAPP_TPL_CANCELLED || 'order_cancelled',
   };
