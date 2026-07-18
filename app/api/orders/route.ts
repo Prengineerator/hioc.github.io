@@ -12,7 +12,7 @@ import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder } from '@/lib/loyalty/ledger';
 import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
-import type { AddonGroup, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
+import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -342,7 +342,7 @@ export async function POST(request: Request) {
   // checkout preview (POST /api/orders/quote) shows the same numbers ahead of
   // submit, but this is what actually gets applied.
   let couponDiscountInr = 0;
-  let appliedCouponId: string | null = null;
+  let appliedCoupon: Coupon | null = null;
   if (typeof coupon_code === 'string' && coupon_code.trim().length > 0) {
     const categories = [
       ...new Set(
@@ -361,7 +361,7 @@ export async function POST(request: Request) {
       return errorResponse(400, couponResult.reason ?? 'Coupon is not valid for this order');
     }
     couponDiscountInr = Math.min(couponResult.discountInr, subtotal_inr);
-    appliedCouponId = couponResult.coupon?.id ?? null;
+    appliedCoupon = couponResult.coupon ?? null;
   }
 
   // Points redemption (FND-4) — validated + computed server-side. Applied
@@ -472,23 +472,52 @@ export async function POST(request: Request) {
     reason: '',
   });
 
-  // Snapshot the coupon redemption (FND-3) — one row per order.
-  if (appliedCouponId && couponDiscountInr > 0) {
-    const { error: couponRedemptionError } = await admin.from('coupon_redemptions').insert({
-      coupon_id: appliedCouponId,
-      order_id: orderRow.id,
-      user_id: userId,
-      discount_inr: couponDiscountInr,
+  // Snapshot the coupon redemption ATOMICALLY (FND-3 / H1): try_redeem_coupon
+  // re-checks usage_limit/per_user_limit under a per-coupon lock and inserts in
+  // one step, closing the last-use race. If the coupon just hit its limit
+  // (race lost), roll the order back (cascade cleans items) and ask for a retry.
+  // Falls back to the plain insert when the RPC isn't deployed yet, so checkout
+  // keeps working until supabase/phase2-hardening.sql is applied.
+  if (appliedCoupon && couponDiscountInr > 0) {
+    const { data: ok, error: rpcError } = await admin.rpc('try_redeem_coupon', {
+      p_coupon_id: appliedCoupon.id,
+      p_order_id: orderRow.id,
+      p_user_id: userId,
+      p_discount: couponDiscountInr,
+      p_usage_limit: appliedCoupon.usage_limit,
+      p_per_user_limit: appliedCoupon.per_user_limit,
     });
-    if (couponRedemptionError) {
-      console.error('coupon_redemptions insert failed', couponRedemptionError);
+    if (rpcError) {
+      console.error('try_redeem_coupon rpc unavailable; falling back to insert', rpcError);
+      await admin.from('coupon_redemptions').insert({
+        coupon_id: appliedCoupon.id,
+        order_id: orderRow.id,
+        user_id: userId,
+        discount_inr: couponDiscountInr,
+      });
+    } else if (ok === false) {
+      await admin.from('orders').delete().eq('id', orderRow.id);
+      return errorResponse(409, 'This coupon just reached its usage limit — please try again.');
     }
   }
 
-  // Record the points redemption (FND-4) — userId is guaranteed non-null here
-  // (redemption requires login, checked above).
+  // Record the points redemption ATOMICALLY (FND-4 / H1): try_redeem_points
+  // re-checks the balance under a per-user lock. userId is non-null here
+  // (redemption requires login). Same rollback-on-race + RPC fallback.
   if (pointsToRedeem > 0 && userId) {
-    await redeemForOrder(userId, orderRow.id, pointsToRedeem, pointsDiscountInr);
+    const { data: ok, error: rpcError } = await admin.rpc('try_redeem_points', {
+      p_user_id: userId,
+      p_order_id: orderRow.id,
+      p_points: pointsToRedeem,
+      p_discount: pointsDiscountInr,
+    });
+    if (rpcError) {
+      console.error('try_redeem_points rpc unavailable; falling back', rpcError);
+      await redeemForOrder(userId, orderRow.id, pointsToRedeem, pointsDiscountInr);
+    } else if (ok === false) {
+      await admin.from('orders').delete().eq('id', orderRow.id);
+      return errorResponse(409, 'Your points balance changed — please review and try again.');
+    }
   }
 
   // Create the gateway payment intent now that the order + items are fully
