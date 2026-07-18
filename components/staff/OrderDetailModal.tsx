@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
+import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
@@ -39,6 +40,7 @@ export function OrderDetailModal({
   // (FND-5) regardless of whether this UI is shown.
   onRefund?: (o: OrderWithItems, amountInr: number, reason: string) => Promise<void> | void;
 }) {
+  useModalDismiss(onClose);
   const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund'>('view');
   const [prepMin, setPrepMin] = useState(defaultPrepMin);
   const [reasonChoice, setReasonChoice] = useState(REJECT_REASONS[0]);

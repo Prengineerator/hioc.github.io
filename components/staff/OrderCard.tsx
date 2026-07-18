@@ -36,9 +36,17 @@ export function OrderCard({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={() => onOpen(order)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(order);
+        }
+      }}
       className={
-        'flex cursor-pointer flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition hover:shadow-md ' +
+        'flex cursor-pointer flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
         (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >

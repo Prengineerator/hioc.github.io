@@ -201,6 +201,12 @@ export default function StaffOrdersPage() {
     );
   }, [orders, query]);
 
+  // Paid orders that were cancelled/rejected still owe the customer a refund
+  // (M8 / PAY-3) — surface them so they aren't silently lost.
+  const refundNeeded = orders.filter(
+    (o) => (o.status === 'cancelled' || o.status === 'rejected') && o.payment_status === 'paid',
+  );
+
   return (
     <div className={counterMode ? 'fixed inset-0 z-40 overflow-auto bg-cream' : 'mx-auto max-w-7xl px-4 py-8'}>
       <div className={counterMode ? 'px-4 py-4' : ''}>
@@ -237,6 +243,26 @@ export default function StaffOrdersPage() {
         />
 
         <NewOrderAlert count={newOrderIds.size} soundEnabled={soundEnabled} />
+
+        {refundNeeded.length > 0 ? (
+          <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm">
+            <p className="font-bold text-red-800">
+              {refundNeeded.length} paid order{refundNeeded.length === 1 ? '' : 's'} need a refund
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {refundNeeded.map((o) => (
+                <button
+                  key={o.id}
+                  type="button"
+                  onClick={() => setSelected(o)}
+                  className="rounded-md border border-red-300 bg-cream px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-100"
+                >
+                  #{formatOrderNumber(o.order_number)} · ₹{o.total_inr ?? o.subtotal_inr}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {loading ? (
           <Spinner label="Loading orders…" />

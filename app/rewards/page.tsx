@@ -78,8 +78,8 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
     <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
       <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-charcoal">How points work</h2>
       <ul className="flex flex-col gap-1 text-sm text-charcoal">
-        <li>• Earn {config.points_per_inr} point(s) for every ₹1 spent on a completed, paid order.</li>
-        <li>• Redeem points for ₹{config.inr_per_point} each at checkout.</li>
+        <li>• Earn {Number(config.points_per_inr)} point(s) for every ₹1 spent on a completed, paid order.</li>
+        <li>• Redeem points for ₹{Number(config.inr_per_point)} each at checkout.</li>
         <li>• Minimum {config.min_redeem_points} points to redeem.</li>
         <li>• Redemption is capped at {config.max_redeem_pct}% of your bill.</li>
         {config.points_expiry_days > 0 ? (

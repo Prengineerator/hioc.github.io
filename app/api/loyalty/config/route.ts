@@ -15,6 +15,16 @@ const WRITABLE_NUMERIC_FIELDS = [
   'points_expiry_days',
 ] as const;
 
+// Sane upper bounds (L5) — without these, e.g. max_redeem_pct could be set
+// absurdly high, letting more points be "spent" than the applied discount.
+const FIELD_MAX: Record<string, number> = {
+  points_per_inr: 1000,
+  inr_per_point: 1000,
+  min_redeem_points: 1_000_000,
+  max_redeem_pct: 100,
+  points_expiry_days: 3650,
+};
+
 // GET /api/loyalty/config — public. Powers the "how points work" copy on the
 // Rewards page and the checkout's redemption UI. Null if the singleton row
 // hasn't been seeded yet (migration not applied).
@@ -42,6 +52,9 @@ export async function PATCH(request: Request) {
     if (value === undefined) continue;
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       return errorResponse(400, `${field} must be a non-negative number`);
+    }
+    if (FIELD_MAX[field] !== undefined && value > FIELD_MAX[field]) {
+      return errorResponse(400, `${field} must be at most ${FIELD_MAX[field]}`);
     }
     patch[field] = value;
   }

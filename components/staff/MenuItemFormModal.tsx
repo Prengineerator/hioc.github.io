@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
+import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 
@@ -31,6 +32,7 @@ export function MenuItemFormModal({
   onClose: () => void;
   onSubmit: (values: MenuItemFormValues) => Promise<void>;
 }) {
+  useModalDismiss(onClose);
   const [name, setName] = useState(initial?.name ?? '');
   const [description, setDescription] = useState(initial?.description ?? '');
   const [category, setCategory] = useState(initial?.category ?? MENU_CATEGORIES[0].slug);
