@@ -145,9 +145,13 @@ export async function POST(request: Request, { params }: RouteParams) {
     console.error('order payment_status update after refund failed', updateError);
   }
 
-  // Claw back any points earned/redeemed on this order (FND-4 edge case) —
-  // a no-op until the Loyalty ledger is implemented.
-  await reverseForOrder(id);
+  // Claw back points ONLY on a FULL refund (H8). reverseForOrder reverses the
+  // order's ENTIRE earn+redeem, so running it on a partial refund would wrongly
+  // wipe all earned points (e.g. a ₹10 refund on a ₹1000 order). A partial
+  // refund leaves loyalty untouched.
+  if (newPaymentStatus === 'refunded') {
+    await reverseForOrder(id);
+  }
 
   return NextResponse.json({ refund: refundRow, order: updatedOrder });
 }
