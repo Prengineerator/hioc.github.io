@@ -58,3 +58,25 @@ export function renderNotification(order: Order, event: NotificationEvent): Rend
     }
   }
 }
+
+// Ordered body variables for a WhatsApp/DLT approved template (Meta requires
+// templates, not free text, for proactive messages). The ORDER must match the
+// {{1}},{{2}},… placeholders in each registered template (see the template table
+// in the setup notes). Values are never empty (Meta rejects empty params).
+export function templateVarsFor(order: Order, event: NotificationEvent): string[] {
+  const num = formatOrderNumber(order.order_number);
+  const name = order.customer_name?.split(' ')[0] || 'there';
+  const link = statusLink(order);
+  switch (event) {
+    case 'accepted': {
+      const eta = order.promised_ready_at ? formatIstTime(new Date(order.promised_ready_at)) : 'soon';
+      return [name, num, eta, link]; // order_accepted: {{1}}name {{2}}num {{3}}eta {{4}}link
+    }
+    case 'ready':
+      return [num, order.pickup_code || '----']; // order_ready: {{1}}num {{2}}code
+    case 'rejected':
+      return [name, num, order.reject_reason || 'unavailable']; // {{1}}name {{2}}num {{3}}reason
+    case 'cancelled':
+      return [num, order.reject_reason || 'as requested']; // {{1}}num {{2}}reason
+  }
+}

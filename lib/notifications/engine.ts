@@ -10,7 +10,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getAdapter } from '@/lib/notifications/adapters';
-import { renderNotification } from '@/lib/notifications/templates';
+import { renderNotification, templateVarsFor } from '@/lib/notifications/templates';
 import { flags } from '@/lib/flags';
 import type { NotificationEvent, Order } from '@/lib/types';
 
@@ -54,6 +54,7 @@ export async function sendOrderNotification(
   }
 
   const { body } = renderNotification(order, event);
+  const templateVars = templateVarsFor(order, event);
 
   let lastError = '';
   let providerRef = '';
@@ -63,7 +64,7 @@ export async function sendOrderNotification(
   for (let i = attempts; i < MAX_ATTEMPTS && !ok; i++) {
     attempts = i + 1;
     try {
-      const res = await adapter.send({ to: order.customer_phone, channel, body });
+      const res = await adapter.send({ to: order.customer_phone, channel, body, event, templateVars });
       ok = res.ok;
       providerRef = res.providerRef;
       lastError = res.error;
