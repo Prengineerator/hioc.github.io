@@ -298,6 +298,16 @@ create policy reviews_staff_update on reviews for update to authenticated using 
 -- Build on Phase-1's v_valid_orders. Plain views for correctness; materialize
 -- the hot ones later if range queries slow down at volume.
 
+-- IMPORTANT: v_valid_orders was created in phase1-migration.sql as
+-- `select * from orders`, which FREEZES its column list at creation time.
+-- SECTION 2 above added orders.user_id, but that does NOT propagate into the
+-- existing view — so we refresh it here before the customer views reference
+-- o.user_id (otherwise: "ERROR: column o.user_id does not exist"). CREATE OR
+-- REPLACE only appends the new columns, so the Phase-1 views that depend on
+-- v_valid_orders (v_daily_sales, v_item_sales, …) keep working unchanged.
+create or replace view v_valid_orders as
+  select * from orders where status not in ('rejected', 'cancelled');
+
 -- Per-customer stats (RET-1): order count, spend, first/last order, simple LTV.
 create or replace view v_customer_stats as
   select
