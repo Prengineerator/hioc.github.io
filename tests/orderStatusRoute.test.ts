@@ -50,6 +50,12 @@ vi.mock('@/lib/api/auth', () => ({
 vi.mock('@/lib/notifications/engine', () => ({ sendOrderNotification: () => Promise.resolve({ sent: true }) }));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderEvent: () => Promise.resolve() }));
 vi.mock('@/lib/store/settings', () => ({ getStoreSettings: () => Promise.resolve({ default_prep_min: 15 }) }));
+// Phase-2 added loyalty earn/reverse hooks to the status route; mock them so the
+// route imports without pulling in the real (server-only) ledger module.
+vi.mock('@/lib/loyalty/ledger', () => ({
+  earnForOrder: () => Promise.resolve(),
+  reverseForOrder: () => Promise.resolve(),
+}));
 
 // Imported after mocks are registered (vi.mock is hoisted).
 const { PATCH } = await import('@/app/api/orders/[id]/status/route');

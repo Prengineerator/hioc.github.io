@@ -24,11 +24,11 @@ export async function getUserRole(user: User): Promise<UserRole | null> {
   return (profile?.role as UserRole) ?? 'customer';
 }
 
-// Map a UserRole to the ActorRole recorded on lifecycle events. Only staff and
-// owner can be an authenticated "actor"; customers act via unauthenticated
-// flows (recorded as 'customer' at the call site).
+// Map a UserRole to the ActorRole recorded on lifecycle events. manager maps to
+// 'owner' so managers inherit owner-level state-machine overrides (FND-5); the
+// events table's actor_id still records the real user for attribution.
 export function actorRoleFor(role: UserRole): ActorRole {
-  return role === 'owner' ? 'owner' : 'staff';
+  return role === 'owner' || role === 'manager' ? 'owner' : 'staff';
 }
 
 /**
@@ -69,10 +69,23 @@ export async function getStaffUser(): Promise<User | null> {
     return null;
   }
 
-  // owner inherits full read/write access to staff ops (OWN-002), so both
-  // 'staff' and 'owner' pass this gate. Owner-only routes use getOwnerUser().
+  // owner + manager inherit full access to staff ops, so 'staff', 'owner', and
+  // 'manager' pass this gate. Owner-only routes use getOwnerUser(); manager-
+  // gated routes (refunds, FND-5) use getManagerUser().
   const role = await getUserRole(user);
-  return role === 'staff' || role === 'owner' ? user : null;
+  return role === 'staff' || role === 'owner' || role === 'manager' ? user : null;
+}
+
+/**
+ * Requires `profiles.role` in ('manager', 'owner') — the gate for sensitive
+ * actions like refunds, discount overrides, and comping (FND-5). Plain staff
+ * do NOT pass.
+ */
+export async function getManagerUser(): Promise<User | null> {
+  const user = await getAuthUser();
+  if (!user) return null;
+  const role = await getUserRole(user);
+  return role === 'manager' || role === 'owner' ? user : null;
 }
 
 /**
@@ -96,6 +109,6 @@ export async function getStaffOrOwner(): Promise<{ user: User; role: UserRole } 
   const user = await getAuthUser();
   if (!user) return null;
   const role = await getUserRole(user);
-  if (role !== 'staff' && role !== 'owner') return null;
+  if (role !== 'staff' && role !== 'owner' && role !== 'manager') return null;
   return { user, role };
 }

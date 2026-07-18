@@ -5,8 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { generatePickupSlots } from '@/lib/store/hours';
-import type { StoreOpenState } from '@/lib/store/hours';
+import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { createClient } from '@/lib/supabase';
+import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
+import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
 
 // Takeaway + dine-in for Phase-1. Both are pickup-at-counter flows (dine-in
@@ -17,6 +20,18 @@ const ORDER_TYPE_OPTIONS: { value: OrderType; label: string }[] = [
   { value: 'dine_in', label: 'Dine-in' },
 ];
 
+// Online payment (PAY-1) is only offered when a public Razorpay key is
+// configured — otherwise the toggle is hidden and every order is pay-at-
+// counter, matching Phase-1 behavior exactly (FND-1 "gateway unset" fallback).
+const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID);
+
+interface QuoteResponse {
+  bill: BillBreakdown;
+  coupon: { ok: boolean; discountInr: number; reason?: string } | null;
+  points: { ok: boolean; points: number; discountInr: number; reason?: string } | null;
+  balance: number | null;
+}
+
 export function CheckoutForm({
   settings,
   openState,
@@ -25,7 +40,7 @@ export function CheckoutForm({
   openState: StoreOpenState | null;
 }) {
   const router = useRouter();
-  const { items, clearCart } = useCart();
+  const { items, totalPrice, clearCart } = useCart();
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -36,6 +51,24 @@ export function CheckoutForm({
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [unavailableNames, setUnavailableNames] = useState<string[]>([]);
+
+  const [paymentMode, setPaymentMode] = useState<'online' | 'counter'>('counter');
+  const [userId, setUserId] = useState<string | null>(null);
+
+  const [couponInput, setCouponInput] = useState('');
+  const [couponApplied, setCouponApplied] = useState<string | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponBusy, setCouponBusy] = useState(false);
+
+  const [pointsInput, setPointsInput] = useState('');
+  const [pointsApplied, setPointsApplied] = useState<number | null>(null);
+  const [pointsError, setPointsError] = useState<string | null>(null);
+  const [pointsBusy, setPointsBusy] = useState(false);
+  const [balance, setBalance] = useState<number | null>(null);
+
+  const [bill, setBill] = useState<BillBreakdown | null>(null);
+  const [couponDiscountInr, setCouponDiscountInr] = useState(0);
+  const [pointsDiscountInr, setPointsDiscountInr] = useState(0);
 
   const slots = useMemo(
     () => (settings ? generatePickupSlots(settings) : []),
@@ -81,6 +114,130 @@ export function CheckoutForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Detect a logged-in session (ACC-1 prefill + FND-4 points eligibility).
+  // Uses the browser Supabase client directly rather than depending on the
+  // Accounts pillar's /api/account/me route being live yet.
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => {
+      if (cancelled) return;
+      const uid = data.user?.id ?? null;
+      setUserId(uid);
+      if (!uid) return;
+      // Best-effort prefill (ACC-1/ACC-3 contract) — gracefully no-ops if the
+      // Accounts pillar's route isn't built yet (404) or the shape differs.
+      fetch('/api/account/me', { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: unknown) => {
+          if (cancelled || !data || typeof data !== 'object') return;
+          const profile =
+            ('profile' in data ? (data as { profile?: unknown }).profile : data) ?? {};
+          if (profile && typeof profile === 'object') {
+            const p = profile as { name?: unknown; phone?: unknown };
+            const prefillName = typeof p.name === 'string' ? p.name.trim() : '';
+            const prefillPhone = typeof p.phone === 'string' ? p.phone.trim() : '';
+            if (prefillName) setName((n) => n || prefillName);
+            if (prefillPhone) {
+              setPhone((ph) => ph || normalizeIndianMobile(prefillPhone) || prefillPhone);
+            }
+          }
+        })
+        .catch(() => {
+          // No prefill — the form is still fully usable manually.
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Live bill preview (PAY-1): re-quotes whenever the cart subtotal changes.
+  // Coupon/points are (re-)applied explicitly via their Apply buttons, which
+  // call the same function with the values being applied.
+  async function refreshQuote(nextCoupon: string, nextPoints: number): Promise<QuoteResponse | null> {
+    try {
+      const res = await fetch('/api/orders/quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subtotal_inr: totalPrice,
+          coupon_code: nextCoupon || undefined,
+          redeem_points: nextPoints || undefined,
+          item_ids: items.map((i) => i.menuItemId),
+        }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as QuoteResponse;
+      setBill(data.bill);
+      setBalance(data.balance);
+      // Keep the itemized discount lines in sync with whatever was actually
+      // requested this call — covers the subtotal-changed refresh path too,
+      // not just the explicit Apply buttons.
+      setCouponDiscountInr(nextCoupon && data.coupon?.ok ? data.coupon.discountInr : 0);
+      setPointsDiscountInr(nextPoints > 0 && data.points?.ok ? data.points.discountInr : 0);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  useEffect(() => {
+    refreshQuote(couponApplied ?? '', pointsApplied ?? 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalPrice]);
+
+  async function applyCoupon() {
+    const code = couponInput.trim();
+    if (!code) return;
+    setCouponBusy(true);
+    setCouponError(null);
+    const data = await refreshQuote(code, pointsApplied ?? 0);
+    if (data?.coupon?.ok) {
+      setCouponApplied(code);
+      setCouponError(null);
+    } else {
+      setCouponApplied(null);
+      setCouponError(data?.coupon?.reason ?? 'This coupon could not be applied.');
+      await refreshQuote('', pointsApplied ?? 0);
+    }
+    setCouponBusy(false);
+  }
+
+  function removeCoupon() {
+    setCouponApplied(null);
+    setCouponInput('');
+    setCouponError(null);
+    refreshQuote('', pointsApplied ?? 0);
+  }
+
+  async function applyPoints() {
+    const pts = parseInt(pointsInput, 10);
+    if (!Number.isFinite(pts) || pts <= 0) {
+      setPointsError('Enter a valid number of points.');
+      return;
+    }
+    setPointsBusy(true);
+    setPointsError(null);
+    const data = await refreshQuote(couponApplied ?? '', pts);
+    if (data?.points?.ok) {
+      setPointsApplied(data.points.points);
+      setPointsError(null);
+    } else {
+      setPointsApplied(null);
+      setPointsError(data?.points?.reason ?? 'Points could not be redeemed.');
+      await refreshQuote(couponApplied ?? '', 0);
+    }
+    setPointsBusy(false);
+  }
+
+  function removePoints() {
+    setPointsApplied(null);
+    setPointsInput('');
+    setPointsError(null);
+    refreshQuote(couponApplied ?? '', 0);
+  }
+
   function validatePhone(value: string): boolean {
     const ok = normalizeIndianMobile(value) !== null;
     setPhoneError(
@@ -124,12 +281,31 @@ export function CheckoutForm({
             addon_option_ids: i.addons.map((a) => a.optionId),
             special_instructions: i.specialInstructions,
           })),
+          payment_mode: ONLINE_PAYMENT_AVAILABLE ? paymentMode : 'counter',
+          coupon_code: couponApplied ?? undefined,
+          redeem_points: pointsApplied ?? undefined,
         }),
       });
 
       if (res.status === 201) {
-        const data = await res.json();
+        const data: { order: { id: string }; payment: CreatedPaymentIntent | null } = await res.json();
         clearCart();
+
+        if (data.payment) {
+          // Online payment intent created — open Razorpay's hosted checkout.
+          // Both success and dismiss land on the status page, which
+          // server-reconciles the real payment_status (webhook + poll).
+          openRazorpayCheckout(data.payment, {
+            name,
+            phone,
+            description: 'HIOC order payment',
+            onSuccess: () => router.push(`/order/${data.order.id}`),
+            onDismiss: () => router.push(`/order/${data.order.id}`),
+            onFailure: () => router.push(`/order/${data.order.id}`),
+          });
+          return;
+        }
+
         // Redirect to the live order-status page (not just the confirmation
         // page) so the customer can track accept/prep/ready in real time.
         router.push(`/order/${data.order.id}`);
@@ -144,6 +320,14 @@ export function CheckoutForm({
       setSubmitting(false);
     }
   }
+
+  const displayBill: BillBreakdown = bill ?? {
+    subtotal_inr: totalPrice,
+    tax_inr: 0,
+    packaging_inr: 0,
+    discount_inr: 0,
+    total_inr: totalPrice,
+  };
 
   return (
     <div className="rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
@@ -263,9 +447,139 @@ export function CheckoutForm({
           />
         </div>
 
-        <div className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
-          Pay at the counter on pickup — no online payment required.
+        {/* Coupon code (FND-3/LOY-2). */}
+        <div>
+          <label htmlFor="coupon" className="mb-1 block text-sm font-bold text-charcoal">
+            Coupon code (optional)
+          </label>
+          {couponApplied ? (
+            <div className="flex items-center justify-between rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal">
+              <span>
+                <span className="font-bold uppercase">{couponApplied}</span> applied — save ₹{couponDiscountInr}
+              </span>
+              <button type="button" onClick={removeCoupon} className="text-xs font-bold text-muted underline">
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                id="coupon"
+                type="text"
+                value={couponInput}
+                onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                placeholder="e.g. WELCOME10"
+                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              />
+              <button
+                type="button"
+                onClick={applyCoupon}
+                disabled={couponBusy || !couponInput.trim()}
+                className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+              >
+                {couponBusy ? '…' : 'Apply'}
+              </button>
+            </div>
+          )}
+          {couponError ? <p className="mt-1 text-xs text-red-700">{couponError}</p> : null}
         </div>
+
+        {/* Points redemption (FND-4/LOY-1) — logged-in customers only. */}
+        {userId ? (
+          <div>
+            <label htmlFor="points" className="mb-1 block text-sm font-bold text-charcoal">
+              Redeem points{balance !== null ? ` (you have ${balance})` : ''}
+            </label>
+            {pointsApplied ? (
+              <div className="flex items-center justify-between rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal">
+                <span>
+                  {pointsApplied} points applied — save ₹{pointsDiscountInr}
+                </span>
+                <button type="button" onClick={removePoints} className="text-xs font-bold text-muted underline">
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  id="points"
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  value={pointsInput}
+                  onChange={(e) => setPointsInput(e.target.value)}
+                  placeholder="e.g. 50"
+                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                />
+                <button
+                  type="button"
+                  onClick={applyPoints}
+                  disabled={pointsBusy || !pointsInput.trim()}
+                  className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+                >
+                  {pointsBusy ? '…' : 'Apply'}
+                </button>
+              </div>
+            )}
+            {pointsError ? <p className="mt-1 text-xs text-red-700">{pointsError}</p> : null}
+          </div>
+        ) : null}
+
+        {/* Bill breakup (C5/PAY-1) — subtotal, GST, packaging, coupon,
+            points, grand total, each a labeled line. */}
+        <div className="rounded-md border border-[#e5e5e5] px-4 py-3 text-sm text-charcoal">
+          <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
+          {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
+          {displayBill.packaging_inr > 0 ? <BillRow label="Packaging" value={displayBill.packaging_inr} /> : null}
+          {couponDiscountInr > 0 ? <BillRow label="Coupon discount" value={-couponDiscountInr} /> : null}
+          {pointsDiscountInr > 0 ? <BillRow label="Points redeemed" value={-pointsDiscountInr} /> : null}
+          <div className="mt-2 flex items-center justify-between border-t border-[#e5e5e5] pt-2">
+            <span className="font-bold text-charcoal">Total</span>
+            <span className="font-bold text-tan">₹{displayBill.total_inr}</span>
+          </div>
+        </div>
+
+        {/* Pay online / pay at counter (PAY-1). */}
+        {ONLINE_PAYMENT_AVAILABLE ? (
+          <div>
+            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setPaymentMode('online')}
+                className={
+                  'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                  (paymentMode === 'online'
+                    ? 'border-tan bg-[#f6efe9] text-tan-dark'
+                    : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                }
+              >
+                Pay online
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMode('counter')}
+                className={
+                  'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                  (paymentMode === 'counter'
+                    ? 'border-tan bg-[#f6efe9] text-tan-dark'
+                    : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                }
+              >
+                Pay at counter
+              </button>
+            </div>
+            <p className="mt-2 rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+              {paymentMode === 'online'
+                ? 'Pay now via UPI, card, or netbanking — your order joins the kitchen queue as soon as payment is confirmed.'
+                : 'Pay at the counter on pickup — no online payment required.'}
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+            Pay at the counter on pickup — no online payment required.
+          </div>
+        )}
 
         {/* DPDP transactional-consent notice (F3t/NFR-005). Order updates are
             transactional, not marketing, so no opt-in checkbox is required —
@@ -285,9 +599,20 @@ export function CheckoutForm({
             ? 'Placing Order…'
             : !storeAcceptingOrders
               ? 'Checkout Unavailable'
-              : 'Place Order'}
+              : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
+                ? `Pay ₹${displayBill.total_inr} & Place Order`
+                : 'Place Order'}
         </button>
       </form>
+    </div>
+  );
+}
+
+function BillRow({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between py-0.5">
+      <span>{label}</span>
+      <span>{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
     </div>
   );
 }

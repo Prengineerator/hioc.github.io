@@ -34,8 +34,9 @@ export type PaymentMethod = 'cash' | 'upi' | 'card' | 'online';
 // Who performed a lifecycle transition (order_status_events.actor_role).
 export type ActorRole = 'customer' | 'staff' | 'owner' | 'system';
 
-// profiles.role — widened to include 'owner' in phase1-migration.sql §8.
-export type UserRole = 'staff' | 'customer' | 'owner';
+// profiles.role — 'owner' added in phase1-migration.sql §8, 'manager' in
+// phase2-migration.sql §8 (FND-5: gates refunds and other sensitive actions).
+export type UserRole = 'staff' | 'customer' | 'owner' | 'manager';
 
 export type AddonSelectionType = 'single' | 'multi';
 
@@ -125,6 +126,9 @@ export interface Order {
   payment_method: PaymentMethod | null; // null until collected (STF-041)
   reject_reason: string; // populated on rejected/cancelled (STF-003)
   version: number; // optimistic-concurrency guard (F1)
+  // Phase-2 addition (migration §2): links an order to a customer account
+  // (ACC-2/ACC-4). Null for guest checkout; backfilled on guest-claim by phone.
+  user_id: string | null;
 }
 
 export interface OrderItemAddon {
@@ -260,4 +264,186 @@ export interface RejectReasonRow {
   status: OrderStatus;
   reason: string;
   cnt: number;
+}
+
+// ===========================================================================
+// PHASE 2 "Value & Retention" — mirrors supabase/phase2-migration.sql.
+// ===========================================================================
+
+// --- Payments & refunds (migration §3) -------------------------------------
+export type RefundStatus = 'pending' | 'processed' | 'failed';
+
+export interface Payment {
+  id: string;
+  order_id: string;
+  gateway: string; // e.g. 'razorpay'
+  gateway_order_id: string;
+  gateway_payment_id: string;
+  method: PaymentMethod | null;
+  amount_inr: number;
+  status: PaymentStatus;
+  signature_ok: boolean;
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Refund {
+  id: string;
+  payment_id: string;
+  order_id: string;
+  amount_inr: number;
+  reason: string;
+  status: RefundStatus;
+  gateway_ref: string;
+  created_by: string | null;
+  created_at: string;
+  processed_at: string | null;
+}
+
+// --- Accounts (migration §4) -----------------------------------------------
+// The Phase-2 columns added to the Phase-1 `profiles` table.
+export interface CustomerProfile {
+  id: string;
+  role: UserRole;
+  name: string;
+  phone: string;
+  phone_verified: boolean;
+  marketing_consent: boolean; // DPDP: marketing only, never gates transactional
+  prefs: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Favorite {
+  user_id: string;
+  menu_item_id: string;
+  created_at: string;
+}
+
+// --- Coupons & promotions (migration §5) -----------------------------------
+export type CouponDiscountType = 'percent' | 'flat';
+
+export interface CouponScope {
+  item_ids?: string[];
+  category?: string[];
+}
+
+export interface Coupon {
+  id: string;
+  code: string;
+  description: string;
+  discount_type: CouponDiscountType;
+  discount_value: number; // percent (0-100) or ₹
+  min_order_inr: number;
+  max_discount_inr: number; // 0 = no cap
+  scope: CouponScope; // empty = whole menu
+  valid_from: string | null;
+  valid_to: string | null;
+  usage_limit: number; // 0 = unlimited
+  per_user_limit: number; // 0 = unlimited
+  is_auto: boolean;
+  active: boolean;
+  created_at: string;
+}
+
+export interface CouponRedemption {
+  id: string;
+  coupon_id: string;
+  order_id: string;
+  user_id: string | null;
+  discount_inr: number;
+  created_at: string;
+}
+
+export interface Announcement {
+  id: string;
+  title: string;
+  body: string;
+  image_url: string;
+  active: boolean;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string;
+}
+
+// --- Loyalty (migration §6) ------------------------------------------------
+export type LoyaltyTxType = 'earn' | 'redeem' | 'adjust' | 'reverse' | 'expire';
+
+export interface LoyaltyAccount {
+  user_id: string;
+  points_balance: number;
+  updated_at: string;
+}
+
+export interface LoyaltyTransaction {
+  id: string;
+  user_id: string;
+  order_id: string | null;
+  type: LoyaltyTxType;
+  points: number; // signed: +earn / -redeem
+  note: string;
+  created_at: string;
+}
+
+export interface LoyaltyConfig {
+  id: string;
+  is_singleton: boolean;
+  points_per_inr: number;
+  inr_per_point: number;
+  min_redeem_points: number;
+  max_redeem_pct: number; // cap redemption at % of bill
+  points_expiry_days: number; // 0 = never
+  enrolled_by_default: boolean;
+  updated_at: string;
+}
+
+// --- Reviews (migration §7) ------------------------------------------------
+export interface Review {
+  id: string;
+  order_id: string;
+  menu_item_id: string | null; // null = overall order rating
+  user_id: string | null; // null = guest via order link
+  rating: number; // 1-5
+  comment: string;
+  staff_response: string;
+  responded_at: string | null;
+  hidden: boolean;
+  created_at: string;
+}
+
+// --- Phase-2 analytics view rows (migration §10) ---------------------------
+export interface CustomerStatsRow {
+  user_id: string;
+  orders: number;
+  revenue_inr: number;
+  aov_inr: number;
+  first_order_at: string;
+  last_order_at: string;
+}
+
+export interface NewVsReturningRow {
+  order_date: string;
+  new_customers: number;
+  returning_customers: number;
+}
+
+export interface PaymentMixRow {
+  method: string;
+  payments: number;
+  collected_inr: number;
+  refunded_inr_total: number;
+}
+
+export interface CouponPerformanceRow {
+  code: string;
+  redemptions: number;
+  discount_given_inr: number;
+}
+
+export interface ReviewSummaryRow {
+  review_date: string;
+  menu_item_id: string | null;
+  reviews: number;
+  avg_rating: number;
 }

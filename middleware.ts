@@ -99,9 +99,11 @@ export async function middleware(request: NextRequest) {
   }
 
   const role = profile?.role;
-  // /owner/** is owner-only. /staff/** allows staff AND owner (owner has full
-  // read/write access to staff ops, OWN-002).
-  const allowed = isOwnerRoute ? role === 'owner' : role === 'staff' || role === 'owner';
+  // /owner/** is owner-only. /staff/** allows staff, manager, AND owner (all
+  // have access to staff ops; manager adds refund/override powers, FND-5).
+  const allowed = isOwnerRoute
+    ? role === 'owner'
+    : role === 'staff' || role === 'owner' || role === 'manager';
 
   if (!allowed) {
     // 'not_staff' tells /staff/login the session IS valid but lacks the needed

@@ -2,7 +2,14 @@ import type { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
 import { CartProvider } from '@/lib/cart/CartContext';
-import { CAFE_HOURS_HOME, MENU_CATEGORIES } from '@/lib/constants';
+import { CAFE_ADDRESS, CAFE_HOURS_HOME, MENU_CATEGORIES } from '@/lib/constants';
+import { buttonVariants } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+// Owned by the promotions engineer (components/promotions/**); imported
+// here (not built here) since it's already self-contained (fetches its own
+// data, handles empty/error states, per-session dismiss) — mounting it is
+// this file's job (app/page.tsx is customer-chrome), building it is theirs.
+import { AnnouncementBanner } from '@/components/promotions/AnnouncementBanner';
 
 export const metadata: Metadata = {
   title: 'Home',
@@ -13,8 +20,10 @@ export const metadata: Metadata = {
 export default function HomePage() {
   return (
     <CartProvider>
+      <AnnouncementBanner />
       <HeroSection />
       <CategoryTeaser />
+      <VisitStrip />
       <AboutTeaser />
     </CartProvider>
   );
@@ -49,11 +58,8 @@ function HeroSection() {
             Nagar.
           </p>
           <div className="flex flex-col items-center gap-3 sm:flex-row md:items-start">
-            <Link
-              href="/menu"
-              className="rounded-md bg-tan px-8 py-3 font-bold text-cream transition-colors hover:bg-tan-dark"
-            >
-              View Menu
+            <Link href="/menu" className={buttonVariants({ size: 'lg' })}>
+              Order Now
             </Link>
             <span className="text-sm text-muted">{CAFE_HOURS_HOME}</span>
           </div>
@@ -74,20 +80,35 @@ function CategoryTeaser() {
       </div>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {MENU_CATEGORIES.map((cat) => (
-          <Link
-            key={cat.slug}
-            href={`/menu?category=${encodeURIComponent(cat.slug)}`}
-            className="group rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition-colors hover:border-tan"
-          >
-            <h3 className="font-bold text-charcoal group-hover:text-tan">
-              {cat.label}
-            </h3>
-            {cat.parent ? (
-              <p className="mt-1 text-sm text-muted">{cat.parent}</p>
-            ) : null}
+          <Link key={cat.slug} href={`/menu?category=${encodeURIComponent(cat.slug)}`}>
+            <Card interactive className="group h-full">
+              <h3 className="font-bold text-charcoal group-hover:text-tan">
+                {cat.label}
+              </h3>
+              {cat.parent ? (
+                <p className="mt-1 text-sm text-muted">{cat.parent}</p>
+              ) : null}
+            </Card>
           </Link>
         ))}
       </div>
+    </section>
+  );
+}
+
+function VisitStrip() {
+  return (
+    <section className="mx-auto max-w-6xl px-4 pb-4">
+      <Card className="flex flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-tan">Visit Us</p>
+          <p className="mt-1 font-bold text-charcoal">{CAFE_ADDRESS}</p>
+          <p className="mt-1 text-sm text-muted">{CAFE_HOURS_HOME}</p>
+        </div>
+        <Link href="/contact" className={buttonVariants({ variant: 'secondary' })}>
+          Get Directions
+        </Link>
+      </Card>
     </section>
   );
 }

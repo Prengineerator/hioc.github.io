@@ -16,6 +16,9 @@ type OrderWithItems = Order & { items: OrderItem[] };
 const REJECT_REASONS = ['Out of stock', 'Too busy', 'Closing soon', 'Other'];
 const PAYMENT_METHODS: PaymentMethod[] = ['cash', 'upi', 'card'];
 const DEFAULT_PREP_MIN = 15;
+// A paid order can still be refunded (in full or partially) even after it's
+// gone terminal — a manager might refund a completed order over a complaint.
+const REFUNDABLE_PAYMENT_STATUSES = ['paid', 'partially_refunded'];
 
 export function OrderDetailModal({
   order,
@@ -23,18 +26,26 @@ export function OrderDetailModal({
   onClose,
   onTransition,
   onPayment,
+  onRefund,
 }: {
   order: OrderWithItems;
   defaultPrepMin?: number;
   onClose: () => void;
   onTransition: (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => void;
   onPayment: (o: OrderWithItems, method: PaymentMethod) => void;
+  // Optional — omit to hide the refund panel entirely (e.g. a surface that
+  // never shows paid orders). The server route is manager/owner-gated
+  // (FND-5) regardless of whether this UI is shown.
+  onRefund?: (o: OrderWithItems, amountInr: number, reason: string) => Promise<void> | void;
 }) {
-  const [mode, setMode] = useState<'view' | 'accept' | 'reject'>('view');
+  const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund'>('view');
   const [prepMin, setPrepMin] = useState(defaultPrepMin);
   const [reasonChoice, setReasonChoice] = useState(REJECT_REASONS[0]);
   const [reasonText, setReasonText] = useState('');
   const [codeInput, setCodeInput] = useState('');
+  const [refundAmount, setRefundAmount] = useState(order.total_inr ?? order.subtotal_inr);
+  const [refundReason, setRefundReason] = useState('');
+  const [refundSubmitting, setRefundSubmitting] = useState(false);
 
   // Pickup-code verification at handover (CUS-056): the customer reads out the
   // code on their status page; staff type it to confirm they're handing the
@@ -46,6 +57,7 @@ export function OrderDetailModal({
   const next = PRIMARY_NEXT[order.status];
   const isNew = order.status === 'received';
   const isActive = ['received', 'accepted', 'preparing', 'ready'].includes(order.status);
+  const canRefund = Boolean(onRefund) && REFUNDABLE_PAYMENT_STATUSES.includes(order.payment_status);
 
   const doAccept = () => {
     const promised = new Date(Date.now() + prepMin * 60_000).toISOString();
@@ -55,6 +67,16 @@ export function OrderDetailModal({
     const reason = reasonChoice === 'Other' ? reasonText.trim() : reasonChoice;
     if (!reason) return;
     onTransition(order, 'rejected', { reason });
+  };
+  const doRefund = async () => {
+    if (!onRefund || refundAmount <= 0 || !refundReason.trim()) return;
+    setRefundSubmitting(true);
+    try {
+      await onRefund(order, refundAmount, refundReason.trim());
+      setMode('view');
+    } finally {
+      setRefundSubmitting(false);
+    }
   };
 
   return (
@@ -118,6 +140,39 @@ export function OrderDetailModal({
             <p className="mt-1 text-xs text-muted">~{formatIstTime(new Date(Date.now() + prepMin * 60_000))}</p>
             <div className="mt-3 flex gap-2">
               <button onClick={doAccept} className="flex-1 rounded-md bg-tan py-2 font-bold text-cream hover:bg-tan-dark">Confirm Accept</button>
+              <button onClick={() => setMode('view')} className="rounded-md border border-[#e5e5e5] px-4 py-2 text-muted">Back</button>
+            </div>
+          </div>
+        ) : mode === 'refund' ? (
+          <div className="mt-5 rounded-md border border-red-200 p-4">
+            <p className="text-sm font-bold text-charcoal">Refund (manager)</p>
+            <p className="mt-1 text-xs text-muted">
+              Issues a refund via the payment gateway. Adjust the amount for a partial refund.
+            </p>
+            <label className="mt-3 block text-xs font-bold text-charcoal">Amount (₹)</label>
+            <input
+              type="number"
+              min={1}
+              max={order.total_inr ?? order.subtotal_inr}
+              value={refundAmount}
+              onChange={(e) => setRefundAmount(Number(e.target.value))}
+              className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2 text-sm"
+            />
+            <label className="mt-3 block text-xs font-bold text-charcoal">Reason</label>
+            <input
+              value={refundReason}
+              onChange={(e) => setRefundReason(e.target.value)}
+              placeholder="e.g. Order cancelled after payment"
+              className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2 text-sm"
+            />
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={doRefund}
+                disabled={refundSubmitting || refundAmount <= 0 || !refundReason.trim()}
+                className="flex-1 rounded-md bg-red-600 py-2 font-bold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {refundSubmitting ? 'Refunding…' : `Refund ₹${refundAmount}`}
+              </button>
               <button onClick={() => setMode('view')} className="rounded-md border border-[#e5e5e5] px-4 py-2 text-muted">Back</button>
             </div>
           </div>
@@ -197,6 +252,17 @@ export function OrderDetailModal({
                     </button>
                   ))}
                 </div>
+              ) : null}
+              {/* Refund (PAY-3/FND-2) — server route is manager/owner-gated
+                  (FND-5); shown here whenever the order has a captured
+                  payment left to refund. */}
+              {canRefund ? (
+                <button
+                  onClick={() => setMode('refund')}
+                  className="mt-2 w-full rounded-md border border-red-200 py-1.5 text-xs font-bold text-red-700 hover:bg-red-50"
+                >
+                  Refund (manager)
+                </button>
               ) : null}
             </div>
           </div>

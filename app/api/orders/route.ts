@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getAuthUser, getStaffUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { startOfTodayIstIso } from '@/lib/api/date';
@@ -9,7 +9,10 @@ import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
-import type { AddonGroup, MenuItem, OrderType } from '@/lib/types';
+import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
+import { quoteRedemption, redeemForOrder } from '@/lib/loyalty/ledger';
+import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
+import type { AddonGroup, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -121,6 +124,9 @@ export async function POST(request: Request) {
     order_type: rawOrderType,
     notes,
     items: rawItems,
+    payment_mode: rawPaymentMode,
+    coupon_code,
+    redeem_points,
   } = body;
 
   if (typeof customer_name !== 'string' || customer_name.trim().length === 0) {
@@ -178,6 +184,22 @@ export async function POST(request: Request) {
   if (typeof items === 'string') {
     return errorResponse(400, items);
   }
+
+  // Online vs pay-at-counter (PAY-1). Default preserves Phase-1 behavior.
+  let paymentMode: 'online' | 'counter' = 'counter';
+  if (rawPaymentMode !== undefined) {
+    if (rawPaymentMode !== 'online' && rawPaymentMode !== 'counter') {
+      return errorResponse(400, 'payment_mode must be "online" or "counter"');
+    }
+    paymentMode = rawPaymentMode;
+  }
+
+  // user_id is ALWAYS derived from the verified session, never trusted from
+  // the request body — a client-supplied user_id would let a guest redeem
+  // someone else's loyalty points or attribute an order to any account.
+  // Guest checkout (no session) keeps working exactly as in Phase 1.
+  const sessionUser = await getAuthUser();
+  const userId = sessionUser?.id ?? null;
 
   const admin = createAdminSupabaseClient();
 
@@ -316,8 +338,68 @@ export async function POST(request: Request) {
     }
   }
 
-  // Authoritative bill snapshot (C5/CUS-031): GST + packaging + grand total.
-  const bill = computeBill(subtotal_inr, settings);
+  // Coupon (FND-3) — validated + computed server-side (authoritative); the
+  // checkout preview (POST /api/orders/quote) shows the same numbers ahead of
+  // submit, but this is what actually gets applied.
+  let couponDiscountInr = 0;
+  let appliedCouponId: string | null = null;
+  if (typeof coupon_code === 'string' && coupon_code.trim().length > 0) {
+    const categories = [
+      ...new Set(
+        resolvedLines
+          .map((l) => menuById.get(l.menu_item_id)?.category)
+          .filter((c): c is string => Boolean(c)),
+      ),
+    ];
+    const couponResult = await validateAndComputeCoupon(coupon_code.trim(), {
+      subtotalInr: subtotal_inr,
+      userId,
+      itemIds: resolvedLines.map((l) => l.menu_item_id),
+      categories,
+    });
+    if (!couponResult.ok) {
+      return errorResponse(400, couponResult.reason ?? 'Coupon is not valid for this order');
+    }
+    couponDiscountInr = Math.min(couponResult.discountInr, subtotal_inr);
+    appliedCouponId = couponResult.coupon?.id ?? null;
+  }
+
+  // Points redemption (FND-4) — validated + computed server-side. Applied
+  // against whatever remains after the coupon discount (coupon-then-points
+  // precedence per FND-3's stacking edge case).
+  let pointsDiscountInr = 0;
+  let pointsToRedeem = 0;
+  if (redeem_points !== undefined) {
+    if (typeof redeem_points !== 'number' || !Number.isInteger(redeem_points) || redeem_points < 0) {
+      return errorResponse(400, 'redeem_points must be a non-negative integer');
+    }
+    if (redeem_points > 0) {
+      if (!userId) {
+        return errorResponse(400, 'You must be logged in to redeem points');
+      }
+      const remaining = Math.max(0, subtotal_inr - couponDiscountInr);
+      const quote = await quoteRedemption(userId, redeem_points, remaining);
+      if (!quote.ok) {
+        return errorResponse(400, quote.reason ?? 'Points could not be redeemed');
+      }
+      pointsDiscountInr = quote.discountInr;
+      pointsToRedeem = quote.points;
+    }
+  }
+
+  const discount_inr = Math.min(couponDiscountInr + pointsDiscountInr, subtotal_inr);
+
+  // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand total.
+  const bill = computeBill(subtotal_inr, settings, discount_inr);
+
+  // Online payment (PAY-1/FND-1) gates the order at 'placed' — kept OUT of
+  // the staff queue until the gateway confirms it (webhook/reconcile). A
+  // fully-discounted order ("free" via coupon/points) has nothing to charge,
+  // so it goes straight to the counter flow regardless of payment_mode.
+  const needsOnlinePayment = paymentMode === 'online' && bill.total_inr > 0;
+  const initialStatus: OrderStatus = needsOnlinePayment ? 'placed' : 'received';
+  const initialPaymentStatus: PaymentStatus = needsOnlinePayment ? 'payment_pending' : 'unpaid';
+  const initialPaymentMethod: PaymentMethod | null = needsOnlinePayment ? 'online' : null;
 
   const { data: orderRow, error: orderError } = await admin
     .from('orders')
@@ -328,7 +410,7 @@ export async function POST(request: Request) {
       pickup_slot_start: slotStartIso,
       pickup_slot_label: slotLabel,
       order_type: orderType,
-      status: 'received',
+      status: initialStatus,
       subtotal_inr: bill.subtotal_inr,
       tax_inr: bill.tax_inr,
       packaging_inr: bill.packaging_inr,
@@ -336,6 +418,9 @@ export async function POST(request: Request) {
       total_inr: bill.total_inr,
       pickup_code: generatePickupCode(),
       notes: notes ?? '',
+      user_id: userId,
+      payment_status: initialPaymentStatus,
+      payment_method: initialPaymentMethod,
     })
     .select()
     .single();
@@ -376,15 +461,62 @@ export async function POST(request: Request) {
   }
 
   // Seed the lifecycle event log with the initial system transition (F1) so
-  // SLA metrics have a 'received' anchor for every order.
+  // SLA metrics have an anchor for every order — 'received' for the normal/
+  // pay-at-counter path, 'placed' when it's gated on online payment (PAY-1).
   await admin.from('order_status_events').insert({
     order_id: orderRow.id,
     from_status: null,
-    to_status: 'received',
+    to_status: initialStatus,
     actor_id: null,
     actor_role: 'system',
     reason: '',
   });
+
+  // Snapshot the coupon redemption (FND-3) — one row per order.
+  if (appliedCouponId && couponDiscountInr > 0) {
+    const { error: couponRedemptionError } = await admin.from('coupon_redemptions').insert({
+      coupon_id: appliedCouponId,
+      order_id: orderRow.id,
+      user_id: userId,
+      discount_inr: couponDiscountInr,
+    });
+    if (couponRedemptionError) {
+      console.error('coupon_redemptions insert failed', couponRedemptionError);
+    }
+  }
+
+  // Record the points redemption (FND-4) — userId is guaranteed non-null here
+  // (redemption requires login, checked above).
+  if (pointsToRedeem > 0 && userId) {
+    await redeemForOrder(userId, orderRow.id, pointsToRedeem, pointsDiscountInr);
+  }
+
+  // Create the gateway payment intent now that the order + items are fully
+  // committed. If the gateway is unconfigured/unavailable, fall back to
+  // pay-at-counter rather than stranding the order at 'placed' with no way
+  // to pay (FND-1 edge case: "partial gateway outage").
+  let paymentIntent: CreatedPaymentIntent | null = null;
+  if (needsOnlinePayment) {
+    paymentIntent = await createPaymentIntent(orderRow.id, bill.total_inr);
+    if (!paymentIntent) {
+      const { error: fallbackError } = await admin
+        .from('orders')
+        .update({ status: 'received', payment_status: 'unpaid', payment_method: null })
+        .eq('id', orderRow.id);
+      if (fallbackError) {
+        console.error('orders fallback-to-counter update failed', fallbackError);
+      } else {
+        await admin.from('order_status_events').insert({
+          order_id: orderRow.id,
+          from_status: 'placed',
+          to_status: 'received',
+          actor_id: null,
+          actor_role: 'system',
+          reason: 'Payment gateway unavailable — switched to pay at counter',
+        });
+      }
+    }
+  }
 
   const { data: fullOrder, error: fetchError } = await admin
     .from('orders')
@@ -398,7 +530,7 @@ export async function POST(request: Request) {
 
   const response = toOrderResponse(fullOrder as OrderRowWithItems);
 
-  return NextResponse.json({ order: response }, { status: 201 });
+  return NextResponse.json({ order: response, payment: paymentIntent }, { status: 201 });
 }
 
 // GET /api/orders — staff-only.

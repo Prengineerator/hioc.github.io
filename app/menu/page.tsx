@@ -11,6 +11,7 @@ import { FloatingCartBar } from '@/components/cart/FloatingCartBar';
 import { CartDrawer } from '@/components/cart/CartDrawer';
 import { Spinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Skeleton } from '@/components/ui/Skeleton';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import type { MenuItem } from '@/lib/types';
@@ -20,6 +21,26 @@ const VALID_CATEGORIES = MENU_CATEGORIES.map((c) => c.slug);
 
 function isMenuCategory(value: string | null): value is string {
   return !!value && VALID_CATEGORIES.includes(value);
+}
+
+// Mirrors the real MenuItemCard's box dimensions so swapping it in for the
+// loaded grid causes no layout shift, and reads as a smoother "filling in"
+// than a page-centered spinner replacing the whole grid at once.
+function MenuGridSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3"
+    >
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="rounded-md border border-line bg-cream p-4 shadow-card">
+          <Skeleton className="mb-3 aspect-[4/3] w-full" />
+          <Skeleton className="mb-2 h-4 w-2/3" />
+          <Skeleton className="h-4 w-1/3" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function MenuPage() {
@@ -122,7 +143,7 @@ function MenuPageContent() {
 
         <div className="mt-8">
           {loading ? (
-            <Spinner label="Loading menu…" />
+            <MenuGridSkeleton />
           ) : items.length === 0 ? (
             <EmptyState
               heading="Nothing here yet"

@@ -21,8 +21,9 @@ export function StoreStatusBanner({ openState }: { openState: StoreOpenState | n
   return (
     <div
       role="alert"
-      className="mb-6 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-center text-sm font-bold text-charcoal"
+      className="mb-6 flex items-center justify-center gap-2 rounded-md border border-tan bg-surface px-4 py-3 text-center text-sm font-bold text-charcoal"
     >
+      <span aria-hidden="true">⏰</span>
       {REASON_COPY[openState.reason]}
     </div>
   );

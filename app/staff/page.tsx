@@ -134,6 +134,32 @@ export default function StaffOrdersPage() {
     [fetchOrders],
   );
 
+  // Refund (PAY-3) — the server route is manager/owner-gated (FND-5); a plain
+  // staff member sees this fail with a clear message rather than the button
+  // being hidden (role isn't plumbed to this client page).
+  const handleRefund = useCallback(
+    async (o: OrderWithItems, amountInr: number, reason: string) => {
+      try {
+        const res = await fetch(`/api/orders/${o.id}/refund`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount_inr: amountInr, reason }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          showToast(d.error ?? 'Refund failed — only managers can issue refunds.');
+        } else {
+          showToast('Refund issued.');
+        }
+      } catch {
+        showToast('Refund failed — please try again.');
+      } finally {
+        fetchOrders();
+      }
+    },
+    [fetchOrders],
+  );
+
   const closeModalAfter = (fn: () => void) => {
     fn();
     setSelected(null);
@@ -210,6 +236,7 @@ export default function StaffOrdersPage() {
           onClose={() => setSelected(null)}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
+          onRefund={(o, amountInr, reason) => handleRefund(o, amountInr, reason)}
         />
       ) : null}
     </div>

@@ -45,14 +45,19 @@ export function AccountNav() {
     router.refresh();
   }
 
+  // Reserves roughly the width of "My Account" so the header doesn't jump
+  // once the session check resolves.
   if (!loaded) {
-    return <li className="w-16" aria-hidden="true" />;
+    return <li className="min-h-[44px] w-24" aria-hidden="true" />;
   }
 
   if (!email) {
     return (
       <li>
-        <Link href="/login" className="text-charcoal transition-colors hover:text-tan">
+        <Link
+          href="/login"
+          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+        >
           Log In
         </Link>
       </li>
@@ -60,17 +65,25 @@ export function AccountNav() {
   }
 
   return (
-    <li className="flex items-center gap-3">
-      <span className="max-w-[10rem] truncate text-charcoal" title={email}>
-        {email}
-      </span>
-      <button
-        type="button"
-        onClick={handleLogout}
-        className="text-charcoal transition-colors hover:text-tan"
-      >
-        Log Out
-      </button>
-    </li>
+    <>
+      <li>
+        <Link
+          href="/account"
+          title={email}
+          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+        >
+          My Account
+        </Link>
+      </li>
+      <li>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+        >
+          Log Out
+        </button>
+      </li>
+    </>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import { useCart, type CartAddonSelection } from '@/lib/cart/CartContext';
+import { Modal } from '@/components/ui/Modal';
+import { Button } from '@/components/ui/Button';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 
 const MAX_INSTRUCTIONS_LEN = 200; // mirrors app/api/orders/route.ts MAX_INSTRUCTION_LENGTH
@@ -93,140 +95,109 @@ export function MenuItemCustomizeModal({
     onClose();
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-4 py-8">
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        className="fixed inset-0 bg-charcoal/50"
-      />
-      <div className="relative flex max-h-[85vh] w-full max-w-lg flex-col rounded-md bg-cream shadow-sm">
-        <div className="flex items-start justify-between gap-3 border-b border-[#e5e5e5] px-6 py-4">
-          <div>
-            <h2 className="text-lg font-bold text-charcoal">{item.name}</h2>
-            {item.description ? (
-              <p className="mt-1 text-sm text-muted">{item.description}</p>
-            ) : null}
-          </div>
+  const footer = (
+    <>
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-4 rounded-md border border-line px-3 py-1">
           <button
             type="button"
-            aria-label="Close"
-            onClick={onClose}
-            className="shrink-0 text-2xl leading-none text-charcoal hover:text-tan"
+            aria-label="Decrease quantity"
+            onClick={() => setQty((q) => Math.max(1, q - 1))}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-charcoal text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
           >
-            &times;
+            &minus;
           </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-4">
-          {item.variants.length > 1 ? (
-            <div className="mb-6">
-              <h3 className="mb-2 text-sm font-bold text-charcoal">Size</h3>
-              <div className="flex flex-wrap gap-2">
-                {item.variants.map((v) => (
-                  <button
-                    key={v.id}
-                    type="button"
-                    onClick={() => setVariantId(v.id)}
-                    className={
-                      'rounded-full px-4 py-2 text-sm font-bold transition-colors ' +
-                      (v.id === variantId
-                        ? 'bg-tan text-cream'
-                        : 'border border-[#e5e5e5] text-charcoal hover:border-tan hover:text-tan')
-                    }
-                  >
-                    {v.label} · ₹{v.price_inr}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {item.addon_groups.map((group) => (
-            <div key={group.id} className="mb-6">
-              <div className="mb-2 flex items-baseline justify-between">
-                <h3 className="text-sm font-bold text-charcoal">{group.display_name}</h3>
-                <span className="text-xs text-muted">{selectionLabel(group)}</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {group.options.map((option) => {
-                  const isSelected = (selected[group.id] ?? []).includes(option.id);
-                  const atMax =
-                    group.selection_type === 'multi' &&
-                    !isSelected &&
-                    (selected[group.id]?.length ?? 0) >= group.max_select;
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      disabled={atMax}
-                      onClick={() => toggleOption(group, option.id)}
-                      className={
-                        'rounded-full px-4 py-2 text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ' +
-                        (isSelected
-                          ? 'bg-tan text-cream'
-                          : 'border border-[#e5e5e5] text-charcoal hover:border-tan hover:text-tan')
-                      }
-                    >
-                      {option.name}
-                      {option.price_inr > 0 ? ` · +₹${option.price_inr}` : ''}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-
-          <div className="mb-2">
-            <h3 className="mb-2 text-sm font-bold text-charcoal">
-              Special instructions (optional)
-            </h3>
-            <textarea
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value.slice(0, MAX_INSTRUCTIONS_LEN))}
-              maxLength={MAX_INSTRUCTIONS_LEN}
-              rows={2}
-              placeholder="e.g. less sugar, no ice"
-              aria-label="Special instructions for this item"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
-            />
-          </div>
-        </div>
-
-        <div className="border-t border-[#e5e5e5] px-6 py-4">
-          <div className="mb-4 flex items-center justify-between">
-            <div className="flex items-center gap-4 rounded-md border border-[#e5e5e5] px-3 py-1">
-              <button
-                type="button"
-                aria-label="Decrease quantity"
-                onClick={() => setQty((q) => Math.max(1, q - 1))}
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-charcoal text-cream"
-              >
-                &minus;
-              </button>
-              <span className="min-w-[1.5rem] text-center font-bold text-charcoal">{qty}</span>
-              <button
-                type="button"
-                aria-label="Increase quantity"
-                onClick={() => setQty((q) => q + 1)}
-                className="flex h-6 w-6 items-center justify-center rounded-full bg-tan text-cream"
-              >
-                +
-              </button>
-            </div>
-            <span className="text-lg font-bold text-tan">₹{unitPrice * qty}</span>
-          </div>
+          <span className="min-w-[1.5rem] text-center font-bold text-charcoal">{qty}</span>
           <button
             type="button"
-            disabled={!canSubmit}
-            onClick={handleAdd}
-            className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Increase quantity"
+            onClick={() => setQty((q) => q + 1)}
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-tan text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
           >
-            {canSubmit ? 'Add to Cart' : 'Select required options'}
+            +
           </button>
         </div>
+        <span className="text-lg font-bold text-tan">₹{unitPrice * qty}</span>
       </div>
-    </div>
+      <Button disabled={!canSubmit} onClick={handleAdd} fullWidth>
+        {canSubmit ? 'Add to Cart' : 'Select required options'}
+      </Button>
+    </>
+  );
+
+  return (
+    <Modal open onClose={onClose} title={item.name} footer={footer}>
+      {item.description ? <p className="mb-4 text-sm text-muted">{item.description}</p> : null}
+      {item.variants.length > 1 ? (
+        <div className="mb-6">
+          <h3 className="mb-2 text-sm font-bold text-charcoal">Size</h3>
+          <div className="flex flex-wrap gap-2">
+            {item.variants.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                onClick={() => setVariantId(v.id)}
+                className={
+                  'rounded-full px-4 py-2 text-sm font-bold transition-colors ' +
+                  (v.id === variantId
+                    ? 'bg-tan text-cream'
+                    : 'border border-line text-charcoal hover:border-tan hover:text-tan')
+                }
+              >
+                {v.label} · ₹{v.price_inr}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {item.addon_groups.map((group) => (
+        <div key={group.id} className="mb-6">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h3 className="text-sm font-bold text-charcoal">{group.display_name}</h3>
+            <span className="text-xs text-muted">{selectionLabel(group)}</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {group.options.map((option) => {
+              const isSelected = (selected[group.id] ?? []).includes(option.id);
+              const atMax =
+                group.selection_type === 'multi' &&
+                !isSelected &&
+                (selected[group.id]?.length ?? 0) >= group.max_select;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  disabled={atMax}
+                  onClick={() => toggleOption(group, option.id)}
+                  className={
+                    'rounded-full px-4 py-2 text-sm font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ' +
+                    (isSelected
+                      ? 'bg-tan text-cream'
+                      : 'border border-line text-charcoal hover:border-tan hover:text-tan')
+                  }
+                >
+                  {option.name}
+                  {option.price_inr > 0 ? ` · +₹${option.price_inr}` : ''}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      <div className="mb-2">
+        <h3 className="mb-2 text-sm font-bold text-charcoal">Special instructions (optional)</h3>
+        <textarea
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value.slice(0, MAX_INSTRUCTIONS_LEN))}
+          maxLength={MAX_INSTRUCTIONS_LEN}
+          rows={2}
+          placeholder="e.g. less sugar, no ice"
+          aria-label="Special instructions for this item"
+          className="w-full rounded-md border border-line px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
+        />
+      </div>
+    </Modal>
   );
 }

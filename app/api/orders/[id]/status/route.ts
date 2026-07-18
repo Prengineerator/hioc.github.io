@@ -7,6 +7,7 @@ import { canTransition } from '@/lib/orders/stateMachine';
 import { getStoreSettings } from '@/lib/store/settings';
 import { sendOrderNotification } from '@/lib/notifications/engine';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import type { Order } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -133,6 +134,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // the function returns; failures never fail the transition.
   if (check.rule?.notify) {
     await sendOrderNotification(order, check.rule.notify);
+  }
+
+  // Loyalty ledger hooks (FND-4): earn points when an order completes, reverse
+  // them if it's rejected/cancelled. No-ops until the Loyalty engine is wired.
+  if (to === 'completed') {
+    await earnForOrder(id);
+  } else if (to === 'rejected' || to === 'cancelled') {
+    await reverseForOrder(id);
   }
 
   // Push the change to any live customer status page (< 2s, F2).
