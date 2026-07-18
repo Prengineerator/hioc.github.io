@@ -11,9 +11,18 @@ const TABS = [
   { href: '/staff/menu', label: 'Menu' },
 ];
 
-export function StaffHeader() {
+export function StaffHeader({
+  userEmail,
+  userName,
+  role,
+}: {
+  userEmail: string;
+  userName?: string;
+  role: string;
+}) {
   const pathname = usePathname();
   const router = useRouter();
+  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : '';
   const [openState, setOpenState] = useState<StoreOpenState | null>(null);
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
@@ -103,6 +112,14 @@ export function StaffHeader() {
                   : 'Store: Closed'}
             </Link>
           ) : null}
+          <div className="text-right leading-tight" title={userEmail}>
+            <div className="max-w-[36vw] truncate text-xs font-medium text-cream sm:max-w-none">
+              {userName || userEmail || 'Signed in'}
+            </div>
+            {roleLabel ? (
+              <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={handleLogout}

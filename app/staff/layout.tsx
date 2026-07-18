@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
-import { getStaffUser } from '@/lib/api/auth';
+import { getStaffOrOwner } from '@/lib/api/auth';
 import { StaffHeader } from '@/components/staff/StaffHeader';
 
 /**
@@ -25,14 +25,19 @@ export default async function StaffLayout({
     return <>{children}</>;
   }
 
-  const user = await getStaffUser();
-  if (!user) {
+  const account = await getStaffOrOwner();
+  if (!account) {
     redirect('/staff/login');
   }
+  const { user, role } = account;
+  const displayName =
+    (user.user_metadata?.full_name as string | undefined) ??
+    (user.user_metadata?.name as string | undefined) ??
+    '';
 
   return (
     <div className="min-h-screen bg-cream">
-      <StaffHeader />
+      <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
       <main>{children}</main>
     </div>
   );
