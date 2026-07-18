@@ -13,10 +13,13 @@ export interface RenderedMessage {
   body: string;
 }
 
-// Absolute link to the customer's live-status page (C1). SITE_URL is set in
-// prod; falls back to a relative path the client can still resolve.
+// Absolute link to the customer's live-status page (C1). A WhatsApp/SMS message
+// needs a full clickable URL, so prefer the explicit NEXT_PUBLIC_SITE_URL, then
+// fall back to Vercel's runtime production domain, and only then to a bare path.
 function statusLink(order: Order): string {
-  const base = process.env.NEXT_PUBLIC_SITE_URL ?? '';
+  const explicit = process.env.NEXT_PUBLIC_SITE_URL;
+  const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  const base = (explicit || (vercel ? `https://${vercel}` : '')).replace(/\/$/, '');
   return `${base}/order/${order.id}`;
 }
 
@@ -73,7 +76,7 @@ export function templateVarsFor(order: Order, event: NotificationEvent): string[
       return [name, num, eta, link]; // order_accepted: {{1}}name {{2}}num {{3}}eta {{4}}link
     }
     case 'ready':
-      return [num, order.pickup_code || '----']; // order_ready: {{1}}num {{2}}code
+      return [num]; // order_ready_1: {{1}}num only (pickup code dropped to pass Utility review)
     case 'rejected':
       return [name, num, order.reject_reason || 'unavailable']; // {{1}}name {{2}}num {{3}}reason
     case 'cancelled':
