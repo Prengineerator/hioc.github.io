@@ -9,12 +9,25 @@
 //   WhatsApp (Meta Cloud API): WHATSAPP_TOKEN, WHATSAPP_PHONE_ID [, WHATSAPP_API_VERSION]
 //   SMS (Twilio):              TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM
 
-import type { NotificationChannel } from '@/lib/types';
+import type { NotificationChannel, NotificationEvent } from '@/lib/types';
 
 export interface SendInput {
   to: string; // E.164 phone (customer_phone), e.g. +919999999999
   channel: NotificationChannel;
-  body: string;
+  body: string; // rendered plain text (log/SMS + WhatsApp free-text fallback)
+  event?: NotificationEvent; // for template-based providers (WhatsApp)
+  templateVars?: string[]; // ordered {{1}},{{2}},… for the event's approved template
+}
+
+// event → approved WhatsApp template name (override per event via env).
+function whatsappTemplateName(event: NotificationEvent): string {
+  const map: Record<NotificationEvent, string> = {
+    accepted: process.env.WHATSAPP_TPL_ACCEPTED || 'order_accepted',
+    ready: process.env.WHATSAPP_TPL_READY || 'order_ready',
+    rejected: process.env.WHATSAPP_TPL_REJECTED || 'order_rejected',
+    cancelled: process.env.WHATSAPP_TPL_CANCELLED || 'order_cancelled',
+  };
+  return map[event];
 }
 
 export interface SendResult {
@@ -45,31 +58,43 @@ export const logAdapter: NotificationAdapter = {
 };
 
 /**
- * WhatsApp via the Meta Cloud API. Sends a plain text message — valid inside the
- * 24-hour customer service window; for proactive sends outside it, Meta requires
- * a pre-approved message *template* (swap the payload `type` to 'template' once
- * templates are approved). Never throws.
+ * WhatsApp via the Meta Cloud API. Order notifications are proactive (outside any
+ * 24h customer-service window), so Meta REQUIRES an approved message *template*:
+ * when `event` + `templateVars` are provided we send `type: 'template'`; without
+ * them (e.g. a reply inside the 24h window) we fall back to free text. Never
+ * throws. Language via WHATSAPP_TPL_LANG (default 'en').
  */
 export const whatsappAdapter: NotificationAdapter = {
   name: 'whatsapp',
   channel: 'whatsapp',
-  async send({ to, body }: SendInput): Promise<SendResult> {
+  async send({ to, body, event, templateVars }: SendInput): Promise<SendResult> {
     const token = process.env.WHATSAPP_TOKEN;
     const phoneId = process.env.WHATSAPP_PHONE_ID;
     const version = process.env.WHATSAPP_API_VERSION ?? 'v21.0';
     if (!token || !phoneId) {
       return { ok: false, providerRef: '', error: 'whatsapp credentials missing' };
     }
+    const digits = to.replace(/^\+/, ''); // Cloud API expects digits without '+'
+    const payload =
+      event && templateVars
+        ? {
+            messaging_product: 'whatsapp',
+            to: digits,
+            type: 'template',
+            template: {
+              name: whatsappTemplateName(event),
+              language: { code: process.env.WHATSAPP_TPL_LANG || 'en' },
+              components: [
+                { type: 'body', parameters: templateVars.map((t) => ({ type: 'text', text: t })) },
+              ],
+            },
+          }
+        : { messaging_product: 'whatsapp', to: digits, type: 'text', text: { preview_url: false, body } };
     try {
       const res = await fetch(`https://graph.facebook.com/${version}/${phoneId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: to.replace(/^\+/, ''), // Cloud API expects digits without '+'
-          type: 'text',
-          text: { preview_url: false, body },
-        }),
+        body: JSON.stringify(payload),
       });
       const data = (await res.json().catch(() => ({}))) as {
         messages?: { id: string }[];
