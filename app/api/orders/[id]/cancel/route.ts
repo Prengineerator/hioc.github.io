@@ -5,6 +5,7 @@ import { isUuid } from '@/lib/api/constants';
 import { canTransition } from '@/lib/orders/stateMachine';
 import { sendOrderNotification } from '@/lib/notifications/engine';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { reverseForOrder } from '@/lib/loyalty/ledger';
 import type { Order } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,9 @@ export async function POST(request: Request, { params }: RouteParams) {
   });
 
   const order = updated as Order;
+  // Credit back any points the customer redeemed at checkout — this order was
+  // never fulfilled (H3). Idempotent; a no-op when there was no earn/redemption.
+  await reverseForOrder(id);
   await sendOrderNotification(order, 'cancelled');
   await broadcastOrderEvent(id, 'cancelled');
 
