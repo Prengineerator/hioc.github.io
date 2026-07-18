@@ -32,6 +32,7 @@ export default function StaffMenuPage() {
     { mode: 'create' } | { mode: 'edit'; item: MenuItem } | null
   >(null);
   const [deleteTarget, setDeleteTarget] = useState<MenuItem | null>(null);
+  const [query, setQuery] = useState('');
 
   const fetchItems = useCallback(async () => {
     const res = await fetch('/api/menu?includeUnavailable=true', {
@@ -111,13 +112,22 @@ export default function StaffMenuPage() {
     fetchItems();
   }
 
+  // Client-side search over the loaded menu (name or category). The list is
+  // small (~120 items) so filtering in-memory is instant.
+  const q = query.trim().toLowerCase();
+  const visibleItems = q
+    ? items.filter(
+        (i) => i.name.toLowerCase().includes(q) || i.category.toLowerCase().includes(q),
+      )
+    : items;
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
       <div id="store" className="mb-8 scroll-mt-20">
         <StoreControls />
       </div>
 
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-charcoal">Menu Items</h1>
         <button
           type="button"
@@ -128,11 +138,23 @@ export default function StaffMenuPage() {
         </button>
       </div>
 
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search menu by name or category…"
+        className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan sm:max-w-sm"
+      />
+
       {loading ? (
         <Spinner label="Loading menu items…" />
+      ) : visibleItems.length === 0 ? (
+        <p className="rounded-md border border-[#e5e5e5] bg-cream py-10 text-center text-sm text-muted">
+          No items match &ldquo;{query}&rdquo;.
+        </p>
       ) : (
         <MenuItemTable
-          items={items}
+          items={visibleItems}
           onSnooze={handleSnooze}
           onReenable={handleReenable}
           onEdit={(item) => setModal({ mode: 'edit', item })}
