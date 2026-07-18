@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
+import { rateLimitOk, clientIp } from '@/lib/api/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,11 @@ export async function POST(request: Request) {
   }
   if (typeof password !== 'string' || password.length === 0) {
     return errorResponse(400, 'password is required and must be a non-empty string');
+  }
+
+  // S1: throttle password login per email + IP to block credential-stuffing / brute force.
+  if (!(await rateLimitOk(`login:${email.trim().toLowerCase()}:${clientIp(request)}`, 10, 600))) {
+    return errorResponse(429, 'Too many attempts. Please wait a few minutes and try again.');
   }
 
   // Cookie-bound server client — signInWithPassword writes the resulting

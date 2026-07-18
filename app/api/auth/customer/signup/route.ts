@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
+import { rateLimitOk, clientIp } from '@/lib/api/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +23,11 @@ export async function POST(request: Request) {
   }
   if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
     return errorResponse(400, `password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+  }
+
+  // S1: throttle signups per email + IP to curb account-spam / email-bombing.
+  if (!(await rateLimitOk(`signup:${email.trim().toLowerCase()}:${clientIp(request)}`, 5, 3600))) {
+    return errorResponse(429, 'Too many attempts. Please wait a while and try again.');
   }
 
   const supabase = createServerSupabaseClient();

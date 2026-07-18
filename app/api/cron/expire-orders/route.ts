@@ -13,13 +13,14 @@ const EXPIRE_AFTER_MIN = 30;
 
 // GET /api/cron/expire-orders — point a Vercel Cron at this (e.g. every 5 min):
 //   vercel.json → { "crons": [{ "path": "/api/cron/expire-orders", "schedule": "*/5 * * * *" }] }
-// Protected by CRON_SECRET (Bearer) when set, so it can't be triggered publicly.
+// Protected by CRON_SECRET (Bearer). Fails CLOSED: if CRON_SECRET is unset the
+// endpoint is disabled (401), so it can never be triggered publicly.
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    if (request.headers.get('authorization') !== `Bearer ${secret}`) {
-      return errorResponse(401, 'Unauthorized');
-    }
+  // S2: fail CLOSED — if CRON_SECRET is not configured, the endpoint is disabled
+  // rather than runnable by anyone. It must be set (and matched) to run.
+  if (!secret || request.headers.get('authorization') !== `Bearer ${secret}`) {
+    return errorResponse(401, 'Unauthorized');
   }
 
   const admin = createAdminSupabaseClient();
