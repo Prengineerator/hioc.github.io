@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 
 export interface ModalProps {
   open: boolean;
@@ -44,9 +45,13 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
-  return (
+  // Portal to <body> so the fixed overlay always covers the viewport — if it
+  // rendered in place, an ancestor with a CSS transform/overflow (e.g. the menu
+  // Card's hover-lift) would become its containing block and trap it inside the
+  // tile instead of centering it on screen.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-4 py-8">
       <button
         type="button"
@@ -76,6 +81,7 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
         <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
         {footer ? <div className="border-t border-line px-6 py-4">{footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
