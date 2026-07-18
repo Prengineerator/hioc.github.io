@@ -29,7 +29,19 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     return errorResponse(400, 'Request body must be a JSON object');
   }
 
-  const parsed = parseCouponInput(body, { partial: true });
+  const admin = createAdminSupabaseClient();
+  // M9: fetch the current discount_type so a PATCH that only changes
+  // discount_value still enforces the percent<=100 cap (type may not be in body).
+  const { data: existing } = await admin
+    .from('coupons')
+    .select('discount_type')
+    .eq('id', id)
+    .maybeSingle();
+
+  const parsed = parseCouponInput(body, {
+    partial: true,
+    existingType: existing?.discount_type as 'percent' | 'flat' | undefined,
+  });
   if (typeof parsed === 'string') {
     return errorResponse(400, parsed);
   }
@@ -37,7 +49,6 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     return errorResponse(400, 'No writable fields provided');
   }
 
-  const admin = createAdminSupabaseClient();
   const { data, error } = await admin
     .from('coupons')
     .update(parsed)

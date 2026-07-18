@@ -13,6 +13,22 @@ The single Critical is the top priority and is **production-blocking**.
 
 ---
 
+## ✅ Resolution status (updated 2026-07-18)
+
+**Fixed in code / SQL patches (26 of 29):**
+- **C1** → `supabase/security-rls-fix.sql` (operator-run)
+- **H1–H8** → all fixed (H1/H6 also need `supabase/phase2-hardening.sql`; H5 needs a Vercel Cron on `/api/cron/expire-orders`)
+- **Medium:** M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13
+- **Low:** L1, L4, L5, L6
+
+**Intentional / won't-fix (3):** L2 (minor focus quirk on a rare staff form), L3 (design-system primitives kept for future use), L7 (view shape — documented, not double-counted in code).
+
+> Operator SQL to run: `security-rls-fix.sql`, `phase2-hardening.sql`; plus the
+> `/api/cron/expire-orders` cron + `CRON_SECRET`, and (M10) a `rate_limits`
+> table created by `phase2-hardening.sql`.
+
+---
+
 ## 🔴 CRITICAL
 
 ### C1 — RLS policies grant every logged-in customer direct read/write on staff-only tables

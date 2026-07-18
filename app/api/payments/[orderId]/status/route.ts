@@ -57,6 +57,7 @@ export async function GET(_request: Request, { params }: RouteParams) {
         gatewayPaymentId: captured.id,
         method: captured.method,
         signatureOk: false, // reconciled via API poll, not a signed webhook
+        capturedAmountPaise: captured.amount, // M5 cross-check
       });
       if (result.order) {
         return NextResponse.json({

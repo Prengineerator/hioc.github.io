@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { rateLimitOk, clientIp } from '@/lib/api/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,11 @@ export async function POST(request: Request) {
     return errorResponse(400, 'phone must be a valid 10-digit Indian mobile number');
   }
   const e164 = `+91${normalized}`;
+
+  // M10: throttle OTP sends per phone + IP to prevent SMS-bombing.
+  if (!(await rateLimitOk(`otp-phone-req:${e164}:${clientIp(request)}`, 5, 600))) {
+    return errorResponse(429, 'Too many code requests. Please wait a few minutes and try again.');
+  }
 
   const supabase = createServerSupabaseClient();
   const { error } = await supabase.auth.signInWithOtp({

@@ -68,3 +68,47 @@ end $$;
 
 grant execute on function public.try_redeem_coupon(uuid, uuid, uuid, integer, integer, integer) to service_role;
 grant execute on function public.try_redeem_points(uuid, uuid, integer, integer) to service_role;
+
+-- M3 — DB-level guard so processed refunds can never exceed the captured
+-- payment, regardless of any read-then-write race in the app.
+create or replace function public.guard_refund_total()
+returns trigger language plpgsql as $$
+declare v_paid integer; v_refunded integer;
+begin
+  if new.status <> 'processed' then return new; end if;
+  select amount_inr into v_paid from payments where id = new.payment_id;
+  select coalesce(sum(amount_inr), 0) into v_refunded from refunds
+    where payment_id = new.payment_id and status = 'processed' and id <> new.id;
+  if v_refunded + new.amount_inr > coalesce(v_paid, 0) then
+    raise exception 'refund total exceeds captured payment';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_guard_refund_total on refunds;
+create trigger trg_guard_refund_total before insert on refunds
+  for each row execute function public.guard_refund_total();
+
+-- M10 — dependency-free rate limiter (OTP abuse). check_rate_limit atomically
+-- increments a per-key counter within a sliding window and returns true while
+-- under the cap. Used by the auth OTP routes (see lib/api/rateLimit.ts).
+create table if not exists rate_limits (
+  key          text primary key,
+  count        integer not null default 0,
+  window_start timestamptz not null default now()
+);
+
+create or replace function public.check_rate_limit(p_key text, p_max integer, p_window_secs integer)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_count integer;
+begin
+  insert into rate_limits (key, count, window_start) values (p_key, 1, now())
+  on conflict (key) do update set
+    count = case when rate_limits.window_start < now() - make_interval(secs => p_window_secs)
+                 then 1 else rate_limits.count + 1 end,
+    window_start = case when rate_limits.window_start < now() - make_interval(secs => p_window_secs)
+                        then now() else rate_limits.window_start end
+  returning count into v_count;
+  return v_count <= p_max; -- true = allowed
+end $$;
+
+grant execute on function public.check_rate_limit(text, integer, integer) to service_role, authenticated, anon;

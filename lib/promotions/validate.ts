@@ -34,7 +34,7 @@ const NONNEG_INT_FIELDS = [
  */
 export function parseCouponInput(
   body: Record<string, unknown>,
-  { partial }: { partial: boolean },
+  { partial, existingType }: { partial: boolean; existingType?: CouponDiscountType },
 ): CouponWritableFields | string {
   const out: CouponWritableFields = {};
 
@@ -65,8 +65,10 @@ export function parseCouponInput(
     if (typeof body.discount_value !== 'number' || !Number.isInteger(body.discount_value) || body.discount_value < 0) {
       return 'discount_value must be a non-negative integer';
     }
+    // Effective type = the one in this body, else the existing coupon's type
+    // (M9) — so a PATCH changing only the value still caps percent coupons.
     if (
-      (out.discount_type ?? body.discount_type) === 'percent' &&
+      (out.discount_type ?? existingType) === 'percent' &&
       body.discount_value > 100
     ) {
       return 'discount_value must be at most 100 for a percent coupon';

@@ -12,6 +12,7 @@ interface RazorpayWebhookPayload {
         id?: string;
         order_id?: string;
         method?: string;
+        amount?: number; // paise (M5 cross-check)
         error_description?: string;
       };
     };
@@ -56,6 +57,7 @@ export async function POST(request: Request) {
           gatewayPaymentId,
           method: paymentEntity?.method,
           signatureOk: true,
+          capturedAmountPaise: paymentEntity?.amount, // M5 cross-check
         });
       }
     } else if (event === 'payment.failed') {

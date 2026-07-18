@@ -29,6 +29,7 @@ export async function captureGatewayPayment(params: {
   gatewayPaymentId: string;
   method?: string;
   signatureOk: boolean;
+  capturedAmountPaise?: number; // for the M5 amount cross-check
 }): Promise<CaptureResult> {
   const admin = createAdminSupabaseClient();
 
@@ -51,6 +52,18 @@ export async function captureGatewayPayment(params: {
       .eq('id', payment.order_id)
       .maybeSingle();
     return { ok: true, order: (order as Order) ?? null, alreadyProcessed: true };
+  }
+
+  // M5: defense-in-depth — the captured amount should equal what we recorded
+  // for this order. Razorpay binds the amount to the order, so a mismatch is
+  // anomalous; log it (money already moved — don't block, but make it visible).
+  if (
+    typeof params.capturedAmountPaise === 'number' &&
+    params.capturedAmountPaise !== (payment.amount_inr as number) * 100
+  ) {
+    console.error(
+      `captureGatewayPayment: AMOUNT MISMATCH for ${params.gatewayOrderId} — captured ${params.capturedAmountPaise}p vs expected ${(payment.amount_inr as number) * 100}p`,
+    );
   }
 
   const method: PaymentMethod = mapRazorpayMethod(params.method);
