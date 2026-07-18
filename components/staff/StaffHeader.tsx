@@ -17,18 +17,29 @@ export function StaffHeader() {
   const [openState, setOpenState] = useState<StoreOpenState | null>(null);
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
-  // the Store controls section on the Menu page. Best-effort — a failed
-  // fetch just leaves the badge hidden.
+  // the Store controls section on the Menu page. Best-effort — a failed fetch
+  // just leaves the badge hidden. Refreshed on a poll, on window focus, and
+  // instantly when the Store controls fire 'hioc:store-changed', so it never
+  // goes stale after an override/pause toggle (or a time-based open/close).
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/store-settings', { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((data) => {
-        if (!cancelled) setOpenState(data.openState ?? null);
-      })
-      .catch(() => {});
+    const load = () => {
+      fetch('/api/store-settings', { cache: 'no-store' })
+        .then((res) => res.json())
+        .then((data) => {
+          if (!cancelled) setOpenState(data.openState ?? null);
+        })
+        .catch(() => {});
+    };
+    load();
+    const poll = setInterval(load, 15000);
+    window.addEventListener('focus', load);
+    window.addEventListener('hioc:store-changed', load);
     return () => {
       cancelled = true;
+      clearInterval(poll);
+      window.removeEventListener('focus', load);
+      window.removeEventListener('hioc:store-changed', load);
     };
   }, []);
 
@@ -85,7 +96,11 @@ export function StaffHeader() {
                   : 'bg-[#f6efe9] text-tan-dark hover:opacity-80')
               }
             >
-              {openState.acceptingOrders ? 'Store: Accepting' : 'Store: Paused'}
+              {openState.acceptingOrders
+                ? 'Store: Accepting'
+                : openState.reason === 'paused'
+                  ? 'Store: Paused'
+                  : 'Store: Closed'}
             </Link>
           ) : null}
           <button

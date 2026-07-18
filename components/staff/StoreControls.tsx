@@ -53,6 +53,9 @@ export function StoreControls() {
       if (res.ok && data) {
         setSettings(data.settings ?? null);
         setOpenState(data.openState ?? null);
+        // Tell the header badge (and any other listener) to refresh immediately,
+        // so "Store: Accepting/Paused/Closed" reflects this change without a reload.
+        window.dispatchEvent(new Event('hioc:store-changed'));
       } else {
         setSettings(prevSettings);
         setOpenState(prevOpenState);
