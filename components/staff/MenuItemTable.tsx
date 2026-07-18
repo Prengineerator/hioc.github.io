@@ -103,51 +103,59 @@ export function MenuItemTable({
                             {availabilityLabel(item)}
                           </span>
                           {available ? (
-                            <div className="relative">
+                            menuOpenFor === item.id ? (
+                              // Inline duration buttons (not an absolute dropdown) so they can
+                              // never be clipped by the table's overflow-x-auto scroll container.
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className="text-[11px] text-muted">86 for:</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onSnooze(item, '2h');
+                                    setMenuOpenFor(null);
+                                  }}
+                                  className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                                >
+                                  2 hrs
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onSnooze(item, 'eod');
+                                    setMenuOpenFor(null);
+                                  }}
+                                  className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                                >
+                                  Today
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onSnooze(item, 'indefinite');
+                                    setMenuOpenFor(null);
+                                  }}
+                                  className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                                >
+                                  Until I re-enable
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setMenuOpenFor(null)}
+                                  className="px-1 text-xs text-muted hover:text-charcoal"
+                                  aria-label="Cancel"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ) : (
                               <button
                                 type="button"
-                                onClick={() =>
-                                  setMenuOpenFor(menuOpenFor === item.id ? null : item.id)
-                                }
+                                onClick={() => setMenuOpenFor(item.id)}
                                 className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                               >
                                 86 this item
                               </button>
-                              {menuOpenFor === item.id ? (
-                                <div className="absolute z-10 mt-1 flex w-40 flex-col overflow-hidden rounded-md border border-[#e5e5e5] bg-cream shadow-sm">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      onSnooze(item, '2h');
-                                      setMenuOpenFor(null);
-                                    }}
-                                    className="px-3 py-2 text-left text-xs text-charcoal hover:bg-[#f6efe9]"
-                                  >
-                                    86 for 2 hours
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      onSnooze(item, 'eod');
-                                      setMenuOpenFor(null);
-                                    }}
-                                    className="px-3 py-2 text-left text-xs text-charcoal hover:bg-[#f6efe9]"
-                                  >
-                                    86 rest of today
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      onSnooze(item, 'indefinite');
-                                      setMenuOpenFor(null);
-                                    }}
-                                    className="px-3 py-2 text-left text-xs text-charcoal hover:bg-[#f6efe9]"
-                                  >
-                                    86 indefinitely
-                                  </button>
-                                </div>
-                              ) : null}
-                            </div>
+                            )
                           ) : (
                             <button
                               type="button"
