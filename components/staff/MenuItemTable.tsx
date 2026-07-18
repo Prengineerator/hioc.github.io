@@ -22,8 +22,8 @@ function variantSummary(item: MenuItem): string {
 // "Available" immediately, with no cron needed to clear the stale column.
 function availabilityLabel(item: MenuItem): string {
   if (isMenuItemAvailable(item)) return 'Available';
-  if (!item.is_available) return "86’d (manual)";
-  return `86’d until ${formatIstTime(new Date(item.unavailable_until as string))}`;
+  if (!item.is_available) return 'Sold out';
+  return `Sold out until ${formatIstTime(new Date(item.unavailable_until as string))}`;
 }
 
 export function MenuItemTable({
@@ -107,7 +107,7 @@ export function MenuItemTable({
                               // Inline duration buttons (not an absolute dropdown) so they can
                               // never be clipped by the table's overflow-x-auto scroll container.
                               <div className="flex flex-wrap items-center gap-1">
-                                <span className="text-[11px] text-muted">86 for:</span>
+                                <span className="text-[11px] text-muted">Sold out for:</span>
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -136,7 +136,7 @@ export function MenuItemTable({
                                   }}
                                   className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                                 >
-                                  Until I re-enable
+                                  Indefinitely
                                 </button>
                                 <button
                                   type="button"
@@ -153,7 +153,7 @@ export function MenuItemTable({
                                 onClick={() => setMenuOpenFor(item.id)}
                                 className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                               >
-                                86 this item
+                                Mark sold out
                               </button>
                             )
                           ) : (
@@ -162,7 +162,7 @@ export function MenuItemTable({
                               onClick={() => onReenable(item)}
                               className="rounded-md border border-tan px-2 py-1 text-xs font-bold text-tan hover:bg-[#f6efe9]"
                             >
-                              Re-enable
+                              Mark available
                             </button>
                           )}
                         </div>
