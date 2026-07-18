@@ -13,6 +13,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
 import { PRIMARY_NEXT } from '@/lib/orders/stateMachine';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
+import { unlockChime, playChime } from '@/lib/staff/chime';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -26,6 +27,7 @@ export default function StaffOrdersPage() {
   const [counterMode, setCounterMode] = useState(false);
   const [prepMin, setPrepMin] = useState(15);
   const [toast, setToast] = useState('');
+  const [soundEnabled, setSoundEnabled] = useState(false);
   const prevReceivedRef = useRef<Set<string> | null>(null);
 
   const fetchOrders = useCallback(async () => {
@@ -76,6 +78,14 @@ export default function StaffOrdersPage() {
     setToast(msg);
     setTimeout(() => setToast(''), 3500);
   };
+
+  // One-time audio unlock (browsers block sound until a user gesture, S2). Plays
+  // a test chime so staff confirm it works.
+  const enableSound = useCallback(async () => {
+    const ok = await unlockChime();
+    setSoundEnabled(ok);
+    if (ok) playChime();
+  }, []);
 
   const patchStatus = useCallback(
     async (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => {
@@ -199,6 +209,18 @@ export default function StaffOrdersPage() {
           <div className="flex items-center gap-3">
             <ConnectionBadge connection={connection} />
             <button
+              type="button"
+              onClick={enableSound}
+              className={
+                'rounded-md border px-3 py-1.5 text-xs font-bold ' +
+                (soundEnabled
+                  ? 'border-[#e5e5e5] text-charcoal hover:border-tan'
+                  : 'border-amber-400 bg-amber-50 text-amber-700')
+              }
+            >
+              {soundEnabled ? '🔔 Sound on' : '🔔 Enable sound'}
+            </button>
+            <button
               onClick={() => setCounterMode((v) => !v)}
               className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
             >
@@ -214,7 +236,7 @@ export default function StaffOrdersPage() {
           className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm sm:max-w-sm"
         />
 
-        <NewOrderAlert count={newOrderIds.size} />
+        <NewOrderAlert count={newOrderIds.size} soundEnabled={soundEnabled} />
 
         {loading ? (
           <Spinner label="Loading orders…" />

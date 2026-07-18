@@ -5,7 +5,8 @@
 // required reason), the forward steps, Cancel, and mark-payment (S7/STF-041).
 // The parent owns the API calls (optimistic update + refetch); this is pure UI.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
@@ -46,6 +47,33 @@ export function OrderDetailModal({
   const [refundAmount, setRefundAmount] = useState(order.total_inr ?? order.subtotal_inr);
   const [refundReason, setRefundReason] = useState('');
   const [refundSubmitting, setRefundSubmitting] = useState(false);
+
+  // Prep/handover checklist (R5): while preparing or ready, each line item is
+  // tickable so staff verify it's made with the right variant/addons/notes.
+  // Persisted to localStorage per order so it survives a refresh on the tablet.
+  const checklistMode = order.status === 'preparing' || order.status === 'ready';
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`hioc:checklist:${order.id}`);
+      setChecked(raw ? new Set(JSON.parse(raw) as string[]) : new Set());
+    } catch {
+      setChecked(new Set());
+    }
+  }, [order.id]);
+  const toggleChecked = (id: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        localStorage.setItem(`hioc:checklist:${order.id}`, JSON.stringify([...next]));
+      } catch {
+        /* private mode / quota — non-fatal */
+      }
+      return next;
+    });
+  };
 
   // Pickup-code verification at handover (CUS-056): the customer reads out the
   // code on their status page; staff type it to confirm they're handing the
@@ -103,23 +131,60 @@ export function OrderDetailModal({
           {order.promised_ready_at ? (
             <p className="text-xs text-muted">ETA: ~{formatIstTime(new Date(order.promised_ready_at))}</p>
           ) : null}
+          <p className="text-xs text-muted">
+            Elapsed{' '}
+            <ElapsedTime since={order.created_at} className="font-bold" warnAfterMin={10} dangerAfterMin={20} />
+            {' '}· in {STATUS_LABELS[order.status]}{' '}
+            <ElapsedTime since={order.updated_at} />
+          </p>
         </div>
 
-        <ul className="mt-4 flex flex-col gap-2 border-t border-[#e5e5e5] pt-3 text-sm text-charcoal">
-          {order.items.map((item) => (
-            <li key={item.id}>
-              <div className="flex justify-between">
-                <span>{item.quantity}× {item.name_snapshot}{item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}</span>
-                <span className="font-bold">₹{item.line_total_inr}</span>
-              </div>
-              {item.addons.length > 0 ? (
-                <p className="pl-4 text-xs text-muted">{item.addons.map((a) => a.option_name_snapshot).join(', ')}</p>
-              ) : null}
-              {item.special_instructions ? (
-                <p className="pl-4 text-xs italic text-tan">Note: {item.special_instructions}</p>
-              ) : null}
-            </li>
-          ))}
+        {checklistMode ? (
+          <p className="mt-4 flex items-center justify-between text-xs font-bold uppercase tracking-wide text-charcoal">
+            <span>{order.status === 'ready' ? 'Handover checklist' : 'Prep checklist'}</span>
+            <span className={checked.size === order.items.length ? 'text-[#2f6b38]' : 'text-tan-dark'}>
+              {checked.size}/{order.items.length} verified
+            </span>
+          </p>
+        ) : null}
+        <ul className="mt-2 flex flex-col gap-2 border-t border-[#e5e5e5] pt-3 text-sm text-charcoal">
+          {order.items.map((item) => {
+            const isChecked = checklistMode && checked.has(item.id);
+            const detail = (
+              <>
+                <div className="flex justify-between gap-2">
+                  <span className={isChecked ? 'text-muted line-through' : ''}>
+                    {item.quantity}× {item.name_snapshot}
+                    {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+                  </span>
+                  <span className="shrink-0 font-bold">₹{item.line_total_inr}</span>
+                </div>
+                {item.addons.length > 0 ? (
+                  <p className="text-xs text-muted">+ {item.addons.map((a) => a.option_name_snapshot).join(', ')}</p>
+                ) : null}
+                {item.special_instructions ? (
+                  <p className="text-xs italic text-tan">Note: {item.special_instructions}</p>
+                ) : null}
+              </>
+            );
+            return (
+              <li key={item.id}>
+                {checklistMode ? (
+                  <label className="flex cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => toggleChecked(item.id)}
+                      className="mt-1 h-4 w-4 shrink-0 accent-tan"
+                    />
+                    <span className="flex-1">{detail}</span>
+                  </label>
+                ) : (
+                  detail
+                )}
+              </li>
+            );
+          })}
         </ul>
 
         <div className="mt-3 flex justify-between border-t border-[#e5e5e5] pt-2 text-sm">

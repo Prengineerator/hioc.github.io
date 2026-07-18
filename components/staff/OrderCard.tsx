@@ -3,7 +3,7 @@
 // A single order card on the staff queue board (S1). Tap to open the detail
 // view; the primary button advances one step along the happy path.
 
-import { timeAgo } from '@/lib/utils/timeAgo';
+import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
@@ -58,8 +58,13 @@ export function OrderCard({
       </div>
 
       <div className="flex items-center justify-between text-xs text-muted">
-        <span>{timeAgo(order.created_at)}</span>
-        <span>{STATUS_LABELS[order.status]}</span>
+        {/* Live total age (amber >10m, red >20m) + time in the current stage. */}
+        <span>
+          <ElapsedTime since={order.created_at} warnAfterMin={10} dangerAfterMin={20} /> total
+        </span>
+        <span>
+          {STATUS_LABELS[order.status]} · <ElapsedTime since={order.updated_at} />
+        </span>
       </div>
 
       {next && PRIMARY_LABEL[order.status] ? (
