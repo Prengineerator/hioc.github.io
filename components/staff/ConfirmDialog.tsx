@@ -1,3 +1,7 @@
+'use client';
+
+import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
+
 export function ConfirmDialog({
   heading,
   body,
@@ -11,6 +15,7 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  useModalDismiss(onCancel);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <button

@@ -104,6 +104,8 @@ export async function POST(request: Request) {
     sort_order,
     variants,
     addon_group_ids,
+    image_url,
+    unavailable_until,
   } = body;
 
   if (typeof name !== 'string' || name.trim().length === 0) {
@@ -165,6 +167,19 @@ export async function POST(request: Request) {
     return errorResponse(400, 'addon_group_ids must be an array of strings');
   }
 
+  if (image_url !== undefined && typeof image_url !== 'string') {
+    return errorResponse(400, 'image_url must be a string');
+  }
+
+  // unavailable_until (S6 86/snooze): ISO date string or null.
+  if (
+    unavailable_until !== undefined &&
+    unavailable_until !== null &&
+    (typeof unavailable_until !== 'string' || Number.isNaN(Date.parse(unavailable_until)))
+  ) {
+    return errorResponse(400, 'unavailable_until must be an ISO date string or null');
+  }
+
   const admin = createAdminSupabaseClient();
 
   const { data: item, error: itemError } = await admin
@@ -177,6 +192,8 @@ export async function POST(request: Request) {
       is_veg: is_veg ?? true,
       is_available: is_available ?? true,
       sort_order: sort_order ?? 0,
+      image_url: typeof image_url === 'string' ? image_url : '',
+      unavailable_until: (unavailable_until as string | null | undefined) ?? null,
     })
     .select()
     .single();

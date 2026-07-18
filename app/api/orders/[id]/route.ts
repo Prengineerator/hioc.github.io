@@ -32,5 +32,21 @@ export async function GET(_request: Request, { params }: RouteParams) {
     return notFound();
   }
 
-  return NextResponse.json({ order: toOrderResponse(data as OrderRowWithItems) });
+  const order = toOrderResponse(data as OrderRowWithItems);
+
+  // Best-effort: surface the applied coupon's code (if any) for the receipt
+  // bill breakup (PAY-1). coupon_redemptions may not exist/be populated until
+  // the Promotions engine lands — any failure here just omits the label.
+  let coupon_code: string | null = null;
+  const { data: redemption, error: redemptionError } = await admin
+    .from('coupon_redemptions')
+    .select('coupons ( code )')
+    .eq('order_id', id)
+    .maybeSingle();
+  if (!redemptionError && redemption) {
+    const coupon = (redemption as unknown as { coupons: { code: string } | null }).coupons;
+    coupon_code = coupon?.code ?? null;
+  }
+
+  return NextResponse.json({ order: { ...order, coupon_code } });
 }

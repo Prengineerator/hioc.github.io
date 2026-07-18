@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
+import { rateLimitOk, clientIp } from '@/lib/api/rateLimit';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,10 @@ export async function POST(request: Request) {
   const { email, token } = body;
   if (typeof email !== 'string' || email.trim().length === 0) {
     return errorResponse(400, 'email is required and must be a non-empty string');
+  }
+  // M10: throttle verify attempts per email + IP to block 6-digit brute force.
+  if (!(await rateLimitOk(`otp-email-vfy:${email.trim().toLowerCase()}:${clientIp(request)}`, 10, 600))) {
+    return errorResponse(429, 'Too many attempts. Please wait a few minutes and try again.');
   }
   if (typeof token !== 'string' || token.trim().length === 0) {
     return errorResponse(400, 'token is required and must be a non-empty string');

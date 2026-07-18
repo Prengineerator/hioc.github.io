@@ -8,6 +8,9 @@ import {
   CAFE_PHONE_DISPLAY,
   CAFE_PHONE_HREF,
 } from '@/lib/constants';
+import { Card } from '@/components/ui/Card';
+import { buttonVariants } from '@/components/ui/Button';
+import { BUSINESS } from '@/lib/legal';
 
 export const metadata: Metadata = {
   title: 'Contact',
@@ -43,8 +46,8 @@ export default function ContactPage() {
         </p>
       </div>
 
-      <div className="mt-10 grid grid-cols-1 gap-10 md:grid-cols-2">
-        <div className="flex flex-col gap-6">
+      <div className="mt-10 grid grid-cols-1 gap-6 md:grid-cols-2">
+        <Card className="flex flex-col gap-6">
           <InfoBlock label="Address">
             <p>{CAFE_ADDRESS}</p>
           </InfoBlock>
@@ -54,6 +57,11 @@ export default function ContactPage() {
           <InfoBlock label="Phone">
             <a href={CAFE_PHONE_HREF} className="text-tan hover:underline">
               {CAFE_PHONE_DISPLAY}
+            </a>
+          </InfoBlock>
+          <InfoBlock label="Email">
+            <a href={BUSINESS.emailHref} className="text-tan hover:underline">
+              {BUSINESS.email}
             </a>
           </InfoBlock>
           <InfoBlock label="Instagram">
@@ -66,25 +74,37 @@ export default function ContactPage() {
               {CAFE_INSTAGRAM_HANDLE}
             </a>
           </InfoBlock>
-        </div>
-
-        <div>
-          <h2 className="mb-3 text-lg font-bold text-charcoal">Map</h2>
-          <div className="overflow-x-auto">
-            <iframe
-              src={CAFE_MAPS_EMBED_SRC}
-              loading="lazy"
-              referrerPolicy="no-referrer-when-downgrade"
-              width="100%"
-              height="400"
-              style={{ border: 0 }}
-              title="HIOC location map"
-            />
+          <InfoBlock label="Business">
+            <p>{BUSINESS.legalName} (operating {BUSINESS.name})</p>
+            {BUSINESS.gstin ? <p className="text-sm text-muted">GSTIN: {BUSINESS.gstin}</p> : null}
+          </InfoBlock>
+          <div className="mt-2 flex flex-col gap-3 sm:flex-row">
+            <a href={CAFE_PHONE_HREF} className={buttonVariants({ fullWidth: true })}>
+              Call Us
+            </a>
+            <a
+              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CAFE_ADDRESS)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ variant: 'secondary', fullWidth: true })}
+            >
+              Get Directions
+            </a>
           </div>
-          <p className="mt-2 text-sm text-muted">
-            Find us on the map — E/773, Near V Mart, Kamla Nagar.
-          </p>
-        </div>
+        </Card>
+
+        <Card padding="none" className="overflow-hidden">
+          <iframe
+            src={CAFE_MAPS_EMBED_SRC}
+            loading="lazy"
+            referrerPolicy="no-referrer-when-downgrade"
+            width="100%"
+            height="100%"
+            className="min-h-[320px] w-full"
+            style={{ border: 0 }}
+            title="HIOC location map"
+          />
+        </Card>
       </div>
     </div>
   );

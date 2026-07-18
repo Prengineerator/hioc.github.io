@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Space_Mono } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/next';
 import { SiteHeader } from '@/components/site/SiteHeader';
@@ -21,6 +21,13 @@ export const metadata: Metadata = {
     template: '%s | HIOC.',
   },
   description: 'High on Coffee — order ahead for pickup.',
+};
+
+// Tints mobile browser chrome (address bar, task switcher) to match the
+// brand instead of the OS default — a small but visible polish on phones,
+// where this app is used most.
+export const viewport: Viewport = {
+  themeColor: '#232325',
 };
 
 export default function RootLayout({

@@ -1,14 +1,29 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { MenuItemTable } from '@/components/staff/MenuItemTable';
+import { MenuItemTable, type SnoozeDuration } from '@/components/staff/MenuItemTable';
 import {
   MenuItemFormModal,
   type MenuItemFormValues,
 } from '@/components/staff/MenuItemFormModal';
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
+import { StoreControls } from '@/components/staff/StoreControls';
 import { Spinner } from '@/components/ui/Spinner';
 import type { MenuItem } from '@/lib/types';
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+// Today's 24:00 IST ("end of day") expressed as a UTC ISO instant — mirrors
+// the IST wall-clock convention in lib/store/hours.ts (that file's helpers
+// are private, so this small piece is duplicated rather than exported).
+function endOfDayIstIso(now: Date): string {
+  const ist = new Date(now.getTime() + IST_OFFSET_MS);
+  const y = ist.getUTCFullYear();
+  const mo = ist.getUTCMonth();
+  const d = ist.getUTCDate();
+  const nextMidnightUtcMs = Date.UTC(y, mo, d + 1, 0, 0, 0) - IST_OFFSET_MS;
+  return new Date(nextMidnightUtcMs).toISOString();
+}
 
 export default function StaffMenuPage() {
   const [items, setItems] = useState<MenuItem[]>([]);
@@ -17,6 +32,7 @@ export default function StaffMenuPage() {
     { mode: 'create' } | { mode: 'edit'; item: MenuItem } | null
   >(null);
   const [deleteTarget, setDeleteTarget] = useState<MenuItem | null>(null);
+  const [query, setQuery] = useState('');
 
   const fetchItems = useCallback(async () => {
     const res = await fetch('/api/menu?includeUnavailable=true', {
@@ -31,14 +47,35 @@ export default function StaffMenuPage() {
     fetchItems();
   }, [fetchItems]);
 
-  async function handleToggleAvailable(item: MenuItem, next: boolean) {
-    setItems((prev) =>
-      prev.map((i) => (i.id === item.id ? { ...i, is_available: next } : i)),
-    );
+  // S6 86/snooze — see lib/menu/availability.ts for the semantics this
+  // implements: a timed snooze keeps is_available true and sets
+  // unavailable_until; an indefinite 86 just flips is_available off.
+  async function handleSnooze(item: MenuItem, duration: SnoozeDuration) {
+    const body =
+      duration === 'indefinite'
+        ? { is_available: false }
+        : {
+            is_available: true,
+            unavailable_until:
+              duration === '2h'
+                ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+                : endOfDayIstIso(new Date()),
+          };
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...body } : i)));
     await fetch(`/api/menu/${item.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_available: next }),
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function handleReenable(item: MenuItem) {
+    const body = { is_available: true, unavailable_until: null };
+    setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...body } : i)));
+    await fetch(`/api/menu/${item.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
   }
 
@@ -75,9 +112,22 @@ export default function StaffMenuPage() {
     fetchItems();
   }
 
+  // Client-side search over the loaded menu (name or category). The list is
+  // small (~120 items) so filtering in-memory is instant.
+  const q = query.trim().toLowerCase();
+  const visibleItems = q
+    ? items.filter(
+        (i) => i.name.toLowerCase().includes(q) || i.category.toLowerCase().includes(q),
+      )
+    : items;
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div id="store" className="mb-8 scroll-mt-20">
+        <StoreControls />
+      </div>
+
+      <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-charcoal">Menu Items</h1>
         <button
           type="button"
@@ -88,12 +138,25 @@ export default function StaffMenuPage() {
         </button>
       </div>
 
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search menu by name or category…"
+        className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan sm:max-w-sm"
+      />
+
       {loading ? (
         <Spinner label="Loading menu items…" />
+      ) : visibleItems.length === 0 ? (
+        <p className="rounded-md border border-[#e5e5e5] bg-cream py-10 text-center text-sm text-muted">
+          No items match &ldquo;{query}&rdquo;.
+        </p>
       ) : (
         <MenuItemTable
-          items={items}
-          onToggleAvailable={handleToggleAvailable}
+          items={visibleItems}
+          onSnooze={handleSnooze}
+          onReenable={handleReenable}
           onEdit={(item) => setModal({ mode: 'edit', item })}
           onDelete={(item) => setDeleteTarget(item)}
         />

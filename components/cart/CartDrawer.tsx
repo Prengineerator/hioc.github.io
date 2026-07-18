@@ -2,19 +2,29 @@
 
 import Link from 'next/link';
 import { useCart } from '@/lib/cart/CartContext';
+import { computeBill } from '@/lib/store/hours';
+import type { StoreSettings } from '@/lib/types';
 
 export function CartDrawer({
   open,
   onClose,
+  settings = null,
+  checkoutDisabledReason = null,
 }: {
   open: boolean;
   onClose: () => void;
+  // Both optional (C5/C3): the drawer still works standalone while settings
+  // are loading, or if the caller doesn't wire the closed-store gate.
+  settings?: StoreSettings | null;
+  checkoutDisabledReason?: string | null;
 }) {
   const { items, totalPrice, increment, decrement, removeItem } = useCart();
 
   if (!open) return null;
 
   const isEmpty = items.length === 0;
+  const bill = settings ? computeBill(totalPrice, settings) : null;
+  const checkoutDisabled = isEmpty || !!checkoutDisabledReason;
 
   return (
     <div className="fixed inset-0 z-50">
@@ -60,6 +70,11 @@ export function CartDrawer({
                       {item.addons.length > 0 ? (
                         <p className="mt-0.5 text-xs text-muted">
                           {item.addons.map((a) => a.optionName).join(', ')}
+                        </p>
+                      ) : null}
+                      {item.specialInstructions ? (
+                        <p className="mt-0.5 text-xs italic text-muted">
+                          Note: {item.specialInstructions}
                         </p>
                       ) : null}
                     </div>
@@ -108,22 +123,37 @@ export function CartDrawer({
         </div>
 
         <div className="border-t border-[#e5e5e5] px-4 py-4">
-          <div className="mb-4 flex items-center justify-between">
-            <span className="font-bold text-charcoal">Subtotal</span>
-            <span className="font-bold text-tan">₹{totalPrice}</span>
+          <div className="mb-4 flex flex-col gap-1 text-sm text-charcoal">
+            <div className="flex items-center justify-between">
+              <span>Subtotal</span>
+              <span>₹{bill ? bill.subtotal_inr : totalPrice}</span>
+            </div>
+            {bill && (bill.tax_inr > 0 || bill.packaging_inr > 0) ? (
+              <div className="flex items-center justify-between font-bold text-charcoal">
+                <span>Total (incl. GST)</span>
+                <span className="text-tan">₹{bill.total_inr}</span>
+              </div>
+            ) : null}
           </div>
+          {checkoutDisabledReason ? (
+            <p className="mb-3 text-center text-xs font-bold text-charcoal">
+              {checkoutDisabledReason}
+            </p>
+          ) : null}
           <Link
             href="/checkout"
-            aria-disabled={isEmpty ? 'true' : undefined}
+            aria-disabled={checkoutDisabled ? 'true' : undefined}
             title={
-              isEmpty ? 'Add items to your cart to checkout' : undefined
+              isEmpty
+                ? 'Add items to your cart to checkout'
+                : checkoutDisabledReason ?? undefined
             }
             onClick={(e) => {
-              if (isEmpty) e.preventDefault();
+              if (checkoutDisabled) e.preventDefault();
             }}
             className={
               'block w-full rounded-md px-4 py-3 text-center font-bold transition-colors ' +
-              (isEmpty
+              (checkoutDisabled
                 ? 'cursor-not-allowed bg-[#e5e5e5] text-muted'
                 : 'bg-tan text-cream hover:bg-tan-dark')
             }

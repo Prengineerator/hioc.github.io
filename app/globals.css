@@ -30,4 +30,49 @@ body {
   background-color: var(--color-cream);
   color: var(--color-charcoal);
   font-size: 16px;
+  /* Space Mono reads tighter than a proportional face at the default 1.5;
+     a touch more line-height keeps paragraphs (about/menu descriptions)
+     comfortable to read on mobile. */
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/*
+ * Keyboard-only focus ring: consistent tan outline on every interactive
+ * element, everywhere. `:focus-visible` (not `:focus`) so mouse/touch
+ * activation never shows it — only keyboard/AT navigation does.
+ */
+:focus-visible {
+  outline: 2px solid var(--color-tan);
+  outline-offset: 2px;
+}
+
+::selection {
+  background-color: var(--color-tan);
+  color: var(--color-cream);
+}
+
+/* Removes the grey tap flash on iOS/Android; interactive components supply
+   their own hover/active states instead. Combined with touch-action below,
+   this also removes the ~300ms double-tap-to-zoom delay on buttons/links —
+   relevant on both the customer's phone and the counter tablet. */
+a,
+button {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Respect the OS-level "reduce motion" setting — mainly affects the Modal
+   overlay/panel entrance animation and hover transitions added across
+   components/ui. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

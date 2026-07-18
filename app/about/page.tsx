@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
+import { buttonVariants } from '@/components/ui/Button';
 
 export const metadata: Metadata = {
   title: 'About',
@@ -60,15 +61,12 @@ export default function AboutPage() {
           Come Say Hi
         </h2>
         <div className="mt-6 flex flex-col items-center justify-center gap-4 sm:flex-row">
-          <Link
-            href="/menu"
-            className="w-full rounded-md bg-tan px-8 py-3 text-center font-bold text-cream transition-colors hover:bg-tan-dark sm:w-auto"
-          >
+          <Link href="/menu" className={buttonVariants({ size: 'lg', className: 'w-full sm:w-auto' })}>
             View Menu
           </Link>
           <Link
             href="/contact"
-            className="w-full rounded-md border-2 border-tan px-8 py-3 text-center font-bold text-tan transition-colors hover:bg-tan hover:text-cream sm:w-auto"
+            className={buttonVariants({ variant: 'secondary', size: 'lg', className: 'w-full sm:w-auto' })}
           >
             Get Directions
           </Link>

@@ -27,6 +27,7 @@ export interface CartItem {
   variantLabel: string;
   unitPriceInr: number;
   addons: CartAddonSelection[];
+  specialInstructions: string; // per-line note (C4); sent as items[].special_instructions
   qty: number;
 }
 
@@ -80,9 +81,10 @@ function writeToStorage(state: CartState) {
  * Cart provider — persists to localStorage so the cart survives navigation
  * between the public pages (Home/Menu/Checkout/Confirmation/About/Contact).
  *
- * A cart "line" is item + variant + the exact set of chosen addon options
- * (see lib/cart/cartKey.ts) — ordering the same drink two different ways
- * produces two separate lines rather than merging into one.
+ * A cart "line" is item + variant + the exact set of chosen addon options +
+ * special-instructions text (see lib/cart/cartKey.ts) — ordering the same
+ * drink two different ways produces two separate lines rather than merging
+ * into one.
  *
  * NOTE: app/layout.tsx is a protected scaffold file this project's contract
  * says not to modify, and it does not currently mount a single app-wide
@@ -112,6 +114,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       line.menuItemId,
       line.variantId,
       line.addons.map((a) => a.optionId),
+      line.specialInstructions,
     );
     setItems((prev) => {
       const existing = prev.find((i) => i.key === key);

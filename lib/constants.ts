@@ -11,9 +11,9 @@ export const CAFE_HOURS = 'Open all days, 10:00 AM – 12:00 AM';
 
 export const CAFE_HOURS_HOME = 'Open Daily, 10:00 AM – 12:00 AM';
 
-export const CAFE_PHONE_DISPLAY = '+91 82795 82271';
+export const CAFE_PHONE_DISPLAY = '+91 56279 63898';
 
-export const CAFE_PHONE_HREF = 'tel:+918279582271';
+export const CAFE_PHONE_HREF = 'tel:+915627963898';
 
 export const CAFE_INSTAGRAM_URL = 'https://www.instagram.com/hioc.in/';
 
