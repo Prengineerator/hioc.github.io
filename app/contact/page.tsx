@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import {
   CAFE_ADDRESS,
+  CAFE_DIRECTIONS_URL,
   CAFE_HOURS,
   CAFE_INSTAGRAM_HANDLE,
   CAFE_INSTAGRAM_URL,
@@ -83,7 +84,7 @@ export default function ContactPage() {
               Call Us
             </a>
             <a
-              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CAFE_ADDRESS)}`}
+              href={CAFE_DIRECTIONS_URL}
               target="_blank"
               rel="noopener noreferrer"
               className={buttonVariants({ variant: 'secondary', fullWidth: true })}
