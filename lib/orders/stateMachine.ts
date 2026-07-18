@@ -47,8 +47,14 @@ export const TRANSITIONS: readonly TransitionRule[] = [
   { from: 'preparing', to: 'cancelled', actors: ['owner'], requiresReason: true, notify: 'cancelled' },
   // ready → …
   { from: 'ready', to: 'completed', actors: ['staff'] },
-  // 'placed' is reserved for Phase-2 online payment; wire the gate here later.
+  // A ready order nobody collects can be cancelled by a manager (H4) rather
+  // than wrongly force-completed (which would earn loyalty on an uncollected order).
+  { from: 'ready', to: 'cancelled', actors: ['owner'], requiresReason: true, notify: 'cancelled' },
+  // 'placed' = online-payment order not yet captured. System promotes it to
+  // 'received' on capture; the customer may abandon it, and a manager (or the
+  // auto-expiry sweep) may cancel it (H4/H5).
   { from: 'placed', to: 'received', actors: ['system'] },
+  { from: 'placed', to: 'cancelled', actors: ['owner', 'customer', 'system'], requiresReason: true, notify: 'cancelled' },
 ];
 
 // owner can do anything staff can (OWN-002) — expand actor sets accordingly.

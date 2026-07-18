@@ -98,10 +98,13 @@ export async function validateAndComputeCoupon(
 
   // Total usage limit (0 = unlimited).
   if (coupon.usage_limit > 0) {
+    // Count only redemptions on orders that weren't cancelled/rejected (H7) —
+    // an abandoned/rejected order must not permanently burn a limited coupon.
     const { count, error: usageError } = await admin
       .from('coupon_redemptions')
-      .select('id', { count: 'exact', head: true })
-      .eq('coupon_id', coupon.id);
+      .select('id, orders!inner(status)', { count: 'exact', head: true })
+      .eq('coupon_id', coupon.id)
+      .not('orders.status', 'in', '("cancelled","rejected")');
     if (usageError) {
       console.error('validateAndComputeCoupon: usage count failed', usageError);
       return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };
@@ -119,9 +122,10 @@ export async function validateAndComputeCoupon(
     }
     const { count, error: userUsageError } = await admin
       .from('coupon_redemptions')
-      .select('id', { count: 'exact', head: true })
+      .select('id, orders!inner(status)', { count: 'exact', head: true })
       .eq('coupon_id', coupon.id)
-      .eq('user_id', ctx.userId);
+      .eq('user_id', ctx.userId)
+      .not('orders.status', 'in', '("cancelled","rejected")');
     if (userUsageError) {
       console.error('validateAndComputeCoupon: per-user count failed', userUsageError);
       return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };

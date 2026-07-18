@@ -97,6 +97,30 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   if (action === 'retry') {
+    // H2: reuse an existing pending gateway order rather than minting a second
+    // one. Two open Razorpay orders for the same HIOC order could each be paid
+    // once → double-charge. A single reused order can only be paid once.
+    const { data: pending } = await admin
+      .from('payments')
+      .select('gateway_order_id, amount_inr')
+      .eq('order_id', orderId)
+      .eq('gateway', 'razorpay')
+      .eq('status', 'payment_pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (pending?.gateway_order_id) {
+      const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID || '';
+      return NextResponse.json({
+        payment: {
+          gateway: 'razorpay',
+          gatewayOrderId: pending.gateway_order_id,
+          amountInr: pending.amount_inr,
+          keyId,
+        },
+      });
+    }
+
     const amount = current.total_inr ?? 0;
     const intent = await createPaymentIntent(orderId, amount);
     if (!intent) {
