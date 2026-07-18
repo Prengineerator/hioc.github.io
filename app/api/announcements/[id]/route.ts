@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getManagerUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { parseAnnouncementInput } from '@/lib/promotions/validate';
@@ -12,7 +12,7 @@ type RouteParams = { params: { id: string } };
 
 // PATCH /api/announcements/[id] — staff/owner only. Edit or toggle `active`.
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }
@@ -56,7 +56,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
 // DELETE /api/announcements/[id] — staff/owner only.
 export async function DELETE(_request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }

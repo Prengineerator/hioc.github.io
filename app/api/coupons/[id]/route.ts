@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getManagerUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { parseCouponInput } from '@/lib/promotions/validate';
@@ -14,7 +14,7 @@ type RouteParams = { params: { id: string } };
 // toggling `active`, editing limits/dates/scope). Code uniqueness is
 // enforced by the DB constraint.
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }

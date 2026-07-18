@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getManagerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { parseCouponInput } from '@/lib/promotions/validate';
 import type { Coupon } from '@/lib/types';
@@ -12,7 +12,7 @@ const MAX_COUPONS = 200;
 // GET /api/coupons — staff/owner only. Lists coupons for the owner promotions
 // UI (newest first).
 export async function GET() {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }
@@ -33,7 +33,7 @@ export async function GET() {
 
 // POST /api/coupons — staff/owner only. Creates a coupon (LOY-5 owner tools).
 export async function POST(request: Request) {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }

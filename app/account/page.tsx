@@ -14,6 +14,11 @@ const SECTIONS = [
     body: 'Your saved items, ready to add to cart.',
   },
   {
+    href: '/rewards',
+    title: 'Rewards',
+    body: 'Your points balance, how to earn, and redeem history.',
+  },
+  {
     href: '/account/profile',
     title: 'Profile',
     body: 'Name, phone, default order type, and notification preferences.',

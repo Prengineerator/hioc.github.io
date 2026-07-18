@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getManagerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { getLoyaltyConfig } from '@/lib/loyalty/ledger';
 import type { LoyaltyConfig } from '@/lib/types';
@@ -26,7 +26,7 @@ export async function GET() {
 // PATCH /api/loyalty/config — staff/owner only. Edits the singleton loyalty
 // config row (earn/redeem rates, limits, expiry).
 export async function PATCH(request: Request) {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }

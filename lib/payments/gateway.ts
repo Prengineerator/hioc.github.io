@@ -75,6 +75,7 @@ export async function createPaymentIntent(
       amount: Math.round(amountInr) * 100, // paise
       currency: 'INR',
       receipt: orderId,
+      payment_capture: 1, // auto-capture on success (M4) — never leave 'authorized'
       notes: { hioc_order_id: orderId },
     }),
   });

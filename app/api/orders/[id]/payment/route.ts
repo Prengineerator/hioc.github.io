@@ -48,6 +48,26 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   const admin = createAdminSupabaseClient();
+
+  // Don't let a manual "mark payment" clobber a gateway-verified online payment
+  // (M6) — those are reconciled against Razorpay and may only change via the
+  // refund flow. Guard against overwriting an online paid/refunded record.
+  const { data: existing } = await admin
+    .from('orders')
+    .select('payment_method, payment_status')
+    .eq('id', id)
+    .maybeSingle();
+  if (!existing) return notFound();
+  if (
+    existing.payment_method === 'online' &&
+    ['paid', 'refunded', 'partially_refunded'].includes(existing.payment_status as string)
+  ) {
+    return errorResponse(
+      409,
+      'This order was paid online — its payment is managed by the gateway and can only change via a refund.',
+    );
+  }
+
   const { data, error } = await admin
     .from('orders')
     .update({ payment_method: body.payment_method, payment_status: paymentStatus })

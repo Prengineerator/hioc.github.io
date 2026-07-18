@@ -398,7 +398,13 @@ export async function POST(request: Request) {
   // so it goes straight to the counter flow regardless of payment_mode.
   const needsOnlinePayment = paymentMode === 'online' && bill.total_inr > 0;
   const initialStatus: OrderStatus = needsOnlinePayment ? 'placed' : 'received';
-  const initialPaymentStatus: PaymentStatus = needsOnlinePayment ? 'payment_pending' : 'unpaid';
+  // A fully-discounted (₹0) order has nothing to collect — mark it paid so staff
+  // don't see "unpaid" + a "mark payment" prompt on an already-settled order (M7).
+  const initialPaymentStatus: PaymentStatus = needsOnlinePayment
+    ? 'payment_pending'
+    : bill.total_inr === 0
+      ? 'paid'
+      : 'unpaid';
   const initialPaymentMethod: PaymentMethod | null = needsOnlinePayment ? 'online' : null;
 
   const { data: orderRow, error: orderError } = await admin

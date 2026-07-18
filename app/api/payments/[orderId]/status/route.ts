@@ -47,7 +47,10 @@ export async function GET(_request: Request, { params }: RouteParams) {
 
   if (payment?.gateway_order_id) {
     const attempts = await fetchOrderPaymentAttempts(payment.gateway_order_id);
-    const captured = attempts?.find((a) => a.status === 'captured' || a.status === 'authorized');
+    // Only a CAPTURED payment means money settled (M4). An 'authorized' one is
+    // not yet captured — treating it as paid could queue an order before the
+    // charge completes.
+    const captured = attempts?.find((a) => a.status === 'captured');
     if (captured) {
       const result = await captureGatewayPayment({
         gatewayOrderId: payment.gateway_order_id,

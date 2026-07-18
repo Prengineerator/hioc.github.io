@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getManagerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { parseAnnouncementInput } from '@/lib/promotions/validate';
 import type { Announcement } from '@/lib/types';
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   const admin = createAdminSupabaseClient();
 
   if (searchParams.get('all') === 'true') {
-    const user = await getStaffUser();
+    const user = await getManagerUser();
     if (!user) {
       return unauthorized();
     }
@@ -53,7 +53,7 @@ export async function GET(request: Request) {
 // POST /api/announcements — staff/owner only. Creates a homepage banner
 // (LOY-5).
 export async function POST(request: Request) {
-  const user = await getStaffUser();
+  const user = await getManagerUser();
   if (!user) {
     return unauthorized();
   }

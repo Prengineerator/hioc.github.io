@@ -156,7 +156,8 @@ function TopCustomerTable({ rows, names }: { rows: CustomerStatsRow[]; names: Ma
     return <p className="py-6 text-center text-sm text-muted">No customers yet</p>;
   }
   return (
-    <table className="w-full text-sm">
+    <div className="overflow-x-auto">
+    <table className="w-full min-w-[420px] text-sm">
       <thead>
         <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
           <th className="py-1 font-bold">Customer</th>
@@ -182,5 +183,6 @@ function TopCustomerTable({ rows, names }: { rows: CustomerStatsRow[]; names: Ma
         })}
       </tbody>
     </table>
+    </div>
   );
 }
