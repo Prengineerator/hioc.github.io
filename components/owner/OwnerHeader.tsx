@@ -9,6 +9,7 @@ const LINKS = [
   { href: '/owner/payments', label: 'Payments' },
   { href: '/owner/promotions', label: 'Promotions' },
   { href: '/owner/reviews', label: 'Reviews' },
+  { href: '/owner/tables', label: 'Tables' },
   { href: '/owner/staff', label: 'Team' },
   { href: '/owner/settings', label: 'Settings' },
   { href: '/staff', label: 'Staff board' },
