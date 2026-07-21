@@ -5,6 +5,8 @@ import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { normalizeEmail } from '@/lib/email';
+import { sendBillNotification } from '@/lib/notifications/engine';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { getStoreSettings } from '@/lib/store/settings';
@@ -118,6 +120,7 @@ export async function POST(request: Request) {
   const {
     customer_name,
     customer_phone,
+    customer_email,
     pickup_time,
     pickup_slot_start,
     pickup_slot_label,
@@ -146,6 +149,20 @@ export async function POST(request: Request) {
   }
   // Stored in E.164 form (see components/staff/OrderCard.tsx tel: link).
   const trimmedPhone = `+91${normalizedPhone}`;
+
+  // Optional customer email (RCT-2 e-bill). Blank/absent is fine; when present
+  // it must be a plausibly-valid address. Stored normalized (trimmed+lowercased).
+  let customerEmail: string | null = null;
+  if (customer_email !== undefined && customer_email !== null && String(customer_email).trim().length > 0) {
+    if (typeof customer_email !== 'string') {
+      return errorResponse(400, 'customer_email must be a string');
+    }
+    const normalizedEmail = normalizeEmail(customer_email);
+    if (!normalizedEmail) {
+      return errorResponse(400, 'customer_email must be a valid email address');
+    }
+    customerEmail = normalizedEmail;
+  }
 
   // Structured pickup slot (C4/CUS-026) with legacy free-text fallback. The
   // label is what surfaces on the confirmation + staff card; the ISO start (if
@@ -412,6 +429,9 @@ export async function POST(request: Request) {
     .insert({
       customer_name: trimmedName,
       customer_phone: trimmedPhone,
+      // Only sent when provided so order creation doesn't require the
+      // customer_email column until the 2026-07-order-email migration is applied.
+      ...(customerEmail ? { customer_email: customerEmail } : {}),
       pickup_time: slotLabel, // legacy column kept in sync with the slot label
       pickup_slot_start: slotStartIso,
       pickup_slot_label: slotLabel,
@@ -564,6 +584,13 @@ export async function POST(request: Request) {
   }
 
   const response = toOrderResponse(fullOrder as OrderRowWithItems);
+
+  // Send the link-based e-bill (RCT-1/2) on email + WhatsApp, logged + idempotent
+  // via the notification engine. Best-effort and never throws — a slow or
+  // unconfigured provider can't block or fail order creation. Each channel is
+  // dormant until configured. Online orders send at placement too; the linked
+  // bill page always reflects live payment status when opened.
+  await sendBillNotification(response);
 
   return NextResponse.json({ order: response, payment: paymentIntent }, { status: 201 });
 }

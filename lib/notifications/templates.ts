@@ -7,6 +7,7 @@ import type { NotificationEvent, Order } from '@/lib/types';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { CAFE_NAME } from '@/lib/constants';
+import { absoluteUrl } from '@/lib/url';
 
 export interface RenderedMessage {
   event: NotificationEvent;
@@ -59,6 +60,13 @@ export function renderNotification(order: Order, event: NotificationEvent): Rend
         body: `Your order ${num} at ${CAFE_NAME} has been cancelled.${reason}`,
       };
     }
+    case 'bill': {
+      const billLink = absoluteUrl(`/order/${order.id}/receipt`);
+      return {
+        event,
+        body: `Hi ${name}, here's your ${CAFE_NAME} bill for order ${num}. View & download it: ${billLink}`,
+      };
+    }
   }
 }
 
@@ -81,5 +89,8 @@ export function templateVarsFor(order: Order, event: NotificationEvent): string[
       return [name, num, order.reject_reason || 'unavailable']; // {{1}}name {{2}}num {{3}}reason
     case 'cancelled':
       return [num, order.reject_reason || 'as requested']; // {{1}}num {{2}}reason
+    case 'bill':
+      // order_bill template: {{1}}name {{2}}num {{3}}bill link (/order/<id>/receipt)
+      return [name, num, absoluteUrl(`/order/${order.id}/receipt`)];
   }
 }

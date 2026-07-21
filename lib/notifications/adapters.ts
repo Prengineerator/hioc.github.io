@@ -12,11 +12,13 @@
 import type { NotificationChannel, NotificationEvent } from '@/lib/types';
 
 export interface SendInput {
-  to: string; // E.164 phone (customer_phone), e.g. +919999999999
+  to: string; // destination: E.164 phone for whatsapp/sms, email address for email
   channel: NotificationChannel;
   body: string; // rendered plain text (log/SMS + WhatsApp free-text fallback)
   event?: NotificationEvent; // for template-based providers (WhatsApp)
   templateVars?: string[]; // ordered {{1}},{{2}},… for the event's approved template
+  subject?: string; // email only
+  html?: string; // email only (falls back to <pre>body</pre>)
 }
 
 // event → approved WhatsApp template name (override per event via env).
@@ -28,6 +30,9 @@ function whatsappTemplateName(event: NotificationEvent): string {
     ready: process.env.WHATSAPP_TPL_READY || 'order_ready_1',
     rejected: process.env.WHATSAPP_TPL_REJECTED || 'order_rejected',
     cancelled: process.env.WHATSAPP_TPL_CANCELLED || 'order_cancelled',
+    // E-bill (RCT-1): the WhatsApp channel stays dormant until an approved
+    // template name is set in WHATSAPP_TPL_BILL (see sendBillNotification).
+    bill: process.env.WHATSAPP_TPL_BILL || 'order_bill',
   };
   return map[event];
 }
@@ -137,6 +142,43 @@ export const smsAdapter: NotificationAdapter = {
         return { ok: false, providerRef: '', error: data.message ?? `HTTP ${res.status}` };
       }
       return { ok: true, providerRef: data.sid ?? '', error: '' };
+    } catch (err) {
+      return { ok: false, providerRef: '', error: err instanceof Error ? err.message : 'send failed' };
+    }
+  },
+};
+
+/**
+ * Email via Resend (REST API, no SDK — same raw-fetch pattern as WhatsApp/SMS).
+ * Used by the e-bill send (channel 'email'); `to` is the address, `subject`+`html`
+ * carry the message (plain `body` is the fallback). Never throws. Returns a
+ * clear error when RESEND_API_KEY / RESEND_FROM aren't configured.
+ */
+export const emailAdapter: NotificationAdapter = {
+  name: 'email',
+  channel: 'email',
+  async send({ to, subject, html, body }: SendInput): Promise<SendResult> {
+    const apiKey = process.env.RESEND_API_KEY;
+    const from = process.env.RESEND_FROM; // e.g. "HIOC <bills@hioc.in>"
+    if (!apiKey || !from) {
+      return { ok: false, providerRef: '', error: 'resend credentials missing' };
+    }
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from,
+          to: [to],
+          subject: subject || 'Your bill',
+          html: html || `<pre>${body}</pre>`,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { id?: string; message?: string; name?: string };
+      if (!res.ok) {
+        return { ok: false, providerRef: '', error: data.message ?? data.name ?? `HTTP ${res.status}` };
+      }
+      return { ok: true, providerRef: data.id ?? '', error: '' };
     } catch (err) {
       return { ok: false, providerRef: '', error: err instanceof Error ? err.message : 'send failed' };
     }

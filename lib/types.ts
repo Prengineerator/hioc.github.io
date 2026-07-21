@@ -46,10 +46,10 @@ export type AddonSelectionType = 'single' | 'multi';
 
 // Notifications (phase1-migration.sql §6).
 export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
-// NOTE: the Phase-3 'bill' event (bill-on-WhatsApp/email, RCT-1/2) is added with
-// that ticket — alongside its template + adapter wiring — so the exhaustive
-// notification handlers stay in sync. Not part of the FND3-M schema/type sync.
-export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled';
+// 'bill' = the link-based e-bill (RCT-1/2), delivered on email + WhatsApp via the
+// notification engine (sendBillNotification). Its handlers live alongside the
+// status events: template name in adapters.ts, body/vars in templates.ts.
+export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill';
 export type NotificationStatus = 'queued' | 'sent' | 'failed';
 
 // store_settings.store_open_override (phase1-migration.sql §7).

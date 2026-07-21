@@ -58,7 +58,7 @@ export function SiteHeader() {
   }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-cream/95 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-line bg-cream/95 backdrop-blur print:hidden">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
         <Link href="/" className="flex shrink-0 items-center" aria-label="HIOC. home">
           <Image

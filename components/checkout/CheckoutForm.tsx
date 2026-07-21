@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { normalizeEmail } from '@/lib/email';
 import { generatePickupSlots } from '@/lib/store/hours';
 import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
@@ -32,6 +33,19 @@ const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID
 // configured.
 const GUEST_OTP_REQUIRED = process.env.NEXT_PUBLIC_FLAG_GUEST_OTP === 'true';
 
+// Guest-order claim (ACC-4). Fired once right after a guest verifies their
+// number at checkout (which logs them in), so any past orders they placed as a
+// guest with the same number link onto the now-authenticated account — matching
+// what app/login/page.tsx does after every login path. Best-effort: a failure
+// here must never block placing the order.
+async function claimGuestOrders() {
+  try {
+    await fetch('/api/account/claim', { method: 'POST' });
+  } catch {
+    // best-effort — the order still gets placed under the new session.
+  }
+}
+
 interface QuoteResponse {
   bill: BillBreakdown;
   coupon: { ok: boolean; discountInr: number; reason?: string } | null;
@@ -52,6 +66,8 @@ export function CheckoutForm({
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [email, setEmail] = useState(''); // optional — for the e-bill by email
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [orderType, setOrderType] = useState<OrderType>('takeaway');
   const [slotStart, setSlotStart] = useState<string | null>(null); // null = not yet picked
   const [notes, setNotes] = useState('');
@@ -63,7 +79,10 @@ export function CheckoutForm({
   const [userId, setUserId] = useState<string | null>(null);
 
   // Guest WhatsApp-OTP verification (ACC-4). `otpStep === 'sent'` reveals the
-  // code input; `phoneVerified` lets the just-verified guest place the order.
+  // code input; once the code checks out `phoneVerified` flips true, the box
+  // collapses to a "number verified ✓" badge, and placing the order becomes a
+  // separate, clearly-labeled action (verify and place are decoupled so a
+  // failed placement never forces the guest to re-verify).
   const [otpStep, setOtpStep] = useState<'idle' | 'sent'>('idle');
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState<string | null>(null);
@@ -253,6 +272,19 @@ export function CheckoutForm({
     refreshQuote(couponApplied ?? '', 0);
   }
 
+  // Editing the number after a successful verification must invalidate it —
+  // otherwise a guest could verify one number, swap in another, and place the
+  // order against an unverified phone. Resets the OTP flow back to the start.
+  function onPhoneChange(value: string) {
+    setPhone(value);
+    if (phoneVerified || otpStep !== 'idle') {
+      setPhoneVerified(false);
+      setOtpStep('idle');
+      setOtpCode('');
+      setOtpError(null);
+    }
+  }
+
   function validatePhone(value: string): boolean {
     const ok = normalizeIndianMobile(value) !== null;
     setPhoneError(
@@ -266,6 +298,13 @@ export function CheckoutForm({
   const storeAcceptingOrders = !openState || openState.acceptingOrders;
   const canSubmit =
     storeAcceptingOrders && unavailableNames.length === 0 && (slots.length === 0 || slotStart !== null);
+
+  // Guest WhatsApp-OTP gating (ACC-4). A signed-out guest must verify their
+  // number via the "Get OTP" control by the phone field before the Place Order
+  // button unlocks; logged-in customers are already verified.
+  const guestVerifyRequired = GUEST_OTP_REQUIRED && !userId;
+  const guestMustVerify = guestVerifyRequired && !phoneVerified;
+  const phoneIsValid = normalizeIndianMobile(phone) !== null;
 
   // Send the WhatsApp verification code to the entered mobile (guest flow).
   async function sendOtp() {
@@ -287,9 +326,12 @@ export function CheckoutForm({
     }
   }
 
-  // Verify the code (which sets the session cookies / logs the guest in), then
-  // place the order — now attributed to that account server-side.
-  async function verifyAndPlace() {
+  // Verify the code (which sets the session cookies / logs the guest in). On
+  // success we collapse the OTP box to a verified badge and claim any past
+  // guest orders — but do NOT place the order here. Placement stays a separate
+  // action so a network/validation failure at placement never drops the guest
+  // back into re-entering a (by then expired) code.
+  async function verifyOtp() {
     if (!otpCode.trim()) {
       setOtpError('Enter the code sent to your WhatsApp.');
       return;
@@ -305,7 +347,10 @@ export function CheckoutForm({
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? 'Invalid or expired code.');
       setPhoneVerified(true);
-      await placeOrder();
+      setOtpStep('idle');
+      setOtpCode('');
+      // The guest is now logged in — link their past guest orders (best-effort).
+      claimGuestOrders();
     } catch (err) {
       setOtpError(err instanceof Error ? err.message : 'Invalid or expired code.');
     } finally {
@@ -324,6 +369,7 @@ export function CheckoutForm({
         body: JSON.stringify({
           customer_name: name,
           customer_phone: phone,
+          customer_email: email.trim() || undefined,
           order_type: orderType,
           pickup_slot_label: selectedSlot?.label ?? 'ASAP',
           pickup_slot_start:
@@ -383,10 +429,17 @@ export function CheckoutForm({
     const phoneOk = validatePhone(phone);
     if (!phoneOk || !canSubmit) return;
 
-    // Guests must verify their mobile via a WhatsApp OTP first (which logs them
-    // in); logged-in customers are already verified and place directly.
+    // Email is optional, but if given it must be valid (it's where the e-bill goes).
+    if (email.trim() && normalizeEmail(email) === null) {
+      setEmailError('Enter a valid email address, or leave it blank.');
+      return;
+    }
+
+    // Guests verify via the "Get OTP" control by the phone field, which unlocks
+    // this button. Belt-and-suspenders guard in case the form is submitted
+    // (e.g. Enter key) before verification completes.
     if (GUEST_OTP_REQUIRED && !userId && !phoneVerified) {
-      await sendOtp();
+      setServerError('Please verify your mobile number (Get OTP) before placing the order.');
       return;
     }
     await placeOrder();
@@ -446,20 +499,122 @@ export function CheckoutForm({
           <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
             Phone
           </label>
-          <input
-            id="phone"
-            type="tel"
-            required
-            maxLength={16}
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            onBlur={(e) => validatePhone(e.target.value)}
-            placeholder="e.g. 98765 43210"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
+          <div className="flex gap-2">
+            <input
+              id="phone"
+              type="tel"
+              required
+              maxLength={16}
+              value={phone}
+              onChange={(e) => onPhoneChange(e.target.value)}
+              onBlur={(e) => validatePhone(e.target.value)}
+              placeholder="e.g. 98765 43210"
+              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            />
+            {/* Dedicated "Get OTP" control (ACC-4): a signed-out guest verifies
+                the number before ordering. Shown only while unverified with no
+                code outstanding; disabled until the number is a valid mobile. */}
+            {guestVerifyRequired && !phoneVerified && otpStep === 'idle' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (validatePhone(phone)) sendOtp();
+                }}
+                disabled={otpBusy || !phoneIsValid}
+                className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+              >
+                {otpBusy ? 'Sending…' : 'Get OTP'}
+              </button>
+            ) : null}
+          </div>
           {phoneError ? (
             <p className="mt-1 text-sm text-charcoal">{phoneError}</p>
           ) : null}
+          {/* Surface a Get-OTP *send* failure (e.g. provider not configured):
+              otpError is otherwise only shown inside the code box, which never
+              opens if the send itself fails. */}
+          {guestVerifyRequired && otpStep === 'idle' && otpError ? (
+            <p className="mt-1 text-xs text-red-700">{otpError}</p>
+          ) : null}
+
+          {/* Code entry — appears after Get OTP sends the WhatsApp code. */}
+          {guestVerifyRequired && otpStep === 'sent' && !phoneVerified ? (
+            <div className="mt-3 flex flex-col gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
+              <p className="text-sm text-charcoal">
+                Enter the 6-digit code sent to your WhatsApp on{' '}
+                <span className="font-bold">{phone}</span> to confirm your number.
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value)}
+                placeholder="6-digit code"
+                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              />
+              {otpError ? <p className="text-xs text-red-700">{otpError}</p> : null}
+              <button
+                type="button"
+                onClick={verifyOtp}
+                disabled={otpBusy}
+                className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {otpBusy ? 'Verifying…' : 'Verify number'}
+              </button>
+              <div className="flex items-center justify-between text-xs">
+                <button
+                  type="button"
+                  onClick={sendOtp}
+                  disabled={otpBusy}
+                  className="font-bold text-tan underline disabled:opacity-50"
+                >
+                  Resend code
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOtpStep('idle');
+                    setOtpCode('');
+                    setOtpError(null);
+                  }}
+                  className="text-muted underline"
+                >
+                  Change number
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Verified badge — the number is confirmed; Place Order unlocks. */}
+          {guestVerifyRequired && phoneVerified ? (
+            <div
+              role="status"
+              className="mt-2 flex items-center gap-2 rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal"
+            >
+              <span aria-hidden className="text-base font-bold text-tan">✓</span>
+              <span>Number verified — you can place your order.</span>
+            </div>
+          ) : null}
+        </div>
+
+        <div>
+          <label htmlFor="email" className="mb-1 block text-sm font-bold text-charcoal">
+            Email <span className="font-normal text-muted">(optional — for your bill)</span>
+          </label>
+          <input
+            id="email"
+            type="email"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (emailError) setEmailError(null);
+            }}
+            placeholder="you@example.com"
+            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+          />
+          {emailError ? <p className="mt-1 text-sm text-charcoal">{emailError}</p> : null}
         </div>
 
         <div>
@@ -661,72 +816,21 @@ export function CheckoutForm({
           marketing.
         </p>
 
-        {GUEST_OTP_REQUIRED && !userId && otpStep === 'sent' && !phoneVerified ? (
-          <div className="flex flex-col gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
-            <p className="text-sm text-charcoal">
-              Enter the 6-digit code sent to your WhatsApp on{' '}
-              <span className="font-bold">{phone}</span> to confirm your number.
-            </p>
-            <input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value)}
-              placeholder="6-digit code"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-            />
-            {otpError ? <p className="text-xs text-red-700">{otpError}</p> : null}
-            <button
-              type="button"
-              onClick={verifyAndPlace}
-              disabled={otpBusy || submitting}
-              className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {otpBusy || submitting ? 'Verifying…' : 'Verify & Place Order'}
-            </button>
-            <div className="flex items-center justify-between text-xs">
-              <button
-                type="button"
-                onClick={sendOtp}
-                disabled={otpBusy}
-                className="font-bold text-tan underline disabled:opacity-50"
-              >
-                Resend code
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setOtpStep('idle');
-                  setOtpCode('');
-                  setOtpError(null);
-                }}
-                className="text-muted underline"
-              >
-                Change number
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            type="submit"
-            disabled={submitting || otpBusy || !canSubmit}
-            className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {otpBusy
-              ? 'Sending code…'
-              : submitting
-                ? 'Placing Order…'
-                : !storeAcceptingOrders
-                  ? 'Checkout Unavailable'
-                  : GUEST_OTP_REQUIRED && !userId
-                    ? 'Verify Number & Place Order'
-                    : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
-                      ? `Pay ₹${displayBill.total_inr} & Place Order`
-                      : 'Place Order'}
-          </button>
-        )}
+        <button
+          type="submit"
+          disabled={submitting || otpBusy || !canSubmit || guestMustVerify}
+          className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {submitting
+            ? 'Placing Order…'
+            : !storeAcceptingOrders
+              ? 'Checkout Unavailable'
+              : guestMustVerify
+                ? 'Verify your number to continue'
+                : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
+                  ? `Pay ₹${displayBill.total_inr} & Place Order`
+                  : 'Place Order'}
+        </button>
       </form>
     </div>
   );

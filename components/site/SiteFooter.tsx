@@ -39,7 +39,7 @@ export function SiteFooter() {
   }
 
   return (
-    <footer className="border-t border-line bg-charcoal text-cream">
+    <footer className="border-t border-line bg-charcoal text-cream print:hidden">
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-4 py-10 text-sm sm:grid-cols-3">
         <div className="flex flex-col items-center gap-3 text-center sm:items-start sm:text-left">
           <Image
