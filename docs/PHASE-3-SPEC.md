@@ -280,8 +280,8 @@ The phase ships in **three independently launchable milestones** — each one le
 | New `order_amendments (id, order_id, staff_id, kind ∈ void_item/change_table/comp — open enum, payload jsonb, created_at)` | FND3-4, audit |
 | New `cash_days (id, business_date unique, status open/closed, opened_by, opened_at, opening_denoms jsonb, opening_total_inr, closed_by, closed_at, closing_denoms jsonb, counted_total_inr, expected_cash_inr, over_short_inr, notes)` — totals always derived from denoms server-side | OPS-2 |
 | New `role_permissions (permission_key unique, min_role staff/manager, updated_by, updated_at)` seeded with D4 defaults; single `hasPermission()` helper; changes audited | FND3-6 |
-| `orders` add `customer_email` nullable (validated at capture; account email auto-fills for logged-in customers) | RCT-2 |
-| `NotificationEvent` gains `'bill'` (types + templates + engine wiring); email joins the adapter set with provider env keys | RCT-1/2 |
+| `orders.customer_email` — **already added** by the link-based e-bill migration; RCT-2 reuses it (no new column) | RCT-2 |
+| `NotificationEvent` gains `'bill'` — added **in RCT-1** with its template + adapter wiring (so the exhaustive handlers stay in sync), not in FND3-M; email joins the adapter set with provider env keys | RCT-1/2 |
 | Totals become **Σ non-voided items** — enforce in the (server-only) recompute path, not a DB trigger | FND3-4 |
 | Analytics views: channel/order-type mix, avg ticket per channel, table turnover | OPS-1 |
 | RLS: `tables` — public read of active rows **minus `qr_token`** (token resolved server-side only); writes owner-only. New tables staff/owner-scoped like Phase-1 order tables. Customer self-read policies (Phase-2 pattern) untouched — staff-created orders with no `user_id` are simply invisible to customers. | NFR-004 |

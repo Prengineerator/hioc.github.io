@@ -22,6 +22,10 @@ export type OrderStatus =
 
 export type OrderType = 'takeaway' | 'dine_in' | 'delivery';
 
+// Which surface created an order (phase3-migration.sql §3, FND3-2). Existing
+// rows backfill to 'customer_web'; the website checkout keeps writing it.
+export type OrderChannel = 'customer_web' | 'staff_pos' | 'table_qr';
+
 export type PaymentStatus =
   | 'unpaid'
   | 'payment_pending'
@@ -42,6 +46,9 @@ export type AddonSelectionType = 'single' | 'multi';
 
 // Notifications (phase1-migration.sql §6).
 export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
+// NOTE: the Phase-3 'bill' event (bill-on-WhatsApp/email, RCT-1/2) is added with
+// that ticket — alongside its template + adapter wiring — so the exhaustive
+// notification handlers stay in sync. Not part of the FND3-M schema/type sync.
 export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled';
 export type NotificationStatus = 'queued' | 'sent' | 'failed';
 
@@ -106,6 +113,7 @@ export interface Order {
   order_number: number;
   customer_name: string;
   customer_phone: string;
+  customer_email: string | null; // optional; used for the link-based e-bill (migration 2026-07-order-email)
   pickup_time: string; // DEPRECATED free-text (schema.sql); prefer pickup_slot_* below
   status: OrderStatus;
   subtotal_inr: number;
@@ -129,6 +137,13 @@ export interface Order {
   // Phase-2 addition (migration §2): links an order to a customer account
   // (ACC-2/ACC-4). Null for guest checkout; backfilled on guest-claim by phone.
   user_id: string | null;
+  // Phase-3 additions (phase3-migration.sql §3): dine-in channel + attribution.
+  // NOTE: customer_email already exists above (link-based e-bill migration) — the
+  // Phase-3 RCT-2 email-bill work reuses it rather than adding a column.
+  channel: OrderChannel; // which surface created it (FND3-2)
+  table_id: string | null; // dine-in table (FND3-1); null for takeaway/web
+  table_label: string; // snapshot of the table label at order time (survives renames)
+  created_by: string | null; // staff/manager/owner who punched a staff_pos order
 }
 
 export interface OrderItemAddon {
@@ -152,6 +167,12 @@ export interface OrderItem {
   line_total_inr: number;
   special_instructions: string; // per-line note (CUS-021); snapshotted (migration §5)
   addons: OrderItemAddon[];
+  // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
+  // is VOIDED, never deleted — kept for audit; excluded from totals server-side.
+  voided: boolean;
+  void_reason: string;
+  voided_by: string | null;
+  voided_at: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -446,4 +467,108 @@ export interface ReviewSummaryRow {
   menu_item_id: string | null;
   reviews: number;
   avg_rating: number;
+}
+
+// ===========================================================================
+// PHASE 3 "Dine-In & Counter Ops" — mirrors supabase/phase3-migration.sql.
+// ===========================================================================
+
+// --- Tables registry (migration §2) ----------------------------------------
+// NOTE: qr_token is intentionally OMITTED from this shape — it must never reach
+// an unauthenticated client. Server routes select an explicit column list
+// excluding it, and match /t/<token> server-side (service role).
+export interface Table {
+  id: string;
+  label: string;
+  zone: string; // '' = none
+  capacity: number; // 0 = unspecified
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Order corrections (migration §5) --------------------------------------
+// Open enum: 'change_table'/'comp' reserved; rounds would attach here if the
+// service model ever changes (docs/PHASE-3-SPEC.md §7).
+export type AmendmentKind = 'void_item' | 'change_table' | 'comp';
+
+export interface OrderAmendment {
+  id: string;
+  order_id: string;
+  staff_id: string | null; // manager for gated actions
+  kind: AmendmentKind;
+  payload: Record<string, unknown>; // { order_item_id, reason, ... }
+  created_at: string;
+}
+
+// --- Cash management (migration §6) ----------------------------------------
+export type CashDayStatus = 'open' | 'closed';
+
+// Denomination → count, e.g. { "500": 3, "200": 5, "10": 12 }. Totals are always
+// derived from this server-side, never typed (OPS-2).
+export type CashDenoms = Record<string, number>;
+
+export interface CashDay {
+  id: string;
+  business_date: string; // 'YYYY-MM-DD' (IST business date)
+  status: CashDayStatus;
+  opened_by: string | null;
+  opened_at: string;
+  opening_denoms: CashDenoms;
+  opening_total_inr: number;
+  closed_by: string | null; // sign-off (manager by default)
+  closed_at: string | null;
+  closing_denoms: CashDenoms;
+  counted_total_inr: number;
+  expected_cash_inr: number; // opening + Σ cash settles − Σ cash refunds
+  over_short_inr: number; // counted - expected (signed)
+  notes: string;
+}
+
+// --- Permission matrix (migration §7) --------------------------------------
+// Sensitive-action keys, gated at 'staff' (staff-and-up) or 'manager'
+// (manager-and-up). owner always passes; unknown keys fail closed to manager —
+// both enforced in lib/permissions.ts (FND3-6), not the DB.
+export type PermissionKey =
+  | 'pos_order_entry'
+  | 'settle_payment'
+  | 'menu_edit'
+  | 'cash_day_open'
+  | 'void_line'
+  | 'comp_order'
+  | 'refund'
+  | 'cash_day_close';
+
+export type PermissionMinRole = 'staff' | 'manager';
+
+export interface RolePermission {
+  permission_key: PermissionKey;
+  min_role: PermissionMinRole;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+// --- Phase-3 analytics view rows (migration §9) ----------------------------
+export interface ChannelMixRow {
+  channel: OrderChannel;
+  order_type: OrderType;
+  orders: number;
+  revenue_inr: number;
+  avg_ticket_inr: number;
+}
+
+export interface TableTurnoverRow {
+  table_id: string | null;
+  table_label: string;
+  business_date: string;
+  settled_orders: number;
+  revenue_inr: number;
+}
+
+export interface StaffEntryStatsRow {
+  staff_id: string | null;
+  business_date: string;
+  orders_entered: number;
+  revenue_inr: number;
 }
