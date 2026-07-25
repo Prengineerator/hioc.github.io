@@ -5,9 +5,13 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
+import { flags } from '@/lib/flags';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
+  // POS-1: the counter-tablet order-entry surface. Only shown when the
+  // staffPos flag is on (default ON, NEXT_PUBLIC_FLAG_STAFF_POS=false to hide).
+  ...(flags.staffPos ? [{ href: '/staff/orders/new', label: 'New order' }] : []),
   { href: '/staff/menu', label: 'Menu' },
 ];
 

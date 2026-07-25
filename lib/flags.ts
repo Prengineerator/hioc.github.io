@@ -23,6 +23,11 @@ export const flags = {
   // Notifications engine. When off, transitions still record events but no
   // send is attempted/logged (useful before a provider is chosen).
   notifications: boolEnv(process.env.FLAG_NOTIFICATIONS, true),
+  // Staff POS-lite order entry (POS-1). Default ON so the counter-tablet
+  // "New order" surface is reachable by a staff account; set
+  // NEXT_PUBLIC_FLAG_STAFF_POS=false to dark it (hides the nav tab and the
+  // /staff/orders/new screen renders a "not enabled" state).
+  staffPos: boolEnv(process.env.NEXT_PUBLIC_FLAG_STAFF_POS, true),
 } as const;
 
 export type FeatureFlags = typeof flags;
