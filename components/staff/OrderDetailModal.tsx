@@ -125,6 +125,15 @@ export function OrderDetailModal({
   const activeItems = order.items.filter((i) => !i.voided);
   const voidTarget = voidItemId ? order.items.find((i) => i.id === voidItemId) : undefined;
 
+  // Print KOT / receipt / token (KOT-1, KOT-2). Opens the staff-gated 80mm print
+  // page in a new tab, which auto-fires the browser print dialog (decision D3 —
+  // USB thermal printer, no driver). Token is only meaningful for a walk-in
+  // takeaway (it has a pickup_code); receipt suits dine-in and settled orders.
+  const openPrint = (type: 'kot' | 'receipt' | 'token') => {
+    window.open(`/staff-print/${order.id}/${type}`, '_blank', 'noopener');
+  };
+  const canPrintToken = order.order_type === 'takeaway' && Boolean(order.pickup_code);
+
   const doAccept = () => {
     const promised = new Date(Date.now() + prepMin * 60_000).toISOString();
     onTransition(order, 'accepted', { promised_ready_at: promised });
@@ -284,6 +293,35 @@ export function OrderDetailModal({
           <span className="font-bold text-tan">₹{order.total_inr ?? order.subtotal_inr}</span>
         </div>
         {order.notes ? <p className="mt-2 text-sm italic text-muted">Order note: {order.notes}</p> : null}
+
+        {/* Print row (KOT-1 / KOT-2). Unobtrusive — sits above the transition
+            actions and never blocks them. KOT is available for any order (reprint
+            is the same route); receipt/token open the 80mm print page. */}
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-[#e5e5e5] pt-3">
+          <button
+            type="button"
+            onClick={() => openPrint('kot')}
+            className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+          >
+            Print KOT
+          </button>
+          <button
+            type="button"
+            onClick={() => openPrint('receipt')}
+            className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+          >
+            Print receipt
+          </button>
+          {canPrintToken ? (
+            <button
+              type="button"
+              onClick={() => openPrint('token')}
+              className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+            >
+              Print token
+            </button>
+          ) : null}
+        </div>
 
         {/* Actions */}
         {mode === 'accept' ? (
