@@ -170,6 +170,69 @@ export default function StaffOrdersPage() {
     [fetchOrders],
   );
 
+  // Void a line (POS-4) — POST /amend voids the line, recomputes totals
+  // server-side, and audits it. The route is manager-gated (hasPermission
+  // ('void_line'), D4): a plain staff member gets a 403 surfaced here rather
+  // than the button being hidden (role isn't plumbed to this client page). 409
+  // covers paid/terminal/last-line. The corrected total lands on refetch.
+  const handleVoid = useCallback(
+    async (o: OrderWithItems, itemId: string, reason: string) => {
+      try {
+        const res = await fetch(`/api/orders/${o.id}/amend`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_id: itemId, reason }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          showToast(
+            res.status === 403
+              ? 'A manager is required to void a line'
+              : d.error ?? 'Could not void the line.',
+          );
+        } else {
+          showToast('Line voided — total updated.');
+        }
+      } catch {
+        showToast('Could not void the line — please try again.');
+      } finally {
+        fetchOrders();
+      }
+    },
+    [fetchOrders],
+  );
+
+  // Manager comp (POS-2) — PATCH /status with a comp payload completes an unpaid
+  // dine-in order at ₹0 (server sets a paid-equivalent + audit, then completes).
+  // Manager-gated server-side: a 403 is surfaced clearly. Version-guarded like
+  // any other transition. Success is reflected on refetch.
+  const handleComp = useCallback(
+    async (o: OrderWithItems, reason: string) => {
+      try {
+        const res = await fetch(`/api/orders/${o.id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'completed', comp: { reason }, version: o.version }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          showToast(
+            res.status === 403
+              ? 'A manager is required to comp'
+              : d.error ?? 'Could not comp the order.',
+          );
+        } else {
+          showToast('Order comped and completed.');
+        }
+      } catch {
+        showToast('Could not comp the order — please try again.');
+      } finally {
+        fetchOrders();
+      }
+    },
+    [fetchOrders],
+  );
+
   const closeModalAfter = (fn: () => void) => {
     fn();
     setSelected(null);
@@ -285,6 +348,8 @@ export default function StaffOrdersPage() {
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
           onRefund={(o, amountInr, reason) => handleRefund(o, amountInr, reason)}
+          onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
+          onComp={(o, reason) => handleComp(o, reason)}
         />
       ) : null}
     </div>
