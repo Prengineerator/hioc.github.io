@@ -60,7 +60,16 @@ vi.mock('@/lib/api/auth', () => ({
         : null,
     ),
 }));
-vi.mock('@/lib/notifications/engine', () => ({ sendOrderNotification: () => Promise.resolve({ sent: true }) }));
+// RCT-1: the route fires sendBillNotification at settle (to === 'completed').
+// Hoisted so the vi.mock factory can reference the spy, and so tests can assert
+// on it.
+const { sendBillNotification } = vi.hoisted(() => ({
+  sendBillNotification: vi.fn(() => Promise.resolve({ email: false, whatsapp: false })),
+}));
+vi.mock('@/lib/notifications/engine', () => ({
+  sendOrderNotification: () => Promise.resolve({ sent: true }),
+  sendBillNotification,
+}));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderEvent: () => Promise.resolve() }));
 vi.mock('@/lib/store/settings', () => ({ getStoreSettings: () => Promise.resolve({ default_prep_min: 15 }) }));
 // Phase-2 added loyalty earn/reverse hooks to the status route; mock them so the
@@ -91,6 +100,7 @@ beforeEach(() => {
   state.eventRow = undefined;
   state.compPatch = undefined;
   state.amendmentRow = undefined;
+  sendBillNotification.mockClear();
 });
 
 describe('PATCH /api/orders/[id]/status', () => {
@@ -133,6 +143,27 @@ describe('PATCH /api/orders/[id]/status', () => {
     state.updated = null; // guarded update returns no row
     const res = await PATCH(req({ status: 'accepted' }), params);
     expect(res.status).toBe(409);
+  });
+
+  // RCT-1: the settled bill fires only when a transition COMPLETES an order.
+  it('fires the settle bill (RCT-1) on a completing transition', async () => {
+    // paid dine_in ready → completed (a legal settle; the staff order skipped
+    // the placement send, so this delivers its bill).
+    state.current = {
+      id: UUID, status: 'ready', version: 3, customer_phone: '+919000000000',
+      order_number: 1002, order_type: 'dine_in', payment_status: 'paid',
+    };
+    state.updated = { ...state.current, status: 'completed', version: 4 };
+    const res = await PATCH(req({ status: 'completed' }), params);
+    expect(res.status).toBe(200);
+    expect(sendBillNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire the settle bill on a non-completing transition', async () => {
+    // received → accepted (default fixture) settles nothing.
+    const res = await PATCH(req({ status: 'accepted' }), params);
+    expect(res.status).toBe(200);
+    expect(sendBillNotification).not.toHaveBeenCalled();
   });
 
   // FND3-5: dine-in must be settled before it completes (guard → 409), unless a

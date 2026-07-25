@@ -30,9 +30,11 @@ function whatsappTemplateName(event: NotificationEvent): string {
     ready: process.env.WHATSAPP_TPL_READY || 'order_ready_1',
     rejected: process.env.WHATSAPP_TPL_REJECTED || 'order_rejected',
     cancelled: process.env.WHATSAPP_TPL_CANCELLED || 'order_cancelled',
-    // E-bill (RCT-1): the WhatsApp channel stays dormant until an approved
-    // template name is set in WHATSAPP_TPL_BILL (see sendBillNotification).
-    bill: process.env.WHATSAPP_TPL_BILL || 'order_bill',
+    // E-bill (RCT-1): 6-var template `order_bill_1` (submitted for Meta approval
+    // in Sprint 1, input I3). The WhatsApp channel stays dormant until an approved
+    // name is set in WHATSAPP_TPL_BILL (see sendBillNotification); this is the
+    // default name once approved.
+    bill: process.env.WHATSAPP_TPL_BILL || 'order_bill_1',
   };
   return map[event];
 }

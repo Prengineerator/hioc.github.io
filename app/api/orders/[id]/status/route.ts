@@ -5,7 +5,8 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isOrderStatus, isUuid } from '@/lib/api/constants';
 import { canTransition } from '@/lib/orders/stateMachine';
 import { getStoreSettings } from '@/lib/store/settings';
-import { sendOrderNotification } from '@/lib/notifications/engine';
+import { sendBillNotification, sendOrderNotification } from '@/lib/notifications/engine';
+import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import type { Order, OrderType, PaymentStatus } from '@/lib/types';
@@ -185,6 +186,26 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // them if it's rejected/cancelled. No-ops until the Loyalty engine is wired.
   if (to === 'completed') {
     await earnForOrder(id);
+
+    // RCT-1: deliver the settled bill on WhatsApp/email at settle. A staff dine-in
+    // order skipped the placement send (it's settled here), so this is its bill; a
+    // web order whose bill already sent at placement no-ops via the engine's
+    // per-(order,event,channel) idempotency, and a no-phone/no-email order skips
+    // cleanly (FND3-5). Best-effort — the whole block is wrapped so a slow or
+    // failing send never fails the settle transition (the printed bill is the
+    // guaranteed copy). We reload the order with its lines so the bill's item
+    // count ({{4}}) is accurate — `order` above is a plain select('*') row and
+    // carries the payment fields but not the embedded items.
+    try {
+      const { data: full } = await admin
+        .from('orders')
+        .select('*, order_items(*, order_item_addons(*))')
+        .eq('id', id)
+        .single();
+      await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : order);
+    } catch (billError) {
+      console.error('settle bill notification failed', billError);
+    }
   } else if (to === 'rejected' || to === 'cancelled') {
     await reverseForOrder(id);
   }

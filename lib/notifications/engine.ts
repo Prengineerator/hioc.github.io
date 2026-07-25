@@ -30,6 +30,10 @@ type Admin = ReturnType<typeof createAdminSupabaseClient>;
  * Sends one message via one adapter and records the result, idempotent per
  * (order_id, event, channel): a prior successful send no-ops, and a retry after
  * an earlier failure updates the row in place. Never throws.
+ *
+ * `force` (staff "Resend bill", RCT-1) bypasses the already-sent short-circuit
+ * and resets the attempt budget so a logged prior send re-delivers; the outcome
+ * still upserts on the idempotency key, so the log stays one row per channel.
  */
 async function deliverAndLog(
   admin: Admin,
@@ -37,11 +41,13 @@ async function deliverAndLog(
   event: NotificationEvent,
   adapter: NotificationAdapter,
   input: SendInput,
+  force = false,
 ): Promise<{ sent: boolean; skipped?: string }> {
   const channel = adapter.channel;
 
   // Idempotency guard: skip a channel that already sent for this (order,event).
-  // The unique index is the hard backstop; this avoids a wasted send.
+  // The unique index is the hard backstop; this avoids a wasted send. A forced
+  // resend deliberately skips this so it re-delivers.
   const { data: existing } = await admin
     .from('notifications')
     .select('id, status, attempts')
@@ -50,14 +56,16 @@ async function deliverAndLog(
     .eq('channel', channel)
     .maybeSingle();
 
-  if (existing?.status === 'sent') {
+  if (!force && existing?.status === 'sent') {
     return { sent: true, skipped: 'already_sent' };
   }
 
   let lastError = '';
   let providerRef = '';
   let ok = false;
-  let attempts = existing?.attempts ?? 0;
+  // A forced resend starts a fresh attempt budget so a previously-maxed row can
+  // still send again; otherwise resume from the prior attempt count.
+  let attempts = force ? 0 : (existing?.attempts ?? 0);
 
   for (let i = attempts; i < MAX_ATTEMPTS && !ok; i++) {
     attempts = i + 1;
@@ -139,10 +147,15 @@ export async function sendOrderNotification(
  *   - whatsapp: needs WHATSAPP_TOKEN + WHATSAPP_PHONE_ID + an approved template
  *     name in WHATSAPP_TPL_BILL
  * Best-effort and never throws, so it can't block or fail order placement.
+ *
+ * `opts.force` (staff "Resend bill", RCT-1) re-delivers on both channels even
+ * when a prior send is already logged.
  */
 export async function sendBillNotification(
   order: Order,
+  opts: { force?: boolean } = {},
 ): Promise<{ email: boolean; whatsapp: boolean }> {
+  const force = opts.force ?? false;
   const result = { email: false, whatsapp: false };
   if (!flags.notifications) return result;
 
@@ -152,14 +165,21 @@ export async function sendBillNotification(
     if (order.customer_email && process.env.RESEND_API_KEY && process.env.RESEND_FROM) {
       const { subject, html } = renderBillEmail(order);
       const { body } = renderNotification(order, 'bill');
-      const r = await deliverAndLog(admin, order, 'bill', emailAdapter, {
-        to: order.customer_email,
-        channel: 'email',
-        body,
-        event: 'bill',
-        subject,
-        html,
-      });
+      const r = await deliverAndLog(
+        admin,
+        order,
+        'bill',
+        emailAdapter,
+        {
+          to: order.customer_email,
+          channel: 'email',
+          body,
+          event: 'bill',
+          subject,
+          html,
+        },
+        force,
+      );
       result.email = r.sent;
     }
 
@@ -171,13 +191,20 @@ export async function sendBillNotification(
     ) {
       const { body } = renderNotification(order, 'bill');
       const templateVars = templateVarsFor(order, 'bill');
-      const r = await deliverAndLog(admin, order, 'bill', whatsappAdapter, {
-        to: order.customer_phone,
-        channel: 'whatsapp',
-        body,
-        event: 'bill',
-        templateVars,
-      });
+      const r = await deliverAndLog(
+        admin,
+        order,
+        'bill',
+        whatsappAdapter,
+        {
+          to: order.customer_phone,
+          channel: 'whatsapp',
+          body,
+          event: 'bill',
+          templateVars,
+        },
+        force,
+      );
       result.whatsapp = r.sent;
     }
   } catch (err) {
