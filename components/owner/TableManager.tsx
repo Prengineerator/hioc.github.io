@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { QrCards } from '@/components/owner/QrCards';
 
 interface TableRow {
   id: string;
@@ -167,7 +168,13 @@ export function TableManager() {
 
       {/* Tables list */}
       <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-bold uppercase tracking-wide text-muted">Your tables</h2>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Your tables</h2>
+          {/* QR-2: print A6 scan-to-order cards (owner-only; qr_token fetched from
+              the owner-gated /api/owner/tables/qr and rendered client-side). Hidden
+              unless flags.tableQr is on — see QrCards. */}
+          <QrCards />
+        </div>
         {loading ? (
           <p className="py-6 text-center text-sm text-muted">Loading…</p>
         ) : tables.length === 0 ? (
