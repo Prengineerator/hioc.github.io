@@ -281,6 +281,26 @@ create policy permission_change_audit_read
   on permission_change_audit for select to authenticated using (true);
 
 -- ===========================================================================
+-- SECTION 11 — qr_token column-privilege hardening  (FND3-1 security / QR-1)
+-- ===========================================================================
+-- RLS is ROW-level and cannot hide a column, so the tables_public_read policy in
+-- SECTION 8 still let the anon/authenticated keys SELECT qr_token off active rows
+-- (the "minus qr_token" guarantee was enforced only by app convention). Close it
+-- at the database with COLUMN privileges: revoke the broad SELECT those roles get
+-- by default and re-grant only the non-sensitive columns. The service-role client
+-- (all server routes) bypasses these grants and still reads/writes qr_token —
+-- QR-1 resolves /t/<token> and QR-2 prints the card, both server-side.
+revoke select on tables from anon, authenticated;
+grant select (id, label, zone, capacity, is_active, sort_order, created_at, updated_at)
+  on tables to anon, authenticated;
+
+-- Writes to the registry are owner-only through the service-role owner route; no
+-- client key should write it directly. Drop the permissive authenticated write
+-- policies (no policy = deny for anon/authenticated; service role bypasses RLS).
+drop policy if exists tables_staff_write  on tables;
+drop policy if exists tables_staff_update on tables;
+
+-- ===========================================================================
 -- END OF PHASE 3 MIGRATION
 -- Remember: mirror all of the above in lib/types.ts (FND3-M), never expose
 -- tables.qr_token to unauthenticated clients, and run the RLS + correction-math
