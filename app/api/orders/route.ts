@@ -126,6 +126,7 @@ export async function POST(request: Request) {
     pickup_slot_label,
     order_type: rawOrderType,
     table_id: rawTableId,
+    qr_token: rawQrToken,
     notes,
     items: rawItems,
     payment_mode: rawPaymentMode,
@@ -142,12 +143,21 @@ export async function POST(request: Request) {
   const actor = await getStaffOrOwner();
   const isStaff = actor !== null;
 
+  // Phase-3 (QR-1/D6): a NON-staff request carrying a `qr_token` is the third
+  // order-entry channel — a seated customer who scanned the table QR. The token
+  // is the *proof of table presence* and is resolved server-side below (never
+  // trusted from the client for anything else). A QR customer may be anonymous
+  // or a logged-in account, so name/phone are optional (like a staff order), the
+  // order is forced dine-in, and it pays online first (nothing enters the queue
+  // unpaid). Guarded by `!isStaff` so a staff session never takes this branch.
+  const isTableQr = !isStaff && typeof rawQrToken === 'string' && rawQrToken.trim().length > 0;
+
   // Customer name — mandatory for guest checkout, optional for a staff-created
   // order (anonymous walk-in allowed, FND3-3). Stored '' when absent (NOT NULL).
   let trimmedName = '';
   if (typeof customer_name === 'string' && customer_name.trim().length > 0) {
     trimmedName = customer_name.trim();
-  } else if (!isStaff) {
+  } else if (!isStaff && !isTableQr) {
     return errorResponse(400, 'customer_name is required and must be a non-empty string');
   }
   if (trimmedName.length > MAX_CUSTOMER_NAME_LENGTH) {
@@ -167,7 +177,7 @@ export async function POST(request: Request) {
     }
     // Stored in E.164 form (see components/staff/OrderCard.tsx tel: link).
     trimmedPhone = `+91${normalizedPhone}`;
-  } else if (!isStaff) {
+  } else if (!isStaff && !isTableQr) {
     return errorResponse(400, 'customer_phone is required and must be a string');
   }
 
@@ -194,6 +204,9 @@ export async function POST(request: Request) {
     }
     orderType = rawOrderType;
   }
+  // A table-QR order is dine-in by definition (QR-1) — the table context comes
+  // from the scanned token, not a client-chosen order_type.
+  if (isTableQr) orderType = 'dine_in';
   const isDineIn = orderType === 'dine_in';
 
   // Structured pickup slot (C4/CUS-026) with legacy free-text fallback. The
@@ -206,7 +219,7 @@ export async function POST(request: Request) {
       : typeof pickup_time === 'string'
         ? pickup_time.trim()
         : '';
-  if (slotLabel.length === 0 && !(isStaff && isDineIn)) {
+  if (slotLabel.length === 0 && !(isDineIn && (isStaff || isTableQr))) {
     return errorResponse(400, 'A pickup time (pickup_slot_label or pickup_time) is required');
   }
   let slotStartIso: string | null = null;
@@ -251,10 +264,29 @@ export async function POST(request: Request) {
 
   // Dine-in requires a valid, active table (FND3-3). Its label is snapshotted
   // onto the order (FND3-2) so it survives later renames — same philosophy as
-  // menu-price snapshots. Only staff create dine-in orders in v1.
+  // menu-price snapshots.
   let tableId: string | null = null;
   let tableLabel = '';
-  if (isDineIn) {
+  if (isTableQr) {
+    // QR self-order (QR-1): the table is resolved from the scanned qr_token
+    // server-side — the token IS the proof of table presence (§5.2), never a
+    // client-supplied table_id. A regenerated/unknown token fails closed with a
+    // friendly "ask staff" message rather than a broken order.
+    const { data: t, error: tErr } = await admin
+      .from('tables')
+      .select('id, label, is_active')
+      .eq('qr_token', (rawQrToken as string).trim())
+      .maybeSingle();
+    if (tErr) {
+      return errorResponse(500, 'Failed to resolve the table');
+    }
+    if (!t || !t.is_active) {
+      return errorResponse(400, 'This table QR is no longer active — please ask our staff.');
+    }
+    tableId = t.id as string;
+    tableLabel = t.label as string;
+  } else if (isDineIn) {
+    // Staff dine-in path: only staff create a dine-in order by table_id in v1.
     if (!isStaff) {
       return errorResponse(400, 'Dine-in orders can only be created by staff');
     }
@@ -487,7 +519,10 @@ export async function POST(request: Request) {
   // starts at 'accepted' and never enters the online-payment 'placed' gate.
   // Normally settled at entry (POS-2), but an unpaid staff order still enters the
   // flow — unlike web online orders which gate on payment. A ₹0 order is paid.
-  const needsOnlinePayment = !isStaff && paymentMode === 'online' && bill.total_inr > 0;
+  // Table-QR orders (QR-1/D6) always pay online first — like a web online order,
+  // they start 'placed' and go through the gateway/payment-intent flow so nothing
+  // enters the queue unpaid, regardless of any client-sent payment_mode.
+  const needsOnlinePayment = !isStaff && (isTableQr || paymentMode === 'online') && bill.total_inr > 0;
   const initialStatus: OrderStatus = isStaff
     ? 'accepted'
     : needsOnlinePayment
@@ -514,7 +549,7 @@ export async function POST(request: Request) {
       pickup_slot_start: slotStartIso,
       pickup_slot_label: slotLabel,
       order_type: orderType,
-      channel: isStaff ? 'staff_pos' : 'customer_web',
+      channel: isStaff ? 'staff_pos' : isTableQr ? 'table_qr' : 'customer_web',
       table_id: tableId,
       table_label: tableLabel,
       created_by: actor ? actor.user.id : null,
@@ -674,7 +709,9 @@ export async function POST(request: Request) {
   // dormant until configured. Online orders send at placement too; the linked
   // bill page always reflects live payment status when opened.
   // A staff-created order is settled later (POS-2); its bill fires at settle
-  // (RCT-1), so we don't send an unpaid bill at creation time.
+  // (RCT-1), so we don't send an unpaid bill at creation time. A web or table-QR
+  // customer (both `!isStaff`) gets the live bill link now; the linked page
+  // reflects real payment status once the online payment (D6) confirms.
   if (!isStaff) {
     await sendBillNotification(response);
   }

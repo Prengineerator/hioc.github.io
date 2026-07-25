@@ -28,6 +28,12 @@ export const flags = {
   // NEXT_PUBLIC_FLAG_STAFF_POS=false to dark it (hides the nav tab and the
   // /staff/orders/new screen renders a "not enabled" state).
   staffPos: boolEnv(process.env.NEXT_PUBLIC_FLAG_STAFF_POS, true),
+  // Table-QR scan-to-order (QR-1). Default OFF — dark-launched: the /t/<token>
+  // scan-to-order surface renders a friendly "ask staff" screen (nothing else)
+  // until NEXT_PUBLIC_FLAG_TABLE_QR=true. Guards the whole customer QR flow so
+  // it can't leak before the tables + QR cards (QR-2) and pay-online path are
+  // verified in the cafe.
+  tableQr: boolEnv(process.env.NEXT_PUBLIC_FLAG_TABLE_QR, false),
 } as const;
 
 export type FeatureFlags = typeof flags;
