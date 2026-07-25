@@ -98,6 +98,10 @@ export interface MenuItem {
   // Phase-1 additions (migration §5):
   image_url: string; // '' when no photo uploaded (C6 placeholder)
   unavailable_until: string | null; // 86 auto-reenable; null = not snoozed (STF-032)
+  // Optional owner-defined POS shortform (2026-07-menu-short-code migration).
+  // Stored UPPERCASE, ^[A-Za-z0-9]{1,8}$; null when unset. Powers the staff
+  // quick-add bar's top-priority code tiers; case-insensitively unique per item.
+  short_code: string | null;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];

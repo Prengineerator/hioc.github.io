@@ -41,6 +41,20 @@ const MENU_ITEM_SELECT = `
   )
 `;
 
+// short_code (2026-07-menu-short-code): optional owner POS shortform. undefined /
+// null / blank clears it; otherwise ^[A-Za-z0-9]{1,8}$, stored UPPERCASE. DB
+// uniqueness (partial index) is surfaced as a 409 by the insert/update callers.
+function parseShortCode(value: unknown): { code: string | null } | { error: string } {
+  if (value === undefined || value === null) return { code: null };
+  if (typeof value !== 'string') return { error: 'short_code must be a string' };
+  const trimmed = value.trim();
+  if (trimmed === '') return { code: null };
+  if (!/^[A-Za-z0-9]{1,8}$/.test(trimmed)) {
+    return { error: 'short_code must be 1–8 letters or digits' };
+  }
+  return { code: trimmed.toUpperCase() };
+}
+
 // GET /api/menu — public. Optional ?category=... and ?includeUnavailable=true.
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -112,6 +126,7 @@ export async function POST(request: Request) {
     addon_group_ids,
     image_url,
     unavailable_until,
+    short_code,
   } = body;
 
   if (typeof name !== 'string' || name.trim().length === 0) {
@@ -186,6 +201,11 @@ export async function POST(request: Request) {
     return errorResponse(400, 'unavailable_until must be an ISO date string or null');
   }
 
+  const shortCodeResult = parseShortCode(short_code);
+  if ('error' in shortCodeResult) {
+    return errorResponse(400, shortCodeResult.error);
+  }
+
   const admin = createAdminSupabaseClient();
 
   const { data: item, error: itemError } = await admin
@@ -200,11 +220,15 @@ export async function POST(request: Request) {
       sort_order: sort_order ?? 0,
       image_url: typeof image_url === 'string' ? image_url : '',
       unavailable_until: (unavailable_until as string | null | undefined) ?? null,
+      short_code: shortCodeResult.code,
     })
     .select()
     .single();
 
   if (itemError || !item) {
+    if (itemError?.code === '23505') {
+      return errorResponse(409, 'Code already in use');
+    }
     return errorResponse(500, 'Failed to create menu item');
   }
 

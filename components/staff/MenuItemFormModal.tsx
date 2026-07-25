@@ -15,6 +15,7 @@ export interface MenuItemFormValues {
   is_available: boolean;
   sort_order: number;
   image_url: string;
+  short_code: string | null; // optional POS quick-add shortform (UPPERCASE or null)
   variants: { label: string; price_inr: number }[];
   addon_group_ids: string[];
 }
@@ -40,6 +41,7 @@ export function MenuItemFormModal({
   const [isAvailable, setIsAvailable] = useState(initial?.is_available ?? true);
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [imageUrl, setImageUrl] = useState(initial?.image_url ?? '');
+  const [shortCode, setShortCode] = useState(initial?.short_code ?? '');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [variantRows, setVariantRows] = useState<VariantRow[]>(
     initial?.variants && initial.variants.length > 0
@@ -141,6 +143,12 @@ export function MenuItemFormModal({
       variants.push({ label: row.label.trim(), price_inr: price });
     }
 
+    const trimmedCode = shortCode.trim().toUpperCase();
+    if (trimmedCode && !/^[A-Z0-9]{1,8}$/.test(trimmedCode)) {
+      setError('Short code must be 1–8 letters or digits (e.g. CAP), or left blank.');
+      return;
+    }
+
     const parentCategory = MENU_CATEGORIES.find((c) => c.slug === category)?.parent ?? '';
 
     setSubmitting(true);
@@ -154,6 +162,7 @@ export function MenuItemFormModal({
         is_available: isAvailable,
         sort_order: Number(sortOrder) || 0,
         image_url: imageUrl,
+        short_code: trimmedCode || null,
         variants,
         addon_group_ids: [...selectedGroupIds],
       });
@@ -274,6 +283,31 @@ export function MenuItemFormModal({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="item-short-code"
+                  className="mb-1 block text-sm font-bold text-charcoal"
+                >
+                  Short code <span className="font-normal text-muted">(optional)</span>
+                </label>
+                <input
+                  id="item-short-code"
+                  type="text"
+                  value={shortCode}
+                  onChange={(e) =>
+                    setShortCode(
+                      e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8),
+                    )
+                  }
+                  placeholder="e.g. CAP"
+                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 font-mono uppercase text-charcoal outline-none focus:border-tan"
+                />
+                <p className="mt-1 text-xs text-muted">
+                  A quick-punch shortform for the POS order screen (1–8 letters/digits). Type it in
+                  the command bar to jump straight to this item.
+                </p>
               </div>
 
               <div>

@@ -30,14 +30,18 @@ export function PosCustomizeModal({
   item,
   onAdd,
   onClose,
+  initialQty = 1,
 }: {
   item: MenuItem;
   onAdd: (line: Omit<CartItem, 'qty' | 'key'>, qty: number) => void;
   onClose: () => void;
+  // Seeds the qty stepper — lets the quick-add bar's "3*latte" carry its qty
+  // into the customize modal for variant/addon items.
+  initialQty?: number;
 }) {
   const [variantId, setVariantId] = useState(item.variants[0]?.id ?? '');
   const [selected, setSelected] = useState<Record<string, string[]>>({});
-  const [qty, setQty] = useState(1);
+  const [qty, setQty] = useState(Math.max(1, initialQty));
   const [instructions, setInstructions] = useState('');
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];

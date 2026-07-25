@@ -42,6 +42,20 @@ function shapeMenuItem(row: MenuItemRow): MenuItem {
   return { ...rest, variants, addon_groups } as MenuItem;
 }
 
+// short_code (2026-07-menu-short-code): optional owner POS shortform. null / blank
+// clears it; otherwise ^[A-Za-z0-9]{1,8}$, stored UPPERCASE. DB uniqueness (partial
+// index) is surfaced as a 409 by the update caller below.
+function parseShortCode(value: unknown): { code: string | null } | { error: string } {
+  if (value === undefined || value === null) return { code: null };
+  if (typeof value !== 'string') return { error: 'short_code must be a string' };
+  const trimmed = value.trim();
+  if (trimmed === '') return { code: null };
+  if (!/^[A-Za-z0-9]{1,8}$/.test(trimmed)) {
+    return { error: 'short_code must be 1–8 letters or digits' };
+  }
+  return { code: trimmed.toUpperCase() };
+}
+
 // PATCH /api/menu/[id] — staff-only. Partial update.
 // `variants`, if present, fully replaces the item's variant list.
 // `addon_group_ids`, if present, fully replaces the item's addon group associations.
@@ -78,6 +92,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       | 'sort_order'
       | 'image_url'
       | 'unavailable_until'
+      | 'short_code'
     >
   > = {};
 
@@ -151,6 +166,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     updates.unavailable_until = body.unavailable_until as string | null;
   }
 
+  if ('short_code' in body) {
+    const result = parseShortCode(body.short_code);
+    if ('error' in result) {
+      return errorResponse(400, result.error);
+    }
+    updates.short_code = result.code;
+  }
+
   let variants: { label: string; price_inr: number }[] | undefined;
   if ('variants' in body) {
     if (
@@ -191,6 +214,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       .select('id')
       .maybeSingle();
     if (updateError) {
+      if (updateError.code === '23505') {
+        return errorResponse(409, 'Code already in use');
+      }
       return errorResponse(500, 'Failed to update menu item');
     }
     if (!updated) {

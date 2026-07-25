@@ -25,7 +25,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
 import { PosPaymentModal } from '@/components/staff/PosPaymentModal';
+import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
 import { Spinner } from '@/components/ui/Spinner';
+import { isSimpleItem, parseQuickAddInput, resolveQuickAdd } from '@/lib/pos/quickAdd';
+import { pushRecent, readRecents } from '@/lib/pos/recents';
 import { computeCartKey } from '@/lib/cart/cartKey';
 import type { CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
@@ -68,14 +71,30 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
 
   const [bill, setBill] = useState<BillBreakdown | null>(null);
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
+  const [pendingQty, setPendingQty] = useState(1); // qty carried from "3*latte" into the modal
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [recentIds, setRecentIds] = useState<string[]>([]); // "Quick picks" (this tablet)
 
   const inFlight = useRef(false);
+  const barRef = useRef<HTMLInputElement>(null); // command bar, for sticky refocus
   const cartRef = useRef(cart);
   cartRef.current = cart;
+
+  // Seed recents from localStorage once on mount (client-only).
+  useEffect(() => {
+    setRecentIds(readRecents());
+  }, []);
+
+  // Sticky keyboard-first focus: keep the command bar focused on mount and
+  // whenever a modal closes, but never steal focus while a modal is open (or the
+  // effect would fight the customize/payment modals and the customer/table fields).
+  useEffect(() => {
+    if (customizing || paymentOpen) return;
+    barRef.current?.focus();
+  }, [customizing, paymentOpen]);
 
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
@@ -130,14 +149,25 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
     [cart],
   );
 
+  // Browse grid: when the bar has a shortform, mirror the SAME ranked resolver
+  // the command-bar dropdown uses (so the big touch grid and the keyboard
+  // dropdown never disagree); otherwise show the selected category.
   const visibleItems = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (q) {
-      // Search spans every category so staff find items fast.
-      return menuItems.filter((i) => i.name.toLowerCase().includes(q));
+    const { term } = parseQuickAddInput(search);
+    if (term) {
+      return resolveQuickAdd(term, menuItems, { limit: 60 }).map((c) => c.item);
     }
     return menuItems.filter((i) => i.category === category);
   }, [menuItems, category, search]);
+
+  // "Quick picks" strip (empty-query state): recent items resolved to the live
+  // menu (drops any that were deleted / are missing).
+  const recentItems = useMemo(() => {
+    const byId = new Map(menuItems.map((i) => [i.id, i]));
+    return recentIds
+      .map((id) => byId.get(id))
+      .filter((i): i is MenuItem => i !== undefined);
+  }, [recentIds, menuItems]);
 
   // --- Live bill from the quote endpoint (never computed client-side) -------
   useEffect(() => {
@@ -182,6 +212,9 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
       if (existing) return prev.map((i) => (i.key === key ? { ...i, qty: i.qty + qty } : i));
       return [...prev, { ...line, key, qty }];
     });
+    // Single funnel for every add (tile tap, quick-add, and the modal's onAdd),
+    // so "Quick picks" reflects whatever was actually punched.
+    setRecentIds(pushRecent(line.menuItemId));
   }, []);
 
   const increment = useCallback((key: string) => {
@@ -196,23 +229,49 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
     setCart((prev) => prev.filter((i) => i.key !== key));
   }, []);
 
-  function handleTapItem(item: MenuItem) {
-    if (!isMenuItemAvailable(item)) return;
-    const isSimple = item.variants.length === 1 && item.addon_groups.length === 0;
-    const onlyVariant = item.variants[0];
-    if (isSimple && onlyVariant) {
-      addLine({
-        menuItemId: item.id,
-        variantId: onlyVariant.id,
-        name: item.name,
-        variantLabel: onlyVariant.label,
-        unitPriceInr: onlyVariant.price_inr,
-        addons: [],
-        specialInstructions: '',
-      });
+  const focusBar = useCallback(() => {
+    barRef.current?.focus();
+  }, []);
+
+  // The one place that turns "a chosen item + qty" into a cart action. Reused by
+  // the tile tap AND the quick-add bar so the add-direct vs. open-modal rule
+  // (isSimpleItem) and the 86 guard can't drift between the two entry paths.
+  function commitCandidate(item: MenuItem, qty: number) {
+    if (!isMenuItemAvailable(item)) {
+      // Tiles are already disabled when 86'd; this only fires from the keyboard
+      // path (highlight a 86'd row + Enter) — tell the user instead of no-op.
+      showToast(`${item.name} is 86’d`);
       return;
     }
+    if (isSimpleItem(item)) {
+      const onlyVariant = item.variants[0];
+      if (!onlyVariant) return;
+      addLine(
+        {
+          menuItemId: item.id,
+          variantId: onlyVariant.id,
+          name: item.name,
+          variantLabel: onlyVariant.label,
+          unitPriceInr: onlyVariant.price_inr,
+          addons: [],
+          specialInstructions: '',
+        },
+        qty,
+      );
+      setSearch('');
+      focusBar();
+      return;
+    }
+    // Variant/addon item: open the customize modal (required options honored),
+    // seeding it with the qty parsed from the shortform.
+    setPendingQty(qty);
     setCustomizing(item);
+  }
+
+  // Tapping a tile inherits the qty currently typed in the bar ("3*" applies to
+  // taps too); on the empty-query browse/recents grids that qty is just 1.
+  function handleTapItem(item: MenuItem) {
+    commitCandidate(item, parseQuickAddInput(search).qty);
   }
 
   // --- Validation for enabling the Collect-payment step ---------------------
@@ -354,16 +413,33 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* ---- Menu ---- */}
         <div className="lg:col-span-2">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search the menu…"
-            className="mb-3 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+          <PosQuickAddBar
+            items={menuItems}
+            query={search}
+            onQueryChange={setSearch}
+            onPick={commitCandidate}
+            onCharge={openPayment}
+            inputRef={barRef}
           />
+
           {!search ? (
-            <div className="mb-4">
-              <MenuCategoryTabs active={category} onChange={setCategory} />
-            </div>
+            <>
+              {recentItems.length > 0 ? (
+                <div className="mb-4">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">
+                    Quick picks
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                    {recentItems.map((item) => (
+                      <PosMenuTile key={item.id} item={item} onTap={() => handleTapItem(item)} />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div className="mb-4">
+                <MenuCategoryTabs active={category} onChange={setCategory} />
+              </div>
+            </>
           ) : null}
 
           {menuLoading ? (
@@ -373,7 +449,7 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
               {search ? 'No items match your search.' : 'No items in this category.'}
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
               {visibleItems.map((item) => (
                 <PosMenuTile key={item.id} item={item} onTap={() => handleTapItem(item)} />
               ))}
@@ -606,8 +682,12 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
       {customizing ? (
         <PosCustomizeModal
           item={customizing}
+          initialQty={pendingQty}
           onAdd={addLine}
-          onClose={() => setCustomizing(null)}
+          onClose={() => {
+            setCustomizing(null);
+            setPendingQty(1);
+          }}
         />
       ) : null}
 
@@ -680,9 +760,16 @@ function PosMenuTile({ item, onTap }: { item: MenuItem; onTap: () => void }) {
         </span>
         <span className="line-clamp-2 text-sm font-bold text-charcoal">{item.name}</span>
       </span>
-      <span className="mt-2 flex w-full items-center justify-between">
+      <span className="mt-2 flex w-full items-center justify-between gap-1">
         <span className="text-xs font-bold text-tan">{priceLabel}</span>
-        {!available ? <span className="text-[10px] font-bold text-muted">86’d</span> : null}
+        <span className="flex items-center gap-1">
+          {item.short_code ? (
+            <span className="rounded border border-[#e5e5e5] px-1 font-mono text-[10px] font-bold uppercase text-muted">
+              {item.short_code}
+            </span>
+          ) : null}
+          {!available ? <span className="text-[10px] font-bold text-muted">86’d</span> : null}
+        </span>
       </span>
     </button>
   );
