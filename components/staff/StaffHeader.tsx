@@ -16,6 +16,8 @@ const TABS = [
     ? [
         { href: '/staff/orders/new', label: 'New order' },
         { href: '/staff/tables', label: 'Tables' },
+        // OPS-2: cash drawer day-open/close by denomination.
+        { href: '/staff/cash', label: 'Cash' },
       ]
     : []),
   { href: '/staff/menu', label: 'Menu' },
