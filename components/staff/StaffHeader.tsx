@@ -9,9 +9,15 @@ import { flags } from '@/lib/flags';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
-  // POS-1: the counter-tablet order-entry surface. Only shown when the
-  // staffPos flag is on (default ON, NEXT_PUBLIC_FLAG_STAFF_POS=false to hide).
-  ...(flags.staffPos ? [{ href: '/staff/orders/new', label: 'New order' }] : []),
+  // POS-1/POS-3: the counter-tablet order-entry surface + tables board. Only
+  // shown when the staffPos flag is on (default ON, NEXT_PUBLIC_FLAG_STAFF_POS=
+  // false to hide both).
+  ...(flags.staffPos
+    ? [
+        { href: '/staff/orders/new', label: 'New order' },
+        { href: '/staff/tables', label: 'Tables' },
+      ]
+    : []),
   { href: '/staff/menu', label: 'Menu' },
 ];
 

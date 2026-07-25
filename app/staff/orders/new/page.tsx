@@ -7,7 +7,11 @@ import { PosOrderEntry } from '@/components/staff/PosOrderEntry';
 // signed-in staff/manager/owner is guaranteed. This page is dark-launched
 // behind the staffPos flag (default ON): when off it renders a clear
 // "not enabled" state rather than the entry screen.
-export default function NewOrderPage() {
+export default function NewOrderPage({
+  searchParams,
+}: {
+  searchParams: { table?: string | string[] };
+}) {
   if (!flags.staffPos) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16 text-center">
@@ -25,5 +29,11 @@ export default function NewOrderPage() {
     );
   }
 
-  return <PosOrderEntry />;
+  // POS-3 deep-link: /staff/orders/new?table=<id> pre-selects that dine-in table
+  // (PosOrderEntry validates it against the active tables and ignores an unknown
+  // id). Only a single string value is meaningful.
+  const initialTableId =
+    typeof searchParams.table === 'string' ? searchParams.table : null;
+
+  return <PosOrderEntry initialTableId={initialTableId} />;
 }

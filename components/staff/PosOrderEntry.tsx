@@ -48,7 +48,7 @@ interface StaffTable {
   sort_order: number;
 }
 
-export function PosOrderEntry() {
+export function PosOrderEntry({ initialTableId }: { initialTableId?: string | null } = {}) {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [category, setCategory] = useState<string>(DEFAULT_CATEGORY);
@@ -105,6 +105,23 @@ export function PosOrderEntry() {
   useEffect(() => {
     fetchTables();
   }, [fetchTables]);
+
+  // Pre-select a table passed in from the tables board deep-link (POS-3 →
+  // /staff/orders/new?table=<id>). Applied ONCE, and only after the active-tables
+  // list has loaded so we can validate the id against it — an unknown/inactive id
+  // is ignored (the picker just stays empty). Forcing dine-in matches the intent
+  // of arriving from a table tile; a later manual change by staff sticks because
+  // the ref stops us from re-applying.
+  const appliedInitialTable = useRef(false);
+  useEffect(() => {
+    if (appliedInitialTable.current || !initialTableId || tables.length === 0) return;
+    const match = tables.find((t) => t.id === initialTableId);
+    if (match) {
+      setOrderType('dine_in');
+      setTableId(match.id);
+    }
+    appliedInitialTable.current = true;
+  }, [initialTableId, tables]);
 
   // --- Derived --------------------------------------------------------------
   const totalItems = useMemo(() => cart.reduce((s, i) => s + i.qty, 0), [cart]);
