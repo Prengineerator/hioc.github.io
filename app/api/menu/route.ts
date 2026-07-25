@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getStaffUser } from '@/lib/api/auth';
+import { hasPermission } from '@/lib/permissions';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, MENU_CATEGORIES } from '@/lib/api/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
@@ -87,6 +88,11 @@ export async function POST(request: Request) {
   const user = await getStaffUser();
   if (!user) {
     return unauthorized();
+  }
+  // FND3-6: menu edits go through the owner-configurable 'menu_edit' gate
+  // (default = staff-and-up, preserving prior behavior).
+  if (!(await hasPermission(user, 'menu_edit'))) {
+    return errorResponse(403, 'You do not have permission to edit the menu');
   }
 
   const body = await parseJsonBody(request);

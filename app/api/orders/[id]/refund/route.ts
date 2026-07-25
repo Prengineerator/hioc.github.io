@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getManagerUser } from '@/lib/api/auth';
+import { getStaffUser } from '@/lib/api/auth';
+import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { createGatewayRefund } from '@/lib/payments/gateway';
@@ -20,8 +21,13 @@ type RouteParams = { params: { id: string } };
 // back (FND-4 edge case). Body: { amount_inr?: number, reason: string } —
 // amount_inr omitted = full refund of whatever remains unrefunded.
 export async function POST(request: Request, { params }: RouteParams) {
-  const manager = await getManagerUser();
-  if (!manager) return unauthorized();
+  // Gate via the owner-configurable matrix (FND3-6): a valid staff session, then
+  // the 'refund' permission (default = manager-and-up, preserving FND-5 behavior).
+  const user = await getStaffUser();
+  if (!user) return unauthorized();
+  if (!(await hasPermission(user, 'refund'))) {
+    return errorResponse(403, 'Manager permission required for refunds');
+  }
 
   const { id } = params;
   if (!isUuid(id)) return notFound();
@@ -103,7 +109,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       amount_inr: amountInr,
       reason,
       status: 'failed',
-      created_by: manager.id,
+      created_by: user.id,
     });
     return errorResponse(
       502,
@@ -120,7 +126,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       reason,
       status: 'processed',
       gateway_ref: gatewayResult.id,
-      created_by: manager.id,
+      created_by: user.id,
       processed_at: new Date().toISOString(),
     })
     .select('*')

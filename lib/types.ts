@@ -572,3 +572,16 @@ export interface StaffEntryStatsRow {
   orders_entered: number;
   revenue_inr: number;
 }
+
+// --- Permission-change audit (migration §10) -------------------------------
+// One row per owner edit to the permission matrix (FND3-6 AC: every flip is
+// audited — which key changed, from what to what, by whom, when). Written by the
+// owner-only permissions route; mirrors the Phase-1 role_change_audit style.
+export interface PermissionChangeAudit {
+  id: string;
+  permission_key: PermissionKey;
+  old_min_role: PermissionMinRole | null;
+  new_min_role: PermissionMinRole;
+  changed_by: string | null;
+  changed_at: string;
+}

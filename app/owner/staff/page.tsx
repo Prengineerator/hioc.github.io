@@ -3,6 +3,7 @@
 // page calls re-checks getOwnerUser() on every request.
 
 import { TeamManager } from '@/components/owner/TeamManager';
+import { PermissionMatrix } from '@/components/owner/PermissionMatrix';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,7 @@ export default function OwnerStaffPage() {
         <p className="text-sm text-muted">Grant or revoke staff-board access for the counter team.</p>
       </div>
       <TeamManager />
+      <PermissionMatrix />
     </div>
   );
 }

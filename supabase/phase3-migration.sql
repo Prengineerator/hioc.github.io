@@ -257,6 +257,30 @@ create or replace view v_staff_entry_stats as
   order by 2 desc;
 
 -- ===========================================================================
+-- SECTION 10 — permission_change_audit: who flipped which gate, when  (FND3-6)
+-- ===========================================================================
+-- Every owner edit to role_permissions is recorded here (FND3-6 AC: changes are
+-- audited — who flipped what, when). Mirrors the Phase-1 role_change_audit
+-- precedent, but is written by the owner-only permissions route (service role)
+-- rather than a trigger: role_permissions.updated_by/updated_at carry the CURRENT
+-- value, while this table keeps the full history of transitions.
+create table if not exists permission_change_audit (
+  id             uuid primary key default gen_random_uuid(),
+  permission_key text not null,
+  old_min_role   text,
+  new_min_role   text not null,
+  changed_by     uuid references auth.users(id) on delete set null,
+  changed_at     timestamptz not null default now()
+);
+
+alter table permission_change_audit enable row level security;
+
+-- Authenticated read (the owner UI may surface the history); writes go through
+-- the owner-only server route on the service role, which bypasses RLS.
+create policy permission_change_audit_read
+  on permission_change_audit for select to authenticated using (true);
+
+-- ===========================================================================
 -- END OF PHASE 3 MIGRATION
 -- Remember: mirror all of the above in lib/types.ts (FND3-M), never expose
 -- tables.qr_token to unauthenticated clients, and run the RLS + correction-math

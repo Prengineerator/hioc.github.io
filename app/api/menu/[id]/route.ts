@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getStaffUser } from '@/lib/api/auth';
+import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, isUuid, MENU_CATEGORIES } from '@/lib/api/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
@@ -48,6 +49,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const user = await getStaffUser();
   if (!user) {
     return unauthorized();
+  }
+  // FND3-6: menu edits go through the owner-configurable 'menu_edit' gate
+  // (default = staff-and-up, preserving prior behavior).
+  if (!(await hasPermission(user, 'menu_edit'))) {
+    return errorResponse(403, 'You do not have permission to edit the menu');
   }
 
   const { id } = params;
@@ -253,6 +259,11 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
   const user = await getStaffUser();
   if (!user) {
     return unauthorized();
+  }
+  // FND3-6: menu edits go through the owner-configurable 'menu_edit' gate
+  // (default = staff-and-up, preserving prior behavior).
+  if (!(await hasPermission(user, 'menu_edit'))) {
+    return errorResponse(403, 'You do not have permission to edit the menu');
   }
 
   const { id } = params;
