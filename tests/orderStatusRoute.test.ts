@@ -12,23 +12,29 @@ const state: {
   updated: Record<string, unknown> | null;
   patch?: Record<string, unknown>;
   eventRow?: Record<string, unknown>;
+  compPatch?: Record<string, unknown>; // the FND3-5 payment_status='paid' comp write
+  amendmentRow?: Record<string, unknown>; // the order_amendments comp audit row
 } = { actor: null, current: null, updated: null };
 
 vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient: () => ({}),
   createAdminSupabaseClient: () => ({
-    from: () => {
+    from: (table: string) => {
       const ctx = { isUpdate: false };
       const chain: Record<string, unknown> = {};
       Object.assign(chain, {
         select: () => chain,
         update: (p: Record<string, unknown>) => {
           ctx.isUpdate = true;
-          state.patch = p;
+          // The main guarded transition write carries status+version; the FND3-5
+          // comp override is a bare payment_status='paid' write (no status).
+          if (table === 'orders' && !('status' in p)) state.compPatch = p;
+          else state.patch = p;
           return chain;
         },
         insert: (row: Record<string, unknown>) => {
-          state.eventRow = row;
+          if (table === 'order_amendments') state.amendmentRow = row;
+          else state.eventRow = row;
           return Promise.resolve({ error: null });
         },
         eq: () => chain,
@@ -45,7 +51,14 @@ vi.mock('@/lib/supabase-server', () => ({
 
 vi.mock('@/lib/api/auth', () => ({
   getStaffOrOwner: () => Promise.resolve(state.actor),
-  actorRoleFor: (role: string) => (role === 'owner' ? 'owner' : 'staff'),
+  actorRoleFor: (role: string) => (role === 'owner' || role === 'manager' ? 'owner' : 'staff'),
+  // FND3-5 comp gate: a manager/owner session resolves to a user, staff → null.
+  getManagerUser: () =>
+    Promise.resolve(
+      state.actor && (state.actor.role === 'owner' || state.actor.role === 'manager')
+        ? state.actor.user
+        : null,
+    ),
 }));
 vi.mock('@/lib/notifications/engine', () => ({ sendOrderNotification: () => Promise.resolve({ sent: true }) }));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderEvent: () => Promise.resolve() }));
@@ -72,10 +85,12 @@ function req(body: unknown) {
 
 beforeEach(() => {
   state.actor = { user: { id: 'staff-1' }, role: 'staff' };
-  state.current = { id: UUID, status: 'received', version: 0, customer_phone: '+919000000000', order_number: 1001 };
-  state.updated = { id: UUID, status: 'accepted', version: 1, order_number: 1001, customer_phone: '+919000000000', pickup_code: '1234', promised_ready_at: null, reject_reason: '' };
+  state.current = { id: UUID, status: 'received', version: 0, customer_phone: '+919000000000', order_number: 1001, order_type: 'takeaway', payment_status: 'unpaid' };
+  state.updated = { id: UUID, status: 'accepted', version: 1, order_number: 1001, customer_phone: '+919000000000', order_type: 'takeaway', payment_status: 'unpaid', pickup_code: '1234', promised_ready_at: null, reject_reason: '' };
   state.patch = undefined;
   state.eventRow = undefined;
+  state.compPatch = undefined;
+  state.amendmentRow = undefined;
 });
 
 describe('PATCH /api/orders/[id]/status', () => {
@@ -118,5 +133,66 @@ describe('PATCH /api/orders/[id]/status', () => {
     state.updated = null; // guarded update returns no row
     const res = await PATCH(req({ status: 'accepted' }), params);
     expect(res.status).toBe(409);
+  });
+
+  // FND3-5: dine-in must be settled before it completes (guard → 409), unless a
+  // manager comps it. Takeaway (default fixture) is unaffected by these rules.
+  describe('dine-in settlement (FND3-5)', () => {
+    const readyDineIn = (paymentStatus: string) => ({
+      id: UUID,
+      status: 'ready',
+      version: 3,
+      customer_phone: null,
+      order_number: 1002,
+      order_type: 'dine_in',
+      payment_status: paymentStatus,
+    });
+
+    it('409s an unpaid dine_in ready → completed and writes no event', async () => {
+      state.current = readyDineIn('unpaid');
+      const res = await PATCH(req({ status: 'completed' }), params);
+      expect(res.status).toBe(409);
+      expect(state.eventRow).toBeUndefined();
+    });
+
+    it('200s a paid dine_in ready → completed', async () => {
+      state.current = readyDineIn('paid');
+      state.updated = { ...readyDineIn('paid'), status: 'completed', version: 4 };
+      const res = await PATCH(req({ status: 'completed' }), params);
+      expect(res.status).toBe(200);
+      expect(state.patch?.status).toBe('completed');
+    });
+
+    it('403s a comp attempt by a non-manager staffer', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+      state.current = readyDineIn('unpaid');
+      const res = await PATCH(req({ status: 'completed', comp: { reason: 'on the house' } }), params);
+      expect(res.status).toBe(403);
+      expect(state.compPatch).toBeUndefined();
+      expect(state.amendmentRow).toBeUndefined();
+    });
+
+    it('lets a manager comp an unpaid dine_in to completion (paid + audited)', async () => {
+      state.actor = { user: { id: 'mgr-1' }, role: 'owner' };
+      state.current = readyDineIn('unpaid');
+      state.updated = { ...readyDineIn('paid'), status: 'completed', version: 4 };
+      const res = await PATCH(
+        req({ status: 'completed', comp: { reason: 'VIP on the house' } }),
+        params,
+      );
+      expect(res.status).toBe(200);
+      expect(state.compPatch?.payment_status).toBe('paid'); // paid-equivalent set
+      expect(state.amendmentRow?.kind).toBe('comp'); // audit row written
+      expect(state.amendmentRow?.staff_id).toBe('mgr-1');
+      expect((state.amendmentRow?.payload as { reason: string }).reason).toBe('VIP on the house');
+      expect(state.patch?.status).toBe('completed'); // then the transition lands
+    });
+
+    it('400s a manager comp with an empty reason', async () => {
+      state.actor = { user: { id: 'mgr-1' }, role: 'owner' };
+      state.current = readyDineIn('unpaid');
+      const res = await PATCH(req({ status: 'completed', comp: { reason: '  ' } }), params);
+      expect(res.status).toBe(400);
+    });
   });
 });

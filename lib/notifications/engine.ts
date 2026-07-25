@@ -110,6 +110,12 @@ export async function sendOrderNotification(
   if (!order.customer_phone) {
     return { sent: false, skipped: 'no_phone' };
   }
+  // D7 (FND3-5): a dine-in 'ready' means "walk the food to the table" — the
+  // ready WhatsApp is suppressed. The settle receipt (the 'bill' event via
+  // sendBillNotification) still sends when a phone was captured.
+  if (event === 'ready' && order.order_type === 'dine_in') {
+    return { sent: false, skipped: 'dine_in_ready_suppressed' };
+  }
 
   const adapter = getAdapter();
   const admin = createAdminSupabaseClient();

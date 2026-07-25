@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getAuthUser, getStaffUser } from '@/lib/api/auth';
+import { actorRoleFor, getAuthUser, getStaffOrOwner, getStaffUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { startOfTodayIstIso } from '@/lib/api/date';
@@ -125,6 +125,7 @@ export async function POST(request: Request) {
     pickup_slot_start,
     pickup_slot_label,
     order_type: rawOrderType,
+    table_id: rawTableId,
     notes,
     items: rawItems,
     payment_mode: rawPaymentMode,
@@ -132,23 +133,43 @@ export async function POST(request: Request) {
     redeem_points,
   } = body;
 
-  if (typeof customer_name !== 'string' || customer_name.trim().length === 0) {
+  // Phase-3 (FND3-2/3): a request carrying an authenticated staff/manager/owner
+  // session is the second order-entry channel (POS-lite). It reuses this whole
+  // pricing/validation stack but relaxes the guest-checkout guards (name/phone
+  // optional, no pickup slot for dine-in, store-open bypassed) and attributes the
+  // order to the acting staff member. A plain guest checkout leaves `actor` null
+  // and behaves exactly as in Phase 1/2.
+  const actor = await getStaffOrOwner();
+  const isStaff = actor !== null;
+
+  // Customer name — mandatory for guest checkout, optional for a staff-created
+  // order (anonymous walk-in allowed, FND3-3). Stored '' when absent (NOT NULL).
+  let trimmedName = '';
+  if (typeof customer_name === 'string' && customer_name.trim().length > 0) {
+    trimmedName = customer_name.trim();
+  } else if (!isStaff) {
     return errorResponse(400, 'customer_name is required and must be a non-empty string');
   }
-  const trimmedName = customer_name.trim();
   if (trimmedName.length > MAX_CUSTOMER_NAME_LENGTH) {
     return errorResponse(400, `customer_name must be at most ${MAX_CUSTOMER_NAME_LENGTH} characters`);
   }
 
-  if (typeof customer_phone !== 'string') {
+  // Customer phone — mandatory for guest checkout, optional for a staff-created
+  // order (FND3-3). When present it's validated + stored E.164 so the order stays
+  // claimable/loyalty-eligible; a staff order without one stores '' so the
+  // notification engine skips cleanly (no_phone). NOT NULL column.
+  let trimmedPhone = '';
+  const phoneProvided = typeof customer_phone === 'string' && customer_phone.trim().length > 0;
+  if (phoneProvided) {
+    const normalizedPhone = normalizeIndianMobile(customer_phone as string);
+    if (!normalizedPhone) {
+      return errorResponse(400, 'customer_phone must be a valid 10-digit Indian mobile number');
+    }
+    // Stored in E.164 form (see components/staff/OrderCard.tsx tel: link).
+    trimmedPhone = `+91${normalizedPhone}`;
+  } else if (!isStaff) {
     return errorResponse(400, 'customer_phone is required and must be a string');
   }
-  const normalizedPhone = normalizeIndianMobile(customer_phone);
-  if (!normalizedPhone) {
-    return errorResponse(400, 'customer_phone must be a valid 10-digit Indian mobile number');
-  }
-  // Stored in E.164 form (see components/staff/OrderCard.tsx tel: link).
-  const trimmedPhone = `+91${normalizedPhone}`;
 
   // Optional customer email (RCT-2 e-bill). Blank/absent is fine; when present
   // it must be a plausibly-valid address. Stored normalized (trimmed+lowercased).
@@ -164,16 +185,28 @@ export async function POST(request: Request) {
     customerEmail = normalizedEmail;
   }
 
+  // Order type first — the pickup-slot rules below depend on it (a staff dine-in
+  // order needs no slot; a walk-in takeaway still uses the token/pickup flow).
+  let orderType: OrderType = 'takeaway';
+  if (rawOrderType !== undefined) {
+    if (!isOrderType(rawOrderType)) {
+      return errorResponse(400, 'order_type must be takeaway, dine_in, or delivery');
+    }
+    orderType = rawOrderType;
+  }
+  const isDineIn = orderType === 'dine_in';
+
   // Structured pickup slot (C4/CUS-026) with legacy free-text fallback. The
   // label is what surfaces on the confirmation + staff card; the ISO start (if
-  // any) drives per-slot capacity and owner slot analytics.
+  // any) drives per-slot capacity and owner slot analytics. Required for guest
+  // checkout and staff walk-in takeaway; skipped for a staff dine-in order.
   const slotLabel =
     typeof pickup_slot_label === 'string' && pickup_slot_label.trim().length > 0
       ? pickup_slot_label.trim()
       : typeof pickup_time === 'string'
         ? pickup_time.trim()
         : '';
-  if (slotLabel.length === 0) {
+  if (slotLabel.length === 0 && !(isStaff && isDineIn)) {
     return errorResponse(400, 'A pickup time (pickup_slot_label or pickup_time) is required');
   }
   let slotStartIso: string | null = null;
@@ -183,14 +216,6 @@ export async function POST(request: Request) {
       return errorResponse(400, 'pickup_slot_start must be an ISO timestamp');
     }
     slotStartIso = new Date(t).toISOString();
-  }
-
-  let orderType: OrderType = 'takeaway';
-  if (rawOrderType !== undefined) {
-    if (!isOrderType(rawOrderType)) {
-      return errorResponse(400, 'order_type must be takeaway, dine_in, or delivery');
-    }
-    orderType = rawOrderType;
   }
 
   if (notes !== undefined && typeof notes !== 'string') {
@@ -215,24 +240,62 @@ export async function POST(request: Request) {
   // the request body — a client-supplied user_id would let a guest redeem
   // someone else's loyalty points or attribute an order to any account.
   // Guest checkout (no session) keeps working exactly as in Phase 1.
+  // For a guest/customer checkout this is the verified customer session (or null
+  // for an anonymous guest). For a STAFF-created order the session belongs to the
+  // staff member, not the customer, so user_id stays null — attribution is
+  // captured separately in created_by. Never trust a client-supplied user_id.
   const sessionUser = await getAuthUser();
-  const userId = sessionUser?.id ?? null;
+  const userId = isStaff ? null : (sessionUser?.id ?? null);
 
   const admin = createAdminSupabaseClient();
 
-  // Store-state gate (C3/S7): reject checkout when we're not accepting orders
-  // (closed, paused, past last-order cutoff). Staff accept existing orders via a
-  // separate flow, so this only blocks new customer checkouts.
+  // Dine-in requires a valid, active table (FND3-3). Its label is snapshotted
+  // onto the order (FND3-2) so it survives later renames — same philosophy as
+  // menu-price snapshots. Only staff create dine-in orders in v1.
+  let tableId: string | null = null;
+  let tableLabel = '';
+  if (isDineIn) {
+    if (!isStaff) {
+      return errorResponse(400, 'Dine-in orders can only be created by staff');
+    }
+    if (!isUuid(rawTableId)) {
+      return errorResponse(400, 'A table is required for dine-in orders');
+    }
+    const { data: tableRow, error: tableError } = await admin
+      .from('tables')
+      .select('id, label, is_active')
+      .eq('id', rawTableId)
+      .maybeSingle();
+    if (tableError) {
+      return errorResponse(500, 'Failed to validate the table');
+    }
+    if (!tableRow || !tableRow.is_active) {
+      return errorResponse(400, 'That table does not exist or is inactive');
+    }
+    tableId = tableRow.id as string;
+    tableLabel = tableRow.label as string;
+  }
+
+  // Store-state gate (C3/S7): reject a guest checkout when we're not accepting
+  // orders (closed, paused, past last-order cutoff). Staff presence implies the
+  // store is open, so a staff-created order bypasses this (FND3-3) — logged, not
+  // blocked. Staff accept existing orders via a separate flow anyway.
   const settings = await getStoreSettings();
   const openState = computeStoreOpenState(settings);
   if (!openState.acceptingOrders) {
-    const msg =
-      openState.reason === 'paused'
-        ? 'We are not accepting online orders right now.'
-        : openState.reason === 'after_cutoff'
-          ? 'Online orders for today are closed. Please try again tomorrow.'
-          : 'The store is currently closed. Please order during opening hours.';
-    return errorResponse(409, msg);
+    if (isStaff) {
+      console.info('staff order created while not accepting online orders', {
+        reason: openState.reason,
+      });
+    } else {
+      const msg =
+        openState.reason === 'paused'
+          ? 'We are not accepting online orders right now.'
+          : openState.reason === 'after_cutoff'
+            ? 'Online orders for today are closed. Please try again tomorrow.'
+            : 'The store is currently closed. Please order during opening hours.';
+      return errorResponse(409, msg);
+    }
   }
 
   const menuItemIds = [...new Set(items.map((item) => item.menu_item_id))];
@@ -409,12 +472,27 @@ export async function POST(request: Request) {
   // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand total.
   const bill = computeBill(subtotal_inr, settings, discount_inr);
 
+  // Dine-in has no packaging charge (D5): force packaging to 0 and drop it from
+  // the total, regardless of the store's packaging setting. GST/discount unchanged.
+  if (isDineIn && bill.packaging_inr !== 0) {
+    bill.total_inr -= bill.packaging_inr;
+    bill.packaging_inr = 0;
+  }
+
   // Online payment (PAY-1/FND-1) gates the order at 'placed' — kept OUT of
   // the staff queue until the gateway confirms it (webhook/reconcile). A
   // fully-discounted order ("free" via coupon/points) has nothing to charge,
   // so it goes straight to the counter flow regardless of payment_mode.
-  const needsOnlinePayment = paymentMode === 'online' && bill.total_inr > 0;
-  const initialStatus: OrderStatus = needsOnlinePayment ? 'placed' : 'received';
+  // Staff-created orders (FND3-3): staff placing the order IS acceptance, so it
+  // starts at 'accepted' and never enters the online-payment 'placed' gate.
+  // Normally settled at entry (POS-2), but an unpaid staff order still enters the
+  // flow — unlike web online orders which gate on payment. A ₹0 order is paid.
+  const needsOnlinePayment = !isStaff && paymentMode === 'online' && bill.total_inr > 0;
+  const initialStatus: OrderStatus = isStaff
+    ? 'accepted'
+    : needsOnlinePayment
+      ? 'placed'
+      : 'received';
   // A fully-discounted (₹0) order has nothing to collect — mark it paid so staff
   // don't see "unpaid" + a "mark payment" prompt on an already-settled order (M7).
   const initialPaymentStatus: PaymentStatus = needsOnlinePayment
@@ -436,13 +514,17 @@ export async function POST(request: Request) {
       pickup_slot_start: slotStartIso,
       pickup_slot_label: slotLabel,
       order_type: orderType,
+      channel: isStaff ? 'staff_pos' : 'customer_web',
+      table_id: tableId,
+      table_label: tableLabel,
+      created_by: actor ? actor.user.id : null,
       status: initialStatus,
       subtotal_inr: bill.subtotal_inr,
       tax_inr: bill.tax_inr,
       packaging_inr: bill.packaging_inr,
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
-      pickup_code: generatePickupCode(),
+      pickup_code: isDineIn ? null : generatePickupCode(),
       notes: notes ?? '',
       user_id: userId,
       payment_status: initialPaymentStatus,
@@ -486,15 +568,16 @@ export async function POST(request: Request) {
     }
   }
 
-  // Seed the lifecycle event log with the initial system transition (F1) so
-  // SLA metrics have an anchor for every order — 'received' for the normal/
-  // pay-at-counter path, 'placed' when it's gated on online payment (PAY-1).
+  // Seed the lifecycle event log with the initial transition (F1) so SLA metrics
+  // have an anchor for every order — 'received'/'placed' for the guest/web path
+  // (system actor), or 'accepted' attributed to the staff member who punched a
+  // staff_pos order (null → accepted, FND3-3).
   await admin.from('order_status_events').insert({
     order_id: orderRow.id,
     from_status: null,
     to_status: initialStatus,
-    actor_id: null,
-    actor_role: 'system',
+    actor_id: actor ? actor.user.id : null,
+    actor_role: actor ? actorRoleFor(actor.role) : 'system',
     reason: '',
   });
 
@@ -590,7 +673,11 @@ export async function POST(request: Request) {
   // unconfigured provider can't block or fail order creation. Each channel is
   // dormant until configured. Online orders send at placement too; the linked
   // bill page always reflects live payment status when opened.
-  await sendBillNotification(response);
+  // A staff-created order is settled later (POS-2); its bill fires at settle
+  // (RCT-1), so we don't send an unpaid bill at creation time.
+  if (!isStaff) {
+    await sendBillNotification(response);
+  }
 
   return NextResponse.json({ order: response, payment: paymentIntent }, { status: 201 });
 }

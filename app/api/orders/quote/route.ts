@@ -20,7 +20,12 @@ export async function POST(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
-  const { subtotal_inr, coupon_code, redeem_points, item_ids, categories } = body;
+  const { subtotal_inr, coupon_code, redeem_points, item_ids, categories, order_type } = body;
+
+  // Dine-in has no packaging charge (D5). The quote is a preview only, so we
+  // don't hard-validate order_type here — any non-'dine_in' value is treated as
+  // packaged, exactly as POST /api/orders re-derives authoritatively at submit.
+  const isDineIn = order_type === 'dine_in';
 
   if (typeof subtotal_inr !== 'number' || !Number.isFinite(subtotal_inr) || subtotal_inr < 0) {
     return errorResponse(400, 'subtotal_inr must be a non-negative number');
@@ -77,6 +82,12 @@ export async function POST(request: Request) {
 
   const discount_inr = Math.min(couponDiscountInr + pointsDiscountInr, subtotal_inr);
   const bill = computeBill(subtotal_inr, settings, discount_inr);
+
+  // Mirror the create path: dine-in drops packaging from the previewed total.
+  if (isDineIn && bill.packaging_inr !== 0) {
+    bill.total_inr -= bill.packaging_inr;
+    bill.packaging_inr = 0;
+  }
 
   return NextResponse.json({ bill, coupon: couponResult, points: pointsResult, balance });
 }
