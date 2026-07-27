@@ -71,9 +71,14 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
       </div>
 
       <div className="rounded-md border border-[#e5e5e5] bg-white p-6 shadow-sm print:border-0 print:p-0 print:shadow-none">
-        {/* Store header */}
+        {/* Store header — the wordmark logo stands in for the text name. */}
         <div className="text-center">
-          <p className="text-lg font-bold tracking-[0.2em]">{CAFE_NAME}</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/images/logo-black.png"
+            alt={CAFE_NAME}
+            className="mx-auto mb-1 h-auto w-40 max-w-[60%]"
+          />
           <p className="mt-1 text-[11px] leading-tight text-muted print:text-black">{CAFE_ADDRESS}</p>
           <p className="text-[11px] text-muted print:text-black">{CAFE_PHONE_DISPLAY}</p>
         </div>

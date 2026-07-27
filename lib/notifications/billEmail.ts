@@ -20,7 +20,7 @@ export function renderBillEmail(order: Order): { subject: string; html: string }
   <body style="margin:0;padding:24px;background:#faf7f4;font-family:Arial,Helvetica,sans-serif;color:#232325;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;margin:0 auto;background:#fffdfa;border:1px solid #e5e5e5;border-radius:8px;">
       <tr><td style="padding:28px 28px 8px;text-align:center;">
-        <div style="font-size:20px;font-weight:bold;letter-spacing:3px;">${CAFE_NAME}</div>
+        <img src="${absoluteUrl('/images/logo-black.png')}" alt="${CAFE_NAME}" width="140" style="display:inline-block;width:140px;max-width:60%;height:auto;border:0;" />
       </td></tr>
       <tr><td style="padding:8px 28px;">
         <p style="font-size:14px;line-height:1.5;">Hi ${escapeHtml(firstName)}, thanks for your order! Your bill for <strong>${orderNo}</strong> is ready.</p>

@@ -61,6 +61,20 @@ function BillRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+// Brand wordmark (public/images/logo-black.png). The logo already contains the
+// name, so it stands in for the text heading. Black art prints cleanly on the
+// 80mm thermal; a plain <img> is used (not next/image) for print reliability.
+function TicketLogo() {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/images/logo-black.png"
+      alt={CAFE_NAME}
+      className="mx-auto mb-1 h-auto w-[38mm] max-w-[70%]"
+    />
+  );
+}
+
 // --- KOT-1 — Kitchen Order Ticket -------------------------------------------
 // Qty × name (variant) + addons + notes. NO prices, NO totals. Voided lines
 // print struck-through so the kitchen sees the correction on a reprint.
@@ -131,7 +145,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   return (
     <div className="font-sans text-black">
       <div className="text-center">
-        <p className="text-base font-bold tracking-[0.2em]">{CAFE_NAME}</p>
+        <TicketLogo />
         <p className="mt-1 text-[11px] leading-tight">{CAFE_ADDRESS}</p>
         <p className="text-[11px]">{CAFE_PHONE_DISPLAY}</p>
       </div>
@@ -219,7 +233,7 @@ export function TokenSlip({ order }: { order: StaffPrintOrder }) {
 
   return (
     <div className="font-sans text-center text-black">
-      <p className="text-sm font-bold tracking-[0.2em]">{CAFE_NAME}</p>
+      <TicketLogo />
 
       <Divider />
 
