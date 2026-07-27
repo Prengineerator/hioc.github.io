@@ -202,6 +202,10 @@ export async function sendBillNotification(
           body,
           event: 'bill',
           templateVars,
+          // Brand logo on the bill message — only sent when the approved template
+          // has an IMAGE header and WHATSAPP_TPL_BILL_HEADER_IMAGE is set to a
+          // public HTTPS URL (e.g. <SITE_URL>/images/logo-black.png).
+          headerImageUrl: process.env.WHATSAPP_TPL_BILL_HEADER_IMAGE || undefined,
         },
         force,
       );

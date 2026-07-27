@@ -7,6 +7,8 @@
 // Env to go live:
 //   NOTIFY_PROVIDER=whatsapp | sms | log        (default: log)
 //   WhatsApp (Meta Cloud API): WHATSAPP_TOKEN, WHATSAPP_PHONE_ID [, WHATSAPP_API_VERSION]
+//     bill template: WHATSAPP_TPL_BILL (approved name) [, WHATSAPP_TPL_BILL_HEADER_IMAGE
+//     = public HTTPS logo URL, only if the approved template has an image header]
 //   SMS (Twilio):              TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM
 
 import type { NotificationChannel, NotificationEvent } from '@/lib/types';
@@ -17,6 +19,11 @@ export interface SendInput {
   body: string; // rendered plain text (log/SMS + WhatsApp free-text fallback)
   event?: NotificationEvent; // for template-based providers (WhatsApp)
   templateVars?: string[]; // ordered {{1}},{{2}},… for the event's approved template
+  // Optional image for a WhatsApp template's IMAGE header (e.g. the brand logo on
+  // the bill). Only takes effect if the APPROVED template was designed with an
+  // image header — Meta rejects a header component the template doesn't declare.
+  // Must be a public HTTPS URL Meta's servers can fetch.
+  headerImageUrl?: string;
   subject?: string; // email only
   html?: string; // email only (falls back to <pre>body</pre>)
 }
@@ -76,7 +83,7 @@ export const logAdapter: NotificationAdapter = {
 export const whatsappAdapter: NotificationAdapter = {
   name: 'whatsapp',
   channel: 'whatsapp',
-  async send({ to, body, event, templateVars }: SendInput): Promise<SendResult> {
+  async send({ to, body, event, templateVars, headerImageUrl }: SendInput): Promise<SendResult> {
     const token = process.env.WHATSAPP_TOKEN;
     const phoneId = process.env.WHATSAPP_PHONE_ID;
     const version = process.env.WHATSAPP_API_VERSION ?? 'v21.0';
@@ -84,21 +91,35 @@ export const whatsappAdapter: NotificationAdapter = {
       return { ok: false, providerRef: '', error: 'whatsapp credentials missing' };
     }
     const digits = to.replace(/^\+/, ''); // Cloud API expects digits without '+'
-    const payload =
-      event && templateVars
-        ? {
-            messaging_product: 'whatsapp',
-            to: digits,
-            type: 'template',
-            template: {
-              name: whatsappTemplateName(event),
-              language: { code: process.env.WHATSAPP_TPL_LANG || 'en' },
-              components: [
-                { type: 'body', parameters: templateVars.map((t) => ({ type: 'text', text: t })) },
-              ],
-            },
-          }
-        : { messaging_product: 'whatsapp', to: digits, type: 'text', text: { preview_url: false, body } };
+    let payload: Record<string, unknown>;
+    if (event && templateVars) {
+      // Build the template components. An image header (e.g. the bill logo) is
+      // included only when a URL is supplied AND the approved template declares
+      // an image header — otherwise Meta rejects the send.
+      const components: Record<string, unknown>[] = [];
+      if (headerImageUrl) {
+        components.push({
+          type: 'header',
+          parameters: [{ type: 'image', image: { link: headerImageUrl } }],
+        });
+      }
+      components.push({
+        type: 'body',
+        parameters: templateVars.map((t) => ({ type: 'text', text: t })),
+      });
+      payload = {
+        messaging_product: 'whatsapp',
+        to: digits,
+        type: 'template',
+        template: {
+          name: whatsappTemplateName(event),
+          language: { code: process.env.WHATSAPP_TPL_LANG || 'en' },
+          components,
+        },
+      };
+    } else {
+      payload = { messaging_product: 'whatsapp', to: digits, type: 'text', text: { preview_url: false, body } };
+    }
     try {
       const res = await fetch(`https://graph.facebook.com/${version}/${phoneId}/messages`, {
         method: 'POST',
