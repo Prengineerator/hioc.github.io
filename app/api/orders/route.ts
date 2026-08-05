@@ -15,6 +15,12 @@ import {
   shapeMenuItem,
   type MenuItemRow,
 } from '@/lib/orders/lines';
+import {
+  claimIdempotencyKey,
+  completeIdempotencyKey,
+  readIdempotencyKey,
+  releaseIdempotencyKey,
+} from '@/lib/orders/idempotency';
 import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
@@ -39,11 +45,18 @@ function generatePickupCode(): string {
 }
 
 // POST /api/orders — public (guest checkout).
+//
+// POS4-2: honors an optional `Idempotency-Key` header. A replay of a key whose
+// order already exists returns THAT order instead of creating a second one —
+// the fix for a timed-out submit being retried into a duplicate (and, on the
+// POS settle path, a double charge).
 export async function POST(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) {
     return errorResponse(400, 'Request body must be a JSON object');
   }
+
+  const idempotencyKey = readIdempotencyKey(request);
 
   const {
     customer_name,
@@ -381,6 +394,32 @@ export async function POST(request: Request) {
       : 'unpaid';
   const initialPaymentMethod: PaymentMethod | null = needsOnlinePayment ? 'online' : null;
 
+  // POS4-2: claim the idempotency key immediately before creating. Claiming here
+  // rather than at the top of the handler means the many validation early-returns
+  // above don't burn a key the staffer will legitimately retry with.
+  if (idempotencyKey) {
+    const claim = await claimIdempotencyKey(admin, idempotencyKey, userId);
+    if (claim.state === 'replay') {
+      // The original request DID succeed — the response just never arrived.
+      // Return its order so the retry is a no-op instead of a duplicate.
+      const { data: prior } = await admin
+        .from('orders')
+        .select('*, order_items(*, order_item_addons(*))')
+        .eq('id', claim.orderId)
+        .single();
+      if (prior) {
+        return NextResponse.json(
+          { order: toOrderResponse(prior as OrderRowWithItems), payment: null, replayed: true },
+          { status: 201 },
+        );
+      }
+    } else if (claim.state === 'in_flight') {
+      return errorResponse(409, 'This order is already being placed — please wait a moment.');
+    }
+    // 'unavailable' (migration not applied) falls through: taking the order
+    // matters more than the guard, and claimIdempotencyKey logged it.
+  }
+
   const { data: orderRow, error: orderError } = await admin
     .from('orders')
     .insert({
@@ -417,8 +456,15 @@ export async function POST(request: Request) {
     // migration hasn't been applied) so the failure is diagnosable rather than
     // an opaque 500 — this app has no PII in the error path.
     console.error('orders insert failed', orderError);
+    // Release the claim: no order exists, so the staffer's retry must not be
+    // rejected as a duplicate of something that never happened.
+    if (idempotencyKey) await releaseIdempotencyKey(admin, idempotencyKey);
     return errorResponse(500, orderError?.message ? `Failed to create order: ${orderError.message}` : 'Failed to create order');
   }
+
+  // Point the claim at the order the moment it exists, so a retry arriving from
+  // here on replays instead of racing.
+  if (idempotencyKey) await completeIdempotencyKey(admin, idempotencyKey, orderRow.id as string);
 
   for (const line of resolvedLines) {
     const { addons, ...lineFields } = line;

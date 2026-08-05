@@ -44,6 +44,16 @@ import type { MenuItem, OrderType } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
 
+// POS4-2 — a per-attempt key for POST /api/orders. crypto.randomUUID is present
+// in every browser this POS runs on; the timestamp+random fallback keeps an old
+// tablet working rather than silently dropping replay protection.
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `pos-${crypto.randomUUID()}`;
+  }
+  return `pos-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 interface StaffTable {
   id: string;
   label: string;
@@ -81,6 +91,7 @@ export function PosOrderEntry({
 
   const [tables, setTables] = useState<StaffTable[]>([]);
   const [tableId, setTableId] = useState<string | null>(null);
+  const [tableFilter, setTableFilter] = useState(''); // POS4-5, shown past ~12 tables
 
   const [showCustomer, setShowCustomer] = useState(false);
   const [custName, setCustName] = useState('');
@@ -99,6 +110,10 @@ export function PosOrderEntry({
 
   const router = useRouter();
   const inFlight = useRef(false);
+  // POS4-2 — identifies THIS order attempt across retries. Rotated only once an
+  // order is actually placed, so a retry after a network failure replays rather
+  // than creating a duplicate.
+  const idempotencyKey = useRef(newIdempotencyKey());
   const barRef = useRef<HTMLInputElement>(null); // command bar, for sticky refocus
   const cartRef = useRef(cart);
   cartRef.current = cart;
@@ -179,6 +194,24 @@ export function PosOrderEntry({
     }
     return menuItems.filter((i) => i.category === category);
   }, [menuItems, category, search]);
+
+  // POS4-5 — tables grouped by zone, filtered by the label search. Zone order
+  // follows the tables' own sort_order (the API already returns them sorted), so
+  // the picker matches the physical room layout the owner configured.
+  const tablesByZone = useMemo(() => {
+    const term = tableFilter.trim().toLowerCase();
+    const matching = term
+      ? tables.filter((t) => t.label.toLowerCase().includes(term))
+      : tables;
+    const groups = new Map<string, StaffTable[]>();
+    for (const t of matching) {
+      const zone = t.zone?.trim() || 'Tables';
+      const list = groups.get(zone) ?? [];
+      list.push(t);
+      groups.set(zone, list);
+    }
+    return [...groups.entries()];
+  }, [tables, tableFilter]);
 
   // "Quick picks" strip (empty-query state): recent items resolved to the live
   // menu (drops any that were deleted / are missing).
@@ -358,9 +391,13 @@ export function PosOrderEntry({
       if (custPhone.trim()) body.customer_phone = custPhone.trim();
       if (custEmail.trim()) body.customer_email = custEmail.trim();
 
+      // POS4-2: one key per attempted order, generated BEFORE the request and
+      // reused if this submit is retried — that's what makes a replay
+      // recognisable. A fresh key is minted for the next order in
+      // resetForNextOrder(); regenerating it here would defeat the guard.
       const res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey.current },
         body: JSON.stringify(body),
       });
 
@@ -463,6 +500,8 @@ export function PosOrderEntry({
   }
 
   function resetForNextOrder() {
+    // A new order attempt gets a new key — this is the ONLY place it rotates.
+    idempotencyKey.current = newIdempotencyKey();
     setCart([]);
     setBill(null);
     setTableId(null);
@@ -583,24 +622,51 @@ export function PosOrderEntry({
                     No active tables — add tables in the owner settings first.
                   </p>
                 ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {tables.map((t) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setTableId(t.id)}
-                        className={
-                          'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
-                          (tableId === t.id
-                            ? 'border-tan bg-tan text-cream'
-                            : 'border-[#e5e5e5] text-charcoal hover:border-tan')
-                        }
-                        title={t.zone || undefined}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
+                  // POS4-5: grouped by zone (the same grouping the tables board
+                  // uses) with a type-to-filter once the list gets long — a flat
+                  // wrap of 30 buttons is unusable at a counter.
+                  <>
+                    {tables.length > 12 ? (
+                      <input
+                        value={tableFilter}
+                        onChange={(e) => setTableFilter(e.target.value)}
+                        placeholder="Filter tables…"
+                        className="mb-2 w-full rounded-md border border-[#e5e5e5] px-3 py-1.5 text-sm outline-none focus:border-tan"
+                      />
+                    ) : null}
+                    <div className="flex flex-col gap-2">
+                      {tablesByZone.length === 0 ? (
+                        <p className="text-sm text-muted">No table matches that.</p>
+                      ) : (
+                        tablesByZone.map(([zone, zoneTables]) => (
+                          <div key={zone}>
+                            {tablesByZone.length > 1 ? (
+                              <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">
+                                {zone}
+                              </p>
+                            ) : null}
+                            <div className="flex flex-wrap gap-2">
+                              {zoneTables.map((t) => (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() => setTableId(t.id)}
+                                  className={
+                                    'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                                    (tableId === t.id
+                                      ? 'border-tan bg-tan text-cream'
+                                      : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                                  }
+                                >
+                                  {t.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             ) : null}
