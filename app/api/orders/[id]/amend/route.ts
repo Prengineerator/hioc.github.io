@@ -343,7 +343,12 @@ async function addLines(
 
   // Audit only after the guarded write commits, so a lost race leaves no
   // phantom row (same rule as the void path).
-  await admin.from('order_amendments').insert({
+  //
+  // The lines and totals are already committed, so a failed audit must NOT fail
+  // the request — but it must not vanish either. The most likely cause is the
+  // 2026-08-running-tab.sql migration not being applied (kind='add_item' fails
+  // the CHECK), which would otherwise mean adds silently going unaudited.
+  const { error: auditError } = await admin.from('order_amendments').insert({
     order_id: id,
     staff_id: user.id,
     kind: 'add_item',
@@ -358,6 +363,13 @@ async function addLines(
       added_inr: resolved.subtotalInr,
     },
   });
+  if (auditError) {
+    console.error(
+      `order_amendments audit FAILED for add on order ${id} (items ${insertedIds.join(',')}, ` +
+        `+₹${resolved.subtotalInr}) — is supabase/2026-08-running-tab.sql applied?`,
+      auditError,
+    );
+  }
 
   await broadcastOrderEvent(id, order.status);
 
