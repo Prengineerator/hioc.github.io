@@ -230,11 +230,20 @@ function TableTile({
                 </span>
                 <span className="font-bold text-charcoal">₹{orderDisplayTotal(order)}</span>
               </div>
+              {/* TAB-2: the whole point of the running tab — more items go ONTO
+                  this order, so the table keeps one bill instead of collecting
+                  a second order nothing ties to the first. */}
+              <Link
+                href={`/staff/orders/new?add=${order.id}`}
+                className="mt-2 block rounded-md bg-tan px-3 py-2 text-center text-xs font-bold text-cream transition-colors hover:bg-tan-dark"
+              >
+                + Add items to this order
+              </Link>
             </div>
           ))}
           <Link
             href="/staff"
-            className="rounded-md bg-tan px-3 py-2 text-center text-xs font-bold text-cream transition-colors hover:bg-tan-dark"
+            className="rounded-md border border-[#e5e5e5] px-3 py-2 text-center text-xs font-bold text-charcoal transition-colors hover:border-tan"
           >
             Settle or correct in Orders →
           </Link>

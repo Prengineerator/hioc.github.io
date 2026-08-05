@@ -8,7 +8,13 @@ import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import { sendBillNotification } from '@/lib/notifications/engine';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
-import { isMenuItemAvailable } from '@/lib/menu/availability';
+import {
+  MENU_ITEM_SELECT,
+  parseItems,
+  resolveOrderLines,
+  shapeMenuItem,
+  type MenuItemRow,
+} from '@/lib/orders/lines';
 import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
@@ -19,89 +25,11 @@ import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMetho
 export const dynamic = 'force-dynamic';
 
 const MAX_CUSTOMER_NAME_LENGTH = 100;
-const MAX_INSTRUCTION_LENGTH = 200;
 const MAX_ALL_ORDERS_ROWS = 200;
-const MENU_ITEM_SELECT = `
-  *,
-  menu_item_variants(*),
-  menu_item_addon_groups(
-    addon_groups(*, options:addon_options(*))
-  )
-`;
 
-type MenuItemRow = Omit<MenuItem, 'variants' | 'addon_groups'> & {
-  menu_item_variants: MenuItem['variants'];
-  menu_item_addon_groups: { addon_groups: AddonGroup | null }[];
-};
-
-function shapeMenuItem(row: MenuItemRow): MenuItem {
-  const { menu_item_variants, menu_item_addon_groups, ...rest } = row;
-  const variants = [...(menu_item_variants ?? [])].sort((a, b) => a.sort_order - b.sort_order);
-  const addon_groups = (menu_item_addon_groups ?? [])
-    .map((link) => link.addon_groups)
-    .filter((g): g is AddonGroup => g !== null)
-    .map((g) => ({
-      ...g,
-      options: [...(g.options ?? [])].sort((a, b) => a.sort_order - b.sort_order),
-    }))
-    .sort((a, b) => a.sort_order - b.sort_order);
-  return { ...rest, variants, addon_groups } as MenuItem;
-}
-
-type IncomingOrderItem = {
-  menu_item_id: string;
-  variant_id: string;
-  quantity: number;
-  addon_option_ids: string[];
-  special_instructions: string;
-};
-
-function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
-  if (!Array.isArray(rawItems) || rawItems.length === 0) {
-    return 'items is required and must be a non-empty array';
-  }
-
-  const parsed: IncomingOrderItem[] = [];
-  for (let i = 0; i < rawItems.length; i++) {
-    const entry = rawItems[i];
-    if (typeof entry !== 'object' || entry === null) {
-      return `items[${i}] must be an object`;
-    }
-    const { menu_item_id, variant_id, quantity, addon_option_ids, special_instructions } =
-      entry as Record<string, unknown>;
-    if (!isUuid(menu_item_id)) {
-      return `items[${i}].menu_item_id must be a valid uuid`;
-    }
-    if (!isUuid(variant_id)) {
-      return `items[${i}].variant_id must be a valid uuid`;
-    }
-    if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1) {
-      return `items[${i}].quantity must be an integer >= 1`;
-    }
-    let addonIds: string[] = [];
-    if (addon_option_ids !== undefined) {
-      if (!Array.isArray(addon_option_ids) || addon_option_ids.some((v) => !isUuid(v))) {
-        return `items[${i}].addon_option_ids must be an array of valid uuids`;
-      }
-      addonIds = addon_option_ids as string[];
-    }
-    let instructions = '';
-    if (special_instructions !== undefined) {
-      if (typeof special_instructions !== 'string') {
-        return `items[${i}].special_instructions must be a string`;
-      }
-      instructions = special_instructions.trim().slice(0, MAX_INSTRUCTION_LENGTH);
-    }
-    parsed.push({
-      menu_item_id,
-      variant_id,
-      quantity,
-      addon_option_ids: addonIds,
-      special_instructions: instructions,
-    });
-  }
-  return parsed;
-}
+// Line parsing / shaping / pricing now lives in lib/orders/lines.ts so the
+// TAB-1 add-to-open-order path prices lines by the exact same rules (money math
+// gets one copy, not two).
 
 // 4-digit counter pickup code shown to the customer and verified at pickup
 // (CUS-056). Not a security token — the opaque order id is the access control;
@@ -345,97 +273,13 @@ export async function POST(request: Request) {
   );
 
   // Validate every line and compute authoritative prices server-side —
-  // never trust a client-submitted price.
-  type ResolvedLine = {
-    menu_item_id: string;
-    variant_id: string;
-    name_snapshot: string;
-    variant_label_snapshot: string;
-    price_inr_snapshot: number;
-    quantity: number;
-    line_total_inr: number;
-    special_instructions: string;
-    addons: { addon_option_id: string; group_name_snapshot: string; option_name_snapshot: string; price_inr_snapshot: number }[];
-  };
-
-  const resolvedLines: ResolvedLine[] = [];
-  let subtotal_inr = 0;
-
-  for (const item of items) {
-    const menuItem = menuById.get(item.menu_item_id);
-    if (!menuItem) {
-      return errorResponse(400, `Menu item ${item.menu_item_id} does not exist`);
-    }
-    // Effective availability includes 86/snooze (unavailable_until), so an item
-    // 86'd while sitting in the cart is rejected here with a clear message (C3).
-    if (!isMenuItemAvailable(menuItem)) {
-      return errorResponse(400, `"${menuItem.name}" is currently unavailable`);
-    }
-
-    const variant = menuItem.variants.find((v) => v.id === item.variant_id);
-    if (!variant) {
-      return errorResponse(400, `"${menuItem.name}" has no such variant`);
-    }
-
-    const optionById = new Map<string, { option: AddonGroup['options'][number]; group: AddonGroup }>();
-    for (const group of menuItem.addon_groups) {
-      for (const option of group.options) {
-        optionById.set(option.id, { option, group });
-      }
-    }
-
-    const selectedByGroup = new Map<string, AddonGroup['options'][number][]>();
-    for (const optionId of item.addon_option_ids) {
-      const found = optionById.get(optionId);
-      if (!found) {
-        return errorResponse(400, `"${menuItem.name}" has no such addon option`);
-      }
-      const list = selectedByGroup.get(found.group.id) ?? [];
-      list.push(found.option);
-      selectedByGroup.set(found.group.id, list);
-    }
-
-    for (const group of menuItem.addon_groups) {
-      const count = selectedByGroup.get(group.id)?.length ?? 0;
-      if (count < group.min_select || count > group.max_select) {
-        return errorResponse(
-          400,
-          `"${menuItem.name}": "${group.display_name}" requires ${
-            group.min_select === group.max_select
-              ? `exactly ${group.min_select}`
-              : `between ${group.min_select} and ${group.max_select}`
-          } selection(s), got ${count}`,
-        );
-      }
-    }
-
-    const addonsFlat = [...selectedByGroup.entries()].flatMap(([groupId, options]) => {
-      const group = menuItem.addon_groups.find((g) => g.id === groupId)!;
-      return options.map((option) => ({
-        addon_option_id: option.id,
-        group_name_snapshot: group.display_name,
-        option_name_snapshot: option.name,
-        price_inr_snapshot: option.price_inr,
-      }));
-    });
-
-    const addonsTotal = addonsFlat.reduce((sum, a) => sum + a.price_inr_snapshot, 0);
-    const unitPrice = variant.price_inr + addonsTotal;
-    const line_total_inr = unitPrice * item.quantity;
-    subtotal_inr += line_total_inr;
-
-    resolvedLines.push({
-      menu_item_id: menuItem.id,
-      variant_id: variant.id,
-      name_snapshot: menuItem.name,
-      variant_label_snapshot: variant.label,
-      price_inr_snapshot: unitPrice,
-      quantity: item.quantity,
-      line_total_inr,
-      special_instructions: item.special_instructions,
-      addons: addonsFlat,
-    });
+  // never trust a client-submitted price. Shared with the TAB-1 add path.
+  const resolved = resolveOrderLines(items, menuById);
+  if (!resolved.ok) {
+    return errorResponse(400, resolved.error);
   }
+  const resolvedLines = resolved.lines;
+  let subtotal_inr = resolved.subtotalInr;
 
   // Per-slot capacity (C4 edge case): if a real slot was chosen and capacity is
   // capped, reject when it's already full (excludes rejected/cancelled orders).

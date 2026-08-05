@@ -5,6 +5,13 @@ import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { recomputeOrderTotals } from '@/lib/orders/amend';
+import {
+  MENU_ITEM_SELECT,
+  parseItems,
+  resolveOrderLines,
+  shapeMenuItem,
+  type MenuItemRow,
+} from '@/lib/orders/lines';
 import { getStoreSettings } from '@/lib/store/settings';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
@@ -31,28 +38,45 @@ type LoadedOrder = {
   order_items: OrderLine[] | null;
 };
 
-// POST /api/orders/[id]/amend — void a wrongly-punched line (FND3-4, UI is POS-4).
-// A line is VOIDED, never deleted (the row survives for audit / a fired KOT). The
-// bill is recomputed server-side from the remaining lines under the optimistic
-// `version` guard, and every void is written to order_amendments. Manager-gated
-// via the owner-tunable permission matrix (default `void_line` = manager, D4).
-// Body: { item_id: uuid, reason: string }.
+// POST /api/orders/[id]/amend — correct an open order. Two operations:
+//
+//   { item_id, reason }        → VOID a wrongly-punched line (FND3-4, UI POS-4)
+//   { op: 'add', items: [...] }→ ADD lines to the running order (TAB-1, UI TAB-2)
+//
+// `op` defaults to 'void' so the existing POS-4 contract is unchanged.
+//
+// Both share the same invariants: the order must be open and unpaid, totals are
+// recomputed SERVER-SIDE under the optimistic `version` guard, a lost race rolls
+// the change back rather than half-applying it, and every amendment is audited
+// in order_amendments.
+//
+// They differ in authorization, deliberately. A void REDUCES what a customer
+// owes and is manager-gated (`void_line`, D4). An add increases an unpaid tab —
+// that's ordinary table service, not a correction, so it rides the same
+// `pos_order_entry` permission as punching the order in the first place. Using a
+// new key here would fail CLOSED to manager on any deploy whose seed row is
+// missing (see lib/permissions.ts), quietly breaking normal service.
 export async function POST(request: Request, { params }: RouteParams) {
-  // Authz first — a valid staff session AND the void_line permission. UI hiding
-  // is not authorization (§5.2); this is the real gate, checked per-request so an
-  // owner flipping the matrix mid-shift takes effect immediately.
   const user = await getStaffUser();
   if (!user) return unauthorized();
 
   const { id } = params;
   if (!isUuid(id)) return notFound();
 
+  const body = await parseJsonBody(request);
+  if (!body) return errorResponse(400, 'Request body must be a JSON object');
+
+  if (body.op === 'add') {
+    return addLines(request, id, user, body);
+  }
+
+  // --- VOID (FND3-4) --------------------------------------------------------
+  // UI hiding is not authorization (§5.2); this is the real gate, checked
+  // per-request so an owner flipping the matrix mid-shift takes effect at once.
   if (!(await hasPermission(user, 'void_line'))) {
     return errorResponse(403, 'Manager permission required to void a line');
   }
 
-  const body = await parseJsonBody(request);
-  if (!body) return errorResponse(400, 'Request body must be a JSON object');
   if (!isUuid(body.item_id)) {
     return errorResponse(400, 'item_id is required and must be a valid uuid');
   }
@@ -182,4 +206,184 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   return NextResponse.json({ order: toOrderResponse(full as OrderRowWithItems) });
+}
+
+/**
+ * TAB-1 — append lines to an open, unpaid order so a table keeps ONE bill.
+ *
+ * Mirrors the void path's safety model exactly: same open/unpaid preconditions,
+ * same server-side recompute, same optimistic version guard, same audit — and on
+ * a lost race the newly inserted lines are deleted (order_item_addons cascades),
+ * so the order is never left half-extended.
+ *
+ * Prices come from lib/orders/lines.ts, the same resolver POST /api/orders uses,
+ * so an added latte is priced and snapshot identically to one punched at
+ * creation. 86'd items and bad variant/addon combinations are rejected there.
+ */
+async function addLines(
+  _request: Request,
+  id: string,
+  user: { id: string },
+  body: Record<string, unknown>,
+) {
+  if (!(await hasPermission(user as never, 'pos_order_entry'))) {
+    return errorResponse(403, 'You do not have permission to add items to an order');
+  }
+
+  const parsed = parseItems(body.items);
+  if (typeof parsed === 'string') return errorResponse(400, parsed);
+
+  const admin = createAdminSupabaseClient();
+
+  const { data, error: readError } = await admin
+    .from('orders')
+    .select(
+      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr)',
+    )
+    .eq('id', id)
+    .maybeSingle();
+
+  if (readError) return errorResponse(500, 'Failed to load the order');
+  if (!data) return notFound();
+  const order = data as LoadedOrder;
+  const existingItems: OrderLine[] = order.order_items ?? [];
+
+  if (!OPEN_STATUSES.includes(order.status)) {
+    return errorResponse(409, 'This order can no longer be changed — it is not open.');
+  }
+  // A paid order's bill is settled; adding to it would silently change what the
+  // customer already paid. Start a new order instead.
+  if (order.payment_status === 'paid') {
+    return errorResponse(409, 'This order is already paid — start a new order for anything else.');
+  }
+
+  // Price the new lines against the live menu (server-authoritative).
+  const menuIds = [...new Set(parsed.map((i) => i.menu_item_id))];
+  const { data: menuRows, error: menuError } = await admin
+    .from('menu_items')
+    .select(MENU_ITEM_SELECT)
+    .in('id', menuIds);
+  if (menuError) return errorResponse(500, 'Failed to validate order items');
+
+  const menuById = new Map(
+    (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
+  );
+  const resolved = resolveOrderLines(parsed, menuById);
+  if (!resolved.ok) return errorResponse(400, resolved.error);
+
+  // Insert the lines, tracking ids so a lost version race can roll them back.
+  const insertedIds: string[] = [];
+  for (const line of resolved.lines) {
+    const { addons, ...lineFields } = line;
+    const { data: itemRow, error: itemError } = await admin
+      .from('order_items')
+      .insert({ ...lineFields, order_id: id })
+      .select('id')
+      .single();
+    if (itemError || !itemRow) {
+      await rollbackLines(admin, insertedIds);
+      return errorResponse(500, 'Failed to add the items');
+    }
+    insertedIds.push(itemRow.id as string);
+
+    if (addons.length > 0) {
+      const { error: addonError } = await admin
+        .from('order_item_addons')
+        .insert(addons.map((a) => ({ ...a, order_item_id: itemRow.id })));
+      if (addonError) {
+        await rollbackLines(admin, insertedIds);
+        return errorResponse(500, 'Failed to add the item options');
+      }
+    }
+  }
+
+  // Recompute from EVERY non-voided line — the ones already on the order plus
+  // the ones just added. Same shared recompute the void path uses (dine-in
+  // packaging rule and discount clamp included).
+  const settings = await getStoreSettings();
+  const allLines = [
+    ...existingItems,
+    ...resolved.lines.map((l) => ({ voided: false, line_total_inr: l.line_total_inr })),
+  ];
+  const bill = recomputeOrderTotals({
+    items: allLines,
+    settings,
+    orderType: order.order_type,
+    discountInr: order.discount_inr,
+  });
+
+  const { data: guarded, error: updateError } = await admin
+    .from('orders')
+    .update({
+      subtotal_inr: bill.subtotal_inr,
+      tax_inr: bill.tax_inr,
+      packaging_inr: bill.packaging_inr,
+      discount_inr: bill.discount_inr,
+      total_inr: bill.total_inr,
+      version: order.version + 1,
+    })
+    .eq('id', id)
+    .eq('version', order.version)
+    .select('id')
+    .maybeSingle();
+
+  if (updateError) {
+    await rollbackLines(admin, insertedIds);
+    return errorResponse(500, 'Failed to update the order total');
+  }
+  if (!guarded) {
+    // Someone else changed the order first. Remove the lines we just added so the
+    // re-presented order is clean, and make the caller re-check — never force.
+    await rollbackLines(admin, insertedIds);
+    return errorResponse(
+      409,
+      'Order was updated by someone else — please re-check the order and try again.',
+    );
+  }
+
+  // Audit only after the guarded write commits, so a lost race leaves no
+  // phantom row (same rule as the void path).
+  await admin.from('order_amendments').insert({
+    order_id: id,
+    staff_id: user.id,
+    kind: 'add_item',
+    payload: {
+      order_item_ids: insertedIds,
+      lines: resolved.lines.map((l) => ({
+        name: l.name_snapshot,
+        variant: l.variant_label_snapshot,
+        quantity: l.quantity,
+        line_total_inr: l.line_total_inr,
+      })),
+      added_inr: resolved.subtotalInr,
+    },
+  });
+
+  await broadcastOrderEvent(id, order.status);
+
+  const { data: full, error: reloadError } = await admin
+    .from('orders')
+    .select('*, order_items(*, order_item_addons(*))')
+    .eq('id', id)
+    .single();
+  if (reloadError || !full) {
+    return errorResponse(500, 'Added the items but failed to reload the order');
+  }
+
+  return NextResponse.json({
+    order: toOrderResponse(full as OrderRowWithItems),
+    // The ids the kitchen still needs to see — TAB-2/POS4-3 print ONLY these as
+    // an addition to the ticket, rather than re-firing the whole order.
+    added_item_ids: insertedIds,
+  });
+}
+
+/** Best-effort removal of just-inserted lines (addons cascade). */
+async function rollbackLines(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  ids: string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await admin.from('order_items').delete().in('id', ids);
+  if (error) console.error('addLines rollback failed', error, ids);
 }

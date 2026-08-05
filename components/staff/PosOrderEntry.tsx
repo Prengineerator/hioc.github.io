@@ -22,6 +22,7 @@
 // the CartItem shape + computeCartKey so the line-merge mechanics match the web.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
 import { PosPaymentModal } from '@/components/staff/PosPaymentModal';
@@ -51,7 +52,24 @@ interface StaffTable {
   sort_order: number;
 }
 
-export function PosOrderEntry({ initialTableId }: { initialTableId?: string | null } = {}) {
+/**
+ * TAB-2 — when present, the screen is in "add to a running order" mode: the
+ * cart is appended to an EXISTING order via the amend engine rather than
+ * creating a new one. Order type, table and customer capture all belong to the
+ * order already, so they're hidden; there is no payment step (the tab is settled
+ * later, once).
+ */
+export interface AddToOrderTarget {
+  id: string;
+  orderNumber: number;
+  tableLabel: string | null;
+}
+
+export function PosOrderEntry({
+  initialTableId,
+  addToOrder = null,
+}: { initialTableId?: string | null; addToOrder?: AddToOrderTarget | null } = {}) {
+  const isAddMode = addToOrder !== null;
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
   const [category, setCategory] = useState<string>(DEFAULT_CATEGORY);
@@ -78,6 +96,7 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
   const [toast, setToast] = useState<string | null>(null);
   const [recentIds, setRecentIds] = useState<string[]>([]); // "Quick picks" (this tablet)
 
+  const router = useRouter();
   const inFlight = useRef(false);
   const barRef = useRef<HTMLInputElement>(null); // command bar, for sticky refocus
   const cartRef = useRef(cart);
@@ -381,6 +400,54 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
     }
   }
 
+  // TAB-2 — append the cart to an existing open order through the amend engine.
+  // Totals are recomputed server-side there, so nothing about money is decided
+  // here; on success we return to the tables board where the new total shows.
+  async function submitAddToOrder() {
+    if (!addToOrder || inFlight.current || cart.length === 0) return;
+    inFlight.current = true;
+    setSubmitting(true);
+    setSubmitError(null);
+
+    try {
+      const res = await fetch(`/api/orders/${addToOrder.id}/amend`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          op: 'add',
+          items: cart.map((i) => ({
+            menu_item_id: i.menuItemId,
+            variant_id: i.variantId,
+            quantity: i.qty,
+            addon_option_ids: i.addons.map((a) => a.optionId),
+            special_instructions: i.specialInstructions,
+          })),
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // A 409 here is the version guard: someone settled or changed the order
+        // while this cart was open. The message from the route says so.
+        setSubmitError(data.error ?? 'Could not add the items. Please try again.');
+        return;
+      }
+
+      const label = formatOrderNumber(addToOrder.orderNumber);
+      setCart([]);
+      setBill(null);
+      setSearch('');
+      showToast(`Added to order #${label}.`);
+      // Back to the board so the running total is visible in context.
+      setTimeout(() => router.push('/staff/tables'), 600);
+    } catch {
+      setSubmitError('Network error — please check the connection and try again.');
+    } finally {
+      inFlight.current = false;
+      setSubmitting(false);
+    }
+  }
+
   function resetForNextOrder() {
     setCart([]);
     setBill(null);
@@ -405,8 +472,16 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
     <div className="mx-auto max-w-7xl px-4 py-6">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-charcoal">New order</h1>
-          <p className="text-sm text-muted">Punch in a dine-in or walk-in order.</p>
+          <h1 className="text-2xl font-bold text-charcoal">
+            {isAddMode ? `Add to order #${formatOrderNumber(addToOrder.orderNumber)}` : 'New order'}
+          </h1>
+          <p className="text-sm text-muted">
+            {isAddMode
+              ? `These items go onto the existing bill${
+                  addToOrder.tableLabel ? ` for ${addToOrder.tableLabel}` : ''
+                } — one table, one bill.`
+              : 'Punch in a dine-in or walk-in order.'}
+          </p>
         </div>
       </div>
 
@@ -460,7 +535,9 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
         {/* ---- Order panel ---- */}
         <div className="lg:col-span-1">
           <div className="sticky top-20 flex flex-col gap-4 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
-            {/* Order type toggle */}
+            {/* Order type toggle — in add mode these belong to the existing
+                order and must not be re-decided here. */}
+            {!isAddMode ? (
             <div className="grid grid-cols-2 gap-2">
               {(['dine_in', 'takeaway'] as const).map((t) => (
                 <button
@@ -481,9 +558,10 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
                 </button>
               ))}
             </div>
+            ) : null}
 
             {/* Table picker (dine-in only) */}
-            {orderType === 'dine_in' ? (
+            {!isAddMode && orderType === 'dine_in' ? (
               <div>
                 <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">Table</p>
                 {tables.length === 0 ? (
@@ -578,7 +656,10 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
               )}
             </div>
 
-            {/* Bill breakup (all numbers from the quote endpoint) */}
+            {/* Bill breakup (all numbers from the quote endpoint). In add mode
+                this is only the value of what's being ADDED — the order's real
+                new total is recomputed server-side by the amend engine, so we
+                label it honestly rather than implying it's the bill. */}
             {cart.length > 0 ? (
               <div className="rounded-md border border-[#e5e5e5] px-3 py-2 text-sm text-charcoal">
                 <BillRow label="Subtotal" value={displaySubtotal} />
@@ -587,16 +668,22 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
                   <BillRow label="Packaging" value={bill.packaging_inr} />
                 ) : null}
                 <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-1">
-                  <span className="font-bold">Total</span>
+                  <span className="font-bold">{isAddMode ? 'Adding' : 'Total'}</span>
                   <span className="font-bold text-tan">
                     {bill ? `₹${bill.total_inr}` : 'Calculating…'}
                   </span>
                 </div>
+                {isAddMode ? (
+                  <p className="mt-1 text-xs text-muted">
+                    The order&rsquo;s new total is recalculated when you add.
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
-            {/* Optional customer capture — skippable in one tap */}
-            {showCustomer ? (
+            {/* Optional customer capture — skippable in one tap. Hidden in add
+                mode: the customer belongs to the order already. */}
+            {isAddMode ? null : showCustomer ? (
               <div className="flex flex-col gap-2">
                 <div className="flex items-center justify-between">
                   <p className="text-xs font-bold uppercase tracking-wide text-muted">
@@ -661,21 +748,45 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
               </p>
             ) : null}
 
-            {/* Proceed to Collect payment */}
-            <button
-              type="button"
-              disabled={!canProceed || submitting}
-              onClick={openPayment}
-              className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {cart.length === 0
-                ? 'Add items to continue'
-                : dineInNeedsTable
-                  ? 'Select a table'
-                  : bill
-                    ? `Charge ₹${bill.total_inr}`
-                    : 'Review & pay'}
-            </button>
+            {/* Primary action. In add mode there is no payment step — the tab is
+                settled once, later. */}
+            {isAddMode ? (
+              <>
+                <button
+                  type="button"
+                  disabled={cart.length === 0 || submitting}
+                  onClick={submitAddToOrder}
+                  className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {cart.length === 0
+                    ? 'Add items to continue'
+                    : submitting
+                      ? 'Adding…'
+                      : `Add ${totalItems} item${totalItems === 1 ? '' : 's'} to #${formatOrderNumber(addToOrder.orderNumber)}`}
+                </button>
+                <a
+                  href="/staff/tables"
+                  className="text-center text-xs font-bold text-muted underline"
+                >
+                  Cancel
+                </a>
+              </>
+            ) : (
+              <button
+                type="button"
+                disabled={!canProceed || submitting}
+                onClick={openPayment}
+                className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {cart.length === 0
+                  ? 'Add items to continue'
+                  : dineInNeedsTable
+                    ? 'Select a table'
+                    : bill
+                      ? `Charge ₹${bill.total_inr}`
+                      : 'Review & pay'}
+              </button>
+            )}
           </div>
         </div>
       </div>
