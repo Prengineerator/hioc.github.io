@@ -43,5 +43,13 @@ export async function POST(_request: Request, { params }: RouteParams) {
   // result flags which channels sent.
   const result = await sendBillNotification(order, { force: true });
 
-  return NextResponse.json({ ok: true, sent: { whatsapp: result.whatsapp, email: result.email } });
+  // BILL-3/4: report WHY nothing sent. Returning a bare `ok: true` rendered a
+  // total failure ("no phone on this order", "WhatsApp not configured") as a
+  // success in the UI — the exact class of silent failure this phase exists to
+  // remove. `reasons` is '' per channel when that channel delivered.
+  return NextResponse.json({
+    ok: true,
+    sent: { whatsapp: result.whatsapp, email: result.email },
+    reasons: result.reasons,
+  });
 }

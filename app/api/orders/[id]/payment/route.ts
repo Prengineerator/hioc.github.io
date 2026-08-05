@@ -3,6 +3,8 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getStaffUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isPaymentMethod, isUuid, PAYMENT_METHODS } from '@/lib/api/constants';
+import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
+import { sendBillNotification } from '@/lib/notifications/engine';
 import type { Order, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -80,6 +82,34 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
   if (!data) {
     return notFound();
+  }
+
+  // BILL-1: deliver the bill the moment the money is taken. The POS "Collect now"
+  // step settles through THIS route and never transitions status, so before this
+  // a counter order got NO bill at all until someone separately marked it
+  // completed in the queue — which on a busy counter never happens. The bill for
+  // a settled order belongs here, not only on the completed transition.
+  //
+  // Exactly-once is the engine's job: its per-(order, event, channel) idempotency
+  // makes the later completed-transition send a no-op, so the customer can't get
+  // two. Only a genuinely settled order bills — 'payment_pending' (an online
+  // order awaiting the gateway) must not.
+  //
+  // Reloaded with its lines so the bill's item count ({{4}}) is accurate; `data`
+  // above is a plain select('*') and carries no items. Best-effort and fully
+  // wrapped: a slow or failing provider must never fail settlement — the printed
+  // bill remains the guaranteed copy.
+  if (paymentStatus === 'paid') {
+    try {
+      const { data: full } = await admin
+        .from('orders')
+        .select('*, order_items(*, order_item_addons(*))')
+        .eq('id', id)
+        .single();
+      await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : (data as Order));
+    } catch (billError) {
+      console.error('settle bill notification failed', billError);
+    }
   }
 
   return NextResponse.json({ order: data as Order });

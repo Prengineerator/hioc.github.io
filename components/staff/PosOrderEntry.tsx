@@ -629,6 +629,7 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
                     if (contactError) setContactError(null);
                   }}
                   inputMode="tel"
+                  // Also asked (and focused) in the Collect-payment step — BILL-2.
                   placeholder="Phone (for the bill on WhatsApp)"
                   className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
                 />
@@ -697,6 +698,14 @@ export function PosOrderEntry({ initialTableId }: { initialTableId?: string | nu
           orderType={orderType}
           tableLabel={selectedTableLabel}
           itemCount={totalItems}
+          // BILL-2: the settle step edits the SAME phone state as the customer
+          // block above, so whichever one staff use, `placeOrder` bills the
+          // number they actually typed.
+          phone={custPhone}
+          onPhoneChange={(value) => {
+            setCustPhone(value);
+            if (contactError) setContactError(null);
+          }}
           submitting={submitting}
           error={submitError}
           onSubmit={placeOrder}

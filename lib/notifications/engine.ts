@@ -19,12 +19,60 @@ import {
 } from '@/lib/notifications/adapters';
 import { renderNotification, templateVarsFor } from '@/lib/notifications/templates';
 import { renderBillEmail } from '@/lib/notifications/billEmail';
+import { emailBillHealth, warnIfMisconfigured, whatsappBillHealth } from '@/lib/notifications/health';
 import { flags } from '@/lib/flags';
-import type { NotificationEvent, Order } from '@/lib/types';
+import type { NotificationChannel, NotificationEvent, Order } from '@/lib/types';
 
 const MAX_ATTEMPTS = 2; // initial try + one retry (NFR / F4 "retried >=1")
 
 type Admin = ReturnType<typeof createAdminSupabaseClient>;
+
+/**
+ * BILL-3: records that a channel was deliberately NOT attempted, and why.
+ *
+ * A skip used to write nothing at all, which made "why didn't this customer get
+ * their bill?" unanswerable — the absence of a row was ambiguous between "never
+ * tried" and "tried and vanished". Never overwrites a successful send, and never
+ * throws: observability must not be able to break delivery.
+ */
+async function logSkip(
+  admin: Admin,
+  order: Order,
+  event: NotificationEvent,
+  channel: NotificationChannel,
+  reason: string,
+): Promise<void> {
+  try {
+    const { data: existing } = await admin
+      .from('notifications')
+      .select('status')
+      .eq('order_id', order.id)
+      .eq('event', event)
+      .eq('channel', channel)
+      .maybeSingle();
+
+    // A bill already delivered (e.g. sent at placement, skipped at settle
+    // because the channel went dormant since) must stay 'sent'.
+    if (existing?.status === 'sent') return;
+
+    await admin.from('notifications').upsert(
+      {
+        order_id: order.id,
+        channel,
+        event,
+        status: 'skipped' as const,
+        provider_ref: '',
+        error: '',
+        skip_reason: reason,
+        attempts: 0,
+        sent_at: null,
+      },
+      { onConflict: 'order_id,event,channel' },
+    );
+  } catch (err) {
+    console.error('logSkip failed', err);
+  }
+}
 
 /**
  * Sends one message via one adapter and records the result, idempotent per
@@ -140,6 +188,18 @@ export async function sendOrderNotification(
 }
 
 /**
+ * Per-channel outcome of a bill send. The booleans are what existing callers
+ * read; `reasons` (BILL-3) carries WHY a channel didn't send — '' when it did —
+ * so the resend action and the owner log can state the cause instead of
+ * rendering a silent failure as success.
+ */
+export interface BillResult {
+  email: boolean;
+  whatsapp: boolean;
+  reasons: { email: string; whatsapp: string };
+}
+
+/**
  * Sends the link-based e-bill (RCT-1/2) for a just-placed order across BOTH the
  * email and WhatsApp channels, each logged + idempotent (event 'bill'). Every
  * channel is independently dormant until its provider is configured:
@@ -154,15 +214,35 @@ export async function sendOrderNotification(
 export async function sendBillNotification(
   order: Order,
   opts: { force?: boolean } = {},
-): Promise<{ email: boolean; whatsapp: boolean }> {
+): Promise<BillResult> {
   const force = opts.force ?? false;
-  const result = { email: false, whatsapp: false };
-  if (!flags.notifications) return result;
+  const result: BillResult = { email: false, whatsapp: false, reasons: { email: '', whatsapp: '' } };
+
+  if (!flags.notifications) {
+    result.reasons.email = 'notifications_disabled';
+    result.reasons.whatsapp = 'notifications_disabled';
+    return result;
+  }
+
+  // BILL-3: one warning per process naming exactly which variables are missing,
+  // so a half-configured deploy announces itself instead of quietly no-op'ing.
+  warnIfMisconfigured();
 
   try {
     const admin = createAdminSupabaseClient();
 
-    if (order.customer_email && process.env.RESEND_API_KEY && process.env.RESEND_FROM) {
+    // --- Email ------------------------------------------------------------
+    const emailHealth = emailBillHealth();
+    const emailSkip = !order.customer_email
+      ? 'no_email'
+      : !emailHealth.configured
+        ? `not_configured:${emailHealth.missing.join(',')}`
+        : '';
+
+    if (emailSkip) {
+      result.reasons.email = emailSkip;
+      await logSkip(admin, order, 'bill', 'email', emailSkip);
+    } else {
       const { subject, html } = renderBillEmail(order);
       const { body } = renderNotification(order, 'bill');
       const r = await deliverAndLog(
@@ -171,7 +251,7 @@ export async function sendBillNotification(
         'bill',
         emailAdapter,
         {
-          to: order.customer_email,
+          to: order.customer_email as string,
           channel: 'email',
           body,
           event: 'bill',
@@ -181,14 +261,21 @@ export async function sendBillNotification(
         force,
       );
       result.email = r.sent;
+      if (!r.sent) result.reasons.email = 'send_failed';
     }
 
-    if (
-      order.customer_phone &&
-      process.env.WHATSAPP_TOKEN &&
-      process.env.WHATSAPP_PHONE_ID &&
-      process.env.WHATSAPP_TPL_BILL
-    ) {
+    // --- WhatsApp ---------------------------------------------------------
+    const waHealth = whatsappBillHealth();
+    const waSkip = !order.customer_phone
+      ? 'no_phone'
+      : !waHealth.configured
+        ? `not_configured:${waHealth.missing.join(',')}`
+        : '';
+
+    if (waSkip) {
+      result.reasons.whatsapp = waSkip;
+      await logSkip(admin, order, 'bill', 'whatsapp', waSkip);
+    } else {
       const { body } = renderNotification(order, 'bill');
       const templateVars = templateVarsFor(order, 'bill');
       const r = await deliverAndLog(
@@ -197,19 +284,21 @@ export async function sendBillNotification(
         'bill',
         whatsappAdapter,
         {
-          to: order.customer_phone,
+          to: order.customer_phone as string,
           channel: 'whatsapp',
           body,
           event: 'bill',
           templateVars,
-          // Brand logo on the bill message — only sent when the approved template
-          // has an IMAGE header and WHATSAPP_TPL_BILL_HEADER_IMAGE is set to a
-          // public HTTPS URL (e.g. <SITE_URL>/images/logo-black.png).
+          // Brand logo on the bill message. Sent only when the approved template
+          // declares an IMAGE header — and MANDATORY when it does (Meta rejects a
+          // send that omits a declared header). whatsappBillHealth() warns when
+          // this is unset; see docs/WHATSAPP-BILL-TEMPLATE.md §3.
           headerImageUrl: process.env.WHATSAPP_TPL_BILL_HEADER_IMAGE || undefined,
         },
         force,
       );
       result.whatsapp = r.sent;
+      if (!r.sent) result.reasons.whatsapp = 'send_failed';
     }
   } catch (err) {
     console.error('sendBillNotification failed', err);

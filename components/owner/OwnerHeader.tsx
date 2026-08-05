@@ -10,6 +10,7 @@ const LINKS = [
   { href: '/owner/promotions', label: 'Promotions' },
   { href: '/owner/reviews', label: 'Reviews' },
   { href: '/owner/tables', label: 'Tables' },
+  { href: '/owner/notifications', label: 'Notifications' },
   { href: '/owner/staff', label: 'Team' },
   { href: '/owner/settings', label: 'Settings' },
   { href: '/staff', label: 'Staff board' },

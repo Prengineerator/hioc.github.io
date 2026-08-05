@@ -14,6 +14,7 @@ import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
+import { describeBillOutcome } from '@/lib/notifications/reasons';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -133,6 +134,44 @@ export function OrderDetailModal({
     window.open(`/staff-print/${order.id}/${type}`, '_blank', 'noopener');
   };
   const canPrintToken = order.order_type === 'takeaway' && Boolean(order.pickup_code);
+
+  // Resend the bill (BILL-4) — wires up the RCT-1 route that shipped with no
+  // caller. Only offered when the order actually has somewhere to send to;
+  // otherwise the honest answer is "capture a number", not a button that fails.
+  const canResendBill = Boolean(order.customer_phone || order.customer_email);
+  const [resending, setResending] = useState(false);
+  const [resendResult, setResendResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const doResendBill = async () => {
+    if (resending) return;
+    setResending(true);
+    setResendResult(null);
+    try {
+      const res = await fetch(`/api/orders/${order.id}/resend-bill`, { method: 'POST' });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        sent?: { whatsapp: boolean; email: boolean };
+        reasons?: { whatsapp: string; email: string };
+      };
+      if (!res.ok) {
+        // Covers the 429 rate limit, whose message is already staff-readable.
+        setResendResult({ ok: false, message: data.error ?? 'Could not resend the bill.' });
+        return;
+      }
+      const sent = data.sent ?? { whatsapp: false, email: false };
+      const reasons = data.reasons ?? { whatsapp: '', email: '' };
+      // A send where NOTHING went out is a failure, not a success — reporting it
+      // as "done" is the bug BILL-3/4 exist to remove.
+      setResendResult({
+        ok: sent.whatsapp || sent.email,
+        message: describeBillOutcome(sent, reasons),
+      });
+    } catch {
+      setResendResult({ ok: false, message: 'Network error — please try again.' });
+    } finally {
+      setResending(false);
+    }
+  };
 
   const doAccept = () => {
     const promised = new Date(Date.now() + prepMin * 60_000).toISOString();
@@ -321,7 +360,30 @@ export function OrderDetailModal({
               Print token
             </button>
           ) : null}
+          {/* BILL-4: the resend route has existed since RCT-1 with nothing calling
+              it. Shown only when there's somewhere to send. */}
+          {canResendBill ? (
+            <button
+              type="button"
+              onClick={doResendBill}
+              disabled={resending}
+              className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
+            >
+              {resending ? 'Sending…' : 'Resend bill'}
+            </button>
+          ) : null}
         </div>
+
+        {resendResult ? (
+          <p
+            role="status"
+            className={
+              'mt-2 text-xs font-bold ' + (resendResult.ok ? 'text-green-700' : 'text-red-700')
+            }
+          >
+            {resendResult.message}
+          </p>
+        ) : null}
 
         {/* Actions */}
         {mode === 'accept' ? (

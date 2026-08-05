@@ -50,7 +50,10 @@ export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
 // notification engine (sendBillNotification). Its handlers live alongside the
 // status events: template name in adapters.ts, body/vars in templates.ts.
 export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill';
-export type NotificationStatus = 'queued' | 'sent' | 'failed';
+// 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
+// attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
+// or "channel not configured" from a send that was tried and failed.
+export type NotificationStatus = 'queued' | 'sent' | 'failed' | 'skipped';
 
 // store_settings.store_open_override (phase1-migration.sql §7).
 export type StoreOpenOverride = 'auto' | 'force_open' | 'force_closed';
@@ -206,6 +209,8 @@ export interface NotificationRecord {
   status: NotificationStatus;
   provider_ref: string;
   error: string;
+  /** Why a 'skipped' row was not attempted, e.g. 'no_phone' | 'not_configured:WHATSAPP_TPL_BILL'. */
+  skip_reason: string;
   attempts: number;
   sent_at: string | null;
   created_at: string;
