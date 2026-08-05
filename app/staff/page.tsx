@@ -148,18 +148,31 @@ export default function StaffOrdersPage() {
   // staff member sees this fail with a clear message rather than the button
   // being hidden (role isn't plumbed to this client page).
   const handleRefund = useCallback(
-    async (o: OrderWithItems, amountInr: number, reason: string) => {
+    async (o: OrderWithItems, amountInr: number, reason: string, method?: string) => {
       try {
         const res = await fetch(`/api/orders/${o.id}/refund`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount_inr: amountInr, reason }),
+          // REF-1: `method` names which tender to refund. Omitted when the order
+          // has a single tender — the route resolves it and errors clearly if a
+          // split leaves the choice ambiguous.
+          body: JSON.stringify({ amount_inr: amountInr, reason, ...(method ? { method } : {}) }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           showToast(d.error ?? 'Refund failed — only managers can issue refunds.');
         } else {
-          showToast('Refund issued.');
+          const d = await res.json().catch(() => ({}));
+          const r = d?.refunded as { method?: string; amount_inr?: number } | undefined;
+          // Say what the staffer must physically do: cash leaves the drawer,
+          // anything else is reversed on the terminal.
+          showToast(
+            r?.method === 'cash'
+              ? `Refunded ₹${r.amount_inr} — give it back from the drawer.`
+              : r?.method
+                ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
+                : 'Refund issued.',
+          );
         }
       } catch {
         showToast('Refund failed — please try again.');
@@ -347,7 +360,7 @@ export default function StaffOrdersPage() {
           onClose={() => setSelected(null)}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
-          onRefund={(o, amountInr, reason) => handleRefund(o, amountInr, reason)}
+          onRefund={(o, amountInr, reason, method) => handleRefund(o, amountInr, reason, method)}
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
           onComp={(o, reason) => handleComp(o, reason)}
         />

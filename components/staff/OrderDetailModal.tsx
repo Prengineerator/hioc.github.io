@@ -49,7 +49,14 @@ export function OrderDetailModal({
   // Optional — omit to hide the refund panel entirely (e.g. a surface that
   // never shows paid orders). The server route is manager/owner-gated
   // (FND-5) regardless of whether this UI is shown.
-  onRefund?: (o: OrderWithItems, amountInr: number, reason: string) => Promise<void> | void;
+  // `method` (REF-1) names which tender to refund. Omit for a single-tender
+  // order; required by the server when a split leaves the choice ambiguous.
+  onRefund?: (
+    o: OrderWithItems,
+    amountInr: number,
+    reason: string,
+    method?: string,
+  ) => Promise<void> | void;
   // Void a wrongly-punched line (POS-4). The /amend route is manager-gated
   // (hasPermission('void_line'), D4) — the UI just exposes the action.
   onVoid?: (o: OrderWithItems, itemId: string, reason: string) => Promise<void> | void;
@@ -66,6 +73,10 @@ export function OrderDetailModal({
   const [refundAmount, setRefundAmount] = useState(order.total_inr ?? order.subtotal_inr);
   const [refundReason, setRefundReason] = useState('');
   const [refundSubmitting, setRefundSubmitting] = useState(false);
+  // REF-1: which tender the money goes back on. Empty = let the server decide
+  // (correct for the common single-tender order).
+  const [refundMethod, setRefundMethod] = useState('');
+  const [tenders, setTenders] = useState<{ method: string; amount_inr: number }[]>([]);
   // Void panel state (POS-4): which line, and the picked/typed reason.
   const [voidItemId, setVoidItemId] = useState<string | null>(null);
   const [voidReasonChoice, setVoidReasonChoice] = useState(VOID_REASONS[0]);
@@ -182,11 +193,32 @@ export function OrderDetailModal({
     if (!reason) return;
     onTransition(order, 'rejected', { reason });
   };
+  // Load the tender breakdown only when the refund panel opens — a split order
+  // needs a choice, a single-tender one doesn't, and the queue shouldn't pay for
+  // this query on every card.
+  useEffect(() => {
+    if (mode !== 'refund') return;
+    let cancelled = false;
+    fetch(`/api/orders/${order.id}/payment`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : { tenders: [] }))
+      .then((d: { tenders?: { method: string; amount_inr: number }[] }) => {
+        if (cancelled) return;
+        const list = d.tenders ?? [];
+        setTenders(list);
+        // Preselect when there's no ambiguity, so the common case stays one tap.
+        if (list.length === 1) setRefundMethod(list[0].method);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, order.id]);
+
   const doRefund = async () => {
     if (!onRefund || refundAmount <= 0 || !refundReason.trim()) return;
     setRefundSubmitting(true);
     try {
-      await onRefund(order, refundAmount, refundReason.trim());
+      await onRefund(order, refundAmount, refundReason.trim(), refundMethod || undefined);
       setMode('view');
     } finally {
       setRefundSubmitting(false);
@@ -404,8 +436,39 @@ export function OrderDetailModal({
           <div className="mt-5 rounded-md border border-red-200 p-4">
             <p className="text-sm font-bold text-charcoal">Refund (manager)</p>
             <p className="mt-1 text-xs text-muted">
-              Issues a refund via the payment gateway. Adjust the amount for a partial refund.
+              {order.payment_method === 'online'
+                ? 'Issues a refund via the payment gateway. Adjust the amount for a partial refund.'
+                : 'Records a refund given at the counter. Cash comes out of the drawer; UPI and card are reversed on the terminal.'}
             </p>
+
+            {/* REF-1: a split order must be told WHICH tender to refund — you
+                can't hand back more cash than the customer paid in cash. */}
+            {tenders.length > 1 ? (
+              <>
+                <label className="mt-3 block text-xs font-bold text-charcoal">Refund on</label>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {tenders.map((t) => (
+                    <button
+                      key={t.method}
+                      type="button"
+                      onClick={() => {
+                        setRefundMethod(t.method);
+                        setRefundAmount(t.amount_inr);
+                      }}
+                      className={
+                        'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors ' +
+                        (refundMethod === t.method
+                          ? 'border-tan bg-tan text-cream'
+                          : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                      }
+                    >
+                      {t.method.toUpperCase()} · ₹{t.amount_inr}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
             <label className="mt-3 block text-xs font-bold text-charcoal">Amount (₹)</label>
             <input
               type="number"

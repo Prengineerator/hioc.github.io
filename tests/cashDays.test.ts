@@ -375,6 +375,36 @@ describe('/api/cash-days handlers (OPS-2)', () => {
     expect(body.open_summary.cash_settle_count).toBe(0);
   });
 
+  it('subtracts only CASH refunds from the drawer, not a UPI reversal', async () => {
+    // REF-1: a split order refunded on UPI takes nothing out of the till.
+    // Counting it would make the drawer read short by that amount.
+    state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
+    state.cashOrders = [{ id: 'o1', total_inr: 480, payment_method: 'upi' }];
+    state.orderPayments = [
+      { order_id: 'o1', method: 'cash', amount_inr: 200 },
+      { order_id: 'o1', method: 'upi', amount_inr: 280 },
+    ];
+    state.refunds = [
+      { amount_inr: 100, method: 'upi' }, // reversed on the terminal — not drawer cash
+      { amount_inr: 50, method: 'cash' }, // handed back from the drawer
+    ];
+
+    const body = await (await GET()).json();
+
+    expect(body.open_summary.expected_cash_inr).toBe(5150); // 5000 + 200 − 50
+  });
+
+  it('treats a legacy method-less refund as cash, preserving old behaviour', async () => {
+    state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
+    state.cashOrders = [{ id: 'o1', total_inr: 300, payment_method: 'cash' }];
+    state.orderPayments = [];
+    state.refunds = [{ amount_inr: 100 }]; // no method column value
+
+    const body = await (await GET()).json();
+
+    expect(body.open_summary.expected_cash_inr).toBe(5200); // 5000 + 300 − 100
+  });
+
   it('still counts a legacy order that has no parts rows', async () => {
     // Orders settled before POS4-1 have no order_payments; the old rule (whole
     // total iff payment_method='cash') must keep working for them.

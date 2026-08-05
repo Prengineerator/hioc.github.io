@@ -19,6 +19,48 @@ const PAYMENT_STATUSES: readonly PaymentStatus[] = [
   'partially_refunded',
 ];
 
+// GET /api/orders/[id]/payment — staff/owner only. The tender breakdown for one
+// order: the POS4-1 parts if it was split, else a single synthetic part for the
+// whole total. REF-1's refund panel uses this to ask which tender to give back
+// on, and to cap the amount per tender.
+export async function GET(_request: Request, { params }: RouteParams) {
+  const user = await getStaffUser();
+  if (!user) return unauthorized();
+
+  const { id } = params;
+  if (!isUuid(id)) return notFound();
+
+  const admin = createAdminSupabaseClient();
+
+  const { data: order } = await admin
+    .from('orders')
+    .select('payment_method, payment_status, total_inr, subtotal_inr')
+    .eq('id', id)
+    .maybeSingle();
+  if (!order) return notFound();
+
+  const { data: parts } = await admin
+    .from('order_payments')
+    .select('method, amount_inr, tendered_inr')
+    .eq('order_id', id)
+    .order('created_at', { ascending: true });
+
+  const rows = (parts ?? []) as { method: string; amount_inr: number }[];
+  const tenders =
+    rows.length > 0
+      ? rows
+      : order.payment_method
+        ? [
+            {
+              method: order.payment_method as string,
+              amount_inr: (order.total_inr as number | null) ?? (order.subtotal_inr as number),
+            },
+          ]
+        : [];
+
+  return NextResponse.json({ tenders, payment_status: order.payment_status });
+}
+
 // PATCH /api/orders/[id]/payment — staff/owner only. Records how a walk-up paid
 // (STF-041). Two accepted shapes:
 //

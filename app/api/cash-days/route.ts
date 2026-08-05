@@ -94,15 +94,22 @@ async function computeCashFlows(admin: Admin, businessDate: string) {
     0,
   );
 
+  // REF-1: only refunds actually paid back IN CASH leave the drawer. A UPI
+  // reversal on a split order must not be counted here or the till reads short.
+  // Legacy rows (written before REF-1) carry no method; those orders only reach
+  // this list because they were cash-settled, so treating them as cash matches
+  // the old behaviour exactly.
   let cashRefundsInr = 0;
   const orderIds = orders.map((o) => o.id);
   if (orderIds.length > 0) {
     const { data: refunds } = await admin
       .from('refunds')
-      .select('amount_inr')
+      .select('amount_inr, method')
       .eq('status', 'processed')
       .in('order_id', orderIds);
-    cashRefundsInr = ((refunds ?? []) as { amount_inr: number | null }[]).reduce(
+    cashRefundsInr = ((refunds ?? []) as { amount_inr: number | null; method?: string | null }[])
+      .filter((r) => !r.method || r.method === 'cash')
+      .reduce(
       (sum, r) => sum + (r.amount_inr ?? 0),
       0,
     );
