@@ -36,6 +36,15 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
+import {
+  canRedeemPoints,
+  couponFeedback,
+  describeCustomer,
+  parsePointsInput,
+  pointsFeedback,
+  type CustomerLookup,
+  type QuotedDiscount,
+} from '@/lib/pos/loyalty';
 import type { PaymentPart } from '@/lib/orders/payments';
 import {
   AUTO_PRINT_DEFAULTS,
@@ -153,6 +162,17 @@ export function PosOrderEntry({
   const [custPhone, setCustPhone] = useState('');
   const [custEmail, setCustEmail] = useState('');
   const [contactError, setContactError] = useState<string | null>(null);
+
+  // VAL-1/VAL-2 — the customer behind the phone, and what they're spending.
+  // `couponCode` is what has actually been APPLIED (and therefore quoted);
+  // `couponInput` is what's being typed. Quoting every keystroke would tell a
+  // staffer "Invalid coupon code" three times while they type a valid one.
+  const [customer, setCustomer] = useState<CustomerLookup | null>(null);
+  const [couponInput, setCouponInput] = useState('');
+  const [couponCode, setCouponCode] = useState('');
+  const [pointsInput, setPointsInput] = useState('');
+  const [quotedCoupon, setQuotedCoupon] = useState<QuotedDiscount | null>(null);
+  const [quotedPoints, setQuotedPoints] = useState<QuotedDiscount | null>(null);
 
   const [bill, setBill] = useState<BillBreakdown | null>(null);
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
@@ -304,10 +324,55 @@ export function PosOrderEntry({
       .filter((i): i is MenuItem => i !== undefined);
   }, [recentIds, menuItems]);
 
+  // Points the staffer has asked to burn. Parsed, never trusted as money — the
+  // rupee value comes back from the quote.
+  const redeemPoints = useMemo(() => parsePointsInput(pointsInput), [pointsInput]);
+  // Only a phone that could actually be someone is worth a lookup or a quote.
+  const lookupPhone = useMemo(() => normalizeIndianMobile(custPhone) ?? '', [custPhone]);
+
+  // --- VAL-2: who is at the counter ----------------------------------------
+  // Runs off the phone alone, and the result is a name the staffer can check
+  // against the person in front of them BEFORE any of their points are spent —
+  // the mistyped-digit guard the ticket asks for. The endpoint returns a name
+  // and a balance and nothing else, so nothing further about them can leak here.
+  useEffect(() => {
+    if (isAddMode || !lookupPhone) {
+      setCustomer(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      fetch(`/api/customers/lookup?phone=${lookupPhone}`, { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: CustomerLookup | null) => {
+          if (!cancelled) setCustomer(data ?? null);
+        })
+        .catch(() => {});
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [lookupPhone, isAddMode]);
+
+  // A number that stops matching an account can't keep its points quoted.
+  useEffect(() => {
+    if (!canRedeemPoints(customer)) {
+      setPointsInput('');
+      setQuotedPoints(null);
+    }
+  }, [customer]);
+
   // --- Live bill from the quote endpoint (never computed client-side) -------
+  // VAL-1: the coupon and the points ride along, so the discount lines shown
+  // here are the server's own arithmetic — the same call the web checkout makes,
+  // plus the phone, which the server (not this client) turns into the account
+  // whose points are being spent.
   useEffect(() => {
     if (subtotal <= 0) {
       setBill(null);
+      setQuotedCoupon(null);
+      setQuotedPoints(null);
       return;
     }
     let cancelled = false;
@@ -320,11 +385,17 @@ export function PosOrderEntry({
           subtotal_inr: subtotal,
           order_type: orderType,
           item_ids: cartRef.current.map((i) => i.menuItemId),
+          ...(couponCode ? { coupon_code: couponCode } : {}),
+          ...(redeemPoints > 0 ? { redeem_points: redeemPoints } : {}),
+          ...(lookupPhone ? { customer_phone: lookupPhone } : {}),
         }),
       })
         .then((res) => (res.ok ? res.json() : null))
-        .then((data: { bill?: BillBreakdown } | null) => {
-          if (!cancelled && data?.bill) setBill(data.bill);
+        .then((data: { bill?: BillBreakdown; coupon?: QuotedDiscount | null; points?: QuotedDiscount | null } | null) => {
+          if (cancelled || !data?.bill) return;
+          setBill(data.bill);
+          setQuotedCoupon(couponCode ? (data.coupon ?? null) : null);
+          setQuotedPoints(redeemPoints > 0 ? (data.points ?? null) : null);
         })
         .catch(() => {});
     }, 250);
@@ -332,7 +403,7 @@ export function PosOrderEntry({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [subtotal, orderType]);
+  }, [subtotal, orderType, couponCode, redeemPoints, lookupPhone]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
   const addLine = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
@@ -496,6 +567,14 @@ export function PosOrderEntry({
       if (custName.trim()) body.customer_name = custName.trim();
       if (custPhone.trim()) body.customer_phone = custPhone.trim();
       if (custEmail.trim()) body.customer_email = custEmail.trim();
+
+      // VAL-1: only what the server has already AGREED to. The bill on screen
+      // excludes a refused coupon, so sending it anyway would fail the whole
+      // order at the till over something the staffer was told about minutes ago.
+      // The account whose points these are is resolved server-side from the
+      // phone above — this client never names it.
+      if (couponCode && quotedCoupon?.ok) body.coupon_code = couponCode;
+      if (redeemPoints > 0 && quotedPoints?.ok) body.redeem_points = redeemPoints;
 
       // POS4-2: one key per attempted order, generated BEFORE the request and
       // reused if this submit is retried — that's what makes a replay
@@ -663,6 +742,14 @@ export function PosOrderEntry({
     setShowCustomer(false);
     setPaymentOpen(false);
     setSearch('');
+    // The next customer is a different person with a different balance —
+    // carrying any of this over would spend the last one's points.
+    setCustomer(null);
+    setCouponInput('');
+    setCouponCode('');
+    setPointsInput('');
+    setQuotedCoupon(null);
+    setQuotedPoints(null);
   }
 
   function showToast(msg: string) {
@@ -670,7 +757,24 @@ export function PosOrderEntry({
     setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 4000);
   }
 
+  // A coupon takes effect on Apply, not on keystroke — see the couponCode state.
+  function applyCoupon() {
+    const code = couponInput.trim().toUpperCase();
+    if (code) setCouponCode(code);
+  }
+
+  function clearCoupon() {
+    setCouponInput('');
+    setCouponCode('');
+    setQuotedCoupon(null);
+  }
+
   const displaySubtotal = bill?.subtotal_inr ?? subtotal;
+  // Every one of these is the server's own verdict, rendered — not re-judged.
+  const customerNote = describeCustomer(customer);
+  const couponNote = couponFeedback(quotedCoupon);
+  const pointsNote = pointsFeedback(quotedPoints);
+  const pointsAvailable = canRedeemPoints(customer);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6">
@@ -898,6 +1002,11 @@ export function PosOrderEntry({
                 {bill && bill.packaging_inr > 0 ? (
                   <BillRow label="Packaging" value={bill.packaging_inr} />
                 ) : null}
+                {/* VAL-1: the coupon + points discount, exactly as the server
+                    computed it. Nothing here is worked out on this tablet. */}
+                {bill && bill.discount_inr > 0 ? (
+                  <BillRow label="Discount" value={-bill.discount_inr} />
+                ) : null}
                 <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-1">
                   <span className="font-bold">{isAddMode ? 'Adding' : 'Total'}</span>
                   <span className="font-bold text-tan">
@@ -951,6 +1060,13 @@ export function PosOrderEntry({
                   placeholder="Phone (for the bill on WhatsApp)"
                   className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
                 />
+                {/* VAL-2: the matched name, so a mistyped digit is caught by a
+                    human before it spends someone else's points. */}
+                {customerNote ? (
+                  <p className={'-mt-1 text-xs ' + (customerNote.ok ? 'font-bold text-green-700' : 'text-muted')}>
+                    {customerNote.text}
+                  </p>
+                ) : null}
                 <input
                   value={custEmail}
                   onChange={(e) => {
@@ -972,6 +1088,72 @@ export function PosOrderEntry({
                 + Add customer details
               </button>
             )}
+
+            {/* VAL-1 — the same coupon and points the customer would get on the
+                web. Every rupee they're worth comes back from the quote; this
+                panel only decides what to ASK for. */}
+            {!isAddMode && cart.length > 0 ? (
+              <div className="flex flex-col gap-2 rounded-md border border-[#e5e5e5] px-3 py-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-muted">
+                  Coupon &amp; points
+                </p>
+
+                <div className="flex gap-2">
+                  <input
+                    value={couponInput}
+                    onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        applyCoupon();
+                      }
+                    }}
+                    disabled={couponCode.length > 0}
+                    placeholder="Coupon code"
+                    className="min-w-0 flex-1 rounded-md border border-[#e5e5e5] px-3 py-2 text-sm uppercase outline-none focus:border-tan disabled:opacity-60"
+                  />
+                  <button
+                    type="button"
+                    onClick={couponCode ? clearCoupon : applyCoupon}
+                    disabled={!couponCode && couponInput.trim().length === 0}
+                    className="shrink-0 rounded-md border border-[#e5e5e5] px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {couponCode ? 'Clear' : 'Apply'}
+                  </button>
+                </div>
+                {/* The server's own reason, verbatim — a friendlier local
+                    rewording would eventually contradict what create enforces. */}
+                {couponNote ? (
+                  <p className={'text-xs ' + (couponNote.ok ? 'font-bold text-green-700' : 'text-red-700')}>
+                    {couponNote.text}
+                  </p>
+                ) : null}
+
+                {pointsAvailable && customerNote ? (
+                  <>
+                    <p className="text-xs font-bold text-green-700">{customerNote.text}</p>
+                    <input
+                      value={pointsInput}
+                      onChange={(e) => setPointsInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      inputMode="numeric"
+                      placeholder="Points to redeem"
+                      className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                    />
+                    {pointsNote ? (
+                      <p className={'text-xs ' + (pointsNote.ok ? 'font-bold text-green-700' : 'text-red-700')}>
+                        {pointsNote.text}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted">
+                    {customer?.found
+                      ? 'No points on this account yet.'
+                      : 'Add the customer’s phone to use their points.'}
+                  </p>
+                )}
+              </div>
+            ) : null}
 
             {submitError && !paymentOpen ? (
               <p role="alert" className="text-sm text-red-700">
@@ -1048,6 +1230,7 @@ export function PosOrderEntry({
             setCustPhone(value);
             if (contactError) setContactError(null);
           }}
+          customerNote={customerNote}
           submitting={submitting}
           error={submitError}
           onSubmit={placeOrder}

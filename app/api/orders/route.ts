@@ -3,6 +3,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { actorRoleFor, getAuthUser, getStaffOrOwner, getStaffUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
@@ -25,6 +26,7 @@ import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder } from '@/lib/loyalty/ledger';
+import { findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
 import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
@@ -307,6 +309,26 @@ export async function POST(request: Request) {
     }
   }
 
+  // VAL-2 (D4-3) — link a counter order to the regular standing at the counter.
+  //
+  // Derived HERE, from the phone the staffer typed, exactly like user_id is
+  // derived from the session and for exactly the same reason: a body field
+  // naming the beneficiary would let a client spend any customer's points.
+  // Staff orders only — a walk-in is physically in front of a staffer who sees
+  // the matched name, whereas letting a web or table-QR customer link by typing
+  // a number would hand them a stranger's balance.
+  //
+  // No match ⇒ the order proceeds unlinked and no account is ever created.
+  const linkedCustomer = isStaff ? await findVerifiedCustomerByPhone(admin, trimmedPhone) : null;
+  const customerUserId = linkedCustomer?.userId ?? null;
+
+  // Whose promotions and points this order draws on. For a web checkout that is
+  // the session (unchanged); for a counter order it is the linked customer, and
+  // `userId` is null there — every coupon and points check below must use THIS,
+  // or a staff order silently behaves like a guest with no history and no
+  // balance (F9).
+  const loyaltyUserId = customerUserId ?? userId;
+
   // Coupon (FND-3) — validated + computed server-side (authoritative); the
   // checkout preview (POST /api/orders/quote) shows the same numbers ahead of
   // submit, but this is what actually gets applied.
@@ -322,7 +344,7 @@ export async function POST(request: Request) {
     ];
     const couponResult = await validateAndComputeCoupon(coupon_code.trim(), {
       subtotalInr: subtotal_inr,
-      userId,
+      userId: loyaltyUserId,
       itemIds: resolvedLines.map((l) => l.menu_item_id),
       categories,
     });
@@ -343,11 +365,18 @@ export async function POST(request: Request) {
       return errorResponse(400, 'redeem_points must be a non-negative integer');
     }
     if (redeem_points > 0) {
-      if (!userId) {
-        return errorResponse(400, 'You must be logged in to redeem points');
+      if (!loyaltyUserId) {
+        // Two different dead ends, and a staffer can act on only one of them:
+        // the counter one is fixable in a second by typing the right number.
+        return errorResponse(
+          400,
+          isStaff
+            ? 'No customer account is linked to this number, so there are no points to redeem. Check the number, or ask the customer to verify it in the app.'
+            : 'You must be logged in to redeem points',
+        );
       }
       const remaining = Math.max(0, subtotal_inr - couponDiscountInr);
-      const quote = await quoteRedemption(userId, redeem_points, remaining);
+      const quote = await quoteRedemption(loyaltyUserId, redeem_points, remaining);
       if (!quote.ok) {
         return errorResponse(400, quote.reason ?? 'Points could not be redeemed');
       }
@@ -420,36 +449,64 @@ export async function POST(request: Request) {
     // matters more than the guard, and claimIdempotencyKey logged it.
   }
 
-  const { data: orderRow, error: orderError } = await admin
+  const orderFields: Record<string, unknown> = {
+    customer_name: trimmedName,
+    customer_phone: trimmedPhone,
+    // Only sent when provided so order creation doesn't require the
+    // customer_email column until the 2026-07-order-email migration is applied.
+    ...(customerEmail ? { customer_email: customerEmail } : {}),
+    pickup_time: slotLabel, // legacy column kept in sync with the slot label
+    pickup_slot_start: slotStartIso,
+    pickup_slot_label: slotLabel,
+    order_type: orderType,
+    channel: isStaff ? 'staff_pos' : isTableQr ? 'table_qr' : 'customer_web',
+    table_id: tableId,
+    table_label: tableLabel,
+    created_by: actor ? actor.user.id : null,
+    status: initialStatus,
+    subtotal_inr: bill.subtotal_inr,
+    tax_inr: bill.tax_inr,
+    packaging_inr: bill.packaging_inr,
+    discount_inr: bill.discount_inr,
+    total_inr: bill.total_inr,
+    pickup_code: isDineIn ? null : generatePickupCode(),
+    notes: notes ?? '',
+    // The session that placed it — null for a staff order by design (D4-3).
+    // Who the order BELONGS to, when that's a different person, is
+    // customer_user_id below.
+    user_id: userId,
+    payment_status: initialPaymentStatus,
+    payment_method: initialPaymentMethod,
+  };
+
+  // VAL-2: the link is sent only when there IS one, so an unlinked order never
+  // depends on the column existing.
+  const linkedFields: Record<string, unknown> = customerUserId
+    ? { ...orderFields, customer_user_id: customerUserId }
+    : orderFields;
+
+  let { data: orderRow, error: orderError } = await admin
     .from('orders')
-    .insert({
-      customer_name: trimmedName,
-      customer_phone: trimmedPhone,
-      // Only sent when provided so order creation doesn't require the
-      // customer_email column until the 2026-07-order-email migration is applied.
-      ...(customerEmail ? { customer_email: customerEmail } : {}),
-      pickup_time: slotLabel, // legacy column kept in sync with the slot label
-      pickup_slot_start: slotStartIso,
-      pickup_slot_label: slotLabel,
-      order_type: orderType,
-      channel: isStaff ? 'staff_pos' : isTableQr ? 'table_qr' : 'customer_web',
-      table_id: tableId,
-      table_label: tableLabel,
-      created_by: actor ? actor.user.id : null,
-      status: initialStatus,
-      subtotal_inr: bill.subtotal_inr,
-      tax_inr: bill.tax_inr,
-      packaging_inr: bill.packaging_inr,
-      discount_inr: bill.discount_inr,
-      total_inr: bill.total_inr,
-      pickup_code: isDineIn ? null : generatePickupCode(),
-      notes: notes ?? '',
-      user_id: userId,
-      payment_status: initialPaymentStatus,
-      payment_method: initialPaymentMethod,
-    })
+    .insert(linkedFields)
     .select()
     .single();
+
+  // The column isn't there yet. Losing the loyalty link costs a regular some
+  // points; refusing to take a paying customer's order because a migration is
+  // pending closes the counter. So this fails OPEN — unlinked, loudly, and
+  // naming the file to apply (same posture as the idempotency claim).
+  if (customerUserId && isMissingColumnError(orderError)) {
+    console.error(
+      'orders.customer_user_id is missing — creating this order UNLINKED, so it will not earn. ' +
+        'Is supabase/2026-08-counter-loyalty.sql applied?',
+      orderError,
+    );
+    ({ data: orderRow, error: orderError } = await admin
+      .from('orders')
+      .insert(orderFields)
+      .select()
+      .single());
+  }
 
   if (orderError || !orderRow) {
     // Surface the underlying Postgres message (e.g. a missing column when the
@@ -512,11 +569,14 @@ export async function POST(request: Request) {
   // (race lost), roll the order back (cascade cleans items) and ask for a retry.
   // Falls back to the plain insert when the RPC isn't deployed yet, so checkout
   // keeps working until supabase/phase2-hardening.sql is applied.
+  // The redemption is recorded against loyaltyUserId — at the counter that's the
+  // linked customer, and it's what the per-user-limit above counted, so the
+  // check and the record it produces are about the same person.
   if (appliedCoupon && couponDiscountInr > 0) {
     const { data: ok, error: rpcError } = await admin.rpc('try_redeem_coupon', {
       p_coupon_id: appliedCoupon.id,
       p_order_id: orderRow.id,
-      p_user_id: userId,
+      p_user_id: loyaltyUserId,
       p_discount: couponDiscountInr,
       p_usage_limit: appliedCoupon.usage_limit,
       p_per_user_limit: appliedCoupon.per_user_limit,
@@ -526,7 +586,7 @@ export async function POST(request: Request) {
       await admin.from('coupon_redemptions').insert({
         coupon_id: appliedCoupon.id,
         order_id: orderRow.id,
-        user_id: userId,
+        user_id: loyaltyUserId,
         discount_inr: couponDiscountInr,
       });
     } else if (ok === false) {
@@ -536,18 +596,20 @@ export async function POST(request: Request) {
   }
 
   // Record the points redemption ATOMICALLY (FND-4 / H1): try_redeem_points
-  // re-checks the balance under a per-user lock. userId is non-null here
-  // (redemption requires login). Same rollback-on-race + RPC fallback.
-  if (pointsToRedeem > 0 && userId) {
+  // re-checks the balance under a per-user lock. loyaltyUserId is non-null here
+  // — the quote above refuses to redeem without an account. Same rollback-on-race
+  // + RPC fallback. The fallback resolves the beneficiary from the order itself,
+  // so both paths debit the same person.
+  if (pointsToRedeem > 0 && loyaltyUserId) {
     const { data: ok, error: rpcError } = await admin.rpc('try_redeem_points', {
-      p_user_id: userId,
+      p_user_id: loyaltyUserId,
       p_order_id: orderRow.id,
       p_points: pointsToRedeem,
       p_discount: pointsDiscountInr,
     });
     if (rpcError) {
       console.error('try_redeem_points rpc unavailable; falling back', rpcError);
-      await redeemForOrder(userId, orderRow.id, pointsToRedeem, pointsDiscountInr);
+      await redeemForOrder(orderRow.id, pointsToRedeem, pointsDiscountInr);
     } else if (ok === false) {
       await admin.from('orders').delete().eq('id', orderRow.id);
       return errorResponse(409, 'Your points balance changed — please review and try again.');

@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
-import { getAuthUser } from '@/lib/api/auth';
+import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { getAuthUser, getUserRole, isStaffRole } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { getBalance, quoteRedemption } from '@/lib/loyalty/ledger';
+import { findVerifiedCustomerByPhone, toStoredPhone } from '@/lib/loyalty/customerLink';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +22,8 @@ export async function POST(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
-  const { subtotal_inr, coupon_code, redeem_points, item_ids, categories, order_type } = body;
+  const { subtotal_inr, coupon_code, redeem_points, item_ids, categories, order_type, customer_phone } =
+    body;
 
   // Dine-in has no packaging charge (D5). The quote is a preview only, so we
   // don't hard-validate order_type here — any non-'dine_in' value is treated as
@@ -47,8 +50,28 @@ export async function POST(request: Request) {
     cats = categories as string[];
   }
 
+  // VAL-1 — whose promotions and points this preview is about.
+  //
+  // On the web that is the caller's own session, as it always was. At the
+  // counter the caller is a STAFF session and the beneficiary is the customer
+  // in front of them, resolved from their phone by the same server-side,
+  // verified-only rule POST /api/orders uses (never a body-supplied user id).
+  //
+  // Gated on a staff session on purpose: this route is public and returns a
+  // points balance, so resolving a phone for anyone would turn it into a
+  // "how many points does this number have?" oracle for the whole internet.
+  //
+  // The role comes off the session we already hold rather than from
+  // getStaffOrOwner(), which would re-verify the JWT a second time: this is the
+  // web checkout's live preview, it fires on every cart change, and its most
+  // common caller is an anonymous visitor who should pay for none of this.
   const user = await getAuthUser();
-  const userId = user?.id ?? null;
+  const role = user ? await getUserRole(user) : null;
+  const isStaff = isStaffRole(role);
+  const linked = isStaff
+    ? await findVerifiedCustomerByPhone(createAdminSupabaseClient(), toStoredPhone(customer_phone))
+    : null;
+  const userId = linked?.userId ?? (isStaff ? null : (user?.id ?? null));
 
   const settings = await getStoreSettings();
 

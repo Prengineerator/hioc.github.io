@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { changeDueInr, type PaymentPart } from '@/lib/orders/payments';
+import type { Feedback } from '@/lib/pos/loyalty';
 import type { BillBreakdown } from '@/lib/store/hours';
 import type { OrderType, PaymentMethod } from '@/lib/types';
 
@@ -37,6 +38,7 @@ export function PosPaymentModal({
   itemCount,
   phone,
   onPhoneChange,
+  customerNote = null,
   submitting,
   error,
   onSubmit,
@@ -48,6 +50,12 @@ export function PosPaymentModal({
   itemCount: number;
   phone: string;
   onPhoneChange: (value: string) => void;
+  /**
+   * VAL-1: who this number belongs to and what they can spend. Shown here
+   * because the phone is most often typed at this moment — a staffer who only
+   * learns about 240 available points after the money is taken can't use them.
+   */
+  customerNote?: Feedback | null;
   submitting: boolean;
   error: string | null;
   // null → create unpaid (collect later); otherwise settle with these parts.
@@ -154,6 +162,11 @@ export function PosPaymentModal({
           ) : (
             <p className="mt-1 text-xs text-muted">Optional — leave blank to skip the WhatsApp bill.</p>
           )}
+          {customerNote?.ok ? (
+            <p className="mt-1 text-xs font-bold text-green-700">
+              {customerNote.text} · close this to use them
+            </p>
+          ) : null}
         </div>
 
         <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">

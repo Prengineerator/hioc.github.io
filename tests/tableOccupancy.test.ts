@@ -75,6 +75,7 @@ function makeOrder(over: {
     table_id: over.table_id === undefined ? 't1' : over.table_id,
     table_label: 'T1',
     created_by: 'staff-1',
+    customer_user_id: null,
     items: over.items ?? [makeItem()],
   };
 }

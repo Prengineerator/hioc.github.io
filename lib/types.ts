@@ -151,6 +151,11 @@ export interface Order {
   table_id: string | null; // dine-in table (FND3-1); null for takeaway/web
   table_label: string; // snapshot of the table label at order time (survives renames)
   created_by: string | null; // staff/manager/owner who punched a staff_pos order
+  // Phase-4 addition (2026-08-counter-loyalty.sql): VAL-2/D4-3. Whose loyalty
+  // account this order belongs to — server-derived from a VERIFIED phone, never
+  // from a request body. Deliberately NOT user_id, which means "the session that
+  // placed it" and stays null for staff orders. Null when nobody was matched.
+  customer_user_id: string | null;
 }
 
 export interface OrderItemAddon {

@@ -579,6 +579,80 @@ async function checkAutoPrint() {
 }
 
 // ---------------------------------------------------------------------------
+// VAL-2 · a counter order can point at a customer's loyalty account.
+//
+// The column alone is not the guarantee. What makes it safe to trust is that
+// NOTHING but a real account id can ever be stored in it — the value is derived
+// from a verified phone, and the foreign key is the backstop if a future code
+// path forgets that. So this probes the constraint, not just the column.
+// ---------------------------------------------------------------------------
+async function checkCounterLoyalty() {
+  heading('VAL-2 · counter loyalty linkage', '2026-08-counter-loyalty.sql');
+
+  const col = await rest('/orders?select=id,user_id,customer_user_id&order=created_at.desc&limit=1');
+  if (!col.ok) {
+    const kind = errKind(col);
+    if (kind === 'no_column') {
+      fail(
+        'orders.customer_user_id exists',
+        'a regular buying at the counter can neither earn nor redeem — apply supabase/2026-08-counter-loyalty.sql',
+      );
+    } else {
+      fail('orders.customer_user_id exists', `${kind}: ${errText(col)}`);
+    }
+    skip('customer_user_id is a real foreign key', 'the column is missing');
+    return;
+  }
+  pass('orders.customer_user_id exists');
+
+  const rows = Array.isArray(col.body) ? col.body : [];
+  if (rows.length === 0) {
+    return skip('customer_user_id is a real foreign key', 'no order exists to probe against');
+  }
+  const target = rows[0];
+  const before = target.customer_user_id ?? null;
+
+  // Aiming the column at an id that belongs to no account. With the FK in place
+  // this UPDATE never happens, so the row — including updated_at, which the
+  // orders trigger would otherwise bump — is untouched. Only the failing case
+  // writes, and it repairs itself below before reporting.
+  const bogus = await rest(`/orders?id=eq.${target.id}`, {
+    method: 'PATCH',
+    prefer: 'return=representation',
+    body: { customer_user_id: BOGUS_ORDER_ID },
+  });
+
+  if (!bogus.ok) {
+    if (errKind(bogus) === 'fk') {
+      return pass('customer_user_id is a real foreign key', 'an id belonging to no account was refused');
+    }
+    return fail('customer_user_id is a real foreign key', `expected fk, got ${errKind(bogus)}: ${errText(bogus)}`);
+  }
+
+  const revert = await rest(`/orders?id=eq.${target.id}`, {
+    method: 'PATCH',
+    prefer: 'return=representation',
+    body: { customer_user_id: before },
+  });
+  const after = await rest(`/orders?select=customer_user_id&id=eq.${target.id}`);
+  const value = Array.isArray(after.body) && after.body[0] ? (after.body[0].customer_user_id ?? null) : 'unreadable';
+
+  if (revert.ok && value === before) {
+    fail(
+      'customer_user_id is a real foreign key',
+      'a non-existent account id STORED — the references clause is missing (the row has been put back)',
+    );
+  } else {
+    fail(
+      'customer_user_id is a real foreign key',
+      `a non-existent account id stored AND the revert failed — SET customer_user_id = ${
+        before === null ? 'NULL' : `'${before}'`
+      } ON orders id ${target.id} BY HAND`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -592,6 +666,7 @@ async function main() {
   await checkRefundTrigger();
   await checkRefundIdempotency();
   await checkAutoPrint();
+  await checkCounterLoyalty();
   await checkViewExposure();
   await checkAnonSurface();
   await checkCleanup();
