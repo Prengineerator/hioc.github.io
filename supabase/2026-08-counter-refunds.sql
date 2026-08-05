@@ -17,6 +17,9 @@
 --      With split payments (POS4-1) an order can even have both.
 --
 -- Safe to re-run. Apply BEFORE deploying the REF-1 refund route.
+--
+-- NOTE: section 3 (the over-refund trigger) was added after this file was first
+-- applied. Re-run the whole file — every statement is idempotent.
 -- ===========================================================================
 
 -- 1. A counter refund has no gateway payment to reference.
@@ -27,6 +30,51 @@ alter table refunds alter column payment_id drop not null;
 alter table refunds add column if not exists method payment_method;
 
 create index if not exists idx_refunds_method on refunds (method);
+
+-- 3. Teach the over-refund guard about counter refunds.
+--
+-- phase2-hardening.sql installs a BEFORE INSERT trigger that caps refunds at the
+-- captured gateway payment. It reads `payments` by new.payment_id — which is
+-- NULL for a counter refund, making v_paid NULL, coalesce(v_paid,0) = 0, and
+-- ANY positive amount raise 'refund total exceeds captured payment'. Without
+-- this, every counter refund fails at the database.
+--
+-- The invariant it protects is right and worth keeping: you may never refund
+-- more than was taken. For a counter refund "what was taken" is the sum of the
+-- POS4-1 parts, or the order total for an order settled before that table
+-- existed. Gateway and counter refunds are capped against their own bucket,
+-- which matches how the app computes per-tender balances.
+create or replace function public.guard_refund_total()
+returns trigger language plpgsql as $$
+declare v_paid integer; v_refunded integer;
+begin
+  if new.status <> 'processed' then return new; end if;
+
+  if new.payment_id is not null then
+    -- Gateway refund — unchanged behaviour.
+    select amount_inr into v_paid from payments where id = new.payment_id;
+    select coalesce(sum(amount_inr), 0) into v_refunded from refunds
+      where payment_id = new.payment_id and status = 'processed' and id <> new.id;
+  else
+    -- REF-1 counter refund: cap against what the till actually took.
+    select coalesce(
+             (select sum(amount_inr) from order_payments where order_id = new.order_id),
+             (select coalesce(total_inr, subtotal_inr) from orders where id = new.order_id)
+           ) into v_paid;
+    select coalesce(sum(amount_inr), 0) into v_refunded from refunds
+      where order_id = new.order_id and payment_id is null and status = 'processed'
+        and id <> new.id;
+  end if;
+
+  if v_refunded + new.amount_inr > coalesce(v_paid, 0) then
+    raise exception 'refund total exceeds captured payment';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_guard_refund_total on refunds;
+create trigger trg_guard_refund_total before insert on refunds
+  for each row execute function public.guard_refund_total();
 
 -- ---------------------------------------------------------------------------
 -- Verify:
