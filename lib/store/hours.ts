@@ -222,5 +222,7 @@ export const FALLBACK_STORE_SETTINGS: StoreSettings = {
   gst_percent: 5,
   gst_inclusive: false,
   packaging_charge_inr: 0,
+  auto_print_kot: true,
+  auto_print_bill: false,
   updated_at: new Date(0).toISOString(),
 };

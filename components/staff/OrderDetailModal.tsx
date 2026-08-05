@@ -14,8 +14,14 @@ import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
-import { describeBillOutcome } from '@/lib/notifications/reasons';
-import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
+import {
+  AUTO_PRINT_DEFAULTS,
+  settlePrintPlan,
+  readAutoPrintSettings,
+  type AutoPrintSettings,
+} from '@/lib/staff/autoPrint';
+import { parseResendResult } from '@/lib/staff/confirmation';
+import type { Order, OrderItem, PaymentMethod, StoreSettings } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -146,6 +152,35 @@ export function OrderDetailModal({
   };
   const canPrintToken = order.order_type === 'takeaway' && Boolean(order.pickup_code);
 
+  // POS4-3 — the owner's auto-print switches, so settling from the queue prints
+  // the same bill the POS's Collect-now step does. Read on open; any failure
+  // (offline, or a deploy predating the migration) keeps the documented default.
+  const [autoPrint, setAutoPrint] = useState<AutoPrintSettings>(AUTO_PRINT_DEFAULTS);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/store-settings', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { settings?: StoreSettings } | null) => {
+        if (!cancelled) setAutoPrint(readAutoPrintSettings(data?.settings));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Every "mark paid" tap goes through here so the print rule can't differ per
+  // button. The print fires BEFORE the settle, inside the click: `onPayment` is
+  // fire-and-forget (the parent owns the request), and a window opened after it
+  // resolves would be blocked as an unrequested pop-up. The trade is a stray
+  // receipt if the settle then fails — cheap, against a bill that never prints.
+  // No KOT here: the kitchen got its ticket at placement, and a second one at
+  // payment time reads as a second order on the rail.
+  const settle = (method: PaymentMethod) => {
+    for (const type of settlePrintPlan(autoPrint)) openPrint(type);
+    onPayment(order, method);
+  };
+
   // Resend the bill (BILL-4) — wires up the RCT-1 route that shipped with no
   // caller. Only offered when the order actually has somewhere to send to;
   // otherwise the honest answer is "capture a number", not a button that fails.
@@ -159,24 +194,10 @@ export function OrderDetailModal({
     setResendResult(null);
     try {
       const res = await fetch(`/api/orders/${order.id}/resend-bill`, { method: 'POST' });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        sent?: { whatsapp: boolean; email: boolean };
-        reasons?: { whatsapp: string; email: string };
-      };
-      if (!res.ok) {
-        // Covers the 429 rate limit, whose message is already staff-readable.
-        setResendResult({ ok: false, message: data.error ?? 'Could not resend the bill.' });
-        return;
-      }
-      const sent = data.sent ?? { whatsapp: false, email: false };
-      const reasons = data.reasons ?? { whatsapp: '', email: '' };
-      // A send where NOTHING went out is a failure, not a success — reporting it
-      // as "done" is the bug BILL-3/4 exist to remove.
-      setResendResult({
-        ok: sent.whatsapp || sent.email,
-        message: describeBillOutcome(sent, reasons),
-      });
+      const data = await res.json().catch(() => ({}));
+      // Shared with the POS confirmation (POS4-4) so a resend can't be reported
+      // two different ways on two screens — including the honest "nothing sent".
+      setResendResult(parseResendResult(res.ok, data));
     } catch {
       setResendResult({ ok: false, message: 'Network error — please try again.' });
     } finally {
@@ -611,7 +632,7 @@ export function OrderDetailModal({
                         {PAYMENT_METHODS.map((m) => (
                           <button
                             key={m}
-                            onClick={() => onPayment(order, m)}
+                            onClick={() => settle(m)}
                             className="flex-1 rounded-md border border-[#e5e5e5] py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan"
                           >
                             {m}
@@ -688,7 +709,7 @@ export function OrderDetailModal({
               {order.payment_status !== 'paid' && !(isDineIn && order.status === 'ready') ? (
                 <div className="mt-2 flex gap-2">
                   {PAYMENT_METHODS.map((m) => (
-                    <button key={m} onClick={() => onPayment(order, m)} className="flex-1 rounded-md border border-[#e5e5e5] py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan">
+                    <button key={m} onClick={() => settle(m)} className="flex-1 rounded-md border border-[#e5e5e5] py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan">
                       {m}
                     </button>
                   ))}

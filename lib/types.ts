@@ -245,6 +245,11 @@ export interface StoreSettings {
   gst_percent: number;
   gst_inclusive: boolean;
   packaging_charge_inr: number;
+  // POS4-3 (migration 2026-08-auto-print). Opposite defaults on purpose: the
+  // kitchen always wants its ticket, most counters don't want paper on every
+  // settle.
+  auto_print_kot: boolean;
+  auto_print_bill: boolean;
   updated_at: string;
 }
 

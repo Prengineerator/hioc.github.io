@@ -8,6 +8,34 @@
 
 ---
 
+## Delivery status (updated 2026-08-05)
+
+Built and pushed to `origin/phase-3-dinein-counter-ops`. 265 tests green; every migration below is applied and verified against the live database.
+
+| Ticket | State | Commit |
+|---|---|---|
+| BILL-1 bill at settle · BILL-2 phone-first · BILL-3 no silent skips · BILL-4 resend wired · BILL-5 owner delivery log | ✅ shipped | `03f0bfb` |
+| TAB-1 add lines to an open order · TAB-2 add-to-order from the tables board | ✅ shipped | `f0dd1a4`, `1daa2f5` |
+| POS4-1 cash tendered/change · split payment · drawer correctness | ✅ shipped | `8029ff1` |
+| POS4-2 idempotent create · POS4-5 zone-grouped table picker | ✅ shipped | `e4c5a3b` |
+| **REF-1 counter refunds** *(not in the original scope — see §4b)* | ✅ shipped | `7c729c9`, `718e95a` |
+| POS4-3 auto-print · POS4-4 post-placement confirmation | 🔨 in progress | — |
+| VAL-1 coupons at the till · VAL-2 account linking | ⬜ not started | — |
+
+**Migrations, all applied:** `2026-08-bill-observability`, `2026-08-running-tab`, `2026-08-split-payments`, `2026-08-idempotent-orders`, `2026-08-counter-refunds`.
+
+**Still not done, and it is the reason this phase exists:** the WhatsApp bill has never run end to end. Every code path, migration and surface is in place, but no WhatsApp credentials are configured in any environment, so not one bill has been delivered. See `docs/WHATSAPP-BILL-TEMPLATE.md` §9.
+
+### Lesson worth keeping: the test suite cannot see the database
+
+REF-1 shipped with 265 passing tests and **could not insert a single row**. The vitest suite mocks Supabase, so it never exercises triggers, CHECK constraints or RLS. A `BEFORE INSERT` trigger from `phase2-hardening.sql` capped refunds against a gateway payment that a counter refund does not have, rejecting every one.
+
+Two things follow, and both are now standing practice:
+1. Any ticket that writes to a guarded table must be probed against a real database before it is called done.
+2. Before adding a table or a write path, `grep supabase/*.sql` for triggers and constraints that already govern it. `guard_refund_total` was invisible from the application code.
+
+---
+
 ## 0. Phase-4 goal & definition of done
 
 **Goal:** Phase 3's definition of done said *"the settled bill is deliverable three ways … sent automatically where contact info was captured."* In practice it isn't: on the one path a busy counter actually takes (punch → Collect now → next customer), **no bill is ever sent**, and nothing in the product reveals that. Phase 4 closes that loop and removes the four friction points that make staff reach back for the paper pad.
@@ -205,6 +233,27 @@ Three independently launchable milestones, each leaving the cafe better off even
 
 ---
 
+## 3b. Pillar B addendum — REF-1: refunds for counter-settled orders
+
+*Not in the v0.1 scope. Discovered while building POS4-1 and added because it was a live defect, not an enhancement.*
+
+**The defect:** `POST /api/orders/[id]/refund` required a `payments` row carrying a `gateway_payment_id`, and those are written only by the Razorpay and reconcile paths. A cash, UPI or card order settled at the counter has no `payments` row at all, so every counter refund returned `409 "No captured gateway payment found for this order."` — while `OrderDetailModal` offered the Refund button on any paid order regardless of method. Refunding a walk-in customer had never been possible in-system. This is a **Phase-2 gap**; POS4-1 only made it more visible by introducing splits.
+
+**Acceptance criteria**
+- **Given** a counter-settled order, **when** a manager refunds it, **then** the refund is recorded directly (no gateway call) with the tender it was returned on.
+- **Given** a split order, **when** no tender is named, **then** the request is **refused with the options and their remaining balances stated** — never guessed at.
+- **Given** a ₹480 order settled ₹200 cash / ₹280 UPI, **when** a ₹300 cash refund is attempted, **then** it is refused: you cannot return more cash than the customer paid in cash.
+- **Given** the cash day, **then** only refunds with `method = 'cash'` reduce expected drawer cash; a UPI reversal must not, or the till reads short.
+- **Given** a legacy refund row with no method, **then** it is treated as cash (preserving pre-REF-1 behaviour) and, for per-tender balances, charged against the largest tender — ignoring it would let the same money be refunded twice.
+
+**Decision — D4-2 resolved:** a refund targets a **chosen tender**, not a proportional split. Handing cash back from the drawer and reversing a UPI charge are different physical acts with different limits.
+
+**Edge case that bit us:** the `guard_refund_total` trigger (`phase2-hardening.sql`) capped every counter refund at zero, because it reads the captured amount via `payment_id`, which is deliberately NULL here. The trigger now caps counter refunds against the sum of `order_payments` — or the order total for pre-POS4-1 orders — preserving the invariant that you may never refund more than was taken.
+
+**Deps:** POS4-1 (`order_payments`). **Migration:** `2026-08-counter-refunds.sql`.
+
+---
+
 ## 4. Pillar C — Value at the counter (VAL) — *Milestone 4C*
 
 ### VAL-1 — Coupons & loyalty redemption at the POS
@@ -243,6 +292,14 @@ Three independently launchable milestones, each leaving the cafe better off even
 | `store_settings.auto_print_kot`, `.auto_print_bill` | alter | Owner-toggleable auto-print | POS4-3 |
 
 All new tables RLS-covered on the same pattern as Phase 3 (staff read where needed; writes via service-role routes). `lib/types.ts` updated in the same commit as the migration — the FND3-M convention.
+
+### Verifying the migrations are actually applied
+
+`npm run verify:db` probes the **live** database for every change in the table above, plus the `guard_refund_total` trigger fix (REF-1). Run it before each deploy; exit 0 means safe to ship.
+
+This is the tooling behind standing practice #1 in *"the test suite cannot see the database"* above: check 6 of the script is the permanent REF-1 regression test, asserting that a counter refund with a NULL `payment_id` inserts while an over-refund is still refused.
+
+It writes only where behaviour cannot be observed any other way, tags those rows with a run-unique sentinel, reverts them and re-queries to prove the revert. A probe that cannot run (e.g. no paid order to refund against) is reported as **skipped**, never as a pass — add `--strict` to fail the run on skips too.
 
 ---
 
