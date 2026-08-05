@@ -13,17 +13,31 @@ const state: {
   existing: Record<string, unknown> | null;
   updated: Record<string, unknown> | null;
   full: Record<string, unknown> | null;
-} = { user: null, existing: null, updated: null, full: null };
+  orderPatch?: Record<string, unknown>;
+  insertedParts: Record<string, unknown>[];
+  deletedParts: boolean;
+} = { user: null, existing: null, updated: null, full: null, insertedParts: [], deletedParts: false };
 
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
-    from: () => {
+    from: (table: string) => {
       const ctx = { isUpdate: false };
       const chain: Record<string, unknown> = {};
       Object.assign(chain, {
         select: () => chain,
-        update: () => {
+        update: (p: Record<string, unknown>) => {
           ctx.isUpdate = true;
+          if (table === 'orders') state.orderPatch = p;
+          return chain;
+        },
+        insert: (rows: Record<string, unknown>[]) => {
+          if (table === 'order_payments') {
+            state.insertedParts.push(...(Array.isArray(rows) ? rows : [rows]));
+          }
+          return Promise.resolve({ error: null });
+        },
+        delete: () => {
+          if (table === 'order_payments') state.deletedParts = true;
           return chain;
         },
         eq: () => chain,
@@ -33,6 +47,7 @@ vi.mock('@/lib/supabase-server', () => ({
           ),
         // The BILL-1 reload (with order_items) is the only .single() in the route.
         single: () => Promise.resolve({ data: state.full, error: null }),
+        then: (resolve: (v: unknown) => void) => resolve({ data: null, error: null }),
       });
       return chain;
     },
@@ -68,7 +83,10 @@ const call = (body: Record<string, unknown>) => PATCH(request(body), { params: {
 beforeEach(() => {
   sendBillNotification.mockClear();
   state.user = { id: 'staff-1' };
-  state.existing = { payment_method: null, payment_status: 'unpaid' };
+  state.insertedParts = [];
+  state.deletedParts = false;
+  state.orderPatch = undefined;
+  state.existing = { payment_method: null, payment_status: 'unpaid', total_inr: 480, subtotal_inr: 450 };
   state.updated = { id: ORDER_ID, payment_method: 'cash', payment_status: 'paid' };
   state.full = {
     id: ORDER_ID,
@@ -136,5 +154,78 @@ describe('PATCH /api/orders/[id]/payment — bill at settle (BILL-1)', () => {
 
     expect(res.status).toBe(401);
     expect(sendBillNotification).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/orders/[id]/payment — split settlement (POS4-1)', () => {
+  it('persists each part and stamps the dominant method on the order', async () => {
+    const res = await call({
+      parts: [
+        { method: 'cash', amount_inr: 200, tendered_inr: 500 },
+        { method: 'upi', amount_inr: 280 },
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    expect(state.insertedParts).toHaveLength(2);
+    expect(state.insertedParts[0]).toMatchObject({
+      method: 'cash',
+      amount_inr: 200,
+      tendered_inr: 500,
+      created_by: 'staff-1',
+    });
+    // UPI is the larger part, so that's what legacy reads see.
+    expect(state.orderPatch).toMatchObject({ payment_method: 'upi', payment_status: 'paid' });
+  });
+
+  it('returns the change due so the counter does no arithmetic', async () => {
+    const res = await call({
+      parts: [
+        { method: 'cash', amount_inr: 200, tendered_inr: 500 },
+        { method: 'upi', amount_inr: 280 },
+      ],
+    });
+
+    await expect(res.json()).resolves.toMatchObject({ change_due_inr: 300 });
+  });
+
+  it('validates against the SERVER total, not anything the client sends', async () => {
+    // Order total is ₹480; these parts sum to ₹400.
+    const res = await call({
+      parts: [
+        { method: 'cash', amount_inr: 200 },
+        { method: 'upi', amount_inr: 200 },
+      ],
+      total_inr: 400, // a client-supplied total must be ignored
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: expect.stringContaining('₹480'),
+    });
+    expect(state.insertedParts).toHaveLength(0);
+  });
+
+  it('clears prior parts so a re-settle cannot double-count cash', async () => {
+    await call({ parts: [{ method: 'cash', amount_inr: 480, tendered_inr: 500 }] });
+    expect(state.deletedParts).toBe(true);
+  });
+
+  it('bills once on a split settle, same as a single method', async () => {
+    await call({
+      parts: [
+        { method: 'cash', amount_inr: 200 },
+        { method: 'card', amount_inr: 280 },
+      ],
+    });
+
+    expect(sendBillNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes no parts on the legacy single-method path', async () => {
+    await call({ payment_method: 'cash' });
+
+    expect(state.insertedParts).toHaveLength(0);
+    expect(state.orderPatch).toMatchObject({ payment_method: 'cash' });
   });
 });

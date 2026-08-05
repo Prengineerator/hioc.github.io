@@ -5,7 +5,8 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isPaymentMethod, isUuid, PAYMENT_METHODS } from '@/lib/api/constants';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { sendBillNotification } from '@/lib/notifications/engine';
-import type { Order, PaymentStatus } from '@/lib/types';
+import { dominantMethod, validateParts, type PaymentPart } from '@/lib/orders/payments';
+import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,9 +20,14 @@ const PAYMENT_STATUSES: readonly PaymentStatus[] = [
 ];
 
 // PATCH /api/orders/[id]/payment — staff/owner only. Records how a walk-up paid
-// (STF-041): sets payment_method and payment_status (defaults to 'paid' when a
-// method is provided). Fulfillment status is untouched — payment tracking is
-// deliberately independent of the order_status lifecycle.
+// (STF-041). Two accepted shapes:
+//
+//   { payment_method, payment_status? }   single method for the whole bill
+//   { parts: [{ method, amount_inr, tendered_inr? }] }   POS4-1 split settlement
+//
+// Fulfillment status is untouched — payment tracking is deliberately independent
+// of the order_status lifecycle. Since BILL-1, a settle to 'paid' also delivers
+// the bill.
 export async function PATCH(request: Request, { params }: RouteParams) {
   const user = await getStaffUser();
   if (!user) {
@@ -34,7 +40,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   const body = await parseJsonBody(request);
-  if (!body || !isPaymentMethod(body.payment_method)) {
+  if (!body) return errorResponse(400, 'Request body must be a JSON object');
+
+  const isSplit = body.parts !== undefined;
+  if (!isSplit && !isPaymentMethod(body.payment_method)) {
     return errorResponse(400, `payment_method is required and must be one of: ${PAYMENT_METHODS.join(', ')}`);
   }
 
@@ -54,9 +63,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // Don't let a manual "mark payment" clobber a gateway-verified online payment
   // (M6) — those are reconciled against Razorpay and may only change via the
   // refund flow. Guard against overwriting an online paid/refunded record.
+  // `total_inr` comes along because a split must be validated against the
+  // SERVER's total, never a total the client tells us.
   const { data: existing } = await admin
     .from('orders')
-    .select('payment_method, payment_status')
+    .select('payment_method, payment_status, total_inr, subtotal_inr')
     .eq('id', id)
     .maybeSingle();
   if (!existing) return notFound();
@@ -70,9 +81,24 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     );
   }
 
+  // POS4-1: validate the split against the authoritative total before touching
+  // anything. The parts must sum exactly — a gap would surface later as an
+  // unexplained cash-drawer variance nobody can reconstruct.
+  let parts: PaymentPart[] | null = null;
+  let changeInr = 0;
+  if (isSplit) {
+    const orderTotal = (existing.total_inr as number | null) ?? (existing.subtotal_inr as number);
+    const validated = validateParts(body.parts, orderTotal);
+    if (!validated.ok) return errorResponse(400, validated.error);
+    parts = validated.parts;
+    changeInr = validated.changeInr;
+  }
+
+  const methodToStore = parts ? dominantMethod(parts) : (body.payment_method as PaymentMethod);
+
   const { data, error } = await admin
     .from('orders')
-    .update({ payment_method: body.payment_method, payment_status: paymentStatus })
+    .update({ payment_method: methodToStore, payment_status: paymentStatus })
     .eq('id', id)
     .select('*')
     .maybeSingle();
@@ -82,6 +108,31 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
   if (!data) {
     return notFound();
+  }
+
+  // POS4-1: persist the parts. Written AFTER the order update so a failed
+  // settle leaves no orphan parts. Replaces any prior parts for this order so a
+  // re-settle (staff correcting how it was paid) doesn't double-count cash.
+  if (parts) {
+    await admin.from('order_payments').delete().eq('order_id', id);
+    const { error: partsError } = await admin.from('order_payments').insert(
+      parts.map((p) => ({
+        order_id: id,
+        method: p.method,
+        amount_inr: p.amount_inr,
+        tendered_inr: p.tendered_inr ?? null,
+        created_by: user.id,
+      })),
+    );
+    if (partsError) {
+      // The order reads as paid but the drawer breakdown is missing — that's a
+      // cash-reconciliation problem, so say so loudly rather than swallow it.
+      console.error(
+        `order_payments insert FAILED for order ${id} — the cash day will fall back to the ` +
+          `whole total on '${methodToStore}'. Is supabase/2026-08-split-payments.sql applied?`,
+        partsError,
+      );
+    }
   }
 
   // BILL-1: deliver the bill the moment the money is taken. The POS "Collect now"
@@ -112,5 +163,6 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
   }
 
-  return NextResponse.json({ order: data as Order });
+  // `change_due_inr` lets the POS show "give ₹120 back" without recomputing it.
+  return NextResponse.json({ order: data as Order, change_due_inr: changeInr });
 }

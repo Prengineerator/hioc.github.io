@@ -1,29 +1,34 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { changeDueInr, type PaymentPart } from '@/lib/orders/payments';
 import type { BillBreakdown } from '@/lib/store/hours';
 import type { OrderType, PaymentMethod } from '@/lib/types';
 
-// The POS-1 "Collect payment" step. Shows the SERVER-computed bill breakup (from
-// POST /api/orders/quote — never recomputed here) and the counter-settlement
-// choices: one tap on Cash / UPI / Card creates the order and immediately
-// settles it via PATCH /api/orders/[id]/payment; the "Collect later" escape
-// creates it unpaid for POS-2 to settle from the order detail. All actions are
-// disabled while a submit is in flight (double-submit guard lives in the parent).
+// The POS-1 "Collect payment" step, extended by POS4-1 with cash tendered/change
+// and a two-way split.
 //
-// BILL-2: the phone lives HERE, at the top, focused — not collapsed under the
-// cart. The WhatsApp bill (RCT-1/BILL-1) can only send to a number we captured,
-// and the moment staff take the money is the one moment the customer is standing
-// there to give it. Skipping stays one tap, but it's now a deliberate choice with
-// its consequence stated rather than the silent default.
+// Everything here is DISPLAY of server numbers: the bill comes from
+// /api/orders/quote and the split is re-validated against the order's
+// authoritative total server-side before anything is stored. The arithmetic
+// below (change, remainder) exists so the counter doesn't do mental maths — it
+// is never what gets persisted.
+//
+// BILL-2: the phone sits at the top, focused — the WhatsApp bill can only reach
+// a number we captured, and this is the moment the customer is standing there.
 
 const COLLECT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'cash', label: 'Cash' },
   { value: 'upi', label: 'UPI' },
   { value: 'card', label: 'Card' },
 ];
+
+// Notes an Indian counter actually sees. "Exact" fills the bill total.
+const TENDER_CHIPS = [100, 200, 500, 2000];
+
+type Step = 'choose' | 'cash' | 'split';
 
 export function PosPaymentModal({
   bill,
@@ -41,32 +46,43 @@ export function PosPaymentModal({
   orderType: OrderType;
   tableLabel: string | null;
   itemCount: number;
-  // Owned by the parent (same state the customer-details block edits) so the two
-  // inputs can never disagree about the number we're about to bill.
   phone: string;
   onPhoneChange: (value: string) => void;
   submitting: boolean;
   error: string | null;
-  // method === null → create unpaid (collect later); otherwise settle now.
-  onSubmit: (method: PaymentMethod | null) => void;
+  // null → create unpaid (collect later); otherwise settle with these parts.
+  onSubmit: (parts: PaymentPart[] | null) => void;
   onClose: () => void;
 }) {
   const isDineIn = orderType === 'dine_in';
   const phoneRef = useRef<HTMLInputElement>(null);
+  const total = bill?.total_inr ?? 0;
 
-  // A settle held back for the "no number" confirm. `null` is a valid method
-  // (collect later), so the pending state is an object, not a bare method.
-  const [pending, setPending] = useState<{ method: PaymentMethod | null } | null>(null);
+  const [step, setStep] = useState<Step>('choose');
+  const [pending, setPending] = useState<{ parts: PaymentPart[] | null } | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
-  // Phone-first: focus it on open so a staffer can type the number straight away.
+  // Cash step
+  const [tendered, setTendered] = useState('');
+  const tenderedNum = Number.parseInt(tendered, 10);
+  const tenderedValid = Number.isFinite(tenderedNum) && tenderedNum >= total;
+  const change = tenderedValid ? changeDueInr(tenderedNum, total) : 0;
+
+  // Split step — two parts: a first method for a chosen amount, the rest on a second.
+  const [firstMethod, setFirstMethod] = useState<PaymentMethod>('cash');
+  const [firstAmount, setFirstAmount] = useState('');
+  const [secondMethod, setSecondMethod] = useState<PaymentMethod>('upi');
+  const [splitTendered, setSplitTendered] = useState('');
+  const firstNum = Number.parseInt(firstAmount, 10);
+  const firstValid = Number.isFinite(firstNum) && firstNum > 0 && firstNum < total;
+  const remainder = firstValid ? total - firstNum : 0;
+
   useEffect(() => {
     phoneRef.current?.focus();
   }, []);
 
-  // One funnel for every settle button, so the validate → confirm → submit rule
-  // can't differ between "Cash" and "Collect later".
-  function attemptSubmit(method: PaymentMethod | null) {
+  // One funnel for every settle, so the phone rule can't differ per path.
+  function attempt(parts: PaymentPart[] | null) {
     const trimmed = phone.trim();
     if (trimmed) {
       if (normalizeIndianMobile(trimmed) === null) {
@@ -75,13 +91,30 @@ export function PosPaymentModal({
         return;
       }
       setPhoneError(null);
-      onSubmit(method);
+      onSubmit(parts);
       return;
     }
-    // No number: ask once, inline. Never a blocking dialog — the counter can
-    // always proceed in one more tap.
-    setPending({ method });
+    setPending({ parts });
   }
+
+  const splitParts = useMemo((): PaymentPart[] | null => {
+    if (!firstValid) return null;
+    const a: PaymentPart = {
+      method: firstMethod,
+      amount_inr: firstNum,
+      tendered_inr:
+        firstMethod === 'cash' && splitTendered.trim()
+          ? Number.parseInt(splitTendered, 10)
+          : null,
+    };
+    const b: PaymentPart = { method: secondMethod, amount_inr: remainder, tendered_inr: null };
+    return [a, b];
+  }, [firstValid, firstMethod, firstNum, secondMethod, remainder, splitTendered]);
+
+  const splitCashShort =
+    firstMethod === 'cash' &&
+    splitTendered.trim().length > 0 &&
+    Number.parseInt(splitTendered, 10) < firstNum;
 
   return (
     <Modal open onClose={onClose} title="Collect payment">
@@ -95,7 +128,6 @@ export function PosPaymentModal({
           </span>
         </div>
 
-        {/* Phone first — this is what the WhatsApp bill sends to. */}
         <div>
           <label htmlFor="pos-bill-phone" className="mb-1 block text-sm font-bold text-charcoal">
             Bill on WhatsApp
@@ -124,7 +156,6 @@ export function PosPaymentModal({
           )}
         </div>
 
-        {/* Bill breakup — every line is the quote endpoint's number. */}
         <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">
           {bill ? (
             <>
@@ -148,9 +179,6 @@ export function PosPaymentModal({
           </div>
         ) : null}
 
-        {/* The one-tap "are you sure" for settling with no number. Replaces the
-            buttons rather than stacking on top of them, so there's exactly one
-            thing to do next. */}
         {pending ? (
           <div className="rounded-md border border-[#e5e5e5] bg-surface px-4 py-3">
             <p className="text-sm font-bold text-charcoal">No number — the customer gets no WhatsApp bill.</p>
@@ -171,9 +199,9 @@ export function PosPaymentModal({
                 type="button"
                 disabled={submitting}
                 onClick={() => {
-                  const { method } = pending;
+                  const { parts } = pending;
                   setPending(null);
-                  onSubmit(method);
+                  onSubmit(parts);
                 }}
                 className="rounded-md border border-[#e5e5e5] px-3 py-3 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-50"
               >
@@ -181,7 +209,171 @@ export function PosPaymentModal({
               </button>
             </div>
           </div>
+        ) : step === 'cash' ? (
+          /* ---- Cash: tendered → change ------------------------------------ */
+          <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-charcoal">Cash — ₹{total}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep('choose');
+                  setTendered('');
+                }}
+                className="text-xs font-bold text-muted underline"
+              >
+                Back
+              </button>
+            </div>
+
+            <label htmlFor="pos-tendered" className="mt-3 block text-xs font-bold uppercase tracking-wide text-muted">
+              Cash received
+            </label>
+            <input
+              id="pos-tendered"
+              value={tendered}
+              onChange={(e) => setTendered(e.target.value.replace(/[^0-9]/g, ''))}
+              inputMode="numeric"
+              placeholder={String(total)}
+              autoFocus
+              className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-3 text-lg font-bold outline-none focus:border-tan"
+            />
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setTendered(String(total))}
+                className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+              >
+                Exact ₹{total}
+              </button>
+              {TENDER_CHIPS.filter((c) => c >= total).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setTendered(String(c))}
+                  className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                >
+                  ₹{c}
+                </button>
+              ))}
+            </div>
+
+            {tendered.trim() && !tenderedValid ? (
+              <p role="alert" className="mt-2 text-xs text-red-700">
+                That&rsquo;s less than the bill of ₹{total}.
+              </p>
+            ) : null}
+
+            <div className="mt-3 flex items-center justify-between border-t border-[#e5e5e5] pt-3">
+              <span className="text-sm font-bold text-charcoal">Change due</span>
+              <span className="text-2xl font-bold text-tan">₹{change}</span>
+            </div>
+
+            <button
+              type="button"
+              disabled={submitting || !tenderedValid}
+              onClick={() =>
+                attempt([{ method: 'cash', amount_inr: total, tendered_inr: tenderedNum }])
+              }
+              className="mt-3 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Take ₹{total} cash
+            </button>
+          </div>
+        ) : step === 'split' ? (
+          /* ---- Split across two methods ----------------------------------- */
+          <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-charcoal">Split ₹{total}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep('choose');
+                  setFirstAmount('');
+                  setSplitTendered('');
+                }}
+                className="text-xs font-bold text-muted underline"
+              >
+                Back
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs font-bold uppercase tracking-wide text-muted">First payment</p>
+            <div className="mt-1 grid grid-cols-3 gap-2">
+              {COLLECT_METHODS.map((m) => (
+                <MethodChip
+                  key={m.value}
+                  label={m.label}
+                  active={firstMethod === m.value}
+                  onClick={() => setFirstMethod(m.value)}
+                />
+              ))}
+            </div>
+            <input
+              value={firstAmount}
+              onChange={(e) => setFirstAmount(e.target.value.replace(/[^0-9]/g, ''))}
+              inputMode="numeric"
+              placeholder="Amount"
+              className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+            />
+            {firstAmount.trim() && !firstValid ? (
+              <p role="alert" className="mt-1 text-xs text-red-700">
+                Enter an amount between ₹1 and ₹{total - 1}.
+              </p>
+            ) : null}
+
+            {firstMethod === 'cash' && firstValid ? (
+              <>
+                <input
+                  value={splitTendered}
+                  onChange={(e) => setSplitTendered(e.target.value.replace(/[^0-9]/g, ''))}
+                  inputMode="numeric"
+                  placeholder={`Cash received (₹${firstNum})`}
+                  className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+                />
+                {splitCashShort ? (
+                  <p role="alert" className="mt-1 text-xs text-red-700">
+                    Less than the ₹{firstNum} cash part.
+                  </p>
+                ) : splitTendered.trim() ? (
+                  <p className="mt-1 text-xs text-muted">
+                    Change due ₹{changeDueInr(Number.parseInt(splitTendered, 10), firstNum)}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+
+            {firstValid ? (
+              <>
+                <p className="mt-4 text-xs font-bold uppercase tracking-wide text-muted">
+                  Remaining ₹{remainder} on
+                </p>
+                <div className="mt-1 grid grid-cols-3 gap-2">
+                  {COLLECT_METHODS.map((m) => (
+                    <MethodChip
+                      key={m.value}
+                      label={m.label}
+                      active={secondMethod === m.value}
+                      onClick={() => setSecondMethod(m.value)}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={submitting || !firstValid || splitCashShort || !splitParts}
+              onClick={() => splitParts && attempt(splitParts)}
+              className="mt-4 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {firstValid
+                ? `Take ₹${firstNum} ${firstMethod.toUpperCase()} + ₹${remainder} ${secondMethod.toUpperCase()}`
+                : 'Enter the first amount'}
+            </button>
+          </div>
         ) : (
+          /* ---- Method choice ---------------------------------------------- */
           <>
             <div>
               <p className="mb-2 text-sm font-bold text-charcoal">Collect now</p>
@@ -191,7 +383,12 @@ export function PosPaymentModal({
                     key={m.value}
                     type="button"
                     disabled={submitting || !bill}
-                    onClick={() => attemptSubmit(m.value)}
+                    onClick={() =>
+                      // Cash gets the tendered/change step; the others are exact.
+                      m.value === 'cash'
+                        ? setStep('cash')
+                        : attempt([{ method: m.value, amount_inr: total, tendered_inr: null }])
+                    }
                     className="rounded-md bg-tan px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {m.label}
@@ -202,8 +399,17 @@ export function PosPaymentModal({
 
             <button
               type="button"
+              disabled={submitting || !bill || total <= 1}
+              onClick={() => setStep('split')}
+              className="rounded-md border border-line px-4 py-2.5 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Split across two methods
+            </button>
+
+            <button
+              type="button"
               disabled={submitting || !bill}
-              onClick={() => attemptSubmit(null)}
+              onClick={() => attempt(null)}
               className="rounded-md border border-line px-4 py-3 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
             >
               Collect later — place unpaid
@@ -211,11 +417,32 @@ export function PosPaymentModal({
           </>
         )}
 
-        {submitting ? (
-          <p className="text-center text-sm text-muted">Placing order…</p>
-        ) : null}
+        {submitting ? <p className="text-center text-sm text-muted">Placing order…</p> : null}
       </div>
     </Modal>
+  );
+}
+
+function MethodChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+        (active ? 'border-tan bg-tan text-cream' : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+      }
+    >
+      {label}
+    </button>
   );
 }
 

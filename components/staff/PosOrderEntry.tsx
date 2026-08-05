@@ -36,10 +36,11 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
+import type { PaymentPart } from '@/lib/orders/payments';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { BillBreakdown } from '@/lib/store/hours';
-import type { MenuItem, OrderType, PaymentMethod } from '@/lib/types';
+import type { MenuItem, OrderType } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
 
@@ -323,7 +324,10 @@ export function PosOrderEntry({
   const selectedTableLabel = tables.find((t) => t.id === tableId)?.label ?? null;
 
   // --- Create (+ optionally settle) -----------------------------------------
-  async function placeOrder(method: PaymentMethod | null) {
+  // POS4-1: settlement arrives as PARTS (a single-method payment is just one
+  // part), so cash tendered and splits persist truthfully in order_payments and
+  // the cash day counts only the cash that actually entered the drawer.
+  async function placeOrder(parts: PaymentPart[] | null) {
     // Double-submit guard: the ref blocks a second entry even before the
     // `submitting` state has flushed to disable the buttons.
     if (inFlight.current) return;
@@ -369,13 +373,14 @@ export function PosOrderEntry({
       const { order } = (await res.json()) as { order: { id: string; order_number: number } };
       const numberLabel = formatOrderNumber(order.order_number);
 
-      // Collect now → settle via the existing payment route (cash/UPI/card).
-      // Collect later → leave it unpaid for POS-2 to settle from the detail.
-      if (method) {
+      // Collect now → settle via the payment route. Collect later → leave it
+      // unpaid for POS-2 to settle from the order detail.
+      let changeDue = 0;
+      if (parts) {
         const payRes = await fetch(`/api/orders/${order.id}/payment`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ payment_method: method }),
+          body: JSON.stringify({ parts }),
         });
         if (!payRes.ok) {
           // The order is already created and on the board — a settle failure is
@@ -384,14 +389,23 @@ export function PosOrderEntry({
           showToast(`Order #${numberLabel} placed — payment not recorded, settle it from Orders.`);
           return;
         }
+        const payData = (await payRes.json().catch(() => ({}))) as { change_due_inr?: number };
+        changeDue = payData.change_due_inr ?? 0;
       }
 
       resetForNextOrder();
-      showToast(
-        method
-          ? `Order #${numberLabel} placed & paid (${method.toUpperCase()}).`
-          : `Order #${numberLabel} placed — collect payment later.`,
-      );
+      if (!parts) {
+        showToast(`Order #${numberLabel} placed — collect payment later.`);
+      } else {
+        const how = parts.map((p) => `₹${p.amount_inr} ${p.method.toUpperCase()}`).join(' + ');
+        // Change is the one number the counter must act on immediately, so it
+        // leads rather than trailing after the order number.
+        showToast(
+          changeDue > 0
+            ? `Change ₹${changeDue} · #${numberLabel} paid (${how}).`
+            : `Order #${numberLabel} paid (${how}).`,
+        );
+      }
     } catch {
       setSubmitError('Network error — please check the connection and try again.');
     } finally {

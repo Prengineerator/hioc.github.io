@@ -24,7 +24,8 @@ const state: {
   openDay: Record<string, unknown> | null; // the currently-open cash day (or null)
   todayRow: Record<string, unknown> | null; // a same-date row (open or closed)
   history: Record<string, unknown>[]; // recent closed days
-  cashOrders: Record<string, unknown>[]; // cash settles for the day
+  cashOrders: Record<string, unknown>[]; // settled orders for the day
+  orderPayments: Record<string, unknown>[]; // POS4-1 split parts for those orders
   refunds: Record<string, unknown>[]; // processed refunds on those cash orders
   insertedDay: Record<string, unknown> | null; // day-open insert result
   insertError: { code?: string; message?: string } | null; // e.g. 23505 race
@@ -38,6 +39,7 @@ const state: {
   todayRow: null,
   history: [],
   cashOrders: [],
+  orderPayments: [],
   refunds: [],
   insertedDay: null,
   insertError: null,
@@ -62,6 +64,8 @@ function resolveValue(table: string, op: string, filters: [string, unknown][]) {
     return { data: null, error: null };
   }
   if (table === 'orders') return { data: state.cashOrders, error: null };
+  // POS4-1: the route now reads split parts and prefers them over the order total.
+  if (table === 'order_payments') return { data: state.orderPayments, error: null };
   if (table === 'refunds') return { data: state.refunds, error: null };
   return { data: null, error: null };
 }
@@ -185,6 +189,7 @@ describe('/api/cash-days handlers (OPS-2)', () => {
     state.todayRow = null;
     state.history = [];
     state.cashOrders = [];
+    state.orderPayments = [];
     state.refunds = [];
     state.insertedDay = null;
     state.insertError = null;
@@ -248,7 +253,10 @@ describe('/api/cash-days handlers (OPS-2)', () => {
   // --- day-close ---------------------------------------------------------
   it('day-close computes counted + expected + over/short and closes on a tie-out', async () => {
     state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
-    state.cashOrders = [{ id: 'o1', total_inr: 300 }, { id: 'o2', total_inr: 200 }]; // settles 500
+    state.cashOrders = [
+      { id: 'o1', total_inr: 300, payment_method: 'cash' },
+      { id: 'o2', total_inr: 200, payment_method: 'cash' },
+    ]; // settles 500
     state.refunds = [{ amount_inr: 100 }]; // refunds 100 → expected 5400
     state.closeResult = { id: 'cd-1', status: 'closed' };
 
@@ -270,7 +278,10 @@ describe('/api/cash-days handlers (OPS-2)', () => {
 
   it('400s a close with a variance and no notes; 200s once notes are supplied', async () => {
     state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
-    state.cashOrders = [{ id: 'o1', total_inr: 300 }, { id: 'o2', total_inr: 200 }];
+    state.cashOrders = [
+      { id: 'o1', total_inr: 300, payment_method: 'cash' },
+      { id: 'o2', total_inr: 200, payment_method: 'cash' },
+    ];
     state.refunds = [{ amount_inr: 100 }]; // expected 5400
     state.closeResult = { id: 'cd-1', status: 'closed' };
 
@@ -315,7 +326,10 @@ describe('/api/cash-days handlers (OPS-2)', () => {
   // --- GET summary -------------------------------------------------------
   it('GET returns the open day with a live expected-cash summary and closed history', async () => {
     state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
-    state.cashOrders = [{ id: 'o1', total_inr: 300 }, { id: 'o2', total_inr: 200 }];
+    state.cashOrders = [
+      { id: 'o1', total_inr: 300, payment_method: 'cash' },
+      { id: 'o2', total_inr: 200, payment_method: 'cash' },
+    ];
     state.refunds = [{ amount_inr: 100 }];
     state.history = [{ id: 'cd-0', status: 'closed', over_short_inr: -20 }];
 
@@ -326,6 +340,58 @@ describe('/api/cash-days handlers (OPS-2)', () => {
     expect(body.open_summary.expected_cash_inr).toBe(5400); // 5000 + 500 − 100
     expect(body.open_summary.cash_settle_count).toBe(2);
     expect(body.history).toHaveLength(1);
+  });
+
+  // --- POS4-1: split settlements must not corrupt the drawer --------------
+  it('counts ONLY the cash part of a split, not the whole order total', async () => {
+    state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
+    // One ₹480 order settled ₹200 cash + ₹280 UPI. Its dominant method is UPI,
+    // so the pre-POS4-1 query (payment_method='cash') would have missed it
+    // entirely; naively counting the total would have added ₹480.
+    state.cashOrders = [{ id: 'o1', total_inr: 480, payment_method: 'upi' }];
+    state.orderPayments = [
+      { order_id: 'o1', method: 'cash', amount_inr: 200 },
+      { order_id: 'o1', method: 'upi', amount_inr: 280 },
+    ];
+    state.refunds = [];
+
+    const body = await (await GET()).json();
+
+    expect(body.open_summary.expected_cash_inr).toBe(5200); // 5000 + 200 cash only
+  });
+
+  it('adds nothing to the drawer for a fully non-cash split', async () => {
+    state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
+    state.cashOrders = [{ id: 'o1', total_inr: 480, payment_method: 'card' }];
+    state.orderPayments = [
+      { order_id: 'o1', method: 'card', amount_inr: 300 },
+      { order_id: 'o1', method: 'upi', amount_inr: 180 },
+    ];
+    state.refunds = [];
+
+    const body = await (await GET()).json();
+
+    expect(body.open_summary.expected_cash_inr).toBe(5000);
+    expect(body.open_summary.cash_settle_count).toBe(0);
+  });
+
+  it('still counts a legacy order that has no parts rows', async () => {
+    // Orders settled before POS4-1 have no order_payments; the old rule (whole
+    // total iff payment_method='cash') must keep working for them.
+    state.openDay = { id: 'cd-1', status: 'open', business_date: '2026-07-26', opening_total_inr: 5000 };
+    state.cashOrders = [
+      { id: 'legacy', total_inr: 300, payment_method: 'cash' },
+      { id: 'o1', total_inr: 480, payment_method: 'upi' },
+    ];
+    state.orderPayments = [
+      { order_id: 'o1', method: 'cash', amount_inr: 200 },
+      { order_id: 'o1', method: 'upi', amount_inr: 280 },
+    ];
+    state.refunds = [];
+
+    const body = await (await GET()).json();
+
+    expect(body.open_summary.expected_cash_inr).toBe(5500); // 5000 + 300 legacy + 200 split cash
   });
 
   it('GET returns a null open day + no summary when the drawer is closed', async () => {

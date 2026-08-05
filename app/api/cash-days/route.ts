@@ -38,16 +38,61 @@ type Admin = SupabaseClient;
 async function computeCashFlows(admin: Admin, businessDate: string) {
   const { startIso, endIso } = istDayRange(businessDate);
 
-  const { data: cashOrders } = await admin
+  // POS4-1: a split settlement stores each part in order_payments, so the cash
+  // that actually entered the drawer is the sum of the CASH PARTS — not the
+  // order total. Summing totals for payment_method='cash' would count the UPI
+  // half of a split as cash and read every drawer short.
+  //
+  // So we load every settled order for the day (any method, because a split's
+  // dominant method may not be cash while a cash part still exists), then prefer
+  // its parts. Orders with no parts are pre-POS4-1 and fall back to the old
+  // rule: the whole total counts iff the order was settled in cash.
+  const { data: settledOrders } = await admin
     .from('orders')
-    .select('id, total_inr')
-    .eq('payment_method', 'cash')
+    .select('id, total_inr, payment_method')
     .in('payment_status', ['paid', 'partially_refunded'])
     .gte('created_at', startIso)
     .lt('created_at', endIso);
 
-  const orders = (cashOrders ?? []) as { id: string; total_inr: number | null }[];
-  const cashSettlesInr = orders.reduce((sum, o) => sum + (o.total_inr ?? 0), 0);
+  const settled = (settledOrders ?? []) as {
+    id: string;
+    total_inr: number | null;
+    payment_method: string | null;
+  }[];
+
+  const partsByOrder = new Map<string, number>();
+  if (settled.length > 0) {
+    const { data: partRows } = await admin
+      .from('order_payments')
+      .select('order_id, amount_inr, method')
+      .in(
+        'order_id',
+        settled.map((o) => o.id),
+      );
+    for (const p of (partRows ?? []) as { order_id: string; amount_inr: number; method: string }[]) {
+      if (p.method !== 'cash') {
+        // Mark the order as "has parts" with no cash, so it isn't double-counted
+        // by the legacy fallback below.
+        if (!partsByOrder.has(p.order_id)) partsByOrder.set(p.order_id, 0);
+        continue;
+      }
+      partsByOrder.set(p.order_id, (partsByOrder.get(p.order_id) ?? 0) + p.amount_inr);
+    }
+  }
+
+  // An order counts toward the drawer only if it actually contributed cash:
+  // either its parts include a cash amount, or (legacy, no parts) it was settled
+  // in cash outright. A split paid entirely by card and UPI has a parts row but
+  // no cash, and must not inflate the settle count.
+  const orders = settled.filter((o) => {
+    const fromParts = partsByOrder.get(o.id);
+    if (fromParts !== undefined) return fromParts > 0;
+    return o.payment_method === 'cash';
+  });
+  const cashSettlesInr = orders.reduce(
+    (sum, o) => sum + (partsByOrder.get(o.id) ?? o.total_inr ?? 0),
+    0,
+  );
 
   let cashRefundsInr = 0;
   const orderIds = orders.map((o) => o.id);
