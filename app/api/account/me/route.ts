@@ -159,6 +159,14 @@ export async function PATCH(request: Request) {
     .single();
 
   if (error || !updated) {
+    // A number already verified on ANOTHER account trips the partial unique
+    // index from 2026-07-phone-unique.sql (shared/family numbers make this a
+    // real customer path, not an edge case). Without this branch it surfaced as
+    // a bare 500 — the sibling phone-otp/verify route has mapped it to a 409
+    // since S4, so this was an oversight rather than a deliberate difference.
+    if ((error as { code?: string } | null)?.code === '23505') {
+      return errorResponse(409, 'This number is already linked to another account.');
+    }
     return errorResponse(500, 'Failed to update profile');
   }
 

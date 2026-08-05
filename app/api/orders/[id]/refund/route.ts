@@ -6,6 +6,7 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isUuid } from '@/lib/api/constants';
 import { createGatewayRefund } from '@/lib/payments/gateway';
 import { reverseForOrder } from '@/lib/loyalty/ledger';
+import { readIdempotencyKey } from '@/lib/orders/idempotency';
 import {
   tenderBalances,
   totalRefundedInr,
@@ -47,6 +48,18 @@ export async function POST(request: Request, { params }: RouteParams) {
 
   const admin = createAdminSupabaseClient();
 
+  // REF-2: a refund moves money OUTWARD, so a replay is worse than a duplicate
+  // order — guard_refund_total caps the total but does not deduplicate, and two
+  // identical part-refunds are each under the cap. If this key already produced
+  // a refund, return THAT one instead of issuing a second.
+  const idempotencyKey = readIdempotencyKey(request);
+  if (idempotencyKey) {
+    const existing = await findRefundByKey(admin, idempotencyKey);
+    if (existing) {
+      return NextResponse.json({ refund: existing, replayed: true });
+    }
+  }
+
   const { data: order, error: orderError } = await admin
     .from('orders')
     .select('id, payment_status, payment_method, total_inr, subtotal_inr')
@@ -74,7 +87,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   // returned 409 and a walk-in customer simply could not be refunded in-system,
   // even though the staff UI offered the button. Route it to the counter path.
   if (!payment || !payment.gateway_payment_id) {
-    return counterRefund(admin, id, order as CounterOrder, body, reason, user.id);
+    return counterRefund(admin, id, order as CounterOrder, body, reason, user.id, idempotencyKey);
   }
 
   const { data: priorRefunds, error: priorError } = await admin
@@ -140,6 +153,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       gateway_ref: gatewayResult.id,
       created_by: user.id,
       processed_at: new Date().toISOString(),
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     })
     .select('*')
     .single();
@@ -190,6 +204,34 @@ type CounterOrder = {
  *
  * D4-2: the tender is chosen, never spread proportionally — see lib/orders/refunds.ts.
  */
+/**
+ * REF-2 — the refund a given Idempotency-Key already produced, or null.
+ * `idempotency_key` carries a partial UNIQUE index, so this is the read half of
+ * the replay guard; the index itself is the hard guarantee against a race.
+ */
+async function findRefundByKey(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  key: string,
+): Promise<unknown | null> {
+  const { data, error } = await admin
+    .from('refunds')
+    .select('*')
+    .eq('idempotency_key', key)
+    .maybeSingle();
+  if (error) {
+    // Most likely the column is missing (migration not applied). Losing replay
+    // protection is bad; refusing a legitimate refund is worse — proceed, and
+    // say which migration would have prevented it.
+    console.error(
+      'refund idempotency lookup failed — proceeding WITHOUT replay protection. ' +
+        'Is supabase/2026-08-refund-idempotency.sql applied?',
+      error,
+    );
+    return null;
+  }
+  return data ?? null;
+}
+
 async function counterRefund(
   admin: ReturnType<typeof createAdminSupabaseClient>,
   id: string,
@@ -197,6 +239,7 @@ async function counterRefund(
   body: Record<string, unknown> | null,
   reason: string,
   userId: string,
+  idempotencyKey: string | null,
 ) {
   // What was actually taken, per tender. POS4-1 orders have parts; anything
   // older is a single tender for the whole total.
@@ -243,9 +286,19 @@ async function counterRefund(
       status: 'processed', // the money moved at the counter, not via a gateway
       created_by: userId,
       processed_at: new Date().toISOString(),
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     })
     .select('*')
     .single();
+
+  // REF-2 race: two taps arrived close enough that both passed the read check.
+  // The unique index caught the second — return the first one's refund rather
+  // than an error, and DON'T re-run the status/loyalty side effects below.
+  if (refundError && (refundError as { code?: string }).code === '23505' && idempotencyKey) {
+    const already = await findRefundByKey(admin, idempotencyKey);
+    if (already) return NextResponse.json({ refund: already, replayed: true });
+  }
+
   if (refundError) {
     // Nothing has moved in our records yet, so this one IS fatal — unlike the
     // gateway path, where the money had already left before the insert.

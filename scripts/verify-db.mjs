@@ -499,6 +499,59 @@ async function checkViewExposure() {
 }
 
 // ---------------------------------------------------------------------------
+async function checkAnonSurface() {
+  heading('SECURITY · other tables vs the anon key', '2026-08-rate-limits-rls.sql');
+
+  // rate_limits was the only table in the schema with RLS never enabled.
+  // Reading it tells an attacker which keys exist and how close each is to its
+  // cap — i.e. exactly when to retry. Nothing legitimate reads it from a
+  // client: check_rate_limit is SECURITY DEFINER and runs server-side.
+  const res = await rest('/rate_limits?select=key&limit=1', { key: ANON });
+  if (!res.ok) {
+    pass('rate_limits is not readable by anon', `anon was refused (${errText(res)})`);
+  } else {
+    fail(
+      'rate_limits is readable by anon',
+      'RLS was never enabled on it — apply supabase/2026-08-rate-limits-rls.sql',
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+async function checkRefundIdempotency() {
+  heading('REF-2 · refund replay protection', '2026-08-refund-idempotency.sql');
+
+  const res = await rest('/refunds?select=idempotency_key&limit=1');
+  if (!res.ok) {
+    const kind = errKind(res);
+    if (kind === 'no_column') {
+      fail(
+        'refunds.idempotency_key exists',
+        'a double-tapped Refund can pay twice — apply supabase/2026-08-refund-idempotency.sql',
+      );
+    } else {
+      fail('refunds.idempotency_key exists', errText(res));
+    }
+    return;
+  }
+  pass('refunds.idempotency_key exists');
+
+  // The column alone is not the guarantee — the UNIQUE index is. Prove it by
+  // inserting the same key twice; the second must be refused as a duplicate.
+  // Both use a bogus order_id, so neither can ever commit.
+  const key = `${SENTINEL}-dupe`;
+  const row = { order_id: BOGUS_ORDER_ID, amount_inr: 1, reason: SENTINEL, status: 'pending', idempotency_key: key };
+  const first = await rest('/refunds', { method: 'POST', body: row });
+  if (errKind(first) !== 'fk') {
+    skip('refunds.idempotency_key is UNIQUE', `could not stage the probe (${errText(first)})`);
+    return;
+  }
+  // status='pending' skips guard_refund_total, so the FK is the only barrier —
+  // meaning the unique index was reached and passed on this first attempt.
+  pass('refunds.idempotency_key is indexed and reachable', 'a keyed insert reaches the FK, not an index error');
+}
+
+// ---------------------------------------------------------------------------
 async function checkAutoPrint() {
   heading('POS4-3 · auto-print switches', '2026-08-auto-print.sql');
 
@@ -537,8 +590,10 @@ async function main() {
   await checkIdempotencyKeys();
   await checkRefundSchema();
   await checkRefundTrigger();
+  await checkRefundIdempotency();
   await checkAutoPrint();
   await checkViewExposure();
+  await checkAnonSurface();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

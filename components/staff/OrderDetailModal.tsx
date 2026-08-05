@@ -8,7 +8,7 @@
 // owns the API calls (optimistic update + refetch); this is pure UI. Server
 // routes enforce authz (§5.2) — the UI only exposes the actions.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -62,6 +62,7 @@ export function OrderDetailModal({
     amountInr: number,
     reason: string,
     method?: string,
+    idempotencyKey?: string,
   ) => Promise<void> | void;
   // Void a wrongly-punched line (POS-4). The /amend route is manager-gated
   // (hasPermission('void_line'), D4) — the UI just exposes the action.
@@ -82,6 +83,12 @@ export function OrderDetailModal({
   // REF-1: which tender the money goes back on. Empty = let the server decide
   // (correct for the common single-tender order).
   const [refundMethod, setRefundMethod] = useState('');
+  // REF-2 — one key per OPEN REFUND PANEL, not per click. A double-tap reuses
+  // it so the route replays instead of paying twice; a deliberate second refund
+  // means reopening the panel, which mints a fresh one. `guard_refund_total`
+  // caps the total but does not deduplicate, so this is the only thing standing
+  // between a laggy tablet and a double payout.
+  const refundKeyRef = useRef<string>('');
   const [tenders, setTenders] = useState<{ method: string; amount_inr: number }[]>([]);
   // Void panel state (POS-4): which line, and the picked/typed reason.
   const [voidItemId, setVoidItemId] = useState<string | null>(null);
@@ -219,6 +226,10 @@ export function OrderDetailModal({
   // this query on every card.
   useEffect(() => {
     if (mode !== 'refund') return;
+    refundKeyRef.current =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `refund-${crypto.randomUUID()}`
+        : `refund-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     let cancelled = false;
     fetch(`/api/orders/${order.id}/payment`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : { tenders: [] }))
@@ -239,7 +250,7 @@ export function OrderDetailModal({
     if (!onRefund || refundAmount <= 0 || !refundReason.trim()) return;
     setRefundSubmitting(true);
     try {
-      await onRefund(order, refundAmount, refundReason.trim(), refundMethod || undefined);
+      await onRefund(order, refundAmount, refundReason.trim(), refundMethod || undefined, refundKeyRef.current);
       setMode('view');
     } finally {
       setRefundSubmitting(false);

@@ -148,14 +148,18 @@ export default function StaffOrdersPage() {
   // staff member sees this fail with a clear message rather than the button
   // being hidden (role isn't plumbed to this client page).
   const handleRefund = useCallback(
-    async (o: OrderWithItems, amountInr: number, reason: string, method?: string) => {
+    async (o: OrderWithItems, amountInr: number, reason: string, method?: string, refundKey?: string) => {
       try {
         const res = await fetch(`/api/orders/${o.id}/refund`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // REF-1: `method` names which tender to refund. Omitted when the order
-          // has a single tender — the route resolves it and errors clearly if a
-          // split leaves the choice ambiguous.
+          headers: {
+            'Content-Type': 'application/json',
+            // REF-2: identifies THIS refund attempt. The key belongs to the
+            // open refund panel, NOT to the click — so a double-tap replays it
+            // and the route returns the refund it already made, instead of
+            // paying the customer twice.
+            ...(refundKey ? { 'Idempotency-Key': refundKey } : {}),
+          },
           body: JSON.stringify({ amount_inr: amountInr, reason, ...(method ? { method } : {}) }),
         });
         if (!res.ok) {
@@ -360,7 +364,7 @@ export default function StaffOrdersPage() {
           onClose={() => setSelected(null)}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
-          onRefund={(o, amountInr, reason, method) => handleRefund(o, amountInr, reason, method)}
+          onRefund={(o, amountInr, reason, method, key) => handleRefund(o, amountInr, reason, method, key)}
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
           onComp={(o, reason) => handleComp(o, reason)}
         />
