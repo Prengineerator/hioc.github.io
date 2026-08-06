@@ -95,6 +95,82 @@ query builder (`.eq()`, `.in()`, `.rpc(name, params)`), which parameterizes.
 
 ---
 
+## Attendance & payroll invariants (Phase 5)
+
+These guard a surface where a bug costs someone their pay or leaks their location.
+They are **review rules, not scanner rules** — the scanner cannot see most of them —
+so they apply to any PR touching `app/api/attendance/**`, `app/api/payroll/**`,
+`lib/attendance/**`, or `lib/payroll/**`. Spec: `docs/PHASE-5-SPEC.md §9`.
+
+### A-1 — the punch time must come from the database (CRITICAL)
+**Meaning:** a route sets `clock_in_at` / `clock_out_at` from a request body, a
+client-supplied ISO string, or the Node process clock instead of the DB's `now()`.
+**Why:** a phone's clock is attacker-controlled. If the client can name the time, the
+whole attendance record is fiction.
+**Fix:** let the column default (`default now()`) supply it, or set it in SQL. A
+client-supplied time field is **ignored, not validated** — do not "sanity check" it
+and then trust it.
+
+### A-2 — the geofence verdict must be computed server-side (CRITICAL)
+**Meaning:** a route reads `in_range`, `distance_m`, or any pass/fail signal from the
+request body.
+**Fix:** the client sends **only** raw readings (`lat`, `lng`, `accuracy_m`,
+`fix_age_ms`). The server computes distance via `lib/attendance/geofence.ts` and
+decides. If a verdict field arrives from the client, drop it.
+
+### A-3 — the geofence configuration must never reach the client (CRITICAL)
+**Meaning:** a response, a Server Component prop, or a public route exposes
+`geofence_radius_m`, `store_lat/lng`, `max_accuracy_m`, or any `attendance_settings`
+row to a staff session.
+**Why:** knowing the radius is most of what you need to fake being inside it.
+**Fix:** return only accept/refuse and the staffer's own distance. `attendance_settings`
+has **no** staff-readable RLS policy; it is service-role only.
+
+### A-4 — clocking in/out must NOT be `hasPermission()`-gated (CRITICAL)
+**Meaning:** the punch route calls `hasPermission(user, 'attendance_punch')` or any
+new key.
+**Why:** `hasPermission()` fails **closed to manager** for any key whose
+`role_permissions` row is missing (`lib/permissions.ts`). A missing seed row would
+therefore stop the entire team from marking attendance. Phase 4's TAB-1 hit exactly
+this trap and deliberately reused an existing key.
+**Fix:** gate punching on a valid staff session only (`getStaffOrOwner()`). Only
+`attendance_edit` and `attendance_approve` are matrix keys — and both must be seeded
+in the migration **and** added to `KNOWN_PERMISSION_KEYS` + `DEFAULT_MIN_ROLE` + the
+`PermissionKey` union in the same PR.
+
+### A-5 — one staffer must not read another's attendance (CRITICAL)
+**Meaning:** an attendance read route filters by a client-supplied `user_id`, or the
+RLS policy is broader than `auth.uid() = user_id`.
+**Fix:** RLS restricts staff to their own rows, and the route re-checks rather than
+trusting RLS alone. `staff_employment` and `payroll_*` are **not staff-readable at
+all** — salary is owner-only, including one's own, in this phase. Every PR touching
+these gets an explicit RLS assertion in its tests.
+
+### A-6 — payroll money must be integer paise (CRITICAL)
+**Meaning:** a float, a `parseFloat`, or a `toFixed` appears in a pay calculation.
+**Fix:** all intermediate maths in integer paise, rounded **once** (half-up) to whole
+₹ at `net_pay_inr`. The standing assertion: perfect attendance nets **exactly** the
+monthly salary — a rounding rule that leaks ₹1 is a bug, not a preference.
+
+### A-7 — a finalized payroll run is immutable (WARN → treat as high)
+**Meaning:** an attendance edit, a rule change, or a salary change can alter a run
+already marked `finalized`.
+**Fix:** refuse the edit and point at the run. Reversal is a recorded action with a
+reason — never a delete, never an in-place recompute. `payroll_runs.rules_snapshot`
+freezes the rule set and rate that were actually used.
+
+### A-8 — the auto-close cron must fail closed (CRITICAL)
+Same shape as **C-4**. Unset `CRON_SECRET` → the endpoint is disabled (401), never
+runnable by anyone. The job must also be idempotent: running it twice must not
+re-close a session or double-flag it.
+
+### A-9 — CSV export must be formula-injection safe (WARN)
+**Meaning:** a payroll export writes a field beginning `=`, `+`, `-`, or `@` unescaped.
+**Fix:** prefix such fields with `'` (or wrap and escape) before writing. Staff names
+are attacker-influenced text that lands in the owner's Excel.
+
+---
+
 ## When the scan can't decide (escalate, don't guess)
 
 If a WARN is ambiguous (is this route meant to be public?), the cheap model should
@@ -109,7 +185,12 @@ that is how the 95–98% band is held. A senior model / human resolves the resid
 
 1. `bash scripts/security-scan.sh` → PASS, 0 CRITICAL.
 2. `npx tsc --noEmit` clean, `npm test` green.
-3. In Supabase, run `scripts/verify-security-migrations.sql` → every row `ok = true`.
+3. `npm run verify:db` → `RESULT: PASS`. This probes the **live** database with the
+   anon key and is the only check that proves RLS, CHECK constraints and triggers are
+   actually deployed — the vitest suite mocks Supabase and is blind to all of it.
+   A **SKIPPED** probe is not a pass; use `--strict` for a gate that refuses to pass
+   on unproven ground. (`scripts/verify-security-migrations.sql` is the older, weaker
+   SQL-only version of this check.)
 4. Env set: `CRON_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `RAZORPAY_KEY_ID/SECRET`,
    `RAZORPAY_WEBHOOK_SECRET`, `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`.
 5. Vercel Cron points at `/api/cron/expire-orders`.
