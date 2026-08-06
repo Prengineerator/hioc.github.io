@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/expire-orders",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/close-attendance",
+      "schedule": "0 * * * *"
     }
   ]
 }

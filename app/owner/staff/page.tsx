@@ -4,6 +4,8 @@
 
 import { TeamManager } from '@/components/owner/TeamManager';
 import { PermissionMatrix } from '@/components/owner/PermissionMatrix';
+import { EmploymentManager } from '@/components/owner/EmploymentManager';
+import { flags } from '@/lib/flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +17,7 @@ export default function OwnerStaffPage() {
         <p className="text-sm text-muted">Grant or revoke staff-board access for the counter team.</p>
       </div>
       <TeamManager />
+      {flags.attendance ? <EmploymentManager /> : null}
       <PermissionMatrix />
     </div>
   );

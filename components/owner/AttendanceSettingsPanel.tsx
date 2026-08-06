@@ -189,6 +189,107 @@ export function AttendanceSettingsPanel() {
         />
       </div>
 
+      {/* OPS5-1b — the payroll rules. Separated by a rule from the geofence
+          because the two get tuned at completely different moments: the fence
+          on site with a phone, these once, at a desk. */}
+      <div className="mt-8 border-t border-[#e5e5e5] pt-6">
+        <h3 className="text-base font-bold text-charcoal">Pay rules</h3>
+        <p className="mt-1 text-sm text-muted">
+          How hours turn into pay. Defaults are sensible — change them only where your cafe
+          actually differs.
+        </p>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          <NumberField
+            label="Late grace (min)"
+            hint="Arriving within this of the shift start isn't late."
+            value={settings.grace_period_min}
+            min={0}
+            max={240}
+            disabled={saving}
+            onCommit={(v) => save({ grace_period_min: v })}
+          />
+          <NumberField
+            label="Late marks = half day"
+            hint="This many late arrivals deducts half a day's pay."
+            value={settings.late_marks_per_halfday}
+            min={1}
+            max={30}
+            disabled={saving}
+            onCommit={(v) => save({ late_marks_per_halfday: v })}
+          />
+          <NumberField
+            label="OT starts after (min)"
+            hint="Extra minutes beyond the contracted day before overtime begins."
+            value={settings.ot_threshold_min}
+            min={0}
+            max={480}
+            disabled={saving}
+            onCommit={(v) => save({ ot_threshold_min: v })}
+          />
+          <NumberField
+            label="OT rate (×)"
+            hint="0 = overtime unpaid, 1 = normal rate, 1.5 = time and a half."
+            value={Number(settings.ot_multiplier)}
+            min={0}
+            max={5}
+            step={0.25}
+            disabled={saving}
+            onCommit={(v) => save({ ot_multiplier: v })}
+          />
+          <NumberField
+            label="Unpaid break (min)"
+            hint="Deducted automatically — but only on a day with a single unbroken session."
+            value={settings.auto_break_min}
+            min={0}
+            max={240}
+            disabled={saving}
+            onCommit={(v) => save({ auto_break_min: v })}
+          />
+          <NumberField
+            label="Break applies after (min)"
+            hint="Only shifts longer than this get the break deducted."
+            value={settings.auto_break_after_min}
+            min={30}
+            max={1440}
+            disabled={saving}
+            onCommit={(v) => save({ auto_break_after_min: v })}
+          />
+          <NumberField
+            label="Half day below (min)"
+            hint="Work under this counts as half a day."
+            value={settings.half_day_min_minutes}
+            min={0}
+            max={1440}
+            disabled={saving}
+            onCommit={(v) => save({ half_day_min_minutes: v })}
+          />
+          <NumberField
+            label="Absent below (min)"
+            hint="Work under this counts as absent. Must be lower than the half-day figure."
+            value={settings.absent_below_minutes}
+            min={0}
+            max={1440}
+            disabled={saving}
+            onCommit={(v) => save({ absent_below_minutes: v })}
+          />
+          <NumberField
+            label="Auto-close grace (min)"
+            hint="How long after a shift ends before a forgotten clock-out is closed for review."
+            value={settings.auto_close_grace_min}
+            min={0}
+            max={720}
+            disabled={saving}
+            onCommit={(v) => save({ auto_close_grace_min: v })}
+          />
+        </div>
+
+        <p className="mt-4 text-xs text-muted">
+          An automatically closed shift is never paid on trust — it waits for you on the
+          attendance sheet until you approve or correct it.
+        </p>
+      </div>
+
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
       {notice ? <p className="mt-4 text-sm text-green-700">{notice}</p> : null}
     </section>
@@ -201,6 +302,7 @@ function NumberField({
   value,
   min,
   max,
+  step,
   disabled,
   onCommit,
 }: {
@@ -209,6 +311,7 @@ function NumberField({
   value: number;
   min: number;
   max: number;
+  step?: number;
   disabled: boolean;
   onCommit: (v: number) => void;
 }) {
@@ -220,9 +323,10 @@ function NumberField({
       <span className="font-bold text-charcoal">{label}</span>
       <input
         type="number"
-        inputMode="numeric"
+        inputMode={step && step < 1 ? 'decimal' : 'numeric'}
         min={min}
         max={max}
+        step={step ?? 1}
         value={draft}
         disabled={disabled}
         onChange={(e) => setDraft(e.target.value)}

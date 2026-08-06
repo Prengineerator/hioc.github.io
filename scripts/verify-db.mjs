@@ -708,6 +708,17 @@ async function checkAttendance() {
     fail('staff_employment is not readable by anon', 'salary data is exposed — apply SECTION 8 of the migration');
   }
 
+  // SHEET-2 / D5-6. A day off is not a session, so paid leave has nowhere to
+  // live without this table.
+  const marks = await rest('/attendance_day_marks?select=mark&limit=1');
+  if (marks.ok) {
+    pass('attendance_day_marks exists');
+  } else if (errKind(marks) === 'no_table') {
+    fail('attendance_day_marks exists', 'paid leave cannot be recorded — apply supabase/2026-08-attendance-day-marks.sql');
+  } else {
+    fail('attendance_day_marks exists', errText(marks));
+  }
+
   // The clock-out RPC is the only way clock_out_at gets the DATABASE's clock
   // rather than the app server's. If it is missing, clocking in works and
   // clocking OUT fails — the worst possible split, because staff would discover
