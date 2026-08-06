@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { AttendanceSettings } from '@/lib/types';
+import { parseCoordinates } from '@/lib/attendance/parseCoordinates';
 
 export function AttendanceSettingsPanel() {
   const [settings, setSettings] = useState<AttendanceSettings | null>(null);
@@ -22,6 +23,8 @@ export function AttendanceSettingsPanel() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [measured, setMeasured] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [pasted, setPasted] = useState('');
+  const [pasteError, setPasteError] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -143,6 +146,52 @@ export function AttendanceSettingsPanel() {
             Set as cafe location
           </button>
         ) : null}
+      </div>
+
+      {/* Paste-from-Maps. "Use my current location" only works while you are
+          standing there; this lets the exact spot be picked from a map at a
+          desk, which is how most people will actually do it. An embedded
+          interactive map would need a Google API key and billing for no extra
+          precision, so we take the coordinates Maps already gives you. */}
+      <div className="mt-4 rounded-md border border-[#e5e5e5] p-3">
+        <label className="block text-sm">
+          <span className="font-bold text-charcoal">…or paste from Google Maps</span>
+          <div className="mt-1 flex flex-wrap gap-2">
+            <input
+              value={pasted}
+              onChange={(e) => {
+                setPasted(e.target.value);
+                setPasteError('');
+              }}
+              placeholder="28.613939, 77.209023 — or a Google Maps link"
+              className="min-w-[16rem] flex-1 rounded-md border border-[#ddd] px-3 py-2 font-mono text-sm"
+            />
+            <button
+              type="button"
+              disabled={saving || !pasted.trim()}
+              onClick={() => {
+                const parsed = parseCoordinates(pasted);
+                if (!parsed.ok) {
+                  setPasteError(parsed.error);
+                  return;
+                }
+                setPasteError('');
+                setMeasured(null); // a pasted point has no accuracy reading to show
+                void save({ store_lat: parsed.value.lat, store_lng: parsed.value.lng });
+              }}
+              className="rounded-md bg-charcoal px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
+            >
+              Use this
+            </button>
+          </div>
+        </label>
+        <p className="mt-2 text-xs text-muted">
+          In Google Maps, right-click the exact spot inside your cafe and click the numbers that
+          appear — that copies them. Paste them here. A shortened{' '}
+          <span className="font-mono">maps.app.goo.gl</span> link won&apos;t work: it doesn&apos;t
+          contain the coordinates.
+        </p>
+        {pasteError ? <p className="mt-2 text-sm text-red-700">{pasteError}</p> : null}
       </div>
 
       {measured ? (
