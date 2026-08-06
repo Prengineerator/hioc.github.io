@@ -549,6 +549,9 @@ export interface CashDay {
 // Sensitive-action keys, gated at 'staff' (staff-and-up) or 'manager'
 // (manager-and-up). owner always passes; unknown keys fail closed to manager —
 // both enforced in lib/permissions.ts (FND3-6), not the DB.
+// Note there is deliberately no 'attendance_punch' key — clocking in/out is
+// gated on a valid staff session only. See lib/permissions.ts and
+// docs/SECURITY-PLAYBOOK.md A-4 for why adding one would be a mistake.
 export type PermissionKey =
   | 'pos_order_entry'
   | 'settle_payment'
@@ -557,7 +560,9 @@ export type PermissionKey =
   | 'void_line'
   | 'comp_order'
   | 'refund'
-  | 'cash_day_close';
+  | 'cash_day_close'
+  | 'attendance_edit'
+  | 'attendance_approve';
 
 export type PermissionMinRole = 'staff' | 'manager';
 
@@ -603,4 +608,157 @@ export interface PermissionChangeAudit {
   new_min_role: PermissionMinRole;
   changed_by: string | null;
   changed_at: string;
+}
+
+// --- Phase 5: attendance & payroll (2026-08-attendance.sql) ----------------
+
+/**
+ * The singleton rule set: geofence config (read by the punch route) plus the
+ * payroll rules (read by the salary engine).
+ *
+ * NEVER send this to a client. A staffer who knows the radius knows most of
+ * what they need to beat it (SECURITY-PLAYBOOK A-3) — the punch response
+ * carries only accept/refuse and the staffer's own distance.
+ *
+ * `store_lat`/`store_lng` are null until the owner sets them, and null means
+ * punching is disabled rather than universally allowed.
+ */
+export interface AttendanceSettings {
+  id: string;
+  is_singleton: boolean;
+  store_lat: number | null;
+  store_lng: number | null;
+  geofence_radius_m: number;
+  max_accuracy_m: number;
+  max_fix_age_sec: number;
+  grace_period_min: number;
+  late_marks_per_halfday: number;
+  ot_threshold_min: number;
+  ot_multiplier: number;
+  auto_break_min: number;
+  auto_break_after_min: number;
+  half_day_min_minutes: number;
+  absent_below_minutes: number;
+  auto_close_grace_min: number;
+  max_session_hours: number;
+  location_retention_days: number;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+/** Effective-dated so a raise never rewrites what an earlier month was paid at. */
+export interface StaffEmployment {
+  id: string;
+  user_id: string;
+  monthly_salary_inr: number;
+  contracted_hours_per_day: number;
+  shift_start_time: string; // 'HH:MM:SS'
+  shift_end_time: string;
+  weekly_off_dow: number | null; // 0 = Sunday .. 6 = Saturday
+  effective_from: string; // ISO date
+  effective_to: string | null; // null = still in effect
+  created_by: string | null;
+  created_at: string;
+}
+
+export type AttendanceStatus = 'open' | 'closed' | 'auto_closed' | 'void';
+/** 'manual' entries are owner-entered and must never render as verified punches. */
+export type AttendanceSource = 'punch' | 'manual';
+export type PunchType = 'in' | 'out';
+
+/** GEO-2 integrity signals. Informational — a flag never blocks a punch. */
+export type AttendanceFlag =
+  | 'low_confidence'
+  | 'static_coords'
+  | 'impossible_travel'
+  | 'implausible_accuracy'
+  | 'auto_closed';
+
+export interface AttendanceSession {
+  id: string;
+  user_id: string;
+  /** Derived by DB trigger from clock_in_at in IST — never supplied by a caller. */
+  business_date: string;
+  clock_in_at: string;
+  clock_in_lat: number | null;
+  clock_in_lng: number | null;
+  clock_in_accuracy_m: number | null;
+  clock_in_distance_m: number | null;
+  clock_out_at: string | null;
+  clock_out_lat: number | null;
+  clock_out_lng: number | null;
+  clock_out_accuracy_m: number | null;
+  clock_out_distance_m: number | null;
+  status: AttendanceStatus;
+  source: AttendanceSource;
+  flags: AttendanceFlag[];
+  approved_by: string | null;
+  approved_at: string | null;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A refused punch. Recorded so a refusal is learnable, by both owner and staffer. */
+export interface AttendancePunchAttempt {
+  id: string;
+  user_id: string;
+  punch_type: PunchType;
+  lat: number | null;
+  lng: number | null;
+  accuracy_m: number | null;
+  distance_m: number | null;
+  reason: string;
+  created_at: string;
+}
+
+export interface AttendanceEdit {
+  id: string;
+  session_id: string;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  reason: string;
+  edited_by: string | null;
+  edited_at: string;
+}
+
+export type PayrollRunStatus = 'draft' | 'finalized' | 'reversed';
+
+export interface PayrollRun {
+  id: string;
+  period_start: string;
+  period_end: string;
+  status: PayrollRunStatus;
+  /** The rules and rates actually used, frozen at finalize (PAY-4). */
+  rules_snapshot: Record<string, unknown>;
+  generated_by: string | null;
+  generated_at: string;
+  finalized_at: string | null;
+  reversed_at: string | null;
+  reversal_reason: string | null;
+}
+
+export interface PayrollRunLine {
+  id: string;
+  run_id: string;
+  user_id: string;
+  monthly_salary_inr: number;
+  contracted_hours_per_day: number;
+  per_minute_paise: number;
+  days_present: number;
+  days_half: number;
+  days_absent: number;
+  days_off: number;
+  days_paid_leave: number;
+  worked_minutes: number;
+  ot_minutes: number;
+  late_marks: number;
+  base_pay_inr: number;
+  ot_pay_inr: number;
+  deductions_inr: number;
+  /** Signed: advances/loans/corrections (D5-7). Negative reduces net pay. */
+  adjustments_inr: number;
+  net_pay_inr: number;
+  detail: Record<string, unknown>;
 }

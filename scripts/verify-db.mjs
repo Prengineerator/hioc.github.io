@@ -653,6 +653,82 @@ async function checkCounterLoyalty() {
 }
 
 // ---------------------------------------------------------------------------
+async function checkAttendance() {
+  heading('Phase 5 · attendance schema & exposure', '2026-08-attendance.sql');
+
+  const settings = await rest('/attendance_settings?select=store_lat,geofence_radius_m&limit=1');
+  if (!settings.ok) {
+    if (errKind(settings) === 'no_table' || errKind(settings) === 'no_column') {
+      fail('attendance_settings exists', 'apply supabase/2026-08-attendance.sql');
+      skip('attendance_settings is not readable by anon', 'the table is missing');
+      skip('attendance_sessions exists', 'the migration has not been applied');
+      skip('attendance permission keys are seeded', 'the migration has not been applied');
+      return;
+    }
+    fail('attendance_settings exists', errText(settings));
+    return;
+  }
+  pass('attendance_settings exists');
+
+  const row = Array.isArray(settings.body) ? settings.body[0] : null;
+  if (row && row.store_lat === null) {
+    pass(
+      'cafe coordinates are unset',
+      'punching is disabled until the owner sets them — which is the correct default, not a gap',
+    );
+  } else if (row) {
+    pass('cafe coordinates are set', `radius ${row.geofence_radius_m} m`);
+  }
+
+  // A-3: a staffer who learns the radius learns most of what they need to beat
+  // it, so this table must be unreadable by a browser session — anon here is the
+  // cheapest proxy for "any client-side key".
+  const anonSettings = await rest('/attendance_settings?select=geofence_radius_m&limit=1', { key: ANON });
+  if (!anonSettings.ok) {
+    pass('attendance_settings is not readable by anon', `anon was refused (${errText(anonSettings)})`);
+  } else {
+    fail(
+      'attendance_settings is not readable by anon',
+      'the geofence radius is world-readable — the REVOKE in SECTION 8 has not been applied',
+    );
+  }
+
+  const sessions = await rest('/attendance_sessions?select=id,business_date,status&limit=1');
+  if (sessions.ok) {
+    pass('attendance_sessions exists');
+  } else {
+    fail('attendance_sessions exists', errText(sessions));
+  }
+
+  // Salary must not be readable by a browser session at all (A-5).
+  const anonEmployment = await rest('/staff_employment?select=monthly_salary_inr&limit=1', { key: ANON });
+  if (!anonEmployment.ok) {
+    pass('staff_employment is not readable by anon', `anon was refused (${errText(anonEmployment)})`);
+  } else {
+    fail('staff_employment is not readable by anon', 'salary data is exposed — apply SECTION 8 of the migration');
+  }
+
+  // The two keys must exist as rows. hasPermission() fails CLOSED to manager
+  // for a missing key, so an absent row does not fail loudly — it silently
+  // escalates the action, which is exactly the kind of thing a probe is for.
+  const perms = await rest("/role_permissions?select=permission_key,min_role&permission_key=like.attendance*");
+  if (perms.ok && Array.isArray(perms.body)) {
+    const keys = perms.body.map((r) => r.permission_key).sort();
+    const want = ['attendance_approve', 'attendance_edit'];
+    if (want.every((k) => keys.includes(k))) {
+      pass('attendance permission keys are seeded', keys.join(', '));
+    } else {
+      fail(
+        'attendance permission keys are seeded',
+        `expected ${want.join(' + ')}, found ${keys.length ? keys.join(', ') : 'none'} — a missing key fails closed to manager`,
+      );
+    }
+  } else {
+    fail('attendance permission keys are seeded', errText(perms));
+  }
+}
+
+// ---------------------------------------------------------------------------
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -669,6 +745,7 @@ async function main() {
   await checkCounterLoyalty();
   await checkViewExposure();
   await checkAnonSurface();
+  await checkAttendance();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

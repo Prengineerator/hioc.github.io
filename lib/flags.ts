@@ -34,6 +34,13 @@ export const flags = {
   // it can't leak before the tables + QR cards (QR-2) and pay-online path are
   // verified in the cafe.
   tableQr: boolEnv(process.env.NEXT_PUBLIC_FLAG_TABLE_QR, false),
+  // Phase-5 staff attendance (ATT-1). Default OFF and it must stay off until
+  // Gate 5A-i passes — the geofence radius and accuracy threshold have to be
+  // tuned against what a phone actually reports inside THIS building, and
+  // shipping untuned would refuse honest staff on day one, which is how a
+  // feature like this loses the team's trust permanently. Set
+  // NEXT_PUBLIC_FLAG_ATTENDANCE=true once the on-site session is done.
+  attendance: boolEnv(process.env.NEXT_PUBLIC_FLAG_ATTENDANCE, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

@@ -24,6 +24,8 @@ export const KNOWN_PERMISSION_KEYS: PermissionKey[] = [
   'comp_order',
   'refund',
   'cash_day_close',
+  'attendance_edit',
+  'attendance_approve',
 ];
 
 // The D4 defaults — the source of truth for filling any key whose row is missing
@@ -37,6 +39,17 @@ export const DEFAULT_MIN_ROLE: Record<PermissionKey, PermissionMinRole> = {
   comp_order: 'manager',
   refund: 'manager',
   cash_day_close: 'manager',
+  // Phase 5 (D5-8): a manager may correct and approve attendance; only the
+  // owner sees money, so the payroll routes use getOwnerUser() and are
+  // deliberately absent from this matrix.
+  //
+  // Clocking IN and OUT is NOT here and must not be added. This helper fails
+  // closed to 'manager' for any key whose role_permissions row is missing, so
+  // an 'attendance_punch' key would stop the entire team marking attendance the
+  // moment a seed row went astray. Punching is gated on a staff session only
+  // (docs/SECURITY-PLAYBOOK.md A-4).
+  attendance_edit: 'manager',
+  attendance_approve: 'manager',
 };
 
 // Rank ladder for the min_role comparison. owner is handled before this is used

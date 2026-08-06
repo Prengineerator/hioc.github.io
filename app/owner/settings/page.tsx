@@ -8,6 +8,8 @@ import { useEffect, useState } from 'react';
 import { Spinner } from '@/components/ui/Spinner';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { ChannelHealthSummary } from '@/components/owner/ChannelHealthSummary';
+import { AttendanceSettingsPanel } from '@/components/owner/AttendanceSettingsPanel';
+import { flags } from '@/lib/flags';
 import { readAutoPrintSettings } from '@/lib/staff/autoPrint';
 import type { StoreSettings } from '@/lib/types';
 
@@ -185,6 +187,15 @@ export default function OwnerSettingsPage() {
       <div className="mt-8 border-t border-[#e5e5e5] pt-8">
         <ChannelHealthSummary />
       </div>
+
+      {/* OPS5-1a. Saves itself per field rather than through the Save button
+          above — the geofence is tuned by trial on site, and a round trip
+          through a form-wide save would make that slower than it needs to be. */}
+      {flags.attendance ? (
+        <div className="mt-8 border-t border-[#e5e5e5] pt-8">
+          <AttendanceSettingsPanel />
+        </div>
+      ) : null}
     </div>
   );
 }

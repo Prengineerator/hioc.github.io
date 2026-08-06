@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
+import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
 import { PRIMARY_NEXT } from '@/lib/orders/stateMachine';
@@ -290,6 +291,9 @@ export default function StaffOrdersPage() {
   return (
     <div className={counterMode ? 'fixed inset-0 z-40 overflow-auto bg-cream' : 'mx-auto max-w-7xl px-4 py-8'}>
       <div className={counterMode ? 'px-4 py-4' : ''}>
+        {/* ATT-3. Hidden in counter mode — that is a full-screen kitchen view
+            and a nudge there is noise, not help. */}
+        {counterMode ? null : <NotClockedInBanner />}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold text-charcoal">Today&apos;s Orders</h1>
           <div className="flex items-center gap-3">

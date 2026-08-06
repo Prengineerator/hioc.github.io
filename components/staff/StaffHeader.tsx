@@ -20,6 +20,10 @@ const TABS = [
         { href: '/staff/cash', label: 'Cash' },
       ]
     : []),
+  // ATT-1: attendance. Its own flag, not staffPos — clocking in has nothing to
+  // do with whether the counter POS is enabled, and it stays dark until the
+  // geofence is tuned on site.
+  ...(flags.attendance ? [{ href: '/staff/attendance', label: 'Attendance' }] : []),
   { href: '/staff/menu', label: 'Menu' },
 ];
 
