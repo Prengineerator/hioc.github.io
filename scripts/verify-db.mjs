@@ -708,6 +708,37 @@ async function checkAttendance() {
     fail('staff_employment is not readable by anon', 'salary data is exposed — apply SECTION 8 of the migration');
   }
 
+  // The clock-out RPC is the only way clock_out_at gets the DATABASE's clock
+  // rather than the app server's. If it is missing, clocking in works and
+  // clocking OUT fails — the worst possible split, because staff would discover
+  // it at the end of a shift. A bogus session id matches no row, so this probe
+  // exercises the function without touching data.
+  const rpc = await rest('/rpc/attendance_clock_out', {
+    method: 'POST',
+    body: {
+      p_session_id: BOGUS_ORDER_ID,
+      p_user_id: BOGUS_ORDER_ID,
+      p_lat: 0,
+      p_lng: 0,
+      p_accuracy_m: 0,
+      p_distance_m: 0,
+      p_flags: [],
+    },
+  });
+  if (rpc.ok) {
+    const rows = Array.isArray(rpc.body) ? rpc.body.length : 0;
+    if (rows === 0) {
+      pass('attendance_clock_out RPC exists', 'a bogus session id matched no rows, as it should');
+    } else {
+      fail('attendance_clock_out RPC exists', `it closed ${rows} row(s) for a bogus id — the guard is wrong`);
+    }
+  } else {
+    fail(
+      'attendance_clock_out RPC exists',
+      `clocking OUT would fail at the end of a shift (${errText(rpc)}) — re-apply SECTION 4b of supabase/2026-08-attendance.sql`,
+    );
+  }
+
   // The two keys must exist as rows. hasPermission() fails CLOSED to manager
   // for a missing key, so an absent row does not fail loudly — it silently
   // escalates the action, which is exactly the kind of thing a probe is for.
