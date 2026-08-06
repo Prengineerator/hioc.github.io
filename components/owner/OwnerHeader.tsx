@@ -15,7 +15,12 @@ const LINKS = [
   { href: '/owner/staff', label: 'Team' },
   // SHEET-1. Sits next to Team on purpose — attendance is a fact about the
   // people managed there, and the two get used in the same sitting.
-  ...(flags.attendance ? [{ href: '/owner/attendance', label: 'Attendance' }] : []),
+  ...(flags.attendance
+    ? [
+        { href: '/owner/attendance', label: 'Attendance' },
+        { href: '/owner/payroll', label: 'Payroll' },
+      ]
+    : []),
   { href: '/owner/settings', label: 'Settings' },
   { href: '/staff', label: 'Staff board' },
 ];
