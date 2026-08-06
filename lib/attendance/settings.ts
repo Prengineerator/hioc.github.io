@@ -35,6 +35,7 @@ const FALLBACK: Omit<AttendanceSettings, 'id' | 'updated_by' | 'updated_at'> = {
   auto_close_grace_min: 120,
   max_session_hours: 14,
   location_retention_days: 365,
+  max_leave_days_per_week: 1,
 };
 
 export async function getAttendanceSettings(): Promise<AttendanceSettings> {

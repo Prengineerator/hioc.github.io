@@ -60,7 +60,7 @@ export async function GET(request: Request) {
   if (profileErr) return errorResponse(500, profileErr.message);
   const people = (profileRows ?? []) as { id: string; name: string; role: string }[];
 
-  const [{ data: sessionRows, error: sessErr }, { data: markRows }, employment] = await Promise.all([
+  const [{ data: sessionRows, error: sessErr }, { data: markRows }, { data: leaveRows }, employment] = await Promise.all([
     admin
       .from('attendance_sessions')
       .select('*')
@@ -72,6 +72,14 @@ export async function GET(request: Request) {
       .select('user_id, business_date, mark, reason')
       .gte('business_date', bounds.from)
       .lte('business_date', bounds.to),
+    // Approved leave is the week's rostered day off (LEAVE). Without this the
+    // sheet would mark someone ABSENT on a day their manager had cleared.
+    admin
+      .from('leave_requests')
+      .select('user_id, leave_date')
+      .eq('status', 'approved')
+      .gte('leave_date', bounds.from)
+      .lte('leave_date', bounds.to),
     loadEmploymentRows(bounds.from, bounds.to),
   ]);
   if (sessErr) return errorResponse(500, sessErr.message);
@@ -98,6 +106,20 @@ export async function GET(request: Request) {
   }
   const markByUserDate = new Map(marks.map((m) => [sessionKey(m.user_id, m.business_date), m.mark]));
 
+  // Only dates that actually appear here get `scheduledOff` passed. Everything
+  // else leaves it undefined, so rollUpDay falls back to the fixed weekly_off_dow
+  // — which is what keeps weeks predating the leave feature computing correctly.
+  const approvedLeave = new Set(
+    ((leaveRows ?? []) as { user_id: string; leave_date: string }[]).map((l) =>
+      sessionKey(l.user_id, l.leave_date),
+    ),
+  );
+  const leaveWeeksSeen = new Set(
+    ((leaveRows ?? []) as { user_id: string; leave_date: string }[]).map(
+      (l) => `${l.user_id}|${l.leave_date.slice(0, 7)}`,
+    ),
+  );
+
   const dates = eachDate(bounds.from, bounds.to);
   const employmentRows = employment as StaffEmployment[];
 
@@ -119,6 +141,11 @@ export async function GET(request: Request) {
         rules,
         employment: toDayEmployment(employmentOnDate(employmentRows, person.id, date)),
         mark: markByUserDate.get(sessionKey(person.id, date)) ?? null,
+        // Supplied only when this person has SOME approved leave in the month;
+        // otherwise undefined so the fixed rostered day still applies.
+        scheduledOff: leaveWeeksSeen.has(`${person.id}|${date.slice(0, 7)}`)
+          ? approvedLeave.has(sessionKey(person.id, date))
+          : undefined,
         dayOfWeek: dayOfWeekFor(date),
       });
     });

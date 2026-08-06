@@ -123,10 +123,19 @@ export function rollUpDay(params: {
   rules: DayRules;
   employment: DayEmployment | null;
   mark?: DayMark;
+  /**
+   * True when this date is the staffer's APPROVED day off from the weekly leave
+   * plan (LEAVE). Overrides the fixed `weeklyOffDow` when supplied.
+   *
+   * The fixed day remains the fallback for any week with no plan — every week
+   * before this feature existed, and any week nobody filled in. Dropping it
+   * would silently restate historical payroll.
+   */
+  scheduledOff?: boolean;
   /** 0 = Sunday .. 6 = Saturday for `date`. Passed in so this stays pure. */
   dayOfWeek: number;
 }): DayRollup {
-  const { date, rules, employment, mark = null, dayOfWeek } = params;
+  const { date, rules, employment, mark = null, dayOfWeek, scheduledOff } = params;
 
   const live = params.sessions.filter((s) => s.status !== 'void');
   const flags = Array.from(new Set(live.flatMap((s) => s.flags ?? [])));
@@ -203,7 +212,12 @@ export function rollUpDay(params: {
     }
   }
 
-  const isWeeklyOff = employment.weeklyOffDow !== null && employment.weeklyOffDow === dayOfWeek;
+  // An approved leave day IS the week's off day. When the weekly plan has
+  // spoken it is authoritative; otherwise fall back to the fixed rostered day.
+  const isWeeklyOff =
+    scheduledOff !== undefined
+      ? scheduledOff
+      : employment.weeklyOffDow !== null && employment.weeklyOffDow === dayOfWeek;
   const contractedMinutes = Math.round(employment.contractedHoursPerDay * 60);
 
   // D5-5: everything worked on a weekly off is overtime.

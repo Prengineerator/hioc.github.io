@@ -26,6 +26,7 @@ export const KNOWN_PERMISSION_KEYS: PermissionKey[] = [
   'cash_day_close',
   'attendance_edit',
   'attendance_approve',
+  'leave_approve',
 ];
 
 // The D4 defaults — the source of truth for filling any key whose row is missing
@@ -50,6 +51,10 @@ export const DEFAULT_MIN_ROLE: Record<PermissionKey, PermissionMinRole> = {
   // (docs/SECURITY-PLAYBOOK.md A-4).
   attendance_edit: 'manager',
   attendance_approve: 'manager',
+  // Approving next week's leave. Requesting it is NOT a key — same reasoning as
+  // punching: a missing seed row would fail closed to manager and stop the whole
+  // team from being able to ask for a day off.
+  leave_approve: 'manager',
 };
 
 // Rank ladder for the min_role comparison. owner is handled before this is used

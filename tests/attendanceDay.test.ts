@@ -349,3 +349,33 @@ describe('dayOfWeekFor', () => {
     expect(dayOfWeekFor('2026-08-09')).toBe(0); // Sunday
   });
 });
+
+describe('rollUpDay — approved leave overrides the fixed rostered day (LEAVE)', () => {
+  it('treats an approved leave day as the weekly off', () => {
+    // Thursday is not the fixed weekly off (Sunday is), but the manager
+    // approved it — so it must not read as an absence.
+    const d = roll([], { scheduledOff: true });
+    expect(d.status).toBe('weekly_off');
+  });
+
+  it('does NOT treat the fixed rostered day as off once a plan exists that excludes it', () => {
+    // Sunday is the fixed weekly off, but this week's plan put the day
+    // elsewhere. With scheduledOff supplied, the plan wins.
+    const d = roll([], { dayOfWeek: 0, scheduledOff: false });
+    expect(d.status).toBe('absent');
+  });
+
+  it('falls back to the fixed rostered day when no plan was supplied', () => {
+    // Weeks predating the leave feature must keep computing as they always did.
+    const d = roll([], { dayOfWeek: 0 });
+    expect(d.status).toBe('weekly_off');
+  });
+
+  it('pays work on an approved leave day entirely as overtime (D5-5)', () => {
+    const d = roll([session({ clockInAt: at('10:00'), clockOutAt: at('16:00') })], {
+      scheduledOff: true,
+    });
+    expect(d.status).toBe('present');
+    expect(d.otMinutes).toBe(360);
+  });
+});

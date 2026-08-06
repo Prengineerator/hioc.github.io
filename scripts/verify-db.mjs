@@ -750,23 +750,48 @@ async function checkAttendance() {
     );
   }
 
+  // LEAVE. The two CHECK constraints are the ones worth probing: they are what
+  // stop a row claiming a weekend day, or a week that does not start on Monday.
+  const leave = await rest('/leave_requests?select=id,week_start,leave_date&limit=1');
+  if (leave.ok) {
+    pass('leave_requests exists');
+  } else if (errKind(leave) === 'no_table') {
+    fail('leave_requests exists', 'weekly leave planning is unavailable — apply supabase/2026-08-leave-planning.sql');
+  } else {
+    fail('leave_requests exists', errText(leave));
+  }
+
+  const maxLeave = await rest('/attendance_settings?select=max_leave_days_per_week&limit=1');
+  if (maxLeave.ok) {
+    pass('attendance_settings.max_leave_days_per_week exists');
+  } else {
+    fail(
+      'attendance_settings.max_leave_days_per_week exists',
+      'apply supabase/2026-08-leave-planning.sql',
+    );
+  }
+
   // The two keys must exist as rows. hasPermission() fails CLOSED to manager
   // for a missing key, so an absent row does not fail loudly — it silently
   // escalates the action, which is exactly the kind of thing a probe is for.
-  const perms = await rest("/role_permissions?select=permission_key,min_role&permission_key=like.attendance*");
+  // Read the whole (tiny) matrix rather than filtering by prefix — the keys
+  // this checks for no longer share one, and a prefix filter would silently
+  // exclude 'leave_approve' and then report it missing forever.
+  const perms = await rest('/role_permissions?select=permission_key,min_role');
   if (perms.ok && Array.isArray(perms.body)) {
-    const keys = perms.body.map((r) => r.permission_key).sort();
-    const want = ['attendance_approve', 'attendance_edit'];
-    if (want.every((k) => keys.includes(k))) {
-      pass('attendance permission keys are seeded', keys.join(', '));
+    const keys = perms.body.map((r) => r.permission_key);
+    const want = ['attendance_approve', 'attendance_edit', 'leave_approve'];
+    const missing = want.filter((k) => !keys.includes(k));
+    if (missing.length === 0) {
+      pass('attendance + leave permission keys are seeded', want.join(', '));
     } else {
       fail(
-        'attendance permission keys are seeded',
-        `expected ${want.join(' + ')}, found ${keys.length ? keys.join(', ') : 'none'} — a missing key fails closed to manager`,
+        'attendance + leave permission keys are seeded',
+        `missing ${missing.join(', ')} — an unseeded key fails CLOSED to manager, silently escalating the action`,
       );
     }
   } else {
-    fail('attendance permission keys are seeded', errText(perms));
+    fail('attendance + leave permission keys are seeded', errText(perms));
   }
 }
 

@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/close-attendance",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/leave-reminders",
+      "schedule": "30 4 * * *"
     }
   ]
 }

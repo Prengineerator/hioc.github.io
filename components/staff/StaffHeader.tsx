@@ -23,7 +23,14 @@ const TABS = [
   // ATT-1: attendance. Its own flag, not staffPos — clocking in has nothing to
   // do with whether the counter POS is enabled, and it stays dark until the
   // geofence is tuned on site.
-  ...(flags.attendance ? [{ href: '/staff/attendance', label: 'Attendance' }] : []),
+  ...(flags.attendance
+    ? [
+        { href: '/staff/attendance', label: 'Attendance' },
+        // LEAVE-3. Under /staff, not /owner, because managers approve here and
+        // /owner/** is owner-only.
+        { href: '/staff/leave', label: 'Leave' },
+      ]
+    : []),
   { href: '/staff/menu', label: 'Menu' },
 ];
 

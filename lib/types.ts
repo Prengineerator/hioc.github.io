@@ -562,7 +562,8 @@ export type PermissionKey =
   | 'refund'
   | 'cash_day_close'
   | 'attendance_edit'
-  | 'attendance_approve';
+  | 'attendance_approve'
+  | 'leave_approve';
 
 export type PermissionMinRole = 'staff' | 'manager';
 
@@ -642,6 +643,8 @@ export interface AttendanceSettings {
   auto_close_grace_min: number;
   max_session_hours: number;
   location_retention_days: number;
+  /** How many days off one person may hold in a single week (LEAVE). */
+  max_leave_days_per_week: number;
   updated_by: string | null;
   updated_at: string;
 }
@@ -737,6 +740,44 @@ export interface PayrollRun {
   finalized_at: string | null;
   reversed_at: string | null;
   reversal_reason: string | null;
+}
+
+// --- Phase 5: weekly leave planning (2026-08-leave-planning.sql) -----------
+
+export type LeaveStatus = 'requested' | 'approved' | 'declined' | 'withdrawn';
+
+/**
+ * One requested day off. `week_start` is always a Monday and `leave_date` is
+ * always Mon–Fri inside that week — both enforced by CHECK constraints, since
+ * a row that violates either would put the roster and payroll into
+ * disagreement about the same date.
+ */
+export interface LeaveRequest {
+  id: string;
+  user_id: string;
+  week_start: string;
+  leave_date: string;
+  status: LeaveStatus;
+  reason: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type LeaveReminderKind = 'staff_submit' | 'manager_decide';
+
+export interface LeaveReminderLog {
+  id: string;
+  user_id: string;
+  week_start: string;
+  kind: LeaveReminderKind;
+  channel: 'whatsapp' | 'email' | 'inapp';
+  sent_on: string;
+  status: 'sent' | 'skipped' | 'failed';
+  skip_reason: string;
+  created_at: string;
 }
 
 export interface PayrollRunLine {

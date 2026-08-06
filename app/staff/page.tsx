@@ -10,6 +10,7 @@ import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
 import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
+import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
 import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
 import { PRIMARY_NEXT } from '@/lib/orders/stateMachine';
@@ -294,6 +295,7 @@ export default function StaffOrdersPage() {
         {/* ATT-3. Hidden in counter mode — that is a full-screen kitchen view
             and a nudge there is noise, not help. */}
         {counterMode ? null : <NotClockedInBanner />}
+        {counterMode ? null : <LeaveReminderBanner />}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold text-charcoal">Today&apos;s Orders</h1>
           <div className="flex items-center gap-3">

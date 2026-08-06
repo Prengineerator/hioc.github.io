@@ -379,6 +379,27 @@ Three independently launchable milestones. Each leaves the cafe better off even 
 
 ---
 
+## 7b. Pillar F — Weekly leave planning (LEAVE) — *added 2026-08-07*
+
+**Why it exists:** the original design assumed a **fixed** weekly off (`staff_employment.weekly_off_dow`). In practice there is no fixed day — the rota changes week to week, staff need a say in it, and the manager needs it settled before the week starts rather than discovered on the day.
+
+**Decisions taken with the owner (2026-08-07):**
+
+| # | Decision | Choice |
+|---|---|---|
+| **D5-10** | What happens when a staffer picks a day | **Staff request → manager approves or declines.** A plan the manager cannot decline is not a plan: if three of four staff pick Friday, someone has to say no, and the product should make that visible before the week starts |
+| **D5-11** | Week shape and deadline | A leave week is identified by its **Monday**. Only **Mon–Fri** are requestable — the cafe is busiest at the weekend, so weekend leave does not exist. The window closes the **preceding Saturday at 23:59 IST** |
+| **D5-12** | Who a manager can see | **Flat — any manager sees every staff member.** Roles are already flat (staff/manager/owner) with no reporting lines, and a single cafe has one floor. If that changes it becomes a filter, not a redesign |
+| **D5-13** | How reminders reach people | **In-app banner now, WhatsApp as a follow-up.** WhatsApp needs a *new* Meta-approved template, which cannot be part of the first release. The cron ships now and logs a `skipped` row with its reason until the template exists, so it starts sending with no code change |
+
+**How it meets payroll:** an **approved leave day becomes that week's rostered day off** — `weekly_off` status, not an absence, and work done on it is entirely overtime (D5-5). The fixed `weekly_off_dow` is **kept as the fallback** for any week with no plan, including every week before this feature existed. Removing it would silently restate historical payroll.
+
+**Enforced in the database, not just the UI:** `week_start` must be a Monday; `leave_date` must be Mon–Fri; `leave_date` must fall inside its own week. Each of those, if violated, puts the roster and payroll into disagreement about the same date — which surfaces as somebody marked absent on a day they had cleared.
+
+**Not built (parked):** leave *balances* and accrual, carry-over, half-day leave, and a minimum-staffing hard block (the manager sees a per-day headcount and decides — the product does not refuse on their behalf).
+
+---
+
 ## 8. Edge cases & failure modes (consolidated)
 
 | Scenario | Required behaviour |
