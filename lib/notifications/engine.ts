@@ -19,7 +19,13 @@ import {
 } from '@/lib/notifications/adapters';
 import { renderNotification, templateVarsFor } from '@/lib/notifications/templates';
 import { renderBillEmail } from '@/lib/notifications/billEmail';
-import { emailBillHealth, warnIfMisconfigured, whatsappBillHealth } from '@/lib/notifications/health';
+import {
+  blockedProviderVars,
+  emailBillHealth,
+  providerSkipReason,
+  warnIfMisconfigured,
+  whatsappBillHealth,
+} from '@/lib/notifications/health';
 import { flags } from '@/lib/flags';
 import type { NotificationChannel, NotificationEvent, Order } from '@/lib/types';
 
@@ -171,6 +177,17 @@ export async function sendOrderNotification(
   // sendBillNotification) still sends when a phone was captured.
   if (event === 'ready' && order.order_type === 'dine_in') {
     return { sent: false, skipped: 'dine_in_ready_suppressed' };
+  }
+
+  // WA-1: a real provider was asked for and its credentials are absent, so
+  // getAdapter() would hand back the stub — which reports SUCCESS. Record the
+  // skip with the exact missing variables instead of writing a `sent` row that
+  // nobody can distinguish from a delivered message.
+  const blocked = blockedProviderVars();
+  if (blocked.length > 0) {
+    const reason = providerSkipReason();
+    await logSkip(createAdminSupabaseClient(), order, event, 'whatsapp', reason);
+    return { sent: false, skipped: reason };
   }
 
   const adapter = getAdapter();

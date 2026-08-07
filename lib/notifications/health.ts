@@ -100,6 +100,40 @@ export function providerMismatch(): string | null {
   return null;
 }
 
+/**
+ * WA-1 — the lie this phase exists to kill.
+ *
+ * `getAdapter()` falls back to the stub whenever the selected provider's
+ * credentials are absent, and the stub reports SUCCESS. So a deployment with
+ * `NOTIFY_PROVIDER=whatsapp` and no token records every bill as `sent` while
+ * nothing reaches a phone — the log is not merely unhelpful, it is actively
+ * wrong, and every later diagnosis built on it is wrong too.
+ *
+ * Returns the env vars that must be set before a send may be ATTEMPTED, or an
+ * empty array when sending is legitimate.
+ *
+ * Note what is deliberately NOT blocked: `NOTIFY_PROVIDER` unset or `log`.
+ * That is a developer intentionally on the stub, which is a valid state — the
+ * tests depend on it and it must not require network. Those rows are branded
+ * `stub_` rather than skipped. The dishonesty is only in *asking* for a real
+ * provider and silently getting the stub.
+ */
+export function blockedProviderVars(): string[] {
+  const provider = (process.env.NOTIFY_PROVIDER ?? 'log').toLowerCase();
+  if (provider === 'whatsapp') {
+    return missingFrom(['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_ID']);
+  }
+  if (provider === 'sms') {
+    return missingFrom(['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_FROM']);
+  }
+  return [];
+}
+
+/** The `skip_reason` to record when {@link blockedProviderVars} is non-empty. */
+export function providerSkipReason(): string {
+  return `not_configured:${blockedProviderVars().join(',')}`;
+}
+
 // Warn once per process, not per request — a busy counter would otherwise flood
 // the logs with the same line.
 let warned = false;

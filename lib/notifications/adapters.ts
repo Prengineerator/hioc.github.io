@@ -63,12 +63,33 @@ export interface NotificationAdapter {
  * synthetic ref so the delivery logs as `sent`. Closes the loop end-to-end
  * before a paid provider is wired, and logs to the server console for dev.
  */
+/**
+ * The development stub. It writes the message to the console and reports
+ * success — which is correct for local work and catastrophic if it is ever
+ * mistaken for a real send.
+ *
+ * WA-1: the ref is branded `stub_` precisely so that "did this actually go to a
+ * phone?" is answerable from the log row alone, forever, without consulting the
+ * environment the row was written in. The legacy prefix was `log_`; the owner
+ * UI matches both so historic rows are branded retroactively rather than
+ * silently counted as real sends.
+ */
+export const STUB_REF_PREFIX = 'stub_';
+/** Rows written before WA-1 branded the stub. Recognised, never rewritten. */
+export const LEGACY_STUB_REF_PREFIX = 'log_';
+
+/** True when a provider_ref came from the stub rather than a real provider. */
+export function isStubRef(providerRef: string | null | undefined): boolean {
+  const ref = providerRef ?? '';
+  return ref.startsWith(STUB_REF_PREFIX) || ref.startsWith(LEGACY_STUB_REF_PREFIX);
+}
+
 export const logAdapter: NotificationAdapter = {
-  name: 'log',
+  name: 'stub',
   channel: 'whatsapp',
   async send({ to, body }: SendInput): Promise<SendResult> {
-    const ref = `log_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    console.info(`[notify:log] → ${to}\n${body}\n(ref ${ref})`);
+    const ref = `${STUB_REF_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    console.info(`[notify:stub] NOT REALLY SENT → ${to}\n${body}\n(ref ${ref})`);
     return { ok: true, providerRef: ref, error: '' };
   },
 };
