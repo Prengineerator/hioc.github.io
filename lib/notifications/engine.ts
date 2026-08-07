@@ -26,6 +26,7 @@ import {
   warnIfMisconfigured,
   whatsappBillHealth,
 } from '@/lib/notifications/health';
+import { hasBeenSent } from '@/lib/notifications/status';
 import { flags } from '@/lib/flags';
 import type { NotificationChannel, NotificationEvent, Order } from '@/lib/types';
 
@@ -58,8 +59,11 @@ async function logSkip(
       .maybeSingle();
 
     // A bill already delivered (e.g. sent at placement, skipped at settle
-    // because the channel went dormant since) must stay 'sent'.
-    if (existing?.status === 'sent') return;
+    // because the channel went dormant since) must keep what it achieved.
+    // hasBeenSent, not `=== 'sent'`: WA-4 added 'delivered' and 'read' above
+    // 'sent', and a row the customer demonstrably OPENED is the last thing that
+    // may be overwritten with "never attempted".
+    if (hasBeenSent(existing?.status)) return;
 
     await admin.from('notifications').upsert(
       {
@@ -96,7 +100,7 @@ async function deliverAndLog(
   adapter: NotificationAdapter,
   input: SendInput,
   force = false,
-): Promise<{ sent: boolean; skipped?: string }> {
+): Promise<{ sent: boolean; skipped?: string; error?: string }> {
   const channel = adapter.channel;
 
   // Idempotency guard: skip a channel that already sent for this (order,event).
@@ -110,7 +114,11 @@ async function deliverAndLog(
     .eq('channel', channel)
     .maybeSingle();
 
-  if (!force && existing?.status === 'sent') {
+  // hasBeenSent, not `=== 'sent'`: a row Meta's webhook promoted to 'delivered'
+  // or 'read' (WA-4) is MORE proof of a completed send, not less. Testing the
+  // literal would re-fire a billable template at a customer who already read
+  // their bill, and overwrite the receipt that proved it.
+  if (!force && hasBeenSent(existing?.status)) {
     return { sent: true, skipped: 'already_sent' };
   }
 
@@ -142,6 +150,14 @@ async function deliverAndLog(
     error: ok ? '' : lastError,
     attempts,
     sent_at: ok ? new Date().toISOString() : null,
+    // WA-4: these are receipts for a SPECIFIC message id. This row is about to
+    // carry a new provider_ref, so the previous message's receipts are no longer
+    // evidence about it — leaving them would render "delivered" for a message
+    // that has not been delivered (a forced resend is exactly this case).
+    // PostgREST's ON CONFLICT DO UPDATE only touches columns present here, so
+    // they have to be named explicitly to be cleared.
+    delivered_at: null,
+    read_at: null,
   };
 
   // Upsert on the idempotency key so a retry after a 'failed' row updates it in
@@ -154,7 +170,12 @@ async function deliverAndLog(
     console.error('deliverAndLog: failed to log delivery', upsertError);
   }
 
-  return { sent: ok };
+  // WA-3: the provider's own words travel back with the verdict, not only into
+  // `notifications.error`. A caller that cannot read that row (the owner's test
+  // send writes no row at all) would otherwise be left with the constant
+  // 'send_failed' — which renders an expired token and a paused template as the
+  // same sentence, and those have completely different remedies.
+  return { sent: ok, error: ok ? '' : lastError };
 }
 
 /**
@@ -214,6 +235,20 @@ export interface BillResult {
   email: boolean;
   whatsapp: boolean;
   reasons: { email: string; whatsapp: string };
+  /**
+   * WA-3: the PROVIDER's verbatim complaint, per channel — '' unless that
+   * channel's reason is 'send_failed'.
+   *
+   * `reasons` is a fixed machine vocabulary, so every provider-side rejection
+   * collapses into the single token 'send_failed'. That is the wrong resolution
+   * for the failures this phase is hunting: "Session has expired" (regenerate
+   * the System User token) and "Template name does not exist in the translation"
+   * (resubmit the template) are the same word to `reasons` and completely
+   * different jobs for the owner. Meta's text is the shortest path from symptom
+   * to remedy, so it rides along instead of only landing in a DB column the
+   * caller may not be able to read.
+   */
+  errors: { email: string; whatsapp: string };
 }
 
 /**
@@ -233,7 +268,12 @@ export async function sendBillNotification(
   opts: { force?: boolean } = {},
 ): Promise<BillResult> {
   const force = opts.force ?? false;
-  const result: BillResult = { email: false, whatsapp: false, reasons: { email: '', whatsapp: '' } };
+  const result: BillResult = {
+    email: false,
+    whatsapp: false,
+    reasons: { email: '', whatsapp: '' },
+    errors: { email: '', whatsapp: '' },
+  };
 
   if (!flags.notifications) {
     result.reasons.email = 'notifications_disabled';
@@ -278,7 +318,10 @@ export async function sendBillNotification(
         force,
       );
       result.email = r.sent;
-      if (!r.sent) result.reasons.email = 'send_failed';
+      if (!r.sent) {
+        result.reasons.email = 'send_failed';
+        result.errors.email = r.error ?? '';
+      }
     }
 
     // --- WhatsApp ---------------------------------------------------------
@@ -315,7 +358,10 @@ export async function sendBillNotification(
         force,
       );
       result.whatsapp = r.sent;
-      if (!r.sent) result.reasons.whatsapp = 'send_failed';
+      if (!r.sent) {
+        result.reasons.whatsapp = 'send_failed';
+        result.errors.whatsapp = r.error ?? '';
+      }
     }
   } catch (err) {
     console.error('sendBillNotification failed', err);

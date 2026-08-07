@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
+import { usePrintDock } from '@/components/staff/PrintDock';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
 import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
@@ -31,6 +32,11 @@ export default function StaffOrdersPage() {
   const [toast, setToast] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(false);
   const prevReceivedRef = useRef<Set<string> | null>(null);
+
+  // PRT-1/PRT-3 — mounted HERE, not inside the order modal. The print iframe and
+  // the failure chip have to outlive the modal: closing an order used to cancel
+  // an in-flight print silently and wipe the shift's failure tally.
+  const printDock = usePrintDock();
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -370,11 +376,14 @@ export default function StaffOrdersPage() {
           onClose={() => setSelected(null)}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
+          onPrint={(orderId, type) => printDock.enqueue([{ orderId, type }])}
           onRefund={(o, amountInr, reason, method, key) => handleRefund(o, amountInr, reason, method, key)}
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
           onComp={(o, reason) => handleComp(o, reason)}
         />
       ) : null}
+
+      {printDock.node}
     </div>
   );
 }

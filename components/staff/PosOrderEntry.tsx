@@ -20,15 +20,23 @@
 // The cart is POS-local React state (not the shared localStorage CartContext) so
 // a staff tablet can never collide with a customer's web cart; it still reuses
 // the CartItem shape + computeCartKey so the line-merge mechanics match the web.
+//
+// FLOW-1/PRT-1 (Phase 6) — the two ways this screen used to change underneath
+// the staffer are gone: payment is a panel docked in the order pane rather than
+// a modal over it (behind NEXT_PUBLIC_FLAG_POS_V2, modal until Gate 6B), and
+// printing happens in a hidden iframe rather than a foreground tab.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
-import { PosPaymentModal } from '@/components/staff/PosPaymentModal';
+import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentModal';
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
 import { Spinner } from '@/components/ui/Spinner';
+import { flags } from '@/lib/flags';
+import { createClient } from '@/lib/supabase';
 import { isSimpleItem, parseQuickAddInput, resolveQuickAdd } from '@/lib/pos/quickAdd';
+import { usePrintDock } from '@/components/staff/PrintDock';
 import { pushRecent, readRecents } from '@/lib/pos/recents';
 import { computeCartKey } from '@/lib/cart/cartKey';
 import type { CartItem } from '@/lib/cart/CartContext';
@@ -49,15 +57,17 @@ import type { PaymentPart } from '@/lib/orders/payments';
 import {
   AUTO_PRINT_DEFAULTS,
   placementPrintPlan,
-  printUrl,
   readAutoPrintSettings,
   type AutoPrintSettings,
   type PrintType,
 } from '@/lib/staff/autoPrint';
 import {
+  billStatusFromDelivery,
+  billStatusTone,
   describePaymentParts,
   parseResendResult,
   placementBillStatus,
+  type BillDeliveryRow,
   type BillStatusView,
 } from '@/lib/staff/confirmation';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -86,6 +96,15 @@ interface PlacementConfirmation {
   changeDueInr: number;
   /** null → nothing was due to send yet (the order isn't settled). */
   bill: BillStatusView | null;
+  /**
+   * Where `bill` came from. The delivery poll reads a `notifications` row that a
+   * failed resend never touched — a 429, a dropped connection or a 401 all
+   * return before the engine runs — so the row still says 'sent' from the
+   * placement send. Without provenance the poll's stale success lands on top of
+   * the fresh failure and the staffer reads "Bill sent on WhatsApp" one
+   * round-trip after "Too many bill resends for this order".
+   */
+  billFrom: 'placement' | 'poll' | 'action';
   canResend: boolean;
   /** Something the staffer must act on: a failed settle, a blocked pop-up. */
   note: string | null;
@@ -101,22 +120,14 @@ function newIdempotencyKey(): string {
   return `pos-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-// POS4-3 — a browser only allows a pop-up while it still counts the staffer's
-// tap as the reason this code is running. The order id doesn't exist until the
-// POST returns, so the tab is opened blank INSIDE the click and pointed at the
-// print page afterwards; calling window.open after the await is an unrequested
-// pop-up and gets blocked.
-//
-// 'noopener' is deliberately absent (the manual Print buttons do use it): it
-// makes window.open return null, and we need the handle to set the location.
-// The target is our own same-origin, staff-gated print page.
-function openBlankPrintWindow(): Window | null {
-  try {
-    return window.open('', '_blank');
-  } catch {
-    return null;
-  }
-}
+// PRT-1 deleted openBlankPrintWindow() and the whole pop-up dance with it. It
+// opened one foreground tab per queued print INSIDE the click handler (the only
+// moment a browser allows it) and pointed it at the print page once the order
+// had an id — which is why the counter's screen jumped to a blank tab the
+// instant they took the money, then to a receipt firing a print dialog, and why
+// those tabs piled up in Chrome's restored session. Prints now run in a hidden
+// same-origin iframe (see the print queue below): no tab, no focus change,
+// nothing for a pop-up blocker to have an opinion about.
 
 interface StaffTable {
   id: string;
@@ -187,6 +198,14 @@ export function PosOrderEntry({
   const [confirmation, setConfirmation] = useState<PlacementConfirmation | null>(null);
   const [resending, setResending] = useState(false);
 
+  // PRT-1/PRT-3 — the print pipeline, shared with the order board
+  // (components/staff/PrintDock). One hidden iframe at a time: two
+  // window.print() calls in flight race inside the browser and one of them
+  // silently does nothing, which on a KOT+receipt order means the kitchen gets
+  // no ticket. The dock owns the queue, the ordering, the 10s watchdog, the
+  // failure chip and the retry.
+  const printDock = usePrintDock();
+
   const router = useRouter();
   const inFlight = useRef(false);
   // POS4-2 — identifies THIS order attempt across retries. Rotated only once an
@@ -224,6 +243,84 @@ export function PosOrderEntry({
     const t = setTimeout(() => setConfirmation(null), CONFIRM_MS);
     return () => clearTimeout(t);
   }, [confirmation]);
+
+  // WA-5 — what the delivery log actually says about this order's bill. The
+  // settle route fires the bill (BILL-1) but answers with the order and the
+  // change due only, so the strip's first line is an honest "sending…"; this
+  // replaces it with the engine's own per-channel verdict (sent / failed / the
+  // exact skip reason) and, once Meta's status webhook has run (WA-4), with
+  // 'delivered' — the only word that means the customer has their bill.
+  // Best-effort by design: `notifications` is staff-readable, and a read that
+  // fails leaves the honest "sending…" rather than inventing a success.
+  // Keyed on the ORDER only. It used to depend on `confirmation.bill.state` too,
+  // which restarted the whole effect — and its 3-poll budget — on every rung, so
+  // "3 looks while the strip is up" was really up to 9. Worse, the state change
+  // a failed resend produces re-ran it immediately, which is how the stale row
+  // got a second chance to overwrite the failure. The live state is read through
+  // a ref instead, so the poll can stop without being able to restart itself.
+  const confirmationRef = useRef<PlacementConfirmation | null>(null);
+  confirmationRef.current = confirmation;
+
+  useEffect(() => {
+    const orderId = confirmation?.orderId;
+    if (!orderId || !confirmation?.bill) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const supabase = createClient();
+
+    const read = async () => {
+      attempts += 1;
+      const cur = confirmationRef.current;
+      // Nothing left to learn: the handset confirmed it, or there was never
+      // anything to send.
+      if (!cur || cur.orderId !== orderId) return;
+      if (cur.bill?.state === 'delivered' || cur.bill?.state === 'none') return;
+      try {
+        const { data, error } = await supabase
+          .from('notifications')
+          .select('channel, status, skip_reason, error')
+          .eq('order_id', orderId)
+          .eq('event', 'bill');
+        if (cancelled || error || !data) return;
+        const view = billStatusFromDelivery(data as BillDeliveryRow[]);
+        if (!view) return;
+        setConfirmation((prev) => {
+          if (!prev || prev.orderId !== orderId) return prev;
+          // The staffer just pressed Resend and got an answer. That answer is
+          // about THIS moment; the log row may not have been written by it at
+          // all (a 429 or a network drop never reaches the engine). Only
+          // evidence from the customer's handset is allowed to replace it.
+          if (prev.billFrom === 'action' && view.state !== 'delivered') return prev;
+          // Same verdict → same object, or every poll would restart the
+          // confirmation's own auto-clear timer and it would never go away.
+          if (prev.bill && prev.bill.state === view.state && prev.bill.message === view.message) {
+            return prev;
+          }
+          return { ...prev, bill: view, billFrom: 'poll' };
+        });
+      } catch {
+        /* the counter keeps the honest "sending…" line */
+      }
+    };
+
+    void read();
+    const t = setInterval(() => {
+      // A handful of looks while the strip is up; the webhook's 'delivered'
+      // usually lands within a few seconds, and the strip is gone at 12.
+      if (attempts >= 3) {
+        clearInterval(t);
+        return;
+      }
+      void read();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirmation?.orderId]);
 
   // Sticky keyboard-first focus: keep the command bar focused on mount and
   // whenever a modal closes, but never steal focus while a modal is open (or the
@@ -368,14 +465,24 @@ export function PosOrderEntry({
   // here are the server's own arithmetic — the same call the web checkout makes,
   // plus the phone, which the server (not this client) turns into the account
   // whose points are being spent.
+  // FLOW-1: true from the instant a priced input changes until the matching
+  // quote lands. Docked, the menu grid stays tappable while the payment step is
+  // open, so without this the panel spends every re-quote window offering to
+  // take the PREVIOUS cart's total. Set synchronously (not inside the 250 ms
+  // debounce) because the gap it has to cover starts at the tap, not at the
+  // fetch.
+  const [billStale, setBillStale] = useState(false);
+
   useEffect(() => {
     if (subtotal <= 0) {
       setBill(null);
       setQuotedCoupon(null);
       setQuotedPoints(null);
+      setBillStale(false);
       return;
     }
     let cancelled = false;
+    setBillStale(true);
     // Small debounce so rapid qty taps don't fire a burst of quotes.
     const t = setTimeout(() => {
       fetch('/api/orders/quote', {
@@ -396,7 +503,12 @@ export function PosOrderEntry({
           setBill(data.bill);
           setQuotedCoupon(couponCode ? (data.coupon ?? null) : null);
           setQuotedPoints(redeemPoints > 0 ? (data.points ?? null) : null);
+          // Only now do the numbers on screen describe the cart on screen.
+          setBillStale(false);
         })
+        // A failed quote leaves `billStale` true on purpose: the panel keeps
+        // saying "re-pricing" rather than offering to charge a total nobody
+        // re-confirmed.
         .catch(() => {});
     }, 250);
     return () => {
@@ -438,6 +550,16 @@ export function PosOrderEntry({
   const focusBar = useCallback(() => {
     barRef.current?.focus();
   }, []);
+
+  // PRT-1/PRT-3 — the only way anything prints from this screen. What prints
+  // when is still lib/staff/autoPrint's decision (unchanged); this is purely the
+  // execution.
+  const enqueuePrints = useCallback(
+    (orderId: string, types: PrintType[]) => {
+      printDock.enqueue(types.map((type) => ({ orderId, type })));
+    },
+    [printDock],
+  );
 
   // The one place that turns "a chosen item + qty" into a cart action. Reused by
   // the tile tap AND the quick-add bar so the add-direct vs. open-modal rule
@@ -509,6 +631,16 @@ export function PosOrderEntry({
 
   const selectedTableLabel = tables.find((t) => t.id === tableId)?.label ?? null;
 
+  // FLOW-1 — where the payment step lives. Docked, it takes the place of the
+  // Charge button at the bottom of the order pane, so the menu grid stays
+  // visible and tappable and the cart above it never disappears behind an
+  // overlay; the takeover modal is the pre-V2 path, kept until Gate 6B.
+  // `canProceed` guards it because emptying the cart mid-payment leaves nothing
+  // to charge for — the step folds back to the button rather than offering to
+  // settle an empty order.
+  const paymentDocked = flags.posV2 && !isAddMode;
+  const showDockedPayment = paymentDocked && paymentOpen && canProceed;
+
   // --- Create (+ optionally settle) -----------------------------------------
   // POS4-1: settlement arrives as PARTS (a single-method payment is just one
   // part), so cash tendered and splits persist truthfully in order_payments and
@@ -518,23 +650,11 @@ export function PosOrderEntry({
     // `submitting` state has flushed to disable the buttons.
     if (inFlight.current) return;
     if (!canProceed) return;
-
-    // POS4-3 — everything up to here is synchronous, so we're still inside the
-    // staffer's tap: this is the only moment the browser will let us open the
-    // print tabs (see openBlankPrintWindow). They're aimed at a real URL below,
-    // once the order has an id.
-    const plan = placementPrintPlan(autoPrint, { settled: parts !== null });
-    const printWindows = plan.map((type) => ({ type, win: openBlankPrintWindow() }));
-    const popupBlocked = printWindows.some((p) => p.win === null);
-    const sendPrints = (orderId: string, types: PrintType[]) => {
-      for (const p of printWindows) {
-        if (types.includes(p.type)) p.win?.location.replace(printUrl(orderId, p.type));
-        else p.win?.close(); // e.g. the receipt tab when the settle failed
-      }
-    };
-    const abandonPrints = () => {
-      for (const p of printWindows) p.win?.close();
-    };
+    // FLOW-1: `parts` were sized against `bill`. If the cart has moved since,
+    // those amounts are for a different order and the server's exact-sum
+    // validator will reject them — after the cash is already in the drawer.
+    // Creating the order UNPAID (parts === null) quotes nothing, so it is safe.
+    if (parts && billStale) return;
 
     // The contact as it was at placement — resetForNextOrder() clears these
     // fields before the confirmation is built.
@@ -588,7 +708,6 @@ export function PosOrderEntry({
 
       if (res.status !== 201) {
         const data = await res.json().catch(() => ({}));
-        abandonPrints();
         setSubmitError(data.error ?? 'Could not place the order. Please try again.');
         return;
       }
@@ -622,17 +741,17 @@ export function PosOrderEntry({
         } else {
           // The order is already created and on the board — a settle failure is
           // recoverable from the queue, so don't strand the counter here. The
-          // kitchen still gets its ticket; the receipt tab is dropped, since
-          // nothing was actually paid.
+          // kitchen still gets its ticket; no receipt is printed, since nothing
+          // was actually paid (the print plan below reads `settled`).
           note = 'Payment not recorded — settle it from Orders.';
         }
       }
 
-      sendPrints(order.id, settled ? plan : plan.filter((t) => t === 'kot'));
-      if (popupBlocked && note === null) {
-        // Silent here would mean an order cooked with no ticket on the rail.
-        note = 'Pop-up blocked — print it from the order.';
-      }
+      // PRT-1 — queued AFTER the settle is known, because an unsettled order has
+      // no bill to print (the plan already says so) and, unlike the old pop-up
+      // path, nothing here needs to happen inside the staffer's tap. Success is
+      // silent; a job that doesn't report back within 10s raises the chip.
+      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled }));
 
       resetForNextOrder();
       setConfirmation({
@@ -644,13 +763,13 @@ export function PosOrderEntry({
         // A bill only exists once the money is taken (BILL-1 fires on 'paid'),
         // so an unpaid or failed settle has nothing to report yet.
         bill: settled ? placementBillStatus({ phone: phoneAtPlacement, email: emailAtPlacement }) : null,
+        billFrom: 'placement',
         // Only offer a resend where a bill both exists and has somewhere to go.
         // A button that can only fail is the false-success this phase removes.
         canResend: settled && Boolean(phoneAtPlacement || emailAtPlacement),
         note,
       });
     } catch {
-      abandonPrints();
       setSubmitError('Network error — please check the connection and try again.');
     } finally {
       inFlight.current = false;
@@ -669,11 +788,22 @@ export function PosOrderEntry({
       const res = await fetch(`/api/orders/${target.orderId}/resend-bill`, { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       const result = parseResendResult(res.ok, data);
-      setConfirmation((cur) => (cur && cur.orderId === target.orderId ? { ...cur, bill: result } : cur));
+      setConfirmation((cur) =>
+        cur && cur.orderId === target.orderId ? { ...cur, bill: result, billFrom: 'action' } : cur,
+      );
     } catch {
       setConfirmation((cur) =>
         cur && cur.orderId === target.orderId
-          ? { ...cur, bill: { ok: false, message: 'Network error — please try again.' } }
+          ? {
+              ...cur,
+              bill: {
+                state: 'failed',
+                ok: false,
+                message: 'Network error — please try again.',
+                failedChannels: [],
+              },
+              billFrom: 'action',
+            }
           : cur,
       );
     } finally {
@@ -1184,6 +1314,41 @@ export function PosOrderEntry({
                   Cancel
                 </a>
               </>
+            ) : showDockedPayment ? (
+              /* FLOW-1 — the payment step, docked. Same component as the modal
+                 path renders, so cash tendered/change and the split rules (whose
+                 parts must sum exactly to the server's total) are the very same
+                 code, not a second copy of them. */
+              <div className="rounded-md border border-tan bg-[#fdfaf7] p-3">
+                <PosPaymentPanel
+                  docked
+                  // FLOW-1's guardrail: "the docked panel renders only quoted
+                  // amounts". The menu stays tappable behind this panel, so
+                  // this is the only thing standing between a mid-quote tap and
+                  // a settle for the wrong total.
+                  stale={billStale}
+                  bill={bill}
+                  orderType={orderType}
+                  tableLabel={selectedTableLabel}
+                  itemCount={totalItems}
+                  phone={custPhone}
+                  onPhoneChange={(value) => {
+                    setCustPhone(value);
+                    if (contactError) setContactError(null);
+                  }}
+                  customerNote={customerNote}
+                  submitting={submitting}
+                  error={submitError}
+                  onSubmit={placeOrder}
+                  onClose={() => {
+                    if (!submitting) {
+                      setPaymentOpen(false);
+                      setSubmitError(null);
+                      focusBar();
+                    }
+                  }}
+                />
+              </div>
             ) : (
               <button
                 type="button"
@@ -1216,7 +1381,7 @@ export function PosOrderEntry({
         />
       ) : null}
 
-      {paymentOpen ? (
+      {paymentOpen && !paymentDocked ? (
         <PosPaymentModal
           bill={bill}
           orderType={orderType}
@@ -1247,9 +1412,9 @@ export function PosOrderEntry({
         <PosPlacementConfirmation
           confirmation={confirmation}
           resending={resending}
-          onPrintBill={() =>
-            window.open(printUrl(confirmation.orderId, 'receipt'), '_blank', 'noopener')
-          }
+          // PRT-1: through the same hidden pipeline as auto-print. A staffer who
+          // asks for the bill wants paper, not a tab.
+          onPrintBill={() => enqueuePrints(confirmation.orderId, ['receipt'])}
           onResend={resendConfirmationBill}
           // The queue has no per-order deep link yet; a just-placed order is at
           // the top of the board.
@@ -1261,6 +1426,8 @@ export function PosOrderEntry({
         />
       ) : null}
 
+      {printDock.node}
+
       {toast ? (
         <div className="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-md bg-charcoal px-4 py-2 text-sm text-cream shadow-lg">
           {toast}
@@ -1269,6 +1436,12 @@ export function PosOrderEntry({
     </div>
   );
 }
+
+const BILL_TONE_CLASS: Record<'good' | 'wait' | 'bad', string> = {
+  good: 'text-green-700',
+  wait: 'text-charcoal',
+  bad: 'text-red-700',
+};
 
 // POS4-4 — what replaced the fire-and-forget toast. Deliberately NOT a modal:
 // the POS behind it is already reset and the command bar already refocused, so
@@ -1290,6 +1463,7 @@ function PosPlacementConfirmation({
   onDismiss: () => void;
 }) {
   const { numberLabel, totalInr, paidAs, changeDueInr, bill, canResend, note } = confirmation;
+  const billFailed = bill !== null && billStatusTone(bill) === 'bad';
 
   return (
     <div
@@ -1321,8 +1495,12 @@ function PosPlacementConfirmation({
         </p>
       ) : null}
 
+      {/* WA-5 — three tones, because delivery has three answers. Green is only
+          for a bill the handset acknowledged; a send still in flight is neither
+          a promise nor an apology, and the staffer's cue is to wait rather than
+          read the total out loud. */}
       {bill ? (
-        <p className={'mt-2 text-xs font-bold ' + (bill.ok ? 'text-green-700' : 'text-red-700')}>
+        <p className={'mt-2 text-xs font-bold ' + BILL_TONE_CLASS[billStatusTone(bill)]}>
           {bill.message}
         </p>
       ) : (
@@ -1334,12 +1512,20 @@ function PosPlacementConfirmation({
       <div className="mt-3 grid grid-cols-2 gap-2">
         <ConfirmAction label="Print bill" onClick={onPrintBill} />
         {/* Nothing to resend to is not a button that fails — it's the reason
-            shown above, which staff can still fix from the order. */}
+            shown above, which staff can still fix from the order. A bill that
+            DID fail makes this the primary action: the customer is still
+            standing there, and one tap is the difference between trust and an
+            apology. */}
         {canResend ? (
-          <ConfirmAction label={resending ? 'Sending…' : 'Resend bill'} onClick={onResend} disabled={resending} />
+          <ConfirmAction
+            label={resending ? 'Sending…' : 'Resend bill'}
+            onClick={onResend}
+            disabled={resending}
+            primary={billFailed}
+          />
         ) : null}
         <ConfirmAction label="Open order" onClick={onOpenOrder} />
-        <ConfirmAction label="New order" onClick={onDismiss} primary />
+        <ConfirmAction label="New order" onClick={onDismiss} primary={!billFailed} />
       </div>
     </div>
   );

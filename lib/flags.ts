@@ -41,6 +41,13 @@ export const flags = {
   // feature like this loses the team's trust permanently. Set
   // NEXT_PUBLIC_FLAG_ATTENDANCE=true once the on-site session is done.
   attendance: boolEnv(process.env.NEXT_PUBLIC_FLAG_ATTENDANCE, false),
+  // Phase-6 POS rework (FLOW-1). Default OFF: it moves the Collect-payment step
+  // out of a modal takeover and into a panel docked in the order pane, and the
+  // owner verifies that on the real counter machine at Gate 6B before it becomes
+  // the only path. Until then the modal flow ships alongside it, unchanged, so a
+  // bad night is one env var away from being over. Set
+  // NEXT_PUBLIC_FLAG_POS_V2=true to dock the payment step.
+  posV2: boolEnv(process.env.NEXT_PUBLIC_FLAG_POS_V2, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

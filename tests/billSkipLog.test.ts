@@ -119,6 +119,19 @@ describe('sendBillNotification — skip logging (BILL-3)', () => {
     expect(skipRows()).toHaveLength(0);
   });
 
+  // WA-4 added 'delivered' and 'read' ABOVE 'sent'. Both guards in the engine
+  // tested `status === 'sent'` literally, so the two statuses that are the
+  // strongest possible proof a bill arrived stopped being protected — a skip at
+  // settle would stamp status:'skipped', provider_ref:'', sent_at:null over a
+  // bill the customer had demonstrably opened.
+  it.each(['delivered', 'read'])('never downgrades a %s bill to skipped', async (status) => {
+    state.existing = { status };
+
+    await sendBillNotification(order);
+
+    expect(skipRows()).toHaveLength(0);
+  });
+
   it('reports both channels when notifications are disabled', async () => {
     vi.resetModules();
     vi.doMock('@/lib/flags', () => ({ flags: { notifications: false } }));

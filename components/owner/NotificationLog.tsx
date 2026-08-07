@@ -8,9 +8,10 @@
 // no, whether the cause is the customer (no number), the configuration (a
 // missing env var) or the provider (Meta rejected it).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Spinner } from '@/components/ui/Spinner';
 import { describeSkipReason } from '@/lib/notifications/reasons';
+import { hasBeenSent } from '@/lib/notifications/status';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import type { NotificationRecord } from '@/lib/types';
@@ -23,6 +24,23 @@ interface ChannelHealth {
   missing: string[];
   warnings: string[];
   note: string;
+}
+
+// WA-3 — the shape POST /api/owner/notifications/test-send returns. `accepted`
+// means a real provider took the request; it is NOT a delivery receipt, and the
+// copy below is careful never to imply otherwise.
+interface TestSendChannel {
+  channel: string;
+  sent: boolean;
+  reason: string;
+  detail: string;
+  provider_error: string;
+}
+
+interface TestSendResult {
+  accepted: boolean;
+  summary: string;
+  channels: TestSendChannel[];
 }
 
 const FILTERS = [
@@ -40,6 +58,10 @@ export function NotificationLog() {
   const [loading, setLoading] = useState(true);
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [testPhone, setTestPhone] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<TestSendResult | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     const active = FILTERS.find((f) => f.key === filter) ?? FILTERS[0];
@@ -85,6 +107,38 @@ export function NotificationLog() {
     }
   };
 
+  // WA-3. Nothing is written to an order, so the log below doesn't reload — the
+  // verdict lives entirely in this inline result.
+  const testSend = async (e: FormEvent) => {
+    e.preventDefault();
+    setTesting(true);
+    setTestResult(null);
+    setTestError(null);
+    try {
+      const res = await fetch('/api/owner/notifications/test-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: testPhone }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<TestSendResult> & { error?: string };
+      if (!res.ok) {
+        setTestError(data.error ?? 'Could not send the test.');
+        return;
+      }
+      setTestResult({
+        accepted: data.accepted ?? false,
+        // A 200 whose body we can't read is not a success. Without this the
+        // card renders a bare red ✗ with no text and nothing to act on.
+        summary: data.summary || 'The server answered, but the result could not be read.',
+        channels: data.channels ?? [],
+      });
+    } catch {
+      setTestError('Network error.');
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       {/* Channel health — BILL-3. An empty log means one of two very different
@@ -119,6 +173,62 @@ export function NotificationLog() {
           ⚠ {providerWarning}
         </p>
       ) : null}
+
+      {/* WA-3 — "is it working right now?" without a deploy, a script, or a
+          customer guinea pig. The real bill template, the real engine, sample
+          data marked TEST. */}
+      <form onSubmit={testSend} className="rounded-md border border-[#e5e5e5] bg-cream px-4 py-3">
+        <p className="text-sm font-bold text-charcoal">Send a test bill</p>
+        <p className="mt-0.5 text-xs text-muted">
+          Sends the real bill message to a number you choose, through the same path a customer&apos;s bill
+          takes. It carries sample data marked TEST and belongs to no order, so nothing appears in the log
+          below.
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            value={testPhone}
+            onChange={(e) => {
+              setTestPhone(e.target.value);
+              // A verdict belongs to the number it was run against. Leaving it
+              // rendered under a freshly typed number invites the exact wrong
+              // conclusion on a tool whose only job is telling the truth about
+              // one specific handset.
+              setTestResult(null);
+              setTestError(null);
+            }}
+            inputMode="tel"
+            placeholder="10-digit mobile"
+            aria-label="Mobile number for the test bill"
+            className="w-44 rounded-md border border-[#d8d2c7] bg-white px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
+          />
+          <button
+            type="submit"
+            disabled={testing || testPhone.trim().length === 0}
+            className="rounded-md border border-tan bg-tan px-3 py-2 text-sm font-bold text-cream transition-opacity disabled:opacity-50"
+          >
+            {testing ? 'Sending…' : 'Send test bill'}
+          </button>
+        </div>
+
+        {testError ? <p className="mt-2 text-sm font-bold text-red-700">{testError}</p> : null}
+
+        {testResult ? (
+          <div className="mt-2">
+            {/* Amber, not green, on success. The tick used to read as "it
+                arrived"; all this proves is that Meta accepted the request. */}
+            <p className={'text-sm font-bold ' + (testResult.accepted ? 'text-amber-800' : 'text-red-700')}>
+              {testResult.accepted ? '→' : '✗'} {testResult.summary}
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {testResult.channels.map((c) => (
+                <li key={c.channel} className="text-xs text-muted">
+                  <span className="font-bold capitalize text-charcoal">{c.channel}</span> — {c.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </form>
 
       <div className="flex flex-wrap gap-2">
         {FILTERS.map((f) => (
@@ -178,7 +288,12 @@ export function NotificationLog() {
                     {formatIstTime(new Date(row.sent_at ?? row.created_at))}
                   </td>
                   <td className="py-2">
-                    {row.event === 'bill' && row.status !== 'sent' ? (
+                    {/* WA-4: `!== 'sent'` was true for 'delivered' and 'read',
+                        i.e. the log offered Resend on the two rows that PROVE
+                        the customer has their bill. A stray tap there is a
+                        second billable template to someone who already read it,
+                        and the engine's upsert would wipe the receipt. */}
+                    {row.event === 'bill' && !hasBeenSent(row.status) ? (
                       <button
                         type="button"
                         onClick={() => resend(row)}
@@ -199,14 +314,20 @@ export function NotificationLog() {
   );
 }
 
+// WA-4 widened the vocabulary, and without a branch here 'delivered' and 'read'
+// — the only two statuses a handset can vouch for — rendered in the same neutral
+// grey as 'queued'. They get the strongest green; 'sent' steps down to amber,
+// because "the Cloud API accepted the request" is a statement about an HTTP call
+// and this screen exists precisely because that was being read as delivery.
+const STATUS_TONES: Record<string, string> = {
+  read: 'bg-green-100 text-green-900',
+  delivered: 'bg-green-50 text-green-800',
+  sent: 'bg-amber-50 text-amber-900',
+  failed: 'bg-red-50 text-red-800',
+  skipped: 'bg-[#f6efe9] text-tan-dark',
+};
+
 function StatusPill({ status }: { status: string }) {
-  const tone =
-    status === 'sent'
-      ? 'bg-green-50 text-green-800'
-      : status === 'failed'
-        ? 'bg-red-50 text-red-800'
-        : status === 'skipped'
-          ? 'bg-[#f6efe9] text-tan-dark'
-          : 'bg-[#f2f2f2] text-muted';
+  const tone = STATUS_TONES[status] ?? 'bg-[#f2f2f2] text-muted';
   return <span className={`rounded px-2 py-0.5 text-xs font-bold ${tone}`}>{status}</span>;
 }

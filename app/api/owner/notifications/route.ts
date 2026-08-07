@@ -38,7 +38,13 @@ export async function GET(request: Request) {
 
   let query = admin
     .from('notifications')
-    .select('id, order_id, channel, event, status, provider_ref, error, skip_reason, attempts, sent_at, created_at, orders(order_number)')
+    // delivered_at/read_at are WA-4's receipts and are NOT optional on
+    // NotificationRecord — omitting them here would hand the client rows whose
+    // TypeScript type guarantees two fields the JSON does not contain, and the
+    // `res.json()` cast in NotificationLog means tsc could never catch it.
+    .select(
+      'id, order_id, channel, event, status, provider_ref, error, skip_reason, attempts, sent_at, delivered_at, read_at, created_at, orders(order_number)',
+    )
     .order('created_at', { ascending: false })
     .limit(limit);
 

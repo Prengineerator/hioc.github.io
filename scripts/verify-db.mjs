@@ -221,6 +221,119 @@ async function checkBillObservability() {
 }
 
 // ---------------------------------------------------------------------------
+// 1b — WA-4: the delivery receipts, and who can read them.
+//
+// The webhook writes status='delivered'/'read' and the two receipt timestamps.
+// If the migration is missing, every one of those writes is rejected by the
+// database and DROPPED IN SILENCE — the endpoint must answer 200 to Meta no
+// matter what, so a rejected write shows up nowhere except a server log nobody
+// is reading. This probe is the only thing standing between that and a webhook
+// that appears to work for weeks.
+//
+// The index on provider_ref is deliberately NOT probed: PostgREST exposes no
+// catalog view to ask, and reporting a permanent SKIP would erode the gate for
+// a performance detail. Check it by hand with the query in the migration's
+// Verify block.
+// ---------------------------------------------------------------------------
+async function checkNotifyDelivery() {
+  heading('WA-4 · delivery receipts', '2026-08-notify-delivery.sql');
+
+  const cols = await rest('/notifications?select=delivered_at,read_at&limit=1');
+  if (cols.ok) pass('notifications.delivered_at / read_at exist');
+  else fail('notifications.delivered_at / read_at exist', `${errKind(cols)}: ${errText(cols)}`);
+
+  // Same technique as check 1: a doomed insert that must die on the FOREIGN KEY
+  // rather than the CHECK, once per new status.
+  for (const status of ['delivered', 'read']) {
+    const attempt = await doomedInsert('notifications', {
+      order_id: BOGUS_ORDER_ID, channel: 'whatsapp', event: 'bill',
+      status, provider_ref: SENTINEL,
+    });
+    expectKind(`notifications.status CHECK accepts '${status}'`, attempt, 'fk', 'reached the FK, so the CHECK passed');
+  }
+
+  // The negative control belongs to this migration too: it DROPS and re-adds
+  // the constraint, so "widened it" and "deleted it" look identical from the
+  // accepting side.
+  const bogus = await doomedInsert('notifications', {
+    order_id: BOGUS_ORDER_ID, channel: 'whatsapp', event: 'bill',
+    status: `bogus_${RUN_ID}`, provider_ref: SENTINEL,
+  });
+  expectKind('the re-added CHECK still rejects unknown statuses', bogus, 'check', 'widened, not dropped');
+
+  // --- and now a REAL row, because the doomed inserts above never touch disk.
+  //
+  // Two things only a landed row can prove: that delivered_at accepts a
+  // timestamp, and that the delivery log is invisible to the anon key. The
+  // second needs the row to EXIST while anon looks: RLS with no matching policy
+  // answers 200 with an EMPTY ARRAY, not a permission error, so querying an
+  // empty table proves nothing at all and reads green forever.
+  const orders = await rest('/orders?select=id&order=created_at.desc&limit=25');
+  const candidates = Array.isArray(orders.body) ? orders.body : [];
+  if (!candidates.length) {
+    skip('a delivered receipt INSERTs and is invisible to anon', `no order to attach a probe row to (${errText(orders)})`);
+    return;
+  }
+
+  // notifications is UNIQUE (order_id, event, channel). 'push' is a channel the
+  // engine has never sent on, so this triple is free on any order — but check,
+  // rather than collide with real data.
+  const taken = await rest('/notifications?select=order_id&channel=eq.push&event=eq.cancelled');
+  const used = new Set(Array.isArray(taken.body) ? taken.body.map((r) => r.order_id) : []);
+  const target = candidates.find((o) => !used.has(o.id));
+  if (!target) {
+    skip('a delivered receipt INSERTs and is invisible to anon', 'every recent order already has a push/cancelled row');
+    return;
+  }
+
+  const stamp = new Date().toISOString();
+  const planted = await rest('/notifications', {
+    method: 'POST', prefer: 'return=representation',
+    body: {
+      order_id: target.id, channel: 'push', event: 'cancelled',
+      status: 'delivered', provider_ref: SENTINEL, delivered_at: stamp,
+    },
+  });
+  if (!planted.ok) {
+    const kind = errKind(planted);
+    if (kind === 'check' || kind === 'no_column') {
+      fail('a delivered receipt INSERTs', `apply supabase/2026-08-notify-delivery.sql — ${errText(planted)}`);
+    } else {
+      skip('a delivered receipt INSERTs and is invisible to anon', `could not plant a probe row (${errText(planted)})`);
+    }
+    return;
+  }
+  pass('a delivered receipt INSERTs', "status='delivered' with a delivered_at was accepted");
+
+  const asService = await rest(`/notifications?select=id,status,delivered_at&provider_ref=eq.${SENTINEL}`);
+  const serviceRows = Array.isArray(asService.body) ? asService.body : [];
+  const asAnon = await rest(`/notifications?select=id&provider_ref=eq.${SENTINEL}`, { key: ANON });
+  const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : -1;
+
+  if (serviceRows.length !== 1) {
+    fail('the delivery log is not readable by the anon key', `probe row not visible even to the service role (${serviceRows.length} rows) — result would be meaningless`);
+  } else if (!asAnon.ok) {
+    pass('the delivery log is not readable by the anon key', `anon was refused outright (${errText(asAnon)})`);
+  } else if (anonRows === 0) {
+    pass('the delivery log is not readable by the anon key', 'RLS returned an empty set for a row that demonstrably exists');
+  } else {
+    fail('the delivery log is readable by the anon key', `anon read back ${anonRows} row(s) — the webhook would be writing into a table customers can read`);
+  }
+
+  if (serviceRows.length === 1 && serviceRows[0].delivered_at) {
+    pass('delivered_at round-trips', `stored ${serviceRows[0].delivered_at}`);
+  } else if (serviceRows.length === 1) {
+    fail('delivered_at round-trips', 'the column came back null after being written');
+  }
+
+  const removed = await rest(`/notifications?provider_ref=eq.${SENTINEL}`, { method: 'DELETE', prefer: 'return=representation' });
+  const left = await rest(`/notifications?select=id&provider_ref=eq.${SENTINEL}`);
+  const leftRows = Array.isArray(left.body) ? left.body.length : -1;
+  if (removed.ok && leftRows === 0) pass('probe row removed from notifications', 're-queried: 0 rows remain');
+  else fail('probe row removed from notifications', `${leftRows} row(s) still present — DELETE FROM notifications WHERE provider_ref='${SENTINEL}' BY HAND`);
+}
+
+// ---------------------------------------------------------------------------
 // 2 — TAB-1: adding to an open order is an amendment, not a second order.
 // ---------------------------------------------------------------------------
 async function checkRunningTab() {
@@ -854,6 +967,7 @@ async function main() {
   process.stdout.write(`sentinel: ${SENTINEL}\n`);
 
   await checkBillObservability();
+  await checkNotifyDelivery();
   await checkRunningTab();
   await checkSplitPayments();
   await checkIdempotencyKeys();

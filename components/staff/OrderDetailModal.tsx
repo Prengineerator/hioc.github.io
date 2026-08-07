@@ -20,7 +20,12 @@ import {
   readAutoPrintSettings,
   type AutoPrintSettings,
 } from '@/lib/staff/autoPrint';
-import { parseResendResult } from '@/lib/staff/confirmation';
+import {
+  billStatusTone,
+  parseResendResult,
+  type BillStatusView,
+} from '@/lib/staff/confirmation';
+import type { PrintType } from '@/lib/staff/autoPrint';
 import type { Order, OrderItem, PaymentMethod, StoreSettings } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -43,6 +48,7 @@ export function OrderDetailModal({
   onClose,
   onTransition,
   onPayment,
+  onPrint,
   onRefund,
   onVoid,
   onComp,
@@ -50,6 +56,12 @@ export function OrderDetailModal({
   order: OrderWithItems;
   defaultPrepMin?: number;
   onClose: () => void;
+  /**
+   * Hands a print to the page-level dock (components/staff/PrintDock). Not a
+   * queue owned here: this modal unmounts the moment the staffer closes the
+   * order, which used to kill the in-flight job and the failure chip with it.
+   */
+  onPrint: (orderId: string, type: PrintType) => void;
   onTransition: (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => void;
   onPayment: (o: OrderWithItems, method: PaymentMethod) => void;
   // Optional — omit to hide the refund panel entirely (e.g. a surface that
@@ -150,12 +162,19 @@ export function OrderDetailModal({
   const activeItems = order.items.filter((i) => !i.voided);
   const voidTarget = voidItemId ? order.items.find((i) => i.id === voidItemId) : undefined;
 
-  // Print KOT / receipt / token (KOT-1, KOT-2). Opens the staff-gated 80mm print
-  // page in a new tab, which auto-fires the browser print dialog (decision D3 —
-  // USB thermal printer, no driver). Token is only meaningful for a walk-in
-  // takeaway (it has a pickup_code); receipt suits dine-in and settled orders.
+  // Print KOT / receipt / token (KOT-1, KOT-2). PRT-1: the staff-gated 80mm print
+  // page is mounted in a hidden same-origin iframe instead of a new tab — the
+  // queue prints one job at a time (concurrent window.print() calls race and one
+  // vanishes) and raises a failure line if a job doesn't report back in 10s.
+  // Token is only meaningful for a walk-in takeaway (it has a pickup_code);
+  // receipt suits dine-in and settled orders.
+  // PRT-3: the queue, the iframe and the failure chip live at PAGE level now
+  // (components/staff/PrintDock). They used to be here, which meant closing this
+  // modal — Escape, a backdrop tap, or just getting back to the board — silently
+  // cancelled an in-flight print and destroyed the shift's failure tally along
+  // with the Retry buttons. `onPrint` hands the job to the dock and returns.
   const openPrint = (type: 'kot' | 'receipt' | 'token') => {
-    window.open(`/staff-print/${order.id}/${type}`, '_blank', 'noopener');
+    onPrint(order.id, type);
   };
   const canPrintToken = order.order_type === 'takeaway' && Boolean(order.pickup_code);
 
@@ -177,12 +196,13 @@ export function OrderDetailModal({
   }, []);
 
   // Every "mark paid" tap goes through here so the print rule can't differ per
-  // button. The print fires BEFORE the settle, inside the click: `onPayment` is
-  // fire-and-forget (the parent owns the request), and a window opened after it
-  // resolves would be blocked as an unrequested pop-up. The trade is a stray
-  // receipt if the settle then fails — cheap, against a bill that never prints.
-  // No KOT here: the kitchen got its ticket at placement, and a second one at
-  // payment time reads as a second order on the rail.
+  // button. No KOT here: the kitchen got its ticket at placement, and a second
+  // one at payment time reads as a second order on the rail.
+  //
+  // PRT-1 removed the reason the print had to fire before the settle: an iframe
+  // isn't a pop-up, so nothing has to happen inside the click any more. It still
+  // does, because `onPayment` is fire-and-forget (the parent owns the request)
+  // and this component has no way to learn that the settle succeeded.
   const settle = (method: PaymentMethod) => {
     for (const type of settlePrintPlan(autoPrint)) openPrint(type);
     onPayment(order, method);
@@ -193,7 +213,9 @@ export function OrderDetailModal({
   // otherwise the honest answer is "capture a number", not a button that fails.
   const canResendBill = Boolean(order.customer_phone || order.customer_email);
   const [resending, setResending] = useState(false);
-  const [resendResult, setResendResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // WA-5: the same BillStatusView the POS confirmation renders, so "sent" and
+  // "delivered" don't quietly become the same word on this screen.
+  const [resendResult, setResendResult] = useState<BillStatusView | null>(null);
 
   const doResendBill = async () => {
     if (resending) return;
@@ -206,7 +228,12 @@ export function OrderDetailModal({
       // two different ways on two screens — including the honest "nothing sent".
       setResendResult(parseResendResult(res.ok, data));
     } catch {
-      setResendResult({ ok: false, message: 'Network error — please try again.' });
+      setResendResult({
+        state: 'failed',
+        ok: false,
+        message: 'Network error — please try again.',
+        failedChannels: [],
+      });
     } finally {
       setResending(false);
     }
@@ -442,7 +469,12 @@ export function OrderDetailModal({
           <p
             role="status"
             className={
-              'mt-2 text-xs font-bold ' + (resendResult.ok ? 'text-green-700' : 'text-red-700')
+              'mt-2 text-xs font-bold ' +
+              (billStatusTone(resendResult) === 'good'
+                ? 'text-green-700'
+                : billStatusTone(resendResult) === 'wait'
+                  ? 'text-charcoal'
+                  : 'text-red-700')
             }
           >
             {resendResult.message}

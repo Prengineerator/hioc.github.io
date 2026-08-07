@@ -19,6 +19,12 @@ import type { OrderType, PaymentMethod } from '@/lib/types';
 //
 // BILL-2: the phone sits at the top, focused — the WhatsApp bill can only reach
 // a number we captured, and this is the moment the customer is standing there.
+//
+// FLOW-1 — the step itself is `PosPaymentPanel`, and it is mounted two ways:
+// docked into the order pane (POS_V2), or inside this modal (the pre-V2 path,
+// alive until the owner signs the docked one off at Gate 6B). ONE implementation
+// on purpose: the split-tender rules below decide what the counter hands over,
+// and a forked copy of them is how two screens start disagreeing about money.
 
 const COLLECT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'cash', label: 'Cash' },
@@ -31,19 +37,7 @@ const TENDER_CHIPS = [100, 200, 500, 2000];
 
 type Step = 'choose' | 'cash' | 'split';
 
-export function PosPaymentModal({
-  bill,
-  orderType,
-  tableLabel,
-  itemCount,
-  phone,
-  onPhoneChange,
-  customerNote = null,
-  submitting,
-  error,
-  onSubmit,
-  onClose,
-}: {
+interface PaymentStepProps {
   bill: BillBreakdown | null;
   orderType: OrderType;
   tableLabel: string | null;
@@ -58,13 +52,60 @@ export function PosPaymentModal({
   customerNote?: Feedback | null;
   submitting: boolean;
   error: string | null;
+  /**
+   * FLOW-1: the cart has changed and `bill` is the price of the PREVIOUS cart.
+   *
+   * This cannot happen in the modal — it covers the menu. Docked, the grid stays
+   * tappable on purpose, so between an item tap and the quote landing (a 250 ms
+   * debounce plus a round-trip) every rupee in this panel belongs to a cart that
+   * is no longer on screen: the cash step offers "Take ₹480 cash" and submits
+   * 480 for an order the server will price at 560. The server's exact-sum
+   * validator rejects it, and `placeOrder` then swallows that into "Payment not
+   * recorded — settle it from Orders" with the cash already in the drawer.
+   */
+  stale?: boolean;
   // null → create unpaid (collect later); otherwise settle with these parts.
   onSubmit: (parts: PaymentPart[] | null) => void;
   onClose: () => void;
-}) {
+}
+
+/** The pre-FLOW-1 takeover. Kept until POS_V2 is verified at Gate 6B (spec E10). */
+export function PosPaymentModal(props: PaymentStepProps) {
+  return (
+    <Modal open onClose={props.onClose} title="Collect payment">
+      <PosPaymentPanel {...props} />
+    </Modal>
+  );
+}
+
+/**
+ * FLOW-1 — `docked` drops the context header and the bill box: docked into the
+ * order pane, both are already on screen an inch above, and a second copy of the
+ * total is how a staffer ends up reading the wrong one.
+ */
+export function PosPaymentPanel({
+  bill,
+  orderType,
+  tableLabel,
+  itemCount,
+  phone,
+  onPhoneChange,
+  customerNote = null,
+  submitting,
+  error,
+  stale = false,
+  onSubmit,
+  onClose,
+  docked = false,
+}: PaymentStepProps & { docked?: boolean }) {
   const isDineIn = orderType === 'dine_in';
   const phoneRef = useRef<HTMLInputElement>(null);
   const total = bill?.total_inr ?? 0;
+
+  // Every button that would COMMIT money is gated on both. Navigation (Back,
+  // "Back to order") and the phone field stay live: a stale quote is a reason to
+  // wait a beat, not to trap the staffer inside the step.
+  const busy = submitting || stale;
 
   const [step, setStep] = useState<Step>('choose');
   const [pending, setPending] = useState<{ parts: PaymentPart[] | null } | null>(null);
@@ -91,6 +132,9 @@ export function PosPaymentModal({
 
   // One funnel for every settle, so the phone rule can't differ per path.
   function attempt(parts: PaymentPart[] | null) {
+    // The last line of defence for the stale-quote race: the buttons are already
+    // disabled, but a tap can land in the same frame the cart changes in.
+    if (stale) return;
     const trimmed = phone.trim();
     if (trimmed) {
       if (normalizeIndianMobile(trimmed) === null) {
@@ -125,16 +169,32 @@ export function PosPaymentModal({
     Number.parseInt(splitTendered, 10) < firstNum;
 
   return (
-    <Modal open onClose={onClose} title="Collect payment">
       <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between rounded-md bg-surface px-4 py-3 text-sm">
-          <span className="font-bold text-charcoal">
-            {isDineIn ? `Dine-in · ${tableLabel ?? '—'}` : 'Takeaway'}
-          </span>
-          <span className="text-muted">
-            {itemCount} item{itemCount === 1 ? '' : 's'}
-          </span>
-        </div>
+        {docked ? (
+          // The docked step needs its own title bar — the modal's chrome (title
+          // + dismiss) isn't there to provide one, and the way back to a
+          // pure-ordering screen must always be one obvious tap.
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-bold text-charcoal">Collect payment</p>
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={onClose}
+              className="text-xs font-bold text-muted underline disabled:opacity-50"
+            >
+              Back to order
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between rounded-md bg-surface px-4 py-3 text-sm">
+            <span className="font-bold text-charcoal">
+              {isDineIn ? `Dine-in · ${tableLabel ?? '—'}` : 'Takeaway'}
+            </span>
+            <span className="text-muted">
+              {itemCount} item{itemCount === 1 ? '' : 's'}
+            </span>
+          </div>
+        )}
 
         <div>
           <label htmlFor="pos-bill-phone" className="mb-1 block text-sm font-bold text-charcoal">
@@ -169,26 +229,40 @@ export function PosPaymentModal({
           ) : null}
         </div>
 
-        <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">
-          {bill ? (
-            <>
-              <BillRow label="Subtotal" value={bill.subtotal_inr} />
-              {bill.tax_inr > 0 ? <BillRow label="GST" value={bill.tax_inr} /> : null}
-              {bill.packaging_inr > 0 ? <BillRow label="Packaging" value={bill.packaging_inr} /> : null}
-              {bill.discount_inr > 0 ? <BillRow label="Discount" value={-bill.discount_inr} /> : null}
-              <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
-                <span className="font-bold text-charcoal">Total</span>
-                <span className="text-lg font-bold text-tan">₹{bill.total_inr}</span>
-              </div>
-            </>
-          ) : (
-            <p className="text-muted">Calculating bill…</p>
-          )}
-        </div>
+        {docked ? null : (
+          <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">
+            {bill ? (
+              <>
+                <BillRow label="Subtotal" value={bill.subtotal_inr} />
+                {bill.tax_inr > 0 ? <BillRow label="GST" value={bill.tax_inr} /> : null}
+                {bill.packaging_inr > 0 ? <BillRow label="Packaging" value={bill.packaging_inr} /> : null}
+                {bill.discount_inr > 0 ? <BillRow label="Discount" value={-bill.discount_inr} /> : null}
+                <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
+                  <span className="font-bold text-charcoal">Total</span>
+                  <span className="text-lg font-bold text-tan">₹{bill.total_inr}</span>
+                </div>
+              </>
+            ) : (
+              <p className="text-muted">Calculating bill…</p>
+            )}
+          </div>
+        )}
 
         {error ? (
           <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}
+          </div>
+        ) : null}
+
+        {stale ? (
+          // Says WHY the buttons went quiet. A step that silently stops
+          // responding for a second reads as a frozen till, and the staffer
+          // taps harder.
+          <div
+            role="status"
+            className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-900"
+          >
+            Cart changed — re-pricing…
           </div>
         ) : null}
 
@@ -210,8 +284,9 @@ export function PosPaymentModal({
               </button>
               <button
                 type="button"
-                disabled={submitting}
+                disabled={busy}
                 onClick={() => {
+                  if (stale) return;
                   const { parts } = pending;
                   setPending(null);
                   onSubmit(parts);
@@ -284,7 +359,7 @@ export function PosPaymentModal({
 
             <button
               type="button"
-              disabled={submitting || !tenderedValid}
+              disabled={busy || !tenderedValid}
               onClick={() =>
                 attempt([{ method: 'cash', amount_inr: total, tendered_inr: tenderedNum }])
               }
@@ -376,7 +451,7 @@ export function PosPaymentModal({
 
             <button
               type="button"
-              disabled={submitting || !firstValid || splitCashShort || !splitParts}
+              disabled={busy || !firstValid || splitCashShort || !splitParts}
               onClick={() => splitParts && attempt(splitParts)}
               className="mt-4 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -395,7 +470,7 @@ export function PosPaymentModal({
                   <button
                     key={m.value}
                     type="button"
-                    disabled={submitting || !bill}
+                    disabled={busy || !bill}
                     onClick={() =>
                       // Cash gets the tendered/change step; the others are exact.
                       m.value === 'cash'
@@ -412,7 +487,7 @@ export function PosPaymentModal({
 
             <button
               type="button"
-              disabled={submitting || !bill || total <= 1}
+              disabled={busy || !bill || total <= 1}
               onClick={() => setStep('split')}
               className="rounded-md border border-line px-4 py-2.5 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -421,7 +496,7 @@ export function PosPaymentModal({
 
             <button
               type="button"
-              disabled={submitting || !bill}
+              disabled={busy || !bill}
               onClick={() => attempt(null)}
               className="rounded-md border border-line px-4 py-3 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -432,7 +507,6 @@ export function PosPaymentModal({
 
         {submitting ? <p className="text-center text-sm text-muted">Placing order…</p> : null}
       </div>
-    </Modal>
   );
 }
 

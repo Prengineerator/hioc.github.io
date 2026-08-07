@@ -53,7 +53,17 @@ export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' 
 // 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
 // attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
 // or "channel not configured" from a send that was tried and failed.
-export type NotificationStatus = 'queued' | 'sent' | 'failed' | 'skipped';
+// 'delivered' / 'read' (WA-4, 2026-08-notify-delivery.sql) come from Meta's status
+// webhook and are the only two the handset can vouch for; 'sent' only ever meant
+// "the provider's API accepted it". The ladder runs queued → sent → delivered →
+// read and never runs backwards (app/api/webhooks/whatsapp/route.ts).
+export type NotificationStatus =
+  | 'queued'
+  | 'sent'
+  | 'failed'
+  | 'skipped'
+  | 'delivered'
+  | 'read';
 
 // store_settings.store_open_override (phase1-migration.sql §7).
 export type StoreOpenOverride = 'auto' | 'force_open' | 'force_closed';
@@ -218,6 +228,15 @@ export interface NotificationRecord {
   skip_reason: string;
   attempts: number;
   sent_at: string | null;
+  /**
+   * WA-4 (2026-08-notify-delivery.sql): Meta's delivery receipts. `sent_at` is
+   * when WE handed the message over; these two are when the handset confirmed
+   * it arrived and when it was opened. Null means no receipt — which is not the
+   * same claim as "not delivered" (email sends and every pre-webhook row are
+   * null too).
+   */
+  delivered_at: string | null;
+  read_at: string | null;
   created_at: string;
 }
 
