@@ -148,6 +148,19 @@ function get(name) {
   return '';
 }
 const isSet = (name) => get(name).length > 0;
+
+/**
+ * `vercel env pull` cannot read back a variable marked "Sensitive" in the Vercel
+ * dashboard — it writes the literal string `[SENSITIVE]` into the file instead.
+ *
+ * Without this check the run is actively misleading: an eleven-character value
+ * is handed to Meta, Meta answers `Cannot parse access token`, and the script
+ * reports the production token as INVALID when it is real and working. That
+ * mis-diagnosis cost a round trip once already — the giveaway was that order
+ * status messages kept arriving on WhatsApp with the "invalid" token.
+ */
+const REDACTED_MARKERS = ['[SENSITIVE]', '[REDACTED]', '[ENCRYPTED]'];
+const isRedacted = (name) => REDACTED_MARKERS.includes(get(name));
 const sourceOf = (name) => {
   const shell = process.env[name];
   if (typeof shell === 'string' && shell.trim().length > 0) return 'shell';
@@ -187,6 +200,9 @@ function out(text) {
 function shape(name) {
   const v = get(name);
   if (!v) return 'MISSING';
+  if (isRedacted(name)) {
+    return `REDACTED by \`vercel env pull\` (marked Sensitive in Vercel) — the real value is set in the deployment, but this run cannot use it`;
+  }
   return `set (${v.length} chars, ends …${v.slice(-4)}) from ${sourceOf(name)}`;
 }
 
@@ -515,6 +531,21 @@ async function checkToken() {
   if (!isSet('WHATSAPP_TOKEN')) {
     skip('token is valid', 'WHATSAPP_TOKEN is not set — there is nothing to ask Meta with. Expected on a local checkout; run this with the deployed env to audit the live channel');
     skip('token does not expire', 'WHATSAPP_TOKEN is not set');
+    return null;
+  }
+
+  // A redacted value would be sent to Meta verbatim and come back
+  // "Cannot parse access token", which reads as a broken production token. It
+  // is not — it is a token this process was never given. Unverifiable, not
+  // failed: the difference matters because the two have opposite remedies.
+  if (isRedacted('WHATSAPP_TOKEN')) {
+    blocked(
+      'token is valid',
+      'WHATSAPP_TOKEN came back REDACTED from `vercel env pull` (it is marked Sensitive in Vercel), so nothing Meta-side can be checked. ' +
+        'Supply the real token for one run: copy it from Meta Business Suite → System Users → Generate token, then ' +
+        'WHATSAPP_TOKEN=\'EAAG…\' npm run verify:notifications',
+    );
+    blocked('token does not expire', 'the token was redacted, not read');
     return null;
   }
 
