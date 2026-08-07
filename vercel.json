@@ -12,6 +12,10 @@
     {
       "path": "/api/cron/leave-reminders",
       "schedule": "30 4 * * *"
+    },
+    {
+      "path": "/api/cron/purge-location",
+      "schedule": "0 2 * * 0"
     }
   ]
 }
