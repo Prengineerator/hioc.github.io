@@ -503,16 +503,68 @@ async function checkAnonSurface() {
   heading('SECURITY · other tables vs the anon key', '2026-08-rate-limits-rls.sql');
 
   // rate_limits was the only table in the schema with RLS never enabled.
-  // Reading it tells an attacker which keys exist and how close each is to its
-  // cap — i.e. exactly when to retry. Nothing legitimate reads it from a
-  // client: check_rate_limit is SECURITY DEFINER and runs server-side.
-  const res = await rest('/rate_limits?select=key&limit=1', { key: ANON });
-  if (!res.ok) {
-    pass('rate_limits is not readable by anon', `anon was refused (${errText(res)})`);
+  // Reading it exposes the keys, which embed customer EMAIL ADDRESSES, E.164
+  // PHONE NUMBERS and IPs (see the rateLimitOk calls in app/api/auth/**) — not
+  // merely "when to retry". Nothing legitimate reads it from a client:
+  // check_rate_limit is SECURITY DEFINER and runs server-side.
+  //
+  // THIS NEEDS A PLANTED ROW. `enable row level security` with NO policy does
+  // not produce a permission error — it returns 200 with an EMPTY ARRAY. So an
+  // "is it readable?" check that only inspects the status code cannot tell a
+  // protected table from an empty one, and on an empty table it reports a
+  // false failure forever. (It did exactly that here.) The harness's own rule
+  // applies: where a positive result could also come from the constraint being
+  // absent, run a negative control.
+  const sentinelKey = `verify-db-sentinel:${SENTINEL}`;
+  const planted = await rest('/rate_limits', {
+    method: 'POST',
+    prefer: 'return=representation',
+    body: { key: sentinelKey, count: 1 },
+  });
+
+  if (!planted.ok) {
+    skip(
+      'rate_limits is not readable by anon',
+      `could not plant a probe row (${errText(planted)}) — cannot distinguish "protected" from "empty"`,
+    );
+    return;
+  }
+
+  const anonRead = await rest(
+    `/rate_limits?select=key&key=eq.${encodeURIComponent(sentinelKey)}`,
+    { key: ANON },
+  );
+  const anonRows = Array.isArray(anonRead.body) ? anonRead.body.length : -1;
+
+  if (!anonRead.ok) {
+    pass('rate_limits is not readable by anon', `anon was refused outright (${errText(anonRead)})`);
+  } else if (anonRows === 0) {
+    // Service role planted it and can see it; anon cannot. That is RLS working.
+    pass(
+      'rate_limits is not readable by anon',
+      'RLS returned an empty set for a row that demonstrably exists',
+    );
   } else {
     fail(
       'rate_limits is readable by anon',
-      'RLS was never enabled on it — apply supabase/2026-08-rate-limits-rls.sql',
+      `anon read back the planted row — RLS is not enabled; apply supabase/2026-08-rate-limits-rls.sql. ` +
+        `Keys embed customer emails and phone numbers.`,
+    );
+  }
+
+  const cleaned = await rest(`/rate_limits?key=eq.${encodeURIComponent(sentinelKey)}`, {
+    method: 'DELETE',
+  });
+  const remaining = await rest(
+    `/rate_limits?select=key&key=eq.${encodeURIComponent(sentinelKey)}`,
+  );
+  const left = Array.isArray(remaining.body) ? remaining.body.length : -1;
+  if (cleaned.ok && left === 0) {
+    pass('probe row removed from rate_limits', 're-queried: 0 rows remain');
+  } else {
+    fail(
+      'probe row removed from rate_limits',
+      `DELETE the row with key = '${sentinelKey}' BY HAND`,
     );
   }
 }
