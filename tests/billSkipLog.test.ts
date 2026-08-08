@@ -146,3 +146,29 @@ describe('sendBillNotification — skip logging (BILL-3)', () => {
     vi.doUnmock('@/lib/flags');
   });
 });
+
+describe('a spent attempt budget must not erase the reason it failed', () => {
+  it('does not overwrite a previous failure error with an empty string', async () => {
+    // The bill fires at settle and again on the 'completed' transition. The
+    // first call spends both attempts and records Meta's rejection; the second
+    // must not loop zero times and then upsert error:'' over it. Reproduced
+    // from a real production row: status='failed', attempts=2, error=''.
+    state.existing = { id: 'n1', status: 'failed', attempts: 2 };
+    state.upserts = [];
+
+    await sendBillNotification(order);
+
+    const blankOverwrite = state.upserts.find(
+      (u) => u.channel === 'whatsapp' && u.status === 'failed' && u.error === '',
+    );
+    expect(blankOverwrite).toBeUndefined();
+  });
+
+  it('still retries when the previous attempt left budget', async () => {
+    state.existing = { id: 'n1', status: 'failed', attempts: 1 };
+    state.upserts = [];
+    await sendBillNotification(order);
+    // A row with budget left must still be attempted, not short-circuited.
+    expect(state.upserts.some((u) => u.channel === 'whatsapp')).toBe(true);
+  });
+});

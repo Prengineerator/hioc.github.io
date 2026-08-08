@@ -122,6 +122,20 @@ async function deliverAndLog(
     return { sent: true, skipped: 'already_sent' };
   }
 
+  // The attempt budget was already spent by an earlier call for this same
+  // (order, event, channel) — the bill fires at settle AND again on the
+  // 'completed' transition, so this is the ordinary path, not an edge case.
+  //
+  // Falling through here would loop ZERO times (i starts at MAX_ATTEMPTS), leave
+  // lastError as '', and then upsert that empty string over the previous
+  // attempt's message — destroying the only record of WHY the send failed. That
+  // is precisely how a genuine Meta rejection became a blank `failed` row in
+  // production, and it is the same class of bug as the stub reporting success:
+  // the system erasing the evidence of its own failure.
+  if (!force && existing?.status === 'failed' && (existing?.attempts ?? 0) >= MAX_ATTEMPTS) {
+    return { sent: false, skipped: 'attempts_exhausted' };
+  }
+
   let lastError = '';
   let providerRef = '';
   let ok = false;
