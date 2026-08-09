@@ -46,6 +46,31 @@ function whatsappTemplateName(event: NotificationEvent): string {
   return map[event];
 }
 
+/**
+ * The language code for one event's template.
+ *
+ * Meta identifies a template by NAME **plus** LANGUAGE, and rejects any
+ * mismatch with `(#132001) Template name does not exist in the translation` —
+ * which reads like the name is wrong when the name is fine. Templates are
+ * created one at a time, often months apart, so their languages drift: picking
+ * "English" in the UI yields `en` and "English (US)" yields `en_US`.
+ *
+ * A single global was therefore the wrong shape. Production had `order_ready_1`
+ * on `en` (working) and `order_bill_1` on another code (every bill rejected),
+ * and no value of one variable could satisfy both — setting the global to fix
+ * the bill would have broken every status message.
+ */
+function whatsappTemplateLang(event: NotificationEvent): string {
+  const perEvent: Partial<Record<NotificationEvent, string | undefined>> = {
+    accepted: process.env.WHATSAPP_TPL_ACCEPTED_LANG,
+    ready: process.env.WHATSAPP_TPL_READY_LANG,
+    rejected: process.env.WHATSAPP_TPL_REJECTED_LANG,
+    cancelled: process.env.WHATSAPP_TPL_CANCELLED_LANG,
+    bill: process.env.WHATSAPP_TPL_BILL_LANG,
+  };
+  return perEvent[event] || process.env.WHATSAPP_TPL_LANG || 'en';
+}
+
 export interface SendResult {
   ok: boolean;
   providerRef: string; // gateway message id ('' when none)
@@ -134,7 +159,7 @@ export const whatsappAdapter: NotificationAdapter = {
         type: 'template',
         template: {
           name: whatsappTemplateName(event),
-          language: { code: process.env.WHATSAPP_TPL_LANG || 'en' },
+          language: { code: whatsappTemplateLang(event) },
           components,
         },
       };
