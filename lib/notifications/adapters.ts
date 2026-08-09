@@ -166,20 +166,70 @@ export const whatsappAdapter: NotificationAdapter = {
     } else {
       payload = { messaging_product: 'whatsapp', to: digits, type: 'text', text: { preview_url: false, body } };
     }
-    try {
+    const post = async (body: Record<string, unknown>) => {
       const res = await fetch(`https://graph.facebook.com/${version}/${phoneId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
       const data = (await res.json().catch(() => ({}))) as {
         messages?: { id: string }[];
-        error?: { message?: string };
+        error?: { message?: string; code?: number };
       };
-      if (!res.ok) {
-        return { ok: false, providerRef: '', error: data.error?.message ?? `HTTP ${res.status}` };
+      return { res, data };
+    };
+
+    try {
+      const { res, data } = await post(payload);
+      if (res.ok) {
+        return { ok: true, providerRef: data.messages?.[0]?.id ?? '', error: '' };
       }
-      return { ok: true, providerRef: data.messages?.[0]?.id ?? '', error: '' };
+
+      // #132001 — "Template name does not exist in the translation". Meta
+      // identifies a template by NAME + LANGUAGE and this error does not say
+      // which half is wrong, nor what the right language would be. There is no
+      // send-side way to ask.
+      //
+      // So rather than have a human guess a language code, redeploy, place a
+      // real order and read the log — a loop this cafe went round twice, losing
+      // a live bill each time — try the handful of codes a template is
+      // realistically approved under, and SAY which one worked. The candidate
+      // list is tiny and only ever runs after a failure that was already fatal,
+      // so the cost is bounded and the alternative is a message nobody gets.
+      const isTemplateSend = Boolean(event && templateVars);
+      if (isTemplateSend && data.error?.code === 132001) {
+        const tried = whatsappTemplateLang(event!);
+        const candidates = ['en', 'en_US', 'en_GB'].filter((c) => c !== tried);
+
+        for (const code of candidates) {
+          const retry = {
+            ...payload,
+            template: { ...(payload.template as object), language: { code } },
+          };
+          const attempt = await post(retry);
+          if (attempt.res.ok) {
+            // Loud on purpose: this is a working send AND a configuration bug.
+            // Without this line the next deploy silently pays the retry cost
+            // forever and nobody learns the real value.
+            console.warn(
+              `[notify] template '${whatsappTemplateName(event!)}' is not approved in '${tried}' but IS in '${code}'. ` +
+                `Set ${event === 'bill' ? 'WHATSAPP_TPL_BILL_LANG' : `WHATSAPP_TPL_${String(event).toUpperCase()}_LANG`}=${code} to stop retrying.`,
+            );
+            return { ok: true, providerRef: attempt.data.messages?.[0]?.id ?? '', error: '' };
+          }
+        }
+
+        // Every candidate refused. The language is not the problem — most
+        // likely the template lives in a different WhatsApp Business Account
+        // than the one owning this phone id, which reports identically.
+        return {
+          ok: false,
+          providerRef: '',
+          error: `${data.error?.message ?? 'template not found'} (tried languages: ${[tried, ...candidates].join(', ')} — if all failed, the template is probably in a different WhatsApp Business Account than WHATSAPP_PHONE_ID)`,
+        };
+      }
+
+      return { ok: false, providerRef: '', error: data.error?.message ?? `HTTP ${res.status}` };
     } catch (err) {
       return { ok: false, providerRef: '', error: err instanceof Error ? err.message : 'send failed' };
     }

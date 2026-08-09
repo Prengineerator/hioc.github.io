@@ -70,3 +70,76 @@ describe('per-template language codes', () => {
     expect(await langFor('bill')).toBe('en');
   });
 });
+
+describe('#132001 language discovery', () => {
+  /** Returns [languages tried in order, final result]. */
+  async function sendAgainst(approvedLang: string | null) {
+    const tried: string[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: { body: string }) => {
+      const lang = JSON.parse(init.body).template.language.code;
+      tried.push(lang);
+      if (approvedLang && lang === approvedLang) {
+        return { ok: true, json: async () => ({ messages: [{ id: 'wamid.OK' }] }) };
+      }
+      return {
+        ok: false,
+        json: async () => ({
+          error: { message: '(#132001) Template name does not exist in the translation', code: 132001 },
+        }),
+      };
+    });
+    const { whatsappAdapter } = await import('@/lib/notifications/adapters');
+    const result = await whatsappAdapter.send({
+      to: '+919876543210',
+      channel: 'whatsapp',
+      body: 'x',
+      event: 'bill' as never,
+      templateVars: ['a'],
+    });
+    return { tried, result };
+  }
+
+  it('finds the approved language and reports success', async () => {
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    process.env.WHATSAPP_TPL_BILL_LANG = 'en_US';
+    const { tried, result } = await sendAgainst('en_GB');
+    expect(result.ok).toBe(true);
+    expect(tried[0]).toBe('en_US'); // configured value first
+    expect(tried).toContain('en_GB');
+  });
+
+  it('does not retry a language it already tried', async () => {
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    process.env.WHATSAPP_TPL_BILL_LANG = 'en';
+    const { tried } = await sendAgainst('en_GB');
+    expect(tried.filter((l) => l === 'en')).toHaveLength(1);
+  });
+
+  it('when every language fails, says the WABA is the likely cause', async () => {
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    const { result } = await sendAgainst(null);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/tried languages/);
+    expect(result.error).toMatch(/different WhatsApp Business Account/);
+  });
+
+  it('does not language-hunt on unrelated errors', async () => {
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    const tried: string[] = [];
+    vi.stubGlobal('fetch', async (_u: string, init: { body: string }) => {
+      tried.push(JSON.parse(init.body).template.language.code);
+      return { ok: false, json: async () => ({ error: { message: 'Invalid OAuth token', code: 190 } }) };
+    });
+    const { whatsappAdapter } = await import('@/lib/notifications/adapters');
+    const r = await whatsappAdapter.send({
+      to: '+919876543210', channel: 'whatsapp', body: 'x',
+      event: 'bill' as never, templateVars: ['a'],
+    });
+    expect(r.ok).toBe(false);
+    expect(tried).toHaveLength(1); // one attempt only — an auth error is not a language problem
+  });
+});
