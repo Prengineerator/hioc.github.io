@@ -22,6 +22,18 @@ export const dynamic = 'force-dynamic';
 //
 // Protected by CRON_SECRET and fails CLOSED when it is unset — same posture as
 // /api/cron/expire-orders.
+//
+// SCHEDULED DAILY (03:00 IST), not hourly. Vercel's Hobby plan permits at most
+// one run per day, and an over-frequent expression fails the DEPLOY outright
+// instead of degrading — which silently froze production on an old build until
+// it was tracked down. If the plan ever changes, hourly is a one-line edit.
+//
+// Daily costs nothing here, by design: this job closes a session AT its shift
+// end, never at "now" (see `closeAt`). A once-a-day sweep therefore records
+// exactly the times an hourly one would; all that changes is how long a
+// forgotten clock-out waits before surfacing in the approval queue. 03:00 IST
+// is past the cafe's midnight close plus the two-hour grace, so one pass clears
+// the whole day.
 
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
