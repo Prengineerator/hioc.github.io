@@ -24,3 +24,11 @@ yarn-error.log*
 # macOS
 .DS_Store
 .env*
+
+# Credential scratch files. These live in the repo root during setup and are
+# NOT ignored by the .env* rules above, so a routine `git add -A` would commit
+# them straight to a public remote. razorpay_testkey.txt was sitting untracked
+# and unignored when this was added.
+*key*.txt
+*secret*.txt
+*credentials*.txt
