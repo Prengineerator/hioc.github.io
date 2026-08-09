@@ -155,6 +155,19 @@ async function deliverAndLog(
     }
   }
 
+  // The provider's own words, to the console as well as the row. Until now the
+  // rejection existed in exactly ONE place — `notifications.error` — so the
+  // moment anything overwrote that column the reason was gone for good, which
+  // is precisely what happened to a real bill failure here. A log line costs
+  // nothing and means the diagnosis survives losing the row.
+  if (!ok) {
+    console.error(
+      `[notify] ${event}/${channel} FAILED for order ${order.id} after ${attempts} attempt(s): ${
+        lastError || '(provider returned no message)'
+      }`,
+    );
+  }
+
   const row = {
     order_id: order.id,
     channel,
