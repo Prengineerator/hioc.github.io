@@ -117,13 +117,16 @@ describe('#132001 language discovery', () => {
     expect(tried.filter((l) => l === 'en')).toHaveLength(1);
   });
 
-  it('when every language fails, says the WABA is the likely cause', async () => {
+  it('when every language fails, names the languages tried and still returns a usable error', async () => {
     process.env.WHATSAPP_TOKEN = 't';
     process.env.WHATSAPP_PHONE_ID = 'p';
     const { result } = await sendAgainst(null);
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/tried languages/);
-    expect(result.error).toMatch(/different WhatsApp Business Account/);
+    // The inventory lookup runs against this test's minimal stub and cannot
+    // succeed — what matters is that a failing DIAGNOSTIC never swallows or
+    // replaces the real error, and never throws out of the adapter.
+    expect(result.error).toMatch(/#132001/);
   });
 
   it('does not language-hunt on unrelated errors', async () => {
@@ -141,5 +144,68 @@ describe('#132001 language discovery', () => {
     });
     expect(r.ok).toBe(false);
     expect(tried).toHaveLength(1); // one attempt only — an auth error is not a language problem
+  });
+});
+
+describe('template inventory on total failure', () => {
+  it('reports what the account actually has when every language fails', async () => {
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    delete process.env.WHATSAPP_TPL_BILL_LANG;
+
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).includes('whatsapp_business_account')) {
+        return { ok: true, json: async () => ({ whatsapp_business_account: { id: '999', name: 'HIOC' } }) };
+      }
+      if (String(url).includes('message_templates')) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { name: 'order_ready_1', language: 'en', status: 'APPROVED' },
+              { name: 'order_accepted', language: 'en', status: 'APPROVED' },
+              { name: 'order_bill', language: 'en', status: 'PENDING' },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: false,
+        json: async () => ({ error: { message: '(#132001) Template name does not exist', code: 132001 } }),
+      };
+    });
+
+    const { whatsappAdapter } = await import('@/lib/notifications/adapters');
+    const r = await whatsappAdapter.send({
+      to: '+919876543210', channel: 'whatsapp', body: 'x',
+      event: 'bill' as never, templateVars: ['a'],
+    });
+
+    expect(r.ok).toBe(false);
+    // The whole point: name what IS there, so "not found" becomes actionable.
+    expect(r.error).toContain('order_ready_1/en');
+    expect(r.error).toContain('999');
+    // Only APPROVED templates are listed — a PENDING one cannot be sent.
+    expect(r.error).not.toContain('order_bill/en');
+  });
+
+  it('says so plainly when the token cannot read the account', async () => {
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url).includes('whatsapp_business_account')) {
+        return { ok: false, json: async () => ({ error: { message: 'missing permission' } }) };
+      }
+      return {
+        ok: false,
+        json: async () => ({ error: { message: '(#132001) nope', code: 132001 } }),
+      };
+    });
+    const { whatsappAdapter } = await import('@/lib/notifications/adapters');
+    const r = await whatsappAdapter.send({
+      to: '+919876543210', channel: 'whatsapp', body: 'x',
+      event: 'bill' as never, templateVars: ['a'],
+    });
+    expect(r.error).toMatch(/whatsapp_business_management/);
   });
 });

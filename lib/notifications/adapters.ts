@@ -120,6 +120,64 @@ export const logAdapter: NotificationAdapter = {
 };
 
 /**
+ * Answers "then what templates DOES this number's account have?".
+ *
+ * Meta's #132001 reports a missing template identically whether the name is
+ * wrong, the language is wrong, or the template is perfectly fine but sitting
+ * in a different WhatsApp Business Account. Those have completely different
+ * remedies and the error distinguishes none of them, which is exactly how a
+ * bill outage survives several rounds of confident fixes.
+ *
+ * So on total failure we resolve the WABA behind the phone id and list what is
+ * actually approved there. Never throws — a diagnostic that can break the
+ * caller is worse than no diagnostic.
+ */
+async function describeAvailableTemplates(
+  version: string,
+  phoneId: string,
+  token: string,
+): Promise<string> {
+  const auth = { Authorization: `Bearer ${token}` };
+  try {
+    const wabaRes = await fetch(
+      `https://graph.facebook.com/${version}/${phoneId}?fields=whatsapp_business_account{id,name}`,
+      { headers: auth },
+    );
+    const wabaJson = (await wabaRes.json().catch(() => ({}))) as {
+      whatsapp_business_account?: { id?: string; name?: string };
+      error?: { message?: string };
+    };
+    const waba = wabaJson.whatsapp_business_account?.id;
+    if (!waba) {
+      return `Could not read the WhatsApp Business Account behind WHATSAPP_PHONE_ID (${
+        wabaJson.error?.message ?? 'no account returned'
+      }) — the token may lack whatsapp_business_management.`;
+    }
+
+    const tplRes = await fetch(
+      `https://graph.facebook.com/${version}/${waba}/message_templates?limit=100&fields=name,language,status`,
+      { headers: auth },
+    );
+    const tplJson = (await tplRes.json().catch(() => ({}))) as {
+      data?: { name?: string; language?: string; status?: string }[];
+      error?: { message?: string };
+    };
+    if (!Array.isArray(tplJson.data)) {
+      return `Could not list templates for account ${waba} (${tplJson.error?.message ?? 'no data'}).`;
+    }
+
+    const approved = tplJson.data
+      .filter((t) => (t.status ?? '').toUpperCase() === 'APPROVED')
+      .map((t) => `${t.name}/${t.language}`);
+    return `Account ${waba} (${wabaJson.whatsapp_business_account?.name ?? 'unnamed'}) has ${
+      approved.length
+    } approved template(s): ${approved.join(', ') || '(none)'}.`;
+  } catch (err) {
+    return `Template inventory lookup failed: ${err instanceof Error ? err.message : 'unknown'}.`;
+  }
+}
+
+/**
  * WhatsApp via the Meta Cloud API. Order notifications are proactive (outside any
  * 24h customer-service window), so Meta REQUIRES an approved message *template*:
  * when `event` + `templateVars` are provided we send `type: 'template'`; without
@@ -219,13 +277,21 @@ export const whatsappAdapter: NotificationAdapter = {
           }
         }
 
-        // Every candidate refused. The language is not the problem — most
-        // likely the template lives in a different WhatsApp Business Account
-        // than the one owning this phone id, which reports identically.
+        // Every candidate refused, so the language is not the problem. Meta has
+        // now said "does not exist" four times without once saying what DOES
+        // exist — and that gap is what turned this into days of guessing names
+        // and codes against a live counter.
+        //
+        // The account can be asked directly, with the token already in hand, so
+        // ask it: resolve the WABA that owns this phone id and list its
+        // templates. "order_bill_1 is not here; these are" ends the guessing in
+        // one line. Bounded — only reached after a send that has already failed
+        // outright, and read-only.
+        const inventory = await describeAvailableTemplates(version, phoneId, token);
         return {
           ok: false,
           providerRef: '',
-          error: `${data.error?.message ?? 'template not found'} (tried languages: ${[tried, ...candidates].join(', ')} — if all failed, the template is probably in a different WhatsApp Business Account than WHATSAPP_PHONE_ID)`,
+          error: `${data.error?.message ?? 'template not found'} — tried languages: ${[tried, ...candidates].join(', ')}. ${inventory}`,
         };
       }
 
