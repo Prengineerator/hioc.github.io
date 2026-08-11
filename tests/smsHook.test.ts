@@ -99,10 +99,26 @@ describe('POST /api/auth/sms-hook', () => {
     expect(res.status).toBe(500);
   });
 
-  it('accepts unsigned requests when no secret is configured (dev/staging)', async () => {
+  it('REFUSES every request when no secret is configured, and sends nothing', async () => {
+    // This test previously asserted the opposite — 200, message sent — under
+    // the reasoning "no secret means dev/staging, so accept". That made the
+    // route an unauthenticated public endpoint which would send a WhatsApp
+    // message to any number in the request body, billed to the cafe, from the
+    // cafe's verified sender. A test asserting it made the hole look deliberate.
+    //
+    // Failing closed costs an outage that is loud and fixed by one copy-paste.
+    // Failing open costs a bill and a sender reputation nobody notices losing.
     delete process.env.SUPABASE_SEND_SMS_HOOK_SECRET;
     const res = await POST(makeReq(OTP_PAYLOAD, { sign: false }));
-    expect(res.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses even a CORRECTLY signed request when no secret is configured', async () => {
+    // There is nothing to verify against, so a signature proves nothing.
+    delete process.env.SUPABASE_SEND_SMS_HOOK_SECRET;
+    const res = await POST(makeReq(OTP_PAYLOAD, { sign: true }));
+    expect(res.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
