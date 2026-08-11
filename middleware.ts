@@ -23,12 +23,15 @@ export async function middleware(request: NextRequest) {
     request: { headers: requestHeaders },
   });
 
-  const isLoginRoute = pathname.startsWith('/staff/login');
+  const isStaffLogin = pathname.startsWith('/staff/login');
+  const isOwnerLogin = pathname.startsWith('/owner/login');
+  const isLoginRoute = isStaffLogin || isOwnerLogin;
   const isStaffRoute = pathname.startsWith('/staff');
   const isOwnerRoute = pathname.startsWith('/owner');
 
-  // Only /staff/** and /owner/** are gated; /staff/login is the sole
-  // unauthenticated entry point.
+  // Only /staff/** and /owner/** are gated. Each surface now has its OWN
+  // unauthenticated entry point — /staff/login and /owner/login — so both must
+  // be excluded here or the gate would redirect a login page to itself.
   if ((!isStaffRoute && !isOwnerRoute) || isLoginRoute) {
     return response;
   }
@@ -55,8 +58,10 @@ export async function middleware(request: NextRequest) {
   // surfaces). Copies any cookies already queued on `response` (e.g. a session
   // token getUser() transparently refreshed) onto the redirect response —
   // building a bare `NextResponse.redirect()` would silently drop those.
+  // Send people to the door for the surface they were trying to reach: an
+  // expired owner session lands back on the owner login, not the counter's.
   function redirectToLogin(errorCode?: string) {
-    const loginUrl = new URL('/staff/login', request.url);
+    const loginUrl = new URL(isOwnerRoute ? '/owner/login' : '/staff/login', request.url);
     loginUrl.searchParams.set('next', pathname);
     if (errorCode) {
       loginUrl.searchParams.set('error', errorCode);

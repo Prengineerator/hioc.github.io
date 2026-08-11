@@ -168,7 +168,9 @@ function LoginForm() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        // Declares which door this is; a staff or owner account signing in here
+        // is refused and pointed at its own entrance (lib/auth/audience.ts).
+        body: JSON.stringify({ email, password, audience: 'customer' }),
       });
       if (res.ok) {
         await claimGuestOrders();

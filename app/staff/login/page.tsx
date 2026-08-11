@@ -38,7 +38,9 @@ function StaffLoginForm() {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        // Declares which door this is; the server refuses a role that belongs
+        // elsewhere and names the right entrance (lib/auth/audience.ts).
+        body: JSON.stringify({ email, password, audience: 'staff' }),
       });
 
       if (res.ok) {
