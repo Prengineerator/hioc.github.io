@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useSurface } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { AccountNav } from '@/components/site/AccountNav';
 
@@ -45,6 +46,7 @@ function CartIcon() {
  */
 export function SiteHeader() {
   const pathname = usePathname();
+  const surface = useSurface();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Close the mobile panel on every route change, so it never stays open
@@ -53,7 +55,11 @@ export function SiteHeader() {
     setMobileOpen(false);
   }, [pathname]);
 
-  if (pathname.startsWith('/staff') || pathname.startsWith('/owner')) {
+  // Path check alone is not enough once the backstage has its own domains:
+  // on staff.hioc.in the browser's pathname is '/orders', not '/staff/orders',
+  // so the customer chrome would render right on top of the staff portal.
+  // The surface comes from the Host header, which is the only thing that knows.
+  if (surface !== 'main' || pathname.startsWith('/staff') || pathname.startsWith('/owner')) {
     return null;
   }
 

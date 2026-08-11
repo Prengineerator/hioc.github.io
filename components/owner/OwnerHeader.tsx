@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { flags } from '@/lib/flags';
 
@@ -27,13 +27,16 @@ const LINKS = [
 
 export function OwnerHeader() {
   const pathname = usePathname();
+  // See StaffHeader: compare the RESOLVED href, not the canonical one.
+  const toHref = useSurfaceHref();
   return (
     <header className="border-b border-[#e5e5e5] bg-cream">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
         <span className="font-bold text-charcoal">HIOC · Owner</span>
         <nav className="flex gap-1">
           {LINKS.map((l) => {
-            const active = l.href === '/owner' ? pathname === '/owner' : pathname.startsWith(l.href);
+            const resolved = toHref(l.href);
+            const active = resolved === '/' ? pathname === '/' : pathname.startsWith(resolved);
             return (
               <Link
                 key={l.href}

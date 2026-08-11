@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import Link from 'next/link';
+import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
@@ -45,6 +45,10 @@ export function StaffHeader({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  // usePathname() reports the BROWSER's path, which on staff.hioc.in is
+  // '/orders' while the tab href is '/staff/orders'. Compare like with like or
+  // no tab ever highlights on the subdomain.
+  const toHref = useSurfaceHref();
   const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : '';
   const [openState, setOpenState] = useState<StoreOpenState | null>(null);
 
@@ -77,7 +81,7 @@ export function StaffHeader({
 
   async function handleLogout() {
     await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/staff/login');
+    router.push(toHref('/staff/login'));
   }
 
   return (
@@ -97,7 +101,7 @@ export function StaffHeader({
           <nav>
             <ul className="flex items-center gap-4 text-sm">
               {TABS.map((tab) => {
-                const isActive = pathname === tab.href;
+                const isActive = pathname === toHref(tab.href);
                 return (
                   <li key={tab.href}>
                     <Link
