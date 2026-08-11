@@ -263,7 +263,7 @@ export function QrCheckout({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Priya"
+            placeholder="e.g. Ayush"
             className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
