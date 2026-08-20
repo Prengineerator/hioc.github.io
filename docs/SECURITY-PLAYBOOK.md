@@ -171,6 +171,57 @@ are attacker-influenced text that lands in the owner's Excel.
 
 ---
 
+## Device & operator invariants (Phase 6)
+
+These guard the layer added by DEV-2/DEV-3 (and extended by PIN-1..5): a machine
+identity that lives in a long-lived cookie. The danger of that shape is not the
+cookie leaking — it is the cookie quietly becoming a credential. Apply to any PR
+touching `lib/api/device.ts`, `lib/api/deviceCookie.ts`, `app/api/device/**`,
+`app/api/owner/devices/**`. Spec: `docs/PHASE-6-SPEC.md §5`.
+
+### D-1 — a device cookie must never authorise anything (CRITICAL)
+**Meaning:** a route treats `getEnrolledDevice()` returning non-null as permission to
+read or write. Any gate of the shape "if the request comes from a known device, allow
+it".
+**Why:** the cookie is a year-long bearer secret sitting in a browser profile on a
+machine several people use and nobody logs out of. It answers "which till is this",
+not "who is allowed to do this". Authority comes from a staff session, or (PIN-3) from
+an operator who entered a PIN on this device — never from the device alone.
+**Fix:** gate on `getStaffUser()` / `getOwnerUser()` / `getCounterActor()` first, and
+read the device only after that has passed. `/api/device/context` is the reference
+shape: staff-gated, then device-aware.
+
+### D-2 — the device secret must never be readable (CRITICAL)
+**Meaning:** `token_hash` appears in a `select`, a response body, a Server Component
+prop, or a log line; or `pos_devices` gains an RLS policy.
+**Why:** the qr_token lesson (Phase-3 §11) — a secret that can be read back is a secret
+that leaks through some future `select *`. The plaintext token exists for exactly one
+HTTP response and is never stored at all.
+**Fix:** every read goes through `DEVICE_COLUMNS`, which omits `token_hash` by
+construction; the only query allowed to mention it filters BY it. `pos_devices` keeps
+RLS enabled with **no policies** (service-role only), asserted by `verify:db`.
+
+### D-3 — revocation must take effect on the next request (CRITICAL)
+**Meaning:** a device lookup omits `revoked_at is null`, or a resolved device is cached
+across requests (module scope, `unstable_cache`, a cookie carrying settings rather than
+just the secret).
+**Why:** revoke is the owner's answer to a machine that walked out of the building. A
+kill switch with a lag is not a kill switch.
+**Fix:** resolve the device from the row on every request; the cookie carries the secret
+and nothing else. Re-enrolling issues a fresh secret rather than reviving the old row —
+there is no un-revoke.
+
+### D-4 — a device default must never become a lock (WARN)
+**Meaning:** a per-device setting is read with `||` instead of `??`, or the POS applies
+a device default over a choice a person already made.
+**Why:** `false` is an answer ("this stand never prints"), and `||` reads it as an
+absence — the event stand prints KOTs it has no kitchen for. And a default that
+overwrites a staffer's tap mid-order is the same class of bug as FLOW-1's payment
+takeover: the machine arguing with the person using it.
+**Fix:** resolve through `lib/pos/deviceSettings.ts` (`??` throughout, unit-tested for
+the false case), and seed a control only when the person has not already set it.
+---
+
 ## When the scan can't decide (escalate, don't guess)
 
 If a WARN is ambiguous (is this route meant to be public?), the cheap model should

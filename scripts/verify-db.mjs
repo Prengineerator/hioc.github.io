@@ -960,6 +960,124 @@ async function checkAttendance() {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 6 · DEV-2/DEV-3 — the counter machines.
+//
+// pos_devices holds a SECRET (token_hash) and is the qr_token lesson applied a
+// second time: RLS on, no policies, service-role only. The probe that matters is
+// therefore the RLS one, and it only means anything with a row actually present
+// — an empty table returns [] to everyone.
+// ---------------------------------------------------------------------------
+async function checkPosDevices() {
+  heading('DEV-2/DEV-3 · enrolled counter machines', '2026-08-pos-devices.sql');
+
+  const cols =
+    'id,name,enrolled_by,enrolled_at,last_seen_at,revoked_at,default_order_type,auto_print_kot,auto_print_bill';
+  const table = await rest(`/pos_devices?select=${cols}&limit=1`);
+  if (!table.ok) {
+    const kind = errKind(table);
+    if (kind === 'no_table' || kind === 'no_column') {
+      fail('pos_devices exists', 'apply supabase/2026-08-pos-devices.sql');
+      skip('enrolled_by must be a real profile', 'the table is missing');
+      skip('default_order_type refuses a type the POS cannot mean', 'the table is missing');
+      skip('pos_devices is not readable by the anon key', 'the table is missing');
+      skip('two ACTIVE devices cannot share a name', 'the table is missing');
+      return;
+    }
+    fail('pos_devices exists', errText(table));
+    return;
+  }
+  pass('pos_devices exists', 'all DEV-2 + DEV-3 columns present');
+
+  // Who enrolled it has to be a real account: 'enrolled_by' is the audit trail
+  // for a credential-issuing action.
+  const badOwner = await doomedInsert('pos_devices', {
+    name: `${SENTINEL}-fk`, token_hash: `${SENTINEL}-fk`, enrolled_by: BOGUS_ORDER_ID,
+  });
+  expectKind('enrolled_by must be a real profile', badOwner, 'fk', 'a non-existent enroller was refused');
+
+  // Everything below needs a real profile to hang a row off.
+  const who = await rest('/profiles?select=id&limit=1');
+  const ownerId = Array.isArray(who.body) && who.body[0] ? who.body[0].id : null;
+  if (!ownerId) {
+    skip('default_order_type refuses a type the POS cannot mean', `no profile row to enroll against (${errText(who)})`);
+    skip('pos_devices is not readable by the anon key', 'no profile row to enroll against');
+    skip('two ACTIVE devices cannot share a name', 'no profile row to enroll against');
+    return;
+  }
+
+  // 'delivery' is a real OrderType elsewhere in the schema and NOT a thing a
+  // counter can default to — which is exactly why the CHECK lists two values
+  // rather than deferring to the orders enum.
+  const badType = await doomedInsert('pos_devices', {
+    name: `${SENTINEL}-check`, token_hash: `${SENTINEL}-check`,
+    enrolled_by: ownerId, default_order_type: 'delivery',
+  });
+  expectKind('default_order_type refuses a type the POS cannot mean', badType, 'check', "'delivery' was rejected");
+
+  // Plant a live device, then ask the public key what it can see. A device
+  // secret readable through PostgREST would let anyone who has the anon key
+  // (i.e. anyone who loaded the site) enumerate and impersonate tills.
+  const planted = await rest('/pos_devices', {
+    method: 'POST', prefer: 'return=representation',
+    body: { name: SENTINEL, token_hash: SENTINEL, enrolled_by: ownerId },
+  });
+  if (!planted.ok) {
+    skip('pos_devices is not readable by the anon key', `could not plant a probe row (${errText(planted)})`);
+    skip('two ACTIVE devices cannot share a name', 'could not plant a probe row');
+    return;
+  }
+
+  const asService = await rest(`/pos_devices?select=id,token_hash&token_hash=eq.${SENTINEL}`);
+  const serviceRows = Array.isArray(asService.body) ? asService.body.length : 0;
+  const asAnon = await rest(`/pos_devices?select=id,token_hash&token_hash=eq.${SENTINEL}`, { key: ANON });
+  const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : 0;
+
+  if (serviceRows !== 1) {
+    fail('pos_devices is not readable by the anon key', `probe row not visible even to the service role (${serviceRows} rows) — result would be meaningless`);
+  } else if (!asAnon.ok) {
+    pass('pos_devices is not readable by the anon key', `anon was refused outright (${errText(asAnon)})`);
+  } else if (anonRows === 0) {
+    pass('pos_devices is not readable by the anon key', 'service role sees the planted device, anon sees 0');
+  } else {
+    fail('pos_devices is not readable by the anon key', `anon read back ${anonRows} device secret(s) — RLS is NOT protecting this table`);
+  }
+
+  // The owner picks which machine to kill off a list of names. Two live
+  // "Counter 1"s make that a coin flip.
+  const dupe = await doomedInsert('pos_devices', {
+    name: SENTINEL.toUpperCase(), token_hash: `${SENTINEL}-dupe`, enrolled_by: ownerId,
+  });
+  expectKind('two ACTIVE devices cannot share a name', dupe, 'unique', 'a case-different duplicate was refused');
+
+  // A revoked device releases its name — re-enrolling a repaired till under the
+  // same label is the normal case, not an edge one.
+  const revoked = await rest(`/pos_devices?token_hash=eq.${SENTINEL}`, {
+    method: 'PATCH', prefer: 'return=representation', body: { revoked_at: new Date().toISOString() },
+  });
+  if (!revoked.ok) {
+    skip('a revoked name can be reused', errText(revoked));
+  } else {
+    const reused = await rest('/pos_devices', {
+      method: 'POST', prefer: 'return=representation',
+      body: { name: SENTINEL, token_hash: `${SENTINEL}-again`, enrolled_by: ownerId },
+    });
+    if (reused.ok) {
+      pass('a revoked name can be reused', 'the unique index is partial, as intended');
+      if (Array.isArray(reused.body)) for (const r of reused.body) if (r?.id) strays.push({ table: 'pos_devices', id: r.id });
+    } else {
+      fail('a revoked name can be reused', `${errKind(reused)}: ${errText(reused)} — the index is not partial`);
+    }
+  }
+
+  const removed = await rest(`/pos_devices?token_hash=like.${SENTINEL}*`, { method: 'DELETE', prefer: 'return=representation' });
+  const left = await rest(`/pos_devices?select=id&token_hash=like.${SENTINEL}*`);
+  const leftRows = Array.isArray(left.body) ? left.body.length : -1;
+  if (removed.ok && leftRows === 0) pass('probe devices removed from pos_devices', 're-queried: 0 rows remain');
+  else fail('probe devices removed from pos_devices', `${leftRows} row(s) still present — REMOVE token_hash LIKE '${SENTINEL}%' BY HAND`);
+}
+
 // ---------------------------------------------------------------------------
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
@@ -979,6 +1097,7 @@ async function main() {
   await checkViewExposure();
   await checkAnonSurface();
   await checkAttendance();
+  await checkPosDevices();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

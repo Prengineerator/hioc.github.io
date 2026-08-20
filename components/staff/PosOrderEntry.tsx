@@ -54,13 +54,9 @@ import {
   type QuotedDiscount,
 } from '@/lib/pos/loyalty';
 import type { PaymentPart } from '@/lib/orders/payments';
-import {
-  AUTO_PRINT_DEFAULTS,
-  placementPrintPlan,
-  readAutoPrintSettings,
-  type AutoPrintSettings,
-  type PrintType,
-} from '@/lib/staff/autoPrint';
+import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
+import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
+import { POS_FALLBACK_ORDER_TYPE, resolveDefaultOrderType } from '@/lib/pos/deviceSettings';
 import {
   billStatusFromDelivery,
   billStatusTone,
@@ -73,7 +69,7 @@ import {
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { BillBreakdown } from '@/lib/store/hours';
-import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
+import type { MenuItem, OrderType } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
 
@@ -162,7 +158,13 @@ export function PosOrderEntry({
   const [search, setSearch] = useState('');
 
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [orderType, setOrderType] = useState<OrderType>('dine_in');
+  const [orderType, setOrderType] = useState<OrderType>(POS_FALLBACK_ORDER_TYPE);
+  // DEV-3 — set the moment a staffer picks a type themselves. The device
+  // default may only seed this control, never overrule a person who already
+  // answered: the boot fetch resolves a beat after first paint, and snapping
+  // "Takeaway" back to the machine's default under someone's finger is the same
+  // class of bug as the payment screen taking over mid-order.
+  const orderTypeTouched = useRef(false);
 
   const [tables, setTables] = useState<StaffTable[]>([]);
   const [tableId, setTableId] = useState<string | null>(null);
@@ -193,8 +195,11 @@ export function PosOrderEntry({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [recentIds, setRecentIds] = useState<string[]>([]); // "Quick picks" (this tablet)
-  // POS4-3/4 — the close of the counter loop.
-  const [autoPrint, setAutoPrint] = useState<AutoPrintSettings>(AUTO_PRINT_DEFAULTS);
+  // POS4-3/4 + DEV-3 — the close of the counter loop. What prints is the
+  // enrolled machine's answer if it has one, else the store's, else the
+  // documented default; `device` is also how this screen learns which till it
+  // is running on.
+  const { autoPrint, device: posDevice, ready: defaultsReady } = useCounterDefaults();
   const [confirmation, setConfirmation] = useState<PlacementConfirmation | null>(null);
   const [resending, setResending] = useState(false);
 
@@ -221,18 +226,19 @@ export function PosOrderEntry({
     setRecentIds(readRecents());
   }, []);
 
-  // POS4-3 — the owner's auto-print switches. Read once: a shift doesn't change
-  // them, and this must be settled long before the first Charge. Any failure
-  // (offline, or a deploy that predates the migration) leaves the documented
-  // defaults in place rather than silently stopping the kitchen's ticket.
+  // DEV-3 — seed the order-type toggle from the machine's default, ONCE.
+  //
+  // Skipped entirely when the URL named a table (arriving from the tables board
+  // means dine-in at that table, and a device that prefers takeaway does not get
+  // to contradict a tap that just happened) and in add-mode, where the type
+  // belongs to the order already on the rail.
+  const appliedDeviceType = useRef(false);
   useEffect(() => {
-    fetch('/api/store-settings', { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { settings?: StoreSettings } | null) => {
-        setAutoPrint(readAutoPrintSettings(data?.settings));
-      })
-      .catch(() => {});
-  }, []);
+    if (appliedDeviceType.current || !defaultsReady) return;
+    appliedDeviceType.current = true;
+    if (isAddMode || initialTableId || orderTypeTouched.current) return;
+    setOrderType(resolveDefaultOrderType(posDevice));
+  }, [defaultsReady, posDevice, isAddMode, initialTableId]);
 
   // POS4-4 — the confirmation is a report, not a gate: it clears itself so a
   // staffer already punching the next order never has to dismiss it. Any action
@@ -982,6 +988,7 @@ export function PosOrderEntry({
                   key={t}
                   type="button"
                   onClick={() => {
+                    orderTypeTouched.current = true;
                     setOrderType(t);
                     if (t === 'takeaway') setTableId(null);
                   }}

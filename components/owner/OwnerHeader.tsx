@@ -11,6 +11,9 @@ const LINKS = [
   { href: '/owner/promotions', label: 'Promotions' },
   { href: '/owner/reviews', label: 'Reviews' },
   { href: '/owner/tables', label: 'Tables' },
+  // DEV-2. Next to Tables because both are the physical cafe described to the
+  // software — the furniture and the machines.
+  { href: '/owner/devices', label: 'Devices' },
   { href: '/owner/notifications', label: 'Notifications' },
   { href: '/owner/staff', label: 'Team' },
   // SHEET-1. Sits next to Team on purpose — attendance is a fact about the

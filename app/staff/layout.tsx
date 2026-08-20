@@ -1,7 +1,17 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { getStaffOrOwner } from '@/lib/api/auth';
 import { StaffHeader } from '@/components/staff/StaffHeader';
+
+// DEV-1 — the install offer belongs to this surface and no other. The manifest
+// describes the POS (app/pos.webmanifest/route.ts), so linking it from the
+// customer site would offer a cafe customer the counter's app; declaring it here
+// covers /staff/**, which includes /staff/login on purpose — a counter machine
+// should be installable before anyone signs in on it.
+export const metadata: Metadata = {
+  manifest: '/pos.webmanifest',
+};
 
 /**
  * Nested layout for everything under /staff/**. Intentionally does NOT

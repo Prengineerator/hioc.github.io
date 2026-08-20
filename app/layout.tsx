@@ -24,6 +24,9 @@ export const metadata: Metadata = {
     template: '%s | HIOC.',
   },
   description: 'High on Coffee — order ahead for pickup.',
+  // No `manifest` here on purpose — the only web app manifest in this repo
+  // describes the POS, and it is declared in app/staff/layout.tsx so a customer
+  // is never offered "Install HIOC POS". See app/pos.webmanifest/route.ts.
 };
 
 // Tints mobile browser chrome (address bar, task switcher) to match the

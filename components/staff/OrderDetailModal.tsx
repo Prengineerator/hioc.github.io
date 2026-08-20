@@ -14,19 +14,15 @@ import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
-import {
-  AUTO_PRINT_DEFAULTS,
-  settlePrintPlan,
-  readAutoPrintSettings,
-  type AutoPrintSettings,
-} from '@/lib/staff/autoPrint';
+import { settlePrintPlan } from '@/lib/staff/autoPrint';
+import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import {
   billStatusTone,
   parseResendResult,
   type BillStatusView,
 } from '@/lib/staff/confirmation';
 import type { PrintType } from '@/lib/staff/autoPrint';
-import type { Order, OrderItem, PaymentMethod, StoreSettings } from '@/lib/types';
+import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -178,22 +174,11 @@ export function OrderDetailModal({
   };
   const canPrintToken = order.order_type === 'takeaway' && Boolean(order.pickup_code);
 
-  // POS4-3 — the owner's auto-print switches, so settling from the queue prints
-  // the same bill the POS's Collect-now step does. Read on open; any failure
-  // (offline, or a deploy predating the migration) keeps the documented default.
-  const [autoPrint, setAutoPrint] = useState<AutoPrintSettings>(AUTO_PRINT_DEFAULTS);
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/store-settings', { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { settings?: StoreSettings } | null) => {
-        if (!cancelled) setAutoPrint(readAutoPrintSettings(data?.settings));
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // POS4-3 + DEV-3 — the same three-way resolution the POS uses, through the
+  // same hook, so settling from the queue prints exactly what settling from the
+  // counter prints. A machine set to "never print" must mean it whichever button
+  // was used; two copies of this rule is how that stops being true.
+  const { autoPrint } = useCounterDefaults();
 
   // Every "mark paid" tap goes through here so the print rule can't differ per
   // button. No KOT here: the kitchen got its ticket at placement, and a second

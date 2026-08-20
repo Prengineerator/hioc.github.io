@@ -822,3 +822,37 @@ export interface PayrollRunLine {
   net_pay_inr: number;
   detail: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 6 · DEV-2/DEV-3 — enrolled counter machines
+// (migration 2026-08-pos-devices.sql).
+// ---------------------------------------------------------------------------
+
+/**
+ * A machine the owner has enrolled: the till, the back office laptop, the event
+ * stand. Identity only — a device grants no authority of its own (see the
+ * migration header). `token_hash` is intentionally NOT in this type: no route
+ * ever selects it into application code except the one that looks a device up
+ * BY it, and leaving it out means a careless `select *` cannot leak it into a
+ * JSON response.
+ */
+export interface PosDevice {
+  id: string;
+  name: string;
+  enrolled_by: string;
+  enrolled_at: string;
+  last_seen_at: string | null;
+  /** Non-null = revoked. One-way; re-enrolling creates a fresh row. */
+  revoked_at: string | null;
+  // DEV-3 — null means "no opinion, use the store-level setting". Read with
+  // `??`, never `||`: false is an answer.
+  default_order_type: Extract<OrderType, 'takeaway' | 'dine_in'> | null;
+  auto_print_kot: boolean | null;
+  auto_print_bill: boolean | null;
+}
+
+/** The device's own view of itself, as the POS reads it at boot (DEV-3). */
+export type PosDeviceContext = Pick<
+  PosDevice,
+  'id' | 'name' | 'default_order_type' | 'auto_print_kot' | 'auto_print_bill'
+>;

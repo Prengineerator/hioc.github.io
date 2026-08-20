@@ -68,7 +68,11 @@ export function isHostAgnostic(pathname: string): boolean {
     pathname.startsWith('/images/') ||
     pathname.startsWith('/fonts/') ||
     pathname === '/favicon.ico' ||
-    pathname === '/manifest.webmanifest' ||
+    // The POS's web app manifest (DEV-1). Named explicitly even though the
+    // extension rule below already covers it: an installed app resolves
+    // start_url and icons against the manifest's own URL, so a rewrite here
+    // would silently change what the installed POS opens.
+    pathname === '/pos.webmanifest' ||
     /\.[a-z0-9]+$/i.test(pathname) // any file extension
   );
 }
