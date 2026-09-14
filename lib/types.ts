@@ -664,6 +664,13 @@ export interface AttendanceSettings {
   location_retention_days: number;
   /** How many days off one person may hold in a single week (LEAVE). */
   max_leave_days_per_week: number;
+  /**
+   * NET-1 — the cafe's public IPs, as literals or CIDR ranges. EMPTY MEANS THE
+   * CHECK IS OFF, not "refuse everything": an owner who has not configured this
+   * gets no flags rather than a sheet full of warnings. Never sent to a staff
+   * client (A-3) — knowing the allowlist is knowing what to spoof.
+   */
+  store_networks: string[];
   updated_by: string | null;
   updated_at: string;
 }
@@ -694,7 +701,11 @@ export type AttendanceFlag =
   | 'static_coords'
   | 'impossible_travel'
   | 'implausible_accuracy'
-  | 'auto_closed';
+  | 'auto_closed'
+  // NET-1 — the punch did not arrive over one of the cafe's configured
+  // networks, or arrived with no usable client IP. Informational like every
+  // other flag here: it never blocks a punch (see lib/attendance/network.ts).
+  | 'off_network';
 
 export interface AttendanceSession {
   id: string;

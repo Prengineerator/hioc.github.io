@@ -157,10 +157,14 @@ vi.mock('@/lib/api/auth', () => ({
 
 const { POST } = await import('@/app/api/attendance/punch/route');
 
-function punchReq(body: unknown) {
+function punchReq(body: unknown, clientIp?: string) {
   return new Request('http://t/api/attendance/punch', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      // NET-1: what Vercel puts in front of every request in production.
+      ...(clientIp ? { 'x-forwarded-for': clientIp } : {}),
+    },
     body: JSON.stringify(body),
   });
 }
@@ -452,5 +456,66 @@ describe('POST /api/attendance/punch — integrity flags', () => {
     };
     await POST(punchReq({ type: 'in', ...reading(2) }));
     expect(state.insertPayload?.flags).toEqual([]);
+  });
+});
+
+// NET-1 — the cafe-network signal rides alongside the geofence: it FLAGS, it
+// never refuses. The owner chose that on 2026-09-14 for a concrete reason — a
+// dynamic public IP changes on its own, and a blocking check would lock the
+// whole team out on a morning nobody touched anything.
+describe('POST /api/attendance/punch — cafe network (NET-1)', () => {
+  beforeEach(() => {
+    state.account = { user: { id: 'u1' }, role: 'staff' };
+  });
+
+  it('flags a punch from off the cafe network, and still records it', () => {
+    state.settings = baseSettings({ store_networks: ['49.36.12.0/24'] });
+    return POST(punchReq({ type: 'in', ...reading(10) }, '182.70.1.1')).then(async (res) => {
+      // Accepted — the shift is real, the doubt is recorded next to it.
+      expect(res.status).toBe(200);
+      expect(state.insertPayload?.flags).toContain('off_network');
+    });
+  });
+
+  it('leaves a punch from the cafe network unflagged', async () => {
+    state.settings = baseSettings({ store_networks: ['49.36.12.0/24'] });
+    const res = await POST(punchReq({ type: 'in', ...reading(10) }, '49.36.12.77'));
+    expect(res.status).toBe(200);
+    expect(state.insertPayload?.flags).not.toContain('off_network');
+  });
+
+  it('flags nothing at all when no networks are configured', async () => {
+    // The state every cafe is in until the owner adds one. Flagging here would
+    // fill the sheet with warnings about a feature nobody turned on.
+    state.settings = baseSettings({ store_networks: [] });
+    const res = await POST(punchReq({ type: 'in', ...reading(10) }, '182.70.1.1'));
+    expect(res.status).toBe(200);
+    expect(state.insertPayload?.flags).not.toContain('off_network');
+  });
+
+  it('survives a settings row that predates the migration', async () => {
+    // A deploy landing before the column exists reads undefined, which must
+    // behave exactly like "not configured" rather than flagging every punch.
+    state.settings = baseSettings();
+    const res = await POST(punchReq({ type: 'in', ...reading(10) }, '182.70.1.1'));
+    expect(res.status).toBe(200);
+    expect(state.insertPayload?.flags).not.toContain('off_network');
+  });
+
+  it('flags a punch that arrives with no client IP', async () => {
+    // "Could not tell" is not "yes" — and it is how a proxy that stops
+    // forwarding the client IP shows up, rather than silently passing.
+    state.settings = baseSettings({ store_networks: ['49.36.12.0/24'] });
+    const res = await POST(punchReq({ type: 'in', ...reading(10) }));
+    expect(res.status).toBe(200);
+    expect(state.insertPayload?.flags).toContain('off_network');
+  });
+
+  it('never turns an off-network punch into a refusal', async () => {
+    // The whole point of the owner's decision, pinned: no combination of
+    // network state produces a non-2xx.
+    state.settings = baseSettings({ store_networks: ['10.0.0.0/8'] });
+    const res = await POST(punchReq({ type: 'in', ...reading(10) }, '203.0.113.5'));
+    expect(res.ok).toBe(true);
   });
 });

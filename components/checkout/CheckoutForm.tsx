@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { flags } from '@/lib/flags';
+import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
+import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel';
 import { normalizeEmail } from '@/lib/email';
 import { generatePickupSlots } from '@/lib/store/hours';
 import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
@@ -31,7 +34,11 @@ const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID
 // (the verification logs them in via the shared phone-OTP flow). Off by default
 // so checkout keeps working until Supabase phone-OTP + the WhatsApp hook are
 // configured.
-const GUEST_OTP_REQUIRED = process.env.NEXT_PUBLIC_FLAG_GUEST_OTP === 'true';
+// VERIFY-1 also forces it: turning ON server-side enforcement without the OTP
+// step visible here would refuse every guest order and offer no way to comply,
+// so the UI requirement is the OR of the two flags rather than only the old one.
+const GUEST_OTP_REQUIRED =
+  process.env.NEXT_PUBLIC_FLAG_GUEST_OTP === 'true' || flags.verifiedOrders;
 
 // Guest-order claim (ACC-4). Fired once right after a guest verifies their
 // number at checkout (which logs them in), so any past orders they placed as a
@@ -64,7 +71,6 @@ export function CheckoutForm({
   const { items, totalPrice, clearCart } = useCart();
 
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [email, setEmail] = useState(''); // optional — for the e-bill by email
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -78,16 +84,18 @@ export function CheckoutForm({
   const [paymentMode, setPaymentMode] = useState<'online' | 'counter'>('counter');
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Guest WhatsApp-OTP verification (ACC-4). `otpStep === 'sent'` reveals the
-  // code input; once the code checks out `phoneVerified` flips true, the box
-  // collapses to a "number verified ✓" badge, and placing the order becomes a
-  // separate, clearly-labeled action (verify and place are decoupled so a
-  // failed placement never forces the guest to re-verify).
-  const [otpStep, setOtpStep] = useState<'idle' | 'sent'>('idle');
-  const [otpCode, setOtpCode] = useState('');
-  const [otpError, setOtpError] = useState<string | null>(null);
-  const [otpBusy, setOtpBusy] = useState(false);
-  const [phoneVerified, setPhoneVerified] = useState(false);
+  // Guest WhatsApp-OTP verification (ACC-4). The mechanics — including the
+  // re-lock when the number is edited — live in usePhoneOtp(), shared with the
+  // table-QR pad (VERIFY-2) so the two customer surfaces cannot drift into
+  // enforcing different things. Verifying and placing stay separate actions:
+  // a failed placement must never force the guest to re-verify against a code
+  // that has since expired.
+  const otp = usePhoneOtp({ onVerified: claimGuestOrders });
+  const phone = otp.phone;
+  const phoneVerified = otp.verified;
+  // Destructured: the prefill effect below depends on this, and `otp` itself is
+  // a fresh object every render.
+  const prefill = otp.prefillPhone;
 
   const [couponInput, setCouponInput] = useState('');
   const [couponApplied, setCouponApplied] = useState<string | null>(null);
@@ -172,8 +180,10 @@ export function CheckoutForm({
             const prefillName = typeof p.name === 'string' ? p.name.trim() : '';
             const prefillPhone = typeof p.phone === 'string' ? p.phone.trim() : '';
             if (prefillName) setName((n) => n || prefillName);
+            // Only prefill an EMPTY field: someone who has already started
+            // typing must not have it overwritten when the profile lands.
             if (prefillPhone) {
-              setPhone((ph) => ph || normalizeIndianMobile(prefillPhone) || prefillPhone);
+              prefill(normalizeIndianMobile(prefillPhone) ?? prefillPhone);
             }
           }
         })
@@ -184,7 +194,7 @@ export function CheckoutForm({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [prefill]);
 
   // Live bill preview (PAY-1): re-quotes whenever the cart subtotal changes.
   // Coupon/points are (re-)applied explicitly via their Apply buttons, which
@@ -272,17 +282,12 @@ export function CheckoutForm({
     refreshQuote(couponApplied ?? '', 0);
   }
 
-  // Editing the number after a successful verification must invalidate it —
-  // otherwise a guest could verify one number, swap in another, and place the
-  // order against an unverified phone. Resets the OTP flow back to the start.
+  // The re-lock on edit (verify one number, type another, order against an
+  // unverified one) is enforced inside usePhoneOtp, so this only has to clear
+  // the format error.
   function onPhoneChange(value: string) {
-    setPhone(value);
-    if (phoneVerified || otpStep !== 'idle') {
-      setPhoneVerified(false);
-      setOtpStep('idle');
-      setOtpCode('');
-      setOtpError(null);
-    }
+    otp.setPhone(value);
+    if (phoneError) setPhoneError(null);
   }
 
   function validatePhone(value: string): boolean {
@@ -305,58 +310,6 @@ export function CheckoutForm({
   const guestVerifyRequired = GUEST_OTP_REQUIRED && !userId;
   const guestMustVerify = guestVerifyRequired && !phoneVerified;
   const phoneIsValid = normalizeIndianMobile(phone) !== null;
-
-  // Send the WhatsApp verification code to the entered mobile (guest flow).
-  async function sendOtp() {
-    setOtpError(null);
-    setOtpBusy(true);
-    try {
-      const res = await fetch('/api/auth/customer/phone-otp/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? 'Could not send the verification code.');
-      setOtpStep('sent');
-    } catch (err) {
-      setOtpError(err instanceof Error ? err.message : 'Could not send the verification code.');
-    } finally {
-      setOtpBusy(false);
-    }
-  }
-
-  // Verify the code (which sets the session cookies / logs the guest in). On
-  // success we collapse the OTP box to a verified badge and claim any past
-  // guest orders — but do NOT place the order here. Placement stays a separate
-  // action so a network/validation failure at placement never drops the guest
-  // back into re-entering a (by then expired) code.
-  async function verifyOtp() {
-    if (!otpCode.trim()) {
-      setOtpError('Enter the code sent to your WhatsApp.');
-      return;
-    }
-    setOtpError(null);
-    setOtpBusy(true);
-    try {
-      const res = await fetch('/api/auth/customer/phone-otp/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, token: otpCode.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? 'Invalid or expired code.');
-      setPhoneVerified(true);
-      setOtpStep('idle');
-      setOtpCode('');
-      // The guest is now logged in — link their past guest orders (best-effort).
-      claimGuestOrders();
-    } catch (err) {
-      setOtpError(err instanceof Error ? err.message : 'Invalid or expired code.');
-    } finally {
-      setOtpBusy(false);
-    }
-  }
 
   async function placeOrder() {
     const selectedSlot = slots.find((s) => s.start === slotStart) ?? slots[0];
@@ -512,91 +465,15 @@ export function CheckoutForm({
               className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
             {/* Dedicated "Get OTP" control (ACC-4): a signed-out guest verifies
-                the number before ordering. Shown only while unverified with no
-                code outstanding; disabled until the number is a valid mobile. */}
-            {guestVerifyRequired && !phoneVerified && otpStep === 'idle' ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (validatePhone(phone)) sendOtp();
-                }}
-                disabled={otpBusy || !phoneIsValid}
-                className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
-              >
-                {otpBusy ? 'Sending…' : 'Get OTP'}
-              </button>
+                the number before ordering. Shared with the table-QR pad. */}
+            {guestVerifyRequired ? (
+              <GetOtpButton otp={otp} onBeforeSend={() => validatePhone(phone)} />
             ) : null}
           </div>
           {phoneError ? (
             <p className="mt-1 text-sm text-charcoal">{phoneError}</p>
           ) : null}
-          {/* Surface a Get-OTP *send* failure (e.g. provider not configured):
-              otpError is otherwise only shown inside the code box, which never
-              opens if the send itself fails. */}
-          {guestVerifyRequired && otpStep === 'idle' && otpError ? (
-            <p className="mt-1 text-xs text-red-700">{otpError}</p>
-          ) : null}
-
-          {/* Code entry — appears after Get OTP sends the WhatsApp code. */}
-          {guestVerifyRequired && otpStep === 'sent' && !phoneVerified ? (
-            <div className="mt-3 flex flex-col gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
-              <p className="text-sm text-charcoal">
-                Enter the 6-digit code sent to your WhatsApp on{' '}
-                <span className="font-bold">{phone}</span> to confirm your number.
-              </p>
-              <input
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                maxLength={6}
-                value={otpCode}
-                onChange={(e) => setOtpCode(e.target.value)}
-                placeholder="6-digit code"
-                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-              />
-              {otpError ? <p className="text-xs text-red-700">{otpError}</p> : null}
-              <button
-                type="button"
-                onClick={verifyOtp}
-                disabled={otpBusy}
-                className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {otpBusy ? 'Verifying…' : 'Verify number'}
-              </button>
-              <div className="flex items-center justify-between text-xs">
-                <button
-                  type="button"
-                  onClick={sendOtp}
-                  disabled={otpBusy}
-                  className="font-bold text-tan underline disabled:opacity-50"
-                >
-                  Resend code
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOtpStep('idle');
-                    setOtpCode('');
-                    setOtpError(null);
-                  }}
-                  className="text-muted underline"
-                >
-                  Change number
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {/* Verified badge — the number is confirmed; Place Order unlocks. */}
-          {guestVerifyRequired && phoneVerified ? (
-            <div
-              role="status"
-              className="mt-2 flex items-center gap-2 rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal"
-            >
-              <span aria-hidden className="text-base font-bold text-tan">✓</span>
-              <span>Number verified — you can place your order.</span>
-            </div>
-          ) : null}
+          {guestVerifyRequired ? <PhoneOtpPanel otp={otp} /> : null}
         </div>
 
         <div>
@@ -818,7 +695,7 @@ export function CheckoutForm({
 
         <button
           type="submit"
-          disabled={submitting || otpBusy || !canSubmit || guestMustVerify}
+          disabled={submitting || otp.busy || !canSubmit || guestMustVerify}
           className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
         >
           {submitting

@@ -48,6 +48,18 @@ export const flags = {
   // bad night is one env var away from being over. Set
   // NEXT_PUBLIC_FLAG_POS_V2=true to dock the payment step.
   posV2: boolEnv(process.env.NEXT_PUBLIC_FLAG_POS_V2, false),
+  // VERIFY-1 — every CUSTOMER-placed order must carry a mobile number the
+  // placer has verified over WhatsApp OTP, enforced server-side in
+  // POST /api/orders. Staff orders at the counter are exempt by design.
+  //
+  // Default OFF, and it must stay off until a test OTP has been seen to arrive
+  // on a real handset. The OTP rides the same WhatsApp channel the bill does,
+  // and that channel is failing today (Meta #132001, template not found in the
+  // sending number's account) — switching this on while the OTP cannot be
+  // delivered would not tighten ordering, it would end it. Read on the server
+  // as well as the client, so NEXT_PUBLIC_ on purpose: the checkout needs to
+  // know whether to show the OTP step at all.
+  verifiedOrders: boolEnv(process.env.NEXT_PUBLIC_FLAG_VERIFIED_ORDERS, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

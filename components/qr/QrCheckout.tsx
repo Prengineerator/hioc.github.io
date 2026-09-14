@@ -4,6 +4,10 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { flags } from '@/lib/flags';
+import { createClient } from '@/lib/supabase';
+import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
+import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel';
 import { normalizeEmail } from '@/lib/email';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
@@ -35,14 +39,61 @@ export function QrCheckout({
   const { items, totalPrice, increment, decrement, removeItem, clearCart } = useCart();
 
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  // VERIFY-2 — this pad had NO verification at all: the number was an optional
+  // field, so a table-QR order could be placed against any number or none, and
+  // the WhatsApp bill went wherever it said. Same hook as the web checkout, so
+  // the two customer surfaces cannot enforce different rules.
+  const otp = usePhoneOtp();
+  const phone = otp.phone;
+  const prefill = otp.prefillPhone;
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [bill, setBill] = useState<BillBreakdown | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  // Who is scanning. Only needed to decide whether the OTP step applies — a
+  // signed-in customer has already verified a number, and the server will check
+  // the order carries THAT one, so their number is prefilled rather than asked
+  // for again. Best-effort throughout: a failed read leaves an anonymous diner,
+  // which is the stricter of the two paths.
+  useEffect(() => {
+    let cancelled = false;
+    void createClient()
+      .auth.getUser()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const uid = data.user?.id ?? null;
+        setUserId(uid);
+        if (!uid) return;
+        return fetch('/api/account/me', { cache: 'no-store' })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((body: unknown) => {
+            if (cancelled || !body || typeof body !== 'object') return;
+            const profile =
+              ('profile' in body ? (body as { profile?: unknown }).profile : body) ?? {};
+            const p = profile as { phone?: unknown };
+            if (typeof p.phone === 'string' && p.phone.trim()) {
+              prefill(normalizeIndianMobile(p.phone) ?? p.phone.trim());
+            }
+          })
+          .catch(() => {});
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [prefill]);
+
+  // The number is mandatory once the rule is on — for a guest because they must
+  // verify it, and for a signed-in customer because the server checks the order
+  // names their verified number (an empty field would read as a mismatch).
+  const verifyRequired = flags.verifiedOrders && !userId;
+  const phoneRequired = flags.verifiedOrders;
+  const mustVerify = verifyRequired && !otp.verified;
 
   // Live dine-in bill preview — re-quotes whenever the cart subtotal changes.
   useEffect(() => {
@@ -87,10 +138,23 @@ export function QrCheckout({
   async function placeOrder() {
     setServerError(null);
 
-    // Contact is optional (a QR diner may stay anonymous), but if given it must
-    // be valid — the phone is where the WhatsApp bill lands and unlocks loyalty.
+    // Contact was optional when a QR diner could stay anonymous. Once the
+    // verified-number rule is on it is not: the server refuses an order whose
+    // number nobody confirmed, and refusing here says so before the round trip.
+    if (phoneRequired && !phone.trim()) {
+      setPhoneError('Enter the mobile number your bill should go to.');
+      return;
+    }
     if (phone.trim() && normalizeIndianMobile(phone) === null) {
-      setPhoneError('Enter a valid 10-digit Indian mobile number, or leave it blank.');
+      setPhoneError(
+        phoneRequired
+          ? 'Enter a valid 10-digit Indian mobile number.'
+          : 'Enter a valid 10-digit Indian mobile number, or leave it blank.',
+      );
+      return;
+    }
+    if (mustVerify) {
+      setPhoneError('Verify this number first — tap "Get OTP" and enter the code from WhatsApp.');
       return;
     }
     if (email.trim() && normalizeEmail(email) === null) {
@@ -269,22 +333,41 @@ export function QrCheckout({
         </div>
         <div>
           <label htmlFor="qr-phone" className="mb-1 block text-sm font-bold text-charcoal">
-            Phone <span className="font-normal text-muted">(optional — for your bill on WhatsApp)</span>
+            Phone{' '}
+            <span className="font-normal text-muted">
+              {phoneRequired
+                ? '(we send your bill here on WhatsApp)'
+                : '(optional — for your bill on WhatsApp)'}
+            </span>
           </label>
-          <input
-            id="qr-phone"
-            type="tel"
-            inputMode="numeric"
-            maxLength={16}
-            value={phone}
-            onChange={(e) => {
-              setPhone(e.target.value);
-              if (phoneError) setPhoneError(null);
-            }}
-            placeholder="e.g. 98765 43210"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
+          <div className="flex gap-2">
+            <input
+              id="qr-phone"
+              type="tel"
+              inputMode="numeric"
+              required={phoneRequired}
+              maxLength={16}
+              value={phone}
+              onChange={(e) => {
+                otp.setPhone(e.target.value);
+                if (phoneError) setPhoneError(null);
+              }}
+              placeholder="e.g. 98765 43210"
+              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            />
+            {verifyRequired ? (
+              <GetOtpButton
+                otp={otp}
+                onBeforeSend={() => {
+                  if (normalizeIndianMobile(phone) !== null) return true;
+                  setPhoneError('Enter a valid 10-digit Indian mobile number.');
+                  return false;
+                }}
+              />
+            ) : null}
+          </div>
           {phoneError ? <p className="mt-1 text-xs text-red-700">{phoneError}</p> : null}
+          {verifyRequired ? <PhoneOtpPanel otp={otp} /> : null}
         </div>
         <div>
           <label htmlFor="qr-email" className="mb-1 block text-sm font-bold text-charcoal">
@@ -344,14 +427,16 @@ export function QrCheckout({
       <button
         type="button"
         onClick={placeOrder}
-        disabled={submitting || !storeAcceptingOrders}
+        disabled={submitting || otp.busy || !storeAcceptingOrders || mustVerify}
         className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
       >
         {submitting
           ? 'Placing order…'
           : !storeAcceptingOrders
             ? 'Ordering unavailable right now'
-            : `Pay ₹${displayBill.total_inr} & place order`}
+            : mustVerify
+              ? 'Verify your number to order'
+              : `Pay ₹${displayBill.total_inr} & place order`}
       </button>
     </div>
   );

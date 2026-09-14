@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getStaffOrOwner } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { clientIp } from '@/lib/api/rateLimit';
+import { evaluateStoreNetwork } from '@/lib/attendance/network';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { evaluateGeofence, type GeoReading } from '@/lib/attendance/geofence';
 import { detectIntegrityFlags } from '@/lib/attendance/integrity';
@@ -176,7 +178,16 @@ export async function POST(request: Request) {
         }
       : null,
   });
-  const flags = Array.from(new Set([...verdict.flags, ...integrityFlags])) as AttendanceFlag[];
+  // NET-1 — did this come through the cafe's connection? A browser cannot read
+  // the WiFi name, so the public IP is the closest available proof, and it is a
+  // genuinely useful one: a spoofed GPS from home passes the geofence and fails
+  // HERE. Flagged, never blocking — the cafe's IP is probably dynamic, and a
+  // blocking check would lock the team out on a morning the router rebooted.
+  const network = evaluateStoreNetwork(clientIp(request), settings.store_networks);
+
+  const flags = Array.from(
+    new Set([...verdict.flags, ...integrityFlags, ...network.flags]),
+  ) as AttendanceFlag[];
 
   if (body.type === 'in') {
     // NOTE what is absent: clock_in_at and business_date. The column default

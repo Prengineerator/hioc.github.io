@@ -7,6 +7,8 @@ import { isMissingColumnError } from '@/lib/api/postgrest';
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
+import { flags } from '@/lib/flags';
+import { evaluatePhoneVerification } from '@/lib/orders/phoneVerification';
 import { sendBillNotification } from '@/lib/notifications/engine';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import {
@@ -204,6 +206,51 @@ export async function POST(request: Request) {
   const userId = isStaff ? null : (sessionUser?.id ?? null);
 
   const admin = createAdminSupabaseClient();
+
+  // VERIFY-1 — a customer-placed order must carry a number its placer has
+  // verified. Enforced HERE and not only in the checkout form, because a
+  // disabled button is not a rule: this route is reachable directly, and the
+  // table-QR checkout never had the button at all. Staff orders are exempt —
+  // see lib/orders/phoneVerification.ts for why that is not a loophole.
+  if (flags.verifiedOrders && !isStaff) {
+    // Read through the admin client, not the caller's session: profiles is
+    // RLS-protected and this is a question about the session's own row, asked
+    // by the server about itself.
+    let profilePhone: string | null = null;
+    let profileVerified = false;
+    if (sessionUser) {
+      const { data: profile, error: profileError } = await admin
+        .from('profiles')
+        .select('phone, phone_verified')
+        .eq('id', sessionUser.id)
+        .maybeSingle();
+      if (profileError) {
+        // Fail CLOSED. A lookup that cannot answer "has this number been
+        // verified?" must not be read as "yes" — the whole point of the rule is
+        // that an unverified number never reaches the WhatsApp sender.
+        console.error('orders: phone verification lookup failed', profileError);
+        return errorResponse(503, 'Could not confirm your verified number just now — please try again.');
+      }
+      profilePhone = (profile?.phone as string | null) ?? null;
+      profileVerified = Boolean(profile?.phone_verified);
+    }
+
+    const verdict = evaluatePhoneVerification({
+      enabled: true,
+      isStaff,
+      sessionUserId: sessionUser?.id ?? null,
+      profilePhone,
+      profilePhoneVerified: profileVerified,
+      orderPhone: trimmedPhone,
+    });
+    if (!verdict.ok) {
+      // 403, not 401: for a mismatch the caller IS authenticated and the
+      // problem is which number the order names. The body carries `code` so the
+      // checkout can reopen the OTP step on the right field instead of printing
+      // a sentence and leaving the customer to work out what to do.
+      return NextResponse.json({ error: verdict.message, code: verdict.code }, { status: 403 });
+    }
+  }
 
   // Dine-in requires a valid, active table (FND3-3). Its label is snapshotted
   // onto the order (FND3-2) so it survives later renames — same philosophy as

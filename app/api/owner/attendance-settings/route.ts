@@ -3,6 +3,8 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
+import { clientIp } from '@/lib/api/rateLimit';
+import { isValidNetworkEntry } from '@/lib/attendance/network';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,10 +35,22 @@ const NUMERIC_FIELDS: Record<string, { min: number; max: number; integer: boolea
   location_retention_days: { min: 30, max: 3650, integer: true },
 };
 
-export async function GET() {
+// NET-1 — how many networks one cafe can plausibly have (a primary line, a
+// backup, maybe a second range). A cap, because every extra entry is another
+// place a punch can look legitimate from.
+const MAX_NETWORKS = 8;
+
+export async function GET(request: Request) {
   const owner = await getOwnerUser();
   if (!owner) return errorResponse(403, 'Owner access required');
-  return NextResponse.json({ settings: await getAttendanceSettings() });
+  return NextResponse.json({
+    settings: await getAttendanceSettings(),
+    // The public IP THIS request came from. The setup flow is "open this page
+    // on the cafe's WiFi and tap Add" — without it the owner has to go and find
+    // their IP on some third-party site and type it in, which is the step where
+    // this feature quietly never gets configured.
+    yourIp: clientIp(request),
+  });
 }
 
 export async function PATCH(request: Request) {
@@ -111,10 +125,40 @@ export async function PATCH(request: Request) {
     );
   }
 
+  // NET-1 — the cafe's networks. An array, not a number, so it sits outside the
+  // NUMERIC_FIELDS loop. Absent = leave alone; [] = deliberately turn the check
+  // off, which is a state the owner is allowed to choose.
+  const networkPatch: { store_networks?: string[] } = {};
+  if ('store_networks' in body) {
+    const raw = body.store_networks;
+    if (!Array.isArray(raw) || raw.some((e) => typeof e !== 'string')) {
+      return errorResponse(400, 'store_networks must be an array of IP addresses or CIDR ranges.');
+    }
+    // Trim, drop blanks, de-duplicate — the owner is pasting these by hand.
+    const entries = Array.from(
+      new Set((raw as string[]).map((e) => e.trim()).filter(Boolean)),
+    );
+    if (entries.length > MAX_NETWORKS) {
+      return errorResponse(400, `At most ${MAX_NETWORKS} networks.`);
+    }
+    // Reject a typo rather than store it: an entry that can never match would
+    // silently turn every honest punch into an off-network flag, and the owner
+    // would be reading a warning about their own spelling.
+    const bad = entries.find((e) => !isValidNetworkEntry(e));
+    if (bad) {
+      return errorResponse(400, `"${bad}" is not a valid IP address or CIDR range (e.g. 49.36.12.34 or 49.36.12.0/24).`);
+    }
+    networkPatch.store_networks = entries;
+  }
+
+  if (Object.keys(patch).length === 0 && Object.keys(networkPatch).length === 0) {
+    return errorResponse(400, 'Nothing to update');
+  }
+
   const admin = createAdminSupabaseClient();
   const { data, error } = await admin
     .from('attendance_settings')
-    .update({ ...patch, updated_by: owner.id })
+    .update({ ...patch, ...networkPatch, updated_by: owner.id })
     .eq('is_singleton', true)
     .select('*')
     .maybeSingle();

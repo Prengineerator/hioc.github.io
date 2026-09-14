@@ -164,6 +164,28 @@ Same shape as **C-4**. Unset `CRON_SECRET` → the endpoint is disabled (401), n
 runnable by anyone. The job must also be idempotent: running it twice must not
 re-close a session or double-flag it.
 
+### A-9b — the cafe-network allowlist must never reach a staff client (CRITICAL)
+**Meaning:** `attendance_settings.store_networks` appears in a response to a staff
+session, a Server Component prop, or any non-owner route.
+**Why:** the same reasoning as **A-3**. Knowing which addresses count as "in the cafe"
+is knowing exactly what to be behind, and the allowlist is a shorter list to work
+around than a coordinate. It is owner-only, alongside the radius.
+**Fix:** it is returned only by `/api/owner/attendance-settings` (getOwnerUser-gated).
+The punch route reads it server-side and puts a FLAG on the row — the staffer's
+response never mentions the network at all.
+
+### A-9c — the network check must flag, never block (WARN → treat as high)
+**Meaning:** a code path turns an `off_network` verdict into a refused punch, a 4xx,
+or anything other than an entry in `attendance_sessions.flags`.
+**Why:** an owner decision (2026-09-14) with a concrete failure behind it — most
+small-business connections have a dynamic public IP that changes when the router
+reboots. Blocking on it locks the entire team out of clocking in on a morning nobody
+changed anything, and they find out at the door. The cost of the flag is one glance at
+the sheet; the cost of the block is a shift.
+**Fix:** `evaluateStoreNetwork()` returns flags only, and it has no `accepted` field to
+misuse. If a future ticket wants blocking, that is a product decision to re-open with
+the owner, not an implementation detail.
+
 ### A-9 — CSV export must be formula-injection safe (WARN)
 **Meaning:** a payroll export writes a field beginning `=`, `+`, `-`, or `@` unescaped.
 **Fix:** prefix such fields with `'` (or wrap and escape) before writing. Staff names

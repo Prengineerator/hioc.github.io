@@ -1,0 +1,55 @@
+-- ===========================================================================
+-- NET-1 — was the punch made on the cafe's network?
+--
+-- The ask was "staff must be connected to the store WiFi to mark attendance".
+-- A browser cannot read the WiFi SSID — there is no web API for it, on any
+-- platform — so the literal check is not available to us. What the SERVER can
+-- see is the public IP the punch arrived from: on the cafe's WiFi that is the
+-- cafe's internet connection, on a phone's mobile data it is the carrier's.
+-- That answers the useful half of the question, and it composes with the
+-- geofence rather than replacing it — a spoofed GPS from home still fails the
+-- network check, and a phone on 4G inside the cafe fails it too.
+--
+-- It FLAGS, it does not block (owner decision, 2026-09-14). Most small-business
+-- connections have a DYNAMIC public IP that changes when the router reboots or
+-- the ISP renews the lease. A blocking check would lock the whole team out of
+-- clocking in on a morning when nobody changed anything, and they would find
+-- out at the door. The flag lands on attendance_sessions.flags, which already
+-- exists and is already documented as "informational — never blocks a punch",
+-- so no new column is needed for the signal itself.
+--
+-- Safe to re-run. Apply before deploying: with the column absent the settings
+-- read drops the field, the allowlist reads as empty, and the check reports
+-- 'not_configured' — i.e. it fails to the quiet state, not to a wall of flags.
+-- ===========================================================================
+
+-- The cafe's public IPs. Each entry is a plain address or a CIDR range:
+--
+--   '49.36.12.34'        one address — the common case for a single connection
+--   '49.36.12.0/24'      a range, for an ISP that moves you around a small pool
+--   '2405:201:1234::/48' an IPv6 prefix, for a connection handing out v6
+--
+-- EMPTY MEANS OFF. Not "refuse everything" — an owner who has not set this up
+-- gets no flags at all, rather than a sheet full of warnings about a feature
+-- they never turned on.
+--
+-- A range rather than a single address is the honest default for most Indian
+-- broadband: ask the ISP for a static IP if attendance matters, otherwise
+-- expect to update this when the connection changes, which is why the owner
+-- settings screen shows the current IP with a one-tap Add.
+alter table attendance_settings
+  add column if not exists store_networks text[] not null default '{}';
+
+-- ---------------------------------------------------------------------------
+-- Verify:
+--   select store_networks from attendance_settings;
+--
+--   -- after a punch, the signal shows up in the flags array that already
+--   -- carries low_confidence / static_coords / impossible_travel:
+--   select business_date, user_id, flags
+--     from attendance_sessions
+--    where 'off_network' = any(flags)
+--    order by clock_in_at desc limit 20;
+--
+-- Then run `npm run verify:db`.
+-- ---------------------------------------------------------------------------

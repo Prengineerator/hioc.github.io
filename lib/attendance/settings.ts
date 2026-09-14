@@ -36,6 +36,9 @@ const FALLBACK: Omit<AttendanceSettings, 'id' | 'updated_by' | 'updated_at'> = {
   max_session_hours: 14,
   location_retention_days: 365,
   max_leave_days_per_week: 1,
+  // NET-1: no networks configured = the check is off, which is the correct
+  // state for a settings row we could not read at all.
+  store_networks: [],
 };
 
 export async function getAttendanceSettings(): Promise<AttendanceSettings> {

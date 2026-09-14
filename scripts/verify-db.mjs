@@ -875,6 +875,24 @@ async function checkAttendance() {
 
   // SHEET-2 / D5-6. A day off is not a session, so paid leave has nowhere to
   // live without this table.
+  // NET-1 — the cafe's network allowlist. Empty is the correct default: it
+  // means the check is off, not that every punch is refused.
+  const nets = await rest('/attendance_settings?select=store_networks&limit=1');
+  if (nets.ok) {
+    const row = Array.isArray(nets.body) ? nets.body[0] : null;
+    const list = row?.store_networks;
+    pass(
+      'attendance_settings.store_networks exists',
+      Array.isArray(list) && list.length
+        ? `${list.length} network(s) configured — off-network punches will be flagged`
+        : 'no networks configured — the check is off, which is the correct default until the owner adds one',
+    );
+  } else if (errKind(nets) === 'no_column') {
+    fail('attendance_settings.store_networks exists', 'apply supabase/2026-09-attendance-network.sql');
+  } else {
+    fail('attendance_settings.store_networks exists', errText(nets));
+  }
+
   const marks = await rest('/attendance_day_marks?select=mark&limit=1');
   if (marks.ok) {
     pass('attendance_day_marks exists');

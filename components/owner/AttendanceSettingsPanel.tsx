@@ -25,6 +25,10 @@ export function AttendanceSettingsPanel() {
   const [measured, setMeasured] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const [pasted, setPasted] = useState('');
   const [pasteError, setPasteError] = useState('');
+  // NET-1 — the public IP THIS browser is reaching us from. The setup flow is
+  // "open this page on the cafe's WiFi and tap Add".
+  const [yourIp, setYourIp] = useState<string | null>(null);
+  const [networkInput, setNetworkInput] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -35,6 +39,7 @@ export function AttendanceSettingsPanel() {
       }
       const data = await res.json();
       setSettings(data.settings as AttendanceSettings);
+      setYourIp(typeof data.yourIp === 'string' ? data.yourIp : null);
     } catch {
       setError('Could not load attendance settings.');
     } finally {
@@ -46,7 +51,7 @@ export function AttendanceSettingsPanel() {
     void load();
   }, [load]);
 
-  async function save(patch: Record<string, number | null>) {
+  async function save(patch: Record<string, unknown>) {
     setSaving(true);
     setError('');
     setNotice('');
@@ -236,6 +241,105 @@ export function AttendanceSettingsPanel() {
           disabled={saving}
           onCommit={(v) => save({ max_fix_age_sec: v })}
         />
+      </div>
+
+      {/* NET-1 — the cafe's network. Sits with the geofence because the two are
+          one question asked twice ("is this person actually here?") and are
+          tuned in the same on-site sitting. */}
+      <div className="mt-8 border-t border-[#e5e5e5] pt-6">
+        <h3 className="text-base font-bold text-charcoal">Cafe network</h3>
+        <p className="mt-1 text-sm text-muted">
+          Punches made off your cafe&apos;s internet connection get flagged on the attendance
+          sheet for you to look at. They are never refused — your connection&apos;s address can
+          change on its own, and nobody should lose a shift to that.
+        </p>
+        <p className="mt-2 text-xs text-muted">
+          A phone can&apos;t tell us which WiFi it is on — no browser allows that — so this checks
+          the internet connection the punch came through. On your cafe&apos;s WiFi that is this
+          cafe; on mobile data it is the phone network, which is what gets flagged. Staff who
+          need to be counted as present should join the cafe WiFi before clocking in.
+        </p>
+
+        {yourIp ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-[#e5e5e5] bg-[#faf7f4] p-3 text-sm">
+            <span className="text-muted">This device is connecting from</span>
+            <span className="font-mono font-bold text-charcoal">{yourIp}</span>
+            {(settings.store_networks ?? []).includes(yourIp) ? (
+              <span className="rounded-full bg-[#e3efe4] px-2 py-0.5 text-xs font-bold text-[#2f6b38]">
+                Already added
+              </span>
+            ) : (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() =>
+                  void save({ store_networks: [...(settings.store_networks ?? []), yourIp] })
+                }
+                className="rounded-md bg-charcoal px-3 py-1.5 text-xs font-bold text-cream disabled:opacity-50"
+              >
+                Add this network
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {(settings.store_networks ?? []).length === 0 ? (
+          <p className="mt-3 text-sm text-muted">
+            No networks added — nothing is being checked or flagged yet.
+          </p>
+        ) : (
+          <ul className="mt-3 flex flex-col gap-2">
+            {(settings.store_networks ?? []).map((entry) => (
+              <li
+                key={entry}
+                className="flex items-center justify-between gap-3 rounded-md border border-[#e5e5e5] px-3 py-2 text-sm"
+              >
+                <span className="font-mono text-charcoal">{entry}</span>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    void save({
+                      store_networks: (settings.store_networks ?? []).filter((e) => e !== entry),
+                    })
+                  }
+                  className="text-sm font-medium text-red-700 hover:underline disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="flex flex-1 flex-col gap-1 text-sm">
+            <span className="font-medium text-charcoal">Add another (address or range)</span>
+            <input
+              value={networkInput}
+              onChange={(e) => setNetworkInput(e.target.value)}
+              placeholder="49.36.12.34 or 49.36.12.0/24"
+              className="min-w-[14rem] rounded-md border border-[#ddd] px-3 py-2 font-mono text-sm"
+            />
+          </label>
+          <button
+            type="button"
+            disabled={saving || !networkInput.trim()}
+            onClick={async () => {
+              const next = [...(settings.store_networks ?? []), networkInput.trim()];
+              await save({ store_networks: next });
+              setNetworkInput('');
+            }}
+            className="rounded-md bg-charcoal px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-muted">
+          If your connection&apos;s address changes and punches start getting flagged, come back
+          here on the cafe WiFi and tap Add. A static IP from your internet provider removes that
+          chore for good.
+        </p>
       </div>
 
       {/* OPS5-1b — the payroll rules. Separated by a rule from the geofence
