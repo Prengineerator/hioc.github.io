@@ -63,6 +63,21 @@ export default async function StaffPrintPage({
 
   return (
     <div className="mx-auto w-[80mm] max-w-full px-3 py-6 text-black print:w-full print:px-0 print:py-0">
+      {/* PRT-2 — the page geometry, declared here rather than left to the
+          printer driver.
+          `margin: 0` is the load-bearing half: the margin box is where Chrome
+          draws the URL, the date and the page number, and on a receipt roll
+          that means every ticket carries "staff.hioc.in/staff-print/..." across
+          the top and wastes an inch of paper. There is no print dialog to
+          untick those boxes in once kiosk printing is on, so the page has to
+          refuse the margin box outright.
+          `size: 80mm auto` keeps the roll continuous instead of being broken
+          into letter-sized pages when the driver's default paper is A4 — the
+          state a freshly installed printer is usually in.
+          Scoped to this route by living in the route: @page is document-global,
+          and the customer receipt and the A6 QR cards have their own geometry. */}
+      <style>{'@page { size: 80mm auto; margin: 0; }'}</style>
+
       {/* On-screen toolbar — auto-opens the print dialog; print:hidden. */}
       {auto ? <PrintOnLoad orderId={id} type={type} /> : <AutoPrint label={LABELS[type]} />}
 
