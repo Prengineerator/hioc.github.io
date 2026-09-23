@@ -56,8 +56,8 @@ export function PhoneOtpPanel({
   verifyingLabel = 'Verifying…',
 }: {
   otp: PhoneOtp;
-  /** Overridable so a caller that auto-places the order right after
-   *  verification (see CheckoutForm) can say so on the button itself. */
+  /** Overridable so a caller that does more than verify on this click can
+   *  say so on the button itself. */
   verifyLabel?: string;
   verifyingLabel?: string;
 }) {
