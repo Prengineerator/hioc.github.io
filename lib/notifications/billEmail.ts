@@ -7,6 +7,7 @@ import type { Order } from '@/lib/types';
 import { absoluteUrl } from '@/lib/url';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
+import { BUSINESS } from '@/lib/legal';
 
 export function renderBillEmail(order: Order): { subject: string; html: string } {
   const orderNo = formatOrderNumber(order.order_number);
@@ -31,7 +32,7 @@ export function renderBillEmail(order: Order): { subject: string; html: string }
         <p style="font-size:12px;color:#8a8a8a;line-height:1.5;">You can open the link above any time to see your order status and print or save the bill as a PDF.</p>
       </td></tr>
       <tr><td style="padding:8px 28px 28px;border-top:1px solid #eee;text-align:center;">
-        <p style="font-size:11px;color:#8a8a8a;line-height:1.5;margin:12px 0 0;">${escapeHtml(CAFE_ADDRESS)}<br/>${escapeHtml(CAFE_PHONE_DISPLAY)}</p>
+        <p style="font-size:11px;color:#8a8a8a;line-height:1.5;margin:12px 0 0;">${escapeHtml(CAFE_ADDRESS)}<br/>${escapeHtml(CAFE_PHONE_DISPLAY)}${BUSINESS.gstin ? `<br/>GSTIN: ${escapeHtml(BUSINESS.gstin)}` : ''}</p>
       </td></tr>
     </table>
   </body>

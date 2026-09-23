@@ -7,6 +7,7 @@
 
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
+import { BUSINESS } from '@/lib/legal';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 
 const ORDER_TYPE_LABEL: Record<string, string> = {
@@ -148,6 +149,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         <TicketLogo />
         <p className="mt-1 text-[11px] leading-tight">{CAFE_ADDRESS}</p>
         <p className="text-[11px]">{CAFE_PHONE_DISPLAY}</p>
+        {BUSINESS.gstin ? <p className="text-[11px]">GSTIN: {BUSINESS.gstin}</p> : null}
       </div>
 
       <Divider />

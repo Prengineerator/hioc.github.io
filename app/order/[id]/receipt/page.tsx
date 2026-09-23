@@ -5,6 +5,7 @@ import { isUuid } from '@/lib/api/constants';
 import { getOrderWithCoupon } from '@/lib/orders/getOrder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
+import { BUSINESS } from '@/lib/legal';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -81,6 +82,9 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           />
           <p className="mt-1 text-[11px] leading-tight text-muted print:text-black">{CAFE_ADDRESS}</p>
           <p className="text-[11px] text-muted print:text-black">{CAFE_PHONE_DISPLAY}</p>
+          {BUSINESS.gstin ? (
+            <p className="text-[11px] text-muted print:text-black">GSTIN: {BUSINESS.gstin}</p>
+          ) : null}
         </div>
 
         <Divider />
