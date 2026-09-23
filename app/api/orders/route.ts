@@ -715,7 +715,17 @@ export async function POST(request: Request) {
     await sendBillNotification(response);
   }
 
-  return NextResponse.json({ order: response, payment: paymentIntent }, { status: 201 });
+  // `payment_unavailable` tells the client the customer asked to pay online but
+  // the gateway failed, so the order was switched to pay-at-counter above — the
+  // client shows that instead of silently landing on the order page.
+  return NextResponse.json(
+    {
+      order: response,
+      payment: paymentIntent,
+      payment_unavailable: needsOnlinePayment && !paymentIntent,
+    },
+    { status: 201 },
+  );
 }
 
 // GET /api/orders — staff-only.

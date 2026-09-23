@@ -187,15 +187,18 @@ export function QrCheckout({
       });
 
       if (res.status === 201) {
-        const data: { order: { id: string }; payment: CreatedPaymentIntent | null } =
-          await res.json();
+        const data: {
+          order: { id: string };
+          payment: CreatedPaymentIntent | null;
+          payment_unavailable?: boolean;
+        } = await res.json();
         clearCart();
 
         // Pay online first (D6): open Razorpay's hosted checkout for the intent
         // the server created. Both success and dismiss land on the live order
         // page, which server-reconciles the real payment_status. If the gateway
-        // is unconfigured the server falls back to pay-at-counter (payment null)
-        // and we go straight to the order page.
+        // is unconfigured or failing the server falls back to pay-at-counter
+        // (payment null, payment_unavailable set) and the order page says so.
         if (data.payment) {
           openRazorpayCheckout(data.payment, {
             name,
@@ -208,7 +211,9 @@ export function QrCheckout({
           return;
         }
 
-        router.push(`/order/${data.order.id}`);
+        router.push(
+          `/order/${data.order.id}${data.payment_unavailable ? '?payment=unavailable' : ''}`,
+        );
         return;
       }
 

@@ -378,7 +378,11 @@ export function CheckoutForm({
       });
 
       if (res.status === 201) {
-        const data: { order: { id: string }; payment: CreatedPaymentIntent | null } = await res.json();
+        const data: {
+          order: { id: string };
+          payment: CreatedPaymentIntent | null;
+          payment_unavailable?: boolean;
+        } = await res.json();
         clearCart();
 
         if (data.payment) {
@@ -400,8 +404,12 @@ export function CheckoutForm({
         }
 
         // Redirect to the live order-status page (not just the confirmation
-        // page) so the customer can track accept/prep/ready in real time.
-        router.push(`/order/${data.order.id}`);
+        // page) so the customer can track accept/prep/ready in real time. If
+        // they chose to pay online but the gateway failed, the server placed it
+        // as pay-at-counter — the flag makes the status page say so.
+        router.push(
+          `/order/${data.order.id}${data.payment_unavailable ? '?payment=unavailable' : ''}`,
+        );
         return;
       }
 
