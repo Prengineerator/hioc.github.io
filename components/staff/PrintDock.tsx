@@ -29,9 +29,12 @@ import {
   PrintQueue,
   PRINT_MESSAGE_CHANNEL,
   type PrintFrameMessage,
+  type PrintJob,
   type PrintJobSpec,
   type PrintQueueSnapshot,
 } from '@/lib/pos/printQueue';
+import { getDesktopBridge } from '@/lib/desktop/bridge';
+import { createDesktopExecutor, NoPrintersConfiguredError } from '@/lib/desktop/printExecutor';
 
 const EMPTY_SNAPSHOT: PrintQueueSnapshot = {
   jobs: [],
@@ -56,14 +59,39 @@ export function usePrintDock(): PrintDock {
   const waiters = useRef(new Map<string, { resolve: () => void; reject: () => void }>());
   const [status, setStatus] = useState<PrintQueueSnapshot>(EMPTY_SNAPSHOT);
 
+  // PRN-4/PRN-5 — computed once, at mount, and never re-checked: the bridge
+  // either exists for the life of this window or it never will. `useRef`
+  // (not state) so reading it never re-renders anything, matching the rest
+  // of this hook's "success is silent" design.
+  const bridge = useRef(getDesktopBridge()).current;
+  const desktopExecutor = useRef(bridge ? createDesktopExecutor(bridge) : null).current;
+
+  // The existing iframe path, unchanged — factored out so the desktop
+  // executor can fall back to it per-job (NoPrintersConfiguredError) without
+  // duplicating this. A plain browser (no bridge) always takes this path, so
+  // its behaviour is byte-for-byte what it was before PRN-4/PRN-5.
+  const runViaIframe = useCallback(
+    (job: PrintJob) =>
+      new Promise<void>((resolve, reject) => {
+        waiters.current.set(job.id, { resolve, reject });
+        setFrame({ jobId: job.id, src: printFrameSrc(job.orderId, job.type) });
+      }),
+    [],
+  );
+
   const queue = useRef<PrintQueue | null>(null);
   if (queue.current === null) {
     queue.current = new PrintQueue({
-      execute: (job) =>
-        new Promise<void>((resolve, reject) => {
-          waiters.current.set(job.id, { resolve, reject });
-          setFrame({ jobId: job.id, src: printFrameSrc(job.orderId, job.type) });
-        }),
+      execute: (job) => {
+        if (!desktopExecutor) return runViaIframe(job);
+        return desktopExecutor(job).catch((err) => {
+          // No printers configured AT ALL (as opposed to none set for this
+          // job's role) — this machine hasn't been set up yet, so behave
+          // exactly like a browser until the owner visits Printers.
+          if (err instanceof NoPrintersConfiguredError) return runViaIframe(job);
+          throw err;
+        });
+      },
       abort: (job) => {
         waiters.current.delete(job.id);
         setFrame((cur) => (cur?.jobId === job.id ? null : cur));
@@ -120,8 +148,9 @@ export function usePrintDock(): PrintDock {
           <p className="text-sm font-bold text-red-800">{printFailureMessage(status.failed)}</p>
           {status.escalate ? (
             <p className="mt-1 text-xs text-red-700">
-              Third failure this shift — check the printer is on and set as this machine&rsquo;s
-              default (see the counter setup guide).
+              {bridge
+                ? 'Third failure this shift — check the printer in Printers.'
+                : "Third failure this shift — check the printer is on and set as this machine’s default (see the counter setup guide)."}
             </p>
           ) : null}
           <div className="mt-2 flex flex-wrap gap-2">

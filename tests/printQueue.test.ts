@@ -46,13 +46,15 @@ function fakeClock() {
 /** An executor whose promises the test settles by hand. */
 function manualExecutor() {
   const started: PrintJob[] = [];
-  const settlers: { resolve: () => void; reject: () => void }[] = [];
+  const settlers: { resolve: (v?: void | { confirmed: boolean }) => void; reject: () => void }[] = [];
   return {
     started,
     settlers,
     execute: (job: PrintJob) => {
       started.push(job);
-      return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
+      return new Promise<void | { confirmed: boolean }>((resolve, reject) =>
+        settlers.push({ resolve, reject }),
+      );
     },
   };
 }
@@ -239,6 +241,61 @@ describe('PrintQueue hand-off — the browser accepting a job is not proof of pa
 
     expect(exec.started.map((j) => j.type)).toEqual(['kot', 'receipt']);
     expect(queue.snapshot().handedOff.map((j) => j.type)).toEqual(['kot']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRN-4 — a desktop executor can vouch for the paper itself. `confirmed: true`
+// skips the hand-off window (there is nothing for a human to contradict);
+// anything else (void, or `confirmed: false`) is the existing behaviour.
+// ---------------------------------------------------------------------------
+
+describe('PrintQueue confirmed prints (PRN-4)', () => {
+  it('drops a confirmed job with no hand-off chip at all', async () => {
+    const { queue, exec } = build();
+    queue.enqueue([{ orderId: 'o1', type: 'kot' }]);
+    await flush();
+    exec.settlers[0].resolve({ confirmed: true });
+    await flush();
+
+    const snap = queue.snapshot();
+    expect(snap.jobs).toHaveLength(0);
+    expect(snap.failed).toHaveLength(0);
+    expect(snap.handedOff).toHaveLength(0);
+    expect(snap.failureCount).toBe(0);
+  });
+
+  it('still hands off when the executor resolves confirmed: false', async () => {
+    const { queue, exec } = build();
+    queue.enqueue([{ orderId: 'o1', type: 'kot' }]);
+    await flush();
+    exec.settlers[0].resolve({ confirmed: false });
+    await flush();
+
+    expect(queue.snapshot().handedOff.map((j) => j.type)).toEqual(['kot']);
+  });
+
+  it('still hands off when the executor resolves with no value (existing behaviour)', async () => {
+    const { queue, exec } = build();
+    queue.enqueue([{ orderId: 'o1', type: 'kot' }]);
+    await flush();
+    exec.settlers[0].resolve();
+    await flush();
+
+    expect(queue.snapshot().handedOff.map((j) => j.type)).toEqual(['kot']);
+  });
+
+  it('does not block the next job while resolving confirmed', async () => {
+    const { queue, exec } = build();
+    queue.enqueue([
+      { orderId: 'o1', type: 'kot' },
+      { orderId: 'o1', type: 'receipt' },
+    ]);
+    await flush();
+    exec.settlers[0].resolve({ confirmed: true });
+    await flush();
+
+    expect(exec.started.map((j) => j.type)).toEqual(['kot', 'receipt']);
   });
 });
 

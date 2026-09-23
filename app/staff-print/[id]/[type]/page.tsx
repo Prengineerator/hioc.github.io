@@ -35,7 +35,7 @@ export default async function StaffPrintPage({
   searchParams,
 }: {
   params: { id: string; type: string };
-  searchParams?: { auto?: string };
+  searchParams?: { auto?: string; silent?: string };
 }) {
   const { id, type } = params;
   if (!isUuid(id) || !TYPES.has(type)) {
@@ -55,6 +55,13 @@ export default async function StaffPrintPage({
   // on load and report back, no toolbar. Without it this is still the tab a
   // staffer opened by hand, unchanged.
   const auto = searchParams?.auto === '1';
+
+  // PRN-5 — `?silent=1` means the desktop shell's driver-fallback path mounted
+  // this page in an offscreen window and will call `webContents.print({
+  // silent: true })` itself. No toolbar, no AutoPrint, no PrintOnLoad/postMessage
+  // handshake — none of that applies when nothing in the browser is doing the
+  // printing. Independent of `auto`; when both are set, `silent` wins.
+  const silent = searchParams?.silent === '1';
 
   const order = await getStaffPrintOrder(id);
   if (!order) {
@@ -78,8 +85,9 @@ export default async function StaffPrintPage({
           and the customer receipt and the A6 QR cards have their own geometry. */}
       <style>{'@page { size: 80mm auto; margin: 0; }'}</style>
 
-      {/* On-screen toolbar — auto-opens the print dialog; print:hidden. */}
-      {auto ? <PrintOnLoad orderId={id} type={type} /> : <AutoPrint label={LABELS[type]} />}
+      {/* On-screen toolbar — auto-opens the print dialog; print:hidden.
+          Silent mode renders neither: the desktop shell drives printing. */}
+      {silent ? null : auto ? <PrintOnLoad orderId={id} type={type} /> : <AutoPrint label={LABELS[type]} />}
 
       <div className="rounded-md border border-[#e5e5e5] bg-white p-4 shadow-sm print:border-0 print:p-0 print:shadow-none">
         {type === 'kot' ? (

@@ -1,0 +1,200 @@
+import { describe, expect, it } from 'vitest';
+import { renderEscPos, transliterate, wrapText } from '@/lib/print/escpos';
+import type { TicketDoc } from '@/lib/print/ticketDoc';
+
+// PRN-3 — pure byte-level tests for the ESC/POS renderer. No printer, no I/O:
+// every assertion is on the Uint8Array (or the plain string helpers) the
+// renderer produces.
+
+function doc(blocks: TicketDoc['blocks']): TicketDoc {
+  return { type: 'receipt', orderId: 'order-1', blocks };
+}
+
+// Finds every start index where `needle` occurs in `haystack`.
+function findAll(haystack: Uint8Array, needle: number[]): number[] {
+  const hits: number[] = [];
+  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    hits.push(i);
+  }
+  return hits;
+}
+
+// Decodes the printable-text lines out of a rendered byte stream by skipping
+// every known ESC/GS command (rather than crudely dropping "non-printable"
+// bytes, which would leave stray characters behind for commands whose
+// parameter byte happens to be printable, e.g. ESC d 0x64 ('d')).
+function decodeLines(bytes: Uint8Array): string[] {
+  const lines: string[] = [];
+  let current = '';
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    if (b === 0x0a) {
+      lines.push(current);
+      current = '';
+      i++;
+      continue;
+    }
+    if (b === 0x1b) {
+      const cmd = bytes[i + 1];
+      if (cmd === 0x40) {
+        i += 2; // ESC @
+      } else {
+        i += 3; // ESC a n / ESC E n / ESC d n
+      }
+      continue;
+    }
+    if (b === 0x1d) {
+      const cmd = bytes[i + 1];
+      if (cmd === 0x21) {
+        i += 3; // GS ! n
+      } else if (cmd === 0x56) {
+        i += 4; // GS V m n
+      } else if (cmd === 0x28) {
+        const pL = bytes[i + 3];
+        const pH = bytes[i + 4];
+        i += 5 + pL + pH * 256; // GS ( k ... variable-length frame
+      } else {
+        i += 2;
+      }
+      continue;
+    }
+    current += String.fromCharCode(b);
+    i++;
+  }
+  if (current.length > 0) lines.push(current);
+  return lines;
+}
+
+describe('renderEscPos — init and cut', () => {
+  it('starts with ESC @ (init)', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false });
+    expect(bytes[0]).toBe(0x1b);
+    expect(bytes[1]).toBe(0x40);
+  });
+
+  it('includes the partial-cut command only when cut is requested', () => {
+    const cutBytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
+    const noCutBytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false });
+    // GS V 66 0
+    expect(findAll(cutBytes, [0x1d, 0x56, 0x42, 0x00])).toHaveLength(1);
+    expect(findAll(noCutBytes, [0x1d, 0x56, 0x42, 0x00])).toHaveLength(0);
+  });
+
+  it('always ends with a 4-line feed (ESC d 4)', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
+    // The trailer feed is the last ESC d command before an optional cut.
+    expect(findAll(bytes, [0x1b, 0x64, 0x04]).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('wrapText', () => {
+  it('never returns a line longer than the requested width, at 32 and 48 columns', () => {
+    const long =
+      'This is a very long line of ticket text that will definitely need to wrap across several lines of receipt paper without ever exceeding the column width, even with a supercalifragilisticexpialidocioussupercalifragilistic word in it.';
+    for (const width of [32, 48]) {
+      const lines = wrapText(long, width);
+      expect(lines.length).toBeGreaterThan(1);
+      for (const line of lines) {
+        expect(line.length).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  it('hard-breaks a single token with no spaces longer than the column', () => {
+    const lines = wrapText('a'.repeat(100), 32);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(32);
+    }
+    expect(lines.join('')).toBe('a'.repeat(100));
+  });
+});
+
+describe('renderEscPos — row right-alignment', () => {
+  it('right-pads so the right value lands flush against the column width', () => {
+    const bytes = renderEscPos(doc([{ kind: 'row', left: 'Subtotal', right: 'Rs. 240' }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    const lines = decodeLines(bytes);
+    const rowLine = lines.find((l) => l.startsWith('Subtotal'));
+    expect(rowLine).toBeDefined();
+    expect(rowLine!.length).toBe(48);
+    expect(rowLine!.endsWith('Rs. 240')).toBe(true);
+  });
+
+  it('never overflows the column width even when left + right cannot share a line', () => {
+    const bytes = renderEscPos(
+      doc([{ kind: 'row', left: 'A very long line item description that eats the whole line', right: 'Rs. 9999' }]),
+      { paperWidthMm: 58, cut: false },
+    );
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(32);
+    }
+    expect(lines.some((l) => l.trim().endsWith('Rs. 9999'))).toBe(true);
+  });
+});
+
+describe('transliterate', () => {
+  it('maps the documented fallbacks and leaves plain ASCII untouched', () => {
+    expect(transliterate('₹120')).toBe('Rs.120');
+    expect(transliterate('‘quoted’')).toBe("'quoted'");
+    expect(transliterate('“quoted”')).toBe('"quoted"');
+    expect(transliterate('2 × 3')).toBe('2 x 3');
+    expect(transliterate('a — b')).toBe('a - b');
+    expect(transliterate('Plain ASCII 123!?')).toBe('Plain ASCII 123!?');
+  });
+
+  it('falls back unknown non-ASCII characters to "?"', () => {
+    expect(transliterate('café')).toBe('caf?'); // é
+    expect(transliterate('\u{1F600}')).toBe('?'); // emoji (surrogate pair)
+  });
+
+  it('never leaves a byte above 0x7e once rendered', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: '₹100 café “deal” — 2×3 🎉' }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    for (const b of bytes) {
+      expect(b).toBeLessThanOrEqual(0x7e);
+    }
+  });
+});
+
+describe('renderEscPos — QR command', () => {
+  it('emits the GS ( k model/size/error/store/print sequence', () => {
+    const bytes = renderEscPos(doc([{ kind: 'qr', data: 'https://hioc.in/order/abc' }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    const gsParenK = [0x1d, 0x28, 0x6b];
+    const hits = findAll(bytes, gsParenK);
+    // model, size, error-correction, store, print — 5 GS ( k frames.
+    expect(hits.length).toBe(5);
+    // The data payload itself should be present in the byte stream (store frame).
+    const dataBytes = Array.from('https://hioc.in/order/abc').map((c) => c.charCodeAt(0));
+    expect(findAll(bytes, dataBytes)).toHaveLength(1);
+  });
+});
+
+describe('renderEscPos — bold toggling stays balanced', () => {
+  it('emits an equal number of ESC E 1 and ESC E 0 commands', () => {
+    const bytes = renderEscPos(
+      doc([
+        { kind: 'text', text: 'normal one' },
+        { kind: 'text', text: 'bold one', bold: true },
+        { kind: 'text', text: 'normal two' },
+        { kind: 'text', text: 'bold two, and the doc ends on bold', bold: true },
+      ]),
+      { paperWidthMm: 80, cut: true },
+    );
+    const boldOn = findAll(bytes, [0x1b, 0x45, 0x01]).length;
+    const boldOff = findAll(bytes, [0x1b, 0x45, 0x00]).length;
+    expect(boldOn).toBeGreaterThan(0);
+    expect(boldOn).toBe(boldOff);
+  });
+});

@@ -1,0 +1,60 @@
+# SHL-3 — packaging & distribution for the HIOC POS desktop shell.
+#
+# Signing/notarization/publish are all env-var driven placeholders (D7-7):
+# unset, the build is unsigned (Windows shows a SmartScreen warning during
+# pilot; macOS builds cannot be notarized and Gatekeeper will block them on
+# another machine). See desktop/README.md for exactly which vars to set.
+
+appId: in.hioc.pos
+productName: HIOC POS
+copyright: HIOC
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+
+# The `usb` native module's .node binary must live outside the asar archive
+# to be dlopen-able at runtime.
+asarUnpack:
+  - "**/*.node"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Reads CSC_LINK / CSC_KEY_PASSWORD from the environment automatically when
+  # present; unsigned otherwise.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - universal
+  category: public.app-category.business
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Reads CSC_LINK / CSC_KEY_PASSWORD for code signing automatically.
+  notarize:
+    teamId: ${env.APPLE_TEAM_ID}
+
+dmg:
+  sign: false
+
+publish:
+  provider: github
+  owner: ${env.HIOC_POS_GH_OWNER}
+  repo: ${env.HIOC_POS_GH_REPO}
