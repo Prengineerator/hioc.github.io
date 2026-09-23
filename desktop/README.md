@@ -8,8 +8,12 @@ milestone and is not implemented here.
 
 ## Dev run
 
+Needs **Node 22.12+** (Electron's installer is ESM-only; on Node 20 `npm i`
+fails with `ERR_REQUIRE_ESM` and Electron never downloads). `.nvmrc` pins it:
+
 ```sh
 cd desktop
+nvm use          # or: nvm install
 npm i
 HIOC_POS_URL=http://localhost:3001 npm start
 ```

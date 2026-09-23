@@ -142,7 +142,10 @@ function registerIpcHandlers(): void {
 function configureLoginItem(): void {
   // Default on in packaged builds only — a dev checkout must never install
   // itself into a developer's login items.
-  app.setLoginItemSettings({ openAtLogin: app.isPackaged });
+  // Calling it at all from an unpackaged app makes macOS log "Operation not
+  // permitted", so dev skips the call entirely.
+  if (!app.isPackaged) return;
+  app.setLoginItemSettings({ openAtLogin: true });
 }
 
 function checkForUpdates(): void {
