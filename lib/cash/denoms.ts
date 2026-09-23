@@ -17,8 +17,10 @@ export interface DenomConfig {
   kind: 'note' | 'amount';
 }
 
-// The denomination set per docs/PHASE-3-SPEC.md OPS-2: ₹500/200/100/50/20/10
-// notes entered as counts, plus a single "coins" bucket entered as a ₹ amount.
+// Every Indian note and coin in circulation at the counter, each entered as a
+// COUNT (2026-09 owner decision: coins used to be one lump "Coins (₹)" figure,
+// which made a coin shortage impossible to see). ₹5/₹2/₹1 are coins; ₹20 and
+// ₹10 exist as both — the count is what's in the drawer, whatever the form.
 export const DENOMINATIONS: readonly DenomConfig[] = [
   { key: '500', label: '₹500', value: 500, kind: 'note' },
   { key: '200', label: '₹200', value: 200, kind: 'note' },
@@ -26,8 +28,15 @@ export const DENOMINATIONS: readonly DenomConfig[] = [
   { key: '50', label: '₹50', value: 50, kind: 'note' },
   { key: '20', label: '₹20', value: 20, kind: 'note' },
   { key: '10', label: '₹10', value: 10, kind: 'note' },
-  { key: 'coins', label: 'Coins (₹)', value: 1, kind: 'amount' },
+  { key: '5', label: '₹5', value: 5, kind: 'note' },
+  { key: '2', label: '₹2', value: 2, kind: 'note' },
+  { key: '1', label: '₹1', value: 1, kind: 'note' },
 ];
+
+// Pre-2026-09 rows stored coins as one lump ₹ amount under this key. It is no
+// longer offered in the grid, but denomsTotalInr still adds it so a historical
+// cash day re-totals to exactly what was recorded.
+export const LEGACY_COINS_KEY = 'coins';
 
 // Coerce one raw grid entry to a non-negative integer (a count, or a ₹ amount
 // for the coins bucket). Garbage / negatives / fractions floor to a safe value.
@@ -39,7 +48,7 @@ function safeCount(raw: unknown): number {
 
 /**
  * The authoritative rupee total of a denomination map:
- *   500·c500 + 200·c200 + 100·c100 + 50·c50 + 20·c20 + 10·c10 + coins
+ *   Σ value·count over DENOMINATIONS (+ a legacy lump 'coins' amount)
  * Only the DENOMINATIONS keys are counted, so unknown keys (e.g. a stray
  * "2000") never inflate the drawer. Always computed server-side.
  */
@@ -49,7 +58,7 @@ export function denomsTotalInr(denoms: CashDenoms | null | undefined): number {
   for (const d of DENOMINATIONS) {
     total += d.value * safeCount(denoms[d.key]);
   }
-  return total;
+  return total + safeCount(denoms[LEGACY_COINS_KEY]);
 }
 
 /**

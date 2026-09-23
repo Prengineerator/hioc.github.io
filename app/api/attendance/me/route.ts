@@ -4,6 +4,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, unauthorized } from '@/lib/api/http';
 import { istBusinessDate } from '@/lib/attendance/businessDate';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
+import { cashRequirementFor } from '@/lib/cash/checkpoints';
 import type { AttendanceSession } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -78,6 +79,9 @@ export async function GET() {
     days.filter(pred).reduce((acc, d) => acc + d.minutes, 0);
 
   const settings = await getAttendanceSettings();
+  // CC-2: fails safe to { required: false, override: null } on any error —
+  // see lib/cash/checkpoints.ts. Never blocks this screen from loading.
+  const cash = await cashRequirementFor(admin, userId);
 
   return NextResponse.json({
     open,
@@ -91,5 +95,6 @@ export async function GET() {
     },
     // Whether punching is possible at all — never the radius or the coordinates.
     configured: settings.store_lat !== null && settings.store_lng !== null,
+    cash,
   });
 }

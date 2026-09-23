@@ -1,6 +1,10 @@
 import Link from 'next/link';
 import { flags } from '@/lib/flags';
+import { getStaffOrOwner } from '@/lib/api/auth';
 import { AttendancePunch } from '@/components/staff/AttendancePunch';
+import { CashOverridePanel } from '@/components/staff/CashOverridePanel';
+
+export const dynamic = 'force-dynamic';
 
 // ATT-1 — the staff attendance screen. The /staff/** layout already gates this
 // behind getStaffOrOwner(), so a signed-in staff/manager/owner is guaranteed.
@@ -9,7 +13,11 @@ import { AttendancePunch } from '@/components/staff/AttendancePunch';
 // off until the geofence has been tuned on site (Gate 5A-i). An untuned radius
 // refuses honest staff, and a feature that refuses honest staff on day one does
 // not get a second chance with the team.
-export default function StaffAttendancePage() {
+//
+// CC-3 — role is resolved server-side (same pattern as app/staff/leave/page.tsx)
+// and used only to decide whether to mount CashOverridePanel at all; the client
+// never decides its own permissions, and the override API re-checks regardless.
+export default async function StaffAttendancePage() {
   if (!flags.attendance) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16 text-center">
@@ -27,5 +35,13 @@ export default function StaffAttendancePage() {
     );
   }
 
-  return <AttendancePunch />;
+  const account = await getStaffOrOwner();
+  const canManageCash = account ? account.role === 'manager' || account.role === 'owner' : false;
+
+  return (
+    <>
+      <AttendancePunch />
+      {canManageCash ? <CashOverridePanel /> : null}
+    </>
+  );
 }

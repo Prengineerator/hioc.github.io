@@ -107,10 +107,6 @@ export async function PATCH(request: Request) {
     patch[key] = value;
   }
 
-  if (Object.keys(patch).length === 0) {
-    return errorResponse(400, 'No writable settings fields provided');
-  }
-
   // Cross-field coherence, checked against the MERGED result rather than the
   // patch alone — otherwise changing one threshold in isolation could put the
   // pair into a state where a day is both absent and a half day. The DB has the
@@ -151,20 +147,59 @@ export async function PATCH(request: Request) {
     networkPatch.store_networks = entries;
   }
 
-  if (Object.keys(patch).length === 0 && Object.keys(networkPatch).length === 0) {
+  // CC-4 — whether a cash count is required at every clock-in/out, and how
+  // much variance is tolerated before it becomes a chargeable shortage
+  // (supabase/2026-09-cash-counts.sql). Kept separate from NUMERIC_FIELDS
+  // (cash_count_required is a boolean) and validated independently of the
+  // migration's own presence — an unapplied migration surfaces as a 500 from
+  // the update below (isMissingCashCountsColumn), not a 400 here.
+  const cashCountPatch: Record<string, boolean | number> = {};
+  if ('cash_count_required' in body) {
+    if (typeof body.cash_count_required !== 'boolean') {
+      return errorResponse(400, 'cash_count_required must be true or false.');
+    }
+    cashCountPatch.cash_count_required = body.cash_count_required;
+  }
+  if ('cash_count_tolerance_inr' in body) {
+    const tol = body.cash_count_tolerance_inr;
+    if (typeof tol !== 'number' || !Number.isFinite(tol) || !Number.isInteger(tol) || tol < 0 || tol > 500) {
+      return errorResponse(400, 'cash_count_tolerance_inr must be a whole number between 0 and 500.');
+    }
+    cashCountPatch.cash_count_tolerance_inr = tol;
+  }
+
+  if (Object.keys(patch).length === 0 && Object.keys(networkPatch).length === 0 && Object.keys(cashCountPatch).length === 0) {
     return errorResponse(400, 'Nothing to update');
   }
 
   const admin = createAdminSupabaseClient();
   const { data, error } = await admin
     .from('attendance_settings')
-    .update({ ...patch, ...networkPatch, updated_by: owner.id })
+    .update({ ...patch, ...networkPatch, ...cashCountPatch, updated_by: owner.id })
     .eq('is_singleton', true)
     .select('*')
     .maybeSingle();
 
-  if (error) return errorResponse(500, error.message);
+  if (error) {
+    if (Object.keys(cashCountPatch).length > 0 && isMissingCashCountsColumn(error)) {
+      return errorResponse(409, 'Cash-counts migration not applied yet — run supabase/2026-09-cash-counts.sql');
+    }
+    return errorResponse(500, error.message);
+  }
   if (!data) return errorResponse(500, 'Attendance settings row is missing — apply supabase/2026-08-attendance.sql.');
 
   return NextResponse.json({ settings: data });
+}
+
+/**
+ * True when `error` means "cash_count_required / cash_count_tolerance_inr
+ * don't exist yet" — supabase/2026-09-cash-counts.sql hasn't been applied.
+ * Mirrors app/api/owner/staff/_lib.ts's isMissingTable (same PostgREST
+ * schema-cache-miss / raw-Postgres "does not exist" signature covers a
+ * missing column as well as a missing table).
+ */
+function isMissingCashCountsColumn(error: { code?: string; message?: string }): boolean {
+  if (error.code === '42703' || error.code === 'PGRST204' || error.code === 'PGRST205') return true;
+  const msg = (error.message ?? '').toLowerCase();
+  return msg.includes('schema cache') || msg.includes('does not exist');
 }

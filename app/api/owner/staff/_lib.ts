@@ -101,7 +101,36 @@ type StaffAccountRow = {
   phone: string | null;
   status: AccountStatus;
   role_before_deactivation?: string | null;
+  handles_cash?: boolean;
 };
+
+const STAFF_ACCOUNT_BASE_COLUMNS = 'login_id, personal_email, phone, status, role_before_deactivation';
+
+/**
+ * Reads one staff_accounts row, including handles_cash
+ * (supabase/2026-09-cash-counts.sql) when that column exists. Falls back to
+ * the pre-cash-counts column set if the migration hasn't been applied yet —
+ * without this, an unknown-column error on the COMBINED select would fail
+ * the whole row and wipe out loginId/personalEmail/phone/status (which have
+ * nothing to do with cash counts) back to their empty defaults. Only
+ * handles_cash itself degrades (to true, via buildMember below) when the
+ * migration is missing.
+ */
+async function selectStaffAccountRow(
+  admin: SupabaseClient,
+  id: string,
+): Promise<{ data: StaffAccountRow | null; error: PgError }> {
+  const withCash = await admin
+    .from('staff_accounts')
+    .select(`${STAFF_ACCOUNT_BASE_COLUMNS}, handles_cash`)
+    .eq('user_id', id)
+    .maybeSingle();
+  if (!withCash.error || !isMissingTable(withCash.error)) {
+    return { data: withCash.data as StaffAccountRow | null, error: withCash.error };
+  }
+  const base = await admin.from('staff_accounts').select(STAFF_ACCOUNT_BASE_COLUMNS).eq('user_id', id).maybeSingle();
+  return { data: base.data as StaffAccountRow | null, error: base.error };
+}
 
 /**
  * Rebuilds one TeamMember row from scratch — profiles + staff_accounts + the
@@ -130,12 +159,9 @@ export async function buildMember(admin: SupabaseClient, id: string): Promise<Te
   let phone = '';
   let status: AccountStatus = 'active';
   let roleBeforeDeactivation: string | null | undefined = null;
+  let handlesCash = true; // default: everyone counts cash unless the owner exempts them
 
-  const { data: account, error: accountError } = await admin
-    .from('staff_accounts')
-    .select('login_id, personal_email, phone, status, role_before_deactivation')
-    .eq('user_id', id)
-    .maybeSingle();
+  const { data: account, error: accountError } = await selectStaffAccountRow(admin, id);
   if (accountError && !isMissingTable(accountError)) {
     console.error('buildMember: staff_accounts lookup failed', accountError);
   }
@@ -146,6 +172,7 @@ export async function buildMember(admin: SupabaseClient, id: string): Promise<Te
     phone = row.phone ?? '';
     status = row.status;
     roleBeforeDeactivation = row.role_before_deactivation;
+    handlesCash = row.handles_cash ?? true;
   }
 
   const deletable = !(await hasHistory(admin, id));
@@ -169,6 +196,7 @@ export async function buildMember(admin: SupabaseClient, id: string): Promise<Te
     status,
     lastSignInAt,
     deletable,
+    handlesCash,
   };
 }
 

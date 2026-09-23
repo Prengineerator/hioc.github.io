@@ -285,6 +285,70 @@ describe('11. an unapproved auto-close blocks the run', () => {
   });
 });
 
+describe('12. cash shortage (approved, unconsumed) — CC-5', () => {
+  it('defaults to zero shortage and no clamp when none is passed', () => {
+    const line = computePayrollLine({ days: fullMonth(), rules: RULES });
+    expect(line.cashShortageInr).toBe(0);
+    expect(line.cashShortageClamped).toBe(false);
+    expect(line.netPayInr).toBe(SALARY);
+  });
+
+  it('deducts an approved cash shortage from net pay', () => {
+    const line = computePayrollLine({ days: fullMonth(), rules: RULES, cashShortageInr: 1_000 });
+    expect(line.cashShortageInr).toBe(1_000);
+    expect(line.netPayInr).toBe(SALARY - 1_000);
+    expect(line.cashShortageClamped).toBe(false);
+  });
+
+  it('clamps net pay at zero and flags it when the shortage exceeds what is left to pay', () => {
+    const line = computePayrollLine({
+      days: fullMonth(),
+      rules: RULES,
+      cashShortageInr: SALARY + 5_000,
+    });
+    expect(line.netPayInr).toBe(0);
+    expect(line.cashShortageClamped).toBe(true);
+    // The full approved figure is still reported — the owner sees what was
+    // actually owed, not a truncated number.
+    expect(line.cashShortageInr).toBe(SALARY + 5_000);
+  });
+
+  it('does not flag a clamp when the shortage exactly consumes net pay', () => {
+    const line = computePayrollLine({ days: fullMonth(), rules: RULES, cashShortageInr: SALARY });
+    expect(line.netPayInr).toBe(0);
+    expect(line.cashShortageClamped).toBe(false);
+  });
+
+  it('combines with a signed adjustment before clamping', () => {
+    const line = computePayrollLine({
+      days: fullMonth(),
+      rules: RULES,
+      adjustmentsInr: 1_000,
+      cashShortageInr: 2_000,
+    });
+    expect(line.netPayInr).toBe(SALARY + 1_000 - 2_000);
+  });
+
+  it('still reports and applies a shortage on an unconfigured line rather than dropping it', () => {
+    const line = computePayrollLine({
+      days: days(5, { employmentKey: null, status: 'not_employed', workedMinutes: 0 }),
+      rules: RULES,
+      cashShortageInr: 300,
+    });
+    expect(line.unconfigured).toBe(true);
+    expect(line.cashShortageInr).toBe(300);
+    expect(line.netPayInr).toBe(0);
+    expect(line.cashShortageClamped).toBe(true);
+  });
+
+  it('perfect attendance still nets EXACTLY the monthly salary when there is no shortage', () => {
+    // The CC-5 release gate: adding cash-shortage support must not disturb
+    // the standing invariant from test 1 above.
+    const line = computePayrollLine({ days: fullMonth(), rules: RULES, cashShortageInr: 0 });
+    expect(line.netPayInr).toBe(SALARY);
+  });
+});
+
 describe('edge cases', () => {
   it('reports unconfigured rather than silently paying zero', () => {
     const line = computePayrollLine({

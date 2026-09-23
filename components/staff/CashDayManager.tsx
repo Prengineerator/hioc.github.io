@@ -13,8 +13,10 @@
 // are a live MIRROR; POST/PATCH recompute every stored figure server-side.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CashCountSheet } from '@/components/staff/CashCountSheet';
 import { CashDayDenomGrid } from '@/components/staff/CashDayDenomGrid';
 import { Spinner } from '@/components/ui/Spinner';
+import type { CashCountResult } from '@/lib/cash/counts';
 import { denomsTotalInr, overShortInr } from '@/lib/cash/denoms';
 import type { CashDay, CashDenoms } from '@/lib/types';
 
@@ -39,6 +41,12 @@ export function CashDayManager() {
   const [openingDenoms, setOpeningDenoms] = useState<CashDenoms>(EMPTY_DENOMS);
   const [closingDenoms, setClosingDenoms] = useState<CashDenoms>(EMPTY_DENOMS);
   const [notes, setNotes] = useState('');
+
+  // CC-3 — a manual mid-shift count, any staffer, any time (distinct from the
+  // day open/close counts above). POST /api/cash-counts {denoms}.
+  const [manualSheetOpen, setManualSheetOpen] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualError, setManualError] = useState('');
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -116,6 +124,47 @@ export function CashDayManager() {
     }
   }, [closingDenoms, notes, load]);
 
+  const manualCount = useCallback(
+    async (denoms: CashDenoms) => {
+      setManualBusy(true);
+      setManualError('');
+      try {
+        const res = await fetch('/api/cash-counts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ denoms }),
+        });
+        const data = await res.json().catch(() => ({}) as Record<string, unknown>);
+        if (!res.ok) {
+          setManualError((data.error as string) ?? 'Could not record that count.');
+          return;
+        }
+        setManualSheetOpen(false);
+        const result = (data.cashCount ?? data.count) as CashCountResult | undefined;
+        if (result) {
+          const variance = result.varianceInr;
+          const varianceText =
+            result.shortageInr > 0
+              ? ` — short by ₹${result.shortageInr}, sent to the owner`
+              : variance !== null && variance > 0
+                ? ` — over by ₹${variance}`
+                : variance === 0
+                  ? ' — ties out'
+                  : '';
+          showToast(`Counted ₹${result.countedTotalInr ?? denomsTotalInr(denoms)}${varianceText}.`);
+        } else {
+          showToast(`Counted ₹${denomsTotalInr(denoms)}.`);
+        }
+        await load();
+      } catch {
+        setManualError('Network problem — please try again.');
+      } finally {
+        setManualBusy(false);
+      }
+    },
+    [load],
+  );
+
   if (loading) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-8">
@@ -126,13 +175,24 @@ export function CashDayManager() {
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
-      <div className="mb-5">
-        <h1 className="text-2xl font-bold text-charcoal">Cash drawer</h1>
-        <p className="text-sm text-muted">
-          {openDay
-            ? `Open since ${formatWhen(openDay.opened_at)} · float ₹${openDay.opening_total_inr}`
-            : 'Count the opening float to start the day.'}
-        </p>
+      <div className="mb-5 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-charcoal">Cash drawer</h1>
+          <p className="text-sm text-muted">
+            {openDay
+              ? `Open since ${formatWhen(openDay.opened_at)} · float ₹${openDay.opening_total_inr}`
+              : 'Count the opening float to start the day.'}
+          </p>
+        </div>
+        {/* CC-3 — a spot count any time, independent of open/close (a mid-shift
+            handover, a manager's spot-check). Visible to every staffer. */}
+        <button
+          type="button"
+          onClick={() => setManualSheetOpen(true)}
+          className="min-h-[40px] shrink-0 rounded-md border border-charcoal px-4 py-2 text-sm font-bold text-charcoal transition-colors hover:bg-charcoal hover:text-cream"
+        >
+          Count now
+        </button>
       </div>
 
       {openDay ? (
@@ -204,10 +264,27 @@ export function CashDayManager() {
       <ClosureHistory history={history} />
 
       {toast ? (
-        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md bg-charcoal px-4 py-2 text-sm text-cream shadow-lg">
+        <div
+          className="fixed left-1/2 z-50 -translate-x-1/2 rounded-md bg-charcoal px-4 py-2 text-sm text-cream shadow-lg"
+          style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom, 0px))' }}
+        >
           {toast}
         </div>
       ) : null}
+
+      <CashCountSheet
+        open={manualSheetOpen}
+        title="Count the cash drawer"
+        subtitle="Manual count"
+        busy={manualBusy}
+        error={manualError}
+        onClose={() => {
+          if (manualBusy) return;
+          setManualSheetOpen(false);
+          setManualError('');
+        }}
+        onConfirm={manualCount}
+      />
     </div>
   );
 }

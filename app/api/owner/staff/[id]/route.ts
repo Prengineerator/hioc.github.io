@@ -19,6 +19,22 @@ type StaffAccountRow = {
   role_before_deactivation: string | null;
 };
 
+/**
+ * A friendlier message when a staff_accounts write fails only because
+ * `handles_cash` doesn't exist yet (supabase/2026-09-cash-counts.sql not
+ * applied) — the raw PostgREST "column not found" text isn't something an
+ * owner can act on.
+ */
+function cashCountsColumnMessage(
+  error: { code?: string; message?: string },
+  patch: Record<string, unknown>,
+): string | null {
+  if ('handles_cash' in patch && isMissingTable(error)) {
+    return 'Cash-counts migration not applied yet — run supabase/2026-09-cash-counts.sql to set "Handles cash".';
+  }
+  return null;
+}
+
 // PATCH /api/owner/staff/[id] — UpdateStaffBody, every field optional. Cannot
 // target an owner, cannot change the caller's own role. A loginId change
 // renames the Supabase auth email; other fields land on profiles or
@@ -101,6 +117,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     accountPatch.phone = body.phone.trim();
   }
 
+  if (typeof body.handlesCash === 'boolean') {
+    accountPatch.handles_cash = body.handlesCash;
+  }
+
   const isDeactivated = currentRole === 'customer' && account?.status === 'deactivated';
   // profiles.role is 'customer' while deactivated — that's not the role the
   // owner sees or means to compare against, so "effective" role for a
@@ -142,7 +162,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (Object.keys(accountPatch).length > 0) {
     if (account) {
       const { error } = await admin.from('staff_accounts').update(accountPatch).eq('user_id', id);
-      if (error) return errorResponse(500, error.message);
+      if (error) return errorResponse(500, cashCountsColumnMessage(error, accountPatch) ?? error.message);
     } else {
       let loginId = (accountPatch.login_id as string | undefined) ?? null;
       if (!loginId) {
@@ -161,8 +181,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       if ('role_before_deactivation' in accountPatch) {
         insertPatch.role_before_deactivation = accountPatch.role_before_deactivation;
       }
+      if ('handles_cash' in accountPatch) {
+        insertPatch.handles_cash = accountPatch.handles_cash;
+      }
       const { error } = await admin.from('staff_accounts').insert(insertPatch);
-      if (error) return errorResponse(500, error.message);
+      if (error) return errorResponse(500, cashCountsColumnMessage(error, accountPatch) ?? error.message);
     }
   }
 

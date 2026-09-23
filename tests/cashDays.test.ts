@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Cash management: day-open / day-close by denomination (OPS-2, STF-045). Two
 // layers, house style:
 //  1. Pure money on lib/cash/denoms.ts — no mocks: denomsTotalInr across the
-//     note counts + coins ₹-amount bucket, and the expected-cash / over-short
+//     note and coin counts (a legacy lump 'coins' amount still re-totals), and the expected-cash / over-short
 //     formulas.
 //  2. Handler-level integration for GET/POST/PATCH /api/cash-days against a
 //     mocked Supabase admin client + auth + permission matrix, so the route's
@@ -141,10 +141,15 @@ describe('denomsTotalInr (OPS-2 money, no mocks)', () => {
     expect(denomsTotalInr({ '500': 1, '200': 1, '100': 1, '50': 1, '20': 1, '10': 1 })).toBe(880);
   });
 
-  it('adds the coins bucket as a rupee AMOUNT, not a count', () => {
-    // coins face value is 1, so the figure is added straight through.
+  it('counts ₹5/₹2/₹1 coins individually', () => {
+    // 5·3 + 2·4 + 1·7 = 30
+    expect(denomsTotalInr({ '5': 3, '2': 4, '1': 7 })).toBe(30);
+    // 500·1 + 100·3 + 10·5 + 5·2 + 1·2 = 862
+    expect(denomsTotalInr({ '500': 1, '100': 3, '10': 5, '5': 2, '1': 2 })).toBe(862);
+  });
+
+  it('still re-totals a legacy row that stored coins as one lump ₹ amount', () => {
     expect(denomsTotalInr({ coins: 47 })).toBe(47);
-    // 500·1 + 100·3 + 10·5 + coins 47 = 897
     expect(denomsTotalInr({ '500': 1, '100': 3, '10': 5, coins: 47 })).toBe(897);
   });
 
@@ -156,10 +161,12 @@ describe('denomsTotalInr (OPS-2 money, no mocks)', () => {
   });
 
   it('sanitizeDenoms coerces to exactly the known keys as non-negative ints', () => {
-    const clean = sanitizeDenoms({ '500': 2, '2000': 9, '100': -1, coins: 3.7 });
-    expect(clean).toEqual({ '500': 2, '200': 0, '100': 0, '50': 0, '20': 0, '10': 0, coins: 3 });
+    // Unknown keys (a stray "2000", the retired lump "coins") are dropped from
+    // new input; counts floor to non-negative integers.
+    const clean = sanitizeDenoms({ '500': 2, '2000': 9, '100': -1, '5': 3.7, coins: 40 });
+    expect(clean).toEqual({ '500': 2, '200': 0, '100': 0, '50': 0, '20': 0, '10': 0, '5': 3, '2': 0, '1': 0 });
     // The stored denoms always re-total to the stored total.
-    expect(denomsTotalInr(clean)).toBe(1003);
+    expect(denomsTotalInr(clean)).toBe(1015); // 500·2 + 5·3
   });
 });
 
@@ -211,12 +218,12 @@ describe('/api/cash-days handlers (OPS-2)', () => {
     state.insertedDay = { id: 'cd-1', status: 'open' };
     const res = await POST(
       jsonReq('POST', {
-        opening_denoms: { '500': 4, '100': 10, coins: 50 },
+        opening_denoms: { '500': 4, '100': 10, '10': 5 },
         opening_total_inr: 999999, // a lie — must be ignored
       }),
     );
     expect(res.status).toBe(200);
-    // 500·4 + 100·10 + coins 50 = 3050 (NOT the client's 999999).
+    // 500·4 + 100·10 + 10·5 = 3050 (NOT the client's 999999).
     expect(state.openInsert?.opening_total_inr).toBe(3050);
     expect(state.openInsert?.status).toBe('open');
     expect(state.openInsert?.opened_by).toBe('staff-1');

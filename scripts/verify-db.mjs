@@ -1140,6 +1140,52 @@ async function checkStaffAccounts() {
   else fail('staff_emails exists', errText(log));
 }
 
+// ---------------------------------------------------------------------------
+// CC-1 · cash counted at clock-in/out (docs/PHASE-5-CASH-COUNTS.md). Shortages
+// become salary deductions, so these tables must be service-role only.
+// ---------------------------------------------------------------------------
+async function checkCashCounts() {
+  heading('CC-1 · cash counts, movements, overrides, shortages', '2026-09-cash-counts.sql');
+
+  const settings = await rest('/attendance_settings?select=cash_count_required,cash_count_tolerance_inr&limit=1');
+  if (settings.ok) {
+    const row = Array.isArray(settings.body) ? settings.body[0] : null;
+    pass(
+      'attendance_settings has the cash-count switches',
+      row?.cash_count_required ? `ON, tolerance ₹${row.cash_count_tolerance_inr}` : 'off — the correct default until the owner turns it on',
+    );
+  } else {
+    fail('attendance_settings has the cash-count switches', errKind(settings) === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(settings));
+  }
+
+  const handles = await rest('/staff_accounts?select=handles_cash&limit=1');
+  if (handles.ok) pass('staff_accounts.handles_cash exists');
+  else fail('staff_accounts.handles_cash exists', errKind(handles) === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(handles));
+
+  const line = await rest('/payroll_run_lines?select=cash_shortage_inr&limit=1');
+  if (line.ok) pass('payroll_run_lines.cash_shortage_inr exists');
+  else fail('payroll_run_lines.cash_shortage_inr exists', errKind(line) === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(line));
+
+  for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages']) {
+    const r = await rest(`/${table}?select=id&limit=1`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    const rows = Array.isArray(r.body) ? r.body : [];
+    if (rows.length === 0) {
+      skip(`${table} is not readable by the anon key`, 'no row to look for yet');
+      continue;
+    }
+    const asAnon = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -1160,6 +1206,7 @@ async function main() {
   await checkAttendance();
   await checkPosDevices();
   await checkStaffAccounts();
+  await checkCashCounts();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

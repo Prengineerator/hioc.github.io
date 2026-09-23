@@ -14,9 +14,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { AttendanceSettings } from '@/lib/types';
 import { parseCoordinates } from '@/lib/attendance/parseCoordinates';
+import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
+
+// CC-4 — cash_count_required / cash_count_tolerance_inr
+// (supabase/2026-09-cash-counts.sql) are optional here rather than added to
+// the shared AttendanceSettings type: the migration may not be applied yet,
+// in which case the settings row simply won't carry these keys and the
+// section below hides itself with a note instead of showing broken fields.
+type CashCountFields = {
+  cash_count_required?: boolean;
+  cash_count_tolerance_inr?: number;
+};
+type SettingsWithCashCount = AttendanceSettings & CashCountFields;
 
 export function AttendanceSettingsPanel() {
-  const [settings, setSettings] = useState<AttendanceSettings | null>(null);
+  const [settings, setSettings] = useState<SettingsWithCashCount | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
@@ -38,7 +50,7 @@ export function AttendanceSettingsPanel() {
         return;
       }
       const data = await res.json();
-      setSettings(data.settings as AttendanceSettings);
+      setSettings(data.settings as SettingsWithCashCount);
       setYourIp(typeof data.yourIp === 'string' ? data.yourIp : null);
     } catch {
       setError('Could not load attendance settings.');
@@ -66,7 +78,7 @@ export function AttendanceSettingsPanel() {
         setError((data.error as string) ?? 'Could not save.');
         return;
       }
-      setSettings(data.settings as AttendanceSettings);
+      setSettings(data.settings as SettingsWithCashCount);
       setNotice('Saved.');
     } catch {
       setError('Network problem — try again.');
@@ -441,6 +453,56 @@ export function AttendanceSettingsPanel() {
           An automatically closed shift is never paid on trust — it waits for you on the
           attendance sheet until you approve or correct it.
         </p>
+      </div>
+
+      {/* CC-4 — the drawer count required at clock-in/out
+          (docs/PHASE-5-CASH-COUNTS.md). Sits after pay rules because a
+          shortage this produces eventually shows up as a payroll deduction —
+          same "tuned once, at a desk" rhythm as the section above. */}
+      <div className="mt-8 border-t border-[#e5e5e5] pt-6">
+        <h3 className="text-base font-bold text-charcoal">Cash counts</h3>
+        {settings.cash_count_required === undefined || settings.cash_count_tolerance_inr === undefined ? (
+          <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            Cash counts aren&apos;t set up in the database yet — apply{' '}
+            <span className="font-mono">supabase/2026-09-cash-counts.sql</span> to turn this on.
+          </p>
+        ) : (
+          <>
+            <p className="mt-1 text-sm text-muted">
+              Staff count the drawer by denomination (₹500 down to ₹1) at every clock-in and
+              clock-out. Counts are recorded either way; a shortfall beyond the tolerance below is
+              sent to you to approve, waive, or reassign to someone else — approving deducts it
+              from that person&apos;s next payroll run.
+            </p>
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-[#e5e5e5] p-3">
+              <span>
+                <span className="block text-sm font-bold text-charcoal">
+                  Require a cash count at clock-in and clock-out
+                </span>
+                <span className="block text-xs text-muted">
+                  Applies only to staff marked &ldquo;Handles cash&rdquo; on the Team screen. The
+                  punch is refused without a count while this is on.
+                </span>
+              </span>
+              <ToggleSwitch
+                checked={settings.cash_count_required ?? false}
+                onChange={(next) => save({ cash_count_required: next })}
+                label="Require a cash count at clock-in and clock-out"
+              />
+            </div>
+            <div className="mt-4 max-w-xs">
+              <NumberField
+                label="Tolerance (₹)"
+                hint="A variance up to this is recorded but never charged. Beyond it, the whole shortfall is charged — this isn't an allowance."
+                value={settings.cash_count_tolerance_inr ?? 0}
+                min={0}
+                max={500}
+                disabled={saving}
+                onCommit={(v) => save({ cash_count_tolerance_inr: v })}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}

@@ -5,6 +5,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
+import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import {
   LOGIN_DOMAIN,
   loginEmailFor,
@@ -27,6 +28,7 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
   const [personalEmailRaw, setPersonalEmailRaw] = useState('');
   const [phone, setPhone] = useState('');
   const [role, setRole] = useState<ManageableRole>('staff');
+  const [handlesCash, setHandlesCash] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const [touched, setTouched] = useState(false);
@@ -41,6 +43,7 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
     setPersonalEmailRaw(member.personalEmail ?? '');
     setPhone(member.phone ?? '');
     setRole(member.role === 'manager' ? 'manager' : 'staff');
+    setHandlesCash(member.handlesCash ?? true);
     setFormError('');
     setTouched(false);
   }, [member]);
@@ -72,7 +75,7 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
 
     setSubmitting(true);
     try {
-      const body: UpdateStaffBody = { name: name.trim(), role, phone: phone.trim() };
+      const body: UpdateStaffBody = { name: name.trim(), role, phone: phone.trim(), handlesCash };
       if (normalizedLoginId) body.loginId = normalizedLoginId;
       if (normalizedPersonalEmail) body.personalEmail = normalizedPersonalEmail;
 
@@ -142,6 +145,16 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
             { value: 'manager', label: 'Manager' },
           ]}
         />
+        <div className="flex items-center justify-between gap-3 rounded-md border border-line p-3">
+          <span>
+            <span className="block text-sm font-bold text-charcoal">Handles cash</span>
+            <span className="block text-xs text-muted">
+              Must count the drawer at clock-in/out. Turn off for staff who never touch the
+              register.
+            </span>
+          </span>
+          <ToggleSwitch checked={handlesCash} onChange={setHandlesCash} label="Handles cash" />
+        </div>
         {formError ? (
           <p role="alert" className="text-sm font-bold text-red-700">
             {formError}

@@ -28,6 +28,7 @@ function line(overrides: Partial<PayrollRunLine> = {}): PayrollRunLine {
     base_pay_inr: 24_000,
     ot_pay_inr: 0,
     deductions_inr: 0,
+    cash_shortage_inr: 0,
     adjustments_inr: 0,
     net_pay_inr: 24_000,
     detail: {},
@@ -93,6 +94,20 @@ describe('renderPayslipEmail', () => {
   it('shows deductions as a negative amount', () => {
     const { text } = renderPayslipEmail(line({ deductions_inr: 750 }), run, 'Ravi');
     expect(text).toContain('Deductions (lateness): −₹750');
+  });
+
+  // CC-5 (docs/PHASE-5-CASH-COUNTS.md)
+  it('shows an approved cash shortage as its own negative line, in both html and text', () => {
+    const { html, text } = renderPayslipEmail(line({ cash_shortage_inr: 500 }), run, 'Ravi');
+    expect(text).toContain('Cash shortage (approved): −₹500');
+    expect(html).toContain('Cash shortage (approved)');
+    expect(html).toContain('−₹500');
+  });
+
+  it('omits the cash shortage line entirely when there is none', () => {
+    const { html, text } = renderPayslipEmail(line({ cash_shortage_inr: 0 }), run, 'Ravi');
+    expect(text).not.toMatch(/Cash shortage/);
+    expect(html).not.toMatch(/Cash shortage/);
   });
 
   it('shows a positive adjustment with its reason, and a negative one without double-negating', () => {

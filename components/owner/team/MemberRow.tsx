@@ -58,8 +58,9 @@ export function MemberRow({ member, busy, onEdit, onPassword, onDeactivate, onRe
           <p className="truncate text-xs text-muted">{loginEmail}</p>
         </div>
         <PersonalEmailCell email={member.personalEmail} />
-        <div>
+        <div className="flex flex-wrap items-center gap-1">
           <Badge variant={roleBadgeVariant(member.role)}>{label}</Badge>
+          {member.handlesCash === false ? <Badge variant="outline">No cash</Badge> : null}
         </div>
         <p className="text-sm text-muted">{lastSignIn}</p>
         <div className="flex justify-end">{actions}</div>
@@ -77,6 +78,7 @@ export function MemberRow({ member, busy, onEdit, onPassword, onDeactivate, onRe
         <PersonalEmailCell email={member.personalEmail} />
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={roleBadgeVariant(member.role)}>{label}</Badge>
+          {member.handlesCash === false ? <Badge variant="outline">No cash</Badge> : null}
           <span className="text-xs text-muted">Last sign-in: {lastSignIn}</span>
         </div>
       </div>

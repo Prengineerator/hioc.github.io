@@ -91,6 +91,17 @@ export interface TeamMember {
   lastSignInAt: string | null;
   /** False when the account has history (SA-D2) — only then may it be deleted. */
   deletable: boolean;
+  /**
+   * staff_accounts.handles_cash (docs/PHASE-5-CASH-COUNTS.md) — false exempts
+   * this person from the clock-in/out drawer count (e.g. kitchen staff who
+   * never touch the register). Optional (rather than always-present) so any
+   * code building a TeamMember without knowing about this field still
+   * compiles; MISSING MEANS TRUE, same as buildMember's own fallback and the
+   * DB column's default — everyone counts unless the owner says otherwise, or
+   * the cash-counts migration (supabase/2026-09-cash-counts.sql) hasn't been
+   * applied yet.
+   */
+  handlesCash?: boolean;
 }
 
 /** POST /api/owner/staff */
@@ -112,6 +123,8 @@ export interface UpdateStaffBody {
   personalEmail?: string;
   phone?: string;
   role?: ManageableRole;
+  /** staff_accounts.handles_cash — see TeamMember.handlesCash. */
+  handlesCash?: boolean;
 }
 
 /** POST /api/owner/staff/[id]/password */

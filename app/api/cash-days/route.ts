@@ -11,6 +11,7 @@ import {
   overShortInr,
 } from '@/lib/cash/denoms';
 import { istBusinessDate, istDayRange } from '@/lib/cash/date';
+import { recordCount } from '@/lib/cash/checkpoints';
 import type { CashDay } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -231,6 +232,20 @@ export async function POST(request: Request) {
     return errorResponse(500, error.message);
   }
 
+  // CC-2: also record this as a checkpoint on the drawer's continuous chain, so
+  // clock-in/out counts have something to compare against. Additive and
+  // best-effort — a failure here must never change this route's response.
+  try {
+    await recordCount(admin, {
+      kind: 'day_open',
+      userId: user.id,
+      denoms: openingDenoms,
+      cashDayId: (data as CashDay).id,
+    });
+  } catch (err) {
+    console.error('cash-days: failed to record the day_open checkpoint (CC-2)', err);
+  }
+
   return NextResponse.json({ cash_day: data as CashDay });
 }
 
@@ -305,6 +320,19 @@ export async function PATCH(request: Request) {
   if (closeError) return errorResponse(500, closeError.message);
   if (!closed) {
     return errorResponse(409, 'This cash day has already been closed');
+  }
+
+  // CC-2: same continuity as day-open. Additive/best-effort — never changes
+  // this route's response or status.
+  try {
+    await recordCount(admin, {
+      kind: 'day_close',
+      userId: user.id,
+      denoms: closingDenoms,
+      cashDayId: (closed as CashDay).id,
+    });
+  } catch (err) {
+    console.error('cash-days: failed to record the day_close checkpoint (CC-2)', err);
   }
 
   return NextResponse.json({

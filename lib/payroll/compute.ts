@@ -80,12 +80,41 @@ export interface PayrollLine {
   otPayInr: number;
   deductionsInr: number;
   adjustmentsInr: number;
+  /**
+   * CC-5: approved, not-yet-consumed cash-drawer shortages (docs/PHASE-5-
+   * CASH-COUNTS.md) charged to this person for the month, in whole rupees.
+   * Already reflected in netPayInr — kept separate from deductionsInr because
+   * that field is specifically the lateness deduction (see the file header).
+   */
+  cashShortageInr: number;
+  /**
+   * True when cashShortageInr was larger than what was left to pay, so net
+   * pay was clamped at 0 rather than going negative. Carrying the remainder
+   * into a future run is out of scope — this just flags that it happened.
+   */
+  cashShortageClamped: boolean;
   netPayInr: number;
   /** True when no employment record covered any day — report, never pay zero silently. */
   unconfigured: boolean;
   /** True while any day is unresolved; PAY-3 blocks finalizing on this. */
   blocked: boolean;
   segments: PayrollSegmentBreakdown[];
+}
+
+/**
+ * Subtract a whole-rupee cash shortage from net pay, in paise, clamping at 0.
+ * Shared by the unconfigured and employed branches so the clamp+warning rule
+ * cannot drift between them.
+ */
+function applyCashShortage(
+  netPaiseBeforeShortage: number,
+  cashShortageInr: number,
+): { netPaise: number; cashShortageClamped: boolean } {
+  const shortagePaise = Math.round(Math.max(0, cashShortageInr) * 100);
+  if (shortagePaise <= 0) return { netPaise: netPaiseBeforeShortage, cashShortageClamped: false };
+  const netPaiseRaw = netPaiseBeforeShortage - shortagePaise;
+  if (netPaiseRaw < 0) return { netPaise: 0, cashShortageClamped: true };
+  return { netPaise: netPaiseRaw, cashShortageClamped: false };
 }
 
 /** Round half-up to whole rupees. Applied exactly once, to net pay. */
@@ -117,8 +146,10 @@ export function computePayrollLine(params: {
   rules: PayrollRules;
   /** Signed one-off correction in rupees (D5-7): advances, loans, fixes. */
   adjustmentsInr?: number;
+  /** CC-5: approved, unconsumed cash-drawer shortages for the month, whole rupees. */
+  cashShortageInr?: number;
 }): PayrollLine {
-  const { days, rules, adjustmentsInr = 0 } = params;
+  const { days, rules, adjustmentsInr = 0, cashShortageInr = 0 } = params;
 
   const employed = days.filter((d) => d.employmentKey !== null);
   const blocked = days.some((d) => d.status === 'needs_approval');
@@ -139,6 +170,7 @@ export function computePayrollLine(params: {
   };
 
   if (employed.length === 0) {
+    const unconfigured = applyCashShortage(adjustmentsInr * 100, cashShortageInr);
     return {
       ...counts,
       ...totals,
@@ -146,7 +178,9 @@ export function computePayrollLine(params: {
       otPayInr: 0,
       deductionsInr: 0,
       adjustmentsInr,
-      netPayInr: adjustmentsInr,
+      cashShortageInr: Math.max(0, cashShortageInr),
+      cashShortageClamped: unconfigured.cashShortageClamped,
+      netPayInr: paiseToRupees(unconfigured.netPaise),
       unconfigured: true,
       blocked,
       segments: [],
@@ -218,7 +252,8 @@ export function computePayrollLine(params: {
 
   // Components are rounded for DISPLAY, but net pay is computed from the
   // unrounded paise so the components cannot drift a rupee away from the total.
-  const netPaise = basePaise + otPaise - deductionPaise + adjustmentsInr * 100;
+  const netPaiseBeforeShortage = basePaise + otPaise - deductionPaise + adjustmentsInr * 100;
+  const { netPaise, cashShortageClamped } = applyCashShortage(netPaiseBeforeShortage, cashShortageInr);
 
   return {
     ...counts,
@@ -227,6 +262,8 @@ export function computePayrollLine(params: {
     otPayInr: paiseToRupees(otPaise),
     deductionsInr: paiseToRupees(deductionPaise),
     adjustmentsInr,
+    cashShortageInr: Math.max(0, cashShortageInr),
+    cashShortageClamped,
     netPayInr: paiseToRupees(netPaise),
     unconfigured: false,
     blocked,

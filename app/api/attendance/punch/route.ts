@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { getStaffOrOwner } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { clientIp } from '@/lib/api/rateLimit';
@@ -7,7 +8,9 @@ import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { evaluateGeofence, type GeoReading } from '@/lib/attendance/geofence';
 import { detectIntegrityFlags } from '@/lib/attendance/integrity';
 import { getAttendanceSettings, geofenceConfigFrom } from '@/lib/attendance/settings';
-import type { AttendanceFlag, AttendanceSession, PunchType } from '@/lib/types';
+import { cashRequirementFor, recordCount, recordOverride } from '@/lib/cash/checkpoints';
+import { kindForPunch, type CashCountResult, type PunchCashRequirement } from '@/lib/cash/counts';
+import type { AttendanceFlag, AttendanceSession, CashDenoms, PunchType } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +33,9 @@ const RETRY_IDEMPOTENCY_MS = 60_000;
 interface PunchBody {
   type: PunchType;
   reading: GeoReading;
+  /** CC-2: the drawer count taken alongside this punch, if any. Optional even
+   *  when a count is required — its absence is what triggers the 428 gate. */
+  cashDenoms?: CashDenoms;
 }
 
 function parseBody(raw: Record<string, unknown>): PunchBody | null {
@@ -52,7 +58,58 @@ function parseBody(raw: Record<string, unknown>): PunchBody | null {
     return null;
   }
 
-  return { type, reading: { lat, lng, accuracyM, fixAgeMs } };
+  // cash_denoms is sanitized server-side by recordCount() — here we only need
+  // to know whether the client SENT a denomination map at all, so a garbage
+  // shape (an array, a string) is treated as "not sent" rather than crashing.
+  const cashDenoms =
+    raw.cash_denoms && typeof raw.cash_denoms === 'object' && !Array.isArray(raw.cash_denoms)
+      ? (raw.cash_denoms as CashDenoms)
+      : undefined;
+
+  return { type, reading: { lat, lng, accuracyM, fixAgeMs }, cashDenoms };
+}
+
+/**
+ * Best-effort: records the cash checkpoint for a punch that has ALREADY been
+ * accepted and written. Never throws — a failure here must not undo the
+ * punch, so it's logged and surfaced to the caller as `cashCountError`
+ * instead. Prefers an actual count (the staffer counted) over a standing
+ * override even if both are present, so an override is never burned when the
+ * staffer went ahead and counted anyway.
+ */
+async function recordCashCheckpoint(
+  admin: SupabaseClient,
+  userId: string,
+  punchType: PunchType,
+  sessionId: string,
+  cashDenoms: CashDenoms | undefined,
+  usableOverride: PunchCashRequirement['override'],
+): Promise<{ cashCount?: CashCountResult; cashCountError?: string }> {
+  try {
+    if (cashDenoms) {
+      const cashCount = await recordCount(admin, {
+        kind: kindForPunch(punchType),
+        userId,
+        denoms: cashDenoms,
+        attendanceSessionId: sessionId,
+      });
+      return { cashCount };
+    }
+    if (usableOverride) {
+      const cashCount = await recordOverride(admin, {
+        userId,
+        punchType,
+        attendanceSessionId: sessionId,
+      });
+      return { cashCount };
+    }
+    return {};
+  } catch (err) {
+    console.error('attendance: failed to record the cash checkpoint for an accepted punch', err);
+    return {
+      cashCountError: 'The punch was recorded, but the cash count could not be saved — tell a manager.',
+    };
+  }
 }
 
 async function logAttempt(
@@ -134,6 +191,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ session: last, repeat: true });
     }
     return errorResponse(409, "You're not clocked in right now.");
+  }
+
+  // --- CC-2: cash count gate ------------------------------------------------
+  // Resolved before anything irreversible happens (the session insert/RPC
+  // below). cashRequirementFor() fails safe to "not required" on any error —
+  // a bug in this subsystem must never block the whole team from punching.
+  const cashReq = await cashRequirementFor(admin, userId);
+  const usableOverride =
+    cashReq.override && cashReq.override.punchType === body.type ? cashReq.override : null;
+  if (cashReq.required && !usableOverride && !body.cashDenoms) {
+    return NextResponse.json(
+      { error: 'Count the cash drawer before you clock in/out.', code: 'CASH_COUNT_REQUIRED' },
+      { status: 428 },
+    );
   }
 
   // --- The geofence decides, server-side (A-2) -----------------------------
@@ -222,7 +293,17 @@ export async function POST(request: Request) {
       return errorResponse(500, 'Could not record your clock-in. Please try again.');
     }
 
-    return NextResponse.json({ session: created, repeat: false });
+    // CC-2: the punch is already written — a cash-count failure from here on
+    // is logged and surfaced, never lets us undo it.
+    const { cashCount, cashCountError } = await recordCashCheckpoint(
+      admin,
+      userId,
+      'in',
+      (created as AttendanceSession).id,
+      body.cashDenoms,
+      usableOverride,
+    );
+    return NextResponse.json({ session: created, repeat: false, cashCount, cashCountError });
   }
 
   // --- Clock out -----------------------------------------------------------
@@ -253,5 +334,13 @@ export async function POST(request: Request) {
     return errorResponse(409, 'That shift was already closed. Refresh to see its current state.');
   }
 
-  return NextResponse.json({ session: closed, repeat: false });
+  const { cashCount, cashCountError } = await recordCashCheckpoint(
+    admin,
+    userId,
+    'out',
+    closed.id,
+    body.cashDenoms,
+    usableOverride,
+  );
+  return NextResponse.json({ session: closed, repeat: false, cashCount, cashCountError });
 }

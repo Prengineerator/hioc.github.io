@@ -119,6 +119,16 @@ export function renderPayslipEmail(
       negative: true,
     });
   }
+  // CC-5 (docs/PHASE-5-CASH-COUNTS.md): an approved cash-drawer shortage,
+  // already frozen into net_pay_inr — shown as its own line so it never reads
+  // as unexplained lateness deduction.
+  if (line.cash_shortage_inr > 0) {
+    moneyRows.push({
+      label: 'Cash shortage (approved)',
+      value: `−${rupees(line.cash_shortage_inr)}`,
+      negative: true,
+    });
+  }
   if (line.adjustments_inr !== 0) {
     const label = adjustmentReason ? `Adjustment — ${adjustmentReason}` : 'Adjustment';
     moneyRows.push({

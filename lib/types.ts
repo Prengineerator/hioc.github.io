@@ -673,6 +673,9 @@ export interface AttendanceSettings {
   store_networks: string[];
   updated_by: string | null;
   updated_at: string;
+  // 2026-09-cash-counts.sql — optional so a DB without the migration still type-checks.
+  cash_count_required?: boolean;
+  cash_count_tolerance_inr?: number;
 }
 
 /** Effective-dated so a raise never rewrites what an earlier month was paid at. */
@@ -830,6 +833,12 @@ export interface PayrollRunLine {
   deductions_inr: number;
   /** Signed: advances/loans/corrections (D5-7). Negative reduces net pay. */
   adjustments_inr: number;
+  /**
+   * CC-5 (docs/PHASE-5-CASH-COUNTS.md): approved cash-drawer shortages frozen
+   * into this run, already reflected in net_pay_inr (clamped at 0, never
+   * negative — see detail.cash_shortage_clamped for whether it was clamped).
+   */
+  cash_shortage_inr: number;
   net_pay_inr: number;
   detail: Record<string, unknown>;
 }

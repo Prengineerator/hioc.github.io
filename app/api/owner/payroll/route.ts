@@ -40,12 +40,56 @@ function eachDate(from: string, to: string): string[] {
   return out;
 }
 
+// CC-5 (docs/PHASE-5-CASH-COUNTS.md) — cash-drawer shortages the owner has
+// APPROVED but that no payroll run has consumed yet (payroll_run_id IS NULL).
+// The cash_counts / cash_shortages tables come from a migration that may not
+// be applied yet (supabase/2026-09-cash-counts.sql); a missing table just
+// yields no rows here, same as every other optional table this route reads —
+// no error, no special-casing, the month simply shows zero shortages.
+interface CashShortageRow {
+  id: string;
+  user_id: string;
+  amount_inr: number;
+}
+
+async function loadUnconsumedApprovedShortages(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  bounds: { from: string; to: string },
+): Promise<CashShortageRow[]> {
+  const { data } = await admin
+    .from('cash_shortages')
+    .select('id, user_id, amount_inr')
+    .eq('status', 'approved')
+    .is('payroll_run_id', null)
+    .gte('business_date', bounds.from)
+    .lte('business_date', bounds.to);
+  return (data ?? []) as CashShortageRow[];
+}
+
+function sumShortagesByUser(rows: CashShortageRow[]): Map<string, number> {
+  const byUser = new Map<string, number>();
+  for (const r of rows) byUser.set(r.user_id, (byUser.get(r.user_id) ?? 0) + r.amount_inr);
+  return byUser;
+}
+
+/**
+ * True when `error` means "the relation doesn't exist" — the cash-counts
+ * migration hasn't been applied yet. Mirrors the same check duplicated in
+ * lib/payroll/payslipEmail.ts and app/api/owner/staff/_lib.ts: PostgREST
+ * usually reports it as PGRST205 (schema-cache miss), raw Postgres as 42P01.
+ */
+function isMissingRelation(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === '42P01' || error.code === 'PGRST205') return true;
+  return /relation .* does not exist|could not find the table|schema cache/i.test(error.message ?? '');
+}
+
 async function computePeriod(month: string) {
   const bounds = monthBounds(month)!;
   const admin = createAdminSupabaseClient();
   const settings = await getAttendanceSettings();
 
-  const [{ data: profileRows }, { data: sessionRows }, { data: markRows }, { data: leaveRows }, employment] =
+  const [{ data: profileRows }, { data: sessionRows }, { data: markRows }, { data: leaveRows }, employment, shortageRows] =
     await Promise.all([
       admin.from('profiles').select('id, name, role').in('role', ['staff', 'manager', 'owner']),
       admin
@@ -65,6 +109,7 @@ async function computePeriod(month: string) {
         .gte('leave_date', bounds.from)
         .lte('leave_date', bounds.to),
       loadEmploymentRows(bounds.from, bounds.to),
+      loadUnconsumedApprovedShortages(admin, bounds),
     ]);
 
   const people = (profileRows ?? []) as { id: string; name: string; role: string }[];
@@ -72,6 +117,7 @@ async function computePeriod(month: string) {
   const marks = (markRows ?? []) as { user_id: string; business_date: string; mark: DayMark }[];
   const leave = (leaveRows ?? []) as { user_id: string; leave_date: string }[];
   const employmentRows = employment as StaffEmployment[];
+  const shortageByUser = sumShortagesByUser(shortageRows);
 
   // Same resolution as the attendance sheet: profiles.name is usually empty
   // (staff sign in as <name>@hioc.in), so both what's shown and the sort order
@@ -151,6 +197,7 @@ async function computePeriod(month: string) {
         otMultiplier: Number(settings.ot_multiplier),
         lateMarksPerHalfday: settings.late_marks_per_halfday,
       },
+      cashShortageInr: shortageByUser.get(person.id) ?? 0,
     });
 
     return {
@@ -167,6 +214,9 @@ async function computePeriod(month: string) {
     bounds,
     lines,
     blocked: lines.some((l) => l.blocked),
+    // Internal bookkeeping for POST's finalize step (which rows to mark
+    // consumed) — not part of the public GET shape, see the GET handler.
+    shortageRows,
     rulesSnapshot: {
       ot_multiplier: Number(settings.ot_multiplier),
       late_marks_per_halfday: settings.late_marks_per_halfday,
@@ -211,7 +261,15 @@ export async function GET(request: Request) {
   }
 
   const computed = await computePeriod(month);
-  return NextResponse.json({ ...computed, finalized: false, run });
+  return NextResponse.json({
+    month: computed.month,
+    bounds: computed.bounds,
+    lines: computed.lines,
+    blocked: computed.blocked,
+    rulesSnapshot: computed.rulesSnapshot,
+    finalized: false,
+    run,
+  });
 }
 
 // POST { month, adjustments?: { user_id, amount_inr, reason }[] } — finalize.
@@ -290,6 +348,10 @@ export async function POST(request: Request) {
               lateMarksPerHalfday: computed.rulesSnapshot.late_marks_per_halfday,
             },
             adjustmentsInr: adj.amount,
+            // Recomputing for a manual adjustment must not drop the cash
+            // shortage that was already priced into `l` — otherwise adding
+            // any adjustment would silently waive an approved shortage.
+            cashShortageInr: l.cashShortageInr,
           })
         : l;
 
@@ -313,6 +375,7 @@ export async function POST(request: Request) {
         base_pay_inr: withAdj.basePayInr,
         ot_pay_inr: withAdj.otPayInr,
         deductions_inr: withAdj.deductionsInr,
+        cash_shortage_inr: withAdj.cashShortageInr,
         adjustments_inr: withAdj.adjustmentsInr,
         net_pay_inr: withAdj.netPayInr,
         // The day-by-day derivation is frozen with the run. PAY-3 renders it,
@@ -321,6 +384,7 @@ export async function POST(request: Request) {
           name: l.name,
           segments: withAdj.segments,
           adjustment_reason: adj?.reason ?? '',
+          cash_shortage_clamped: withAdj.cashShortageClamped,
           days: l.days.map((d) => ({
             date: d.date,
             status: d.status,
@@ -342,6 +406,40 @@ export async function POST(request: Request) {
     }
   }
 
+  // CC-5: the run and its lines are written — cash_shortage_inr is frozen
+  // into each line above. Now mark exactly those shortage rows consumed
+  // (payroll_run_id = run.id) so a later month's finalize never deducts them
+  // again. Scoped to the users who actually got a payroll_run_line here —
+  // computed.shortageRows came from the SAME query that produced each line's
+  // cashShortageInr, so this can't drift from what was frozen. The run and
+  // its lines already stand at this point; a failure here must not undo them
+  // (that would double-charge nobody but silently un-freeze correct numbers),
+  // so it is reported in the response instead of failing the request.
+  const paidUserIds = new Set(lines.map((l) => l.user_id));
+  const shortageIdsToMark = computed.shortageRows
+    .filter((r) => paidUserIds.has(r.user_id))
+    .map((r) => r.id);
+
+  let cashShortagesMarked = 0;
+  let cashShortageMarkError: string | null = null;
+  if (shortageIdsToMark.length > 0) {
+    try {
+      const { error: markErr } = await admin
+        .from('cash_shortages')
+        .update({ payroll_run_id: run.id })
+        .in('id', shortageIdsToMark);
+      if (markErr) {
+        cashShortageMarkError = markErr.message;
+        console.error('Could not mark cash shortages as consumed by payroll run', run.id, markErr);
+      } else {
+        cashShortagesMarked = shortageIdsToMark.length;
+      }
+    } catch (err) {
+      cashShortageMarkError = err instanceof Error ? err.message : 'Could not mark cash shortages consumed.';
+      console.error('cash_shortages marking threw during finalize', run.id, err);
+    }
+  }
+
   // SA-5: one payslip email per line, to the personal email on file. This is
   // best-effort — a finalized run must stand even if every email fails, so
   // sendPayslipsForRun never throws and any failure here is swallowed too.
@@ -352,7 +450,13 @@ export async function POST(request: Request) {
     console.error('sendPayslipsForRun threw during finalize', run.id, err);
   }
 
-  return NextResponse.json({ run, lines: lines.length, payslips });
+  return NextResponse.json({
+    run,
+    lines: lines.length,
+    payslips,
+    cashShortagesMarked,
+    ...(cashShortageMarkError ? { cashShortageMarkError } : {}),
+  });
 }
 
 // PATCH { month, reason } — reverse a finalized run.
@@ -386,5 +490,39 @@ export async function PATCH(request: Request) {
 
   if (error) return errorResponse(500, error.message);
   if (!data) return errorResponse(404, 'No finalized run for that month.');
-  return NextResponse.json({ run: data });
+  const run = data as PayrollRun;
+
+  // CC-5: this run's shortages were marked payroll_run_id = run.id at
+  // finalize so they'd never be deducted twice. Reversing without undoing
+  // that mark would strand them forever — no future month's compute would
+  // ever pick them up again (they're not "unconsumed" any more). Clear it so
+  // the next finalize (for this month or any other) re-includes them.
+  let cashShortagesCleared = 0;
+  let cashShortageClearError: string | null = null;
+  try {
+    const { data: clearedRows, error: clearErr } = await admin
+      .from('cash_shortages')
+      .update({ payroll_run_id: null })
+      .eq('payroll_run_id', run.id)
+      .select('id');
+    if (clearErr) {
+      // A missing cash-counts migration is not a failure worth reporting —
+      // there was nothing to clear either way.
+      if (!isMissingRelation(clearErr)) {
+        cashShortageClearError = clearErr.message;
+        console.error('Could not clear cash_shortage payroll_run_id on reversal', run.id, clearErr);
+      }
+    } else {
+      cashShortagesCleared = (clearedRows ?? []).length;
+    }
+  } catch (err) {
+    cashShortageClearError = err instanceof Error ? err.message : 'Could not clear cash shortages.';
+    console.error('cash_shortages clear threw during reversal', run.id, err);
+  }
+
+  return NextResponse.json({
+    run,
+    cashShortagesCleared,
+    ...(cashShortageClearError ? { cashShortageClearError } : {}),
+  });
 }

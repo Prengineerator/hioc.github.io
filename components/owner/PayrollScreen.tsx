@@ -41,6 +41,11 @@ interface Line {
   basePayInr: number;
   otPayInr: number;
   deductionsInr: number;
+  // CC-5 (docs/PHASE-5-CASH-COUNTS.md): approved cash-drawer shortages
+  // already deducted into netPayInr; cashShortageClamped is true when the
+  // shortage exceeded what was left to pay, so net pay was clamped at 0.
+  cashShortageInr: number;
+  cashShortageClamped: boolean;
   adjustmentsInr: number;
   netPayInr: number;
   unconfigured: boolean;
@@ -221,6 +226,7 @@ export function PayrollScreen() {
       'Base pay',
       'OT pay',
       'Deductions',
+      'Cash shortage',
       'Adjustments',
       'Net pay',
     ];
@@ -237,6 +243,7 @@ export function PayrollScreen() {
       l.basePayInr,
       l.otPayInr,
       l.deductionsInr,
+      l.cashShortageInr,
       l.adjustmentsInr,
       l.netPayInr,
     ]);
@@ -357,6 +364,7 @@ export function PayrollScreen() {
                   <th className="px-3 py-2 text-right font-bold text-charcoal">OT</th>
                   <th className="px-3 py-2 text-right font-bold text-charcoal">Base</th>
                   <th className="px-3 py-2 text-right font-bold text-charcoal">Deduct</th>
+                  <th className="px-3 py-2 text-right font-bold text-charcoal">Shortage</th>
                   <th className="px-3 py-2 text-right font-bold text-charcoal">Net</th>
                 </tr>
               </thead>
@@ -393,13 +401,35 @@ export function PayrollScreen() {
                       <td className="px-3 py-2 text-right text-muted">
                         {l.deductionsInr ? `−${rupees(l.deductionsInr)}` : '—'}
                       </td>
+                      <td className="px-3 py-2 text-right text-muted">
+                        {l.cashShortageInr ? (
+                          <a
+                            href="/owner/cash"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-red-700 underline"
+                            title="Review cash shortages"
+                          >
+                            −{rupees(l.cashShortageInr)}
+                          </a>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right font-bold text-charcoal">
                         {rupees(l.netPayInr)}
+                        {l.cashShortageClamped ? (
+                          <span
+                            className="ml-1 rounded bg-red-100 px-1 py-0.5 text-[10px] font-normal text-red-800"
+                            title="The approved cash shortage was more than this person had left to be paid this month. Net pay was clamped at ₹0 — the remainder is not carried over."
+                          >
+                            shortage exceeded pay
+                          </span>
+                        ) : null}
                       </td>
                     </tr>
                     {expanded === l.user_id ? (
                       <tr className="border-b border-[#f0f0f0] bg-[#faf7f4]">
-                        <td colSpan={7} className="px-3 py-3">
+                        <td colSpan={8} className="px-3 py-3">
                           <Derivation line={l} />
                         </td>
                       </tr>
@@ -441,6 +471,19 @@ function Derivation({ line }: { line: Line }) {
           {s.lateMarks ? ` · ${s.lateMarks} late` : ''}
         </p>
       ))}
+      {line.cashShortageInr > 0 ? (
+        <p className="mt-2 text-sm text-red-700">
+          Cash shortage (approved): −{rupees(line.cashShortageInr)} ·{' '}
+          <a href="/owner/cash" className="underline">
+            review on Cash
+          </a>
+          {line.cashShortageClamped ? (
+            <span className="ml-1 text-amber-800">
+              — exceeded net pay this month; the remainder is not carried over.
+            </span>
+          ) : null}
+        </p>
+      ) : null}
       <div className="mt-2 flex flex-wrap gap-1">
         {worked.map((d) => (
           <span

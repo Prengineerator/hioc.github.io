@@ -23,6 +23,11 @@ const LINKS = [
     ? [
         { href: '/owner/attendance', label: 'Attendance' },
         { href: '/owner/payroll', label: 'Payroll' },
+        // CC-4 — shortages the clock-in/out drawer count revealed, and the
+        // count log behind them (docs/PHASE-5-CASH-COUNTS.md). Grouped with
+        // Attendance/Payroll: the count rides the same punch and a decided
+        // shortage lands on the same payroll run.
+        { href: '/owner/cash', label: 'Cash' },
       ]
     : []),
   { href: '/owner/settings', label: 'Settings' },
