@@ -7,7 +7,7 @@
   "scripts": {
     "build": "esbuild src/main.ts src/preload.ts --bundle --platform=node --target=node18 --format=cjs --outdir=dist --external:electron --external:electron-updater --external:usb --sourcemap",
     "start": "npm run build && electron .",
-    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:win": "npm run build && npm install --no-save --force @node-usb/usb-win32-x64-msvc@3.1.0 && electron-builder --win --x64",
     "dist:mac": "npm run build && electron-builder --mac --universal"
   },
   "dependencies": {
@@ -25,5 +25,6 @@
   },
   "engines": {
     "node": ">=22.12"
-  }
+  },
+  "author": "HIOC"
 }

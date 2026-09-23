@@ -23,6 +23,12 @@ files:
 asarUnpack:
   - "**/*.node"
 
+# `usb` ships prebuilt N-API binaries per platform (@node-usb/usb-<platform>),
+# which are ABI-stable across Electron versions — nothing to recompile, and a
+# Windows build made on a Mac could not compile one anyway. The Windows binary
+# must be present in node_modules before `dist:win` (the script installs it).
+npmRebuild: false
+
 win:
   target:
     - target: nsis
@@ -48,13 +54,18 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   # Reads CSC_LINK / CSC_KEY_PASSWORD for code signing automatically.
-  notarize:
-    teamId: ${env.APPLE_TEAM_ID}
+  # Off for the unsigned pilot. With an Apple Developer account, set true and
+  # export APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (D7-7).
+  notarize: false
 
 dmg:
   sign: false
 
+# Auto-update feed. A SEPARATE public repo that only ever holds installers —
+# the app's source stays private, and counter machines need no token to read
+# a public release. Until the repo exists the update check fails quietly.
+# Release: GH_TOKEN=... npm run dist:win -- --publish always
 publish:
   provider: github
-  owner: ${env.HIOC_POS_GH_OWNER}
-  repo: ${env.HIOC_POS_GH_REPO}
+  owner: Prengineerator
+  repo: hioc-pos-releases
