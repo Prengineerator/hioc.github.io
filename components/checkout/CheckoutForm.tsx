@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
@@ -89,23 +89,14 @@ export function CheckoutForm({
   // table-QR pad (VERIFY-2) so the two customer surfaces cannot drift into
   // enforcing different things.
   //
-  // Verifying and placing are still two separate underlying actions — a failed
-  // placement never forces a re-verify against a code that has since expired,
-  // because `otp.verified` stays true regardless of how placeOrder() turns
-  // out — but from the guest's side, entering the code IS what places the
-  // order: onVerified fires placeOrder() directly. guestReadinessBlocker()
-  // (defined below, referenced here by closure) has already gated the "Get
-  // OTP" button on everything placeOrder needs, so this only re-checks it in
-  // case something changed while the guest was reading their WhatsApp.
+  // Verifying does NOT place the order: once the number is confirmed the
+  // payment choice (Pay online / Pay at counter) is revealed and the guest
+  // places the order with the normal submit button. `otp.verified` stays true
+  // regardless of how placement turns out, so a failed placement never forces
+  // a re-verify against a code that has since expired.
   const otp = usePhoneOtp({
     onVerified: () => {
       claimGuestOrders();
-      const blocker = guestReadinessBlocker();
-      if (blocker) {
-        setServerError(blocker);
-        return;
-      }
-      void placeOrder();
     },
   });
   const phone = otp.phone;
@@ -322,11 +313,20 @@ export function CheckoutForm({
     storeAcceptingOrders && unavailableNames.length === 0 && (slots.length === 0 || slotStart !== null);
 
   // Guest WhatsApp-OTP gating (ACC-4). A signed-out guest must verify their
-  // number via the "Get OTP" step at the bottom of the form — entering the
-  // code places the order directly, so this is the LAST thing a guest does.
-  // Logged-in customers are already verified and never see any of this.
+  // number via the "Get OTP" step at the bottom of the form; only then are the
+  // payment options and the Place Order button shown. Logged-in customers are
+  // already verified and never see any of this.
   const guestVerifyRequired = GUEST_OTP_REQUIRED && !userId;
   const guestMustVerify = guestVerifyRequired && !phoneVerified;
+
+  // Bring the newly revealed payment choice into view right after a guest
+  // verifies — the OTP box they were typing in sits below it.
+  const paymentSectionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (guestVerifyRequired && phoneVerified) {
+      paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [guestVerifyRequired, phoneVerified]);
   const phoneIsValid = normalizeIndianMobile(phone) !== null;
 
   // Single source of truth for "why can't this guest get an OTP yet" — shown
@@ -435,10 +435,9 @@ export function CheckoutForm({
       return;
     }
 
-    // Guests verify — and place the order — via the "Get OTP" step at the
-    // bottom of the form; this submit path is only reachable by a logged-in
-    // customer (no submit button renders for an unverified guest, but Enter
-    // in a text field can still trigger form submission in some browsers).
+    // Guests must verify via the "Get OTP" step first — no submit button
+    // renders for an unverified guest, but Enter in a text field can still
+    // trigger form submission in some browsers.
     if (GUEST_OTP_REQUIRED && !userId && !phoneVerified) {
       setServerError('Please verify your mobile number (Get OTP) before placing the order.');
       return;
@@ -693,9 +692,13 @@ export function CheckoutForm({
           </div>
         </div>
 
-        {/* Pay online / pay at counter (PAY-1). */}
-        {ONLINE_PAYMENT_AVAILABLE ? (
-          <div>
+        {/* A verified guest's confirmation, right above the payment choice it unlocked. */}
+        {guestVerifyRequired && phoneVerified ? <PhoneOtpPanel otp={otp} /> : null}
+
+        {/* Pay online / pay at counter (PAY-1). Hidden until a guest has
+            verified their number — see guestMustVerify. */}
+        {guestMustVerify ? null : ONLINE_PAYMENT_AVAILABLE ? (
+          <div ref={paymentSectionRef}>
             <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -730,7 +733,7 @@ export function CheckoutForm({
             </p>
           </div>
         ) : (
-          <div className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+          <div ref={paymentSectionRef} className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
             Pay at the counter on pickup — no online payment required.
           </div>
         )}
@@ -745,10 +748,10 @@ export function CheckoutForm({
         </p>
 
         {guestMustVerify ? (
-          // Last step for an unverified guest: get a code, enter it, and that
-          // IS placing the order (see onVerified above) — no separate submit
-          // click after. GetOtpButton/PhoneOtpPanel self-hide based on
-          // otp.step, so exactly one of them is visible at a time.
+          // An unverified guest's next step: get a code and enter it. That
+          // reveals the payment choice and the Place Order button above.
+          // GetOtpButton/PhoneOtpPanel self-hide based on otp.step, so exactly
+          // one of them is visible at a time.
           <div className="flex flex-col gap-2">
             <GetOtpButton
               otp={otp}
@@ -756,14 +759,12 @@ export function CheckoutForm({
               extraDisabled={guestBlocker !== null}
               onBeforeSend={() => validatePhone(phone)}
             />
-            {otp.step === 'idle' && guestBlocker ? (
-              <p className="text-center text-xs text-muted">{guestBlocker}</p>
+            {otp.step === 'idle' ? (
+              <p className="text-center text-xs text-muted">
+                {guestBlocker ?? "You'll choose how to pay after verifying your number."}
+              </p>
             ) : null}
-            <PhoneOtpPanel
-              otp={otp}
-              verifyLabel="Verify & Place Order"
-              verifyingLabel="Verifying & placing order…"
-            />
+            <PhoneOtpPanel otp={otp} />
           </div>
         ) : (
           <button
