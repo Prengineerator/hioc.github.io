@@ -10,7 +10,23 @@
 
 import type { PhoneOtp } from '@/lib/hooks/usePhoneOtp';
 
-export function GetOtpButton({ otp, onBeforeSend }: { otp: PhoneOtp; onBeforeSend?: () => boolean }) {
+export function GetOtpButton({
+  otp,
+  onBeforeSend,
+  variant = 'inline',
+  extraDisabled = false,
+}: {
+  otp: PhoneOtp;
+  onBeforeSend?: () => boolean;
+  /** 'primary' — full-width CTA styling for standalone placement (e.g. as the
+   *  final step before placing an order), vs the default compact inline pill
+   *  meant to sit next to the phone input. */
+  variant?: 'inline' | 'primary';
+  /** Extra disable condition beyond phone validity — e.g. other required
+   *  fields on the surrounding form aren't filled in yet. Kept separate from
+   *  `otp.phoneIsValid` so the caller can show its own reason for each. */
+  extraDisabled?: boolean;
+}) {
   if (otp.verified || otp.step !== 'idle') return null;
   return (
     <button
@@ -22,15 +38,29 @@ export function GetOtpButton({ otp, onBeforeSend }: { otp: PhoneOtp; onBeforeSen
         if (onBeforeSend && !onBeforeSend()) return;
         void otp.sendOtp();
       }}
-      disabled={otp.busy || !otp.phoneIsValid}
-      className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+      disabled={otp.busy || !otp.phoneIsValid || extraDisabled}
+      className={
+        variant === 'primary'
+          ? 'w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60'
+          : 'shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50'
+      }
     >
       {otp.busy ? 'Sending…' : 'Get OTP'}
     </button>
   );
 }
 
-export function PhoneOtpPanel({ otp }: { otp: PhoneOtp }) {
+export function PhoneOtpPanel({
+  otp,
+  verifyLabel = 'Verify number',
+  verifyingLabel = 'Verifying…',
+}: {
+  otp: PhoneOtp;
+  /** Overridable so a caller that auto-places the order right after
+   *  verification (see CheckoutForm) can say so on the button itself. */
+  verifyLabel?: string;
+  verifyingLabel?: string;
+}) {
   return (
     <>
       {/* A send failure (provider down, template misconfigured) surfaces here.
@@ -64,7 +94,7 @@ export function PhoneOtpPanel({ otp }: { otp: PhoneOtp }) {
             disabled={otp.busy}
             className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {otp.busy ? 'Verifying…' : 'Verify number'}
+            {otp.busy ? verifyingLabel : verifyLabel}
           </button>
           <div className="flex items-center justify-between text-xs">
             <button

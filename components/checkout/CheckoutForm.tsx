@@ -87,10 +87,27 @@ export function CheckoutForm({
   // Guest WhatsApp-OTP verification (ACC-4). The mechanics — including the
   // re-lock when the number is edited — live in usePhoneOtp(), shared with the
   // table-QR pad (VERIFY-2) so the two customer surfaces cannot drift into
-  // enforcing different things. Verifying and placing stay separate actions:
-  // a failed placement must never force the guest to re-verify against a code
-  // that has since expired.
-  const otp = usePhoneOtp({ onVerified: claimGuestOrders });
+  // enforcing different things.
+  //
+  // Verifying and placing are still two separate underlying actions — a failed
+  // placement never forces a re-verify against a code that has since expired,
+  // because `otp.verified` stays true regardless of how placeOrder() turns
+  // out — but from the guest's side, entering the code IS what places the
+  // order: onVerified fires placeOrder() directly. guestReadinessBlocker()
+  // (defined below, referenced here by closure) has already gated the "Get
+  // OTP" button on everything placeOrder needs, so this only re-checks it in
+  // case something changed while the guest was reading their WhatsApp.
+  const otp = usePhoneOtp({
+    onVerified: () => {
+      claimGuestOrders();
+      const blocker = guestReadinessBlocker();
+      if (blocker) {
+        setServerError(blocker);
+        return;
+      }
+      void placeOrder();
+    },
+  });
   const phone = otp.phone;
   const phoneVerified = otp.verified;
   // Destructured: the prefill effect below depends on this, and `otp` itself is
@@ -305,11 +322,30 @@ export function CheckoutForm({
     storeAcceptingOrders && unavailableNames.length === 0 && (slots.length === 0 || slotStart !== null);
 
   // Guest WhatsApp-OTP gating (ACC-4). A signed-out guest must verify their
-  // number via the "Get OTP" control by the phone field before the Place Order
-  // button unlocks; logged-in customers are already verified.
+  // number via the "Get OTP" step at the bottom of the form — entering the
+  // code places the order directly, so this is the LAST thing a guest does.
+  // Logged-in customers are already verified and never see any of this.
   const guestVerifyRequired = GUEST_OTP_REQUIRED && !userId;
   const guestMustVerify = guestVerifyRequired && !phoneVerified;
   const phoneIsValid = normalizeIndianMobile(phone) !== null;
+
+  // Single source of truth for "why can't this guest get an OTP yet" — shown
+  // next to the Get OTP button so a faded/disabled control is never the only
+  // signal. Anything it flags here is exactly what placeOrder() would also
+  // reject, so once it returns null the OTP step is the only thing left.
+  function guestReadinessBlocker(): string | null {
+    if (!storeAcceptingOrders) return "We're not accepting orders right now — please check back later.";
+    if (unavailableNames.length > 0) {
+      return `Remove ${unavailableNames.join(', ')} from your cart to continue.`;
+    }
+    if (slots.length > 0 && slotStart === null) return 'Select a pickup time above.';
+    if (!name.trim()) return 'Enter your name above.';
+    if (!phoneIsValid) return 'Enter a valid 10-digit mobile number above.';
+    if (email.trim() && normalizeEmail(email) === null) {
+      return 'Enter a valid email address above, or leave it blank.';
+    }
+    return null;
+  }
 
   async function placeOrder() {
     const selectedSlot = slots.find((s) => s.start === slotStart) ?? slots[0];
@@ -388,9 +424,10 @@ export function CheckoutForm({
       return;
     }
 
-    // Guests verify via the "Get OTP" control by the phone field, which unlocks
-    // this button. Belt-and-suspenders guard in case the form is submitted
-    // (e.g. Enter key) before verification completes.
+    // Guests verify — and place the order — via the "Get OTP" step at the
+    // bottom of the form; this submit path is only reachable by a logged-in
+    // customer (no submit button renders for an unverified guest, but Enter
+    // in a text field can still trigger form submission in some browsers).
     if (GUEST_OTP_REQUIRED && !userId && !phoneVerified) {
       setServerError('Please verify your mobile number (Get OTP) before placing the order.');
       return;
@@ -405,6 +442,8 @@ export function CheckoutForm({
     discount_inr: 0,
     total_inr: totalPrice,
   };
+
+  const guestBlocker = guestMustVerify ? guestReadinessBlocker() : null;
 
   return (
     <div className="rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
@@ -452,28 +491,29 @@ export function CheckoutForm({
           <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
             Phone
           </label>
-          <div className="flex gap-2">
-            <input
-              id="phone"
-              type="tel"
-              required
-              maxLength={16}
-              value={phone}
-              onChange={(e) => onPhoneChange(e.target.value)}
-              onBlur={(e) => validatePhone(e.target.value)}
-              placeholder="e.g. 98765 43210"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-            />
-            {/* Dedicated "Get OTP" control (ACC-4): a signed-out guest verifies
-                the number before ordering. Shared with the table-QR pad. */}
-            {guestVerifyRequired ? (
-              <GetOtpButton otp={otp} onBeforeSend={() => validatePhone(phone)} />
-            ) : null}
-          </div>
+          <input
+            id="phone"
+            type="tel"
+            required
+            maxLength={16}
+            value={phone}
+            onChange={(e) => onPhoneChange(e.target.value)}
+            onBlur={(e) => validatePhone(e.target.value)}
+            placeholder="e.g. 98765 43210"
+            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+          />
           {phoneError ? (
             <p className="mt-1 text-sm text-charcoal">{phoneError}</p>
           ) : null}
-          {guestVerifyRequired ? <PhoneOtpPanel otp={otp} /> : null}
+          {/* The actual "Get OTP" control (ACC-4) lives at the bottom of the
+              form now, as the last step before placing the order — see the
+              submit area below. This just sets the expectation early. */}
+          {guestVerifyRequired ? (
+            <p className="mt-1 text-xs text-muted">
+              We&apos;ll WhatsApp a verification code to this number as the last step, right
+              before your order is placed.
+            </p>
+          ) : null}
         </div>
 
         <div>
@@ -693,21 +733,42 @@ export function CheckoutForm({
           marketing.
         </p>
 
-        <button
-          type="submit"
-          disabled={submitting || otp.busy || !canSubmit || guestMustVerify}
-          className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {submitting
-            ? 'Placing Order…'
-            : !storeAcceptingOrders
-              ? 'Checkout Unavailable'
-              : guestMustVerify
-                ? 'Verify your number to continue'
+        {guestMustVerify ? (
+          // Last step for an unverified guest: get a code, enter it, and that
+          // IS placing the order (see onVerified above) — no separate submit
+          // click after. GetOtpButton/PhoneOtpPanel self-hide based on
+          // otp.step, so exactly one of them is visible at a time.
+          <div className="flex flex-col gap-2">
+            <GetOtpButton
+              otp={otp}
+              variant="primary"
+              extraDisabled={guestBlocker !== null}
+              onBeforeSend={() => validatePhone(phone)}
+            />
+            {otp.step === 'idle' && guestBlocker ? (
+              <p className="text-center text-xs text-muted">{guestBlocker}</p>
+            ) : null}
+            <PhoneOtpPanel
+              otp={otp}
+              verifyLabel="Verify & Place Order"
+              verifyingLabel="Verifying & placing order…"
+            />
+          </div>
+        ) : (
+          <button
+            type="submit"
+            disabled={submitting || otp.busy || !canSubmit}
+            className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting
+              ? 'Placing Order…'
+              : !storeAcceptingOrders
+                ? 'Checkout Unavailable'
                 : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
                   ? `Pay ₹${displayBill.total_inr} & Place Order`
                   : 'Place Order'}
-        </button>
+          </button>
+        )}
       </form>
     </div>
   );
