@@ -42,6 +42,11 @@ const PAYMENT_POLL_MAX_ATTEMPTS = 30; // ~2 minutes bounded reconciliation windo
 const PAYMENT_CANCELLED_MSG = 'Payment was cancelled — you can retry or pay at the counter.';
 const PAYMENT_FAILED_MSG = "Your payment didn't go through — you can retry or pay at the counter.";
 
+// Set by the checkout pages when the customer chose to pay online but the
+// gateway was unavailable, so the server placed the order as pay-at-counter.
+const PAYMENT_UNAVAILABLE_MSG =
+  "Online payment isn't available right now, so your order was placed as pay at the counter. Please pay when you collect it.";
+
 // Set by CheckoutForm when the Razorpay modal closes without a verified payment.
 function initialPaymentMessage(flag: string | null): string {
   if (flag === 'cancelled') return PAYMENT_CANCELLED_MSG;
@@ -53,6 +58,7 @@ export default function OrderStatusPage() {
   const params = useParams<{ id: string }>();
   const orderId = params?.id ?? null;
   const searchParams = useSearchParams();
+  const paymentUnavailable = searchParams.get('payment') === 'unavailable';
 
   const [order, setOrder] = useState<OrderWithItems | null>(null);
   const [loading, setLoading] = useState(true);
@@ -235,6 +241,15 @@ export default function OrderStatusPage() {
         Hi {order.customer_name.split(' ')[0]} — here&apos;s your live status.
       </p>
       <PaymentBadge order={order} />
+
+      {paymentUnavailable && !awaitingPayment && order.payment_status !== 'paid' ? (
+        <p
+          role="status"
+          className="mt-6 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm font-bold text-charcoal"
+        >
+          {PAYMENT_UNAVAILABLE_MSG}
+        </p>
+      ) : null}
 
       {awaitingPayment ? (
         <div className="mt-6 rounded-md border border-tan bg-[#f6efe9] p-6 text-center">

@@ -37,6 +37,8 @@ vi.mock('@/lib/supabase-server', () => ({
         select: () => chain,
         eq: () => chain,
         not: () => chain,
+        // Gateway-failure fallback: orders.update(...).eq('id', …) back to counter.
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
         in: () => Promise.resolve({ data: state.menuRows, error: null }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
@@ -161,8 +163,12 @@ describe('POST /api/orders — table QR channel (QR-1 / D6)', () => {
     expect(createPaymentIntent).toHaveBeenCalledTimes(1);
 
     // The created payment intent is handed back to the client to open checkout.
-    const payload = (await res.json()) as { payment: { gatewayOrderId?: string } | null };
+    const payload = (await res.json()) as {
+      payment: { gatewayOrderId?: string } | null;
+      payment_unavailable: boolean;
+    };
     expect(payload.payment?.gatewayOrderId).toBe('order_fake123');
+    expect(payload.payment_unavailable).toBe(false);
 
     // Initial lifecycle event is system-owned (no staff actor).
     expect(state.eventRow?.to_status).toBe('placed');
@@ -170,6 +176,16 @@ describe('POST /api/orders — table QR channel (QR-1 / D6)', () => {
 
     // A QR customer gets the live bill link at placement (RCT-1, !isStaff).
     expect(sendBillNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('flags payment_unavailable when the gateway fails and the order falls back to counter', async () => {
+    vi.mocked(createPaymentIntent).mockResolvedValueOnce(null);
+    const res = await POST(req({ qr_token: QR_TOKEN, items: oneLatte }));
+    expect(res.status).toBe(201);
+    const payload = (await res.json()) as { payment: unknown; payment_unavailable: boolean };
+    expect(payload.payment).toBeNull();
+    expect(payload.payment_unavailable).toBe(true);
+    expect(state.eventRow?.reason).toBe('Payment gateway unavailable — switched to pay at counter');
   });
 
   it('keeps loyalty attribution when the QR diner is a logged-in customer', async () => {
