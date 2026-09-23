@@ -5,10 +5,13 @@ import { errorResponse, unauthorized } from '@/lib/api/http';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import {
+  filterOrderRowsByStatus,
   includeGuestOrdersByPhone,
+  isValidHistoryStatusFilter,
   mergeOrderRows,
   paginateOrderRows,
-  type OrderIdRow,
+  type HistoryStatusFilter,
+  type OrderStatusRow,
 } from '@/lib/account/history';
 
 export const dynamic = 'force-dynamic';
@@ -48,6 +51,13 @@ const PAGE_SIZE = 10;
 // server-side — `orders` has no customer self-read RLS policy (see
 // supabase/phase2-migration.sql §9 notes) — scoped to these explicit filters,
 // which are exactly the three rules above and nothing wider.
+//
+// Optional `status=active|past` (account orders page Active/Past tabs, ACC-2
+// usability pass) narrows the result to non-terminal or terminal orders
+// respectively (lib/account/history.ts's isActiveOrderStatus — the same
+// partition the state machine and the order-tracking page use). Applied to
+// the MERGED id list, before pagination, so `total`/`hasMore` describe the
+// filtered tab, not the caller's whole history.
 export async function GET(request: Request) {
   const user = await getAuthUser();
   if (!user) {
@@ -57,6 +67,15 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const pageParam = parseInt(searchParams.get('page') ?? '1', 10);
   const page = Number.isInteger(pageParam) && pageParam > 0 ? pageParam : 1;
+
+  const statusParam = searchParams.get('status');
+  let statusFilter: HistoryStatusFilter | null = null;
+  if (statusParam !== null) {
+    if (!isValidHistoryStatusFilter(statusParam)) {
+      return errorResponse(400, 'status must be "active" or "past"');
+    }
+    statusFilter = statusParam;
+  }
 
   const admin = createAdminSupabaseClient();
 
@@ -69,11 +88,13 @@ export async function GET(request: Request) {
     return errorResponse(500, 'Failed to load order history');
   }
 
-  // Sources 1 + 2: everything linked to the account.
-  let ownedRows: OrderIdRow[] = [];
+  // Sources 1 + 2: everything linked to the account. `status` is pulled
+  // alongside id/created_at so the Active/Past filter below can be applied
+  // without a second round trip.
+  let ownedRows: OrderStatusRow[] = [];
   const linked = await admin
     .from('orders')
-    .select('id, created_at')
+    .select('id, created_at, status')
     .or(`user_id.eq.${user.id},customer_user_id.eq.${user.id}`);
   if (linked.error) {
     if (!isMissingColumnError(linked.error)) {
@@ -83,32 +104,32 @@ export async function GET(request: Request) {
       'account/history: orders.customer_user_id is missing — counter orders will not appear ' +
         'until this account is linked by the guest-claim path. Is supabase/2026-08-counter-loyalty.sql applied?',
     );
-    const fallback = await admin.from('orders').select('id, created_at').eq('user_id', user.id);
+    const fallback = await admin.from('orders').select('id, created_at, status').eq('user_id', user.id);
     if (fallback.error) {
       return errorResponse(500, 'Failed to load order history');
     }
-    ownedRows = (fallback.data ?? []) as OrderIdRow[];
+    ownedRows = (fallback.data ?? []) as OrderStatusRow[];
   } else {
-    ownedRows = (linked.data ?? []) as OrderIdRow[];
+    ownedRows = (linked.data ?? []) as OrderStatusRow[];
   }
 
   // Source 3: unclaimed guest orders — ONLY when the CALLER's own phone is
   // verified. Never widen this by an order's (unverified) customer_phone.
-  let guestRows: OrderIdRow[] = [];
+  let guestRows: OrderStatusRow[] = [];
   const phoneVerified = includeGuestOrdersByPhone(profile);
   if (phoneVerified) {
     const guest = await admin
       .from('orders')
-      .select('id, created_at')
+      .select('id, created_at, status')
       .eq('customer_phone', profile!.phone as string)
       .is('user_id', null);
     if (guest.error) {
       return errorResponse(500, 'Failed to load order history');
     }
-    guestRows = (guest.data ?? []) as OrderIdRow[];
+    guestRows = (guest.data ?? []) as OrderStatusRow[];
   }
 
-  const merged = mergeOrderRows([ownedRows, guestRows]);
+  const merged = filterOrderRowsByStatus(mergeOrderRows([ownedRows, guestRows]), statusFilter);
   const { items, total, hasMore } = paginateOrderRows(merged, page, PAGE_SIZE);
 
   if (items.length === 0) {
@@ -119,6 +140,7 @@ export async function GET(request: Request) {
       total,
       hasMore,
       phoneVerified,
+      status: statusFilter,
     });
   }
 
@@ -152,5 +174,6 @@ export async function GET(request: Request) {
     total,
     hasMore,
     phoneVerified,
+    status: statusFilter,
   });
 }

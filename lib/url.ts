@@ -12,3 +12,16 @@ export function absoluteUrl(path: string): string {
   const rel = path.startsWith('/') ? path : `/${path}`;
   return `${base}${rel}`;
 }
+
+/**
+ * A post-login redirect target, or null. Only a same-site absolute path is
+ * allowed: it must start with a single "/" (not "//", which browsers treat as
+ * another host) and contain no backslash (some browsers normalise "/\\host").
+ */
+export function safeNextPath(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (!v.startsWith('/') || v.startsWith('//') || v.includes('\\')) return null;
+  if (/[\u0000-\u001f]/.test(v)) return null;
+  return v;
+}

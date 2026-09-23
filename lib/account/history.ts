@@ -1,10 +1,19 @@
 import 'server-only';
 
-// Pure merge/dedupe/paginate/security rules behind GET /api/account/history
-// (ACC-2, widened by the "customer login should show every order" fix).
-// Kept dependency-free — no Supabase import here — so the rules that matter
-// most (dedupe by id, newest first, and the one security rule below) can be
-// tested without mocking a database.
+import { isTerminal } from '@/lib/orders/stateMachine';
+import type { OrderStatus } from '@/lib/types';
+
+// Pure merge/dedupe/paginate/security/status-filter rules behind
+// GET /api/account/history (ACC-2, widened by the "customer login should
+// show every order" fix; status filter added for the Active/Past tabs on
+// the account orders page). Kept dependency-free of Supabase — so the rules
+// that matter most (dedupe by id, newest first, the one security rule
+// below, and the status partition) can be tested without mocking a
+// database. `isTerminal` is the one exception: it's the same pure,
+// Supabase-free state-machine predicate the order-status route and the
+// customer order-tracking page already use, and reusing it here (rather
+// than re-listing which statuses are terminal) is what guarantees "Active"
+// here can never silently drift from what the rest of the app calls active.
 //
 // A caller's orders come from up to three Supabase queries run by the route
 // handler (owner-linked, and — only when the caller's own phone is verified
@@ -14,6 +23,44 @@ import 'server-only';
 export interface OrderIdRow {
   id: string;
   created_at: string;
+}
+
+export type HistoryStatusFilter = 'active' | 'past';
+
+export function isValidHistoryStatusFilter(value: unknown): value is HistoryStatusFilter {
+  return value === 'active' || value === 'past';
+}
+
+/**
+ * "Active" = still moving toward fulfillment (placed/received/accepted/
+ * preparing/ready); "Past" = terminal (completed/rejected/cancelled) — the
+ * exact complement of `isTerminal()` (lib/orders/stateMachine.ts), which is
+ * what the Active/Past tabs on the account orders page (and the "Active
+ * order" callout on the account overview) mean by each word.
+ */
+export function isActiveOrderStatus(status: OrderStatus): boolean {
+  return !isTerminal(status);
+}
+
+export interface OrderStatusRow extends OrderIdRow {
+  status: OrderStatus;
+}
+
+/**
+ * Narrows an already-merged, newest-first order list to just the Active or
+ * Past bucket. Applied AFTER `mergeOrderRows` and BEFORE
+ * `paginateOrderRows`, so `total`/`hasMore` reflect the filtered set — not
+ * the caller's whole history — and pagination stays correct within a tab.
+ * A missing/invalid filter is a no-op (returns `rows` unchanged).
+ */
+export function filterOrderRowsByStatus<T extends OrderStatusRow>(
+  rows: T[],
+  filter: HistoryStatusFilter | null | undefined,
+): T[] {
+  if (!filter) return rows;
+  return rows.filter((row) =>
+    filter === 'active' ? isActiveOrderStatus(row.status) : !isActiveOrderStatus(row.status),
+  );
 }
 
 /**
