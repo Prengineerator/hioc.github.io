@@ -17,6 +17,7 @@ import type { CreatedPaymentIntent } from './types';
 export type { CreatedPaymentIntent } from './types';
 
 const RAZORPAY_API_BASE = 'https://api.razorpay.com/v1';
+const MIN_ORDER_AMOUNT_PAISE = 100; // Razorpay's minimum order amount (₹1)
 
 function credentials(): { keyId: string; keySecret: string } | null {
   const keyId = process.env.RAZORPAY_KEY_ID;
@@ -65,6 +66,8 @@ export async function createPaymentIntent(
   amountInr: number,
 ): Promise<CreatedPaymentIntent | null> {
   if (!Number.isFinite(amountInr) || amountInr <= 0) return null;
+  const amountPaise = Math.round(amountInr) * 100;
+  if (amountPaise < MIN_ORDER_AMOUNT_PAISE) return null; // Razorpay rejects < ₹1
   const creds = credentials();
   if (!creds) return null; // gateway not configured — caller falls back to counter
 
@@ -72,7 +75,7 @@ export async function createPaymentIntent(
   const rzpOrder = await razorpayRequest<RzpOrder>('/orders', {
     method: 'POST',
     body: JSON.stringify({
-      amount: Math.round(amountInr) * 100, // paise
+      amount: amountPaise,
       currency: 'INR',
       receipt: orderId,
       payment_capture: 1, // auto-capture on success (M4) — never leave 'authorized'
@@ -112,8 +115,31 @@ export function verifyWebhookSignature(rawBody: string, signature: string): bool
   const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!secret || !signature) return false;
   const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+  return signaturesMatch(expected, signature);
+}
+
+/**
+ * Verifies the signature Checkout.js hands the browser on a successful
+ * payment: HMAC-SHA256(`${razorpay_order_id}|${razorpay_payment_id}`) keyed
+ * with RAZORPAY_KEY_SECRET (the API secret, not the webhook secret).
+ */
+export function verifyCheckoutSignature(
+  gatewayOrderId: string,
+  gatewayPaymentId: string,
+  signature: string,
+): boolean {
+  const creds = credentials();
+  if (!creds || !gatewayOrderId || !gatewayPaymentId || !signature) return false;
+  const expected = createHmac('sha256', creds.keySecret)
+    .update(`${gatewayOrderId}|${gatewayPaymentId}`)
+    .digest('hex');
+  return signaturesMatch(expected, signature);
+}
+
+// Constant-time compare to avoid a timing side-channel.
+function signaturesMatch(expected: string, got: string): boolean {
   const expectedBuf = Buffer.from(expected, 'utf8');
-  const gotBuf = Buffer.from(signature, 'utf8');
+  const gotBuf = Buffer.from(got, 'utf8');
   if (expectedBuf.length !== gotBuf.length) return false;
   return timingSafeEqual(expectedBuf, gotBuf);
 }
@@ -140,6 +166,16 @@ export async function fetchOrderPaymentAttempts(
     { method: 'GET' },
   );
   return data?.items ?? null;
+}
+
+/** Fetches a single payment — used by the Checkout.js verify route. Null on failure. */
+export async function fetchGatewayPayment(
+  gatewayPaymentId: string,
+): Promise<RazorpayPaymentAttempt | null> {
+  return razorpayRequest<RazorpayPaymentAttempt>(
+    `/payments/${encodeURIComponent(gatewayPaymentId)}`,
+    { method: 'GET' },
+  );
 }
 
 export interface RazorpayRefundResult {

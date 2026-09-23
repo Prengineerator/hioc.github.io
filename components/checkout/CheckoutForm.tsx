@@ -383,15 +383,18 @@ export function CheckoutForm({
 
         if (data.payment) {
           // Online payment intent created — open Razorpay's hosted checkout.
-          // Both success and dismiss land on the status page, which
-          // server-reconciles the real payment_status (webhook + poll).
+          // Every outcome lands on the status page, which server-reconciles
+          // the real payment_status (verify + webhook + poll); the `payment`
+          // flag just tells it which message to show on arrival.
+          const statusUrl = `/order/${data.order.id}`;
           openRazorpayCheckout(data.payment, {
             name,
             phone,
             description: 'HIOC order payment',
-            onSuccess: () => router.push(`/order/${data.order.id}`),
-            onDismiss: () => router.push(`/order/${data.order.id}`),
-            onFailure: () => router.push(`/order/${data.order.id}`),
+            onSuccess: () => router.push(statusUrl),
+            onDismiss: (lastFailure) =>
+              router.push(`${statusUrl}?payment=${lastFailure ? 'failed' : 'cancelled'}`),
+            onFailure: () => router.push(`${statusUrl}?payment=failed`),
           });
           return;
         }
