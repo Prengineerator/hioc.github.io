@@ -13,7 +13,7 @@
 // and once completed it links to leaving a review (LOY-3, another pillar).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
@@ -39,9 +39,20 @@ const STEP_LABEL: Record<string, string> = {
 const PAYMENT_POLL_MS = 4000;
 const PAYMENT_POLL_MAX_ATTEMPTS = 30; // ~2 minutes bounded reconciliation window
 
+const PAYMENT_CANCELLED_MSG = 'Payment was cancelled — you can retry or pay at the counter.';
+const PAYMENT_FAILED_MSG = "Your payment didn't go through — you can retry or pay at the counter.";
+
+// Set by CheckoutForm when the Razorpay modal closes without a verified payment.
+function initialPaymentMessage(flag: string | null): string {
+  if (flag === 'cancelled') return PAYMENT_CANCELLED_MSG;
+  if (flag === 'failed') return PAYMENT_FAILED_MSG;
+  return '';
+}
+
 export default function OrderStatusPage() {
   const params = useParams<{ id: string }>();
   const orderId = params?.id ?? null;
+  const searchParams = useSearchParams();
 
   const [order, setOrder] = useState<OrderWithItems | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,7 +61,9 @@ export default function OrderStatusPage() {
   const [cancelError, setCancelError] = useState('');
   const [paying, setPaying] = useState(false);
   const [switching, setSwitching] = useState(false);
-  const [paymentActionError, setPaymentActionError] = useState('');
+  const [paymentActionError, setPaymentActionError] = useState(() =>
+    initialPaymentMessage(searchParams.get('payment')),
+  );
   const pollAttempts = useRef(0);
 
   const fetchOrder = useCallback(async () => {
@@ -139,8 +152,17 @@ export default function OrderStatusPage() {
         phone: order.customer_phone,
         description: `Order #${formatOrderNumber(order.order_number)}`,
         onSuccess: fetchOrder,
-        onDismiss: fetchOrder,
-        onFailure: (msg) => setPaymentActionError(msg),
+        onDismiss: (lastFailure) => {
+          setPaymentActionError(
+            lastFailure ? `Payment failed: ${lastFailure}` : PAYMENT_CANCELLED_MSG,
+          );
+          fetchOrder();
+        },
+        onFailure: (msg) => {
+          setPaymentActionError(msg);
+          fetchOrder();
+        },
+        onPaymentFailed: (msg) => setPaymentActionError(`Payment failed: ${msg}`),
       });
     } catch {
       setPaymentActionError('Network error — please try again.');
