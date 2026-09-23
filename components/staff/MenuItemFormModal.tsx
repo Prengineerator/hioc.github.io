@@ -323,15 +323,19 @@ export function MenuItemFormModal({
                 </div>
                 <div className="flex flex-col gap-2">
                   {variantRows.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
+                    // flex-wrap + a min-width on each field (rather than a
+                    // fixed w-1/2) so a 360px phone wraps the Remove button
+                    // onto its own line instead of squeezing the price input
+                    // down to a few characters.
+                    <div key={i} className="flex flex-wrap items-center gap-2">
                       <input
                         type="text"
                         placeholder="e.g. Large"
                         value={row.label}
                         onChange={(e) => updateVariant(i, 'label', e.target.value)}
-                        className="w-1/2 rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                        className="min-w-[7rem] flex-1 rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
                       />
-                      <div className="flex flex-1 items-center rounded-md border border-[#e5e5e5] focus-within:border-tan">
+                      <div className="flex min-w-[7rem] flex-1 items-center rounded-md border border-[#e5e5e5] focus-within:border-tan">
                         <span className="pl-3 text-muted">₹</span>
                         <input
                           type="number"
@@ -340,7 +344,7 @@ export function MenuItemFormModal({
                           placeholder="Price"
                           value={row.price}
                           onChange={(e) => updateVariant(i, 'price', e.target.value)}
-                          className="w-full rounded-md px-2 py-2 text-charcoal outline-none"
+                          className="w-full min-w-0 rounded-md px-2 py-2 text-charcoal outline-none"
                         />
                       </div>
                       <button

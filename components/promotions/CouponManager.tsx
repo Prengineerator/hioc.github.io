@@ -173,13 +173,13 @@ export function CouponManager() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">{coupons.length} coupon(s)</p>
         {editingId === null ? (
           <button
             type="button"
             onClick={startCreate}
-            className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream hover:bg-tan-dark"
+            className="rounded-md bg-tan px-4 py-2.5 text-sm font-bold text-cream hover:bg-tan-dark"
           >
             New coupon
           </button>

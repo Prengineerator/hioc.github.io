@@ -4,11 +4,13 @@
 
 import {
   getChannelMix,
+  getCustomerSegmentSplit,
   getDailySales,
   getDineInPeakHours,
   getItemSales,
   getHourlyOrders,
   getOrderDurations,
+  getRecentOrders,
   getRejectReasons,
   getStaffLeaderboard,
   getStatusCounts,
@@ -16,6 +18,9 @@ import {
   getTodayAtAGlance,
   summariseChannels,
 } from '@/lib/analytics/queries';
+import { startOfTodayIstIso } from '@/lib/api/date';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import {
   Card,
   GlanceCards,
@@ -31,7 +36,10 @@ import {
   StaffLeaderboard,
   TableTurnoverList,
 } from '@/components/owner/ChannelAnalytics';
+import { CustomerTypeSplit, RecentOrdersCard } from '@/components/owner/RecentOrders';
 import { LiveOps } from '@/components/owner/LiveOps';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const dynamic = 'force-dynamic';
 
@@ -56,6 +64,9 @@ export default async function OwnerOverviewPage() {
     dineInHours,
     turnover,
     leaderboard,
+    recentOrders,
+    todaySplit,
+    last30Split,
   ] = await Promise.all([
     getTodayAtAGlance(),
     getDailySales(30),
@@ -68,7 +79,16 @@ export default async function OwnerOverviewPage() {
     getDineInPeakHours(30),
     getTableTurnover(30),
     getStaffLeaderboard(30),
+    getRecentOrders(20),
+    getCustomerSegmentSplit(startOfTodayIstIso()),
+    getCustomerSegmentSplit(new Date(Date.now() - 30 * DAY_MS).toISOString()),
   ]);
+
+  // Recent-orders "Entered by <name>" needs the same profiles.name → email
+  // local-part fallback the staff leaderboard uses (lib/staff/displayName.ts)
+  // — resolved here, once, for just the staffers who appear in this window.
+  const staffIds = [...new Set(recentOrders.map((o) => o.created_by).filter((id): id is string => Boolean(id)))];
+  const staffNames = await getStaffDisplayNames(createAdminSupabaseClient(), staffIds);
 
   const acceptSecs = durations.map((d) => d.accept_secs);
   const prepSecs = durations.map((d) => d.prep_secs);
@@ -83,6 +103,19 @@ export default async function OwnerOverviewPage() {
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
       <h1 className="text-2xl font-bold text-charcoal">Today at a glance</h1>
       <GlanceCards g={glance} />
+
+      <Card title="Orders by customer type">
+        <CustomerTypeSplit
+          windows={[
+            { label: 'Today', counts: todaySplit },
+            { label: 'Last 30 days', counts: last30Split },
+          ]}
+        />
+      </Card>
+
+      <Card title="Recent orders">
+        <RecentOrdersCard rows={recentOrders} staffNames={staffNames} />
+      </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Live operations">

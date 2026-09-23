@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { getAuthUser } from '@/lib/api/auth';
 import { AccountHeader } from '@/components/account/AccountHeader';
 
@@ -8,7 +9,14 @@ import { AccountHeader } from '@/components/account/AccountHeader';
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
   const user = await getAuthUser();
   if (!user) {
-    redirect('/login?next=/account');
+    // Send them back to what they actually asked for (e.g. a "view my
+    // orders" link to /account/orders) rather than always bouncing to the
+    // generic /account landing page. This Server Component has no direct
+    // view of the request URL, so it reads the `x-pathname` header
+    // middleware.ts forwards on every request (same pattern as
+    // app/staff/layout.tsx / app/owner/layout.tsx).
+    const pathname = headers().get('x-pathname') || '/account';
+    redirect(`/login?next=${encodeURIComponent(pathname)}`);
   }
 
   return (

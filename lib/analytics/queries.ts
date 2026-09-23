@@ -9,13 +9,25 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { startOfTodayIstIso } from '@/lib/api/date';
+import { isMissingColumnError } from '@/lib/api/postgrest';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import {
+  segmentCustomers,
+  tallyCustomerSegments,
+  type CustomerOrderInput,
+  type CustomerOrderRow,
+  type CustomerSegment,
+  type CustomerSegmentation,
+} from '@/lib/analytics/customerSegments';
 import type {
   ChannelMixRow,
   DailySalesRow,
   HourlyOrdersRow,
   ItemSalesRow,
+  NewVsReturningRow,
   OrderChannel,
   OrderDurationRow,
+  OrderStatus,
   RejectReasonRow,
   StaffEntryStatsRow,
   TableTurnoverRow,
@@ -313,21 +325,12 @@ export async function getStaffLeaderboard(days = 30): Promise<StaffLeaderboardRo
     byStaff.set(r.staff_id, acc);
   }
 
+  // Staff accounts are created as <name>@hioc.in and most never get a
+  // profiles.name, which is why this used to show "Unknown staff" for nearly
+  // everyone — getStaffDisplayNames falls back to the email's local part
+  // before giving up (lib/staff/displayName.ts).
   const ids = [...byStaff.keys()];
-  const names = new Map<string, string>();
-  if (ids.length > 0) {
-    const { data: profs, error: pErr } = await admin
-      .from('profiles')
-      .select('id, name')
-      .in('id', ids);
-    if (pErr) {
-      console.error('getStaffLeaderboard profiles lookup failed', pErr);
-    } else {
-      for (const p of (profs ?? []) as { id: string; name: string | null }[]) {
-        if (p.name) names.set(p.id, p.name);
-      }
-    }
-  }
+  const names = await getStaffDisplayNames(admin, ids);
 
   return [...byStaff.entries()]
     .map(([staff_id, a]) => ({
@@ -337,4 +340,181 @@ export async function getStaffLeaderboard(days = 30): Promise<StaffLeaderboardRo
       revenue_inr: a.revenue_inr,
     }))
     .sort((x, y) => y.orders_entered - x.orders_entered);
+}
+
+// ---------------------------------------------------------------------------
+// Customer segregation (owner feedback: orders all showed as "customer", with
+// no distinction between a walk-in, a counter regular, and an online order).
+// The classification/aggregation itself is pure and lives in
+// lib/analytics/customerSegments.ts — these are just the fetchers.
+//
+// customer_user_id (2026-08-counter-loyalty.sql) may not exist on every DB
+// yet, exactly like app/api/orders/route.ts's write path: try the full select
+// first, and on a "missing column" error retry without it (same
+// isMissingColumnError helper), degrading to user_id-only linkage rather than
+// failing the page.
+// ---------------------------------------------------------------------------
+
+const RECENT_ORDER_COLUMNS =
+  'id, order_number, created_at, total_inr, channel, status, user_id, customer_user_id, customer_name, customer_phone, created_by';
+const RECENT_ORDER_COLUMNS_NO_LINK =
+  'id, order_number, created_at, total_inr, channel, status, user_id, customer_name, customer_phone, created_by';
+
+export interface RecentOrderRow {
+  id: string;
+  order_number: number;
+  created_at: string;
+  total_inr: number | null;
+  channel: OrderChannel;
+  status: OrderStatus;
+  user_id: string | null;
+  customer_user_id: string | null;
+  customer_name: string;
+  customer_phone: string;
+  created_by: string | null;
+}
+
+/** Most recent orders (any status) for the dashboard's "Recent orders" card. */
+export async function getRecentOrders(limit = 20): Promise<RecentOrderRow[]> {
+  const admin = createAdminSupabaseClient();
+  let { data, error } = await admin
+    .from('orders')
+    .select(RECENT_ORDER_COLUMNS)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error && isMissingColumnError(error)) {
+    const fallback = await admin
+      .from('orders')
+      .select(RECENT_ORDER_COLUMNS_NO_LINK)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (!fallback.error) {
+      return (fallback.data ?? []).map((r) => ({
+        ...(r as Omit<RecentOrderRow, 'customer_user_id'>),
+        customer_user_id: null,
+      }));
+    }
+    error = fallback.error;
+  }
+
+  if (error) {
+    console.error('getRecentOrders failed', error);
+    return [];
+  }
+  return (data ?? []) as RecentOrderRow[];
+}
+
+// PostgREST caps every response at the project's max_rows (1000 by default)
+// no matter what .limit() asks for, so a 30/90-day window at cafe volume
+// silently truncated. Page with .range() until a short page or `max` rows.
+const PAGE_ROWS = 1000;
+
+/**
+ * Valid (not rejected/cancelled — same filter as v_valid_orders) orders since
+ * `sinceIso`, paged past the max_rows cap. Tolerates orders.customer_user_id
+ * being absent on a DB without 2026-08-counter-loyalty.sql (null-filled).
+ * Returns null on failure so callers can pick their own degraded value.
+ */
+async function fetchValidOrdersSince<T>(
+  columns: string,
+  sinceIso: string,
+  max: number,
+): Promise<T[] | null> {
+  const admin = createAdminSupabaseClient();
+  const fetchAll = async (cols: string) => {
+    const rows: Record<string, unknown>[] = [];
+    for (let from = 0; from < max; from += PAGE_ROWS) {
+      const { data, error } = await admin
+        .from('orders')
+        .select(cols)
+        .gte('created_at', sinceIso)
+        .not('status', 'in', '("rejected","cancelled")')
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
+        .range(from, Math.min(from + PAGE_ROWS, max) - 1);
+      if (error) return { rows, error };
+      const page = (data ?? []) as unknown as Record<string, unknown>[];
+      rows.push(...page);
+      if (page.length < PAGE_ROWS) break;
+    }
+    return { rows, error: null };
+  };
+
+  let result = await fetchAll(columns);
+  if (result.error && isMissingColumnError(result.error)) {
+    const noLink = columns
+      .split(',')
+      .map((c) => c.trim())
+      .filter((c) => c !== 'customer_user_id')
+      .join(', ');
+    result = await fetchAll(noLink);
+    if (!result.error) {
+      return result.rows.map((r) => ({ ...r, customer_user_id: null })) as T[];
+    }
+  }
+  if (result.error) {
+    console.error('fetchValidOrdersSince failed', result.error);
+    return null;
+  }
+  return result.rows as T[];
+}
+
+/**
+ * Orders-by-customer-type split (walk-in vs identified vs online) since
+ * `sinceIso`, excluding invalid orders the same way v_valid_orders does.
+ */
+export async function getCustomerSegmentSplit(sinceIso: string): Promise<Record<CustomerSegment, number>> {
+  const rows = await fetchValidOrdersSince<CustomerOrderInput>(
+    'channel, user_id, customer_user_id, customer_name, customer_phone',
+    sinceIso,
+    20000,
+  );
+  if (!rows) return { walk_in: 0, identified: 0, online: 0 };
+  return tallyCustomerSegments(rows);
+}
+
+/**
+ * Raw order rows for the customers page's TypeScript-side segregation
+ * (identified-by-account stats + walk-in/phone-only-guest counts) — computing
+ * this in JS from a bounded window, rather than adding a new SQL view, since
+ * there is already a backlog of unapplied migrations (see
+ * supabase/2026-08-counter-loyalty.sql, supabase/*pos-devices*.sql).
+ */
+export async function getOrdersForCustomerSegmentation(days = 90, limit = 20000): Promise<CustomerOrderRow[]> {
+  const since = new Date(Date.now() - days * DAY_MS).toISOString();
+  const rows = await fetchValidOrdersSince<CustomerOrderRow>(
+    'channel, user_id, customer_user_id, customer_name, customer_phone, total_inr, created_at',
+    since,
+    limit,
+  );
+  return rows ?? [];
+}
+
+/** Convenience wrapper: fetch + segment in one call for the customers page. */
+export async function getCustomerSegmentation(days = 90, limit = 20000): Promise<CustomerSegmentation> {
+  const rows = await getOrdersForCustomerSegmentation(days, limit);
+  return segmentCustomers(rows);
+}
+
+/**
+ * New vs returning per day (RET-1), from v_new_vs_returning
+ * (supabase/phase2-migration.sql §10). user_id-only, like the view itself —
+ * a counter-linked regular's later web order still counts as "new" there,
+ * since the view has no notion of customer_user_id. Moved here from
+ * app/owner/customers/page.tsx so every analytics fetcher lives in one place.
+ */
+export async function getNewVsReturning(days: number): Promise<NewVsReturningRow[]> {
+  const admin = createAdminSupabaseClient();
+  const since = new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
+  const { data, error } = await admin
+    .from('v_new_vs_returning')
+    .select('*')
+    .gte('order_date', since)
+    .order('order_date', { ascending: false });
+  if (error) {
+    console.error('getNewVsReturning failed', error);
+    return [];
+  }
+  return (data ?? []) as NewVsReturningRow[];
 }

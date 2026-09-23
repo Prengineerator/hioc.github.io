@@ -237,7 +237,7 @@ export function NotificationLog() {
             type="button"
             onClick={() => setFilter(f.key)}
             className={
-              'rounded-md border px-3 py-1.5 text-sm font-bold transition-colors ' +
+              'rounded-md border px-3 py-2.5 text-sm font-bold transition-colors ' +
               (filter === f.key
                 ? 'border-tan bg-tan text-cream'
                 : 'border-[#e5e5e5] text-charcoal hover:border-tan')

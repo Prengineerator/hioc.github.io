@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { flags } from '@/lib/flags';
@@ -32,11 +33,26 @@ export function OwnerHeader() {
   const pathname = usePathname();
   // See StaffHeader: compare the RESOLVED href, not the canonical one.
   const toHref = useSurfaceHref();
+  const navRef = useRef<HTMLElement>(null);
+
+  // Mobile nav is a horizontally scrolling pill row (see className below) — on
+  // first paint (and on every navigation) the active pill may be off-screen,
+  // so bring it into view. data-active (not a ref) because SurfaceLink is a
+  // plain function component and can't take a forwarded ref.
+  useEffect(() => {
+    const active = navRef.current?.querySelector('[data-active="true"]');
+    active?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }, [pathname]);
+
   return (
     <header className="border-b border-[#e5e5e5] bg-cream">
-      <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
+      <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
         <span className="font-bold text-charcoal">HIOC · Owner</span>
-        <nav className="flex gap-1">
+        <nav
+          ref={navRef}
+          aria-label="Owner navigation"
+          className="-mx-4 flex w-full gap-1 overflow-x-auto px-4 pb-1 [-ms-overflow-style:none] [scrollbar-width:none] sm:mx-0 sm:w-auto sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden"
+        >
           {LINKS.map((l) => {
             const resolved = toHref(l.href);
             const active = resolved === '/' ? pathname === '/' : pathname.startsWith(resolved);
@@ -44,8 +60,9 @@ export function OwnerHeader() {
               <Link
                 key={l.href}
                 href={l.href}
+                data-active={active ? 'true' : undefined}
                 className={
-                  'rounded-md px-3 py-1.5 text-sm font-bold ' +
+                  'shrink-0 whitespace-nowrap rounded-md px-3 py-2.5 text-sm font-bold sm:py-1.5 ' +
                   (active ? 'bg-charcoal text-cream' : 'text-charcoal hover:bg-[#f2efe9]')
                 }
               >

@@ -191,6 +191,11 @@ export function PosOrderEntry({
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
   const [pendingQty, setPendingQty] = useState(1); // qty carried from "3*latte" into the modal
   const [paymentOpen, setPaymentOpen] = useState(false);
+  // Phone layout only (< lg): the order panel becomes a bottom sheet, opened
+  // via the sticky "View order" bar, instead of the side column desktop/tablet
+  // keep. Purely a layout toggle — nothing about the order/payment flow reads
+  // this state.
+  const [mobileCartOpen, setMobileCartOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -633,6 +638,12 @@ export function PosOrderEntry({
     }
     setSubmitError(null);
     setPaymentOpen(true);
+    // On a phone the payment step (docked) lives inside the order sheet — this
+    // can be reached via Ctrl/⌘+Enter from the command bar before the sheet
+    // was ever opened by hand, so force it open rather than settling money in
+    // a panel nobody can see. A no-op at lg+, where the sheet classes don't
+    // apply.
+    setMobileCartOpen(true);
   }
 
   const selectedTableLabel = tables.find((t) => t.id === tableId)?.label ?? null;
@@ -854,6 +865,7 @@ export function PosOrderEntry({
       setCart([]);
       setBill(null);
       setSearch('');
+      setMobileCartOpen(false);
       showToast(`Added to order #${label}.`);
       // Back to the board so the running total is visible in context.
       setTimeout(() => router.push('/staff/tables'), 600);
@@ -877,6 +889,7 @@ export function PosOrderEntry({
     setContactError(null);
     setShowCustomer(false);
     setPaymentOpen(false);
+    setMobileCartOpen(false);
     setSearch('');
     // The next customer is a different person with a different balance —
     // carrying any of this over would spend the last one's points.
@@ -913,7 +926,7 @@ export function PosOrderEntry({
   const pointsAvailable = canRedeemPoints(customer);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6">
+    <div className="mx-auto max-w-7xl px-4 py-6 pb-28 lg:pb-6">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-charcoal">
@@ -976,9 +989,39 @@ export function PosOrderEntry({
           )}
         </div>
 
-        {/* ---- Order panel ---- */}
+        {/* ---- Order panel ----
+            Tablet/desktop (lg+): unchanged sticky side column.
+            Phone (< lg): the exact same panel becomes a bottom sheet, opened
+            from the "View order" bar below — translate-y-full keeps it
+            off-screen (not unmounted) while closed so nothing inside it
+            (coupon input, customer fields, the docked payment step) loses its
+            state or re-renders from scratch when it's toggled. */}
         <div className="lg:col-span-1">
-          <div className="sticky top-20 flex flex-col gap-4 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+          <div
+            className={
+              'fixed inset-x-0 bottom-0 z-40 flex max-h-[85dvh] flex-col gap-4 overflow-y-auto rounded-t-xl border border-[#e5e5e5] bg-cream p-4 shadow-elevated transition-transform duration-200 ease-out ' +
+              (mobileCartOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none') +
+              ' pb-[calc(1rem+env(safe-area-inset-bottom))]' +
+              ' lg:sticky lg:top-20 lg:inset-x-auto lg:bottom-auto lg:z-auto lg:max-h-none lg:translate-y-0 lg:pointer-events-auto lg:overflow-visible lg:rounded-md lg:pb-4 lg:shadow-sm lg:transition-none'
+            }
+          >
+            {/* Sheet handle + close — phone only. The panel's own scroll needs
+                an explicit dismiss since there's no backdrop tap target above
+                the fold once it's scrolled. */}
+            <div className="flex items-center justify-between lg:hidden">
+              <p className="text-sm font-bold text-charcoal">
+                {isAddMode ? 'Add to order' : 'Order'}
+              </p>
+              <button
+                type="button"
+                onClick={() => setMobileCartOpen(false)}
+                aria-label="Close order"
+                className="-mr-1 flex h-9 w-9 items-center justify-center rounded-full text-xl leading-none text-muted hover:text-charcoal"
+              >
+                &times;
+              </button>
+            </div>
+
             {/* Order type toggle — in add mode these belong to the existing
                 order and must not be re-decided here. */}
             {!isAddMode ? (
@@ -1376,6 +1419,37 @@ export function PosOrderEntry({
         </div>
       </div>
 
+      {/* Phone-only scrim behind the order sheet. Sits below the shared Modal
+          (customize/payment, z-50) on purpose — settling payment through the
+          pre-V2 modal path must always be able to take over the screen, not
+          get trapped under this sheet. */}
+      {mobileCartOpen ? (
+        <button
+          type="button"
+          aria-label="Close order"
+          onClick={() => setMobileCartOpen(false)}
+          className="fixed inset-0 z-30 bg-charcoal/40 lg:hidden"
+        />
+      ) : null}
+
+      {/* Phone-only sticky summary bar — replaces the side column as the way
+          into the order below lg. Hidden once the sheet is open (it would
+          just sit underneath it) and while there's nothing to view yet. */}
+      {!mobileCartOpen && totalItems > 0 ? (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#e5e5e5] bg-cream px-4 pt-3 shadow-[0_-2px_10px_rgba(0,0,0,0.08)] lg:hidden pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+          <button
+            type="button"
+            onClick={() => setMobileCartOpen(true)}
+            className="flex w-full items-center justify-between rounded-md bg-tan px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+          >
+            <span>
+              View order · {totalItems} item{totalItems === 1 ? '' : 's'}
+            </span>
+            <span>{bill ? `₹${bill.total_inr}` : billStale ? 'Pricing…' : `₹${subtotal}`}</span>
+          </button>
+        </div>
+      ) : null}
+
       {customizing ? (
         <PosCustomizeModal
           item={customizing}
@@ -1436,7 +1510,9 @@ export function PosOrderEntry({
       {printDock.node}
 
       {toast ? (
-        <div className="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-md bg-charcoal px-4 py-2 text-sm text-cream shadow-lg">
+        <div
+          className="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-[60] mx-auto w-fit max-w-[calc(100vw-2rem)] rounded-md bg-charcoal px-4 py-2 text-center text-sm text-cream shadow-lg sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2"
+        >
           {toast}
         </div>
       ) : null}
@@ -1476,7 +1552,7 @@ function PosPlacementConfirmation({
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-4 right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-xl"
+      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-xl"
     >
       <div className="flex items-start justify-between gap-2">
         <div>

@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
+import { nameFromEmail } from '@/lib/staff/displayName';
 
 export const dynamic = 'force-dynamic';
 
@@ -90,9 +91,22 @@ export async function POST(request: Request) {
     userId = created.user.id;
   }
 
+  // This endpoint takes no name — so if the profile doesn't already have one
+  // (the trigger creates the row with name unset), derive one from the email's
+  // local part now rather than leaving the attendance sheet to show
+  // "Unknown staff" until someone fixes it by hand. Never overwrites a name
+  // that's already there.
+  const { data: existingProfile } = await admin.from('profiles').select('name').eq('id', userId).maybeSingle();
+  const hasName = Boolean((existingProfile as { name?: string | null } | null)?.name?.trim());
+  const patch: { id: string; role: string; name?: string } = { id: userId, role };
+  if (!hasName) {
+    const derived = nameFromEmail(email);
+    if (derived) patch.name = derived;
+  }
+
   // Upsert the role (the trigger creates a profiles row on user creation, but
   // upsert also covers any pre-existing user missing a row).
-  const { error: upErr } = await admin.from('profiles').upsert({ id: userId, role }, { onConflict: 'id' });
+  const { error: upErr } = await admin.from('profiles').upsert(patch, { onConflict: 'id' });
   if (upErr) return errorResponse(500, `Could not set role: ${upErr.message}`);
 
   return NextResponse.json({ success: true, id: userId, email, role });

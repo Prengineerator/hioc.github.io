@@ -6,6 +6,7 @@ import { errorResponse } from '@/lib/api/http';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
 import { loadEmploymentRows, employmentOnDate, toDayEmployment } from '@/lib/attendance/employment';
 import { rollUpDay, dayOfWeekFor, type DaySession, type DayMark } from '@/lib/attendance/day';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, StaffEmployment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -55,10 +56,21 @@ export async function GET(request: Request) {
   const { data: profileRows, error: profileErr } = await admin
     .from('profiles')
     .select('id, name, role')
-    .in('role', ['staff', 'manager', 'owner'])
-    .order('name', { ascending: true });
+    .in('role', ['staff', 'manager', 'owner']);
   if (profileErr) return errorResponse(500, profileErr.message);
   const people = (profileRows ?? []) as { id: string; name: string; role: string }[];
+
+  // profiles.name is usually empty (staff sign in as <name>@hioc.in and never
+  // set it), so both the displayed name and the sort order below are resolved
+  // through it rather than the raw column — otherwise everyone collapses to
+  // "(no name)" and sorts as one undifferentiated group.
+  const displayNames = await getStaffDisplayNames(
+    admin,
+    people.map((p) => p.id),
+  );
+  people.sort((a, b) =>
+    (displayNames.get(a.id) ?? '').localeCompare(displayNames.get(b.id) ?? ''),
+  );
 
   const [{ data: sessionRows, error: sessErr }, { data: markRows }, { data: leaveRows }, employment] = await Promise.all([
     admin
@@ -153,7 +165,7 @@ export async function GET(request: Request) {
     const counted = days.filter((d) => d.status !== 'not_employed');
     return {
       user_id: person.id,
-      name: person.name || '(no name)',
+      name: displayNames.get(person.id) ?? 'Unknown staff',
       role: person.role,
       // Whether they are set up for payroll at all. A missing record must be
       // visible, not silently computed as zero.

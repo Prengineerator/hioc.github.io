@@ -10,6 +10,7 @@ import {
   daysUntilDeadline,
   formatLeaveDate,
 } from '@/lib/leave/week';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { LeaveRequest } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -40,8 +41,7 @@ export async function GET(request: Request) {
       admin
         .from('profiles')
         .select('id, name, role')
-        .in('role', ['staff', 'manager'])
-        .order('name', { ascending: true }),
+        .in('role', ['staff', 'manager']),
       admin
         .from('leave_requests')
         .select('*')
@@ -53,6 +53,16 @@ export async function GET(request: Request) {
 
   const people = (profileRows ?? []) as { id: string; name: string; role: string }[];
   const requests = (leaveRows ?? []) as LeaveRequest[];
+
+  // profiles.name is usually empty (staff sign in as <name>@hioc.in), so the
+  // displayed name and the sort order both come from the resolved name.
+  const displayNames = await getStaffDisplayNames(
+    admin,
+    people.map((p) => p.id),
+  );
+  people.sort((a, b) =>
+    (displayNames.get(a.id) ?? '').localeCompare(displayNames.get(b.id) ?? ''),
+  );
 
   const byUser = new Map<string, LeaveRequest[]>();
   for (const r of requests) {
@@ -77,7 +87,7 @@ export async function GET(request: Request) {
 
   const rows = people.map((p) => ({
     user_id: p.id,
-    name: p.name || '(no name)',
+    name: displayNames.get(p.id) ?? 'Unknown staff',
     role: p.role,
     requests: (byUser.get(p.id) ?? []).sort((a, b) => (a.leave_date < b.leave_date ? -1 : 1)),
     /** Nobody has planned anything — the person a reminder should target. */

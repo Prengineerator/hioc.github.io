@@ -128,10 +128,10 @@ export function AnnouncementManager() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">{items.length} announcement(s)</p>
         {editingId === null ? (
-          <button type="button" onClick={startCreate} className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream hover:bg-tan-dark">
+          <button type="button" onClick={startCreate} className="rounded-md bg-tan px-4 py-2.5 text-sm font-bold text-cream hover:bg-tan-dark">
             New announcement
           </button>
         ) : null}
@@ -179,20 +179,20 @@ export function AnnouncementManager() {
 
       <ul className="flex flex-col gap-2">
         {items.map((a) => (
-          <li key={a.id} className="flex items-center justify-between rounded-md border border-[#e5e5e5] bg-cream px-4 py-3">
-            <div>
-              <p className="text-sm font-bold text-charcoal">{a.title}</p>
+          <li key={a.id} className="flex flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-charcoal">{a.title}</p>
               <p className="text-xs text-muted">
                 {a.starts_at ? new Date(a.starts_at).toLocaleDateString('en-IN') : 'Always'}
                 {' → '}
                 {a.ends_at ? new Date(a.ends_at).toLocaleDateString('en-IN') : 'No end'}
               </p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 type="button"
                 onClick={() => toggleActive(a)}
-                className={'rounded-md px-2 py-1 text-xs font-bold ' + (a.active ? 'bg-green-100 text-green-700' : 'bg-[#e5e5e5] text-muted')}
+                className={'rounded-md px-2 py-1.5 text-xs font-bold ' + (a.active ? 'bg-green-100 text-green-700' : 'bg-[#e5e5e5] text-muted')}
               >
                 {a.active ? 'Active' : 'Inactive'}
               </button>

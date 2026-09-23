@@ -243,7 +243,9 @@ export function PayrollScreen() {
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="border-b border-[#e5e5e5] text-left">
-                  <th className="px-3 py-2 font-bold text-charcoal">Staff</th>
+                  <th className="sticky left-0 z-10 bg-white px-3 py-2 font-bold text-charcoal">
+                    Staff
+                  </th>
                   <th className="px-3 py-2 text-right font-bold text-charcoal">P/H/A</th>
                   <th className="px-3 py-2 text-right font-bold text-charcoal">Hours</th>
                   <th className="px-3 py-2 text-right font-bold text-charcoal">OT</th>
@@ -261,7 +263,7 @@ export function PayrollScreen() {
                       className="cursor-pointer border-b border-[#f0f0f0] hover:bg-[#faf7f4]"
                       onClick={() => setExpanded(expanded === l.user_id ? null : l.user_id)}
                     >
-                      <td className="px-3 py-2">
+                      <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-3 py-2">
                         <span className="font-bold text-charcoal">{l.name}</span>
                         {l.unconfigured ? (
                           <span className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700">

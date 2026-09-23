@@ -275,7 +275,7 @@ export function AttendanceSettingsPanel() {
                 onClick={() =>
                   void save({ store_networks: [...(settings.store_networks ?? []), yourIp] })
                 }
-                className="rounded-md bg-charcoal px-3 py-1.5 text-xs font-bold text-cream disabled:opacity-50"
+                className="rounded-md bg-charcoal px-3 py-2.5 text-xs font-bold text-cream disabled:opacity-50"
               >
                 Add this network
               </button>
@@ -292,7 +292,7 @@ export function AttendanceSettingsPanel() {
             {(settings.store_networks ?? []).map((entry) => (
               <li
                 key={entry}
-                className="flex items-center justify-between gap-3 rounded-md border border-[#e5e5e5] px-3 py-2 text-sm"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#e5e5e5] px-3 py-2 text-sm"
               >
                 <span className="font-mono text-charcoal">{entry}</span>
                 <button

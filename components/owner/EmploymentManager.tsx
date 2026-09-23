@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { StaffEmployment } from '@/lib/types';
+import { staffDisplayName } from '@/lib/staff/displayName';
 
 interface Member {
   id: string;
@@ -35,7 +36,15 @@ export function EmploymentManager() {
         fetch('/api/owner/staff', { cache: 'no-store' }),
       ]);
       if (recRes.ok) setRecords((await recRes.json()).records as StaffEmployment[]);
-      if (memRes.ok) setMembers((await memRes.json()).members as Member[]);
+      if (memRes.ok) {
+        const fetched = (await memRes.json()).members as Member[];
+        // profiles.name is usually empty (staff sign in as <name>@hioc.in), so
+        // sort by the resolved display name, not the raw (mostly blank) column.
+        fetched.sort((a, b) =>
+          staffDisplayName(a.name, a.email).localeCompare(staffDisplayName(b.name, b.email)),
+        );
+        setMembers(fetched);
+      }
     } finally {
       setLoading(false);
     }
@@ -66,7 +75,7 @@ export function EmploymentManager() {
             <li key={m.id} className="py-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="font-bold text-charcoal">{m.name || m.email}</p>
+                  <p className="font-bold text-charcoal">{staffDisplayName(m.name, m.email)}</p>
                   {current ? (
                     <p className="text-sm text-muted">
                       ₹{current.monthly_salary_inr.toLocaleString('en-IN')}/month ·{' '}

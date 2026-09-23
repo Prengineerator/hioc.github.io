@@ -148,7 +148,7 @@ export function QrCards() {
 
             {/* Modal panel (on-screen only) */}
             <div className="mx-auto mt-6 mb-6 flex max-h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden rounded-md bg-cream shadow-xl">
-              <div className="qr-cards-toolbar flex items-center justify-between gap-3 border-b border-[#e5e5e5] px-5 py-3">
+              <div className="qr-cards-toolbar flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e5e5] px-5 py-3">
                 <div>
                   <h2 className="text-sm font-bold uppercase tracking-wide text-muted">
                     Print QR cards
@@ -162,14 +162,14 @@ export function QrCards() {
                     type="button"
                     onClick={() => requestPrint(null)}
                     disabled={loading || cards.length === 0}
-                    className="rounded-md bg-charcoal px-4 py-2 text-sm font-bold text-cream transition-colors hover:opacity-90 disabled:opacity-50"
+                    className="rounded-md bg-charcoal px-4 py-2.5 text-sm font-bold text-cream transition-colors hover:opacity-90 disabled:opacity-50"
                   >
                     Print all
                   </button>
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="text-sm font-medium text-muted hover:underline"
+                    className="px-1 py-2.5 text-sm font-medium text-muted hover:underline"
                   >
                     Close
                   </button>
@@ -234,7 +234,7 @@ export function QrCards() {
       <button
         type="button"
         onClick={openModal}
-        className="rounded-md border border-[#d8d2c7] bg-white px-3 py-1.5 text-sm font-medium text-charcoal transition-colors hover:border-tan"
+        className="rounded-md border border-[#d8d2c7] bg-white px-3 py-2 text-sm font-medium text-charcoal transition-colors hover:border-tan"
       >
         Print QR cards
       </button>

@@ -6,6 +6,7 @@ import { getAttendanceSettings } from '@/lib/attendance/settings';
 import { loadEmploymentRows, employmentOnDate, toDayEmployment } from '@/lib/attendance/employment';
 import { rollUpDay, dayOfWeekFor, type DaySession, type DayMark } from '@/lib/attendance/day';
 import { computePayrollLine, type PayrollDayInput } from '@/lib/payroll/compute';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, PayrollRun, StaffEmployment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -70,6 +71,17 @@ async function computePeriod(month: string) {
   const marks = (markRows ?? []) as { user_id: string; business_date: string; mark: DayMark }[];
   const leave = (leaveRows ?? []) as { user_id: string; leave_date: string }[];
   const employmentRows = employment as StaffEmployment[];
+
+  // Same resolution as the attendance sheet: profiles.name is usually empty
+  // (staff sign in as <name>@hioc.in), so both what's shown and the sort order
+  // below come from the resolved name, not the raw column.
+  const displayNames = await getStaffDisplayNames(
+    admin,
+    people.map((p) => p.id),
+  );
+  people.sort((a, b) =>
+    (displayNames.get(a.id) ?? '').localeCompare(displayNames.get(b.id) ?? ''),
+  );
 
   const rules = {
     gracePeriodMin: settings.grace_period_min,
@@ -142,7 +154,7 @@ async function computePeriod(month: string) {
 
     return {
       user_id: person.id,
-      name: person.name || '(no name)',
+      name: displayNames.get(person.id) ?? 'Unknown staff',
       role: person.role,
       ...line,
       days: dayInputs,

@@ -35,7 +35,7 @@ export function LiveOps() {
 
   return (
     <div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         {ACTIVE_LANES.map((lane) => (
           <div key={lane} className="rounded-md bg-[#f2efe9] p-3 text-center">
             <p className="text-lg font-bold text-charcoal">{active.filter((o) => o.status === lane).length}</p>

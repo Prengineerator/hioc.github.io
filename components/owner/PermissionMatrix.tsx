@@ -112,7 +112,7 @@ export function PermissionMatrix() {
                         aria-pressed={active}
                         disabled={savingKey === p.permission_key || active}
                         onClick={() => handleChange(p.permission_key, opt.value)}
-                        className={`px-3 py-1.5 text-xs font-bold transition-colors ${
+                        className={`px-3 py-2.5 text-xs font-bold transition-colors ${
                           active
                             ? 'bg-charcoal text-cream'
                             : 'bg-white text-charcoal hover:bg-[#f2efe9] disabled:opacity-50'
