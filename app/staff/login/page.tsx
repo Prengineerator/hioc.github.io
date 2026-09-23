@@ -3,6 +3,23 @@
 import { Suspense, useState, type FormEvent } from 'react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { normalizeLoginId, loginEmailFor } from '@/lib/staff/accounts';
+
+const FORGOT_SENT_MESSAGE =
+  'If that login ID has a personal email on file, a reset link is on its way. Otherwise ask the owner.';
+
+/**
+ * "ayush" → "ayush@hioc.in" (the Supabase auth email); a full address like
+ * "ayush@hioc.in" or "someone@gmail.com" (an owner/manager profile predating
+ * login IDs) passes through unchanged. Lets the field say "Login ID" and take
+ * either form without the owner's existing address stopping working.
+ */
+function resolveLoginEmail(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.includes('@')) return trimmed;
+  const loginId = normalizeLoginId(trimmed);
+  return loginId ? loginEmailFor(loginId) : trimmed;
+}
 
 export default function StaffLoginPage() {
   return (
@@ -29,6 +46,11 @@ function StaffLoginForm() {
   );
   const [submitting, setSubmitting] = useState(false);
 
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotLoginId, setForgotLoginId] = useState('');
+  const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState<string | null>(null);
+
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
@@ -40,7 +62,7 @@ function StaffLoginForm() {
         headers: { 'Content-Type': 'application/json' },
         // Declares which door this is; the server refuses a role that belongs
         // elsewhere and names the right entrance (lib/auth/audience.ts).
-        body: JSON.stringify({ email, password, audience: 'staff' }),
+        body: JSON.stringify({ email: resolveLoginEmail(email), password, audience: 'staff' }),
       });
 
       if (res.ok) {
@@ -51,7 +73,7 @@ function StaffLoginForm() {
       }
 
       if (res.status === 401) {
-        setError('Invalid email or password.');
+        setError('Invalid login ID or password.');
       } else {
         const data = await res.json().catch(() => ({ error: 'Login failed' }));
         setError(data.error ?? 'Login failed');
@@ -60,6 +82,28 @@ function StaffLoginForm() {
       setError('Network error — please try again.');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // docs/PHASE-5-STAFF-ACCOUNTS.md, "Password emails": always the same
+  // generic message, win or lose — no account enumeration, including on a
+  // rate limit (429 still shows the same line rather than confirming an
+  // account exists by naming a different failure).
+  async function handleForgotSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setForgotSubmitting(true);
+    setForgotMessage(null);
+    try {
+      await fetch('/api/auth/staff/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ loginId: forgotLoginId }),
+      });
+    } catch {
+      // Falls through to the same generic message below.
+    } finally {
+      setForgotMessage(FORGOT_SENT_MESSAGE);
+      setForgotSubmitting(false);
     }
   }
 
@@ -91,15 +135,17 @@ function StaffLoginForm() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
             <label htmlFor="email" className="mb-1 block text-sm font-bold text-charcoal">
-              Email
+              Login ID
             </label>
             <input
               id="email"
-              type="email"
+              type="text"
+              autoCapitalize="none"
+              autoCorrect="off"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@hioc.in"
+              placeholder="ayush or ayush@hioc.in"
               className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
           </div>
@@ -124,6 +170,55 @@ function StaffLoginForm() {
             {submitting ? 'Logging in…' : 'Log In'}
           </button>
         </form>
+
+        <div className="mt-4 text-center">
+          <button
+            type="button"
+            onClick={() => {
+              setShowForgot((v) => !v);
+              setForgotMessage(null);
+            }}
+            className="text-sm font-bold text-tan underline decoration-tan/50 underline-offset-2 hover:text-tan-dark"
+          >
+            Forgot password?
+          </button>
+        </div>
+
+        {showForgot ? (
+          <form onSubmit={handleForgotSubmit} className="mt-4 flex flex-col gap-3 border-t border-[#e5e5e5] pt-4">
+            {forgotMessage ? (
+              <p role="status" className="text-sm text-charcoal">
+                {forgotMessage}
+              </p>
+            ) : (
+              <>
+                <div>
+                  <label htmlFor="forgotLoginId" className="mb-1 block text-sm font-bold text-charcoal">
+                    Login ID
+                  </label>
+                  <input
+                    id="forgotLoginId"
+                    type="text"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    required
+                    value={forgotLoginId}
+                    onChange={(e) => setForgotLoginId(e.target.value)}
+                    placeholder="ayush or ayush@hioc.in"
+                    className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={forgotSubmitting}
+                  className="w-full rounded-md border border-tan px-4 py-2 font-bold text-tan transition-colors hover:bg-[#f6efe9] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {forgotSubmitting ? 'Sending…' : 'Send reset link'}
+                </button>
+              </>
+            )}
+          </form>
+        ) : null}
       </div>
     </div>
   );

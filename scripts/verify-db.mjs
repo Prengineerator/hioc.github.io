@@ -1097,6 +1097,49 @@ async function checkPosDevices() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// SA-1 · staff accounts (docs/PHASE-5-STAFF-ACCOUNTS.md). Personal emails are
+// PII: both tables must be service-role only. RLS with no policy returns an
+// empty set to anon rather than an error, so the anon probe only means
+// something when the service role sees at least one row (the backfill makes
+// one per team member).
+// ---------------------------------------------------------------------------
+async function checkStaffAccounts() {
+  heading('SA-1 · staff accounts & staff email log', '2026-09-staff-accounts.sql');
+
+  const accounts = await rest('/staff_accounts?select=user_id,login_id,personal_email,status&limit=5');
+  if (!accounts.ok) {
+    const kind = errKind(accounts);
+    const why = kind === 'no_table' || kind === 'no_column' ? 'apply supabase/2026-09-staff-accounts.sql' : errText(accounts);
+    fail('staff_accounts exists', why);
+    skip('staff_accounts is not readable by the anon key', 'the table is missing');
+  } else {
+    const rows = Array.isArray(accounts.body) ? accounts.body : [];
+    const missing = rows.filter((r) => !r.personal_email).length;
+    pass(
+      'staff_accounts exists',
+      rows.length === 0
+        ? 'no rows — the backfill found no team members'
+        : missing
+          ? `${missing} of the first ${rows.length} account(s) have no personal email — reset links and payslips can't reach them`
+          : 'backfilled; personal emails present',
+    );
+    if (rows.length === 0) {
+      skip('staff_accounts is not readable by the anon key', 'no row to look for');
+    } else {
+      const asAnon = await rest('/staff_accounts?select=user_id&limit=1', { key: ANON });
+      const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+      if (leaked) fail('staff_accounts is not readable by the anon key', 'personal emails are exposed — RLS is off or a policy was added');
+      else pass('staff_accounts is not readable by the anon key');
+    }
+  }
+
+  const log = await rest('/staff_emails?select=id,kind,ref,status&limit=1');
+  if (log.ok) pass('staff_emails exists');
+  else if (errKind(log) === 'no_table' || errKind(log) === 'no_column') fail('staff_emails exists', 'apply supabase/2026-09-staff-accounts.sql');
+  else fail('staff_emails exists', errText(log));
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -1116,6 +1159,7 @@ async function main() {
   await checkAnonSurface();
   await checkAttendance();
   await checkPosDevices();
+  await checkStaffAccounts();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

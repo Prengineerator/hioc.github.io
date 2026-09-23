@@ -1,39 +1,46 @@
 'use client';
 
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+// Owner Team screen (docs/PHASE-5-STAFF-ACCOUNTS.md, "Owner portal"). Talks
+// only to the /api/owner/staff contract in lib/staff/accounts.ts — this file
+// owns display + interaction, not the account rules (those live server-side).
+//
+// No optimistic UI: every mutation just refetches the list, per the ticket.
 
-interface Member {
-  id: string;
-  role: string;
-  name: string;
-  email: string;
-  isSelf: boolean;
-}
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button } from '@/components/ui/Button';
+import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
+import type { EmailOutcome, TeamMember } from '@/lib/staff/accounts';
+import { AddStaffModal } from './team/AddStaffModal';
+import { EditStaffModal } from './team/EditStaffModal';
+import { PasswordModal } from './team/PasswordModal';
+import { MemberRow } from './team/MemberRow';
+import { passwordToast, type ToastState } from './team/shared';
 
-const ROLE_LABEL: Record<string, string> = {
-  owner: 'Owner',
-  manager: 'Manager',
-  staff: 'Staff',
-};
+type ConfirmAction = { type: 'deactivate' | 'delete'; member: TeamMember };
 
 export function TeamManager() {
-  const [members, setMembers] = useState<Member[]>([]);
+  const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'staff' | 'manager'>('staff');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [toast, setToast] = useState<ToastState | null>(null);
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
+  const [passwordMember, setPasswordMember] = useState<TeamMember | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [deactivatedOpen, setDeactivatedOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const res = await fetch('/api/owner/staff', { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Failed to load team');
-      setMembers(data.members ?? []);
+      setMembers((data.members ?? []) as TeamMember[]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load team');
+      setLoadError(err instanceof Error ? err.message : 'Failed to load team');
     } finally {
       setLoading(false);
     }
@@ -43,145 +50,188 @@ export function TeamManager() {
     void load();
   }, [load]);
 
-  async function handleAdd(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError('');
-    setNotice('');
-    setSubmitting(true);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const active = useMemo(() => members.filter((m) => m.status === 'active'), [members]);
+  const deactivated = useMemo(() => members.filter((m) => m.status === 'deactivated'), [members]);
+
+  function handleCreated(member: TeamMember, mode: 'link' | 'set', email?: EmailOutcome) {
+    setShowAdd(false);
+    setToast(passwordToast(member.personalEmail || 'their personal email', mode, email));
+    void load();
+  }
+
+  function handleUpdated(member: TeamMember, loginIdChanged: boolean) {
+    setEditingMember(null);
+    setToast({
+      tone: 'success',
+      text: loginIdChanged
+        ? `${member.name || 'Member'} updated — they sign in with the new login ID next time.`
+        : `${member.name || 'Member'} updated.`,
+    });
+    void load();
+  }
+
+  function handlePasswordDone(member: TeamMember, mode: 'link' | 'set', email?: EmailOutcome) {
+    setPasswordMember(null);
+    setToast(passwordToast(member.personalEmail || 'their personal email', mode, email));
+    void load();
+  }
+
+  async function handleDeactivate(member: TeamMember) {
+    setConfirmAction(null);
+    setBusyId(member.id);
     try {
-      const res = await fetch('/api/owner/staff', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), role }),
-      });
+      const res = await fetch(`/api/owner/staff/${member.id}/deactivate`, { method: 'POST' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Failed to add team member');
-      setNotice(`${email.trim()} is now ${ROLE_LABEL[role] ?? role}. They can sign in with this email.`);
-      setEmail('');
-      setRole('staff');
+      if (!res.ok) throw new Error(data.error ?? 'Could not deactivate.');
+      setToast({ tone: 'success', text: `${member.name || 'Member'} deactivated — their login is blocked.` });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add team member');
+      setToast({ tone: 'warning', text: err instanceof Error ? err.message : 'Could not deactivate.' });
     } finally {
-      setSubmitting(false);
+      setBusyId(null);
     }
   }
 
-  async function handleRemove(m: Member) {
-    if (!confirm(`Remove ${m.email || m.name || 'this member'}'s ${ROLE_LABEL[m.role] ?? m.role} access?`)) {
-      return;
-    }
-    setError('');
-    setNotice('');
+  async function handleReactivate(member: TeamMember) {
+    setBusyId(member.id);
     try {
-      const res = await fetch('/api/owner/staff', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: m.id }),
-      });
+      const res = await fetch(`/api/owner/staff/${member.id}/reactivate`, { method: 'POST' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Failed to remove member');
-      setNotice(`${m.email || m.name || 'Member'} removed from the team.`);
+      if (!res.ok) throw new Error(data.error ?? 'Could not reactivate.');
+      setToast({ tone: 'success', text: `${member.name || 'Member'} reactivated.` });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove member');
+      setToast({ tone: 'warning', text: err instanceof Error ? err.message : 'Could not reactivate.' });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(member: TeamMember) {
+    setConfirmAction(null);
+    setBusyId(member.id);
+    try {
+      const res = await fetch(`/api/owner/staff/${member.id}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? 'Could not delete.');
+      setToast({ tone: 'success', text: `${member.name || 'Member'} deleted.` });
+      await load();
+    } catch (err) {
+      setToast({ tone: 'warning', text: err instanceof Error ? err.message : 'Could not delete.' });
+    } finally {
+      setBusyId(null);
     }
   }
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Add form */}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
-        <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Add a team member</h2>
-        <p className="mb-4 text-sm text-muted">
-          Enter their email. If they don&apos;t have an account yet, one is created — they sign in with
-          the normal email code (OTP). Owners are still managed via SQL.
-        </p>
-        <form onSubmit={handleAdd} className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <label className="flex flex-1 flex-col gap-1 text-sm">
-            <span className="font-medium text-charcoal">Email</span>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@example.com"
-              className="rounded-md border border-[#d8d2c7] bg-white px-3 py-2 text-charcoal outline-none focus:border-tan"
-            />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium text-charcoal">Role</span>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value as 'staff' | 'manager')}
-              className="rounded-md border border-[#d8d2c7] bg-white px-3 py-2 text-charcoal outline-none focus:border-tan"
-            >
-              <option value="staff">Staff</option>
-              <option value="manager">Manager</option>
-            </select>
-          </label>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="rounded-md bg-charcoal px-5 py-2 text-sm font-bold text-cream transition-colors hover:opacity-90 disabled:opacity-50"
-          >
-            {submitting ? 'Adding…' : 'Add member'}
-          </button>
-        </form>
-        {error ? <p className="mt-3 text-sm font-medium text-red-700">{error}</p> : null}
-        {notice ? <p className="mt-3 text-sm font-medium text-[#2f6b38]">{notice}</p> : null}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-cream p-5 shadow-card">
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Team</h2>
+          <p className="mt-1 text-sm text-muted">
+            Staff sign in with an @hioc.in login ID — a personal email is where reset links and payslips go.
+          </p>
+        </div>
+        <Button onClick={() => setShowAdd(true)}>Add staff</Button>
       </div>
 
-      {/* Members table */}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-bold uppercase tracking-wide text-muted">Team members</h2>
+      {loadError ? <p className="text-sm font-bold text-red-700">{loadError}</p> : null}
+
+      <div className="rounded-md border border-line bg-cream p-5 shadow-card">
         {loading ? (
           <p className="py-6 text-center text-sm text-muted">Loading…</p>
-        ) : members.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted">No team members yet.</p>
+        ) : active.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted">No active team members yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[420px] text-sm">
-              <thead>
-                <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-                  <th className="py-1 font-bold">Member</th>
-                  <th className="py-1 font-bold">Role</th>
-                  <th className="py-1 text-right font-bold">Access</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((m) => (
-                  <tr key={m.id} className="border-b border-[#f2efe9]">
-                    <td className="py-2 text-charcoal">
-                      {m.email || '—'}
-                      {m.name ? <span className="block text-xs text-muted">{m.name}</span> : null}
-                    </td>
-                    <td className="py-2">
-                      <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-xs font-bold text-charcoal">
-                        {ROLE_LABEL[m.role] ?? m.role}
-                      </span>
-                      {m.isSelf ? <span className="ml-2 text-xs text-muted">you</span> : null}
-                    </td>
-                    <td className="py-2 text-right">
-                      {m.isSelf || m.role === 'owner' ? (
-                        <span className="text-xs text-muted">—</span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleRemove(m)}
-                          className="text-sm font-medium text-red-700 hover:underline"
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ul>
+            {active.map((m) => (
+              <MemberRow
+                key={m.id}
+                member={m}
+                busy={busyId === m.id}
+                onEdit={setEditingMember}
+                onPassword={setPasswordMember}
+                onDeactivate={(mem) => setConfirmAction({ type: 'deactivate', member: mem })}
+                onReactivate={handleReactivate}
+                onDelete={(mem) => setConfirmAction({ type: 'delete', member: mem })}
+              />
+            ))}
+          </ul>
         )}
       </div>
+
+      {!loading && deactivated.length > 0 ? (
+        <div className="rounded-md border border-line bg-cream p-5 shadow-card">
+          <button
+            type="button"
+            onClick={() => setDeactivatedOpen((v) => !v)}
+            aria-expanded={deactivatedOpen}
+            className="flex min-h-[40px] w-full items-center justify-between text-left text-sm font-bold uppercase tracking-wide text-muted"
+          >
+            <span>Deactivated ({deactivated.length})</span>
+            <span aria-hidden="true">{deactivatedOpen ? '▲' : '▼'}</span>
+          </button>
+          {deactivatedOpen ? (
+            <ul className="mt-3">
+              {deactivated.map((m) => (
+                <MemberRow
+                  key={m.id}
+                  member={m}
+                  busy={busyId === m.id}
+                  onEdit={setEditingMember}
+                  onPassword={setPasswordMember}
+                  onDeactivate={(mem) => setConfirmAction({ type: 'deactivate', member: mem })}
+                  onReactivate={handleReactivate}
+                  onDelete={(mem) => setConfirmAction({ type: 'delete', member: mem })}
+                />
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      <AddStaffModal open={showAdd} onClose={() => setShowAdd(false)} onCreated={handleCreated} />
+      <EditStaffModal member={editingMember} onClose={() => setEditingMember(null)} onUpdated={handleUpdated} />
+      <PasswordModal member={passwordMember} onClose={() => setPasswordMember(null)} onDone={handlePasswordDone} />
+
+      {confirmAction?.type === 'deactivate' ? (
+        <ConfirmDialog
+          heading={`Deactivate ${confirmAction.member.name || 'this member'}?`}
+          body="Their login is blocked immediately. Attendance, payroll and order history is kept, and you can reactivate them anytime."
+          confirmLabel="Deactivate"
+          onConfirm={() => handleDeactivate(confirmAction.member)}
+          onCancel={() => setConfirmAction(null)}
+        />
+      ) : null}
+      {confirmAction?.type === 'delete' ? (
+        <ConfirmDialog
+          heading={`Delete ${confirmAction.member.name || 'this member'}?`}
+          body="This permanently removes their account. Only offered because they have no attendance, payroll or order history."
+          confirmLabel="Delete"
+          onConfirm={() => handleDelete(confirmAction.member)}
+          onCancel={() => setConfirmAction(null)}
+        />
+      ) : null}
+
+      {toast ? (
+        <div
+          role="status"
+          className={
+            'fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-[60] mx-auto w-fit max-w-[calc(100vw-2rem)] rounded-md px-4 py-2 text-center text-sm shadow-lg sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 ' +
+            (toast.tone === 'success'
+              ? 'bg-charcoal text-cream'
+              : 'border border-amber-300 bg-amber-50 text-amber-900')
+          }
+        >
+          {toast.text}
+        </div>
+      ) : null}
     </div>
   );
 }

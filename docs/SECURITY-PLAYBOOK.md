@@ -191,6 +191,40 @@ the owner, not an implementation detail.
 **Fix:** prefix such fields with `'` (or wrap and escape) before writing. Staff names
 are attacker-influenced text that lands in the owner's Excel.
 
+### A-10 — staff account operations are owner-only (CRITICAL)
+**Meaning:** any route that creates, edits, deactivates, deletes, or changes the
+password of a staff account is reachable by a manager or staff session.
+**Why:** a manager who can reset a colleague's password can sign in as them — and
+punch their attendance or read their payslip.
+**Fix:** every `/api/owner/staff/**` handler starts with `getOwnerUser()`; the owner
+can never target themselves or another owner for deactivate/delete/demote.
+
+### A-11 — mail to a staffer goes to the personal email, never the login ID (HIGH)
+**Meaning:** a code path emails `<id>@hioc.in`, or uses Supabase's own
+`resetPasswordForEmail` for a staff account.
+**Why:** the login ID is not a mailbox — the mail silently vanishes, and a reset flow
+that "works" in code leaves staff locked out.
+**Fix:** send through `lib/staff/emails.ts` (reads `staff_accounts.personal_email`,
+logs to `staff_emails`). Links are built from `generateLink(...).properties.hashed_token`.
+
+### A-12 — no password in any email, log, or response (CRITICAL)
+**Meaning:** a password (owner-set or staff-chosen) appears in an email body, a
+`console.*` call, an API response, or a `staff_emails` row.
+**Fix:** the owner sets it and tells the staffer in person; the staffer only gets a
+"your password was changed" notice.
+
+### A-13 — forgot-password must not reveal whether an account exists (HIGH)
+**Meaning:** `/api/auth/staff/forgot` answers differently (body or status, other than
+429) for an unknown, deactivated, no-email, or valid login ID.
+**Fix:** one fixed 200 body; rate-limit per IP and per login ID.
+
+### A-14 — deactivate, don't delete, an account with history (HIGH)
+**Meaning:** `admin.auth.admin.deleteUser` runs for an account that has attendance,
+employment, payroll, leave, order-entry or cash-day rows.
+**Why:** those tables cascade from `auth.users` — the delete erases pay history.
+**Fix:** check `HISTORY_CHECKS` (lib/staff/accounts.ts) first and 409; deactivation
+sets `profiles.role='customer'` (instant server-side revoke) plus an auth ban.
+
 ---
 
 ## Device & operator invariants (Phase 6)

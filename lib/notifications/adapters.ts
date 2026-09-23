@@ -26,6 +26,7 @@ export interface SendInput {
   headerImageUrl?: string;
   subject?: string; // email only
   html?: string; // email only (falls back to <pre>body</pre>)
+  from?: string; // email only: overrides RESEND_FROM (e.g. staff mail from RESEND_FROM_STAFF)
 }
 
 // event → approved WhatsApp template name (override per event via env).
@@ -342,9 +343,9 @@ export const smsAdapter: NotificationAdapter = {
 export const emailAdapter: NotificationAdapter = {
   name: 'email',
   channel: 'email',
-  async send({ to, subject, html, body }: SendInput): Promise<SendResult> {
+  async send({ to, subject, html, body, from: fromOverride }: SendInput): Promise<SendResult> {
     const apiKey = process.env.RESEND_API_KEY;
-    const from = process.env.RESEND_FROM; // e.g. "HIOC <bills@hioc.in>"
+    const from = fromOverride || process.env.RESEND_FROM; // e.g. "HIOC <bills@hioc.in>"
     if (!apiKey || !from) {
       return { ok: false, providerRef: '', error: 'resend credentials missing' };
     }

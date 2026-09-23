@@ -30,8 +30,11 @@ export default async function StaffLayout({
 }) {
   const pathname = headers().get('x-pathname') ?? '';
   const isLoginPage = pathname.startsWith('/staff/login');
+  // Reached from an emailed link before the staffer has any session (like
+  // /staff/login itself) — docs/PHASE-5-STAFF-ACCOUNTS.md, "Password emails".
+  const isResetPasswordPage = pathname.startsWith('/staff/reset-password');
 
-  if (isLoginPage) {
+  if (isLoginPage || isResetPasswordPage) {
     return <>{children}</>;
   }
 

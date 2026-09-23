@@ -89,9 +89,10 @@ Team screen (`components/owner/TeamManager.tsx`) becomes:
 
 ## Password emails
 
-- Links come from `admin.auth.admin.generateLink({ type: 'recovery', email: loginEmail, options: { redirectTo: <staff>/staff/reset-password } })`
-  — this **returns** the link without Supabase sending anything; we send it via
-  Resend (`emailAdapter`) to the personal email. Same mechanism for invites.
+- Links come from `admin.auth.admin.generateLink({ type: 'recovery', email: loginEmail })`,
+  which **returns** a token without Supabase sending anything. We email
+  `/staff/reset-password?token_hash=…` via Resend to the personal email; the
+  token is verified only when the new password is submitted. Same for invites.
 - **Staff "Forgot password?"** on `/staff/login`: enter login ID →
   `POST /api/auth/staff/forgot` → always the same generic reply (no account
   enumeration); rate-limited per IP and per login ID; sends only for an
@@ -114,11 +115,11 @@ Team screen (`components/owner/TeamManager.tsx`) becomes:
 
 - Resend: done (domain verified, `RESEND_API_KEY` + `RESEND_FROM` set). Optional
   `RESEND_FROM_STAFF` (e.g. `HIOC Team <team@hioc.in>`), falls back to `RESEND_FROM`.
-- **Supabase → Authentication → URL Configuration → Redirect URLs**: add
-  `https://staff.hioc.in/staff/reset-password` (and the preview domain) —
-  otherwise the reset link lands on the site root. Owner does this in the dashboard.
+- **No Supabase redirect-URL setup needed.** Links carry `generateLink(...).properties.hashed_token`
+  to our own `/staff/reset-password`, verified server-side only on submit — so an email
+  scanner that pre-fetches the link can't burn it.
 
-## Security invariants (add to SECURITY-PLAYBOOK as A-10…)
+## Security invariants (SECURITY-PLAYBOOK A-10 … A-14)
 
 - Owner-only for every account operation; a manager session gets 403.
 - No password ever in an email, log line, or API response (except the owner's own form echo).
@@ -140,9 +141,8 @@ Team screen (`components/owner/TeamManager.tsx`) becomes:
 ## Deploy order
 
 1. Apply `supabase/2026-09-staff-accounts.sql`; `npm run verify:db` green.
-2. Add the reset-password redirect URL in Supabase.
-3. Deploy.
-4. Owner fills in personal emails for existing staff.
-5. Test: add a throwaway staffer with a link → set password → log in → forgot
+2. Deploy.
+3. Owner fills in personal emails for existing staff.
+4. Test: add a throwaway staffer with a link → set password → log in → forgot
    password → deactivate (login refused) → reactivate → delete (allowed: no history).
-6. Finalize a payroll month → check payslip email + log.
+5. Finalize a payroll month → check payslip email + log.

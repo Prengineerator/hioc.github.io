@@ -63,6 +63,16 @@ interface Finalized {
   lines: Record<string, unknown>[];
 }
 
+// SA-5 — mirrors lib/payroll/payslipEmail.ts's PayslipStatus.
+interface PayslipStatus {
+  userId: string;
+  name: string;
+  toEmail: string;
+  status: 'sent' | 'failed' | 'skipped' | 'not_sent';
+  detail: string;
+  sentAt: string | null;
+}
+
 const rupees = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const hm = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
 
@@ -109,6 +119,58 @@ export function PayrollScreen() {
   }, [load]);
 
   const draft = data && !data.finalized ? (data as Draft) : null;
+  const finalized = data && data.finalized ? (data as Finalized) : null;
+
+  const [payslips, setPayslips] = useState<PayslipStatus[]>([]);
+  const [payslipsLoading, setPayslipsLoading] = useState(false);
+  const [payslipsError, setPayslipsError] = useState('');
+  const [resendBusy, setResendBusy] = useState<string | null>(null); // a userId, or 'all'
+
+  const loadPayslips = useCallback(async (runId: string) => {
+    setPayslipsLoading(true);
+    setPayslipsError('');
+    try {
+      const res = await fetch(`/api/owner/payroll/payslips?runId=${encodeURIComponent(runId)}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        setPayslipsError((await res.json().catch(() => ({}))).error ?? 'Could not load payslip status.');
+        setPayslips([]);
+        return;
+      }
+      const body = await res.json();
+      setPayslips(Array.isArray(body.statuses) ? body.statuses : []);
+    } catch {
+      setPayslipsError('Could not load payslip status.');
+    } finally {
+      setPayslipsLoading(false);
+    }
+  }, []);
+
+  const finalizedRunId = finalized?.run?.id ?? null;
+  useEffect(() => {
+    if (finalizedRunId) {
+      void loadPayslips(finalizedRunId);
+    } else {
+      setPayslips([]);
+      setPayslipsError('');
+    }
+  }, [finalizedRunId, loadPayslips]);
+
+  async function resendPayslip(userId?: string) {
+    if (!finalizedRunId) return;
+    setResendBusy(userId ?? 'all');
+    try {
+      const res = await fetch('/api/owner/payroll/payslips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(userId ? { runId: finalizedRunId, userId } : { runId: finalizedRunId }),
+      });
+      if (res.ok) await loadPayslips(finalizedRunId);
+    } finally {
+      setResendBusy(null);
+    }
+  }
 
   const totals = useMemo(() => {
     if (!draft) return null;
@@ -217,6 +279,50 @@ export function PayrollScreen() {
         <div className="mt-6 rounded-md border border-green-300 bg-green-50 p-4 text-sm text-green-900">
           <strong>Finalized.</strong> These figures are frozen with the rules that produced them —
           later changes to attendance or pay rules will not alter them.
+        </div>
+      ) : null}
+
+      {finalized ? (
+        <div className="mt-6 rounded-md border border-[#e5e5e5] bg-white p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-bold text-charcoal">Payslips</h2>
+            <button
+              type="button"
+              disabled={resendBusy !== null || payslipsLoading || !payslips.some((p) => p.status !== 'sent')}
+              onClick={() => resendPayslip()}
+              className="rounded-md border border-charcoal px-3 py-1.5 text-xs font-bold text-charcoal disabled:opacity-50"
+            >
+              {resendBusy === 'all' ? 'Sending…' : 'Send all unsent'}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-muted">
+            Sent to each staffer&apos;s personal email when the month was finalized.
+          </p>
+
+          {payslipsLoading ? <p className="mt-3 text-xs text-muted">Loading…</p> : null}
+          {payslipsError ? <p className="mt-3 text-xs text-red-700">{payslipsError}</p> : null}
+
+          <ul className="mt-3 divide-y divide-[#f0f0f0]">
+            {payslips.map((p) => (
+              <li key={p.userId} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-charcoal">{p.name}</p>
+                  <PayslipStatusText p={p} />
+                </div>
+                <button
+                  type="button"
+                  disabled={resendBusy !== null || !p.toEmail}
+                  onClick={() => resendPayslip(p.userId)}
+                  className="shrink-0 rounded-md border border-charcoal px-3 py-1 text-xs font-bold text-charcoal disabled:opacity-50"
+                >
+                  {resendBusy === p.userId ? 'Sending…' : 'Resend'}
+                </button>
+              </li>
+            ))}
+            {!payslipsLoading && payslips.length === 0 && !payslipsError ? (
+              <li className="py-2 text-xs text-muted">No staff on this run.</li>
+            ) : null}
+          </ul>
         </div>
       ) : null}
 
@@ -358,6 +464,46 @@ function Derivation({ line }: { line: Line }) {
       </div>
     </div>
   );
+}
+
+function payslipSentAtLabel(iso: string | null): string {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
+}
+
+function PayslipStatusText({ p }: { p: PayslipStatus }) {
+  if (p.status === 'sent') {
+    return <p className="text-xs text-green-700">Sent {payslipSentAtLabel(p.sentAt)}</p>;
+  }
+  if (p.status === 'failed') {
+    return <p className="text-xs text-red-700">Failed{p.detail ? ` — ${p.detail}` : ''}</p>;
+  }
+  if (p.detail === 'migration not applied') {
+    return <p className="text-xs text-muted">Staff accounts aren&apos;t set up yet.</p>;
+  }
+  if (!p.toEmail) {
+    return (
+      <p className="text-xs text-amber-700">
+        No personal email —{' '}
+        <a href="/owner/staff" className="underline">
+          add one on the Team screen
+        </a>
+      </p>
+    );
+  }
+  if (p.status === 'skipped') {
+    return <p className="text-xs text-muted">Skipped{p.detail ? ` — ${p.detail}` : ''}</p>;
+  }
+  return <p className="text-xs text-muted">Not sent yet</p>;
 }
 
 function Stat({ label, value, strong }: { label: string; value: string; strong?: boolean }) {

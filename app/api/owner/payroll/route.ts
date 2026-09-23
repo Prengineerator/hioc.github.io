@@ -6,6 +6,7 @@ import { getAttendanceSettings } from '@/lib/attendance/settings';
 import { loadEmploymentRows, employmentOnDate, toDayEmployment } from '@/lib/attendance/employment';
 import { rollUpDay, dayOfWeekFor, type DaySession, type DayMark } from '@/lib/attendance/day';
 import { computePayrollLine, type PayrollDayInput } from '@/lib/payroll/compute';
+import { sendPayslipsForRun } from '@/lib/payroll/payslipEmail';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, PayrollRun, StaffEmployment } from '@/lib/types';
 
@@ -341,7 +342,17 @@ export async function POST(request: Request) {
     }
   }
 
-  return NextResponse.json({ run, lines: lines.length });
+  // SA-5: one payslip email per line, to the personal email on file. This is
+  // best-effort — a finalized run must stand even if every email fails, so
+  // sendPayslipsForRun never throws and any failure here is swallowed too.
+  let payslips: Awaited<ReturnType<typeof sendPayslipsForRun>> = [];
+  try {
+    payslips = await sendPayslipsForRun(admin, run.id);
+  } catch (err) {
+    console.error('sendPayslipsForRun threw during finalize', run.id, err);
+  }
+
+  return NextResponse.json({ run, lines: lines.length, payslips });
 }
 
 // PATCH { month, reason } — reverse a finalized run.

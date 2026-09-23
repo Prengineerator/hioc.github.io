@@ -39,13 +39,18 @@ export async function middleware(request: NextRequest) {
 
   const isStaffLogin = pathname.startsWith('/staff/login');
   const isOwnerLogin = pathname.startsWith('/owner/login');
-  const isLoginRoute = isStaffLogin || isOwnerLogin;
+  // Staff password reset (docs/PHASE-5-STAFF-ACCOUNTS.md, "Password emails")
+  // is reached from an emailed link before the staffer has any session — it
+  // needs the same unauthenticated-entry treatment as /staff/login itself.
+  const isStaffResetPassword = pathname.startsWith('/staff/reset-password');
+  const isLoginRoute = isStaffLogin || isOwnerLogin || isStaffResetPassword;
   const isStaffRoute = pathname.startsWith('/staff');
   const isOwnerRoute = pathname.startsWith('/owner');
 
   // Only /staff/** and /owner/** are gated. Each surface now has its OWN
-  // unauthenticated entry point — /staff/login and /owner/login — so both must
-  // be excluded here or the gate would redirect a login page to itself.
+  // unauthenticated entry point — /staff/login, /owner/login, and
+  // /staff/reset-password — so all three must be excluded here or the gate
+  // would redirect a login/reset page to itself.
   if ((!isStaffRoute && !isOwnerRoute) || isLoginRoute) {
     return response;
   }
