@@ -23,6 +23,43 @@ export const flags = {
   // Notifications engine. When off, transitions still record events but no
   // send is attempted/logged (useful before a provider is chosen).
   notifications: boolEnv(process.env.FLAG_NOTIFICATIONS, true),
+  // Staff POS-lite order entry (POS-1). Default ON so the counter-tablet
+  // "New order" surface is reachable by a staff account; set
+  // NEXT_PUBLIC_FLAG_STAFF_POS=false to dark it (hides the nav tab and the
+  // /staff/orders/new screen renders a "not enabled" state).
+  staffPos: boolEnv(process.env.NEXT_PUBLIC_FLAG_STAFF_POS, true),
+  // Table-QR scan-to-order (QR-1). Default OFF — dark-launched: the /t/<token>
+  // scan-to-order surface renders a friendly "ask staff" screen (nothing else)
+  // until NEXT_PUBLIC_FLAG_TABLE_QR=true. Guards the whole customer QR flow so
+  // it can't leak before the tables + QR cards (QR-2) and pay-online path are
+  // verified in the cafe.
+  tableQr: boolEnv(process.env.NEXT_PUBLIC_FLAG_TABLE_QR, false),
+  // Phase-5 staff attendance (ATT-1). Default OFF and it must stay off until
+  // Gate 5A-i passes — the geofence radius and accuracy threshold have to be
+  // tuned against what a phone actually reports inside THIS building, and
+  // shipping untuned would refuse honest staff on day one, which is how a
+  // feature like this loses the team's trust permanently. Set
+  // NEXT_PUBLIC_FLAG_ATTENDANCE=true once the on-site session is done.
+  attendance: boolEnv(process.env.NEXT_PUBLIC_FLAG_ATTENDANCE, false),
+  // Phase-6 POS rework (FLOW-1). Default OFF: it moves the Collect-payment step
+  // out of a modal takeover and into a panel docked in the order pane, and the
+  // owner verifies that on the real counter machine at Gate 6B before it becomes
+  // the only path. Until then the modal flow ships alongside it, unchanged, so a
+  // bad night is one env var away from being over. Set
+  // NEXT_PUBLIC_FLAG_POS_V2=true to dock the payment step.
+  posV2: boolEnv(process.env.NEXT_PUBLIC_FLAG_POS_V2, false),
+  // VERIFY-1 — every CUSTOMER-placed order must carry a mobile number the
+  // placer has verified over WhatsApp OTP, enforced server-side in
+  // POST /api/orders. Staff orders at the counter are exempt by design.
+  //
+  // Default OFF, and it must stay off until a test OTP has been seen to arrive
+  // on a real handset. The OTP rides the same WhatsApp channel the bill does,
+  // and that channel is failing today (Meta #132001, template not found in the
+  // sending number's account) — switching this on while the OTP cannot be
+  // delivered would not tighten ordering, it would end it. Read on the server
+  // as well as the client, so NEXT_PUBLIC_ on purpose: the checkout needs to
+  // know whether to show the OTP step at all.
+  verifiedOrders: boolEnv(process.env.NEXT_PUBLIC_FLAG_VERIFIED_ORDERS, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

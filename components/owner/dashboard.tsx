@@ -61,9 +61,9 @@ export function SellerList({ title, rows }: { title: string; rows: ItemSalesRow[
       <h3 className="mb-2 text-sm font-bold text-charcoal">{title}</h3>
       <ul className="flex flex-col gap-1 text-sm">
         {rows.map((r) => (
-          <li key={(r.menu_item_id ?? '') + r.item_name} className="flex justify-between border-b border-[#f2efe9] py-1">
-            <span className="text-charcoal">{r.item_name}</span>
-            <span className="text-muted">{r.units_sold}× · ₹{r.revenue_inr}</span>
+          <li key={(r.menu_item_id ?? '') + r.item_name} className="flex justify-between gap-2 border-b border-[#f2efe9] py-1">
+            <span className="min-w-0 truncate text-charcoal">{r.item_name}</span>
+            <span className="shrink-0 text-muted">{r.units_sold}× · ₹{r.revenue_inr}</span>
           </li>
         ))}
       </ul>
@@ -112,9 +112,9 @@ export function ReasonList({ rows }: { rows: RejectReasonRow[] }) {
   return (
     <ul className="flex flex-col gap-1 text-sm">
       {rows.map((r, i) => (
-        <li key={i} className="flex justify-between border-b border-[#f2efe9] py-1">
-          <span className="text-charcoal">{r.reason} <span className="text-xs text-muted">({r.status})</span></span>
-          <span className="text-muted">{r.cnt}</span>
+        <li key={i} className="flex justify-between gap-2 border-b border-[#f2efe9] py-1">
+          <span className="min-w-0 truncate text-charcoal">{r.reason} <span className="text-xs text-muted">({r.status})</span></span>
+          <span className="shrink-0 text-muted">{r.cnt}</span>
         </li>
       ))}
     </ul>

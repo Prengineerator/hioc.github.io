@@ -62,6 +62,65 @@ describe('canTransition — rejected transitions', () => {
   });
 });
 
+describe('canTransition — machine-owned entry (FND3-3/5)', () => {
+  it('allows system null → received and null → placed', () => {
+    expect(canTransition(null, 'received', 'system').ok).toBe(true);
+    expect(canTransition(null, 'placed', 'system').ok).toBe(true);
+  });
+
+  it('allows the staff/POS dine-in create (null → accepted); owner inherits', () => {
+    expect(canTransition(null, 'accepted', 'staff').ok).toBe(true);
+    expect(canTransition(null, 'accepted', 'owner').ok).toBe(true);
+  });
+
+  it('forbids a customer from the staff-create entry (null → accepted)', () => {
+    const res = canTransition(null, 'accepted', 'customer');
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe('forbidden_actor');
+  });
+});
+
+describe('canTransition — dine-in settlement guard (FND3-5)', () => {
+  it('blocks dine_in ready → completed while unpaid (payment_required)', () => {
+    const res = canTransition('ready', 'completed', 'staff', undefined, {
+      orderType: 'dine_in',
+      paymentStatus: 'unpaid',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe('payment_required');
+  });
+
+  it('allows dine_in ready → completed once paid', () => {
+    expect(
+      canTransition('ready', 'completed', 'staff', undefined, {
+        orderType: 'dine_in',
+        paymentStatus: 'paid',
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('allows dine_in ready → completed on a manager comp (isComp)', () => {
+    expect(
+      canTransition('ready', 'completed', 'staff', undefined, {
+        orderType: 'dine_in',
+        paymentStatus: 'unpaid',
+        isComp: true,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('leaves takeaway ready → completed unaffected by payment status', () => {
+    expect(
+      canTransition('ready', 'completed', 'staff', undefined, {
+        orderType: 'takeaway',
+        paymentStatus: 'unpaid',
+      }).ok,
+    ).toBe(true);
+    // …and a context-free call (how the UI invokes it) is likewise unaffected.
+    expect(canTransition('ready', 'completed', 'staff').ok).toBe(true);
+  });
+});
+
 describe('terminal states', () => {
   it('marks completed/rejected/cancelled terminal and nothing leaves them', () => {
     for (const t of TERMINAL_STATUSES) {

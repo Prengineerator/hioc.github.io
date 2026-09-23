@@ -8,7 +8,13 @@ import path from 'node:path';
 // match app imports exactly.
 export default defineConfig({
   resolve: {
-    alias: { '@': path.resolve(__dirname, '.') },
+    alias: {
+      '@': path.resolve(__dirname, '.'),
+      // `import 'server-only'` is a Next.js build-time guard with no Node
+      // resolution, so anything importing it (the notification engine) can't be
+      // unit-tested without a stub. Vitest already runs in a server context.
+      'server-only': path.resolve(__dirname, 'tests/stubs/server-only.ts'),
+    },
   },
   test: {
     include: ['tests/**/*.test.ts'],

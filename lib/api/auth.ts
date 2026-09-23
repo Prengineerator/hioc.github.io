@@ -32,6 +32,16 @@ export function actorRoleFor(role: UserRole): ActorRole {
 }
 
 /**
+ * Who counts as "behind the counter" — owner and manager inherit everything
+ * plain staff can do. Exported so a route that has already loaded the role (to
+ * avoid a second session round-trip) asks the same question the gates below do
+ * rather than re-listing the roles and eventually missing one.
+ */
+export function isStaffRole(role: UserRole | null): boolean {
+  return role === 'staff' || role === 'owner' || role === 'manager';
+}
+
+/**
  * Verifies the caller's Supabase auth session server-side (cookie-based).
  * Uses `getUser()` rather than `getSession()` — it re-validates the JWT
  * against the Supabase Auth server instead of trusting an unverified cookie
@@ -73,7 +83,7 @@ export async function getStaffUser(): Promise<User | null> {
   // 'manager' pass this gate. Owner-only routes use getOwnerUser(); manager-
   // gated routes (refunds, FND-5) use getManagerUser().
   const role = await getUserRole(user);
-  return role === 'staff' || role === 'owner' || role === 'manager' ? user : null;
+  return isStaffRole(role) ? user : null;
 }
 
 /**
@@ -109,6 +119,6 @@ export async function getStaffOrOwner(): Promise<{ user: User; role: UserRole } 
   const user = await getAuthUser();
   if (!user) return null;
   const role = await getUserRole(user);
-  if (role !== 'staff' && role !== 'owner' && role !== 'manager') return null;
-  return { user, role };
+  if (!isStaffRole(role)) return null;
+  return { user, role: role as UserRole };
 }

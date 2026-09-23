@@ -63,6 +63,11 @@ function AccountOrdersContent() {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Whether the account's own profile phone is verified — echoed back by
+  // /api/account/history alongside `orders` so the empty state below can
+  // point a not-yet-verified customer at the one thing that would surface
+  // their counter orders (VERIFY-2), without a second round trip.
+  const [phoneVerified, setPhoneVerified] = useState(true);
 
   const [reorderingId, setReorderingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string>('');
@@ -79,6 +84,7 @@ function AccountOrdersContent() {
       const data = await res.json();
       setOrders(data.orders ?? []);
       setHasMore(Boolean(data.hasMore));
+      setPhoneVerified(Boolean(data.phoneVerified));
       setPage(p);
     } catch {
       setError('Network error — please try again.');
@@ -147,6 +153,15 @@ function AccountOrdersContent() {
       ) : orders.length === 0 ? (
         <div className="rounded-md border border-[#e5e5e5] bg-cream p-8 text-center shadow-sm">
           <p className="text-muted">No orders yet.</p>
+          {!phoneVerified ? (
+            <p className="mx-auto mt-3 max-w-sm text-sm text-muted">
+              Placed an order at the counter?{' '}
+              <Link href="/account/profile" className="font-bold text-tan hover:underline">
+                Verify your WhatsApp number
+              </Link>{' '}
+              to see it here.
+            </p>
+          ) : null}
           <Link
             href="/menu"
             className="mt-4 inline-block rounded-md bg-tan px-5 py-2 text-sm font-bold text-cream hover:bg-tan-dark"

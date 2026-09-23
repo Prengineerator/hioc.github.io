@@ -41,6 +41,10 @@ const WRITABLE_KEYS = [
   'gst_percent',
   'gst_inclusive',
   'packaging_charge_inr',
+  // POS4-3 — owner-toggleable so a cafe can turn the counter's automatic prints
+  // on or off from the settings screen rather than through a redeploy.
+  'auto_print_kot',
+  'auto_print_bill',
 ] as const;
 
 export type StoreSettingsPatch = Partial<Pick<StoreSettings, (typeof WRITABLE_KEYS)[number]>>;

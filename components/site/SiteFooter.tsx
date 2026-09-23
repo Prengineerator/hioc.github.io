@@ -2,6 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { useSurface } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import {
   CAFE_ADDRESS,
@@ -34,12 +35,17 @@ const POLICY_LINKS = [
  */
 export function SiteFooter() {
   const pathname = usePathname();
-  if (pathname.startsWith('/staff') || pathname.startsWith('/owner')) {
+  const surface = useSurface();
+  // Path check alone is not enough once the backstage has its own domains:
+  // on staff.hioc.in the browser's pathname is '/orders', not '/staff/orders',
+  // so the customer chrome would render right on top of the staff portal.
+  // The surface comes from the Host header, which is the only thing that knows.
+  if (surface !== 'main' || pathname.startsWith('/staff') || pathname.startsWith('/owner')) {
     return null;
   }
 
   return (
-    <footer className="border-t border-line bg-charcoal text-cream">
+    <footer className="border-t border-line bg-charcoal text-cream print:hidden">
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-4 py-10 text-sm sm:grid-cols-3">
         <div className="flex flex-col items-center gap-3 text-center sm:items-start sm:text-left">
           <Image

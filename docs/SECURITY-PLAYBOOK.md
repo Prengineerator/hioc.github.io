@@ -95,6 +95,189 @@ query builder (`.eq()`, `.in()`, `.rpc(name, params)`), which parameterizes.
 
 ---
 
+## Attendance & payroll invariants (Phase 5)
+
+These guard a surface where a bug costs someone their pay or leaks their location.
+They are **review rules, not scanner rules** — the scanner cannot see most of them —
+so they apply to any PR touching `app/api/attendance/**`, `app/api/payroll/**`,
+`lib/attendance/**`, or `lib/payroll/**`. Spec: `docs/PHASE-5-SPEC.md §9`.
+
+### A-1 — the punch time must come from the database (CRITICAL)
+**Meaning:** a route sets `clock_in_at` / `clock_out_at` from a request body, a
+client-supplied ISO string, or the Node process clock instead of the DB's `now()`.
+**Why:** a phone's clock is attacker-controlled. If the client can name the time, the
+whole attendance record is fiction.
+**Fix:** let the column default (`default now()`) supply it, or set it in SQL. A
+client-supplied time field is **ignored, not validated** — do not "sanity check" it
+and then trust it.
+
+### A-2 — the geofence verdict must be computed server-side (CRITICAL)
+**Meaning:** a route reads `in_range`, `distance_m`, or any pass/fail signal from the
+request body.
+**Fix:** the client sends **only** raw readings (`lat`, `lng`, `accuracy_m`,
+`fix_age_ms`). The server computes distance via `lib/attendance/geofence.ts` and
+decides. If a verdict field arrives from the client, drop it.
+
+### A-3 — the geofence configuration must never reach the client (CRITICAL)
+**Meaning:** a response, a Server Component prop, or a public route exposes
+`geofence_radius_m`, `store_lat/lng`, `max_accuracy_m`, or any `attendance_settings`
+row to a staff session.
+**Why:** knowing the radius is most of what you need to fake being inside it.
+**Fix:** return only accept/refuse and the staffer's own distance. `attendance_settings`
+has **no** staff-readable RLS policy; it is service-role only.
+
+### A-4 — clocking in/out must NOT be `hasPermission()`-gated (CRITICAL)
+**Meaning:** the punch route calls `hasPermission(user, 'attendance_punch')` or any
+new key.
+**Why:** `hasPermission()` fails **closed to manager** for any key whose
+`role_permissions` row is missing (`lib/permissions.ts`). A missing seed row would
+therefore stop the entire team from marking attendance. Phase 4's TAB-1 hit exactly
+this trap and deliberately reused an existing key.
+**Fix:** gate punching on a valid staff session only (`getStaffOrOwner()`). Only
+`attendance_edit` and `attendance_approve` are matrix keys — and both must be seeded
+in the migration **and** added to `KNOWN_PERMISSION_KEYS` + `DEFAULT_MIN_ROLE` + the
+`PermissionKey` union in the same PR.
+
+### A-5 — one staffer must not read another's attendance (CRITICAL)
+**Meaning:** an attendance read route filters by a client-supplied `user_id`, or the
+RLS policy is broader than `auth.uid() = user_id`.
+**Fix:** RLS restricts staff to their own rows, and the route re-checks rather than
+trusting RLS alone. `staff_employment` and `payroll_*` are **not staff-readable at
+all** — salary is owner-only, including one's own, in this phase. Every PR touching
+these gets an explicit RLS assertion in its tests.
+
+### A-6 — payroll money must be integer paise (CRITICAL)
+**Meaning:** a float, a `parseFloat`, or a `toFixed` appears in a pay calculation.
+**Fix:** all intermediate maths in integer paise, rounded **once** (half-up) to whole
+₹ at `net_pay_inr`. The standing assertion: perfect attendance nets **exactly** the
+monthly salary — a rounding rule that leaks ₹1 is a bug, not a preference.
+
+### A-7 — a finalized payroll run is immutable (WARN → treat as high)
+**Meaning:** an attendance edit, a rule change, or a salary change can alter a run
+already marked `finalized`.
+**Fix:** refuse the edit and point at the run. Reversal is a recorded action with a
+reason — never a delete, never an in-place recompute. `payroll_runs.rules_snapshot`
+freezes the rule set and rate that were actually used.
+
+### A-8 — the auto-close cron must fail closed (CRITICAL)
+Same shape as **C-4**. Unset `CRON_SECRET` → the endpoint is disabled (401), never
+runnable by anyone. The job must also be idempotent: running it twice must not
+re-close a session or double-flag it.
+
+### A-9b — the cafe-network allowlist must never reach a staff client (CRITICAL)
+**Meaning:** `attendance_settings.store_networks` appears in a response to a staff
+session, a Server Component prop, or any non-owner route.
+**Why:** the same reasoning as **A-3**. Knowing which addresses count as "in the cafe"
+is knowing exactly what to be behind, and the allowlist is a shorter list to work
+around than a coordinate. It is owner-only, alongside the radius.
+**Fix:** it is returned only by `/api/owner/attendance-settings` (getOwnerUser-gated).
+The punch route reads it server-side and puts a FLAG on the row — the staffer's
+response never mentions the network at all.
+
+### A-9c — the network check must flag, never block (WARN → treat as high)
+**Meaning:** a code path turns an `off_network` verdict into a refused punch, a 4xx,
+or anything other than an entry in `attendance_sessions.flags`.
+**Why:** an owner decision (2026-09-14) with a concrete failure behind it — most
+small-business connections have a dynamic public IP that changes when the router
+reboots. Blocking on it locks the entire team out of clocking in on a morning nobody
+changed anything, and they find out at the door. The cost of the flag is one glance at
+the sheet; the cost of the block is a shift.
+**Fix:** `evaluateStoreNetwork()` returns flags only, and it has no `accepted` field to
+misuse. If a future ticket wants blocking, that is a product decision to re-open with
+the owner, not an implementation detail.
+
+### A-9 — CSV export must be formula-injection safe (WARN)
+**Meaning:** a payroll export writes a field beginning `=`, `+`, `-`, or `@` unescaped.
+**Fix:** prefix such fields with `'` (or wrap and escape) before writing. Staff names
+are attacker-influenced text that lands in the owner's Excel.
+
+### A-10 — staff account operations are owner-only (CRITICAL)
+**Meaning:** any route that creates, edits, deactivates, deletes, or changes the
+password of a staff account is reachable by a manager or staff session.
+**Why:** a manager who can reset a colleague's password can sign in as them — and
+punch their attendance or read their payslip.
+**Fix:** every `/api/owner/staff/**` handler starts with `getOwnerUser()`; the owner
+can never target themselves or another owner for deactivate/delete/demote.
+
+### A-11 — mail to a staffer goes to the personal email, never the login ID (HIGH)
+**Meaning:** a code path emails `<id>@hioc.in`, or uses Supabase's own
+`resetPasswordForEmail` for a staff account.
+**Why:** the login ID is not a mailbox — the mail silently vanishes, and a reset flow
+that "works" in code leaves staff locked out.
+**Fix:** send through `lib/staff/emails.ts` (reads `staff_accounts.personal_email`,
+logs to `staff_emails`). Links are built from `generateLink(...).properties.hashed_token`.
+
+### A-12 — no password in any email, log, or response (CRITICAL)
+**Meaning:** a password (owner-set or staff-chosen) appears in an email body, a
+`console.*` call, an API response, or a `staff_emails` row.
+**Fix:** the owner sets it and tells the staffer in person; the staffer only gets a
+"your password was changed" notice.
+
+### A-13 — forgot-password must not reveal whether an account exists (HIGH)
+**Meaning:** `/api/auth/staff/forgot` answers differently (body or status, other than
+429) for an unknown, deactivated, no-email, or valid login ID.
+**Fix:** one fixed 200 body; rate-limit per IP and per login ID.
+
+### A-14 — deactivate, don't delete, an account with history (HIGH)
+**Meaning:** `admin.auth.admin.deleteUser` runs for an account that has attendance,
+employment, payroll, leave, order-entry or cash-day rows.
+**Why:** those tables cascade from `auth.users` — the delete erases pay history.
+**Fix:** check `HISTORY_CHECKS` (lib/staff/accounts.ts) first and 409; deactivation
+sets `profiles.role='customer'` (instant server-side revoke) plus an auth ban.
+
+---
+
+## Device & operator invariants (Phase 6)
+
+These guard the layer added by DEV-2/DEV-3 (and extended by PIN-1..5): a machine
+identity that lives in a long-lived cookie. The danger of that shape is not the
+cookie leaking — it is the cookie quietly becoming a credential. Apply to any PR
+touching `lib/api/device.ts`, `lib/api/deviceCookie.ts`, `app/api/device/**`,
+`app/api/owner/devices/**`. Spec: `docs/PHASE-6-SPEC.md §5`.
+
+### D-1 — a device cookie must never authorise anything (CRITICAL)
+**Meaning:** a route treats `getEnrolledDevice()` returning non-null as permission to
+read or write. Any gate of the shape "if the request comes from a known device, allow
+it".
+**Why:** the cookie is a year-long bearer secret sitting in a browser profile on a
+machine several people use and nobody logs out of. It answers "which till is this",
+not "who is allowed to do this". Authority comes from a staff session, or (PIN-3) from
+an operator who entered a PIN on this device — never from the device alone.
+**Fix:** gate on `getStaffUser()` / `getOwnerUser()` / `getCounterActor()` first, and
+read the device only after that has passed. `/api/device/context` is the reference
+shape: staff-gated, then device-aware.
+
+### D-2 — the device secret must never be readable (CRITICAL)
+**Meaning:** `token_hash` appears in a `select`, a response body, a Server Component
+prop, or a log line; or `pos_devices` gains an RLS policy.
+**Why:** the qr_token lesson (Phase-3 §11) — a secret that can be read back is a secret
+that leaks through some future `select *`. The plaintext token exists for exactly one
+HTTP response and is never stored at all.
+**Fix:** every read goes through `DEVICE_COLUMNS`, which omits `token_hash` by
+construction; the only query allowed to mention it filters BY it. `pos_devices` keeps
+RLS enabled with **no policies** (service-role only), asserted by `verify:db`.
+
+### D-3 — revocation must take effect on the next request (CRITICAL)
+**Meaning:** a device lookup omits `revoked_at is null`, or a resolved device is cached
+across requests (module scope, `unstable_cache`, a cookie carrying settings rather than
+just the secret).
+**Why:** revoke is the owner's answer to a machine that walked out of the building. A
+kill switch with a lag is not a kill switch.
+**Fix:** resolve the device from the row on every request; the cookie carries the secret
+and nothing else. Re-enrolling issues a fresh secret rather than reviving the old row —
+there is no un-revoke.
+
+### D-4 — a device default must never become a lock (WARN)
+**Meaning:** a per-device setting is read with `||` instead of `??`, or the POS applies
+a device default over a choice a person already made.
+**Why:** `false` is an answer ("this stand never prints"), and `||` reads it as an
+absence — the event stand prints KOTs it has no kitchen for. And a default that
+overwrites a staffer's tap mid-order is the same class of bug as FLOW-1's payment
+takeover: the machine arguing with the person using it.
+**Fix:** resolve through `lib/pos/deviceSettings.ts` (`??` throughout, unit-tested for
+the false case), and seed a control only when the person has not already set it.
+---
+
 ## When the scan can't decide (escalate, don't guess)
 
 If a WARN is ambiguous (is this route meant to be public?), the cheap model should
@@ -109,7 +292,12 @@ that is how the 95–98% band is held. A senior model / human resolves the resid
 
 1. `bash scripts/security-scan.sh` → PASS, 0 CRITICAL.
 2. `npx tsc --noEmit` clean, `npm test` green.
-3. In Supabase, run `scripts/verify-security-migrations.sql` → every row `ok = true`.
+3. `npm run verify:db` → `RESULT: PASS`. This probes the **live** database with the
+   anon key and is the only check that proves RLS, CHECK constraints and triggers are
+   actually deployed — the vitest suite mocks Supabase and is blind to all of it.
+   A **SKIPPED** probe is not a pass; use `--strict` for a gate that refuses to pass
+   on unproven ground. (`scripts/verify-security-migrations.sql` is the older, weaker
+   SQL-only version of this check.)
 4. Env set: `CRON_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`, `RAZORPAY_KEY_ID/SECRET`,
    `RAZORPAY_WEBHOOK_SECRET`, `NEXT_PUBLIC_SUPABASE_URL/ANON_KEY`.
 5. Vercel Cron points at `/api/cron/expire-orders`.

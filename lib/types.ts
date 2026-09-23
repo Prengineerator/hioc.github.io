@@ -22,6 +22,10 @@ export type OrderStatus =
 
 export type OrderType = 'takeaway' | 'dine_in' | 'delivery';
 
+// Which surface created an order (phase3-migration.sql §3, FND3-2). Existing
+// rows backfill to 'customer_web'; the website checkout keeps writing it.
+export type OrderChannel = 'customer_web' | 'staff_pos' | 'table_qr';
+
 export type PaymentStatus =
   | 'unpaid'
   | 'payment_pending'
@@ -42,8 +46,24 @@ export type AddonSelectionType = 'single' | 'multi';
 
 // Notifications (phase1-migration.sql §6).
 export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
-export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled';
-export type NotificationStatus = 'queued' | 'sent' | 'failed';
+// 'bill' = the link-based e-bill (RCT-1/2), delivered on email + WhatsApp via the
+// notification engine (sendBillNotification). Its handlers live alongside the
+// status events: template name in adapters.ts, body/vars in templates.ts.
+export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill';
+// 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
+// attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
+// or "channel not configured" from a send that was tried and failed.
+// 'delivered' / 'read' (WA-4, 2026-08-notify-delivery.sql) come from Meta's status
+// webhook and are the only two the handset can vouch for; 'sent' only ever meant
+// "the provider's API accepted it". The ladder runs queued → sent → delivered →
+// read and never runs backwards (app/api/webhooks/whatsapp/route.ts).
+export type NotificationStatus =
+  | 'queued'
+  | 'sent'
+  | 'failed'
+  | 'skipped'
+  | 'delivered'
+  | 'read';
 
 // store_settings.store_open_override (phase1-migration.sql §7).
 export type StoreOpenOverride = 'auto' | 'force_open' | 'force_closed';
@@ -91,6 +111,10 @@ export interface MenuItem {
   // Phase-1 additions (migration §5):
   image_url: string; // '' when no photo uploaded (C6 placeholder)
   unavailable_until: string | null; // 86 auto-reenable; null = not snoozed (STF-032)
+  // Optional owner-defined POS shortform (2026-07-menu-short-code migration).
+  // Stored UPPERCASE, ^[A-Za-z0-9]{1,8}$; null when unset. Powers the staff
+  // quick-add bar's top-priority code tiers; case-insensitively unique per item.
+  short_code: string | null;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
@@ -106,6 +130,7 @@ export interface Order {
   order_number: number;
   customer_name: string;
   customer_phone: string;
+  customer_email: string | null; // optional; used for the link-based e-bill (migration 2026-07-order-email)
   pickup_time: string; // DEPRECATED free-text (schema.sql); prefer pickup_slot_* below
   status: OrderStatus;
   subtotal_inr: number;
@@ -129,6 +154,18 @@ export interface Order {
   // Phase-2 addition (migration §2): links an order to a customer account
   // (ACC-2/ACC-4). Null for guest checkout; backfilled on guest-claim by phone.
   user_id: string | null;
+  // Phase-3 additions (phase3-migration.sql §3): dine-in channel + attribution.
+  // NOTE: customer_email already exists above (link-based e-bill migration) — the
+  // Phase-3 RCT-2 email-bill work reuses it rather than adding a column.
+  channel: OrderChannel; // which surface created it (FND3-2)
+  table_id: string | null; // dine-in table (FND3-1); null for takeaway/web
+  table_label: string; // snapshot of the table label at order time (survives renames)
+  created_by: string | null; // staff/manager/owner who punched a staff_pos order
+  // Phase-4 addition (2026-08-counter-loyalty.sql): VAL-2/D4-3. Whose loyalty
+  // account this order belongs to — server-derived from a VERIFIED phone, never
+  // from a request body. Deliberately NOT user_id, which means "the session that
+  // placed it" and stays null for staff orders. Null when nobody was matched.
+  customer_user_id: string | null;
 }
 
 export interface OrderItemAddon {
@@ -152,6 +189,12 @@ export interface OrderItem {
   line_total_inr: number;
   special_instructions: string; // per-line note (CUS-021); snapshotted (migration §5)
   addons: OrderItemAddon[];
+  // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
+  // is VOIDED, never deleted — kept for audit; excluded from totals server-side.
+  voided: boolean;
+  void_reason: string;
+  voided_by: string | null;
+  voided_at: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +224,19 @@ export interface NotificationRecord {
   status: NotificationStatus;
   provider_ref: string;
   error: string;
+  /** Why a 'skipped' row was not attempted, e.g. 'no_phone' | 'not_configured:WHATSAPP_TPL_BILL'. */
+  skip_reason: string;
   attempts: number;
   sent_at: string | null;
+  /**
+   * WA-4 (2026-08-notify-delivery.sql): Meta's delivery receipts. `sent_at` is
+   * when WE handed the message over; these two are when the handset confirmed
+   * it arrived and when it was opened. Null means no receipt — which is not the
+   * same claim as "not delivered" (email sends and every pre-webhook row are
+   * null too).
+   */
+  delivered_at: string | null;
+  read_at: string | null;
   created_at: string;
 }
 
@@ -215,6 +269,11 @@ export interface StoreSettings {
   gst_percent: number;
   gst_inclusive: boolean;
   packaging_charge_inr: number;
+  // POS4-3 (migration 2026-08-auto-print). Opposite defaults on purpose: the
+  // kitchen always wants its ticket, most counters don't want paper on every
+  // settle.
+  auto_print_kot: boolean;
+  auto_print_bill: boolean;
   updated_at: string;
 }
 
@@ -447,3 +506,373 @@ export interface ReviewSummaryRow {
   reviews: number;
   avg_rating: number;
 }
+
+// ===========================================================================
+// PHASE 3 "Dine-In & Counter Ops" — mirrors supabase/phase3-migration.sql.
+// ===========================================================================
+
+// --- Tables registry (migration §2) ----------------------------------------
+// NOTE: qr_token is intentionally OMITTED from this shape — it must never reach
+// an unauthenticated client. Server routes select an explicit column list
+// excluding it, and match /t/<token> server-side (service role).
+export interface Table {
+  id: string;
+  label: string;
+  zone: string; // '' = none
+  capacity: number; // 0 = unspecified
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Order corrections (migration §5) --------------------------------------
+// Open enum: 'change_table'/'comp' reserved; rounds would attach here if the
+// service model ever changes (docs/PHASE-3-SPEC.md §7).
+export type AmendmentKind = 'void_item' | 'change_table' | 'comp';
+
+export interface OrderAmendment {
+  id: string;
+  order_id: string;
+  staff_id: string | null; // manager for gated actions
+  kind: AmendmentKind;
+  payload: Record<string, unknown>; // { order_item_id, reason, ... }
+  created_at: string;
+}
+
+// --- Cash management (migration §6) ----------------------------------------
+export type CashDayStatus = 'open' | 'closed';
+
+// Denomination → count, e.g. { "500": 3, "200": 5, "10": 12 }. Totals are always
+// derived from this server-side, never typed (OPS-2).
+export type CashDenoms = Record<string, number>;
+
+export interface CashDay {
+  id: string;
+  business_date: string; // 'YYYY-MM-DD' (IST business date)
+  status: CashDayStatus;
+  opened_by: string | null;
+  opened_at: string;
+  opening_denoms: CashDenoms;
+  opening_total_inr: number;
+  closed_by: string | null; // sign-off (manager by default)
+  closed_at: string | null;
+  closing_denoms: CashDenoms;
+  counted_total_inr: number;
+  expected_cash_inr: number; // opening + Σ cash settles − Σ cash refunds
+  over_short_inr: number; // counted - expected (signed)
+  notes: string;
+}
+
+// --- Permission matrix (migration §7) --------------------------------------
+// Sensitive-action keys, gated at 'staff' (staff-and-up) or 'manager'
+// (manager-and-up). owner always passes; unknown keys fail closed to manager —
+// both enforced in lib/permissions.ts (FND3-6), not the DB.
+// Note there is deliberately no 'attendance_punch' key — clocking in/out is
+// gated on a valid staff session only. See lib/permissions.ts and
+// docs/SECURITY-PLAYBOOK.md A-4 for why adding one would be a mistake.
+export type PermissionKey =
+  | 'pos_order_entry'
+  | 'settle_payment'
+  | 'menu_edit'
+  | 'cash_day_open'
+  | 'void_line'
+  | 'comp_order'
+  | 'refund'
+  | 'cash_day_close'
+  | 'attendance_edit'
+  | 'attendance_approve'
+  | 'leave_approve';
+
+export type PermissionMinRole = 'staff' | 'manager';
+
+export interface RolePermission {
+  permission_key: PermissionKey;
+  min_role: PermissionMinRole;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+// --- Phase-3 analytics view rows (migration §9) ----------------------------
+export interface ChannelMixRow {
+  channel: OrderChannel;
+  order_type: OrderType;
+  orders: number;
+  revenue_inr: number;
+  avg_ticket_inr: number;
+}
+
+export interface TableTurnoverRow {
+  table_id: string | null;
+  table_label: string;
+  business_date: string;
+  settled_orders: number;
+  revenue_inr: number;
+}
+
+export interface StaffEntryStatsRow {
+  staff_id: string | null;
+  business_date: string;
+  orders_entered: number;
+  revenue_inr: number;
+}
+
+// --- Permission-change audit (migration §10) -------------------------------
+// One row per owner edit to the permission matrix (FND3-6 AC: every flip is
+// audited — which key changed, from what to what, by whom, when). Written by the
+// owner-only permissions route; mirrors the Phase-1 role_change_audit style.
+export interface PermissionChangeAudit {
+  id: string;
+  permission_key: PermissionKey;
+  old_min_role: PermissionMinRole | null;
+  new_min_role: PermissionMinRole;
+  changed_by: string | null;
+  changed_at: string;
+}
+
+// --- Phase 5: attendance & payroll (2026-08-attendance.sql) ----------------
+
+/**
+ * The singleton rule set: geofence config (read by the punch route) plus the
+ * payroll rules (read by the salary engine).
+ *
+ * NEVER send this to a client. A staffer who knows the radius knows most of
+ * what they need to beat it (SECURITY-PLAYBOOK A-3) — the punch response
+ * carries only accept/refuse and the staffer's own distance.
+ *
+ * `store_lat`/`store_lng` are null until the owner sets them, and null means
+ * punching is disabled rather than universally allowed.
+ */
+export interface AttendanceSettings {
+  id: string;
+  is_singleton: boolean;
+  store_lat: number | null;
+  store_lng: number | null;
+  geofence_radius_m: number;
+  max_accuracy_m: number;
+  max_fix_age_sec: number;
+  grace_period_min: number;
+  late_marks_per_halfday: number;
+  ot_threshold_min: number;
+  ot_multiplier: number;
+  auto_break_min: number;
+  auto_break_after_min: number;
+  half_day_min_minutes: number;
+  absent_below_minutes: number;
+  auto_close_grace_min: number;
+  max_session_hours: number;
+  location_retention_days: number;
+  /** How many days off one person may hold in a single week (LEAVE). */
+  max_leave_days_per_week: number;
+  /**
+   * NET-1 — the cafe's public IPs, as literals or CIDR ranges. EMPTY MEANS THE
+   * CHECK IS OFF, not "refuse everything": an owner who has not configured this
+   * gets no flags rather than a sheet full of warnings. Never sent to a staff
+   * client (A-3) — knowing the allowlist is knowing what to spoof.
+   */
+  store_networks: string[];
+  updated_by: string | null;
+  updated_at: string;
+  // 2026-09-cash-counts.sql — optional so a DB without the migration still type-checks.
+  cash_count_required?: boolean;
+  cash_count_tolerance_inr?: number;
+}
+
+/** Effective-dated so a raise never rewrites what an earlier month was paid at. */
+export interface StaffEmployment {
+  id: string;
+  user_id: string;
+  monthly_salary_inr: number;
+  contracted_hours_per_day: number;
+  shift_start_time: string; // 'HH:MM:SS'
+  shift_end_time: string;
+  weekly_off_dow: number | null; // 0 = Sunday .. 6 = Saturday
+  effective_from: string; // ISO date
+  effective_to: string | null; // null = still in effect
+  created_by: string | null;
+  created_at: string;
+}
+
+export type AttendanceStatus = 'open' | 'closed' | 'auto_closed' | 'void';
+/** 'manual' entries are owner-entered and must never render as verified punches. */
+export type AttendanceSource = 'punch' | 'manual';
+export type PunchType = 'in' | 'out';
+
+/** GEO-2 integrity signals. Informational — a flag never blocks a punch. */
+export type AttendanceFlag =
+  | 'low_confidence'
+  | 'static_coords'
+  | 'impossible_travel'
+  | 'implausible_accuracy'
+  | 'auto_closed'
+  // NET-1 — the punch did not arrive over one of the cafe's configured
+  // networks, or arrived with no usable client IP. Informational like every
+  // other flag here: it never blocks a punch (see lib/attendance/network.ts).
+  | 'off_network';
+
+export interface AttendanceSession {
+  id: string;
+  user_id: string;
+  /** Derived by DB trigger from clock_in_at in IST — never supplied by a caller. */
+  business_date: string;
+  clock_in_at: string;
+  clock_in_lat: number | null;
+  clock_in_lng: number | null;
+  clock_in_accuracy_m: number | null;
+  clock_in_distance_m: number | null;
+  clock_out_at: string | null;
+  clock_out_lat: number | null;
+  clock_out_lng: number | null;
+  clock_out_accuracy_m: number | null;
+  clock_out_distance_m: number | null;
+  status: AttendanceStatus;
+  source: AttendanceSource;
+  flags: AttendanceFlag[];
+  approved_by: string | null;
+  approved_at: string | null;
+  notes: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A refused punch. Recorded so a refusal is learnable, by both owner and staffer. */
+export interface AttendancePunchAttempt {
+  id: string;
+  user_id: string;
+  punch_type: PunchType;
+  lat: number | null;
+  lng: number | null;
+  accuracy_m: number | null;
+  distance_m: number | null;
+  reason: string;
+  created_at: string;
+}
+
+export interface AttendanceEdit {
+  id: string;
+  session_id: string;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  reason: string;
+  edited_by: string | null;
+  edited_at: string;
+}
+
+export type PayrollRunStatus = 'draft' | 'finalized' | 'reversed';
+
+export interface PayrollRun {
+  id: string;
+  period_start: string;
+  period_end: string;
+  status: PayrollRunStatus;
+  /** The rules and rates actually used, frozen at finalize (PAY-4). */
+  rules_snapshot: Record<string, unknown>;
+  generated_by: string | null;
+  generated_at: string;
+  finalized_at: string | null;
+  reversed_at: string | null;
+  reversal_reason: string | null;
+}
+
+// --- Phase 5: weekly leave planning (2026-08-leave-planning.sql) -----------
+
+export type LeaveStatus = 'requested' | 'approved' | 'declined' | 'withdrawn';
+
+/**
+ * One requested day off. `week_start` is always a Monday and `leave_date` is
+ * always Mon–Fri inside that week — both enforced by CHECK constraints, since
+ * a row that violates either would put the roster and payroll into
+ * disagreement about the same date.
+ */
+export interface LeaveRequest {
+  id: string;
+  user_id: string;
+  week_start: string;
+  leave_date: string;
+  status: LeaveStatus;
+  reason: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type LeaveReminderKind = 'staff_submit' | 'manager_decide';
+
+export interface LeaveReminderLog {
+  id: string;
+  user_id: string;
+  week_start: string;
+  kind: LeaveReminderKind;
+  channel: 'whatsapp' | 'email' | 'inapp';
+  sent_on: string;
+  status: 'sent' | 'skipped' | 'failed';
+  skip_reason: string;
+  created_at: string;
+}
+
+export interface PayrollRunLine {
+  id: string;
+  run_id: string;
+  user_id: string;
+  monthly_salary_inr: number;
+  contracted_hours_per_day: number;
+  per_minute_paise: number;
+  days_present: number;
+  days_half: number;
+  days_absent: number;
+  days_off: number;
+  days_paid_leave: number;
+  worked_minutes: number;
+  ot_minutes: number;
+  late_marks: number;
+  base_pay_inr: number;
+  ot_pay_inr: number;
+  deductions_inr: number;
+  /** Signed: advances/loans/corrections (D5-7). Negative reduces net pay. */
+  adjustments_inr: number;
+  /**
+   * CC-5 (docs/PHASE-5-CASH-COUNTS.md): approved cash-drawer shortages frozen
+   * into this run, already reflected in net_pay_inr (clamped at 0, never
+   * negative — see detail.cash_shortage_clamped for whether it was clamped).
+   */
+  cash_shortage_inr: number;
+  net_pay_inr: number;
+  detail: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6 · DEV-2/DEV-3 — enrolled counter machines
+// (migration 2026-08-pos-devices.sql).
+// ---------------------------------------------------------------------------
+
+/**
+ * A machine the owner has enrolled: the till, the back office laptop, the event
+ * stand. Identity only — a device grants no authority of its own (see the
+ * migration header). `token_hash` is intentionally NOT in this type: no route
+ * ever selects it into application code except the one that looks a device up
+ * BY it, and leaving it out means a careless `select *` cannot leak it into a
+ * JSON response.
+ */
+export interface PosDevice {
+  id: string;
+  name: string;
+  enrolled_by: string;
+  enrolled_at: string;
+  last_seen_at: string | null;
+  /** Non-null = revoked. One-way; re-enrolling creates a fresh row. */
+  revoked_at: string | null;
+  // DEV-3 — null means "no opinion, use the store-level setting". Read with
+  // `??`, never `||`: false is an answer.
+  default_order_type: Extract<OrderType, 'takeaway' | 'dine_in'> | null;
+  auto_print_kot: boolean | null;
+  auto_print_bill: boolean | null;
+}
+
+/** The device's own view of itself, as the POS reads it at boot (DEV-3). */
+export type PosDeviceContext = Pick<
+  PosDevice,
+  'id' | 'name' | 'default_order_type' | 'auto_print_kot' | 'auto_print_bill'
+>;

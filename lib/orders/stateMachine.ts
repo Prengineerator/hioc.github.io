@@ -5,7 +5,7 @@
 //
 // Spec: docs/PHASE-1-SPEC.md §F1.
 
-import type { ActorRole, NotificationEvent, OrderStatus } from '@/lib/types';
+import type { ActorRole, NotificationEvent, OrderStatus, OrderType, PaymentStatus } from '@/lib/types';
 
 export const TERMINAL_STATUSES: readonly OrderStatus[] = [
   'completed',
@@ -22,19 +22,40 @@ export function isTerminal(status: OrderStatus): boolean {
 // (OWN-002) plus the manager cancel override.
 type TransitionActor = ActorRole;
 
+// Extra order facts a guard may consult to decide a transition (FND3-5). All
+// optional so pure state-machine callers (the UIs, most tests) can omit it —
+// only the settlement guard needs them, and only for dine-in.
+export interface TransitionContext {
+  orderType?: OrderType;
+  paymentStatus?: PaymentStatus;
+  isComp?: boolean;
+}
+
 export interface TransitionRule {
-  from: OrderStatus;
+  // `null` = a create/entry transition (there is no prior status). FND3-3/5
+  // moved order entry into the table so the machine — not the route — owns it.
+  from: OrderStatus | null;
   to: OrderStatus;
   actors: readonly TransitionActor[];
   requiresReason?: boolean;
   // Which customer notification (if any) fires on this transition (F4).
   notify?: NotificationEvent;
+  // Optional business-rule guard evaluated AFTER the actor + reason checks
+  // (FND3-5, e.g. dine-in must be settled before it completes). Returns
+  // `{ ok: false, code, message }` to block with a specific reason.
+  guard?: (ctx: TransitionContext) => { ok: boolean; code?: string; message?: string };
 }
 
 // The allowed-transitions table from docs/PHASE-1-SPEC.md §F1. Anything not
 // listed here is a 409. Staff permissions are automatically granted to owner
 // (see canTransition) so rules only ever name 'staff' where owner also applies.
 export const TRANSITIONS: readonly TransitionRule[] = [
+  // (create) → … — machine-owned entry points (FND3-3/5). `system` seeds the
+  // web/online lifecycle; `accepted` is the staff/POS dine-in create that skips
+  // 'received' (owner/manager inherit the staff rule via actorSatisfies).
+  { from: null, to: 'received', actors: ['system'] },
+  { from: null, to: 'placed', actors: ['system'] },
+  { from: null, to: 'accepted', actors: ['staff'] },
   // received → …
   { from: 'received', to: 'accepted', actors: ['staff'], notify: 'accepted' },
   { from: 'received', to: 'rejected', actors: ['staff'], requiresReason: true, notify: 'rejected' },
@@ -46,7 +67,22 @@ export const TRANSITIONS: readonly TransitionRule[] = [
   { from: 'preparing', to: 'ready', actors: ['staff'], notify: 'ready' },
   { from: 'preparing', to: 'cancelled', actors: ['owner'], requiresReason: true, notify: 'cancelled' },
   // ready → …
-  { from: 'ready', to: 'completed', actors: ['staff'] },
+  {
+    from: 'ready',
+    to: 'completed',
+    actors: ['staff'],
+    // FND3-5 / POS-2: a dine-in order must be settled before it can complete —
+    // payment_status 'paid', or an explicit manager comp (isComp). Takeaway and
+    // delivery (and any context-free UI call) are unaffected.
+    guard: (ctx) =>
+      ctx.orderType !== 'dine_in' || ctx.paymentStatus === 'paid' || !!ctx.isComp
+        ? { ok: true }
+        : {
+            ok: false,
+            code: 'payment_required',
+            message: 'Dine-in order must be settled before it can be completed',
+          },
+  },
   // A ready order nobody collects can be cancelled by a manager (H4) rather
   // than wrongly force-completed (which would earn loyalty on an uncollected order).
   { from: 'ready', to: 'cancelled', actors: ['owner'], requiresReason: true, notify: 'cancelled' },
@@ -66,7 +102,7 @@ function actorSatisfies(rule: TransitionRule, actorRole: TransitionActor): boole
 }
 
 export function findTransition(
-  from: OrderStatus,
+  from: OrderStatus | null,
   to: OrderStatus,
 ): TransitionRule | undefined {
   return TRANSITIONS.find((t) => t.from === from && t.to === to);
@@ -74,7 +110,7 @@ export function findTransition(
 
 export interface TransitionCheck {
   ok: boolean;
-  code?: 'not_allowed' | 'forbidden_actor' | 'reason_required';
+  code?: 'not_allowed' | 'forbidden_actor' | 'reason_required' | 'payment_required';
   message?: string;
   rule?: TransitionRule;
 }
@@ -85,10 +121,11 @@ export interface TransitionCheck {
  * describing exactly why it was rejected (used to pick 409 vs 403 vs 400).
  */
 export function canTransition(
-  from: OrderStatus,
+  from: OrderStatus | null,
   to: OrderStatus,
   actorRole: TransitionActor,
   reason?: string,
+  context?: TransitionContext,
 ): TransitionCheck {
   const rule = findTransition(from, to);
   if (!rule) {
@@ -113,6 +150,10 @@ export function canTransition(
       message: `Transition ${from} → ${to} requires a reason`,
       rule,
     };
+  }
+  const g = rule.guard?.(context ?? {});
+  if (g && !g.ok) {
+    return { ok: false, code: g.code as TransitionCheck['code'], message: g.message, rule };
   }
   return { ok: true, rule };
 }

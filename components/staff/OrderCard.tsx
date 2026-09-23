@@ -33,6 +33,14 @@ export function OrderCard({
   const next = PRIMARY_NEXT[order.status];
   const itemCount = order.items.reduce((n, i) => n + i.quantity, 0);
   const isReady = order.status === 'ready';
+  const isDineIn = order.order_type === 'dine_in';
+  const hasVoid = order.items.some((i) => i.voided);
+  // Dine-in cards show the table instead of a pickup slot (there is none).
+  const whereLabel = isDineIn
+    ? order.table_label
+      ? `Table ${order.table_label}`
+      : 'Dine-in'
+    : order.pickup_slot_label || order.pickup_time;
 
   return (
     <div
@@ -60,8 +68,8 @@ export function OrderCard({
       <div className="text-sm text-charcoal">
         <p className="font-bold">{order.customer_name}</p>
         <p className="text-xs text-muted">
-          {itemCount} item{itemCount === 1 ? '' : 's'} · ₹{order.total_inr ?? order.subtotal_inr} ·{' '}
-          {order.pickup_slot_label || order.pickup_time}
+          {itemCount} item{itemCount === 1 ? '' : 's'} · ₹{order.total_inr ?? order.subtotal_inr} · {whereLabel}
+          {hasVoid ? <span className="ml-1 font-bold text-red-600">· voided</span> : null}
         </p>
       </div>
 

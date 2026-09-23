@@ -17,7 +17,22 @@ export const dynamic = 'force-dynamic';
 // Standard-Webhooks signature check (what Supabase auth hooks use).
 function signatureOk(rawBody: string, headers: Headers): boolean {
   const secretRaw = process.env.SUPABASE_SEND_SMS_HOOK_SECRET;
-  if (!secretRaw) return true; // not configured yet — accept (dev/staging)
+  // FAIL CLOSED. This previously returned true when the secret was unset —
+  // "accept, we're only in dev" — which made this an UNAUTHENTICATED PUBLIC
+  // endpoint that sends WhatsApp messages to any number in the request body,
+  // billed to the cafe, from the cafe's verified sender. The identical
+  // fail-open shipped on the WhatsApp delivery webhook and sat live for weeks.
+  //
+  // The cost of failing closed is that OTP stops until the secret is set, which
+  // is loud, immediate, and fixed in one dashboard copy-paste. The cost of
+  // failing open is a bill and a sender reputation nobody notices losing.
+  if (!secretRaw) {
+    console.error(
+      '[sms-hook] SUPABASE_SEND_SMS_HOOK_SECRET is not set — refusing every request. ' +
+        'Copy the secret from Supabase → Authentication → Hooks → Send SMS Hook.',
+    );
+    return false;
+  }
   const id = headers.get('webhook-id');
   const ts = headers.get('webhook-timestamp');
   const sigHeader = headers.get('webhook-signature');

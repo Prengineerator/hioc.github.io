@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
 import { getOwnerUser } from '@/lib/api/auth';
 import { flags } from '@/lib/flags';
 import { OwnerHeader } from '@/components/owner/OwnerHeader';
@@ -7,6 +8,13 @@ import { OwnerHeader } from '@/components/owner/OwnerHeader';
 // this server check via getOwnerUser() is the belt-and-suspenders second layer,
 // and it also honors the dark-launch flag (XC-045).
 export default async function OwnerLayout({ children }: { children: React.ReactNode }) {
+  // /owner/login is the ONE unauthenticated route under /owner. Wrapping it in
+  // the owner chrome would redirect it to itself — the same reason the staff
+  // layout special-cases /staff/login. Server Components cannot read the URL,
+  // so middleware forwards it as x-pathname.
+  const pathname = headers().get('x-pathname') ?? '';
+  if (pathname.startsWith('/owner/login')) return <>{children}</>;
+
   if (!flags.ownerDashboard) {
     return (
       <div className="mx-auto max-w-xl px-4 py-24 text-center">

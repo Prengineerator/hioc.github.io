@@ -75,7 +75,45 @@ export default function PrivacyPage() {
         </p>
       </PolicySection>
 
-      <PolicySection heading="8. Contact / grievance officer">
+      <PolicySection heading="8. Team members: attendance & location">
+        <p>
+          This section applies <strong>only to {BUSINESS.name} team members</strong> who use the
+          staff portal to mark attendance. It does not apply to customers, and none of it describes
+          data we collect from people ordering from us.
+        </p>
+        <ul className="list-disc pl-5">
+          <li>
+            <strong>What we read.</strong> Your device&apos;s location (latitude, longitude, and the
+            accuracy of that reading) at the <em>single moment</em> you tap Clock in or Clock out.
+          </li>
+          <li>
+            <strong>When we read it.</strong> Only at that moment. We do <strong>not</strong> track
+            your location in the background, between punches, outside your shift, or at any time you
+            are not actively marking attendance.
+          </li>
+          <li>
+            <strong>Why.</strong> Solely to confirm the punch was made at the cafe, so that
+            attendance and pay are based on a verifiable record rather than recollection.
+          </li>
+          <li>
+            <strong>What is stored and who sees it.</strong> The reading, its accuracy, and the
+            resulting distance from the cafe. The cafe owner can see how far from the cafe each of
+            your punches was, as part of the attendance and payroll record.
+          </li>
+          <li>
+            <strong>How long.</strong> The raw coordinates are deleted after 12 months; only the
+            distance and the accepted/refused outcome are kept beyond that.
+          </li>
+          <li>
+            <strong>Your choice.</strong> You may decline location access. Attendance then has to be
+            recorded manually by the owner, and is marked as a manual entry rather than a verified
+            punch. You can see your own attendance record, including any corrections made to it, in
+            the staff portal at any time.
+          </li>
+        </ul>
+      </PolicySection>
+
+      <PolicySection heading="9. Contact / grievance officer">
         <p>
           For any privacy question or grievance, contact {BUSINESS.name} at{' '}
           <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a> or{' '}

@@ -57,8 +57,15 @@ export async function POST(request: Request) {
     .eq('id', data.user.id);
 
   if (profileError) {
-    // Non-fatal — the session is valid either way; log so a drifted profile
-    // row is diagnosable rather than silently wrong.
+    // After 2026-07-phone-unique.sql, a number already verified on a DIFFERENT
+    // account trips the partial unique index (Postgres 23505). Surface it
+    // instead of silently "succeeding" with the phone unrecorded (S4), so the
+    // caller shows a clear message rather than proceeding half-verified.
+    if ((profileError as { code?: string }).code === '23505') {
+      return errorResponse(409, 'This number is already linked to another account.');
+    }
+    // Other failures are non-fatal — the session is valid either way; log so a
+    // drifted profile row is diagnosable rather than silently wrong.
     console.error('phone-otp verify: profile update failed', profileError);
   }
 

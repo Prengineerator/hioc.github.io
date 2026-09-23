@@ -39,8 +39,8 @@ export default function AboutPage() {
         <p>
           Before we had four walls, HIOC. started as an idea on wheels —
           coffee brewed fresh and rolled out to wherever people gathered.
-          These days you&apos;ll find us parked for good at E/773, Near V
-          Mart, Kamla Nagar, Agra — the wheels stopped rolling, but we&apos;re
+          These days you&apos;ll find us parked for good at E-773, E Block,
+          Ghatwasan, Kamla Nagar, Agra — the wheels stopped rolling, but we&apos;re
           still every bit as High on Coffee as we started out.
         </p>
         <p>

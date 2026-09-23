@@ -15,6 +15,7 @@ export interface MenuItemFormValues {
   is_available: boolean;
   sort_order: number;
   image_url: string;
+  short_code: string | null; // optional POS quick-add shortform (UPPERCASE or null)
   variants: { label: string; price_inr: number }[];
   addon_group_ids: string[];
 }
@@ -40,6 +41,7 @@ export function MenuItemFormModal({
   const [isAvailable, setIsAvailable] = useState(initial?.is_available ?? true);
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [imageUrl, setImageUrl] = useState(initial?.image_url ?? '');
+  const [shortCode, setShortCode] = useState(initial?.short_code ?? '');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [variantRows, setVariantRows] = useState<VariantRow[]>(
     initial?.variants && initial.variants.length > 0
@@ -141,6 +143,12 @@ export function MenuItemFormModal({
       variants.push({ label: row.label.trim(), price_inr: price });
     }
 
+    const trimmedCode = shortCode.trim().toUpperCase();
+    if (trimmedCode && !/^[A-Z0-9]{1,8}$/.test(trimmedCode)) {
+      setError('Short code must be 1–8 letters or digits (e.g. CAP), or left blank.');
+      return;
+    }
+
     const parentCategory = MENU_CATEGORIES.find((c) => c.slug === category)?.parent ?? '';
 
     setSubmitting(true);
@@ -154,6 +162,7 @@ export function MenuItemFormModal({
         is_available: isAvailable,
         sort_order: Number(sortOrder) || 0,
         image_url: imageUrl,
+        short_code: trimmedCode || null,
         variants,
         addon_group_ids: [...selectedGroupIds],
       });
@@ -277,6 +286,31 @@ export function MenuItemFormModal({
               </div>
 
               <div>
+                <label
+                  htmlFor="item-short-code"
+                  className="mb-1 block text-sm font-bold text-charcoal"
+                >
+                  Short code <span className="font-normal text-muted">(optional)</span>
+                </label>
+                <input
+                  id="item-short-code"
+                  type="text"
+                  value={shortCode}
+                  onChange={(e) =>
+                    setShortCode(
+                      e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8),
+                    )
+                  }
+                  placeholder="e.g. CAP"
+                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 font-mono uppercase text-charcoal outline-none focus:border-tan"
+                />
+                <p className="mt-1 text-xs text-muted">
+                  A quick-punch shortform for the POS order screen (1–8 letters/digits). Type it in
+                  the command bar to jump straight to this item.
+                </p>
+              </div>
+
+              <div>
                 <div className="mb-1 flex items-center justify-between">
                   <span className="text-sm font-bold text-charcoal">Sizes &amp; Prices</span>
                   <button
@@ -289,15 +323,19 @@ export function MenuItemFormModal({
                 </div>
                 <div className="flex flex-col gap-2">
                   {variantRows.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
+                    // flex-wrap + a min-width on each field (rather than a
+                    // fixed w-1/2) so a 360px phone wraps the Remove button
+                    // onto its own line instead of squeezing the price input
+                    // down to a few characters.
+                    <div key={i} className="flex flex-wrap items-center gap-2">
                       <input
                         type="text"
                         placeholder="e.g. Large"
                         value={row.label}
                         onChange={(e) => updateVariant(i, 'label', e.target.value)}
-                        className="w-1/2 rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                        className="min-w-[7rem] flex-1 rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
                       />
-                      <div className="flex flex-1 items-center rounded-md border border-[#e5e5e5] focus-within:border-tan">
+                      <div className="flex min-w-[7rem] flex-1 items-center rounded-md border border-[#e5e5e5] focus-within:border-tan">
                         <span className="pl-3 text-muted">₹</span>
                         <input
                           type="number"
@@ -306,7 +344,7 @@ export function MenuItemFormModal({
                           placeholder="Price"
                           value={row.price}
                           onChange={(e) => updateVariant(i, 'price', e.target.value)}
-                          className="w-full rounded-md px-2 py-2 text-charcoal outline-none"
+                          className="w-full min-w-0 rounded-md px-2 py-2 text-charcoal outline-none"
                         />
                       </div>
                       <button

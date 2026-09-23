@@ -325,6 +325,14 @@ export default function OrderStatusPage() {
           ))}
         </ul>
         <BillRows order={order} />
+        <div className="mt-4 text-center">
+          <Link
+            href={`/order/${order.id}/receipt`}
+            className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-bold text-tan-dark hover:bg-[#f6efe9]"
+          >
+            View / print bill
+          </Link>
+        </div>
       </div>
 
       {!awaitingPayment ? (

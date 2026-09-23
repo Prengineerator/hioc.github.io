@@ -3,14 +3,24 @@
 // best/worst sellers, peak-hours heatmap, and rejection reasons.
 
 import {
+  getChannelMix,
+  getCustomerSegmentSplit,
   getDailySales,
+  getDineInPeakHours,
   getItemSales,
   getHourlyOrders,
   getOrderDurations,
+  getRecentOrders,
   getRejectReasons,
+  getStaffLeaderboard,
   getStatusCounts,
+  getTableTurnover,
   getTodayAtAGlance,
+  summariseChannels,
 } from '@/lib/analytics/queries';
+import { startOfTodayIstIso } from '@/lib/api/date';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import {
   Card,
   GlanceCards,
@@ -19,7 +29,17 @@ import {
   ReasonList,
   SellerList,
 } from '@/components/owner/dashboard';
+import {
+  ChannelMixTable,
+  ChannelSummaryCards,
+  DineInPeakBars,
+  StaffLeaderboard,
+  TableTurnoverList,
+} from '@/components/owner/ChannelAnalytics';
+import { CustomerTypeSplit, RecentOrdersCard } from '@/components/owner/RecentOrders';
 import { LiveOps } from '@/components/owner/LiveOps';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +52,22 @@ function percentile(values: (number | null)[], p: number): number | null {
 }
 
 export default async function OwnerOverviewPage() {
-  const [glance, daily, items, hourly, durations, reasons, counts] = await Promise.all([
+  const [
+    glance,
+    daily,
+    items,
+    hourly,
+    durations,
+    reasons,
+    counts,
+    channelMix,
+    dineInHours,
+    turnover,
+    leaderboard,
+    recentOrders,
+    todaySplit,
+    last30Split,
+  ] = await Promise.all([
     getTodayAtAGlance(),
     getDailySales(30),
     getItemSales(50),
@@ -40,7 +75,20 @@ export default async function OwnerOverviewPage() {
     getOrderDurations(30),
     getRejectReasons(),
     getStatusCounts(30),
+    getChannelMix(),
+    getDineInPeakHours(30),
+    getTableTurnover(30),
+    getStaffLeaderboard(30),
+    getRecentOrders(20),
+    getCustomerSegmentSplit(startOfTodayIstIso()),
+    getCustomerSegmentSplit(new Date(Date.now() - 30 * DAY_MS).toISOString()),
   ]);
+
+  // Recent-orders "Entered by <name>" needs the same profiles.name → email
+  // local-part fallback the staff leaderboard uses (lib/staff/displayName.ts)
+  // — resolved here, once, for just the staffers who appear in this window.
+  const staffIds = [...new Set(recentOrders.map((o) => o.created_by).filter((id): id is string => Boolean(id)))];
+  const staffNames = await getStaffDisplayNames(createAdminSupabaseClient(), staffIds);
 
   const acceptSecs = durations.map((d) => d.accept_secs);
   const prepSecs = durations.map((d) => d.prep_secs);
@@ -49,11 +97,25 @@ export default async function OwnerOverviewPage() {
 
   const bestSellers = items.slice(0, 8);
   const worstSellers = [...items].reverse().slice(0, 8);
+  const channelSummary = summariseChannels(channelMix);
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
       <h1 className="text-2xl font-bold text-charcoal">Today at a glance</h1>
       <GlanceCards g={glance} />
+
+      <Card title="Orders by customer type">
+        <CustomerTypeSplit
+          windows={[
+            { label: 'Today', counts: todaySplit },
+            { label: 'Last 30 days', counts: last30Split },
+          ]}
+        />
+      </Card>
+
+      <Card title="Recent orders">
+        <RecentOrdersCard rows={recentOrders} staffNames={staffNames} />
+      </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Live operations">
@@ -94,6 +156,20 @@ export default async function OwnerOverviewPage() {
 
       <Card title="Peak hours (orders)"><Heatmap rows={hourly} /></Card>
       <Card title="Rejection & cancellation reasons"><ReasonList rows={reasons} /></Card>
+
+      <h2 className="mt-2 text-2xl font-bold text-charcoal">Channel mix &amp; dine-in</h2>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Orders & revenue by channel"><ChannelMixTable rows={channelMix} /></Card>
+        <Card title="Average ticket per channel"><ChannelSummaryCards rows={channelSummary} /></Card>
+      </div>
+
+      <Card title="Dine-in peak hours (orders)"><DineInPeakBars rows={dineInHours} /></Card>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Table turnover · last 30 days"><TableTurnoverList rows={turnover} /></Card>
+        <Card title="Staff-entry leaderboard · last 30 days"><StaffLeaderboard rows={leaderboard} /></Card>
+      </div>
     </div>
   );
 }

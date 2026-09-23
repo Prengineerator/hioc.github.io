@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { surfaceForHost, rewriteForSurface } from '@/lib/routing/surface';
 
 /**
  * Gates everything under /staff/** behind a valid Supabase session that
@@ -14,21 +15,42 @@ import { NextResponse, type NextRequest } from 'next/server';
  * own redundant session check and the StaffHeader chrome for that route.
  */
 export async function middleware(request: NextRequest) {
-  const pathname = request.nextUrl.pathname;
+  // Subdomain → canonical path, FIRST. staff.hioc.in/orders becomes
+  // /staff/orders before anything below looks at the pathname, so every route,
+  // layout and auth gate keeps matching the paths it already knows and none of
+  // them has to learn that subdomains exist. Doing this after the gate would
+  // mean staff.hioc.in/orders read as an ungated customer route.
+  const surface = surfaceForHost(request.headers.get('host'));
+  const rewritten = rewriteForSurface(surface, request.nextUrl.pathname);
+  const pathname = rewritten ?? request.nextUrl.pathname;
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-pathname', pathname);
+  // Read by the root layout so links render prefix-free on a subdomain without
+  // a hydration mismatch — the client must be told, not left to guess from
+  // window.location after the server has already rendered.
+  requestHeaders.set('x-surface', surface);
 
-  const response = NextResponse.next({
-    request: { headers: requestHeaders },
-  });
+  const response = rewritten
+    ? NextResponse.rewrite(new URL(rewritten + request.nextUrl.search, request.url), {
+        request: { headers: requestHeaders },
+      })
+    : NextResponse.next({ request: { headers: requestHeaders } });
 
-  const isLoginRoute = pathname.startsWith('/staff/login');
+  const isStaffLogin = pathname.startsWith('/staff/login');
+  const isOwnerLogin = pathname.startsWith('/owner/login');
+  // Staff password reset (docs/PHASE-5-STAFF-ACCOUNTS.md, "Password emails")
+  // is reached from an emailed link before the staffer has any session — it
+  // needs the same unauthenticated-entry treatment as /staff/login itself.
+  const isStaffResetPassword = pathname.startsWith('/staff/reset-password');
+  const isLoginRoute = isStaffLogin || isOwnerLogin || isStaffResetPassword;
   const isStaffRoute = pathname.startsWith('/staff');
   const isOwnerRoute = pathname.startsWith('/owner');
 
-  // Only /staff/** and /owner/** are gated; /staff/login is the sole
-  // unauthenticated entry point.
+  // Only /staff/** and /owner/** are gated. Each surface now has its OWN
+  // unauthenticated entry point — /staff/login, /owner/login, and
+  // /staff/reset-password — so all three must be excluded here or the gate
+  // would redirect a login/reset page to itself.
   if ((!isStaffRoute && !isOwnerRoute) || isLoginRoute) {
     return response;
   }
@@ -55,8 +77,10 @@ export async function middleware(request: NextRequest) {
   // surfaces). Copies any cookies already queued on `response` (e.g. a session
   // token getUser() transparently refreshed) onto the redirect response —
   // building a bare `NextResponse.redirect()` would silently drop those.
+  // Send people to the door for the surface they were trying to reach: an
+  // expired owner session lands back on the owner login, not the counter's.
   function redirectToLogin(errorCode?: string) {
-    const loginUrl = new URL('/staff/login', request.url);
+    const loginUrl = new URL(isOwnerRoute ? '/owner/login' : '/staff/login', request.url);
     loginUrl.searchParams.set('next', pathname);
     if (errorCode) {
       loginUrl.searchParams.set('error', errorCode);
@@ -116,5 +140,14 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/staff', '/staff/:path*', '/owner', '/owner/:path*'],
+  // Runs on EVERYTHING except Next internals and static assets.
+  //
+  // It used to match only /staff and /owner, which is correct for path-based
+  // routing and silently wrong for subdomains: on staff.hioc.in the incoming
+  // path is /orders, so middleware would never fire, no rewrite would happen,
+  // and the staff portal would 404 on its own domain.
+  //
+  // The auth gate below still only engages for /staff and /owner paths, so the
+  // added cost on a customer request is one host classification.
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|images/|fonts/).*)'],
 };

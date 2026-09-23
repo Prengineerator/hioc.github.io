@@ -35,7 +35,7 @@ export default async function OwnerPromotionsPage() {
       <h1 className="text-2xl font-bold text-charcoal">Promotions</h1>
 
       <Card title="Coupon performance">
-        <div className="mb-4 flex gap-6 text-sm">
+        <div className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-sm">
           <span className="text-charcoal">
             <span className="font-bold">{totalRedemptions}</span> redemptions
           </span>

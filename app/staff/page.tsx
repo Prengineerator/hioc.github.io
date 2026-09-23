@@ -8,7 +8,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
+import { usePrintDock } from '@/components/staff/PrintDock';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
+import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
+import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
 import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
 import { PRIMARY_NEXT } from '@/lib/orders/stateMachine';
@@ -29,6 +32,11 @@ export default function StaffOrdersPage() {
   const [toast, setToast] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(false);
   const prevReceivedRef = useRef<Set<string> | null>(null);
+
+  // PRT-1/PRT-3 — mounted HERE, not inside the order modal. The print iframe and
+  // the failure chip have to outlive the modal: closing an order used to cancel
+  // an in-flight print silently and wipe the shift's failure tally.
+  const printDock = usePrintDock();
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -148,21 +156,101 @@ export default function StaffOrdersPage() {
   // staff member sees this fail with a clear message rather than the button
   // being hidden (role isn't plumbed to this client page).
   const handleRefund = useCallback(
-    async (o: OrderWithItems, amountInr: number, reason: string) => {
+    async (o: OrderWithItems, amountInr: number, reason: string, method?: string, refundKey?: string) => {
       try {
         const res = await fetch(`/api/orders/${o.id}/refund`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount_inr: amountInr, reason }),
+          headers: {
+            'Content-Type': 'application/json',
+            // REF-2: identifies THIS refund attempt. The key belongs to the
+            // open refund panel, NOT to the click — so a double-tap replays it
+            // and the route returns the refund it already made, instead of
+            // paying the customer twice.
+            ...(refundKey ? { 'Idempotency-Key': refundKey } : {}),
+          },
+          body: JSON.stringify({ amount_inr: amountInr, reason, ...(method ? { method } : {}) }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           showToast(d.error ?? 'Refund failed — only managers can issue refunds.');
         } else {
-          showToast('Refund issued.');
+          const d = await res.json().catch(() => ({}));
+          const r = d?.refunded as { method?: string; amount_inr?: number } | undefined;
+          // Say what the staffer must physically do: cash leaves the drawer,
+          // anything else is reversed on the terminal.
+          showToast(
+            r?.method === 'cash'
+              ? `Refunded ₹${r.amount_inr} — give it back from the drawer.`
+              : r?.method
+                ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
+                : 'Refund issued.',
+          );
         }
       } catch {
         showToast('Refund failed — please try again.');
+      } finally {
+        fetchOrders();
+      }
+    },
+    [fetchOrders],
+  );
+
+  // Void a line (POS-4) — POST /amend voids the line, recomputes totals
+  // server-side, and audits it. The route is manager-gated (hasPermission
+  // ('void_line'), D4): a plain staff member gets a 403 surfaced here rather
+  // than the button being hidden (role isn't plumbed to this client page). 409
+  // covers paid/terminal/last-line. The corrected total lands on refetch.
+  const handleVoid = useCallback(
+    async (o: OrderWithItems, itemId: string, reason: string) => {
+      try {
+        const res = await fetch(`/api/orders/${o.id}/amend`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_id: itemId, reason }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          showToast(
+            res.status === 403
+              ? 'A manager is required to void a line'
+              : d.error ?? 'Could not void the line.',
+          );
+        } else {
+          showToast('Line voided — total updated.');
+        }
+      } catch {
+        showToast('Could not void the line — please try again.');
+      } finally {
+        fetchOrders();
+      }
+    },
+    [fetchOrders],
+  );
+
+  // Manager comp (POS-2) — PATCH /status with a comp payload completes an unpaid
+  // dine-in order at ₹0 (server sets a paid-equivalent + audit, then completes).
+  // Manager-gated server-side: a 403 is surfaced clearly. Version-guarded like
+  // any other transition. Success is reflected on refetch.
+  const handleComp = useCallback(
+    async (o: OrderWithItems, reason: string) => {
+      try {
+        const res = await fetch(`/api/orders/${o.id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'completed', comp: { reason }, version: o.version }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          showToast(
+            res.status === 403
+              ? 'A manager is required to comp'
+              : d.error ?? 'Could not comp the order.',
+          );
+        } else {
+          showToast('Order comped and completed.');
+        }
+      } catch {
+        showToast('Could not comp the order — please try again.');
       } finally {
         fetchOrders();
       }
@@ -210,6 +298,10 @@ export default function StaffOrdersPage() {
   return (
     <div className={counterMode ? 'fixed inset-0 z-40 overflow-auto bg-cream' : 'mx-auto max-w-7xl px-4 py-8'}>
       <div className={counterMode ? 'px-4 py-4' : ''}>
+        {/* ATT-3. Hidden in counter mode — that is a full-screen kitchen view
+            and a nudge there is noise, not help. */}
+        {counterMode ? null : <NotClockedInBanner />}
+        {counterMode ? null : <LeaveReminderBanner />}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold text-charcoal">Today&apos;s Orders</h1>
           <div className="flex items-center gap-3">
@@ -284,9 +376,14 @@ export default function StaffOrdersPage() {
           onClose={() => setSelected(null)}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
-          onRefund={(o, amountInr, reason) => handleRefund(o, amountInr, reason)}
+          onPrint={(orderId, type) => printDock.enqueue([{ orderId, type }])}
+          onRefund={(o, amountInr, reason, method, key) => handleRefund(o, amountInr, reason, method, key)}
+          onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
+          onComp={(o, reason) => handleComp(o, reason)}
         />
       ) : null}
+
+      {printDock.node}
     </div>
   );
 }
