@@ -6,16 +6,25 @@ import { describe, expect, it } from 'vitest';
 // arguments, which is the whole reason it lives in lib/account/history.ts
 // instead of inline in the route handler.
 
+import type { OrderStatus } from '@/lib/types';
 import {
+  filterOrderRowsByStatus,
   includeGuestOrdersByPhone,
+  isActiveOrderStatus,
+  isValidHistoryStatusFilter,
   mergeOrderRows,
   ownsOrder,
   paginateOrderRows,
   type OrderIdRow,
+  type OrderStatusRow,
 } from '@/lib/account/history';
 
 function row(id: string, created_at: string): OrderIdRow {
   return { id, created_at };
+}
+
+function statusRow(id: string, status: OrderStatus, created_at = '2026-09-20T10:00:00Z'): OrderStatusRow {
+  return { id, created_at, status };
 }
 
 describe('mergeOrderRows', () => {
@@ -155,5 +164,100 @@ describe('ownsOrder — same three rules as the history route, for reorder (ACC-
   it('is false for a missing order or a blank caller id', () => {
     expect(ownsOrder(null, ME, verifiedProfile)).toBe(false);
     expect(ownsOrder({ user_id: ME }, '', verifiedProfile)).toBe(false);
+  });
+});
+
+// Active/Past tabs on the account orders page (ACC-2 usability pass) — the
+// owner's bug report also flagged "past orders are not manageable in a good
+// way"; this is the server-side half of the fix. The important property is
+// that this partition is EXACTLY the complement of what the state machine
+// (lib/orders/stateMachine.ts) calls terminal, not a separately-maintained
+// list that could quietly drift from it.
+describe('isActiveOrderStatus — exactly the non-terminal statuses', () => {
+  const ALL_STATUSES: OrderStatus[] = [
+    'placed',
+    'received',
+    'accepted',
+    'preparing',
+    'ready',
+    'completed',
+    'rejected',
+    'cancelled',
+  ];
+  const EXPECTED_ACTIVE: OrderStatus[] = ['placed', 'received', 'accepted', 'preparing', 'ready'];
+  const EXPECTED_PAST: OrderStatus[] = ['completed', 'rejected', 'cancelled'];
+
+  it('is true for every in-flight status and false for every terminal one', () => {
+    expect(ALL_STATUSES.filter(isActiveOrderStatus)).toEqual(EXPECTED_ACTIVE);
+    expect(ALL_STATUSES.filter((s) => !isActiveOrderStatus(s))).toEqual(EXPECTED_PAST);
+  });
+});
+
+describe('isValidHistoryStatusFilter', () => {
+  it('accepts exactly "active" and "past"', () => {
+    expect(isValidHistoryStatusFilter('active')).toBe(true);
+    expect(isValidHistoryStatusFilter('past')).toBe(true);
+  });
+
+  it('rejects anything else, including near-misses and non-strings', () => {
+    expect(isValidHistoryStatusFilter('Active')).toBe(false);
+    expect(isValidHistoryStatusFilter('all')).toBe(false);
+    expect(isValidHistoryStatusFilter('')).toBe(false);
+    expect(isValidHistoryStatusFilter(null)).toBe(false);
+    expect(isValidHistoryStatusFilter(undefined)).toBe(false);
+  });
+});
+
+describe('filterOrderRowsByStatus', () => {
+  const rows: OrderStatusRow[] = [
+    statusRow('a', 'received'),
+    statusRow('b', 'completed'),
+    statusRow('c', 'preparing'),
+    statusRow('d', 'cancelled'),
+    statusRow('e', 'rejected'),
+    statusRow('f', 'ready'),
+  ];
+
+  it('keeps only in-flight orders for "active"', () => {
+    expect(filterOrderRowsByStatus(rows, 'active').map((r) => r.id)).toEqual(['a', 'c', 'f']);
+  });
+
+  it('keeps only terminal orders for "past"', () => {
+    expect(filterOrderRowsByStatus(rows, 'past').map((r) => r.id)).toEqual(['b', 'd', 'e']);
+  });
+
+  it('is a no-op for a missing filter — used when the route gets no ?status=', () => {
+    expect(filterOrderRowsByStatus(rows, null)).toEqual(rows);
+    expect(filterOrderRowsByStatus(rows, undefined)).toEqual(rows);
+  });
+
+  it('preserves the incoming (already newest-first) order within a bucket', () => {
+    const ordered: OrderStatusRow[] = [
+      statusRow('newest', 'ready', '2026-09-20T10:00:00Z'),
+      statusRow('older', 'received', '2026-09-19T10:00:00Z'),
+      statusRow('oldest', 'accepted', '2026-09-18T10:00:00Z'),
+    ];
+    expect(filterOrderRowsByStatus(ordered, 'active').map((r) => r.id)).toEqual([
+      'newest',
+      'older',
+      'oldest',
+    ]);
+  });
+
+  it('composes correctly with mergeOrderRows + paginateOrderRows, the route\'s actual pipeline', () => {
+    // Mirrors GET /api/account/history: merge sources, filter by status,
+    // THEN paginate — total/hasMore must describe the filtered tab.
+    const owned: OrderStatusRow[] = [
+      statusRow('o1', 'completed', '2026-09-20T10:00:00Z'),
+      statusRow('o2', 'ready', '2026-09-19T10:00:00Z'),
+    ];
+    const guest: OrderStatusRow[] = [statusRow('g1', 'received', '2026-09-18T10:00:00Z')];
+
+    const merged = filterOrderRowsByStatus(mergeOrderRows([owned, guest]), 'active');
+    const page = paginateOrderRows(merged, 1, 10);
+
+    expect(page.items.map((r) => r.id)).toEqual(['o2', 'g1']);
+    expect(page.total).toBe(2);
+    expect(page.hasMore).toBe(false);
   });
 });

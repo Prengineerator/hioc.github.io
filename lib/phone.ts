@@ -29,3 +29,17 @@ export function normalizeIndianMobile(input: string): string | null {
 
   return digits.length === 10 && INDIAN_MOBILE_REGEX.test(digits) ? digits : null;
 }
+
+/**
+ * "9876543210" (or any recognizable Indian-mobile form — profiles.phone's
+ * "+91XXXXXXXXXX", Supabase Auth's bare "91XXXXXXXXXX", raw digits, …) →
+ * "+91 98765 43210" for display (AccountHeader/AccountNav "who's logged
+ * in" line). Returns null when the input isn't a valid Indian mobile
+ * number, same as normalizeIndianMobile.
+ */
+export function formatIndianMobileDisplay(phone: string | null | undefined): string | null {
+  if (!phone) return null;
+  const normalized = normalizeIndianMobile(phone);
+  if (!normalized) return null;
+  return `+91 ${normalized.slice(0, 5)} ${normalized.slice(5)}`;
+}
