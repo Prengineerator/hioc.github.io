@@ -9,6 +9,7 @@ import { MenuItemCard } from '@/components/menu/MenuItemCard';
 import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
 import { FloatingCartBar } from '@/components/cart/FloatingCartBar';
 import { CartDrawer } from '@/components/cart/CartDrawer';
+import { OrderAgainStrip } from '@/components/account/OrderAgainStrip';
 import { Spinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -133,11 +134,15 @@ function MenuPageContent() {
             coffee.
           </p>
           <p className="mt-1 text-sm italic text-muted">
-            Pay at the counter when you pick up — no online payment needed.
+            {process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID
+              ? 'Pay online, or at the counter when you pick up.'
+              : 'Pay at the counter when you pick up — no online payment needed.'}
           </p>
         </div>
 
         <StoreStatusBanner openState={openState} />
+
+        <OrderAgainStrip onAdded={() => setDrawerOpen(true)} />
 
         <MenuCategoryTabs active={category} onChange={handleCategoryChange} />
 

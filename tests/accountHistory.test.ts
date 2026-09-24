@@ -15,6 +15,7 @@ import {
   mergeOrderRows,
   ownsOrder,
   paginateOrderRows,
+  verifiedEmailOf,
   type OrderIdRow,
   type OrderStatusRow,
 } from '@/lib/account/history';
@@ -164,6 +165,49 @@ describe('ownsOrder — same three rules as the history route, for reorder (ACC-
   it('is false for a missing order or a blank caller id', () => {
     expect(ownsOrder(null, ME, verifiedProfile)).toBe(false);
     expect(ownsOrder({ user_id: ME }, '', verifiedProfile)).toBe(false);
+  });
+});
+
+describe('verifiedEmailOf — only a CONFIRMED login email counts', () => {
+  it('returns the lowercased email once Supabase has confirmed it', () => {
+    expect(verifiedEmailOf({ email: ' Me@Example.com ', email_confirmed_at: '2026-09-01T00:00:00Z' })).toBe(
+      'me@example.com',
+    );
+  });
+
+  it('is null for an unconfirmed, missing, or blank email', () => {
+    expect(verifiedEmailOf({ email: 'me@example.com', email_confirmed_at: null })).toBeNull();
+    expect(verifiedEmailOf({ email: 'me@example.com' })).toBeNull();
+    expect(verifiedEmailOf({ email: '', email_confirmed_at: '2026-09-01T00:00:00Z' })).toBeNull();
+    expect(verifiedEmailOf(null)).toBeNull();
+  });
+});
+
+describe('ownsOrder — unclaimed guest orders matched by the caller\'s verified email', () => {
+  const ME = 'user-me';
+  const STRANGER = 'user-stranger';
+  const guestOrder = { user_id: null, customer_user_id: null, customer_phone: '+910000000000', customer_email: 'me@example.com' };
+
+  it('owns a guest order placed with the caller\'s verified login email', () => {
+    expect(ownsOrder(guestOrder, ME, null, 'me@example.com')).toBe(true);
+  });
+
+  it('matches case-insensitively on the order side', () => {
+    expect(ownsOrder({ ...guestOrder, customer_email: 'Me@Example.COM' }, ME, null, 'me@example.com')).toBe(true);
+  });
+
+  it('does NOT own it without a verified email, or with a different one', () => {
+    expect(ownsOrder(guestOrder, ME, null, null)).toBe(false);
+    expect(ownsOrder(guestOrder, ME, null, 'someone@else.com')).toBe(false);
+  });
+
+  it('never matches an order with no email, even for a verified caller', () => {
+    expect(ownsOrder({ ...guestOrder, customer_email: null }, ME, null, 'me@example.com')).toBe(false);
+    expect(ownsOrder({ ...guestOrder, customer_email: '' }, ME, null, 'me@example.com')).toBe(false);
+  });
+
+  it('never claims an order already assigned to someone else by email', () => {
+    expect(ownsOrder({ ...guestOrder, user_id: STRANGER }, ME, null, 'me@example.com')).toBe(false);
   });
 });
 

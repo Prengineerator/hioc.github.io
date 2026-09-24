@@ -14,7 +14,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { CartProvider, useCart } from '@/lib/cart/CartContext';
+import { CartProvider } from '@/lib/cart/CartContext';
+import { useReorder } from '@/lib/account/useReorder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import {
@@ -48,7 +49,7 @@ export default function AccountOrdersPage() {
 
 function AccountOrdersContent() {
   const router = useRouter();
-  const { addItem } = useCart();
+  const { reorder, reorderingId } = useReorder();
 
   // null tab = still deciding which one to default to (initial load).
   const [tab, setTab] = useState<Tab | null>(null);
@@ -67,7 +68,6 @@ function AccountOrdersContent() {
   // still be missing counter orders placed under an unverified number.
   const [phoneVerified, setPhoneVerified] = useState(true);
 
-  const [reorderingId, setReorderingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string>('');
 
   const fetchPage = useCallback(async (t: Tab, p: number): Promise<HistoryResponse | null> => {
@@ -151,41 +151,18 @@ function AccountOrdersContent() {
   }
 
   async function handleReorder(orderId: string) {
-    setReorderingId(orderId);
     setNotice('');
-    try {
-      const res = await fetch(`/api/account/reorder/${orderId}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setNotice(data.error ?? 'Could not reorder this order.');
-        return;
-      }
-      for (const line of data.items ?? []) {
-        const { qty, ...rest } = line;
-        addItem(rest, qty);
-      }
-      const notes: string[] = [];
-      if (data.skipped?.length) {
-        notes.push(
-          `Skipped (unavailable): ${data.skipped.map((s: { name: string }) => s.name).join(', ')}`,
-        );
-      }
-      if (data.modified?.length) {
-        notes.push(
-          `Some add-ons dropped for: ${data.modified.map((m: { name: string }) => m.name).join(', ')}`,
-        );
-      }
-      if (notes.length > 0) {
-        // Small delay so the notice is readable before we navigate away.
-        setNotice(notes.join(' · '));
-        setTimeout(() => router.push('/checkout'), 1500);
-      } else {
-        router.push('/checkout');
-      }
-    } catch {
-      setNotice('Network error — please try again.');
-    } finally {
-      setReorderingId(null);
+    const result = await reorder(orderId);
+    if (!result.ok) {
+      setNotice(result.error ?? 'Could not reorder this order.');
+      return;
+    }
+    if (result.notice) {
+      // Small delay so the notice is readable before we navigate away.
+      setNotice(result.notice);
+      setTimeout(() => router.push('/checkout'), 1500);
+    } else {
+      router.push('/checkout');
     }
   }
 

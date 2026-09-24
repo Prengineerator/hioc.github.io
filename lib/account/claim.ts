@@ -32,3 +32,31 @@ export async function claimGuestOrders(
   }
   return data?.length ?? 0;
 }
+
+/**
+ * Same as claimGuestOrders, keyed on the caller's VERIFIED login email
+ * (lib/account/history.ts verifiedEmailOf) instead of their phone — so a
+ * guest who gave an email at checkout and later logs in with that email (or
+ * adds it to a phone login) finds those orders on their account. Orders
+ * store `customer_email` already lowercased (lib/email.ts).
+ */
+export async function claimGuestOrdersByEmail(
+  admin: SupabaseClient,
+  userId: string,
+  verifiedEmail: string | null,
+): Promise<number> {
+  if (!verifiedEmail) return 0;
+
+  const { data, error } = await admin
+    .from('orders')
+    .update({ user_id: userId })
+    .eq('customer_email', verifiedEmail)
+    .is('user_id', null)
+    .select('id');
+
+  if (error) {
+    console.error('claimGuestOrdersByEmail: update failed', error);
+    return 0;
+  }
+  return data?.length ?? 0;
+}

@@ -44,7 +44,7 @@ const SECTIONS = [
   {
     href: '/account/profile',
     title: 'Profile',
-    body: 'Name, phone, default order type, and notification preferences.',
+    body: 'Name, phone, email, default order type, and notification preferences.',
   },
 ];
 
