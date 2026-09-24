@@ -727,6 +727,11 @@ export function CheckoutForm({
         {mustVerify ? null : isGuest ? (
           <div ref={paymentSectionRef}>
             <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            {guestCannotPay ? (
+              <div className="mb-2">
+                <PayOnlineUnavailableButton />
+              </div>
+            ) : null}
             <p className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
               {guestCannotPay ? (
                 <>Online payment is unavailable right now. </>
@@ -778,8 +783,24 @@ export function CheckoutForm({
             </p>
           </div>
         ) : (
-          <div ref={paymentSectionRef} className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
-            Pay at the counter on pickup — no online payment required.
+          // Gateway not configured (e.g. a preview without Razorpay keys) or
+          // switched off: keep online payment VISIBLE but greyed out, so it
+          // reads as "temporarily unavailable" rather than as a missing feature.
+          <div ref={paymentSectionRef}>
+            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            <div className="grid grid-cols-2 gap-2">
+              <PayOnlineUnavailableButton />
+              <button
+                type="button"
+                aria-pressed="true"
+                className="rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm font-bold text-tan-dark"
+              >
+                Pay at counter
+              </button>
+            </div>
+            <p className="mt-2 rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+              Online payment is temporarily unavailable — pay at the counter on pickup.
+            </p>
           </div>
         )}
 
@@ -828,6 +849,22 @@ export function CheckoutForm({
         )}
       </form>
     </div>
+  );
+}
+
+// Shown in place of the live "Pay online" choice while the gateway is not
+// configured — disabled, so the option stays visible without being usable.
+function PayOnlineUnavailableButton() {
+  return (
+    <button
+      type="button"
+      disabled
+      aria-disabled="true"
+      className="w-full cursor-not-allowed rounded-md border border-dashed border-[#e5e5e5] px-3 py-2 text-sm font-bold text-muted opacity-60"
+    >
+      Pay online
+      <span className="block text-xs font-normal">Temporarily unavailable</span>
+    </button>
   );
 }
 
