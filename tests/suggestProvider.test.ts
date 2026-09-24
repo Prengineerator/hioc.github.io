@@ -6,15 +6,27 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   costUsdMicros,
   deciderModelLabel,
+  deciderProvider,
   geminiModel,
   geminiWorkerModel,
+  jevModel,
   llmDisabledReason,
   llmEnabled,
   llmProvider,
+  textProvider,
   workerModelLabel,
 } from '@/lib/suggest/models';
 
-const ENV_KEYS = ['SUGGEST_LLM', 'SUGGEST_LLM_PROVIDER', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'GEMINI_WORKER_MODEL'] as const;
+const ENV_KEYS = [
+  'SUGGEST_LLM',
+  'SUGGEST_LLM_PROVIDER',
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'GEMINI_MODEL',
+  'GEMINI_WORKER_MODEL',
+  'TYPESAFE_API_KEY',
+  'JEV_MODEL',
+] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -138,9 +150,9 @@ describe('llmDisabledReason()', () => {
 });
 
 describe('geminiModel() / geminiWorkerModel()', () => {
-  it('defaults to gemini-3-flash', () => {
-    expect(geminiModel()).toBe('gemini-3-flash');
-    expect(geminiWorkerModel()).toBe('gemini-3-flash');
+  it('defaults to gemini-3-flash-preview', () => {
+    expect(geminiModel()).toBe('gemini-3-flash-preview');
+    expect(geminiWorkerModel()).toBe('gemini-3-flash-preview');
   });
 
   it('GEMINI_MODEL overrides the default (trimmed)', () => {
@@ -169,23 +181,189 @@ describe('deciderModelLabel() / workerModelLabel()', () => {
 
   it('is "gemini:<model>" when Gemini is the active provider', () => {
     process.env.GEMINI_API_KEY = 'gk-1';
-    process.env.GEMINI_MODEL = 'gemini-3-flash';
-    expect(deciderModelLabel()).toBe('gemini:gemini-3-flash');
-    expect(workerModelLabel()).toBe('gemini:gemini-3-flash');
+    process.env.GEMINI_MODEL = 'gemini-3-flash-preview';
+    expect(deciderModelLabel()).toBe('gemini:gemini-3-flash-preview');
+    expect(workerModelLabel()).toBe('gemini:gemini-3-flash-preview');
   });
 });
 
 describe('costUsdMicros()', () => {
   it('is 0 for a raw Gemini model id', () => {
-    expect(costUsdMicros('gemini-3-flash', { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1_000_000 })).toBe(0);
+    expect(costUsdMicros('gemini-3-flash-preview', { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1_000_000 })).toBe(0);
   });
 
   it('is 0 for the "gemini:<model>" label form too', () => {
-    expect(costUsdMicros('gemini:gemini-3-flash', { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1_000_000 })).toBe(0);
+    expect(costUsdMicros('gemini:gemini-3-flash-preview', { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1_000_000 })).toBe(0);
   });
 
   it('still prices Anthropic models normally (unchanged behaviour)', () => {
     const micros = costUsdMicros('claude-opus-5', { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 });
     expect(micros).toBe(5_000_000); // $5 per MTok input
+  });
+
+  it('is round(inputTokens x 0.042) for a raw Jev model id, with output free', () => {
+    const micros = costUsdMicros('jev-latest', { inputTokens: 1_000_000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1_000_000 });
+    expect(micros).toBe(42_000); // $0.042 per MTok input, output free
+  });
+
+  it('is round(inputTokens x 0.042) for the "jev:<model>" label form too', () => {
+    const micros = costUsdMicros('jev:jev-latest', { inputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 50 });
+    expect(micros).toBe(Math.round(500 * 0.042));
+  });
+
+  it('rounds to the nearest integer micro-dollar for Jev', () => {
+    expect(costUsdMicros('jev-latest', { inputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })).toBe(0); // round(0.42) = 0
+    expect(costUsdMicros('jev-latest', { inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })).toBe(4); // round(4.2) = 4
+  });
+});
+
+describe('jevModel()', () => {
+  it('defaults to jev-latest', () => {
+    expect(jevModel()).toBe('jev-latest');
+  });
+
+  it('JEV_MODEL overrides the default (trimmed)', () => {
+    process.env.JEV_MODEL = '  jev-custom-id  ';
+    expect(jevModel()).toBe('jev-custom-id');
+  });
+});
+
+describe('deciderProvider() — auto (no pin)', () => {
+  it('is null when no key is set', () => {
+    expect(deciderProvider()).toBeNull();
+  });
+
+  it('is "jev" when only TYPESAFE_API_KEY is set', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(deciderProvider()).toBe('jev');
+  });
+
+  it('prefers "jev" over "anthropic" and "gemini" when all three keys are set', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(deciderProvider()).toBe('jev');
+  });
+
+  it('falls back to "anthropic" when TYPESAFE_API_KEY is unset but ANTHROPIC_API_KEY is set', () => {
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(deciderProvider()).toBe('anthropic');
+  });
+
+  it('falls back to "gemini" when only GEMINI_API_KEY is set', () => {
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(deciderProvider()).toBe('gemini');
+  });
+});
+
+describe('deciderProvider() — explicit SUGGEST_LLM_PROVIDER pin', () => {
+  it('pins "jev" only when TYPESAFE_API_KEY is set, even with the other keys present', () => {
+    process.env.SUGGEST_LLM_PROVIDER = 'jev';
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(deciderProvider()).toBe('jev');
+  });
+
+  it('pinning "jev" with TYPESAFE_API_KEY unset is null — never silently falls back to another provider', () => {
+    process.env.SUGGEST_LLM_PROVIDER = 'jev';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(deciderProvider()).toBeNull();
+  });
+
+  it('is case-insensitive for "jev" too', () => {
+    process.env.SUGGEST_LLM_PROVIDER = '  JEV  ';
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(deciderProvider()).toBe('jev');
+  });
+});
+
+describe('deciderProvider() — SUGGEST_LLM kill switch disables Jev too', () => {
+  it('SUGGEST_LLM=off is null even with TYPESAFE_API_KEY set', () => {
+    process.env.SUGGEST_LLM = 'off';
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(deciderProvider()).toBeNull();
+  });
+});
+
+describe('llmProvider()/llmEnabled()/llmDisabledReason() — alias deciderProvider() (incl. Jev)', () => {
+  it('llmProvider() returns "jev" exactly like deciderProvider()', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(llmProvider()).toBe('jev');
+    expect(llmEnabled()).toBe(true);
+    expect(llmDisabledReason()).toBeNull();
+  });
+});
+
+describe('textProvider() — never returns "jev" (digest needs prose)', () => {
+  it('is null when no key is set', () => {
+    expect(textProvider()).toBeNull();
+  });
+
+  it('is "anthropic" when only ANTHROPIC_API_KEY is set, Jev key notwithstanding', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    expect(textProvider()).toBe('anthropic');
+  });
+
+  it('is "gemini" when only GEMINI_API_KEY is set, Jev key notwithstanding', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(textProvider()).toBe('gemini');
+  });
+
+  it('is null when ONLY TYPESAFE_API_KEY is set — Jev can never answer a text job', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(textProvider()).toBeNull();
+  });
+
+  it('a SUGGEST_LLM_PROVIDER=jev pin falls through to auto selection for text (Anthropic preferred)', () => {
+    process.env.SUGGEST_LLM_PROVIDER = 'jev';
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(textProvider()).toBe('anthropic');
+  });
+
+  it('a SUGGEST_LLM_PROVIDER=jev pin with no Anthropic/Gemini key falls through to null', () => {
+    process.env.SUGGEST_LLM_PROVIDER = 'jev';
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(textProvider()).toBeNull();
+  });
+
+  it('respects an explicit "anthropic"/"gemini" pin exactly like deciderProvider() does', () => {
+    process.env.SUGGEST_LLM_PROVIDER = 'gemini';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(textProvider()).toBe('gemini');
+  });
+
+  it('SUGGEST_LLM=off disables text generation too', () => {
+    process.env.SUGGEST_LLM = 'off';
+    process.env.ANTHROPIC_API_KEY = 'ak-1';
+    expect(textProvider()).toBeNull();
+  });
+});
+
+describe('deciderModelLabel() — Jev', () => {
+  it('is "jev:<model>" when Jev is the active decider provider', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.JEV_MODEL = 'jev-custom';
+    expect(deciderModelLabel()).toBe('jev:jev-custom');
+  });
+});
+
+describe('workerModelLabel() — Jev is never the digest worker', () => {
+  it('falls back to Anthropic\'s raw model id when only TYPESAFE_API_KEY is set (textProvider() is null)', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    expect(workerModelLabel()).toBe('claude-sonnet-5');
+  });
+
+  it('still returns "gemini:<model>" when Gemini is configured, even with a Jev key also present', () => {
+    process.env.TYPESAFE_API_KEY = 'tk-1';
+    process.env.GEMINI_API_KEY = 'gk-1';
+    expect(workerModelLabel()).toBe('gemini:gemini-3-flash-preview');
   });
 });

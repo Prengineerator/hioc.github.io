@@ -212,8 +212,10 @@ export interface SuggestResponse {
 
 export interface Candidate {
   menuItemId: string;
+  name: string;
   score: number; // 0–1
   minPriceInr: number;
+  maxPriceInr: number;
   category: string;
   traits: MenuItemTraits;
 }

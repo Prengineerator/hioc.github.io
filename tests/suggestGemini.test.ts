@@ -34,7 +34,7 @@ const SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' } }, requir
 
 function baseArgs(overrides: Partial<Parameters<typeof geminiGenerateJson>[0]> = {}) {
   return {
-    model: 'gemini-3-flash',
+    model: 'gemini-3-flash-preview',
     system: 'system prompt text',
     user: 'user message text',
     schema: SCHEMA as unknown as Record<string, unknown>,
@@ -58,7 +58,7 @@ describe('geminiGenerateJson — request shape', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
 
-    expect(url).toBe(`${URL_PREFIX}gemini-3-flash:generateContent`);
+    expect(url).toBe(`${URL_PREFIX}gemini-3-flash-preview:generateContent`);
     expect(url).not.toContain(API_KEY);
     expect(init.method).toBe('POST');
     expect(init.headers['content-type']).toBe('application/json');
@@ -215,6 +215,78 @@ describe('geminiGenerateJson — schema robustness (one-shot retry)', () => {
   });
 });
 
+describe('geminiGenerateJson — thinkingLevel (speed-up for tagging/decision calls)', () => {
+  it('sends generationConfig.thinkingConfig.thinkingLevel when thinkingLevel is set', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { candidates: [{ content: { parts: [{ text: '{"ok":true}' }] }, finishReason: 'STOP' }] }),
+    );
+    await geminiGenerateJson(baseArgs({ thinkingLevel: 'low' }));
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'low' });
+  });
+
+  it('sends no thinkingConfig when thinkingLevel is omitted', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { candidates: [{ content: { parts: [{ text: '{"ok":true}' }] }, finishReason: 'STOP' }] }),
+    );
+    await geminiGenerateJson(baseArgs());
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.generationConfig.thinkingConfig).toBeUndefined();
+  });
+
+  it('a 400 mentioning "thinking" retries once WITHOUT thinkingConfig, keeping the schema', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(400, { error: { message: 'Unknown name "thinkingConfig" at generationConfig' } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          candidates: [{ content: { parts: [{ text: '{"ok":true}' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 2, cachedContentTokenCount: 0 },
+        }),
+      );
+
+    const { json } = await geminiGenerateJson(baseArgs({ thinkingLevel: 'low' }));
+    expect(json).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(secondBody.generationConfig.thinkingConfig).toBeUndefined();
+    // The schema retry is a SEPARATE drop — a pure thinking-400 keeps the schema.
+    expect(secondBody.generationConfig.responseJsonSchema).toEqual(SCHEMA);
+  });
+
+  it('both a schema-related AND a thinking-related 400 can each be dropped, capped at 3 HTTP attempts total', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(400, { error: { message: 'bad responseJsonSchema' } }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: { message: 'thinkingConfig not supported' } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          candidates: [{ content: { parts: [{ text: '{"ok":true}' }] }, finishReason: 'STOP' }],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, cachedContentTokenCount: 0 },
+        }),
+      );
+
+    const { json } = await geminiGenerateJson(baseArgs({ thinkingLevel: 'low' }));
+    expect(json).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    const thirdBody = JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string);
+    expect(thirdBody.generationConfig.responseJsonSchema).toBeUndefined();
+    expect(thirdBody.generationConfig.thinkingConfig).toBeUndefined();
+  });
+
+  it('never makes more than 3 HTTP attempts for one logical call', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(400, { error: { message: 'bad responseJsonSchema' } }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: { message: 'thinkingConfig not supported' } }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: { message: 'still schema trouble' } }));
+
+    await expect(geminiGenerateJson(baseArgs({ thinkingLevel: 'low' }))).rejects.toMatchObject({ kind: 'error' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('geminiGenerateText', () => {
   it('returns concatenated non-thought text and mapped usage, with no schema/mimetype in the body', async () => {
     fetchMock.mockResolvedValueOnce(
@@ -224,7 +296,7 @@ describe('geminiGenerateText', () => {
       }),
     );
     const { text, usage } = await geminiGenerateText({
-      model: 'gemini-3-flash',
+      model: 'gemini-3-flash-preview',
       system: 'sys',
       user: 'usr',
       maxOutputTokens: 200,
@@ -243,7 +315,7 @@ describe('geminiGenerateText', () => {
   it('propagates the same refusal/invalid_output error kinds as geminiGenerateJson', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { promptFeedback: { blockReason: 'OTHER' }, candidates: [] }));
     await expect(
-      geminiGenerateText({ model: 'gemini-3-flash', system: 's', user: 'u', maxOutputTokens: 100, timeoutMs: 5000 }),
+      geminiGenerateText({ model: 'gemini-3-flash-preview', system: 's', user: 'u', maxOutputTokens: 100, timeoutMs: 5000 }),
     ).rejects.toMatchObject({ kind: 'refusal' });
   });
 });

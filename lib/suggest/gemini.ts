@@ -155,13 +155,33 @@ async function postGenerateContent(args: {
   return (await response.json()) as GeminiResponseBody;
 }
 
-function buildJsonBody(args: { system: string; user: string; schema?: Record<string, unknown>; maxOutputTokens: number }) {
+// Speeds up trait tagging and the picks decision (owner-reported: a full
+// minute per click, ~40 items tagged). 'low' is used for both — enough to cut
+// latency sharply without needing deep reasoning for a JSON-schema-constrained
+// classification task. Never sent unless a caller opts in (the digest, which
+// wants full reasoning for its prose, never passes this).
+export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
+
+// Never more than this many HTTP attempts for one logical call — the two
+// retries below (schema, thinking) can each fire independently, or a single
+// 400 can trigger both drops at once, but the loop bound is the hard cap
+// regardless of which combination occurs.
+const MAX_ATTEMPTS = 3;
+
+function buildJsonBody(args: {
+  system: string;
+  user: string;
+  schema?: Record<string, unknown>;
+  maxOutputTokens: number;
+  thinkingLevel?: GeminiThinkingLevel;
+}) {
   return {
     systemInstruction: { parts: [{ text: args.system }] },
     contents: [{ role: 'user', parts: [{ text: args.user }] }],
     generationConfig: {
       responseMimeType: 'application/json',
       ...(args.schema ? { responseJsonSchema: args.schema } : {}),
+      ...(args.thinkingLevel ? { thinkingConfig: { thinkingLevel: args.thinkingLevel } } : {}),
       maxOutputTokens: args.maxOutputTokens,
     },
   };
@@ -175,40 +195,68 @@ export interface GeminiGenerateJsonArgs {
   maxOutputTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  /** Sets `generationConfig.thinkingConfig.thinkingLevel`. Omit for the
+   * model's default (used by nothing in this codebase today except the
+   * digest, implicitly, by never passing it). */
+  thinkingLevel?: GeminiThinkingLevel;
+}
+
+function isSchemaRelated400(err: unknown): boolean {
+  return err instanceof GeminiHttpError && err.status === 400 && /responseJsonSchema|schema/i.test(err.message);
+}
+
+function isThinkingRelated400(err: unknown): boolean {
+  return err instanceof GeminiHttpError && err.status === 400 && /thinking/i.test(err.message);
 }
 
 /**
- * Structured-JSON generation. Never sends temperature or a thinking config.
- * If the API 400s specifically because of `responseJsonSchema`, retries ONCE
- * without it — schema described in the system text instead — since our own
- * validators (traitsValidate.ts / validate.ts) check every field regardless
- * of whether the model was schema-constrained (§5.4 "Schema robustness").
+ * Structured-JSON generation. Never sends temperature. Up to MAX_ATTEMPTS
+ * HTTP attempts total, dropping one feature per retry:
+ *  - If the API 400s specifically because of `responseJsonSchema`, retries
+ *    without it — schema described in the system text instead — since our
+ *    own validators (traitsValidate.ts / validate.ts) check every field
+ *    regardless of whether the model was schema-constrained (§5.4 "Schema
+ *    robustness").
+ *  - If the API 400s specifically because of `thinkingConfig` (an older
+ *    model that doesn't support it), retries without it.
+ *  - Both drops can apply across the (at most 3) attempts, in whichever
+ *    order the API actually rejects them.
  */
 export async function geminiGenerateJson(args: GeminiGenerateJsonArgs): Promise<{ json: unknown; usage: GeminiUsage }> {
-  let body: GeminiResponseBody;
-  try {
-    body = await postGenerateContent({
-      model: args.model,
-      body: buildJsonBody({ system: args.system, user: args.user, schema: args.schema, maxOutputTokens: args.maxOutputTokens }),
-      timeoutMs: args.timeoutMs,
-      signal: args.signal,
-    });
-  } catch (err) {
-    const schemaRelated = err instanceof GeminiHttpError && err.status === 400 && /responseJsonSchema|schema/i.test(err.message);
-    if (!schemaRelated) throw classifyHttpError(err);
+  let useSchema = true;
+  let useThinking = Boolean(args.thinkingLevel);
+  let body: GeminiResponseBody | undefined;
+  let lastErr: unknown;
 
-    const fallbackSystem = `${args.system}\n\nRespond with JSON matching this JSON Schema exactly: ${JSON.stringify(args.schema)}`;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const system = useSchema
+      ? args.system
+      : `${args.system}\n\nRespond with JSON matching this JSON Schema exactly: ${JSON.stringify(args.schema)}`;
     try {
       body = await postGenerateContent({
         model: args.model,
-        body: buildJsonBody({ system: fallbackSystem, user: args.user, maxOutputTokens: args.maxOutputTokens }),
+        body: buildJsonBody({
+          system,
+          user: args.user,
+          schema: useSchema ? args.schema : undefined,
+          maxOutputTokens: args.maxOutputTokens,
+          thinkingLevel: useThinking ? args.thinkingLevel : undefined,
+        }),
         timeoutMs: args.timeoutMs,
         signal: args.signal,
       });
-    } catch (retryErr) {
-      throw classifyHttpError(retryErr);
+      break;
+    } catch (err) {
+      lastErr = err;
+      const dropSchema = useSchema && isSchemaRelated400(err);
+      const dropThinking = useThinking && isThinkingRelated400(err);
+      if (!dropSchema && !dropThinking) throw classifyHttpError(err);
+      if (dropSchema) useSchema = false;
+      if (dropThinking) useThinking = false;
+      // loop again with the offending feature(s) dropped, up to MAX_ATTEMPTS
     }
   }
+  if (!body) throw classifyHttpError(lastErr);
 
   throwIfRefused(body);
   const finishReason = body.candidates?.[0]?.finishReason;
@@ -234,26 +282,40 @@ export interface GeminiGenerateTextArgs {
   maxOutputTokens: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  thinkingLevel?: GeminiThinkingLevel;
 }
 
-/** Plain-text generation (SUG-12's digest — no JSON schema involved). Same
- * request as geminiGenerateJson minus responseMimeType/schema. */
+/** Plain-text generation (SUG-12's digest — no JSON schema involved, so only
+ * the thinking-config retry applies here; at most 2 HTTP attempts). The
+ * digest never passes `thinkingLevel` — it wants full reasoning for prose. */
 export async function geminiGenerateText(args: GeminiGenerateTextArgs): Promise<{ text: string; usage: GeminiUsage }> {
-  let body: GeminiResponseBody;
-  try {
-    body = await postGenerateContent({
-      model: args.model,
-      body: {
-        systemInstruction: { parts: [{ text: args.system }] },
-        contents: [{ role: 'user', parts: [{ text: args.user }] }],
-        generationConfig: { maxOutputTokens: args.maxOutputTokens },
-      },
-      timeoutMs: args.timeoutMs,
-      signal: args.signal,
-    });
-  } catch (err) {
-    throw classifyHttpError(err);
+  let useThinking = Boolean(args.thinkingLevel);
+  let body: GeminiResponseBody | undefined;
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      body = await postGenerateContent({
+        model: args.model,
+        body: {
+          systemInstruction: { parts: [{ text: args.system }] },
+          contents: [{ role: 'user', parts: [{ text: args.user }] }],
+          generationConfig: {
+            maxOutputTokens: args.maxOutputTokens,
+            ...(useThinking ? { thinkingConfig: { thinkingLevel: args.thinkingLevel } } : {}),
+          },
+        },
+        timeoutMs: args.timeoutMs,
+        signal: args.signal,
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (!(useThinking && isThinkingRelated400(err))) throw classifyHttpError(err);
+      useThinking = false;
+    }
   }
+  if (!body) throw classifyHttpError(lastErr);
 
   throwIfRefused(body);
   const finishReason = body.candidates?.[0]?.finishReason;

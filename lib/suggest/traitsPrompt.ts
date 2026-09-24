@@ -1,23 +1,34 @@
 // Phase 7 · SUG-2 — menu-trait tagging (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md
-// §5.1). Sends batches of ~40 items (id, name, description, category,
-// parent_category — no customer data, so S-3 doesn't apply here, but nothing
-// here ever sees an order either) to the active decider provider (Opus, or
-// Gemini Flash when configured — §1) with a JSON-schema output format, then
-// runs every row through lib/suggest/traitsValidate.ts before it is trusted
-// (playbook S-2: model output is data). Both providers share the exact same
-// SYSTEM_PROMPT, OUTPUT_SCHEMA and validateOpusTraitRows() call — only the
-// transport and batching strategy differ.
+// §5.1). Sends items (id, name, description, category, parent_category — no
+// customer data, so S-3 doesn't apply here, but nothing here ever sees an
+// order either) to the active decider provider (Jev, or Opus, or Gemini Flash
+// when configured — §1), then runs every row through
+// lib/suggest/traitsValidate.ts before it is trusted (playbook S-2: model
+// output is data). All three providers share the exact same allow-lists
+// (imported, not retyped) and validateOpusTraitRows() call; only the
+// transport, question/prompt shape and batching strategy differ:
+//   - Anthropic (Opus): batches of 40 items, ~3 batches run concurrently.
+//   - Gemini (free tier): batches of 15 items, a concurrency-4 promise pool,
+//     all sharing one 50s budget — fast enough that the owner isn't stuck
+//     waiting a full minute for ~40 items (see GEMINI_BATCH_SIZE below).
+//   - Jev: ONE systemOne call per item (Jev is decision-only, not a batch
+//     JSON-writer), a concurrency-8 promise pool sharing one 50s budget, plus
+//     per-item low-confidence `needsReview` hints (§5.1 "Low-confidence
+//     review hints").
 //
-// 'server-only' — this is where ANTHROPIC_API_KEY/GEMINI_API_KEY-backed calls
-// happen (playbook S-1). The caller (app/api/owner/suggest/traits/generate/route.ts)
-// owns the "which items need tagging" and "upsert, never overwrite confirmed"
-// decisions; this module only tags whatever it's given.
+// 'server-only' — this is where TYPESAFE_API_KEY/ANTHROPIC_API_KEY/GEMINI_API_KEY-backed
+// calls happen (playbook S-1). The caller
+// (app/api/owner/suggest/traits/generate/route.ts) owns the "which items need
+// tagging" and "upsert, never overwrite confirmed" decisions; this module
+// only tags whatever it's given.
 
 import 'server-only';
+import { choice, noul, score } from '@typesafe-ai/sdk';
 import { getAnthropicClient } from './anthropic';
 import { geminiGenerateJson } from './gemini';
-import { costUsdMicros, deciderModel, deciderModelLabel, geminiModel, llmProvider } from './models';
-import { DAYPARTS, MOODS } from './types';
+import { getJevClient } from './jev';
+import { costUsdMicros, deciderModel, deciderModelLabel, deciderProvider, geminiModel, jevModel } from './models';
+import { DAYPARTS, MOODS, type Daypart, type Mood } from './types';
 import { TRAIT_BODY, TRAIT_CAFFEINE, TRAIT_KIND, TRAIT_TEMPERATURES, validateOpusTraitRows, type ValidatedTraitRow } from './traitsValidate';
 
 export interface MenuItemForTagging {
@@ -39,29 +50,86 @@ export interface TagTraitsUsage {
 export interface TagTraitsResult {
   rows: ValidatedTraitRow[];
   usage: TagTraitsUsage;
-  /** Batches sent. */
+  /** Batches sent (Jev: one per item — see the module doc comment). */
   batches: number;
-  /** Batches that errored, timed out, weren't `end_turn`, or didn't parse —
-   * their items simply aren't in `rows`; the caller decides what to do next. */
+  /** Batches that errored, timed out, weren't `end_turn`, didn't parse, or
+   * (Jev/Gemini) never got to start before the shared time/rate-limit budget
+   * ran out — their items simply aren't in `rows`; the caller decides what to
+   * do next. */
   failedBatches: number;
   /** The first per-batch failure message, e.g. a wrong Gemini model id or a
-   * 429 quota error — surfaced by the owner-facing generate route when
-   * NOTHING got tagged, so the "Generate" failure is actionable rather than a
-   * bare "0 of 120 tagged". Never contains an API key (S-6). */
+   * 429 quota error — surfaced by the owner-facing generate route even on a
+   * PARTIAL success (some rows tagged, some not), so the "Generate" result is
+   * always actionable rather than a bare "N of 120 tagged". Never contains an
+   * API key (S-6). */
   firstError?: string;
+  /** Jev only (§5.1 "Low-confidence review hints") — item NAMES (not ids;
+   * the owner-facing route has no other use for the id here) whose
+   * temperature/caffeine/kind choice confidence was < 0.6, or whose
+   * is_coffee noul landed in the uncertain 0.35–0.65 band. Empty for the
+   * Anthropic/Gemini paths, which don't carry a comparable per-field
+   * confidence signal into this result. No DB column — display-only. */
+  needsReview: string[];
 }
 
 const BATCH_SIZE = 40;
 const MAX_TOKENS = 16000;
 const ANTHROPIC_TIMEOUT_MS = 50000; // under the route's 60 s maxDuration, leaving time to upsert
 
-// Gemini's free tier is roughly 10 requests/minute, so batches run
-// SEQUENTIALLY (concurrent batches would just trip the rate limit) under one
-// shared 50 s budget rather than each getting its own fixed timeout. Each
-// call's timeout is whatever's left of that budget, floored at 10 s so the
-// last batch still gets a fair shot rather than a near-zero window.
+// Gemini's free tier batches run through a small CONCURRENCY-4 promise pool —
+// small batches (15 items, vs. Anthropic's 40) get through several times
+// faster than the old fully-sequential 40-item-batch approach, which owners
+// reported taking a full minute for ~40 items. All batches share one 50s
+// budget; each call's own timeout is whatever's left of that budget, floored
+// at 10s so a late-starting batch still gets a fair shot rather than a
+// near-zero window. A 429 (rate limit) from any batch stops new batches from
+// starting — everything already tagged is kept — since concurrent requests
+// against the free tier's ~10/min limit are the most likely way to trip it.
+const GEMINI_BATCH_SIZE = 15;
+const GEMINI_CONCURRENCY = 4;
 const GEMINI_BUDGET_MS = 50000;
 const GEMINI_MIN_TIMEOUT_MS = 10000;
+const GEMINI_RATE_LIMIT_MESSAGE =
+  "Gemini's free-tier limit was reached. Everything tagged so far is saved; wait a minute and click Generate again.";
+
+// Jev tags ONE item per systemOne call (it can't write a batch of JSON rows —
+// it only answers structured questions about ONE state), through a
+// CONCURRENCY-8 promise pool sharing one 50s budget. An item not started
+// before the budget runs out counts as failed — not called — same posture as
+// Gemini's budget exhaustion above; the owner simply clicks Generate again,
+// and only missing/unconfirmed items are ever re-tagged (this module never
+// decides that — the caller does).
+const JEV_CONCURRENCY = 8;
+const JEV_BUDGET_MS = 50000;
+const JEV_PER_ITEM_TIMEOUT_MS = 10000;
+// Jev has no free-form text output, so flavor_notes is a FIXED vocabulary —
+// one noul ("does this item taste of X?") per word, kept when noul ≥ 0.6,
+// highest-probability first, capped at 5 (§5.1).
+export const JEV_FLAVOR_VOCABULARY = [
+  'chocolate',
+  'caramel',
+  'hazelnut',
+  'vanilla',
+  'coffee-forward',
+  'nutty',
+  'fruity',
+  'berry',
+  'citrus',
+  'mango',
+  'strawberry',
+  'creamy',
+  'biscuit',
+  'cinnamon',
+  'honey',
+  'floral',
+  'matcha',
+  'spiced',
+  'cheesy',
+  'savoury',
+] as const;
+const JEV_LOW_CONFIDENCE_THRESHOLD = 0.6;
+const JEV_UNCERTAIN_NOUL_LOW = 0.35;
+const JEV_UNCERTAIN_NOUL_HIGH = 0.65;
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -138,6 +206,9 @@ interface BatchOutcome {
   rows: ValidatedTraitRow[] | null;
   usage: NormalizedUsage | null;
   error?: string;
+  /** Gemini only: this batch failed specifically with HTTP 429 — the caller
+   * stops starting new batches when it sees this (GEMINI_RATE_LIMIT_MESSAGE). */
+  rateLimited?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,9 +268,11 @@ async function tagWithAnthropic(items: MenuItemForTagging[]): Promise<TagTraitsR
 }
 
 // ---------------------------------------------------------------------------
-// Gemini (free tier) — batches run SEQUENTIALLY under one shared time budget
-// (see GEMINI_BUDGET_MS above). Same SYSTEM_PROMPT/OUTPUT_SCHEMA, same
-// validateOpusTraitRows() call as the Anthropic path.
+// Gemini (free tier) — small batches through a CONCURRENCY-4 promise pool,
+// all sharing one 50s budget (see GEMINI_BATCH_SIZE/GEMINI_CONCURRENCY
+// above). Same SYSTEM_PROMPT/OUTPUT_SCHEMA, same validateOpusTraitRows() call
+// as the Anthropic path; `thinkingLevel: 'low'` cuts per-call latency for
+// this JSON-schema-constrained classification task.
 // ---------------------------------------------------------------------------
 
 async function tagBatchWithGemini(model: string, batch: MenuItemForTagging[], timeoutMs: number): Promise<BatchOutcome> {
@@ -212,6 +285,7 @@ async function tagBatchWithGemini(model: string, batch: MenuItemForTagging[], ti
       schema: OUTPUT_SCHEMA,
       maxOutputTokens: MAX_TOKENS,
       timeoutMs,
+      thinkingLevel: 'low',
     });
     const parsed = json as { items?: unknown };
     const rows = validateOpusTraitRows(parsed.items, allowedIds);
@@ -221,26 +295,276 @@ async function tagBatchWithGemini(model: string, batch: MenuItemForTagging[], ti
     };
   } catch (err) {
     console.error('tagMenuItemTraits: gemini batch failed', err);
-    return { rows: null, usage: null, error: err instanceof Error ? err.message : String(err) };
+    const message = err instanceof Error ? err.message : String(err);
+    return { rows: null, usage: null, error: message, rateLimited: /HTTP 429\b/.test(message) };
   }
+}
+
+/** A small index-based promise pool: `concurrency` workers each pull the next
+ * unclaimed index until the list is exhausted or `stop()` returns true, in
+ * which case a worker returns without claiming further work — already
+ * in-flight calls are left to finish naturally, only NEW ones are skipped.
+ * Skipped/never-reached indices are left `undefined` in the returned array. */
+async function runPool<T>(
+  count: number,
+  concurrency: number,
+  stop: () => boolean,
+  run: (index: number) => Promise<T>,
+): Promise<(T | undefined)[]> {
+  // .fill(undefined), not a bare `new Array(count)`: the latter leaves real
+  // holes, which Array.prototype.map() SKIPS (not what we want — every
+  // never-reached index must still map to a "failed, not called" outcome
+  // below) while a plain for-of loop treats a hole as undefined anyway. This
+  // keeps both call sites consistent.
+  const results: (T | undefined)[] = new Array(count).fill(undefined);
+  let nextIndex = 0;
+  async function worker() {
+    for (;;) {
+      if (stop()) return;
+      const i = nextIndex++;
+      if (i >= count) return;
+      results[i] = await run(i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, count) }, () => worker()));
+  return results;
 }
 
 async function tagWithGemini(items: MenuItemForTagging[]): Promise<TagTraitsResult> {
   const apiModel = geminiModel();
-  const batches = chunk(items, BATCH_SIZE);
+  const batches = chunk(items, GEMINI_BATCH_SIZE);
   const startedAt = Date.now();
-  const outcomes: BatchOutcome[] = [];
+  let rateLimited = false;
 
-  for (const batch of batches) {
-    const remainingMs = GEMINI_BUDGET_MS - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      outcomes.push({ rows: null, usage: null, error: 'gemini trait tagging: overall time budget exhausted' });
-      continue;
+  const outcomes = await runPool<BatchOutcome>(
+    batches.length,
+    GEMINI_CONCURRENCY,
+    () => rateLimited,
+    async (i) => {
+      const remainingMs = GEMINI_BUDGET_MS - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        return { rows: null, usage: null, error: 'gemini trait tagging: overall time budget exhausted' };
+      }
+      const outcome = await tagBatchWithGemini(apiModel, batches[i], Math.max(remainingMs, GEMINI_MIN_TIMEOUT_MS));
+      if (outcome.rateLimited) rateLimited = true;
+      return outcome;
+    },
+  );
+
+  // A batch the pool never started (because rate-limiting stopped new work)
+  // counts as failed, not called — same posture as a budget-exhausted one.
+  const finalOutcomes: BatchOutcome[] = outcomes.map(
+    (o) => o ?? { rows: null, usage: null, error: 'gemini trait tagging: skipped after the free-tier rate limit was hit' },
+  );
+
+  const result = finishResult(finalOutcomes, deciderModelLabel(), batches.length);
+  // A friendly, actionable message beats whichever raw batch error happened
+  // to be first — surfaced even on a partial success (some rows tagged).
+  if (rateLimited) result.firstError = GEMINI_RATE_LIMIT_MESSAGE;
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Jev (decision-only) — ONE systemOne call per item, through a CONCURRENCY-8
+// promise pool sharing one 50s budget (§5.1). Jev can't write free-form JSON
+// rows, so every field is its own choice/score/noul question; the answers are
+// assembled into the SAME row shape (and run through the SAME
+// validateOpusTraitRows()) as the Anthropic/Gemini batch paths.
+// ---------------------------------------------------------------------------
+
+// One-line descriptions per §3.2/§5.3's mood meanings, reused verbatim in
+// spirit for Jev's per-mood noul questions.
+const JEV_MOOD_DESCRIPTIONS: Record<Mood, string> = {
+  boost: 'Suits a customer who wants an energising lift — e.g. a high- or medium-caffeine drink.',
+  cosy: 'Suits a customer who wants something warm and unhurried — hot and rich-bodied.',
+  celebrate: 'Suits a customer who is celebrating — a dessert, or a notably sweet treat.',
+  comfort: 'Suits a customer who wants comfort — rich-bodied, or noticeably sweet.',
+  cool: 'Suits a customer who wants to cool down on a hot day — a cold, iced drink.',
+  surprise: 'Suits a customer open to trying something a little different from the everyday choice.',
+};
+
+const JEV_DAYPART_DESCRIPTIONS: Record<Daypart, string> = {
+  morning: 'Typically ordered first thing in the morning.',
+  afternoon: 'Typically ordered in the afternoon.',
+  evening: 'Typically ordered in the evening.',
+  late: 'Typically ordered late at night.',
+};
+
+const JEV_TEMPERATURE_CRITERIA = {
+  hot: 'Served hot.',
+  iced: 'Served iced/cold.',
+  either: 'A drink offered both hot and iced.',
+  ambient: 'Food or dessert served at room temperature — no serving temperature applies.',
+};
+
+const JEV_CAFFEINE_CRITERIA = {
+  none: 'No coffee, tea, matcha or chocolate — no caffeine at all.',
+  low: 'Chocolate-based, with a small amount of caffeine.',
+  medium: 'Tea-, matcha- or chai-based, with a moderate amount of caffeine.',
+  high: 'Coffee-based — an espresso drink — with a high amount of caffeine.',
+};
+
+const JEV_BODY_CRITERIA = {
+  light: 'Light-bodied — or, for food/dessert, a light portion.',
+  medium: 'Medium-bodied — or, for food/dessert, a medium portion.',
+  rich: 'Rich, heavy-bodied — or, for food/dessert, a hearty, filling portion.',
+};
+
+const JEV_KIND_CRITERIA = { drink: 'A drink.', food: 'A savoury food item.', dessert: 'A sweet dessert.' };
+
+const JEV_SWEETNESS_CRITERIA = [
+  'Not sweet at all — unsweetened or savoury.',
+  'Lightly sweet.',
+  'Sweet.',
+  'Very sweet — dessert-like.',
+] as const;
+
+type JevAnswer = { choice?: string; confidence?: number; noul?: number; score?: number };
+
+function buildJevQuestions(): Record<string, ReturnType<typeof choice> | ReturnType<typeof noul> | ReturnType<typeof score>> {
+  const questions: Record<string, ReturnType<typeof choice> | ReturnType<typeof noul> | ReturnType<typeof score>> = {
+    temperature: choice('The item\'s serving temperature.', JEV_TEMPERATURE_CRITERIA),
+    caffeine: choice('The item\'s caffeine level.', JEV_CAFFEINE_CRITERIA),
+    is_coffee: noul('Is this drink coffee-based?'),
+    sweetness: score('How sweet is this item?', JEV_SWEETNESS_CRITERIA),
+    body: choice("The item's body/heaviness (portion heaviness for food/dessert).", JEV_BODY_CRITERIA),
+    kind: choice('What kind of menu item this is.', JEV_KIND_CRITERIA),
+  };
+  for (const mood of MOODS) questions[`mood_${mood}`] = noul(JEV_MOOD_DESCRIPTIONS[mood]);
+  for (const daypart of DAYPARTS) questions[`daypart_${daypart}`] = noul(JEV_DAYPART_DESCRIPTIONS[daypart]);
+  for (const flavor of JEV_FLAVOR_VOCABULARY) questions[`flavor_${flavor}`] = noul(`Does this item taste of ${flavor}?`);
+  return questions;
+}
+
+interface JevItemOutcome {
+  row: ValidatedTraitRow | null;
+  needsReviewName: string | null;
+  usage: { inputTokens: number; outputTokens: number } | null;
+  error?: string;
+}
+
+async function tagOneItemWithJev(
+  client: NonNullable<ReturnType<typeof getJevClient>>,
+  model: string,
+  item: MenuItemForTagging,
+  timeoutMs: number,
+): Promise<JevItemOutcome> {
+  try {
+    const result = await client.systemOne(
+      {
+        state: { name: item.name, description: item.description, category: item.category, parent_category: item.parent_category },
+        questions: buildJevQuestions(),
+        model,
+      },
+      { timeout: timeoutMs, retry: { maxRetries: 1 } },
+    );
+    const a = result.answers as unknown as Record<string, JevAnswer>;
+
+    let moods = MOODS.filter((m) => (a[`mood_${m}`]?.noul ?? 0) >= 0.5);
+    if (moods.length === 0) {
+      moods = [MOODS.reduce((best, m) => ((a[`mood_${m}`]?.noul ?? 0) > (a[`mood_${best}`]?.noul ?? 0) ? m : best))];
     }
-    outcomes.push(await tagBatchWithGemini(apiModel, batch, Math.max(remainingMs, GEMINI_MIN_TIMEOUT_MS)));
+
+    const dayparts = DAYPARTS.filter((d) => (a[`daypart_${d}`]?.noul ?? 0) >= 0.5);
+    const finalDayparts = dayparts.length > 0 ? dayparts : [...DAYPARTS];
+
+    const flavorNotes = JEV_FLAVOR_VOCABULARY.map((f) => ({ f, p: a[`flavor_${f}`]?.noul ?? 0 }))
+      .filter((x) => x.p >= 0.6)
+      .sort((x, y) => y.p - x.p)
+      .slice(0, 5)
+      .map((x) => x.f);
+
+    const sweetness = Math.min(3, Math.max(0, Math.round(a.sweetness?.score ?? 0)));
+
+    const rawRow = {
+      menu_item_id: item.id,
+      temperature: a.temperature?.choice,
+      caffeine: a.caffeine?.choice,
+      is_coffee: (a.is_coffee?.noul ?? 0) >= 0.5,
+      sweetness,
+      body: a.body?.choice,
+      kind: a.kind?.choice,
+      moods,
+      dayparts: finalDayparts,
+      flavor_notes: flavorNotes,
+    };
+    const [row] = validateOpusTraitRows([rawRow], new Set([item.id]));
+
+    const isCoffeeNoul = a.is_coffee?.noul ?? 0;
+    const lowConfidence =
+      (a.temperature?.confidence ?? 1) < JEV_LOW_CONFIDENCE_THRESHOLD ||
+      (a.caffeine?.confidence ?? 1) < JEV_LOW_CONFIDENCE_THRESHOLD ||
+      (a.kind?.confidence ?? 1) < JEV_LOW_CONFIDENCE_THRESHOLD ||
+      (isCoffeeNoul > JEV_UNCERTAIN_NOUL_LOW && isCoffeeNoul < JEV_UNCERTAIN_NOUL_HIGH);
+
+    return {
+      row: row ?? null,
+      needsReviewName: row && lowConfidence ? item.name : null,
+      usage: { inputTokens: result.usage?.input_tokens ?? 0, outputTokens: result.usage?.output_tokens ?? 0 },
+    };
+  } catch (err) {
+    console.error('tagMenuItemTraits: jev item failed', err);
+    return { row: null, needsReviewName: null, usage: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+async function tagWithJev(items: MenuItemForTagging[]): Promise<TagTraitsResult> {
+  const client = getJevClient();
+  if (!client) throw new Error('TYPESAFE_API_KEY is not set');
+
+  const model = jevModel();
+  const startedAt = Date.now();
+
+  const outcomes = await runPool<JevItemOutcome>(
+    items.length,
+    JEV_CONCURRENCY,
+    () => false, // never stop early — a budget-exhausted item just fails in place, below
+    async (i) => {
+      const remainingMs = JEV_BUDGET_MS - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        return { row: null, needsReviewName: null, usage: null, error: 'jev trait tagging: overall time budget exhausted' };
+      }
+      return tagOneItemWithJev(client, model, items[i], Math.min(remainingMs, JEV_PER_ITEM_TIMEOUT_MS));
+    },
+  );
+
+  const rows: ValidatedTraitRow[] = [];
+  const needsReview: string[] = [];
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let failedItems = 0;
+  let firstError: string | undefined;
+
+  for (const o of outcomes) {
+    const outcome = o ?? { row: null, needsReviewName: null, usage: null, error: 'jev trait tagging: item never started' };
+    if (outcome.usage) {
+      inputTokens += outcome.usage.inputTokens;
+      outputTokens += outcome.usage.outputTokens;
+    }
+    if (outcome.row) {
+      rows.push(outcome.row);
+      if (outcome.needsReviewName) needsReview.push(outcome.needsReviewName);
+    } else {
+      failedItems++;
+      if (!firstError && outcome.error) firstError = outcome.error;
+    }
   }
 
-  return finishResult(outcomes, deciderModelLabel(), batches.length);
+  const label = deciderModelLabel();
+  return {
+    rows,
+    usage: {
+      inputTokens,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens,
+      costUsdMicros: costUsdMicros(label, { inputTokens, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens }),
+    },
+    batches: items.length,
+    failedBatches: failedItems,
+    firstError,
+    needsReview,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -278,18 +602,21 @@ function finishResult(outcomes: BatchOutcome[], model: string, batchCount: numbe
       outputTokens,
       costUsdMicros: costUsdMicros(model, { inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens }),
     },
+    needsReview: [],
     batches: batchCount,
     failedBatches,
     firstError,
   };
 }
 
-/** Tags a batch of menu items with whichever provider llmProvider() selects.
- * Throws only when NEITHER key is configured — per-batch call/parse failures
- * are absorbed into `failedBatches`/`firstError`. */
+/** Tags a batch of menu items with whichever provider deciderProvider()
+ * selects (Jev preferred, then Anthropic, then Gemini — §1). Throws only when
+ * NO key is configured — per-item/per-batch call/parse failures are absorbed
+ * into `failedBatches`/`firstError`/`needsReview`. */
 export async function tagMenuItemTraits(items: MenuItemForTagging[]): Promise<TagTraitsResult> {
-  const provider = llmProvider();
+  const provider = deciderProvider();
+  if (provider === 'jev') return tagWithJev(items);
   if (provider === 'gemini') return tagWithGemini(items);
   if (provider === 'anthropic') return tagWithAnthropic(items);
-  throw new Error('Neither GEMINI_API_KEY nor ANTHROPIC_API_KEY is set');
+  throw new Error('Neither TYPESAFE_API_KEY, GEMINI_API_KEY nor ANTHROPIC_API_KEY is set');
 }

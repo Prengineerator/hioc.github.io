@@ -202,6 +202,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
 
   const scored: Candidate[] = candidates.map((c) => {
     const minPrice = Math.min(...c.item.variants.map((v) => v.price_inr));
+    const maxPrice = Math.max(...c.item.variants.map((v) => v.price_inr));
     const weighted =
       MOOD_WEIGHT * moodScore(inputs, c.traits, profile) +
       EXTRAS_WEIGHT * extrasScore(inputs, c.traits) +
@@ -213,8 +214,10 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
 
     return {
       menuItemId: c.item.id,
+      name: c.item.name,
       score: clamp01(penalised),
       minPriceInr: minPrice,
+      maxPriceInr: maxPrice,
       category: c.item.category,
       traits: c.traits,
     };
