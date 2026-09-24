@@ -46,6 +46,8 @@ const EXTRA_OPTIONS: { value: Extra; label: string }[] = [
   { value: 'eat', label: 'Something to eat' },
   { value: 'light', label: 'Light' },
   { value: 'filling', label: 'Filling' },
+  { value: 'chocolatey', label: 'Chocolatey 🍫' },
+  { value: 'fruity', label: 'Fruity 🍓' },
 ];
 
 const NEED_OPTIONS: { value: Need; label: string }[] = [
@@ -69,7 +71,9 @@ const MOOD_OPTIONS: { value: Mood; label: string; icon: string }[] = [
   { value: 'surprise', label: 'Surprise me', icon: '✨' },
 ];
 
-const SUGGEST_TIMEOUT_MS = 8000;
+// Above SUGGEST_LIMITS.deciderTimeoutMs (9s) plus room for the rest of the
+// route's work; the ResultsSkeleton + its rotating copy cover the wait.
+const SUGGEST_TIMEOUT_MS = 15000;
 
 function FieldGroup({ label, children }: { label: string; children: ReactNode }) {
   return (

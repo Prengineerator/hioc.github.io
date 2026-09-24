@@ -25,7 +25,7 @@ export type TraitKind = 'drink' | 'food' | 'dessert';
 // Customer step-1 chips (§3.2). 'either' is the same as not choosing.
 export type TemperaturePref = 'hot' | 'iced' | 'either';
 export type BasePref = 'coffee' | 'no_coffee' | 'either';
-export const EXTRAS = ['sweet', 'eat', 'light', 'filling'] as const;
+export const EXTRAS = ['sweet', 'eat', 'light', 'filling', 'chocolatey', 'fruity'] as const;
 export type Extra = (typeof EXTRAS)[number];
 export const NEEDS = ['no_caffeine', 'less_sugar'] as const;
 export type Need = (typeof NEEDS)[number];
@@ -217,6 +217,10 @@ export interface Candidate {
   minPriceInr: number;
   maxPriceInr: number;
   category: string;
+  /** Menu description, trimmed to 160 chars (§5.4) — extra context for the
+   * decider model, on top of the structured traits. The Jev decider ignores
+   * it (it only ever sees the short criteria label built by jevDecider.ts). */
+  description: string;
   traits: MenuItemTraits;
 }
 
@@ -290,11 +294,11 @@ export const SUGGEST_LIMITS = {
   noteMaxChars: 140,
   reasonMaxChars: 120,
   picks: 3,
-  shortlist: 12,
-  maxPerCategoryInShortlist: 2,
+  shortlist: 24,
+  maxPerCategoryInShortlist: 8,
   refines: 2,
   excludeMax: 12,
-  deciderTimeoutMs: 5000,
+  deciderTimeoutMs: 9000,
   profileWindowDays: 90,
   profileMaxOrders: 50,
   profileTtlHours: 24,

@@ -41,11 +41,37 @@ export function passesHardConstraints(
   // §5.2.6 — already shown in this refine chain.
   if (excludeIds.includes(item.id)) return false;
 
-  // §5.2.2 — temperature. 'either' (served either way) and 'ambient'
-  // (food/dessert) traits satisfy both Hot and Iced chip values by not
-  // equalling the excluded temperature.
-  if (inputs.temperature === 'hot' && traits.temperature === 'iced') return false;
-  if (inputs.temperature === 'iced' && traits.temperature === 'hot') return false;
+  // §5.2.2b — composition: food only leaks into a "help me choose" answer
+  // when the customer actually asked to eat (root cause: production sessions
+  // were shown food/dessert for plain drink requests). 'eat'/'filling' admit
+  // food; 'eat'/'sweet'/'filling' or a celebrating mood admit dessert.
+  // Neither 'chocolatey' nor 'fruity' admits food/dessert on their own —
+  // they're soft flavour steers (§5.3), not a reason to serve cake instead
+  // of a drink.
+  if (traits.kind === 'food' && !(inputs.extras.includes('eat') || inputs.extras.includes('filling'))) {
+    return false;
+  }
+  if (
+    traits.kind === 'dessert' &&
+    !(
+      inputs.extras.includes('eat') ||
+      inputs.extras.includes('sweet') ||
+      inputs.extras.includes('filling') ||
+      inputs.mood === 'celebrate'
+    )
+  ) {
+    return false;
+  }
+
+  // §5.2.2 — temperature. DRINKS ONLY: a hot food item (garlic bread, say)
+  // must never be excluded just because the customer wants an iced drink —
+  // temperature is a drink-serving concept, not a food one. 'either' (served
+  // either way) drinks satisfy both Hot and Iced chip values by not equalling
+  // the excluded temperature; food/dessert are exempt outright.
+  if (traits.kind === 'drink') {
+    if (inputs.temperature === 'hot' && traits.temperature === 'iced') return false;
+    if (inputs.temperature === 'iced' && traits.temperature === 'hot') return false;
+  }
 
   // §5.2.3 — base + caffeine need. "Coffee" only restricts drinks; food and
   // dessert pass regardless of is_coffee, per the spec text verbatim.
@@ -90,12 +116,21 @@ export function filterCandidates(
 // ---------------------------------------------------------------------------
 // §5.2 last paragraph — "the response carries relaxHint naming the single
 // constraint whose removal adds the most candidates (budget first, then
-// temperature, then extras)". Extras are a SOFT (scoring) chip, not a hard
-// constraint (§5.3), so they can never be the cause of a shortage and never
-// appear here — only budget, temperature, base and needs can. Order given by
-// this ticket's assignment (which reconciles that note): budget, temperature,
-// base, needs — used both as the relaxation order and as the tie-break when
-// two relaxations would add the same number of candidates.
+// temperature, then extras)". RELAX_ORDER below only ever names one of the
+// customer's own chips (budget/temperature/base/needs) — never a derived
+// rule the customer didn't directly set. In particular: 'extras' (sweet/eat/
+// light/filling/chocolatey/fruity) and mood now also gate composition
+// (food/dessert eligibility, above) so they CAN be part of why a request is
+// short — but they're deliberately never offered as a relaxHint. Turning off
+// "less sugar" or "no caffeine" is a sensible thing to offer; silently
+// turning ON "Something to eat" the customer never asked for is not — that
+// would put food in front of someone who explicitly wants a drink, exactly
+// the bug this composition rule exists to fix. So only budget, temperature,
+// base and needs — real, offerable customer choices — can ever be named.
+// Order given by this ticket's assignment (which reconciles that note):
+// budget, temperature, base, needs — used both as the relaxation order and
+// as the tie-break when two relaxations would add the same number of
+// candidates.
 // ---------------------------------------------------------------------------
 
 type RelaxableConstraint = 'budget' | 'temperature' | 'base' | 'needs';

@@ -18,7 +18,10 @@ import type { Decider, FallbackReason, MenuItemTraits, SuggestResponse } from '@
 import type { MenuItem } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 15;
+// SUGGEST_LIMITS.deciderTimeoutMs is 9s; with menu/traits/popularity loads,
+// the session insert and the 'shown' events insert on top, 15s cut it close
+// on a slow decider call, so this carries margin above the decider budget.
+export const maxDuration = 20;
 
 type AdminClient = ReturnType<typeof createAdminSupabaseClient>;
 

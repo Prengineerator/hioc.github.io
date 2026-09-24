@@ -8,8 +8,9 @@
 // Pure: no Supabase, no 'server-only'. Runs in <20ms per spec §1 so it's a
 // safe fallback path when the LLM is slow/down/over budget.
 
+import { isChocolatey, isFruity } from './flavor';
 import type { FilteredCandidate } from './filter';
-import type { Candidate, Daypart, Mood, MenuItemTraits, SuggestInputs, TasteProfile } from './types';
+import type { Candidate, Daypart, Extra, Mood, MenuItemTraits, SuggestInputs, TasteProfile } from './types';
 import { SUGGEST_LIMITS } from './types';
 
 // ---------------------------------------------------------------------------
@@ -77,9 +78,14 @@ function moodScore(inputs: SuggestInputs, traits: MenuItemTraits, profile: Taste
 // is treated as fully satisfied (1) — there's nothing to fall short of, and
 // scoring it 0 would wrongly punish every candidate whenever the customer
 // left this step blank (all-optional per §3.2).
+//
+// 'chocolatey'/'fruity' (owner addition) are SOFT preferences, scored here
+// like any other extra — never a hard filter (lib/suggest/filter.ts's
+// composition rule deliberately leaves them out), so a chocolatey request
+// with no chocolate drink left still gets a good, if unmatched, pick.
 // ---------------------------------------------------------------------------
 
-function extraSatisfied(extra: SuggestInputs['extras'][number], traits: MenuItemTraits): boolean {
+function extraSatisfied(extra: Extra, traits: MenuItemTraits, name: string): boolean {
   switch (extra) {
     case 'sweet':
       return traits.sweetness >= 2;
@@ -89,12 +95,16 @@ function extraSatisfied(extra: SuggestInputs['extras'][number], traits: MenuItem
       return traits.body === 'light';
     case 'filling':
       return traits.body === 'rich';
+    case 'chocolatey':
+      return isChocolatey(name, traits.flavor_notes);
+    case 'fruity':
+      return isFruity(name, traits.flavor_notes);
   }
 }
 
-function extrasScore(inputs: SuggestInputs, traits: MenuItemTraits): number {
+function extrasScore(inputs: SuggestInputs, traits: MenuItemTraits, name: string): number {
   if (inputs.extras.length === 0) return 1;
-  const satisfied = inputs.extras.filter((e) => extraSatisfied(e, traits)).length;
+  const satisfied = inputs.extras.filter((e) => extraSatisfied(e, traits, name)).length;
   return clamp01(satisfied / inputs.extras.length);
 }
 
@@ -205,7 +215,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
     const maxPrice = Math.max(...c.item.variants.map((v) => v.price_inr));
     const weighted =
       MOOD_WEIGHT * moodScore(inputs, c.traits, profile) +
-      EXTRAS_WEIGHT * extrasScore(inputs, c.traits) +
+      EXTRAS_WEIGHT * extrasScore(inputs, c.traits, c.item.name) +
       DAYPART_WEIGHT * daypartScore(daypart, c.traits) +
       PROFILE_WEIGHT * profileScore(c, minPrice, profile) +
       POPULARITY_WEIGHT * popularityFor(c.item.id);
@@ -219,6 +229,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       minPriceInr: minPrice,
       maxPriceInr: maxPrice,
       category: c.item.category,
+      description: c.item.description,
       traits: c.traits,
     };
   });
@@ -227,7 +238,9 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
 }
 
 /**
- * §5.3 diversity rules: at most `maxPerCategoryInShortlist` per category, and
+ * §5.3 diversity rules: at most `maxPerCategoryInShortlist` per category —
+ * deliberately generous (8, not a tight 2) so the decider actually sees the
+ * menu's full spread of, say, hot coffees rather than only its top 2 — and
  * (when "Something to eat" was chosen) at least one food/dessert item
  * guaranteed somewhere in the top-`shortlist` list.
  */

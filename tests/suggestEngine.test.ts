@@ -200,3 +200,92 @@ describe('runSuggest — relaxHint and header', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regression — real production sessions (Phase-7 "help me choose" quality
+// pass). Root cause #1: food/dessert leaked into plain drink requests, and a
+// hot food item was wrongly excluded by an iced-drink chip. Root cause #2:
+// the 2-per-category shortlist cap starved a same-category request (e.g. "hot
+// coffee") down to just 2 options for the decider to choose from.
+// ---------------------------------------------------------------------------
+
+describe('regression — production evidence sessions', () => {
+  const traitsById = buildFixtureTraitsById();
+  const menu = buildFixtureMenu();
+
+  it('evidence #1: coffee + boost + hot + less_sugar + treat, no extras — no pick is ever food/dessert (fallback path)', async () => {
+    const inputs: SuggestInputs = {
+      temperature: 'hot',
+      base: 'coffee',
+      extras: [],
+      needs: ['less_sugar'],
+      budget: 'treat',
+      mood: 'boost',
+      note: '',
+    };
+    const result = await runSuggest(
+      baseArgs({ request: request({ inputs }), menu, traitsById, decider: null, fallbackReason: 'disabled' }),
+    );
+    for (const id of result.pickIds) {
+      expect(traitsById.get(id)!.kind, `${id} should never be food/dessert here`).toBe('drink');
+    }
+    if (result.usualItemId) {
+      expect(traitsById.get(result.usualItemId)!.kind).toBe('drink');
+    }
+  });
+
+  it('evidence #1 still holds when the decider answers (validated path) — an adversarial food pick is dropped', async () => {
+    const inputs: SuggestInputs = {
+      temperature: 'hot',
+      base: 'coffee',
+      extras: [],
+      needs: ['less_sugar'],
+      budget: 'treat',
+      mood: 'boost',
+      note: '',
+    };
+    // Mirrors the real session: the decider (adversarially) tries to include
+    // "Baked Cheese Nachos" alongside real coffee picks.
+    const decider: Decider = async ({ shortlist }) =>
+      goodResult([
+        { menuItemId: 'baked-cheese-nachos', reason: 'Nice', reasonCode: 'trait' },
+        ...shortlist.slice(0, 2).map((c) => ({ menuItemId: c.menuItemId, reason: 'Nice', reasonCode: 'trait' as const })),
+      ]);
+    const result = await runSuggest(baseArgs({ request: request({ inputs }), menu, traitsById, decider }));
+    for (const id of result.pickIds) {
+      expect(traitsById.get(id)!.kind).toBe('drink');
+    }
+  });
+
+  it('evidence #2: coffee + cosy + iced + less_sugar + extras:[light] — no pick is ever food/dessert, deterministic fallback included', async () => {
+    const inputs: SuggestInputs = {
+      temperature: 'iced',
+      base: 'coffee',
+      extras: ['light'],
+      needs: ['less_sugar'],
+      budget: 'any',
+      mood: 'cosy',
+      note: '',
+    };
+    const result = await runSuggest(
+      baseArgs({ request: request({ inputs }), menu, traitsById, decider: null, fallbackReason: 'timeout' }),
+    );
+    for (const id of result.pickIds) {
+      expect(traitsById.get(id)!.kind, `${id} should never be food/dessert here`).toBe('drink');
+    }
+  });
+
+  it('boost + hot + coffee yields three coffee drinks when ≥3 exist (root cause #2: no more 2-per-category starving)', async () => {
+    const inputs: SuggestInputs = { ...BASE_INPUTS, temperature: 'hot', base: 'coffee', mood: 'boost' };
+    const result = await runSuggest(
+      baseArgs({ request: request({ inputs }), menu, traitsById, decider: null, fallbackReason: 'disabled' }),
+    );
+    expect(result.picks.length).toBe(3);
+    for (const id of result.pickIds) {
+      const t = traitsById.get(id)!;
+      expect(t.kind).toBe('drink');
+      expect(t.is_coffee).toBe(true);
+      expect(t.temperature === 'hot' || t.temperature === 'either').toBe(true);
+    }
+  });
+});

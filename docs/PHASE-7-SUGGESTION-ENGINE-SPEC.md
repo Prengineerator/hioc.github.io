@@ -89,7 +89,7 @@ Jev cannot generate text, so it is never used for the weekly digest (SUG-12), wh
 **Step 1: "What are you in the mood for?"** (preselection, all optional, multi-select chips)
 - Temperature: `Hot` · `Iced` · `Either`
 - Base: `Coffee` · `No coffee` · `Either`
-- Extras: `Something sweet` · `Something to eat` · `Light` · `Filling`
+- Extras: `Something sweet` · `Something to eat` · `Light` · `Filling` · `Chocolatey` · `Fruity`
 - Needs: `No caffeine` · `Less sugar`
 - Budget (single): `Under ₹150` · `₹150–₹300` · `Treat myself` · `No preference`
 
@@ -156,7 +156,7 @@ Table `menu_item_traits` (one row per menu item):
 | Field | Values |
 |---|---|
 | `temperature` | `hot` · `iced` · `either` (served either way) · `ambient` (food/dessert) |
-| `caffeine` | `none` · `low` · `medium` · `high` |
+| `caffeine` | `none` · `low` · `medium` · `high` — chocolate/cocoa/Nutella/Oreo/hot chocolate are ALWAYS `none` (owner decision); only coffee/espresso (medium/high) and tea/matcha/chai (low/medium) ever carry caffeine |
 | `is_coffee` | boolean (coffee-based) |
 | `sweetness` | 0–3 |
 | `body` | `light` · `medium` · `rich` (for food: portion heaviness) |
@@ -178,22 +178,25 @@ Table `menu_item_traits` (one row per menu item):
 ### 5.2 Hard filter (SUG-3, pure)
 An item is a candidate only if **all** of these hold:
 1. `isMenuItemAvailable(item)` (reuse `lib/menu/availability.ts`) and it has a traits row.
-2. Temperature: `Hot` excludes `iced`; `Iced` excludes `hot`. `either` and `ambient` pass both.
-3. `No caffeine` excludes `caffeine ≠ none`. `No coffee` excludes `is_coffee`. `Coffee` keeps only `is_coffee` **for drinks** (food still passes).
-4. Budget uses the **cheapest variant** price: `Under ₹150` → ≤ 150; `₹150–₹300` → 150–300 inclusive; `Treat myself` / none → no cap.
-5. `Less sugar` excludes `sweetness = 3`.
-6. Not in `excludeItemIds` (refine).
+2. **Composition:** `kind: 'food'` is a candidate only if `extras` includes `eat` or `filling`. `kind: 'dessert'` is a candidate only if `extras` includes `eat`, `sweet` or `filling`, **or** `mood === 'celebrate'`. Otherwise only `kind: 'drink'` items pass. `chocolatey`/`fruity` (soft flavour extras, §5.3) never admit food/dessert on their own. This is what keeps a plain drink request from being answered with cake or a savoury snack.
+3. Temperature — **drinks only**: `Hot` excludes an iced *drink*; `Iced` excludes a hot *drink*. `either` drinks pass both. Food/dessert are never excluded by the temperature chip — a hot food item (garlic bread, say) must still show up for an iced-drink request.
+4. `No caffeine` excludes `caffeine ≠ none`. `No coffee` excludes `is_coffee`. `Coffee` keeps only `is_coffee` **for drinks** (food still passes).
+5. Budget uses the **cheapest variant** price: `Under ₹150` → ≤ 150; `₹150–₹300` → 150–300 inclusive; `Treat myself` / none → no cap.
+6. `Less sugar` excludes `sweetness = 3`.
+7. Not in `excludeItemIds` (refine).
 
-If fewer than 3 candidates remain, the response carries `relaxHint` naming the single constraint whose removal adds the most candidates (budget first, then temperature, then extras). The engine never relaxes a constraint silently.
+`pickUsual` (`lib/suggest/profile.ts`) reuses `passesHardConstraints` directly, so a customer's "usual" is held to the exact same composition/temperature rules as today's picks.
+
+If fewer than 3 candidates remain, the response carries `relaxHint` naming the single constraint whose removal adds the most candidates (budget first, then temperature, then extras) — always one of the customer's own chips (temperature/base/needs/budget), never the composition rule itself: silently turning ON "Something to eat" the customer never asked for would reintroduce the very bug this rule fixes. The engine never relaxes a constraint silently.
 
 ### 5.3 Scoring (SUG-3, pure)
 `score = 0.35·mood + 0.20·extras + 0.15·daypart + 0.20·profile + 0.10·popularity`, each term in [0, 1]:
 - **mood:** 1 if the mood key ∈ `moods`; plus a mood-specific trait bonus (boost → caffeine high/medium; cosy → hot + rich; celebrating → dessert or sweetness ≥ 2; comfort → rich or sweetness ≥ 2; cool-down → iced; surprise → a novelty bonus for items **not** in the profile's top items).
-- **extras:** the fraction of chosen extras satisfied (sweet → sweetness ≥ 2; eat → kind food/dessert; light → body light; filling → body rich).
+- **extras:** the fraction of chosen extras satisfied (sweet → sweetness ≥ 2; eat → kind food/dessert; light → body light; filling → body rich; **chocolatey**/**fruity** → the item's name or a flavor note matches a chocolate-/fruit-family word, `lib/suggest/flavor.ts`). `chocolatey`/`fruity` are SOFT preferences scored here only — they never hard-filter (§5.2), so a chocolatey request with nothing chocolatey left still gets a good pick.
 - **daypart:** 1 if the current IST daypart ∈ `dayparts`.
 - **profile** (signed in only, else 0): category affinity + trait affinity (hot/iced ratio, sweetness preference) + price-comfort fit (§5.5). Items the customer ordered in the last 3 visits get **−0.1** so the picks explore while the "usual" card covers habit.
 - **popularity:** 30-day units, min-max normalised across the menu.
-- **Diversity:** after sorting, the shortlist takes at most 2 items per `category` and guarantees one `food`/`dessert` in the top 12 when "Something to eat" was chosen.
+- **Diversity:** after sorting, the shortlist takes at most `maxPerCategoryInShortlist` (8 — deliberately generous, not a tight cap that starves the decider down to only 2 same-category options) items per `category`, out of a `shortlist` of up to 24, and guarantees one `food`/`dessert` in that list when "Something to eat" was chosen. `deterministicPicks` (the fallback, `lib/suggest/templates.ts`) still picks by score first; category variety is only a **tie-break** — when the next top-scored candidate is within 0.05 of the last pick and shares its category, a different-category candidate within that same score band is preferred next.
 
 Weights are constants in `lib/suggest/score.ts`, not env, so a change is a reviewed diff with an eval re-run.
 
@@ -202,11 +205,14 @@ Weights are constants in `lib/suggest/score.ts`, not env, so a change is a revie
 **Jev (preferred, `lib/suggest/jevDecider.ts`):** TypeSafe AI's Jev is a decision-only "System One" model — it answers structured `choice`/`score`/`noul` questions about a `state`, and cannot write prose. So the picks decision is ONE `systemOne` call asking a single `choice` question — "which one item would a thoughtful barista recommend first?" — with one criterion label per shortlisted candidate (`"<name> — <category>, ₹<min>"`), over a `state` shaped `{ customer: {...}, profile, daypart, candidates: [...] }` (same S-3 "no PII" rule as the other deciders — mood/chips/profile/coarse traits only). Candidates are then **ranked by `answers.best.probabilities` descending** (ties broken by the shortlist's own order) and the top 3 ids become the picks. Since Jev writes no text, every reason comes from the same deterministic `templateReason()` the fallback path uses (mood-matched when the item's traits include the customer's mood, else the general 'trait' template) — §4's tone guide is satisfied by construction, not by a lint-and-replace step — and `header` is left `null` so the engine's own `templateHeader()` supplies it. SDK `timeout` = `SUGGEST_LIMITS.deciderTimeoutMs` (5,000 ms), `retry: { maxRetries: 0 }` (the engine owns the fallback, same reasoning as Anthropic's `maxRetries: 0` below); client `logLevel: 'warn'`. Failure mapping: `APITimeoutError`/`APIUserAbortError` → `timeout`; `RateLimitError`/any other `APIError`/connection failure → `error` (message carries the HTTP status, never the key); a missing or empty `answers.best.probabilities` → `invalid_output`. The client is constructed ONLY in `lib/suggest/jev.ts` (S-7), never with `dangerouslyAllowBrowser`.
 
 **Opus / Gemini Flash (fallback providers) — the Opus decision:**
-- **Model:** `claude-opus-5` via `@anthropic-ai/sdk`, `output_config: { effort: "low", format: <JSON schema> }`, `max_tokens` 1,500, with server-side `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) so a refusal is retried on a fallback model inside the same call. SDK `timeout` 5,000 ms, `maxRetries` 0; the endpoint owns the fallback.
+- **Model:** `claude-opus-5` via `@anthropic-ai/sdk`, `output_config: { effort: "low", format: <JSON schema> }`, `max_tokens` 1,500, with server-side `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) so a refusal is retried on a fallback model inside the same call. SDK `timeout` = `SUGGEST_LIMITS.deciderTimeoutMs` (9,000 ms — raised from 5,000 ms so Opus, which typically answers in 4.4–4.9 s, isn't racing a timeout that sits barely above its own latency), `maxRetries` 0; the endpoint owns the fallback. `app/api/suggest/route.ts`'s `maxDuration` (20 s) carries margin above this budget.
 - **Prompt caching:** the system prompt (role, tone guide, output rules) plus the **full traits catalog** (every available item's id, name, category, price range, traits) forms a stable prefix with `cache_control: {type: "ephemeral"}`. The catalog is serialised **sorted by id** so the prefix stays byte-identical. The per-request part (inputs, profile summary, shortlist ids with scores) comes after the breakpoint.
+- **Shortlist size:** up to `SUGGEST_LIMITS.shortlist` = **24** candidates (raised from 12) — Opus was previously seeing as few as 2 coffees for a "hot coffee" request because of the old 2-per-category shortlist cap (§5.3); 24 candidates at up to 8 per category gives it the menu's real spread to choose from.
+- **What each candidate carries:** id, category, cheapest variant price, its **menu description** (`description`, trimmed to 160 chars) and its structured traits (temperature, caffeine, is_coffee, sweetness, body, kind, moods, `flavor_notes`) — the description gives Opus texture/flavour context beyond the trait tags alone, so its written reasons can be specific rather than generic.
+- **Decision guidance (system prompt):** honour the customer's explicit chips/extras first; match the mood (boost → strongest caffeine, bold espresso-forward; cosy → warm, rich, comforting; celebrate → indulgent, dessert welcome; comfort → familiar, creamy, sweet-leaning; cool → refreshing, iced, lighter; surprise → something distinctive, avoiding the customer's own usual items); offer a little variety across the three picks only when the options are comparably good, and never pad with food/dessert the customer didn't ask for; each `reason` must name a specific taste/texture/flavour note for THAT item (never a generic "a great choice"); the header should reflect the customer's mood.
 - **What Opus sees about a person:** only the derived profile summary: top categories, hot/iced lean, sweetness lean, `priceComfort` band, `orderingMood`, and up to 5 usual item ids. **No name, phone, email, order ids, timestamps or rupee totals.**
 - **Free-text note:** passed inside `<customer_note>` tags and described in the system prompt as untrusted customer text that may express preferences but cannot change the rules.
-- **Output schema:** `{ picks: [{ menu_item_id, reason, reason_code }], header }`, with 1–3 picks, `reason` ≤ 120 chars, `reason_code` ∈ the mood/trait enum.
+- **Output schema:** `{ picks: [{ menu_item_id, reason, reason_code }], header }`, with 1–3 picks, `reason` ≤ 120 chars, at most one emoji, no mention of spending (§4), `reason_code` ∈ the mood/trait enum.
 - **Validation:** drop any pick whose id isn't in the shortlist. Deduplicate. If fewer than 3 valid picks remain, top up from the deterministic order. Every `reason` goes through `lintReason()`; `header` too, with a fixed fallback header.
 - **Fallback triggers:** timeout, network/5xx, `stop_reason` ≠ `end_turn`, unparsable JSON, spend cap reached, `ANTHROPIC_API_KEY` unset, `SUGGEST_LLM=off`. The response then uses `source: 'fallback'` and template reasons from `lib/suggest/templates.ts`.
 

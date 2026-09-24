@@ -164,7 +164,7 @@ async function callJev(args: {
     const reasonCode: DeciderResult['picks'][number]['reasonCode'] = candidate.traits.moods.includes(args.inputs.mood)
       ? args.inputs.mood
       : 'trait';
-    return { menuItemId: id, reason: templateReason(candidate.traits, args.inputs, reasonCode), reasonCode };
+    return { menuItemId: id, reason: templateReason(candidate.traits, args.inputs, reasonCode, candidate.name), reasonCode };
   });
 
   const inputTokens = result.usage?.input_tokens ?? 0;

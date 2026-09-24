@@ -14,6 +14,19 @@ import type { SuggestInputs, TasteProfile } from '@/lib/suggest/types';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { buildFixtureMenu, buildFixtureTraitsById } from './fixtures/suggestMenu';
 
+const COFFEE_MENU_ITEM_IDS = [
+  'espresso',
+  'cappuccino',
+  'cafe-latte',
+  'doppio',
+  'flat-white',
+  'mocha',
+  'cortado',
+  'ristretto',
+  'hot-americano',
+  'macchiato',
+];
+
 function makeInputs(over: Partial<SuggestInputs>): SuggestInputs {
   return {
     temperature: 'either',
@@ -125,12 +138,27 @@ describe('scoreCandidates', () => {
     // mood: 'cool' gives neither espresso nor the waffle a mood-term bonus
     // (espresso isn't iced; the waffle isn't tagged 'cool') — isolates the
     // extras term instead of being swamped by the heavier 0.35 mood weight.
+    //
+    // The "no extras chosen" half deliberately builds its candidates by hand
+    // (not via filterCandidates) rather than through 'eat' — the composition
+    // rule (§5.2) means the waffle isn't even a CANDIDATE with extras: [], so
+    // this exercises scoreCandidates' own extras maths directly, same as
+    // buildShortlist's "guaranteed food/dessert" logic can hand it an item
+    // that already cleared composition upstream.
+    const waffleItem = items.find((i) => i.id === 'belgian-waffle')!;
+    const espressoItem = items.find((i) => i.id === 'espresso')!;
+    const waffleTraits = traitsById.get('belgian-waffle')!;
+    const espressoTraits = traitsById.get('espresso')!;
+
     const withEat = makeInputs({ extras: ['eat'], mood: 'cool' });
     const withoutExtras = makeInputs({ extras: [], mood: 'cool' });
     const filteredWith = filterCandidates(items, traitsById, withEat, []);
-    const filteredWithout = filterCandidates(items, traitsById, withoutExtras, []);
+    const handBuilt = [
+      { item: waffleItem, traits: waffleTraits },
+      { item: espressoItem, traits: espressoTraits },
+    ];
     const scoredWith = scoreCandidates({ candidates: filteredWith, inputs: withEat, profile: null, daypart: 'afternoon', popularity: new Map(), recentItemIds: [] });
-    const scoredWithout = scoreCandidates({ candidates: filteredWithout, inputs: withoutExtras, profile: null, daypart: 'afternoon', popularity: new Map(), recentItemIds: [] });
+    const scoredWithout = scoreCandidates({ candidates: handBuilt, inputs: withoutExtras, profile: null, daypart: 'afternoon', popularity: new Map(), recentItemIds: [] });
     const waffleWith = scoredWith.find((c) => c.menuItemId === 'belgian-waffle')!;
     const espressoWith = scoredWith.find((c) => c.menuItemId === 'espresso')!;
     // 'eat' is satisfied by the waffle (food) but not espresso (drink).
@@ -142,6 +170,29 @@ describe('scoreCandidates', () => {
     const espressoWithout = scoredWithout.find((c) => c.menuItemId === 'espresso')!;
     const gapWithout = waffleWithout.score - espressoWithout.score;
     expect(gapWith).toBeGreaterThan(gapWithout);
+  });
+
+  it('extras: "chocolatey" scores a chocolatey drink higher than a non-chocolatey one (soft preference, never a hard filter)', () => {
+    const inputs = makeInputs({ extras: ['chocolatey'], mood: 'cool', temperature: 'either' });
+    const filtered = filterCandidates(items, traitsById, inputs, []);
+    const scored = scoreCandidates({ candidates: filtered, inputs, profile: null, daypart: 'afternoon', popularity: new Map(), recentItemIds: [] });
+    // hot-chocolate's name AND flavor_notes both read chocolatey; espresso
+    // reads neither — isolates the extras term rather than the mood term
+    // (neither is tagged 'cool').
+    const hotChocolate = scored.find((c) => c.menuItemId === 'hot-chocolate')!;
+    const espresso = scored.find((c) => c.menuItemId === 'espresso')!;
+    expect(hotChocolate.score).toBeGreaterThan(espresso.score);
+  });
+
+  it('extras: "fruity" scores a fruity drink higher than a non-fruity one', () => {
+    const inputs = makeInputs({ extras: ['fruity'], mood: 'cool', temperature: 'either' });
+    const filtered = filterCandidates(items, traitsById, inputs, []);
+    const scored = scoreCandidates({ candidates: filtered, inputs, profile: null, daypart: 'afternoon', popularity: new Map(), recentItemIds: [] });
+    // berry-lemonade is both 'cool'-tagged and fruity (name + flavor_notes);
+    // espresso is neither — a real request this extra should win on.
+    const berryLemonade = scored.find((c) => c.menuItemId === 'berry-lemonade')!;
+    const espresso = scored.find((c) => c.menuItemId === 'espresso')!;
+    expect(berryLemonade.score).toBeGreaterThan(espresso.score);
   });
 
   it('daypart: an item tagged for the current daypart outscores one that is not (all else equal)', () => {
@@ -156,7 +207,10 @@ describe('scoreCandidates', () => {
   });
 
   it('profile price-comfort: a budget customer is scored down for an item priced well above their p75', () => {
-    const inputs = makeInputs({ budget: 'any' });
+    // extras: ['sweet'] admits the dessert past the §5.2 composition rule —
+    // applied identically to both profiles compared below, so it doesn't
+    // affect the budget-vs-premium comparison itself.
+    const inputs = makeInputs({ budget: 'any', extras: ['sweet'] });
     const filtered = filterCandidates(items, traitsById, inputs, []);
     const budgetProfile = fullProfile({ priceComfort: 'budget', ticket: { median: 120, p75: 140 } });
     const premiumProfile = fullProfile({ priceComfort: 'premium', ticket: { median: 500, p75: 600 } });
@@ -170,7 +224,9 @@ describe('scoreCandidates', () => {
   });
 
   it('orderingMood "treating" gives a food/dessert item a bonus over "routine"', () => {
-    const inputs = makeInputs({});
+    // extras: ['sweet'] admits the dessert past the §5.2 composition rule —
+    // applied identically to both orderingMood runs compared below.
+    const inputs = makeInputs({ extras: ['sweet'] });
     const filtered = filterCandidates(items, traitsById, inputs, []);
     const treating = fullProfile({ orderingMood: 'treating' });
     const routine = fullProfile({ orderingMood: 'routine' });
@@ -241,6 +297,19 @@ describe('buildShortlist', () => {
     const shortlist = buildShortlist(scored, inputs);
     expect(shortlist.length).toBeLessThanOrEqual(SUGGEST_LIMITS.shortlist);
     expect(shortlist.some((c) => c.traits.kind === 'food' || c.traits.kind === 'dessert')).toBe(true);
+  });
+
+  it('root cause #2: no longer starves a same-category request to 2 — 10 hot coffees + "hot coffee" yields ≥8 coffees in the shortlist', () => {
+    const inputs = makeInputs({ temperature: 'hot', base: 'coffee', mood: 'boost' });
+    const filtered = filterCandidates(items, traitsById, inputs, []);
+    const filteredCoffeeIds = filtered.filter((c) => COFFEE_MENU_ITEM_IDS.includes(c.item.id)).map((c) => c.item.id);
+    // The fixture menu really does have 10 hot coffees that clear this filter.
+    expect(filteredCoffeeIds.length).toBe(10);
+
+    const scored = scoreCandidates({ candidates: filtered, inputs, profile: null, daypart: 'morning', popularity: new Map(), recentItemIds: [] });
+    const shortlist = buildShortlist(scored, inputs);
+    const coffeesInShortlist = shortlist.filter((c) => COFFEE_MENU_ITEM_IDS.includes(c.menuItemId));
+    expect(coffeesInShortlist.length).toBeGreaterThanOrEqual(8);
   });
 
   it('never returns FEWER food/dessert items than the same scenario without "eat" chosen', () => {
