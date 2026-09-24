@@ -2,10 +2,12 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { isUuid } from '@/lib/api/constants';
+import type { Order } from '@/lib/types';
 import { getOrderWithCoupon } from '@/lib/orders/getOrder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
+import { hasBill } from '@/lib/orders/paymentStatusUI';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -47,6 +49,20 @@ function formatIstDateTime(iso: string): string {
   }
 }
 
+// A bill only exists once a payment is recorded (sendBillNotification's
+// rule — see hasBill). When it doesn't, this page has nothing authentic to
+// print, so it shows a short notice instead of a receipt built from data
+// that was never actually billed.
+function noBillNotice(order: Pick<Order, 'status' | 'payment_status'>): string {
+  if (order.status === 'cancelled' || order.status === 'rejected') {
+    return 'This order was cancelled, so no bill was issued.';
+  }
+  if (order.payment_status === 'refunded' || order.payment_status === 'partially_refunded') {
+    return 'This order was refunded, so no bill is available.';
+  }
+  return 'Your bill will be available once payment is received.';
+}
+
 export default async function ReceiptPage({ params }: { params: { id: string } }) {
   const { id } = params;
   if (!isUuid(id)) {
@@ -56,6 +72,21 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
   const order = await getOrderWithCoupon(id);
   if (!order) {
     notFound();
+  }
+
+  if (!hasBill(order)) {
+    return (
+      <div className="mx-auto max-w-sm px-4 py-8 text-charcoal print:py-0 print:text-black">
+        <div className="mb-6 print:hidden">
+          <Link href={`/order/${order.id}`} className="text-sm text-tan hover:underline">
+            ← Back to order
+          </Link>
+        </div>
+        <div className="rounded-md border border-[#e5e5e5] bg-white p-6 text-center shadow-sm">
+          <p className="text-sm text-charcoal">{noBillNotice(order)}</p>
+        </div>
+      </div>
+    );
   }
 
   const total = order.total_inr ?? order.subtotal_inr;
