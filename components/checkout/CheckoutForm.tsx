@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
+import { collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
+import { postSuggestEvent } from '@/components/suggest/api';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
 import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel';
@@ -64,6 +66,25 @@ export function CheckoutForm({
 }) {
   const router = useRouter();
   const { items, totalPrice, clearCart } = useCart();
+
+  // Phase-7 (SUG-8/SUG-9): distinct suggestion session ids carried by the
+  // cart lines currently in this order, capped and omitted-when-empty by the
+  // shared helper. Fire 'checkout_started' once per session id the first time
+  // it's seen on this checkout form (covers "mounts with suggested lines" —
+  // and, since carts can change items while checkout is open, also a session
+  // id that only shows up later, e.g. after navigating back to add another
+  // suggested item).
+  const suggestionSessionIds = useMemo(() => collectSuggestionSessionIds(items), [items]);
+  const firedCheckoutStarted = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!suggestionSessionIds) return;
+    for (const id of suggestionSessionIds) {
+      if (!firedCheckoutStarted.current.has(id)) {
+        firedCheckoutStarted.current.add(id);
+        postSuggestEvent(id, 'checkout_started');
+      }
+    }
+  }, [suggestionSessionIds]);
 
   const [name, setName] = useState('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -403,6 +424,9 @@ export function CheckoutForm({
           require_online: isGuest,
           coupon_code: couponApplied ?? undefined,
           redeem_points: pointsApplied ?? undefined,
+          // Phase-7 (SUG-8): omitted entirely (not sent as []) when no cart
+          // line came from a /suggest session.
+          ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
         }),
       });
 

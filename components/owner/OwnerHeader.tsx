@@ -8,6 +8,9 @@ import { flags } from '@/lib/flags';
 const LINKS = [
   { href: '/owner', label: 'Overview' },
   { href: '/owner/customers', label: 'Customers' },
+  // Phase-7 SUG-10. Always shown (not flag-gated): the owner needs the Traits
+  // tab to tag the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on (Gate 7A).
+  { href: '/owner/suggestions', label: 'Suggestions' },
   { href: '/owner/payments', label: 'Payments' },
   { href: '/owner/promotions', label: 'Promotions' },
   { href: '/owner/reviews', label: 'Reviews' },

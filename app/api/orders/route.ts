@@ -30,6 +30,9 @@ import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import { findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
 import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
+import { parseSuggestionSessionIds, writeOrderAttribution } from '@/lib/suggest/attribution';
+import { markProfileStale } from '@/lib/suggest/profileStore';
+import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -78,7 +81,14 @@ export async function POST(request: Request) {
     require_online: rawRequireOnline,
     coupon_code,
     redeem_points,
+    suggestion_session_ids,
   } = body;
+
+  // Phase-7 (SUG-8/SUG-9): distinct session ids the cart's lines carry, so the
+  // order can be attributed back to the /suggest sessions that produced them.
+  // Never a 400 — anything malformed here is simply ignored; a checkout must
+  // never fail over an analytics field.
+  const suggestionSessionIds = parseSuggestionSessionIds(suggestion_session_ids, SUGGEST_LIMITS.orderSessionIdsMax);
 
   // Phase-3 (FND3-2/3): a request carrying an authenticated staff/manager/owner
   // session is the second order-entry channel (POS-lite). It reuses this whole
@@ -742,6 +752,24 @@ export async function POST(request: Request) {
   }
 
   const response = toOrderResponse(fullOrder as OrderRowWithItems);
+
+  // Phase-7 (SUG-9): best-effort suggestion attribution + profile staleness,
+  // AFTER the order and its items are fully committed. Both helpers are
+  // wrapped internally and never throw — a broken suggestion session or a
+  // stale-marking failure must never touch this response.
+  if (suggestionSessionIds.length > 0) {
+    await writeOrderAttribution(admin, {
+      orderId: orderRow.id as string,
+      sessionIds: suggestionSessionIds,
+      lines: resolvedLines.map((l) => ({ menu_item_id: l.menu_item_id, line_total_inr: l.line_total_inr })),
+    });
+  }
+  // Only while the engine is live: profiles are built only then, and a
+  // recompute also triggers on "an order newer than source_order_at", so this
+  // is a freshness nudge — not worth two round-trips on every order otherwise.
+  if (flags.suggest) {
+    await Promise.all([markProfileStale(userId), markProfileStale(customerUserId)]);
+  }
 
   // Send the link-based e-bill (RCT-1/2) on email + WhatsApp, logged + idempotent
   // via the notification engine. Best-effort and never throws — a slow or

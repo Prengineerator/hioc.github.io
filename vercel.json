@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/purge-location",
       "schedule": "0 2 * * 0"
+    },
+    {
+      "path": "/api/cron/suggest-digest",
+      "schedule": "30 22 * * 0"
     }
   ]
 }

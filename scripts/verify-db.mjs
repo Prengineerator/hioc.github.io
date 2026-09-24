@@ -1186,6 +1186,106 @@ async function checkCashCounts() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Phase 7 · SUG-1 — the "Help me choose" suggestion engine
+// (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §8 SUG-1 AC, supabase/2026-09-suggestion-engine.sql).
+// Five tables, RLS on, everything but customer_taste_profiles' self-read
+// policy is service-role only — so an anon client must see ZERO rows on
+// every one of them, migration or no migration, rows or no rows.
+// ---------------------------------------------------------------------------
+const BOGUS_SESSION_ID = '00000000-0000-0000-0000-000000000000'; // nil UUID: never a real suggestion_sessions row
+
+async function checkSuggestionEngine() {
+  heading('SUG-1 · suggestion engine tables + RLS', '2026-09-suggestion-engine.sql');
+
+  const tables = [
+    { table: 'menu_item_traits', select: 'menu_item_id' },
+    { table: 'customer_taste_profiles', select: 'user_id' },
+    { table: 'suggestion_sessions', select: 'id' },
+    { table: 'suggestion_events', select: 'id' },
+    { table: 'suggestion_digests', select: 'id' },
+  ];
+  let allExist = true;
+  for (const { table, select } of tables) {
+    const res = await rest(`/${table}?select=${select}&limit=1`);
+    if (res.ok) pass(`${table} exists`);
+    else {
+      allExist = false;
+      fail(`${table} exists`, errKind(res) === 'no_table' ? 'apply supabase/2026-09-suggestion-engine.sql' : errText(res));
+    }
+  }
+  if (!allExist) {
+    skip('anon is blocked from every suggestion-engine table', 'at least one table is missing — apply the migration first');
+    skip("suggestion_events.event CHECK rejects 'bogus'", 'suggestion_events is missing');
+    return;
+  }
+
+  // RLS-blocked-from-anon, planted-row technique (same as idempotency_keys
+  // above): querying an EMPTY table proves nothing, since anon and service
+  // role both see [] either way. Plant with the service role, confirm anon
+  // sees 0 WHILE IT EXISTS, then take it back out.
+  const planted = await rest('/suggestion_sessions', {
+    method: 'POST',
+    prefer: 'return=representation',
+    body: { source: 'fallback', anon_id: SENTINEL, inputs: {}, candidate_ids: [], pick_ids: [] },
+  });
+  if (!planted.ok) {
+    skip('anon is blocked from suggestion_sessions', `could not plant a probe row (${errText(planted)})`);
+  } else {
+    const plantedId = Array.isArray(planted.body) ? planted.body[0]?.id : undefined;
+    const asService = await rest(`/suggestion_sessions?select=id&anon_id=eq.${SENTINEL}`);
+    const serviceRows = Array.isArray(asService.body) ? asService.body.length : 0;
+    const asAnon = await rest(`/suggestion_sessions?select=id&anon_id=eq.${SENTINEL}`, { key: ANON });
+    const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : 0;
+
+    if (serviceRows !== 1) {
+      fail('anon is blocked from suggestion_sessions', `probe row not visible even to the service role (${serviceRows} rows) — result would be meaningless`);
+    } else if (!asAnon.ok) {
+      pass('anon is blocked from suggestion_sessions', `anon was refused outright (${errText(asAnon)})`);
+    } else if (anonRows === 0) {
+      pass('anon is blocked from suggestion_sessions', 'service role sees the planted row, anon sees 0 (SUG-1 AC)');
+    } else {
+      fail('anon is blocked from suggestion_sessions', `anon read back ${anonRows} row(s) — RLS is NOT protecting this table`);
+    }
+
+    if (plantedId) {
+      const removed = await rest(`/suggestion_sessions?id=eq.${plantedId}`, { method: 'DELETE', prefer: 'return=representation' });
+      const left = await rest(`/suggestion_sessions?select=id&id=eq.${plantedId}`);
+      const leftRows = Array.isArray(left.body) ? left.body.length : -1;
+      if (removed.ok && leftRows === 0) pass('probe row removed from suggestion_sessions', 're-queried: 0 rows remain');
+      else fail('probe row removed from suggestion_sessions', `${leftRows} row(s) still present — REMOVE id='${plantedId}' BY HAND`);
+    }
+  }
+
+  // The other three service-role-only tables + customer_taste_profiles
+  // (whose one policy requires auth.uid() = user_id — anon has no auth.uid()
+  // either): an anon SELECT must never return a row, empty-table caveat noted.
+  for (const table of ['menu_item_traits', 'customer_taste_profiles', 'suggestion_events', 'suggestion_digests']) {
+    const rows = await rest(`/${table}?select=*&limit=1`);
+    if (!Array.isArray(rows.body) || rows.body.length === 0) {
+      skip(`${table} is not readable by the anon key`, 'no row to look for yet');
+      continue;
+    }
+    const asAnon = await rest(`/${table}?select=*&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+
+  // suggestion_events.event CHECK (SUG-1 AC: "the CHECK on suggestion_events.event
+  // rejects 'bogus'"). A bogus session_id means EVERY insert here is doomed —
+  // the question is only WHICH constraint kills it. A valid event dies on the
+  // FK (proving the CHECK passed); 'bogus' must die on the CHECK itself.
+  const validEvent = await doomedInsert('suggestion_events', { session_id: BOGUS_SESSION_ID, event: 'shown' });
+  expectKind("suggestion_events.event CHECK accepts 'shown'", validEvent, 'fk', 'reached the FK, so the CHECK passed');
+
+  const bogusEvent = await doomedInsert('suggestion_events', {
+    session_id: BOGUS_SESSION_ID,
+    event: `bogus_${RUN_ID}`,
+  });
+  expectKind("suggestion_events.event CHECK rejects 'bogus'", bogusEvent, 'check', 'constraint is present, not merely dropped');
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -1207,6 +1307,7 @@ async function main() {
   await checkPosDevices();
   await checkStaffAccounts();
   await checkCashCounts();
+  await checkSuggestionEngine();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

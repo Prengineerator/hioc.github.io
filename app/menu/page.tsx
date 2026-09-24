@@ -1,6 +1,7 @@
 'use client';
 
 import { Suspense, useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CartProvider } from '@/lib/cart/CartContext';
 import { useStoreSettings } from '@/lib/cart/useStoreSettings';
@@ -15,6 +16,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
+import { flags } from '@/lib/flags';
 import type { MenuItem } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
@@ -143,6 +145,15 @@ function MenuPageContent() {
         <StoreStatusBanner openState={openState} />
 
         <OrderAgainStrip onAdded={() => setDrawerOpen(true)} />
+
+        {flags.suggest ? (
+          <Link
+            href="/suggest"
+            className="mb-6 flex items-center justify-center gap-2 rounded-md border border-tan bg-surface px-4 py-3 text-center text-sm font-bold text-charcoal transition-colors hover:bg-[#f0e6da]"
+          >
+            Can&apos;t decide? Tell us your mood <span aria-hidden="true">→</span>
+          </Link>
+        ) : null}
 
         <MenuCategoryTabs active={category} onChange={handleCategoryChange} />
 
