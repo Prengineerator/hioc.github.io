@@ -9,36 +9,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
-
-const ORDER_TYPE_LABEL: Record<string, string> = {
-  takeaway: 'Takeaway',
-  dine_in: 'Dine-in',
-  delivery: 'Delivery',
-};
-
-const PAYMENT_LABEL: Record<string, string> = {
-  unpaid: 'Pay at counter',
-  payment_pending: 'Payment pending',
-  paid: 'Paid',
-  refunded: 'Refunded',
-  partially_refunded: 'Partially refunded',
-};
-
-function formatIstDateTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString('en-IN', {
-      timeZone: 'Asia/Kolkata',
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    return iso;
-  }
-}
+import { ORDER_TYPE_LABEL, PAYMENT_LABEL, formatIstDateTime } from '@/lib/print/labels';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;

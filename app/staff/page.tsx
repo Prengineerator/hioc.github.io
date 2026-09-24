@@ -140,11 +140,14 @@ export default function StaffOrdersPage() {
   const handlePayment = useCallback(
     async (o: OrderWithItems, method: PaymentMethod) => {
       try {
-        await fetch(`/api/orders/${o.id}/payment`, {
+        const res = await fetch(`/api/orders/${o.id}/payment`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ payment_method: method }),
         });
+        return res.ok;
+      } catch {
+        return false;
       } finally {
         fetchOrders();
       }

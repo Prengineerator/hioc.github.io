@@ -15,6 +15,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
+import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import {
   billStatusTone,
@@ -59,7 +60,8 @@ export function OrderDetailModal({
    */
   onPrint: (orderId: string, type: PrintType) => void;
   onTransition: (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => void;
-  onPayment: (o: OrderWithItems, method: PaymentMethod) => void;
+  /** Resolves true once the server has recorded the payment. */
+  onPayment: (o: OrderWithItems, method: PaymentMethod) => Promise<boolean>;
   // Optional — omit to hide the refund panel entirely (e.g. a surface that
   // never shows paid orders). The server route is manager/owner-gated
   // (FND-5) regardless of whether this UI is shown.
@@ -188,9 +190,19 @@ export function OrderDetailModal({
   // isn't a pop-up, so nothing has to happen inside the click any more. It still
   // does, because `onPayment` is fire-and-forget (the parent owns the request)
   // and this component has no way to learn that the settle succeeded.
+  // PRN-6 — the drawer is money, so unlike the print above it waits for the
+  // server to confirm the settle: a failed PATCH must never pop an open drawer
+  // with no cash recorded against it. No-op outside the desktop app or with no
+  // drawer printer configured; a drawer failure is a small note, never blocking.
+  const [drawerNote, setDrawerNote] = useState<string | null>(null);
   const settle = (method: PaymentMethod) => {
     for (const type of settlePrintPlan(autoPrint)) openPrint(type);
-    onPayment(order, method);
+    setDrawerNote(null);
+    void onPayment(order, method).then(async (ok) => {
+      if (!ok) return;
+      const err = await openDrawerIfCash([{ method }]);
+      if (err) setDrawerNote(err);
+    });
   };
 
   // Resend the bill (BILL-4) — wires up the RCT-1 route that shipped with no
@@ -754,6 +766,7 @@ export function OrderDetailModal({
                   Refund (manager)
                 </button>
               ) : null}
+              {drawerNote ? <p className="mt-2 text-xs font-bold text-red-700">{drawerNote}</p> : null}
             </div>
           </div>
         )}

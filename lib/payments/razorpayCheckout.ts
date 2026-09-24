@@ -101,7 +101,7 @@ export async function openRazorpayCheckout(
     key: intent.keyId,
     amount: Math.round(intent.amountInr) * 100,
     currency: 'INR',
-    name: 'House Of Immaculate Coffee',
+    name: 'Hioc',
     description: opts.description ?? 'Order payment',
     order_id: intent.gatewayOrderId,
     prefill: { name: opts.name, contact: opts.phone },
