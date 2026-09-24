@@ -1,0 +1,1229 @@
+{
+  "note": "DRAFT for owner review — goodFit lists are the eval author's best guess at a barista-approved match, not yet confirmed by the owner. Item names are taken from supabase/seed.sql. Re-label/adjust freely; the harness only cares about the shape.",
+  "scenarios": [
+    {
+      "id": "s01",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black",
+        "On The Rocks",
+        "Signature Iced Brew"
+      ]
+    },
+    {
+      "id": "s02",
+      "inputs": {
+        "temperature": "hot",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black",
+        "Macchiato"
+      ]
+    },
+    {
+      "id": "s03",
+      "inputs": {
+        "temperature": "iced",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Americano Iced",
+        "Long Black Iced",
+        "Signature Iced Brew",
+        "Toffee Nut Cold Brew"
+      ]
+    },
+    {
+      "id": "s04",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "under_150",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black"
+      ]
+    },
+    {
+      "id": "s05",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "eat"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Garlic Bread Toast",
+        "Butter Croissant"
+      ]
+    },
+    {
+      "id": "s06",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "less_sugar"
+        ],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black",
+        "On The Rocks"
+      ]
+    },
+    {
+      "id": "s07",
+      "inputs": {
+        "temperature": "either",
+        "base": "coffee",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black",
+        "Affogato"
+      ]
+    },
+    {
+      "id": "s08",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": "studying for an exam"
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black",
+        "Signature Iced Brew"
+      ]
+    },
+    {
+      "id": "s09",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "treat",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Affogato",
+        "Signature Iced Brew",
+        "Vanilla Creme Cold Brew"
+      ]
+    },
+    {
+      "id": "s10",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "On The Rocks",
+        "Long Black"
+      ],
+      "profile": {
+        "topCategories": [
+          "Coffee"
+        ],
+        "icedLean": "hot",
+        "sweetLean": "low",
+        "priceComfort": "mid",
+        "orderingMood": "routine",
+        "usualItemIds": []
+      }
+    },
+    {
+      "id": "s11",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte",
+        "Cappucino",
+        "Flat White",
+        "Signature Mocha",
+        "Chai Latte"
+      ]
+    },
+    {
+      "id": "s12",
+      "inputs": {
+        "temperature": "hot",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte",
+        "Cappucino",
+        "Flat White",
+        "Honey Cinnamon"
+      ]
+    },
+    {
+      "id": "s13",
+      "inputs": {
+        "temperature": "either",
+        "base": "no_coffee",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Chai Latte",
+        "Ginger Orange Honey Tea",
+        "Signature Hot Chocolate"
+      ]
+    },
+    {
+      "id": "s14",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "sweet"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Mocha",
+        "White Mocha",
+        "Honey Cinnamon",
+        "Rose Latte"
+      ]
+    },
+    {
+      "id": "s15",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "eat"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte",
+        "Butter Croissant",
+        "Cinnamon Roll"
+      ]
+    },
+    {
+      "id": "s16",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Ginger Orange Honey Tea",
+        "Cinnamon Hot Chocolate"
+      ]
+    },
+    {
+      "id": "s17",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "150_300",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte",
+        "Cappucino",
+        "Signature Mocha",
+        "Rose Latte"
+      ]
+    },
+    {
+      "id": "s18",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": "catching up with an old friend"
+      },
+      "goodFit": [
+        "Latte",
+        "Cappucino",
+        "Chai Latte"
+      ]
+    },
+    {
+      "id": "s19",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "filling"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Nutella Mocha",
+        "White Mocha"
+      ]
+    },
+    {
+      "id": "s20",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte",
+        "Cappucino",
+        "Honey Cinnamon"
+      ],
+      "profile": {
+        "topCategories": [
+          "Coffee"
+        ],
+        "icedLean": "hot",
+        "sweetLean": "medium",
+        "priceComfort": "budget",
+        "orderingMood": "routine",
+        "usualItemIds": []
+      }
+    },
+    {
+      "id": "s21",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "Nutella Mocha",
+        "White Mocha",
+        "90's Sundae",
+        "Devil's Fantasy",
+        "Death By Chocolate Brownie"
+      ]
+    },
+    {
+      "id": "s22",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "sweet"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "White Mocha",
+        "Nutella Mocha",
+        "Choco Truffle Slice",
+        "White Truffle Slice"
+      ]
+    },
+    {
+      "id": "s23",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "eat"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "Devil's Fantasy",
+        "Tripple Choco Crepes",
+        "Nutella-Hazelnut Crepes",
+        "Death By Chocolate Brownie"
+      ]
+    },
+    {
+      "id": "s24",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "treat",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "Mixed Berry Cheesecake",
+        "Biscoff Cheesecake",
+        "Hioc's Signature Tiramisu",
+        "Oreo Cheesecake"
+      ]
+    },
+    {
+      "id": "s25",
+      "inputs": {
+        "temperature": "iced",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "Nutella Iced Mocha",
+        "Signature Mocha Iced",
+        "Cranberry Iced"
+      ]
+    },
+    {
+      "id": "s26",
+      "inputs": {
+        "temperature": "either",
+        "base": "no_coffee",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "90's Sundae",
+        "White Garland Cupcake",
+        "Blueberry Blast Slice"
+      ]
+    },
+    {
+      "id": "s27",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "90's Sundae",
+        "Choco Chip Cupcake",
+        "Blueberry Blast Slice"
+      ]
+    },
+    {
+      "id": "s28",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": "birthday treat for a friend"
+      },
+      "goodFit": [
+        "Death By Chocolate Brownie",
+        "Mixed Berry Cheesecake",
+        "Choco Truffle Slice"
+      ]
+    },
+    {
+      "id": "s29",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "filling"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "Devil's Fantasy",
+        "Nutella Stuffed",
+        "Biscoff Stuffed"
+      ]
+    },
+    {
+      "id": "s30",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "White Mocha",
+        "Nutella Mocha",
+        "Mixed Berry Cheesecake"
+      ],
+      "profile": {
+        "topCategories": [
+          "Cheesecakes"
+        ],
+        "icedLean": "mixed",
+        "sweetLean": "high",
+        "priceComfort": "premium",
+        "orderingMood": "treating",
+        "usualItemIds": []
+      }
+    },
+    {
+      "id": "s31",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Hazelnut Hot Chocolate",
+        "Cinnamon Hot Chocolate",
+        "Chai Latte"
+      ]
+    },
+    {
+      "id": "s32",
+      "inputs": {
+        "temperature": "hot",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Hazelnut Hot Chocolate",
+        "Ginger Orange Honey Tea"
+      ]
+    },
+    {
+      "id": "s33",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "eat"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Baked Cheese Nachos",
+        "Garlic Bread Toast",
+        "Cinnamon Roll"
+      ]
+    },
+    {
+      "id": "s34",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Hazelnut Hot Chocolate",
+        "Cinnamon Hot Chocolate",
+        "Ginger Orange Honey Tea"
+      ]
+    },
+    {
+      "id": "s35",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "filling"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Nutella Stuffed",
+        "Biscoff Stuffed",
+        "Devils Own Stuffed"
+      ]
+    },
+    {
+      "id": "s36",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "150_300",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Hazelnut Hot Chocolate",
+        "Chai Latte",
+        "Cinnamon Roll"
+      ]
+    },
+    {
+      "id": "s37",
+      "inputs": {
+        "temperature": "either",
+        "base": "no_coffee",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Chai Latte",
+        "Ginger Orange Honey Tea"
+      ]
+    },
+    {
+      "id": "s38",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": "rainy day, need something warm"
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Hazelnut Hot Chocolate",
+        "Chai Latte"
+      ]
+    },
+    {
+      "id": "s39",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "sweet"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Hazelnut Hot Chocolate",
+        "Cinnamon Hot Chocolate",
+        "Nutella Waffle"
+      ]
+    },
+    {
+      "id": "s40",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "comfort",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Chai Latte",
+        "Nutella Waffle"
+      ],
+      "profile": {
+        "topCategories": [
+          "Hot Non-Coffee"
+        ],
+        "icedLean": "hot",
+        "sweetLean": "high",
+        "priceComfort": "mid",
+        "orderingMood": "saving",
+        "usualItemIds": []
+      }
+    },
+    {
+      "id": "s41",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Americano Iced",
+        "Latte Iced",
+        "Berry Lemonata Iced",
+        "Sunrise Iced"
+      ]
+    },
+    {
+      "id": "s42",
+      "inputs": {
+        "temperature": "iced",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Cappucino Iced",
+        "Latte Iced",
+        "Vietnamese Latte Iced",
+        "Raspberry Cream Iced"
+      ]
+    },
+    {
+      "id": "s43",
+      "inputs": {
+        "temperature": "either",
+        "base": "no_coffee",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Berry Lemonata Iced",
+        "Choco Berry Iced",
+        "Sunrise Iced",
+        "Mango Iced Matcha"
+      ]
+    },
+    {
+      "id": "s44",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "sweet"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Choco Berry Iced",
+        "Raspberry Cream Iced",
+        "Blueberry Iced Matcha"
+      ]
+    },
+    {
+      "id": "s45",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "under_150",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Americano Iced",
+        "Long Black Iced",
+        "On The Rocks"
+      ]
+    },
+    {
+      "id": "s46",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Berry Lemonata Iced",
+        "Choco Berry Iced",
+        "Sunrise Iced"
+      ]
+    },
+    {
+      "id": "s47",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "less_sugar"
+        ],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Americano Iced",
+        "Long Black Iced"
+      ]
+    },
+    {
+      "id": "s48",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": "just finished a workout"
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Americano Iced",
+        "Berry Lemonata Iced"
+      ]
+    },
+    {
+      "id": "s49",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "eat"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Baked Cheese Nachos"
+      ],
+      "scenarioNote": "iced + eat has few natural pairings — a good stress scenario"
+    },
+    {
+      "id": "s50",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte Iced",
+        "Vietnamese Latte Iced",
+        "Cappucino Iced"
+      ],
+      "profile": {
+        "topCategories": [
+          "Iced Coffee"
+        ],
+        "icedLean": "iced",
+        "sweetLean": "medium",
+        "priceComfort": "mid",
+        "orderingMood": "routine",
+        "usualItemIds": []
+      }
+    },
+    {
+      "id": "s51",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Rose Latte",
+        "Pistachio Latte",
+        "Lotus Biscoff Latte",
+        "Matcha Latte"
+      ]
+    },
+    {
+      "id": "s52",
+      "inputs": {
+        "temperature": "hot",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Rose Latte",
+        "Pistachio Latte",
+        "Ginger Orange Honey Tea"
+      ]
+    },
+    {
+      "id": "s53",
+      "inputs": {
+        "temperature": "iced",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Cranberry Iced",
+        "Valencia Orange Iced",
+        "Blueberry Iced Matcha"
+      ],
+      "scenarioNote": "seasonal Monthly Drops items may also be good fits, owner to confirm against current drops"
+    },
+    {
+      "id": "s54",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "sweet"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Lotus Biscoff Latte",
+        "Rose Creme",
+        "Krazy Kitkat Creme"
+      ]
+    },
+    {
+      "id": "s55",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "eat"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Pistachio Crepes",
+        "Nutella-Almond Crepes",
+        "Valentino Chips"
+      ]
+    },
+    {
+      "id": "s56",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "treat",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Minion Creme (Nutella-Banana)",
+        "White Garland Creme",
+        "Krazy Kitkat Creme"
+      ]
+    },
+    {
+      "id": "s57",
+      "inputs": {
+        "temperature": "either",
+        "base": "no_coffee",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Matcha Latte",
+        "Pistachio Latte",
+        "Rose Creme"
+      ]
+    },
+    {
+      "id": "s58",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Matcha Creme",
+        "Fruity Mango Creme",
+        "Rose Creme"
+      ]
+    },
+    {
+      "id": "s59",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": "meeting a friend, feeling adventurous"
+      },
+      "goodFit": [
+        "Rose Latte",
+        "Lotus Biscoff Latte",
+        "Pistachio Crepes"
+      ]
+    },
+    {
+      "id": "s60",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [],
+        "budget": "any",
+        "mood": "surprise",
+        "note": ""
+      },
+      "goodFit": [
+        "Pistachio Latte",
+        "Rose Latte",
+        "Matcha Latte"
+      ],
+      "profile": {
+        "topCategories": [
+          "Coffee"
+        ],
+        "icedLean": "mixed",
+        "sweetLean": "medium",
+        "priceComfort": "mid",
+        "orderingMood": "explorer",
+        "usualItemIds": []
+      }
+    },
+    {
+      "id": "s61",
+      "inputs": {
+        "temperature": "either",
+        "base": "coffee",
+        "extras": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "150_300",
+        "mood": "boost",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Chai Latte"
+      ],
+      "scenarioNote": "\"boost\" + no_caffeine is a real tension in the product — a fair stress scenario for the deterministic ranker"
+    },
+    {
+      "id": "s62",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "light"
+        ],
+        "needs": [],
+        "budget": "under_150",
+        "mood": "cosy",
+        "note": ""
+      },
+      "goodFit": [
+        "Espresso",
+        "Americano",
+        "Long Black"
+      ]
+    },
+    {
+      "id": "s63",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [],
+        "needs": [
+          "less_sugar"
+        ],
+        "budget": "any",
+        "mood": "celebrate",
+        "note": ""
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Long Black",
+        "Americano"
+      ]
+    },
+    {
+      "id": "s64",
+      "inputs": {
+        "temperature": "either",
+        "base": "either",
+        "extras": [
+          "filling"
+        ],
+        "needs": [],
+        "budget": "any",
+        "mood": "cool",
+        "note": ""
+      },
+      "goodFit": [
+        "Toffee Nut Cold Brew",
+        "Vanilla Creme Cold Brew"
+      ]
+    }
+  ]
+}
