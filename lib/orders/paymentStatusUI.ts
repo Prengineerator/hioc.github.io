@@ -34,3 +34,12 @@ export function paymentFlagMessage(flag: string | null, allowCounter: boolean): 
   }
   return '';
 }
+
+// A bill (RCT-1/2) only ever gets *created* once a payment is recorded
+// (sendBillNotification fires on ₹0-at-creation, gateway capture, staff
+// settle, or paid-completion). Cancelled/rejected are carved out even if
+// paid before cancellation, since a refund would move payment_status off
+// 'paid' anyway; a merely 'completed'-but-never-paid order has no bill.
+export function hasBill(order: Pick<Order, 'status' | 'payment_status'>): boolean {
+  return order.payment_status === 'paid' && order.status !== 'cancelled' && order.status !== 'rejected';
+}

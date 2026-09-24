@@ -22,7 +22,7 @@ import { useOrderRealtime, type RealtimeConnection } from '@/lib/realtime/hooks'
 import { Spinner } from '@/components/ui/Spinner';
 import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
-import { canPayAtCounter, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
+import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[]; coupon_code?: string | null };
@@ -395,14 +395,16 @@ export default function OrderStatusPage() {
           ))}
         </ul>
         <BillRows order={order} />
-        <div className="mt-4 text-center">
-          <Link
-            href={`/order/${order.id}/receipt`}
-            className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-bold text-tan-dark hover:bg-[#f6efe9]"
-          >
-            View / print bill
-          </Link>
-        </div>
+        {hasBill(order) ? (
+          <div className="mt-4 text-center">
+            <Link
+              href={`/order/${order.id}/receipt`}
+              className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-bold text-tan-dark hover:bg-[#f6efe9]"
+            >
+              View / print bill
+            </Link>
+          </div>
+        ) : null}
       </div>
 
       {!awaitingPayment ? (

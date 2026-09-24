@@ -25,6 +25,7 @@ import {
   isActiveOrderStatus,
   orderTypeLabel,
 } from '@/lib/account/orderDisplay';
+import { hasBill } from '@/lib/orders/paymentStatusUI';
 import { Spinner } from '@/components/ui/Spinner';
 import type { OrderResponse } from '@/lib/api/orders';
 
@@ -266,7 +267,7 @@ function AccountOrdersContent() {
                       Track
                     </Link>
                   ) : null}
-                  {order.status === 'completed' ? (
+                  {hasBill(order) ? (
                     <Link
                       href={`/order/${order.id}/receipt`}
                       className="text-xs font-bold text-tan hover:underline"
