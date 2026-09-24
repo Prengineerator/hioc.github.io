@@ -23,7 +23,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { getAnthropicClient, SERVER_FALLBACK_BETA, SERVER_FALLBACKS } from './anthropic';
 import { DeciderError, type DeciderErrorKind } from './deciderError';
 import { geminiGenerateJson } from './gemini';
-import { costUsdMicros, deciderModel, deciderModelLabel, geminiModel, llmProvider } from './models';
+import { jevDecider } from './jevDecider';
+import { costUsdMicros, deciderModel, deciderModelLabel, deciderProvider, geminiModel } from './models';
 import { sanitizeNote } from './tone';
 import { MOODS, SUGGEST_LIMITS } from './types';
 import type { Candidate, Decider, DeciderResult, ProfileSummary, SuggestInputs } from './types';
@@ -274,6 +275,9 @@ async function callGemini(args: {
     maxOutputTokens: MAX_TOKENS,
     timeoutMs: SUGGEST_LIMITS.deciderTimeoutMs,
     signal: args.signal,
+    // Cuts latency sharply for this JSON-schema-constrained pick — see
+    // lib/suggest/gemini.ts's GeminiThinkingLevel doc.
+    thinkingLevel: 'low',
   });
 
   const { picks, header } = parseDeciderPayload(json);
@@ -301,13 +305,16 @@ async function callGemini(args: {
  * provider answered. */
 export const geminiDecider: Decider = callGemini;
 
-/** The `Decider` for whichever provider `llmProvider()` currently selects —
- * null when neither is configured (§5.4 fallback triggers: disabled / no
+/** The `Decider` for whichever provider `deciderProvider()` currently selects
+ * — null when none is configured (§5.4 fallback triggers: disabled / no
  * key). This is what app/api/suggest/route.ts calls instead of reaching for
- * `opusDecider` directly, so a Gemini-only deployment "just works". */
+ * `opusDecider` directly, so a Jev- or Gemini-only deployment "just works". */
 export function activeDecider(): Decider | null {
-  const provider = llmProvider();
+  const provider = deciderProvider();
+  if (provider === 'jev') return jevDecider;
   if (provider === 'anthropic') return opusDecider;
   if (provider === 'gemini') return geminiDecider;
   return null;
 }
+
+export { jevDecider };

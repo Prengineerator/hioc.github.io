@@ -59,7 +59,7 @@ const opusDeciderMock = vi.fn(async (_args: unknown) => ({
 const geminiDeciderMock = vi.fn(async (_args: unknown) => ({
   picks: [{ menuItemId: 'espresso', reason: 'A bold lift for your afternoon', reasonCode: 'boost' as const }],
   header: 'Here is a lovely pick for you',
-  model: 'gemini:gemini-3-flash',
+  model: 'gemini:gemini-3-flash-preview',
   inputTokens: 100,
   cacheReadTokens: 0,
   outputTokens: 20,
@@ -263,7 +263,7 @@ describe('POST /api/suggest', () => {
     expect(data.source).toBe('llm');
     expect(geminiDeciderMock).toHaveBeenCalledTimes(1);
     expect(opusDeciderMock).not.toHaveBeenCalled();
-    expect((state.sessionInsert as Record<string, unknown>)?.model).toBe('gemini:gemini-3-flash');
+    expect((state.sessionInsert as Record<string, unknown>)?.model).toBe('gemini:gemini-3-flash-preview');
     expect((state.sessionInsert as Record<string, unknown>)?.cost_usd_micros).toBe(0);
   });
 

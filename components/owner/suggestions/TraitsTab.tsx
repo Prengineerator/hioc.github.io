@@ -70,6 +70,7 @@ export function TraitsTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [needsReview, setNeedsReview] = useState<string[]>([]);
   const [filter, setFilter] = useState<Filter>('unconfirmed');
   const [editingId, setEditingId] = useState('');
   const [edit, setEdit] = useState<EditState | null>(null);
@@ -210,19 +211,22 @@ export function TraitsTab() {
     setGenerating(true);
     setError('');
     setNotice('');
+    setNeedsReview([]);
     try {
       const res = await fetch('/api/owner/suggest/traits/generate', { method: 'POST' });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Generation failed');
-      if ((json.tagged ?? 0) === 0 && json.error) {
-        // Nothing got tagged — show WHY (e.g. a wrong Gemini model id, a 429
-        // quota error) instead of a silent "0 of N tagged".
-        setError(json.error);
-      } else {
+      // Surface WHY something went wrong (e.g. a wrong Gemini model id, a 429
+      // quota error, a Jev item that never started) whenever it's present —
+      // even alongside a partial-success notice below, not only when nothing
+      // got tagged at all.
+      if (json.error) setError(json.error);
+      if ((json.tagged ?? 0) > 0) {
         setNotice(
           `Tagged ${json.tagged ?? 0} of ${json.requested ?? 0} item(s) with AI (~$${(json.costUsd ?? 0).toFixed(4)}). Review them below before confirming.`,
         );
       }
+      if (Array.isArray(json.needsReview) && json.needsReview.length > 0) setNeedsReview(json.needsReview);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed');
@@ -271,6 +275,11 @@ export function TraitsTab() {
 
       {error ? <p className="mb-2 text-sm font-medium text-red-700">{error}</p> : null}
       {notice ? <p className="mb-2 text-sm font-medium text-[#2f6b38]">{notice}</p> : null}
+      {needsReview.length > 0 ? (
+        <p className="mb-2 text-sm font-medium text-[#8a6412]">
+          Jev was unsure about these — please check them first: {needsReview.join(', ')}
+        </p>
+      ) : null}
 
       {loading ? (
         <p className="py-6 text-center text-sm text-muted">Loading…</p>

@@ -12,7 +12,7 @@
 import 'server-only';
 import { getAnthropicClient } from './anthropic';
 import { geminiGenerateText } from './gemini';
-import { costUsdMicros, geminiWorkerModel, llmProvider, workerModel, workerModelLabel } from './models';
+import { costUsdMicros, geminiWorkerModel, textProvider, workerModel, workerModelLabel } from './models';
 import type { SuggestionStats } from './types';
 
 export interface DigestResult {
@@ -155,7 +155,10 @@ async function generateWithGemini(stats: SuggestionStats, templateSummary: strin
  */
 export async function generateWeeklyDigest(stats: SuggestionStats): Promise<DigestResult> {
   const templateSummary = buildTemplateSummary(stats);
-  const provider = llmProvider();
+  // textProvider(), NOT deciderProvider()/llmProvider(): Jev cannot write
+  // prose (§1), so a Jev-only deployment (or a SUGGEST_LLM_PROVIDER=jev pin)
+  // falls straight through to the template summary here, same as no key at all.
+  const provider = textProvider();
   if (provider === 'gemini') return generateWithGemini(stats, templateSummary);
   if (provider === 'anthropic') return generateWithAnthropic(stats, templateSummary);
   return { summary: templateSummary, source: 'template', model: null, costUsdMicros: 0 };
