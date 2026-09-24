@@ -185,7 +185,7 @@ export function EngineHealthCard({ stats, dailyCapUsd }: { stats: SuggestionStat
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-md bg-[#f2efe9] p-3 text-center">
           <p className="text-xl font-bold text-charcoal">{Math.round(stats.llmShare * 100)}%</p>
-          <p className="text-xs uppercase text-muted">Answered by Opus</p>
+          <p className="text-xs uppercase text-muted">Answered by AI</p>
         </div>
         <div className="rounded-md bg-[#f2efe9] p-3 text-center">
           <p className="text-xl font-bold text-charcoal">{stats.latencyP50Ms === null ? '—' : `${stats.latencyP50Ms}ms`}</p>

@@ -22,7 +22,8 @@ import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
 import { getAnthropicClient, SERVER_FALLBACK_BETA, SERVER_FALLBACKS } from './anthropic';
 import { DeciderError, type DeciderErrorKind } from './deciderError';
-import { costUsdMicros, deciderModel } from './models';
+import { geminiGenerateJson } from './gemini';
+import { costUsdMicros, deciderModel, deciderModelLabel, geminiModel, llmProvider } from './models';
 import { sanitizeNote } from './tone';
 import { MOODS, SUGGEST_LIMITS } from './types';
 import type { Candidate, Decider, DeciderResult, ProfileSummary, SuggestInputs } from './types';
@@ -131,6 +132,35 @@ function buildUserMessage(args: {
   return lines.join('\n\n');
 }
 
+/** Shared by both providers: given the already-parsed JSON payload (Opus:
+ * `JSON.parse(textBlock.text)`; Gemini: `geminiGenerateJson`'s `json`), pulls
+ * out `picks`/`header` the same way — S-2 (model output is data): a bad or
+ * invented field is dropped here, never trusted downstream. */
+function parseDeciderPayload(parsed: unknown): { picks: DeciderResult['picks']; header: string | null } {
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { picks?: unknown }).picks)) {
+    throw new DeciderError('invalid_output', 'decider response missing picks array');
+  }
+  const obj = parsed as { header?: unknown; picks: unknown[] };
+
+  const picks: DeciderResult['picks'] = [];
+  for (const raw of obj.picks) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const p = raw as Record<string, unknown>;
+    if (typeof p.menu_item_id !== 'string' || typeof p.reason !== 'string') continue;
+    const reasonCode = typeof p.reason_code === 'string' ? p.reason_code : 'trait';
+    picks.push({
+      menuItemId: p.menu_item_id,
+      reason: p.reason,
+      reasonCode: reasonCode as DeciderResult['picks'][number]['reasonCode'],
+    });
+  }
+  // Validation of ids/reasons against the shortlist + tone lint happens in
+  // lib/suggest/validate.ts (S-2) — this only needs to produce SOME picks
+  // array; an empty one after parsing is still valid JSON and is handled by
+  // the engine's top-up, not treated as a decider failure.
+  return { picks, header: typeof obj.header === 'string' ? obj.header : null };
+}
+
 function classifyThrown(err: unknown): DeciderError {
   if (err instanceof Anthropic.APIUserAbortError || err instanceof Anthropic.APIConnectionTimeoutError) {
     return new DeciderError('timeout', err.message);
@@ -194,36 +224,17 @@ async function callOpus(args: {
   const textBlock = response.content.find((b): b is Anthropic.TextBlock => b.type === 'text');
   if (!textBlock) throw new DeciderError('invalid_output', 'no text content block in decider response');
 
-  let parsed: { header?: unknown; picks?: unknown };
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(textBlock.text) as { header?: unknown; picks?: unknown };
+    parsed = JSON.parse(textBlock.text);
   } catch {
     throw new DeciderError('invalid_output', 'decider response was not valid JSON');
   }
-  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.picks)) {
-    throw new DeciderError('invalid_output', 'decider response missing picks array');
-  }
-
-  const picks: DeciderResult['picks'] = [];
-  for (const raw of parsed.picks) {
-    if (typeof raw !== 'object' || raw === null) continue;
-    const p = raw as Record<string, unknown>;
-    if (typeof p.menu_item_id !== 'string' || typeof p.reason !== 'string') continue;
-    const reasonCode = typeof p.reason_code === 'string' ? p.reason_code : 'trait';
-    picks.push({
-      menuItemId: p.menu_item_id,
-      reason: p.reason,
-      reasonCode: reasonCode as DeciderResult['picks'][number]['reasonCode'],
-    });
-  }
-  // Validation of ids/reasons against the shortlist + tone lint happens in
-  // lib/suggest/validate.ts (S-2: model output is data) — this only needs to
-  // produce SOME picks array; an empty one after parsing is still valid JSON
-  // and is handled by the engine's top-up, not treated as a decider failure.
+  const { picks, header } = parseDeciderPayload(parsed);
 
   return {
     picks,
-    header: typeof parsed.header === 'string' ? parsed.header : null,
+    header,
     model,
     inputTokens,
     cacheReadTokens,
@@ -235,3 +246,68 @@ async function callOpus(args: {
 /** The real (Opus) `Decider` implementation. Injected into lib/suggest/engine.ts
  * by app/api/suggest/route.ts; tests inject a stub instead (SUG-4 AC). */
 export const opusDecider: Decider = callOpus;
+
+// ---------------------------------------------------------------------------
+// Gemini — the free-tier decider. Same STABLE_SYSTEM_PROMPT, serializeCatalog,
+// buildUserMessage and OUTPUT_SCHEMA as Opus above; only the transport (raw
+// REST via lib/suggest/gemini.ts, no prompt caching) and the JSON-payload
+// parsing (already done for us by geminiGenerateJson) differ. Gemini's free
+// tier has no context-caching breakpoint concept, so the catalog and the rest
+// of the user message are simply concatenated into one turn.
+// ---------------------------------------------------------------------------
+
+async function callGemini(args: {
+  inputs: SuggestInputs;
+  shortlist: Candidate[];
+  profile: ProfileSummary | null;
+  daypart: import('./types').Daypart;
+  signal: AbortSignal;
+}): Promise<DeciderResult> {
+  const model = geminiModel();
+  const user = [serializeCatalog(args.shortlist), buildUserMessage(args)].join('\n\n');
+
+  const { json, usage } = await geminiGenerateJson({
+    model,
+    system: STABLE_SYSTEM_PROMPT,
+    user,
+    schema: OUTPUT_SCHEMA,
+    maxOutputTokens: MAX_TOKENS,
+    timeoutMs: SUGGEST_LIMITS.deciderTimeoutMs,
+    signal: args.signal,
+  });
+
+  const { picks, header } = parseDeciderPayload(json);
+  const label = deciderModelLabel();
+  const costMicros = costUsdMicros(label, {
+    inputTokens: usage.inputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: 0,
+    outputTokens: usage.outputTokens,
+  });
+
+  return {
+    picks,
+    header,
+    model: label,
+    inputTokens: usage.inputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    outputTokens: usage.outputTokens,
+    costUsdMicros: costMicros,
+  };
+}
+
+/** The free-tier (Gemini) `Decider` implementation — same contract as
+ * `opusDecider`, so `lib/suggest/engine.ts` never needs to know which
+ * provider answered. */
+export const geminiDecider: Decider = callGemini;
+
+/** The `Decider` for whichever provider `llmProvider()` currently selects —
+ * null when neither is configured (§5.4 fallback triggers: disabled / no
+ * key). This is what app/api/suggest/route.ts calls instead of reaching for
+ * `opusDecider` directly, so a Gemini-only deployment "just works". */
+export function activeDecider(): Decider | null {
+  const provider = llmProvider();
+  if (provider === 'anthropic') return opusDecider;
+  if (provider === 'gemini') return geminiDecider;
+  return null;
+}

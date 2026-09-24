@@ -7,8 +7,8 @@ import { flags } from '@/lib/flags';
 import { MENU_ITEM_SELECT, shapeMenuItem, type MenuItemRow } from '@/lib/orders/lines';
 import { isOverBudget } from '@/lib/suggest/budget';
 import { runSuggest } from '@/lib/suggest/engine';
-import { opusDecider } from '@/lib/suggest/llm';
-import { dailyBudgetUsdMicros, llmEnabled } from '@/lib/suggest/models';
+import { activeDecider } from '@/lib/suggest/llm';
+import { dailyBudgetUsdMicros, llmDisabledReason, llmEnabled } from '@/lib/suggest/models';
 import { getOrBuildProfile } from '@/lib/suggest/profileStore';
 import { templateHeader } from '@/lib/suggest/templates';
 import { todaySpendMicros } from '@/lib/suggest/spend';
@@ -211,13 +211,13 @@ export async function POST(request: Request) {
   if (rateLimited) {
     preDecidedFallbackReason = 'rate_limited';
   } else if (!llmEnabled()) {
-    preDecidedFallbackReason = process.env.ANTHROPIC_API_KEY ? 'disabled' : 'no_key';
+    preDecidedFallbackReason = llmDisabledReason() ?? 'no_key';
   } else {
     const spent = await todaySpendMicros(now);
     if (isOverBudget(spent, dailyBudgetUsdMicros())) {
       preDecidedFallbackReason = 'budget';
     } else {
-      decider = opusDecider;
+      decider = activeDecider();
     }
   }
 

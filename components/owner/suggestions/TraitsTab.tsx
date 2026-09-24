@@ -1,9 +1,10 @@
 'use client';
 
-// Phase 7 · SUG-2 — the owner's review table for Opus-tagged menu traits.
-// Mirrors components/owner/TableManager.tsx's fetch/edit/save pattern:
-// GET the list, PATCH one row inline, PATCH { confirmIds } in bulk, POST the
-// Opus generator. Every write ends by refetching rather than trusting the
+// Phase 7 · SUG-2 — the owner's review table for AI-tagged menu traits
+// (Opus, or Gemini Flash on the free tier — lib/suggest/models.ts's
+// llmProvider()). Mirrors components/owner/TableManager.tsx's fetch/edit/save
+// pattern: GET the list, PATCH one row inline, PATCH { confirmIds } in bulk,
+// POST the generator. Every write ends by refetching rather than trusting the
 // client's optimistic guess.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -213,9 +214,15 @@ export function TraitsTab() {
       const res = await fetch('/api/owner/suggest/traits/generate', { method: 'POST' });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Generation failed');
-      setNotice(
-        `Tagged ${json.tagged ?? 0} of ${json.requested ?? 0} item(s) with Opus (~$${(json.costUsd ?? 0).toFixed(4)}). Review them below before confirming.`,
-      );
+      if ((json.tagged ?? 0) === 0 && json.error) {
+        // Nothing got tagged — show WHY (e.g. a wrong Gemini model id, a 429
+        // quota error) instead of a silent "0 of N tagged".
+        setError(json.error);
+      } else {
+        setNotice(
+          `Tagged ${json.tagged ?? 0} of ${json.requested ?? 0} item(s) with AI (~$${(json.costUsd ?? 0).toFixed(4)}). Review them below before confirming.`,
+        );
+      }
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed');
@@ -257,7 +264,7 @@ export function TraitsTab() {
             disabled={generating}
             className="rounded-md bg-charcoal px-3 py-1.5 text-sm font-bold text-cream hover:opacity-90 disabled:opacity-50"
           >
-            {generating ? 'Tagging with Opus…' : 'Generate missing traits with Opus'}
+            {generating ? 'Tagging with AI…' : 'Generate missing traits with AI'}
           </button>
         </div>
       </div>
@@ -307,7 +314,7 @@ export function TraitsTab() {
 
                     {!t ? (
                       <td colSpan={9} className="py-2 text-xs text-muted">
-                        No traits yet — use “Generate missing traits with Opus” above.
+                        No traits yet — use “Generate missing traits with AI” above.
                       </td>
                     ) : editing && edit ? (
                       <>
@@ -446,7 +453,7 @@ export function TraitsTab() {
                             (t.confirmed ? 'bg-[#e3efe4] text-[#2f6b38]' : 'bg-[#f6e9c9] text-[#8a6412]')
                           }
                         >
-                          {t.confirmed ? 'Confirmed' : `${t.source === 'opus' ? 'Opus' : 'Owner'} · unconfirmed`}
+                          {t.confirmed ? 'Confirmed' : `${t.source === 'opus' ? 'AI' : 'Owner'} · unconfirmed`}
                         </span>
                       ) : (
                         <span className="rounded-full bg-[#f6d9d9] px-2 py-0.5 text-xs font-bold text-red-800">Missing</span>

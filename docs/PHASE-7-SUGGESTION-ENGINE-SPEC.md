@@ -44,21 +44,23 @@
 
 ## 1. Who decides what: model routing
 
-The owner's rule: **decision-making is done by the most capable model (Opus); execution is done by cheaper agents (Sonnet) or by plain code.** Applied to the product:
+The owner's rule: **decision-making is done by the most capable model (Opus, or Gemini Flash when that's the configured provider — see "Provider" below); execution is done by cheaper agents (Sonnet, or Gemini Flash) or by plain code.** Applied to the product:
 
 | Job | Kind | Done by | Why |
 |---|---|---|---|
-| Tag each menu item with taste traits (caffeine, sweetness, temperature, body, mood fit, time of day) | **Decision.** Every later match depends on it. | **Opus** (`claude-opus-5`), owner-reviewed | Needs real-world coffee knowledge. Runs rarely (menu changes), so cost is negligible. |
+| Tag each menu item with taste traits (caffeine, sweetness, temperature, body, mood fit, time of day) | **Decision.** Every later match depends on it. | **Opus** (`claude-opus-5`) or **Gemini Flash** (free tier), owner-reviewed | Needs real-world coffee knowledge. Runs rarely (menu changes), so cost is negligible. |
 | Enforce hard constraints (availability, budget, hot/iced, caffeine) | Rules | **Deterministic code** | Must hold 100% of the time. Never delegated to a model. |
 | Score and shortlist ~12 candidates from preferences + mood + taste profile | Mechanical ranking | **Deterministic code** | Fast (< 20 ms), testable, and it is the fallback. |
-| Choose the final 3 from the shortlist and write the gentle one-line reason | **Decision** | **Opus** (`claude-opus-5`, effort `low`, structured JSON) | This is where "accuracy should be very high" is won: weighing mood, history and pairing like a barista would. |
+| Choose the final 3 from the shortlist and write the gentle one-line reason | **Decision** | **Opus** (`claude-opus-5`, effort `low`, structured JSON) or **Gemini Flash** (free tier, same structured JSON schema) | This is where "accuracy should be very high" is won: weighing mood, history and pairing like a barista would. |
 | Build the per-account taste profile (the preference cache) | Aggregation | **Deterministic code** | Numbers from orders. No model sees raw order history. |
-| Weekly owner digest: "what customers told the engine this week" | Summarising numbers already computed | **Sonnet** (`claude-sonnet-5`) | Execution work; cheaper model. |
+| Weekly owner digest: "what customers told the engine this week" | Summarising numbers already computed | **Sonnet** (`claude-sonnet-5`) or **Gemini Flash** (free tier) | Execution work; cheaper model. |
 | Tone lint on customer-facing copy | Rules | **Deterministic code** | Banned-phrase list and length cap applied to every model output. |
 
 **Development follows the same rule:** this spec, the data contracts (`supabase/2026-09-suggestion-engine.sql`, `lib/suggest/types.ts`) and final review are the Opus work. Implementation tickets SUG-1…SUG-12 are executed by Sonnet agents against those contracts.
 
-Model IDs live in one place (`lib/suggest/models.ts`), overridable by env (`SUGGEST_DECIDER_MODEL`, `SUGGEST_WORKER_MODEL`), so moving to a newer model is a config change.
+Model IDs live in one place (`lib/suggest/models.ts`), overridable by env (`SUGGEST_DECIDER_MODEL`, `SUGGEST_WORKER_MODEL` for Anthropic; `GEMINI_MODEL`, `GEMINI_WORKER_MODEL` for Gemini), so moving to a newer model is a config change.
+
+**Provider:** the owner needs a paid Anthropic key to run the decider on Opus. Without one — the free-tier path — setting only `GEMINI_API_KEY` runs the SAME jobs on Gemini Flash instead, at $0 (Google's free tier). `lib/suggest/models.ts`'s `llmProvider()` picks Anthropic when `ANTHROPIC_API_KEY` is set, else Gemini when `GEMINI_API_KEY` is set (or `SUGGEST_LLM_PROVIDER` pins one explicitly); `SUGGEST_LLM=off` disables both. Whichever provider answers, it is handed the exact same system prompt, output schema and shortlist, and its output goes through the exact same validation (§5.4, `lib/suggest/validate.ts`) and the exact same fallback path on failure — the customer-visible behaviour, and the accuracy bar in §6, do not depend on which provider is configured.
 
 ---
 
@@ -222,10 +224,11 @@ Table `customer_taste_profiles` (PK `user_id`), holding `profile jsonb`, `order_
 **Privacy (DPDP-aligned):** `/account` gets a "Your taste profile" card: a plain-language summary ("You usually go for iced coffee in the afternoon"), a **Reset** button (deletes the row and recomputes), and a **Don't personalise** toggle (`opted_out = true` means the profile is not used or recomputed, and suggestions behave as for a guest). Only the owning user and service-role code can read it. The owner dashboard shows **aggregates only**, never an individual's profile.
 
 ### 5.6 Cost & abuse controls (SUG-6)
+- **Provider:** the decider (§5.4) and the weekly digest worker (SUG-12) run on Opus / Sonnet by default, or on **Gemini Flash** when the owner has only configured `GEMINI_API_KEY` (§1) — free-tier, $0 per call. Same `STABLE_SYSTEM_PROMPT`/`SYSTEM_PROMPT`, the same output schema, the same post-parse shape handling and the same validation (`lib/suggest/validate.ts`, `traitsValidate.ts`) run regardless of provider, and a Gemini failure falls back exactly like an Anthropic one (§5.4 "Fallback triggers"). `lib/suggest/gemini.ts` speaks the Gemini REST API directly (`fetch`, no SDK dependency) and sends the key only as the `x-goog-api-key` header (S-6).
 - **Rate limits:** 20 suggestion requests per 10 min per IP, and 60 per day per signed-in user, via `rateLimitOk()`. Beyond the limit the request succeeds using the **fallback path only** (no LLM call); it is not refused.
 - **Spend cap:** each LLM call records `input_tokens`, `cache_read_tokens`, `output_tokens` and `cost_usd_micros` on its session. Before calling Opus, the endpoint sums today's `cost_usd_micros` (IST day); at or above `SUGGEST_DAILY_BUDGET_USD` (default 3) it uses the fallback. This is a DB-backed check, not in-memory, so it holds across serverless instances.
-- **Pricing constants** (USD per MTok) live in `lib/suggest/models.ts`: Opus 5 in $5 / out $25 / cache read $0.50; Sonnet 5 in $2 / out $10 / cache read $0.20. Expected cost: ~3k cached + ~600 fresh input and ~250 output tokens ≈ **$0.01 per suggestion**.
-- `ANTHROPIC_API_KEY` is read only in `lib/suggest/llm.ts`, which imports `'server-only'` (playbook C-1).
+- **Pricing constants** (USD per MTok) live in `lib/suggest/models.ts`: Opus 5 in $5 / out $25 / cache read $0.50; Sonnet 5 in $2 / out $10 / cache read $0.20. Expected cost: ~3k cached + ~600 fresh input and ~250 output tokens ≈ **$0.01 per suggestion**. Gemini's free tier is **$0** — `costUsdMicros()` returns 0 for any model id starting with `gemini`, so the daily spend cap only ever limits Anthropic spend.
+- `ANTHROPIC_API_KEY` is read only in `lib/suggest/llm.ts`; `GEMINI_API_KEY` only in `lib/suggest/gemini.ts` — both import `'server-only'` (playbook C-1).
 
 ---
 
@@ -320,6 +323,7 @@ Pure aggregation goes in `lib/suggest/analytics.ts`; server queries in `lib/sugg
 - **S-3:** No PII goes to any model: no name, phone, email or order ids. The profile summary only.
 - **S-4:** `ordered` attribution is server-written only. Client events are whitelisted and session-bound.
 - **S-5:** Every LLM route has a fallback path and a DB-backed spend cap. A missing key means the fallback, never a 500.
+- **S-6:** `GEMINI_API_KEY` is only read in `'server-only'` modules (`lib/suggest/gemini.ts`). It is sent ONLY as the `x-goog-api-key` request header, NEVER as a URL query parameter and NEVER written to a log or an error message — URLs get logged by proxies and error trackers even when headers don't.
 
 ## 10. Out of scope (Phase 7)
 Staff-POS suggestions, WhatsApp suggestions, push/email re-engagement using profiles, A/B testing framework (the `source` field allows a crude LLM-vs-fallback comparison), multi-language copy.

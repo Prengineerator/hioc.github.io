@@ -3,22 +3,23 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse } from '@/lib/api/http';
 import { rateLimitOk } from '@/lib/api/rateLimit';
-import { getAnthropicClient } from '@/lib/suggest/anthropic';
+import { llmProvider } from '@/lib/suggest/models';
 import { tagMenuItemTraits, type MenuItemForTagging } from '@/lib/suggest/traitsPrompt';
 
 export const dynamic = 'force-dynamic';
 // Opus tagging of ~3 concurrent batches; the tagger's own timeout sits under this.
 export const maxDuration = 60;
 
-// POST /api/owner/suggest/traits/generate — owner-only Opus trait tagging
-// (SUG-2). Tags only items whose traits row is MISSING or `confirmed=false`
-// — a confirmed row is never sent to Opus, so it can never be overwritten,
-// which is what the SUG-2 AC ("given 3 confirmed rows, those rows are
-// byte-identical afterwards") requires.
+// POST /api/owner/suggest/traits/generate — owner-only trait tagging (SUG-2),
+// via whichever provider lib/suggest/models.ts's llmProvider() selects (Opus,
+// or Gemini Flash on the free tier — §1). Tags only items whose traits row is
+// MISSING or `confirmed=false` — a confirmed row is never sent to the model,
+// so it can never be overwritten, which is what the SUG-2 AC ("given 3
+// confirmed rows, those rows are byte-identical afterwards") requires.
 //
-// Rate-limited to 5/hour per owner (this is a paid LLM call over the whole
-// menu) and returns 503 — not a generic 500 — when the API key isn't
-// configured, so the owner sees a clear "not set up" message.
+// Rate-limited to 5/hour per owner (this can be a paid LLM call over the
+// whole menu) and returns 503 — not a generic 500 — when neither provider key
+// is configured, so the owner sees a clear "not set up" message.
 
 const GENERATE_PER_HOUR = 5;
 const RATE_WINDOW_SECS = 3600;
@@ -30,8 +31,8 @@ export async function POST() {
   const allowed = await rateLimitOk(`suggest-traits:${owner.id}`, GENERATE_PER_HOUR, RATE_WINDOW_SECS);
   if (!allowed) return errorResponse(429, `Only ${GENERATE_PER_HOUR} trait generations per hour — try again shortly.`);
 
-  if (!getAnthropicClient()) {
-    return errorResponse(503, 'The trait tagger is not configured (ANTHROPIC_API_KEY is unset). Ask an admin to set it up.');
+  if (llmProvider() === null) {
+    return errorResponse(503, 'The trait tagger is not configured. Set GEMINI_API_KEY (free) or ANTHROPIC_API_KEY to enable it.');
   }
 
   const admin = createAdminSupabaseClient();
@@ -96,11 +97,15 @@ export async function POST() {
     if (upsertErr) return errorResponse(500, upsertErr.message);
   }
 
-  return NextResponse.json({
+  const responseBody: Record<string, unknown> = {
     tagged: writable.length,
     requested: targets.length,
     batches: result.batches,
     failedBatches: result.failedBatches,
     costUsd: result.usage.costUsdMicros / 1_000_000,
-  });
+  };
+  // Nothing got tagged at all — surface WHY (a wrong Gemini model id, a 429
+  // quota error, …) instead of a bare "0 of 120 tagged" the owner can't act on.
+  if (writable.length === 0 && result.firstError) responseBody.error = result.firstError;
+  return NextResponse.json(responseBody);
 }
