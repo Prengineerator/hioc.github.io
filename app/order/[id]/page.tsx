@@ -59,6 +59,12 @@ export default function OrderStatusPage() {
   const [paying, setPaying] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [paymentActionError, setPaymentActionError] = useState('');
+  // The ?payment= flag's message is only a fallback for paymentActionError
+  // (below) — once the customer has actually taken an action (retry or
+  // switch), the stale "didn't go through"/"was cancelled" copy from the URL
+  // must not reappear just because paymentActionError was cleared back to ''
+  // for the new attempt.
+  const [flagDismissed, setFlagDismissed] = useState(false);
   const pollAttempts = useRef(0);
   // Bumped whenever a retry starts or a Razorpay attempt succeeds, so the
   // reconciliation-poll effect below tears down and restarts with a fresh
@@ -141,6 +147,7 @@ export default function OrderStatusPage() {
     if (!orderId || !order) return;
     setPaying(true);
     setPaymentActionError('');
+    setFlagDismissed(true);
     // Issue-2: a retry always gets a fresh reconciliation-poll budget, even if
     // an earlier failed/abandoned attempt on this order already spent one out
     // sitting on the "waiting on payment" screen — otherwise a payment that
@@ -200,6 +207,7 @@ export default function OrderStatusPage() {
     if (!orderId) return;
     setSwitching(true);
     setPaymentActionError('');
+    setFlagDismissed(true);
     try {
       const res = await fetch(`/api/payments/${orderId}/status`, {
         method: 'POST',
@@ -249,7 +257,8 @@ export default function OrderStatusPage() {
   const awaitingPayment = order.status === 'placed'; // gated on online payment (PAY-1)
   const allowCounter = canPayAtCounter(order); // issue-1: guest/table-QR orders never see this offered
   const displayedPaymentError =
-    paymentActionError || paymentFlagMessage(searchParams.get('payment'), allowCounter);
+    paymentActionError ||
+    (flagDismissed ? '' : paymentFlagMessage(searchParams.get('payment'), allowCounter));
 
   return (
     <div className="mx-auto max-w-xl px-4 py-12">
