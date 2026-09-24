@@ -23,6 +23,8 @@ import {
   isActiveOrderStatus,
 } from '@/lib/account/orderDisplay';
 import { Spinner } from '@/components/ui/Spinner';
+import { TasteProfileCard } from '@/components/account/TasteProfileCard';
+import { flags } from '@/lib/flags';
 import type { OrderResponse } from '@/lib/api/orders';
 
 const SECTIONS = [
@@ -142,6 +144,8 @@ export default function AccountHomePage() {
           </ul>
         </div>
       ) : null}
+
+      {flags.suggest ? <TasteProfileCard /> : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
         {SECTIONS.map((s) => (

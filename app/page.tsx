@@ -5,6 +5,7 @@ import { CartProvider } from '@/lib/cart/CartContext';
 import { CAFE_ADDRESS, CAFE_HOURS_HOME, MENU_CATEGORIES } from '@/lib/constants';
 import { buttonVariants } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { flags } from '@/lib/flags';
 // Owned by the promotions engineer (components/promotions/**); imported
 // here (not built here) since it's already self-contained (fetches its own
 // data, handles empty/error states, per-session dismiss) — mounting it is
@@ -61,6 +62,11 @@ function HeroSection() {
             <Link href="/menu" className={buttonVariants({ size: 'lg' })}>
               Order Now
             </Link>
+            {flags.suggest ? (
+              <Link href="/suggest" className={buttonVariants({ size: 'lg', variant: 'secondary' })}>
+                Not sure? Help me choose ☕
+              </Link>
+            ) : null}
             <span className="text-sm text-muted">{CAFE_HOURS_HOME}</span>
           </div>
         </div>
