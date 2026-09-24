@@ -12,6 +12,12 @@ export interface ModalProps {
   /** Optional pinned bottom bar (e.g. a submit button), rendered outside the scrollable body. */
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg';
+  /** Optional line under the title (e.g. an item description), clamped to 2 lines. */
+  subtitle?: ReactNode;
+  /** Tightens header/body/footer padding and the title size — for content-dense modals
+   * (e.g. item customization) that would otherwise lose body space to chrome. Off by
+   * default so every other modal keeps its current look. */
+  dense?: boolean;
 }
 
 const SIZE_CLASSES: Record<NonNullable<ModalProps['size']>, string> = {
@@ -28,7 +34,16 @@ const SIZE_CLASSES: Record<NonNullable<ModalProps['size']>, string> = {
  * has to supply `title` + content. Renders nothing when `open` is false —
  * callers control mount/unmount, so no exit animation is attempted.
  */
-export function Modal({ open, onClose, title, children, footer, size = 'md' }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  size = 'md',
+  subtitle,
+  dense = false,
+}: ModalProps) {
   const titleId = useId();
 
   useEffect(() => {
@@ -65,10 +80,15 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
         aria-labelledby={titleId}
         className={`relative flex max-h-[85vh] w-full animate-scale-in flex-col rounded-md bg-cream shadow-elevated ${SIZE_CLASSES[size]}`}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-line px-6 py-4">
-          <h2 id={titleId} className="text-lg font-bold text-charcoal">
-            {title}
-          </h2>
+        <div
+          className={`flex items-start justify-between gap-3 border-b border-line ${dense ? 'px-4 py-3' : 'px-6 py-4'}`}
+        >
+          <div className="min-w-0">
+            <h2 id={titleId} className={`font-bold text-charcoal ${dense ? 'text-base' : 'text-lg'}`}>
+              {title}
+            </h2>
+            {subtitle ? <p className="mt-0.5 line-clamp-2 text-xs text-muted">{subtitle}</p> : null}
+          </div>
           <button
             type="button"
             aria-label="Close"
@@ -78,8 +98,8 @@ export function Modal({ open, onClose, title, children, footer, size = 'md' }: M
             &times;
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
-        {footer ? <div className="border-t border-line px-6 py-4">{footer}</div> : null}
+        <div className={`flex-1 overflow-y-auto ${dense ? 'px-4 py-3' : 'px-6 py-4'}`}>{children}</div>
+        {footer ? <div className={`border-t border-line ${dense ? 'px-4 py-3' : 'px-6 py-4'}`}>{footer}</div> : null}
       </div>
     </div>,
     document.body,
