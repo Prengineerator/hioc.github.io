@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
 import { collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
@@ -13,7 +13,7 @@ import { generatePickupSlots } from '@/lib/store/hours';
 import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { createClient } from '@/lib/supabase';
-import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
+import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
 
@@ -367,6 +367,17 @@ export function CheckoutForm({
   const effectivePaymentMode: 'online' | 'counter' = isGuest ? 'online' : paymentMode;
   const guestCannotPay = isGuest && !ONLINE_PAYMENT_AVAILABLE;
 
+  // Perf: start downloading Razorpay's Checkout.js as soon as "online" becomes
+  // the effective payment choice, instead of only starting when the order is
+  // actually placed — so by the time placeOrder() opens the modal, the script
+  // is already loaded (or loading) rather than the customer watching a blank
+  // pause while it downloads. Safe to call repeatedly (memoized internally).
+  useEffect(() => {
+    if (ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online') {
+      preloadRazorpay();
+    }
+  }, [effectivePaymentMode]);
+
   // Bring the newly revealed payment choice into view right after a number is
   // verified — the OTP box they were typing in sits below it.
   const paymentSectionRef = useRef<HTMLDivElement>(null);
@@ -512,14 +523,14 @@ export function CheckoutForm({
 
   const guestBlocker = mustVerify ? guestReadinessBlocker() : null;
 
-  return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
-      <h2 className="mb-4 text-lg font-bold text-charcoal">Your Details</h2>
+  const anySavings = couponDiscountInr > 0 && pointsDiscountInr > 0;
 
+  return (
+    <div className="flex flex-col gap-4 md:gap-5">
       {serverError ? (
         <div
           role="alert"
-          className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+          className="rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
         >
           {serverError}
         </div>
@@ -528,7 +539,7 @@ export function CheckoutForm({
       {unavailableNames.length > 0 ? (
         <div
           role="alert"
-          className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+          className="rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
         >
           <p className="font-bold">
             {unavailableNames.join(', ')} {unavailableNames.length === 1 ? 'is' : 'are'} no
@@ -538,229 +549,281 @@ export function CheckoutForm({
         </div>
       ) : null}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-        <div>
-          <label htmlFor="name" className="mb-1 block text-sm font-bold text-charcoal">
-            Name
-          </label>
-          <input
-            id="name"
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Ayush"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-        </div>
-
-        {isGuest ? (
-          <p className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
-            Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
-            follow your order on the next page.{' '}
-            <a href="/login?next=/checkout" className="font-bold text-tan underline">
-              Log in
-            </a>{' '}
-            to get WhatsApp updates or pay at the counter.
-          </p>
-        ) : (
-          <>
-        <div>
-          <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
-            Phone
-          </label>
-          <input
-            id="phone"
-            type="tel"
-            required
-            maxLength={16}
-            value={phone}
-            onChange={(e) => onPhoneChange(e.target.value)}
-            onBlur={(e) => validatePhone(e.target.value)}
-            placeholder="e.g. 98765 43210"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-          {phoneError ? (
-            <p className="mt-1 text-sm text-charcoal">{phoneError}</p>
-          ) : null}
-          {/* The actual "Get OTP" control (ACC-4) lives at the bottom of the
-              form now, as the last step before placing the order — see the
-              submit area below. This just sets the expectation early. */}
-          {!accountPhoneMatches ? (
-            <p className="mt-1 text-xs text-muted">
-              We&apos;ll WhatsApp a verification code to this number as the last step, right
-              before your order is placed.
-            </p>
-          ) : null}
-        </div>
-
-        <div>
-          <label htmlFor="email" className="mb-1 block text-sm font-bold text-charcoal">
-            Email <span className="font-normal text-muted">(optional — for your bill)</span>
-          </label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              if (emailError) setEmailError(null);
-            }}
-            placeholder="you@example.com"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-          {emailError ? <p className="mt-1 text-sm text-charcoal">{emailError}</p> : null}
-        </div>
-          </>
-        )}
-
-        <div>
-          <label htmlFor="order-type" className="mb-1 block text-sm font-bold text-charcoal">
-            Order Type
-          </label>
-          <select
-            id="order-type"
-            value={orderType}
-            onChange={(e) => setOrderType(e.target.value as OrderType)}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          >
-            {ORDER_TYPE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label htmlFor="pickup" className="mb-1 block text-sm font-bold text-charcoal">
-            Pickup Time
-          </label>
-          {slots.length === 0 ? (
-            <p className="text-sm text-muted">
-              {settings ? 'No pickup slots available right now.' : 'Loading pickup times…'}
-            </p>
-          ) : (
-            <select
-              id="pickup"
-              value={slotStart ?? ''}
-              onChange={(e) => setSlotStart(e.target.value)}
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-            >
-              {slots.map((slot) => (
-                <option key={slot.start || 'asap'} value={slot.start}>
-                  {slot.label}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div>
-          <label htmlFor="notes" className="mb-1 block text-sm font-bold text-charcoal">
-            Notes (optional)
-          </label>
-          <textarea
-            id="notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Any special requests for the whole order"
-            rows={3}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-        </div>
-
-        {/* Coupon code (FND-3/LOY-2). */}
-        <div>
-          <label htmlFor="coupon" className="mb-1 block text-sm font-bold text-charcoal">
-            Coupon code (optional)
-          </label>
-          {couponApplied ? (
-            <div className="flex items-center justify-between rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal">
-              <span>
-                <span className="font-bold uppercase">{couponApplied}</span> applied — save ₹{couponDiscountInr}
-              </span>
-              <button type="button" onClick={removeCoupon} className="text-xs font-bold text-muted underline">
-                Remove
-              </button>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <input
-                id="coupon"
-                type="text"
-                value={couponInput}
-                onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
-                placeholder="e.g. WELCOME10"
-                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-              />
-              <button
-                type="button"
-                onClick={applyCoupon}
-                disabled={couponBusy || !couponInput.trim()}
-                className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
-              >
-                {couponBusy ? '…' : 'Apply'}
-              </button>
-            </div>
-          )}
-          {couponError ? <p className="mt-1 text-xs text-red-700">{couponError}</p> : null}
-        </div>
-
-        {/* Points redemption (FND-4/LOY-1) — logged-in customers only. */}
-        {userId ? (
+      {/* No single outer card any more (that's what made coupons and points
+          read as just two more rows in one long list) — each concern below is
+          its own titled, bordered card, so contact details, order details,
+          offers/rewards, the bill, and payment are all visually distinct. */}
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4 md:gap-5" noValidate>
+        <Section title="1 · Your details">
           <div>
-            <label htmlFor="points" className="mb-1 block text-sm font-bold text-charcoal">
-              Redeem points{balance !== null ? ` (you have ${balance})` : ''}
+            <label htmlFor="name" className="mb-1 block text-sm font-bold text-charcoal">
+              Name
             </label>
-            {pointsApplied ? (
-              <div className="flex items-center justify-between rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal">
-                <span>
-                  {pointsApplied} points applied — save ₹{pointsDiscountInr}
-                </span>
-                <button type="button" onClick={removePoints} className="text-xs font-bold text-muted underline">
-                  Remove
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                <input
-                  id="points"
-                  type="number"
-                  min={0}
-                  inputMode="numeric"
-                  value={pointsInput}
-                  onChange={(e) => setPointsInput(e.target.value)}
-                  placeholder="e.g. 50"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-                />
-                <button
-                  type="button"
-                  onClick={applyPoints}
-                  disabled={pointsBusy || !pointsInput.trim()}
-                  className="shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
-                >
-                  {pointsBusy ? '…' : 'Apply'}
-                </button>
-              </div>
-            )}
-            {pointsError ? <p className="mt-1 text-xs text-red-700">{pointsError}</p> : null}
+            <input
+              id="name"
+              type="text"
+              required
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Ayush"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+            />
           </div>
-        ) : null}
+
+          {isGuest ? (
+            <p className="rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
+              Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
+              follow your order on the next page.{' '}
+              <a href="/login?next=/checkout" className="font-bold text-tan underline">
+                Log in
+              </a>{' '}
+              to get WhatsApp updates or pay at the counter.
+            </p>
+          ) : (
+            <>
+              <div>
+                <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
+                  Phone
+                </label>
+                <input
+                  id="phone"
+                  type="tel"
+                  required
+                  maxLength={16}
+                  value={phone}
+                  onChange={(e) => onPhoneChange(e.target.value)}
+                  onBlur={(e) => validatePhone(e.target.value)}
+                  placeholder="e.g. 98765 43210"
+                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+                />
+                {phoneError ? (
+                  <p className="mt-1 text-sm text-charcoal">{phoneError}</p>
+                ) : null}
+                {/* The actual "Get OTP" control (ACC-4) lives at the bottom of the
+                    form now, as the last step before placing the order — see the
+                    submit area below. This just sets the expectation early. */}
+                {!accountPhoneMatches ? (
+                  <p className="mt-1 text-xs text-muted">
+                    We&apos;ll WhatsApp a verification code to this number as the last step, right
+                    before your order is placed.
+                  </p>
+                ) : null}
+              </div>
+
+              <div>
+                <label htmlFor="email" className="mb-1 block text-sm font-bold text-charcoal">
+                  Email <span className="font-normal text-muted">(optional — for your bill)</span>
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (emailError) setEmailError(null);
+                  }}
+                  placeholder="you@example.com"
+                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+                />
+                {emailError ? <p className="mt-1 text-sm text-charcoal">{emailError}</p> : null}
+              </div>
+            </>
+          )}
+        </Section>
+
+        <Section title="2 · Order details">
+          <div>
+            <span id="order-type" className="mb-1 block text-sm font-bold text-charcoal">
+              Order Type
+            </span>
+            <div role="group" aria-labelledby="order-type" className="grid grid-cols-2 gap-2">
+              {ORDER_TYPE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  aria-pressed={orderType === opt.value}
+                  onClick={() => setOrderType(opt.value)}
+                  className={
+                    'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                    (orderType === opt.value
+                      ? 'border-tan bg-surface text-tan-dark'
+                      : 'border-line text-charcoal hover:border-tan')
+                  }
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="pickup" className="mb-1 block text-sm font-bold text-charcoal">
+              Pickup Time
+            </label>
+            {slots.length === 0 ? (
+              <p className="text-sm text-muted">
+                {settings ? 'No pickup slots available right now.' : 'Loading pickup times…'}
+              </p>
+            ) : (
+              <select
+                id="pickup"
+                value={slotStart ?? ''}
+                onChange={(e) => setSlotStart(e.target.value)}
+                className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              >
+                {slots.map((slot) => (
+                  <option key={slot.start || 'asap'} value={slot.start}>
+                    {slot.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="notes" className="mb-1 block text-sm font-bold text-charcoal">
+              Notes (optional)
+            </label>
+            <textarea
+              id="notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Any special requests for the whole order"
+              rows={2}
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+            />
+          </div>
+        </Section>
+
+        {/* Offers & rewards (FND-3/FND-4/LOY-1/LOY-2) — deliberately called out
+            with a coupon-like dashed tan border so it reads as a distinct,
+            discoverable perk rather than blending into the rest of the form. */}
+        <div className="rounded-md border border-dashed border-tan bg-surface p-4 md:p-5">
+          <h2 className="mb-3 text-sm font-bold text-tan-dark">Offers &amp; rewards</h2>
+          <div className="flex flex-col gap-4">
+            {/* Coupon code. */}
+            <div>
+              <div className="mb-1 flex items-center gap-1.5">
+                <TicketIcon />
+                <label htmlFor="coupon" className="text-sm font-bold text-charcoal">
+                  Have a coupon?
+                </label>
+              </div>
+              {couponApplied ? (
+                <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
+                  <span>
+                    <span className="font-bold uppercase">{couponApplied}</span> applied · You
+                    save ₹{couponDiscountInr}
+                  </span>
+                  <button type="button" onClick={removeCoupon} className="shrink-0 text-xs font-bold text-muted underline">
+                    Remove
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    id="coupon"
+                    type="text"
+                    value={couponInput}
+                    onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                    placeholder="e.g. WELCOME10"
+                    className="w-full rounded-md border border-line bg-cream px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyCoupon}
+                    disabled={couponBusy || !couponInput.trim()}
+                    className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+                  >
+                    {couponBusy ? '…' : 'Apply'}
+                  </button>
+                </div>
+              )}
+              {couponError ? <p className="mt-1 text-xs text-red-700">{couponError}</p> : null}
+            </div>
+
+            {/* Points redemption — logged-in customers only (coupons need no
+                login, so guests still see the coupon block above). */}
+            {userId ? (
+              <>
+                <div className="border-t border-dashed border-tan/50" />
+                <div>
+                  <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <StarIcon />
+                      <label htmlFor="points" className="text-sm font-bold text-charcoal">
+                        Redeem points
+                      </label>
+                    </div>
+                    {balance !== null ? (
+                      <span className="rounded-full border border-tan/50 bg-cream px-2 py-0.5 text-xs font-bold text-tan-dark">
+                        Balance: {balance} pts
+                      </span>
+                    ) : null}
+                  </div>
+                  {pointsApplied ? (
+                    <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
+                      <span>
+                        {pointsApplied} pts applied · You save ₹{pointsDiscountInr}
+                      </span>
+                      <button type="button" onClick={removePoints} className="shrink-0 text-xs font-bold text-muted underline">
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <input
+                        id="points"
+                        type="number"
+                        min={0}
+                        inputMode="numeric"
+                        value={pointsInput}
+                        onChange={(e) => setPointsInput(e.target.value)}
+                        placeholder="e.g. 50"
+                        className="w-full rounded-md border border-line bg-cream px-3 py-2 text-charcoal outline-none focus:border-tan"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyPoints}
+                        disabled={pointsBusy || !pointsInput.trim()}
+                        className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+                      >
+                        {pointsBusy ? '…' : 'Apply'}
+                      </button>
+                    </div>
+                  )}
+                  {pointsError ? <p className="mt-1 text-xs text-red-700">{pointsError}</p> : null}
+                </div>
+              </>
+            ) : null}
+
+            {anySavings ? (
+              <p className="border-t border-dashed border-tan/50 pt-3 text-sm font-bold text-tan-dark">
+                Total savings ₹{couponDiscountInr + pointsDiscountInr}
+              </p>
+            ) : null}
+          </div>
+        </div>
 
         {/* Bill breakup (C5/PAY-1) — subtotal, GST, packaging, coupon,
-            points, grand total, each a labeled line. */}
-        <div className="rounded-md border border-[#e5e5e5] px-4 py-3 text-sm text-charcoal">
-          <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
-          {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
-          {displayBill.packaging_inr > 0 ? <BillRow label="Packaging" value={displayBill.packaging_inr} /> : null}
-          {couponDiscountInr > 0 ? <BillRow label="Coupon discount" value={-couponDiscountInr} /> : null}
-          {pointsDiscountInr > 0 ? <BillRow label="Points redeemed" value={-pointsDiscountInr} /> : null}
-          <div className="mt-2 flex items-center justify-between border-t border-[#e5e5e5] pt-2">
-            <span className="font-bold text-charcoal">Total</span>
-            <span className="font-bold text-tan">₹{displayBill.total_inr}</span>
+            points, grand total, each a labeled line, its own card. */}
+        <Section title="Bill summary">
+          <div className="flex flex-col text-sm text-charcoal">
+            <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
+            {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
+            {displayBill.packaging_inr > 0 ? <BillRow label="Packaging" value={displayBill.packaging_inr} /> : null}
+            {couponDiscountInr > 0 ? (
+              <BillRow label={`Coupon (${couponApplied})`} value={-couponDiscountInr} tone="success" />
+            ) : null}
+            {pointsDiscountInr > 0 ? (
+              <BillRow label={`Points (${pointsApplied} pts)`} value={-pointsDiscountInr} tone="success" />
+            ) : null}
+            <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
+              <span className="font-bold text-charcoal">Total</span>
+              <span className="font-bold text-tan">₹{displayBill.total_inr}</span>
+            </div>
           </div>
-        </div>
+        </Section>
 
         {/* The verified-number confirmation, right above the payment choice it unlocked. */}
         {phoneVerified ? <PhoneOtpPanel otp={otp} /> : null}
@@ -768,14 +831,14 @@ export function CheckoutForm({
         {/* Pay online / pay at counter (PAY-1). Hidden until the number is
             verified — see mustVerify. Guests get online payment only. */}
         {mustVerify ? null : isGuest ? (
-          <div ref={paymentSectionRef}>
+          <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
             <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
             {guestCannotPay ? (
               <div className="mb-2">
                 <PayOnlineUnavailableButton />
               </div>
             ) : null}
-            <p className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+            <p className="rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
               {guestCannotPay ? (
                 <>Online payment is unavailable right now. </>
               ) : (
@@ -791,7 +854,7 @@ export function CheckoutForm({
             </p>
           </div>
         ) : ONLINE_PAYMENT_AVAILABLE ? (
-          <div ref={paymentSectionRef}>
+          <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
             <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -800,8 +863,8 @@ export function CheckoutForm({
                 className={
                   'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
                   (paymentMode === 'online'
-                    ? 'border-tan bg-[#f6efe9] text-tan-dark'
-                    : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                    ? 'border-tan bg-surface text-tan-dark'
+                    : 'border-line text-charcoal hover:border-tan')
                 }
               >
                 Pay online
@@ -812,14 +875,14 @@ export function CheckoutForm({
                 className={
                   'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
                   (paymentMode === 'counter'
-                    ? 'border-tan bg-[#f6efe9] text-tan-dark'
-                    : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                    ? 'border-tan bg-surface text-tan-dark'
+                    : 'border-line text-charcoal hover:border-tan')
                 }
               >
                 Pay at counter
               </button>
             </div>
-            <p className="mt-2 rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+            <p className="mt-2 rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
               {paymentMode === 'online'
                 ? 'Pay now via UPI, card, or netbanking — your order joins the kitchen queue as soon as payment is confirmed.'
                 : 'Pay at the counter on pickup — no online payment required.'}
@@ -829,19 +892,19 @@ export function CheckoutForm({
           // Gateway not configured (e.g. a preview without Razorpay keys) or
           // switched off: keep online payment VISIBLE but greyed out, so it
           // reads as "temporarily unavailable" rather than as a missing feature.
-          <div ref={paymentSectionRef}>
+          <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
             <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
             <div className="grid grid-cols-2 gap-2">
               <PayOnlineUnavailableButton />
               <button
                 type="button"
                 aria-pressed="true"
-                className="rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm font-bold text-tan-dark"
+                className="rounded-md border border-tan bg-surface px-3 py-2 text-sm font-bold text-tan-dark"
               >
                 Pay at counter
               </button>
             </div>
-            <p className="mt-2 rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+            <p className="mt-2 rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
               Online payment is temporarily unavailable — pay at the counter on pickup.
             </p>
           </div>
@@ -895,6 +958,20 @@ export function CheckoutForm({
   );
 }
 
+// A titled, bordered card — the basic unit the checkout form is built from
+// now, instead of one long flat list inside a single outer card. Kept tiny on
+// purpose: sections whose content needs special treatment (Offers & rewards'
+// highlighted tan card, Payment's ref + three variants) build their own
+// wrapper instead of forcing everything through one prop-heavy component.
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded-md border border-line bg-cream p-4 md:p-5">
+      <h2 className="mb-3 text-sm font-bold text-charcoal">{title}</h2>
+      <div className="flex flex-col gap-4">{children}</div>
+    </div>
+  );
+}
+
 // Shown in place of the live "Pay online" choice while the gateway is not
 // configured — disabled, so the option stays visible without being usable.
 function PayOnlineUnavailableButton() {
@@ -903,7 +980,7 @@ function PayOnlineUnavailableButton() {
       type="button"
       disabled
       aria-disabled="true"
-      className="w-full cursor-not-allowed rounded-md border border-dashed border-[#e5e5e5] px-3 py-2 text-sm font-bold text-muted opacity-60"
+      className="w-full cursor-not-allowed rounded-md border border-dashed border-line px-3 py-2 text-sm font-bold text-muted opacity-60"
     >
       Pay online
       <span className="block text-xs font-normal">Temporarily unavailable</span>
@@ -911,11 +988,53 @@ function PayOnlineUnavailableButton() {
   );
 }
 
-function BillRow({ label, value }: { label: string; value: number }) {
+// `tone="success"` is used for an applied coupon/points line in the bill —
+// green rather than the plain charcoal every other row uses, so a discount
+// that's actually in effect is visually obvious at a glance.
+function BillRow({ label, value, tone }: { label: string; value: number; tone?: 'success' }) {
+  const toneClass = tone === 'success' ? 'font-bold text-green-700' : '';
   return (
     <div className="flex items-center justify-between py-0.5">
-      <span>{label}</span>
-      <span>{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
+      <span className={toneClass}>{label}</span>
+      <span className={toneClass}>{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
     </div>
+  );
+}
+
+// Small inline icons for the Offers & rewards card — a ticket for the coupon
+// block, a star for points — so the two sub-sections are distinguishable at a
+// glance even before reading their labels.
+function TicketIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className="shrink-0 text-tan-dark"
+    >
+      <path d="M3 9a2 2 0 0 0 0 4v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a2 2 0 0 1 0-4V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v3Z" />
+      <path d="M9 4v16" strokeDasharray="2.5 2.5" />
+    </svg>
+  );
+}
+
+function StarIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      className="shrink-0 text-tan-dark"
+    >
+      <path d="M12 2.5l2.9 6.06 6.6.77-4.86 4.6 1.28 6.57L12 17.9l-5.92 3.6 1.28-6.57-4.86-4.6 6.6-.77L12 2.5Z" />
+    </svg>
   );
 }

@@ -46,6 +46,18 @@ function loadRazorpayScript(): Promise<boolean> {
   return scriptPromise;
 }
 
+/**
+ * Kicks off the Checkout.js download ahead of time (e.g. as soon as the
+ * checkout form's effective payment mode is "online"), so by the time the
+ * order is actually placed the script is already cached/loading instead of
+ * only starting then — shaving a full script-download round trip off the gap
+ * between "Place Order" and the Razorpay modal opening. Safe to call more than
+ * once (loadRazorpayScript memoizes) and safe to call on the server (no-ops).
+ */
+export function preloadRazorpay(): void {
+  void loadRazorpayScript();
+}
+
 export interface OpenCheckoutOptions {
   name: string;
   phone: string;
