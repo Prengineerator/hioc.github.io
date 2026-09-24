@@ -90,7 +90,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   const admin = createAdminSupabaseClient();
   const { data: current, error: readError } = await admin
     .from('orders')
-    .select('id, status, version, payment_status, total_inr')
+    .select('id, status, version, payment_status, total_inr, channel, user_id')
     .eq('id', orderId)
     .maybeSingle();
   if (readError) return errorResponse(500, 'Failed to load order');
@@ -98,6 +98,22 @@ export async function POST(request: Request, { params }: RouteParams) {
 
   if (current.payment_status === 'paid') {
     return errorResponse(409, 'This order is already paid.');
+  }
+
+  // Issue-1: a web GUEST (no session — see POST /api/orders' isWebGuest) and a
+  // table-QR order (QR-1/D6) must pay online — "nothing enters the queue
+  // unpaid" for either. There is no pay-at-counter flow for them, so a failed
+  // or abandoned online payment must not be routed around that rule.
+  if (action === 'switch_to_counter') {
+    const mustPayOnline =
+      current.channel === 'table_qr' ||
+      (current.channel === 'customer_web' && !current.user_id);
+    if (mustPayOnline) {
+      return errorResponse(
+        403,
+        'Guest orders must be paid online. Please retry the payment.',
+      );
+    }
   }
 
   if (action === 'retry') {

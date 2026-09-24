@@ -819,13 +819,19 @@ export async function POST(request: Request) {
   // via the notification engine. Best-effort and never throws — a slow or
   // unconfigured provider can't block or fail order creation. Each channel is
   // dormant until configured.
-  // It is the customer's order confirmation, so it goes out only for an order
-  // that is actually confirmed: an online order still waiting on payment
-  // ('placed') gets it from lib/payments/reconcile.ts at the moment payment is
-  // captured and the order enters the queue — never for an abandoned payment.
-  // A staff-created order is settled later (POS-2); its bill fires at settle
-  // (RCT-1), so we don't send an unpaid bill at creation time.
-  if (!isStaff && response.status !== 'placed') {
+  // Issue-3: a bill must only go out once a payment is actually RECORDED —
+  // never a bill for money not yet collected. The only order that's genuinely
+  // settled at creation time is a fully-discounted ₹0 order (payment_status
+  // 'paid' from the top, above). Every other order gets its bill later,
+  // exactly when it's actually paid: an online order (web or table-QR) at the
+  // moment payment is captured (lib/payments/reconcile.ts); an unpaid
+  // pay-at-counter order (including the gateway-unavailable fallback above,
+  // and a guest order switched to counter — which can't happen any more, see
+  // issue-1 — were it ever unpaid) at staff settlement
+  // (app/api/orders/[id]/payment/route.ts) or at the completed transition
+  // once paid (app/api/orders/[id]/status/route.ts). A staff-created order is
+  // always settled later too (POS-2) — never billed here.
+  if (!isStaff && response.payment_status === 'paid') {
     runAfterResponse(sendBillNotification(response));
   }
 

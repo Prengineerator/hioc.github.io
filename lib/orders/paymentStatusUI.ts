@@ -1,0 +1,35 @@
+// Pure decision helpers for the customer order-status page's payment-pending
+// UI (app/order/[id]/page.tsx, PAY-2). Pulled out of the page component so
+// they're unit-testable without a React rendering harness (a Next.js `page.tsx`
+// may only export the reserved route-module names — see its type error if you
+// try) — and so the two related decisions (can this order pay at counter? what
+// does the payment-flag banner say?) live in one obviously-paired place.
+
+import type { Order } from '@/lib/types';
+
+// Issue-1: a web guest (no session) or a table-QR order must pay online —
+// there's no pay-at-counter fallback for them (see POST /api/orders' isWebGuest
+// and POST /api/payments/[orderId]/status), so neither is ever offered, or
+// told about, "pay at counter".
+export function canPayAtCounter(order: Pick<Order, 'channel' | 'user_id'>): boolean {
+  if (order.channel === 'table_qr') return false;
+  if (order.channel === 'customer_web' && !order.user_id) return false;
+  return true;
+}
+
+// Set by CheckoutForm when the Razorpay modal closes without a verified
+// payment, and re-derived from the ?payment= flag once the order (and
+// therefore whether it can pay at counter) has loaded.
+export function paymentFlagMessage(flag: string | null, allowCounter: boolean): string {
+  if (flag === 'cancelled') {
+    return allowCounter
+      ? 'Payment was cancelled — you can retry or pay at the counter.'
+      : 'Payment was cancelled — please retry the payment.';
+  }
+  if (flag === 'failed') {
+    return allowCounter
+      ? "Your payment didn't go through — you can retry or pay at the counter."
+      : "Your payment didn't go through — please retry the payment.";
+  }
+  return '';
+}

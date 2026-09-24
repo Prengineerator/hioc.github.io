@@ -191,20 +191,30 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     // order skipped the placement send (it's settled here), so this is its bill; a
     // web order whose bill already sent at placement no-ops via the engine's
     // per-(order,event,channel) idempotency, and a no-phone/no-email order skips
-    // cleanly (FND3-5). Best-effort — the whole block is wrapped so a slow or
-    // failing send never fails the settle transition (the printed bill is the
-    // guaranteed copy). We reload the order with its lines so the bill's item
-    // count ({{4}}) is accurate — `order` above is a plain select('*') row and
-    // carries the payment fields but not the embedded items.
-    try {
-      const { data: full } = await admin
-        .from('orders')
-        .select('*, order_items(*, order_item_addons(*))')
-        .eq('id', id)
-        .single();
-      await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : order);
-    } catch (billError) {
-      console.error('settle bill notification failed', billError);
+    // cleanly (FND3-5).
+    // Issue-3: only when the order is actually PAID by the time it completes —
+    // most order types (takeaway/delivery) have no settlement guard on this
+    // transition, so an unpaid counter order could otherwise complete and get
+    // a bill for money never collected. `order` is the just-guarded UPDATE
+    // result, so it carries the current payment_status — including the
+    // FND3-5 manager-comp override above, which sets it to 'paid' BEFORE this
+    // transition lands, so a comped dine-in still bills here.
+    // Best-effort — the whole block is wrapped so a slow or failing send never
+    // fails the settle transition (the printed bill is the guaranteed copy).
+    // We reload the order with its lines so the bill's item count ({{4}}) is
+    // accurate — `order` above is a plain select('*') row and carries the
+    // payment fields but not the embedded items.
+    if (order.payment_status === 'paid') {
+      try {
+        const { data: full } = await admin
+          .from('orders')
+          .select('*, order_items(*, order_item_addons(*))')
+          .eq('id', id)
+          .single();
+        await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : order);
+      } catch (billError) {
+        console.error('settle bill notification failed', billError);
+      }
     }
   } else if (to === 'rejected' || to === 'cancelled') {
     await reverseForOrder(id);
