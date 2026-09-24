@@ -1,0 +1,30 @@
+{
+  "name": "hioc-pos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HIOC POS desktop shell (Electron) \u2014 Phase 7 SHL + PRN",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "esbuild src/main.ts src/preload.ts --bundle --platform=node --target=node18 --format=cjs --outdir=dist --external:electron --external:electron-updater --external:usb --sourcemap",
+    "start": "npm run build && electron .",
+    "dist:win": "npm run build && npm install --no-save --force @node-usb/usb-win32-x64-msvc@3.1.0 && electron-builder --win --x64",
+    "dist:mac": "npm run build && electron-builder --mac --universal"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "optionalDependencies": {
+    "usb": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "author": "HIOC"
+}

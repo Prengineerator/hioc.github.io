@@ -51,9 +51,19 @@ export async function POST(request: Request) {
   // while leaving the cookies in place would be worse than not checking at all,
   // since the caller could simply navigate on.
   const audience = body.audience;
-  if (isValidAudience(audience) && data.user) {
+  if (data.user) {
     const role = await getUserRole(data.user);
-    if (!mayUseDoor(role, audience)) {
+    // Customers sign in with a one-time code only (WhatsApp or email) — owner
+    // rule. Password sign-in is for the staff and owner portals, so a customer
+    // account is refused here whichever door it claims (or none).
+    if (audienceForRole(role) === 'customer') {
+      await supabase.auth.signOut();
+      return errorResponse(
+        403,
+        'Customers sign in with a one-time code — use the WhatsApp or Email option on the login page.',
+      );
+    }
+    if (isValidAudience(audience) && !mayUseDoor(role, audience)) {
       await supabase.auth.signOut();
       return errorResponse(403, wrongDoorMessage(audienceForRole(role), audience));
     }

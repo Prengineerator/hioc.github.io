@@ -1,0 +1,71 @@
+# SHL-3 — packaging & distribution for the HIOC POS desktop shell.
+#
+# Signing/notarization/publish are all env-var driven placeholders (D7-7):
+# unset, the build is unsigned (Windows shows a SmartScreen warning during
+# pilot; macOS builds cannot be notarized and Gatekeeper will block them on
+# another machine). See desktop/README.md for exactly which vars to set.
+
+appId: in.hioc.pos
+productName: HIOC POS
+copyright: HIOC
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+
+# The `usb` native module's .node binary must live outside the asar archive
+# to be dlopen-able at runtime.
+asarUnpack:
+  - "**/*.node"
+
+# `usb` ships prebuilt N-API binaries per platform (@node-usb/usb-<platform>),
+# which are ABI-stable across Electron versions — nothing to recompile, and a
+# Windows build made on a Mac could not compile one anyway. The Windows binary
+# must be present in node_modules before `dist:win` (the script installs it).
+npmRebuild: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Reads CSC_LINK / CSC_KEY_PASSWORD from the environment automatically when
+  # present; unsigned otherwise.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - universal
+  category: public.app-category.business
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Reads CSC_LINK / CSC_KEY_PASSWORD for code signing automatically.
+  # Off for the unsigned pilot. With an Apple Developer account, set true and
+  # export APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (D7-7).
+  notarize: false
+
+dmg:
+  sign: false
+
+# Auto-update feed. A SEPARATE public repo that only ever holds installers —
+# the app's source stays private, and counter machines need no token to read
+# a public release. Until the repo exists the update check fails quietly.
+# Release: GH_TOKEN=... npm run dist:win -- --publish always
+publish:
+  provider: github
+  owner: Prengineerator
+  repo: hioc-pos-releases

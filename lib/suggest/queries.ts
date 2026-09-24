@@ -63,7 +63,7 @@ export async function getSuggestionStats(windowStart: string): Promise<Suggestio
       .from('orders')
       .select('total_inr, subtotal_inr')
       .eq('channel', 'customer_web')
-      .not('status', 'in', '("rejected","cancelled")')
+      .not('status', 'in', '("placed","rejected","cancelled")')
       .gte('created_at', windowStart)
       .limit(QUERY_ROW_LIMIT),
   ]);
@@ -79,7 +79,23 @@ export async function getSuggestionStats(windowStart: string): Promise<Suggestio
   }
   if (webOrdersResult.error) console.error('getSuggestionStats: web orders failed', webOrdersResult.error);
 
-  const eventRows = (eventsResult.data ?? []) as SuggestionEventRow[];
+  // An 'ordered' event is written when the order row is created — for an
+  // online-paid order that is BEFORE payment. Count it only once the order is
+  // real: an order still 'placed' (payment not completed) or later cancelled /
+  // rejected (e.g. auto-expired unpaid) is not suggestion revenue.
+  const rawEvents = (eventsResult.data ?? []) as SuggestionEventRow[];
+  const orderedIds = [...new Set(rawEvents.filter((e) => e.event === 'ordered' && e.order_id).map((e) => e.order_id as string))];
+  let liveOrderIds = new Set<string>();
+  if (orderedIds.length > 0) {
+    const { data: liveOrders, error: liveErr } = await admin
+      .from('orders')
+      .select('id')
+      .in('id', orderedIds)
+      .not('status', 'in', '("placed","rejected","cancelled")');
+    if (liveErr) console.error('getSuggestionStats: attributed order status failed', liveErr);
+    else liveOrderIds = new Set((liveOrders ?? []).map((o) => o.id as string));
+  }
+  const eventRows = rawEvents.filter((e) => e.event !== 'ordered' || (e.order_id !== null && liveOrderIds.has(e.order_id)));
   const webOrderRows = (webOrdersResult.data ?? []) as { total_inr: number | null; subtotal_inr: number }[];
 
   const itemIds = [...new Set(eventRows.map((e) => e.menu_item_id).filter((id): id is string => Boolean(id)))];

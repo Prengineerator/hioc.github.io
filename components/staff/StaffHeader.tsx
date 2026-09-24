@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
+import { getDesktopBridge } from '@/lib/desktop/bridge';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -55,6 +56,16 @@ export function StaffHeader({
   // tablet/desktop header don't fit a 360–414px phone, so below md they move
   // into a collapsible drawer behind a hamburger button instead.
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // PRN-1 — "Printers" only makes sense inside the desktop app, which is the
+  // only place `window.hiocDesktop` exists. Checked after mount, not during
+  // render: SSR has no `window` at all, so doing this synchronously would
+  // make the very first client render disagree with the server-rendered HTML.
+  const [hasDesktopBridge, setHasDesktopBridge] = useState(false);
+  useEffect(() => {
+    setHasDesktopBridge(getDesktopBridge() !== null);
+  }, []);
+  const tabs = hasDesktopBridge ? [...TABS, { href: '/staff/printers', label: 'Printers' }] : TABS;
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
   // the Store controls section on the Menu page. Best-effort — a failed fetch
@@ -132,7 +143,7 @@ export function StaffHeader({
               md, where it moves into the drawer instead. */}
           <nav className="hidden md:block">
             <ul className="flex items-center gap-4 text-sm">
-              {TABS.map((tab) => {
+              {tabs.map((tab) => {
                 const isActive = pathname === toHref(tab.href);
                 return (
                   <li key={tab.href}>
@@ -197,7 +208,7 @@ export function StaffHeader({
         <div id="staff-mobile-menu" className="border-t border-cream/10 px-4 pb-4 md:hidden">
           <nav>
             <ul className="flex flex-col gap-1 pt-3 text-sm">
-              {TABS.map((tab) => {
+              {tabs.map((tab) => {
                 const isActive = pathname === toHref(tab.href);
                 return (
                   <li key={tab.href}>

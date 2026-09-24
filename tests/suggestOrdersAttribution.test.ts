@@ -78,7 +78,10 @@ vi.mock('@/lib/supabase-server', () => ({
           }
           return Promise.resolve({ error: null });
         },
-        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        maybeSingle: () =>
+          table === 'profiles'
+            ? Promise.resolve({ data: { phone: '+919876543210', phone_verified: true }, error: null })
+            : Promise.resolve({ data: null, error: null }),
         single: () => {
           if (table === 'order_items') return Promise.resolve({ data: { id: 'oi-1' }, error: null });
           if (table === 'orders' && ctx.inserted) {
@@ -147,7 +150,10 @@ beforeEach(() => {
   state.orderInsert = undefined;
   state.insertedEvents = [];
   state.profileUpdates = [];
-  state.sessionUser = null;
+  // Signed in with a verified phone: guest orders must now be paid online and
+  // every web order needs a verified mobile, so a counter-paid order is placed
+  // the way a real signed-in customer places it.
+  state.sessionUser = { id: 'user-1' };
   state.sessionRows = [
     {
       id: SESSION_ID,
@@ -207,7 +213,6 @@ describe('POST /api/orders — SUG-9 suggestion attribution', () => {
   });
 
   it('marks the taste profile stale for a signed-in order (best-effort)', async () => {
-    state.sessionUser = { id: 'user-1' };
     const res = await POST(orderRequest());
     expect(res.status).toBe(201);
     expect(state.profileUpdates.some((u) => u.user_id === 'user-1')).toBe(true);

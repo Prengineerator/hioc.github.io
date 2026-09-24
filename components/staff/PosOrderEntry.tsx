@@ -57,6 +57,7 @@ import type { PaymentPart } from '@/lib/orders/payments';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { POS_FALLBACK_ORDER_TYPE, resolveDefaultOrderType } from '@/lib/pos/deviceSettings';
+import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import {
   billStatusFromDelivery,
   billStatusTone,
@@ -755,6 +756,13 @@ export function PosOrderEntry({
           changeDue = payData.change_due_inr ?? 0;
           if (payData.order) totalInr = payData.order.total_inr ?? payData.order.subtotal_inr;
           settled = true;
+          // PRN-6 — pop the drawer now that the cash (or cash-part) sale is
+          // actually recorded. No-op outside the desktop app or on a machine
+          // with no drawer printer; a real failure comes back as a message
+          // rather than throwing, so a dead drawer never looks like a failed
+          // sale — the money is already taken.
+          const drawerError = await openDrawerIfCash(parts);
+          if (drawerError) note = drawerError;
         } else {
           // The order is already created and on the board — a settle failure is
           // recoverable from the queue, so don't strand the counter here. The

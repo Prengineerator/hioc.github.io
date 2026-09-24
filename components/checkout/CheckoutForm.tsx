@@ -6,7 +6,6 @@ import { useCart } from '@/lib/cart/CartContext';
 import { collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
 import { postSuggestEvent } from '@/components/suggest/api';
 import { normalizeIndianMobile } from '@/lib/phone';
-import { flags } from '@/lib/flags';
 import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
 import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel';
 import { normalizeEmail } from '@/lib/email';
@@ -31,16 +30,12 @@ const ORDER_TYPE_OPTIONS: { value: OrderType; label: string }[] = [
 // counter, matching Phase-1 behavior exactly (FND-1 "gateway unset" fallback).
 const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID);
 
-// Guest phone verification (ACC-4). When enabled, a customer who is NOT logged
-// in must verify their mobile via a WhatsApp code before the order is placed
-// (the verification logs them in via the shared phone-OTP flow). Off by default
-// so checkout keeps working until Supabase phone-OTP + the WhatsApp hook are
-// configured.
-// VERIFY-1 also forces it: turning ON server-side enforcement without the OTP
-// step visible here would refuse every guest order and offer no way to comply,
-// so the UI requirement is the OR of the two flags rather than only the old one.
-const GUEST_OTP_REQUIRED =
-  process.env.NEXT_PUBLIC_FLAG_GUEST_OTP === 'true' || flags.verifiedOrders;
+// Two ways to check out (owner rule, enforced by POST /api/orders too):
+//  * Signed in — the order carries a WhatsApp-verified mobile. A mobile login
+//    is already verified; an email login verifies (and links) it here. Pay
+//    online or at the counter.
+//  * Guest — name only: no mobile, no email, no code. Online payment only; the
+//    order reaches the kitchen once paid, and is tracked on the order page.
 
 // Guest-order claim (ACC-4). Fired once right after a guest verifies their
 // number at checkout (which logs them in), so any past orders they placed as a
@@ -104,6 +99,11 @@ export function CheckoutForm({
 
   const [paymentMode, setPaymentMode] = useState<'online' | 'counter'>('counter');
   const [userId, setUserId] = useState<string | null>(null);
+  // False until the session lookup below answers — the form must not pick the
+  // guest or signed-in layout (or submit) before it knows which it is.
+  const [authChecked, setAuthChecked] = useState(false);
+  // The signed-in account's already-verified number ('+91…'), if any.
+  const [verifiedAccountPhone, setVerifiedAccountPhone] = useState<string | null>(null);
 
   // Guest WhatsApp-OTP verification (ACC-4). The mechanics — including the
   // re-lock when the number is edited — live in usePhoneOtp(), shared with the
@@ -119,6 +119,9 @@ export function CheckoutForm({
     onVerified: () => {
       claimGuestOrders();
     },
+    // A signed-in customer (e.g. email login) adds the number to THIS account
+    // rather than being signed in as a separate phone account.
+    linkToAccount: Boolean(userId),
   });
   const phone = otp.phone;
   const phoneVerified = otp.verified;
@@ -195,6 +198,7 @@ export function CheckoutForm({
       if (cancelled) return;
       const uid = data.user?.id ?? null;
       setUserId(uid);
+      setAuthChecked(true);
       if (!uid) return;
       // Best-effort prefill (ACC-1/ACC-3 contract) — gracefully no-ops if the
       // Accounts pillar's route isn't built yet (404) or the shape differs.
@@ -205,10 +209,25 @@ export function CheckoutForm({
           const profile =
             ('profile' in data ? (data as { profile?: unknown }).profile : data) ?? {};
           if (profile && typeof profile === 'object') {
-            const p = profile as { name?: unknown; phone?: unknown };
-            const prefillName = typeof p.name === 'string' ? p.name.trim() : '';
+            const p = profile as {
+              name?: unknown;
+              phone?: unknown;
+              phone_verified?: unknown;
+              prefill?: { name?: unknown; email?: unknown };
+            };
+            if (p.phone_verified === true && typeof p.phone === 'string' && p.phone.trim()) {
+              setVerifiedAccountPhone(p.phone.trim());
+            }
+            // `prefill` falls back to the customer's most recent order when the
+            // profile has no name / no verified email (most WhatsApp-code
+            // logins) — see lib/account/prefill.ts.
+            const fromPrefill = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+            const prefillName =
+              fromPrefill(p.prefill?.name) || (typeof p.name === 'string' ? p.name.trim() : '');
+            const prefillEmail = fromPrefill(p.prefill?.email);
             const prefillPhone = typeof p.phone === 'string' ? p.phone.trim() : '';
             if (prefillName) setName((n) => n || prefillName);
+            if (prefillEmail) setEmail((e) => e || prefillEmail);
             // Only prefill an EMPTY field: someone who has already started
             // typing must not have it overwritten when the profile lands.
             if (prefillPhone) {
@@ -333,21 +352,29 @@ export function CheckoutForm({
   const canSubmit =
     storeAcceptingOrders && unavailableNames.length === 0 && (slots.length === 0 || slotStart !== null);
 
-  // Guest WhatsApp-OTP gating (ACC-4). A signed-out guest must verify their
-  // number via the "Get OTP" step at the bottom of the form; only then are the
-  // payment options and the Place Order button shown. Logged-in customers are
-  // already verified and never see any of this.
-  const guestVerifyRequired = GUEST_OTP_REQUIRED && !userId;
-  const guestMustVerify = guestVerifyRequired && !phoneVerified;
+  // WhatsApp-OTP gating. The number is confirmed when it is the signed-in
+  // account's own verified number (a mobile login), or once verified here. Until
+  // then the "Get OTP" step replaces the payment choice and Place Order button.
+  const accountPhoneMatches = Boolean(
+    userId &&
+      verifiedAccountPhone &&
+      normalizeIndianMobile(phone) === verifiedAccountPhone.replace(/^\+91/, ''),
+  );
+  // A guest — not signed in — gives no number, so there is nothing to verify.
+  const isGuest = authChecked && !userId;
+  const mustVerify = authChecked && !isGuest && !accountPhoneMatches && !phoneVerified;
 
-  // Bring the newly revealed payment choice into view right after a guest
-  // verifies — the OTP box they were typing in sits below it.
+  const effectivePaymentMode: 'online' | 'counter' = isGuest ? 'online' : paymentMode;
+  const guestCannotPay = isGuest && !ONLINE_PAYMENT_AVAILABLE;
+
+  // Bring the newly revealed payment choice into view right after a number is
+  // verified — the OTP box they were typing in sits below it.
   const paymentSectionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (guestVerifyRequired && phoneVerified) {
+    if (phoneVerified) {
       paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
-  }, [guestVerifyRequired, phoneVerified]);
+  }, [phoneVerified]);
   const phoneIsValid = normalizeIndianMobile(phone) !== null;
 
   // Single source of truth for "why can't this guest get an OTP yet" — shown
@@ -378,8 +405,9 @@ export function CheckoutForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_name: name,
-          customer_phone: phone,
-          customer_email: email.trim() || undefined,
+          // A guest gives no contact details (the server ignores any anyway).
+          customer_phone: isGuest ? '' : phone,
+          customer_email: isGuest ? undefined : email.trim() || undefined,
           order_type: orderType,
           pickup_slot_label: selectedSlot?.label ?? 'ASAP',
           pickup_slot_start:
@@ -392,7 +420,8 @@ export function CheckoutForm({
             addon_option_ids: i.addons.map((a) => a.optionId),
             special_instructions: i.specialInstructions,
           })),
-          payment_mode: ONLINE_PAYMENT_AVAILABLE ? paymentMode : 'counter',
+          payment_mode: ONLINE_PAYMENT_AVAILABLE ? effectivePaymentMode : 'counter',
+          require_online: isGuest,
           coupon_code: couponApplied ?? undefined,
           redeem_points: pointsApplied ?? undefined,
           // Phase-7 (SUG-8): omitted entirely (not sent as []) when no cart
@@ -450,20 +479,24 @@ export function CheckoutForm({
     e.preventDefault();
     setServerError(null);
 
-    const phoneOk = validatePhone(phone);
-    if (!phoneOk || !canSubmit) return;
+    if (!authChecked || !canSubmit) return;
+    if (!isGuest && !validatePhone(phone)) return;
 
     // Email is optional, but if given it must be valid (it's where the e-bill goes).
-    if (email.trim() && normalizeEmail(email) === null) {
+    if (!isGuest && email.trim() && normalizeEmail(email) === null) {
       setEmailError('Enter a valid email address, or leave it blank.');
       return;
     }
 
-    // Guests must verify via the "Get OTP" step first — no submit button
-    // renders for an unverified guest, but Enter in a text field can still
-    // trigger form submission in some browsers.
-    if (GUEST_OTP_REQUIRED && !userId && !phoneVerified) {
+    // The number must be verified first — no submit button renders until it
+    // is, but Enter in a text field can still trigger form submission in some
+    // browsers.
+    if (mustVerify) {
       setServerError('Please verify your mobile number (Get OTP) before placing the order.');
+      return;
+    }
+    if (guestCannotPay) {
+      setServerError('Online payment is unavailable right now. Please log in to order and pay at the counter.');
       return;
     }
     await placeOrder();
@@ -477,7 +510,7 @@ export function CheckoutForm({
     total_inr: totalPrice,
   };
 
-  const guestBlocker = guestMustVerify ? guestReadinessBlocker() : null;
+  const guestBlocker = mustVerify ? guestReadinessBlocker() : null;
 
   return (
     <div className="rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
@@ -521,6 +554,17 @@ export function CheckoutForm({
           />
         </div>
 
+        {isGuest ? (
+          <p className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+            Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
+            follow your order on the next page.{' '}
+            <a href="/login?next=/checkout" className="font-bold text-tan underline">
+              Log in
+            </a>{' '}
+            to get WhatsApp updates or pay at the counter.
+          </p>
+        ) : (
+          <>
         <div>
           <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
             Phone
@@ -542,7 +586,7 @@ export function CheckoutForm({
           {/* The actual "Get OTP" control (ACC-4) lives at the bottom of the
               form now, as the last step before placing the order — see the
               submit area below. This just sets the expectation early. */}
-          {guestVerifyRequired ? (
+          {!accountPhoneMatches ? (
             <p className="mt-1 text-xs text-muted">
               We&apos;ll WhatsApp a verification code to this number as the last step, right
               before your order is placed.
@@ -567,6 +611,8 @@ export function CheckoutForm({
           />
           {emailError ? <p className="mt-1 text-sm text-charcoal">{emailError}</p> : null}
         </div>
+          </>
+        )}
 
         <div>
           <label htmlFor="order-type" className="mb-1 block text-sm font-bold text-charcoal">
@@ -716,12 +762,35 @@ export function CheckoutForm({
           </div>
         </div>
 
-        {/* A verified guest's confirmation, right above the payment choice it unlocked. */}
-        {guestVerifyRequired && phoneVerified ? <PhoneOtpPanel otp={otp} /> : null}
+        {/* The verified-number confirmation, right above the payment choice it unlocked. */}
+        {phoneVerified ? <PhoneOtpPanel otp={otp} /> : null}
 
-        {/* Pay online / pay at counter (PAY-1). Hidden until a guest has
-            verified their number — see guestMustVerify. */}
-        {guestMustVerify ? null : ONLINE_PAYMENT_AVAILABLE ? (
+        {/* Pay online / pay at counter (PAY-1). Hidden until the number is
+            verified — see mustVerify. Guests get online payment only. */}
+        {mustVerify ? null : isGuest ? (
+          <div ref={paymentSectionRef}>
+            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            {guestCannotPay ? (
+              <div className="mb-2">
+                <PayOnlineUnavailableButton />
+              </div>
+            ) : null}
+            <p className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+              {guestCannotPay ? (
+                <>Online payment is unavailable right now. </>
+              ) : (
+                <>
+                  Guest orders are paid online (UPI, card, or netbanking) — your order joins the
+                  kitchen queue as soon as payment is confirmed.{' '}
+                </>
+              )}
+              <a href="/login?next=/checkout" className="font-bold text-tan underline">
+                Log in
+              </a>{' '}
+              to pay at the counter instead.
+            </p>
+          </div>
+        ) : ONLINE_PAYMENT_AVAILABLE ? (
           <div ref={paymentSectionRef}>
             <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
             <div className="grid grid-cols-2 gap-2">
@@ -757,8 +826,24 @@ export function CheckoutForm({
             </p>
           </div>
         ) : (
-          <div ref={paymentSectionRef} className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
-            Pay at the counter on pickup — no online payment required.
+          // Gateway not configured (e.g. a preview without Razorpay keys) or
+          // switched off: keep online payment VISIBLE but greyed out, so it
+          // reads as "temporarily unavailable" rather than as a missing feature.
+          <div ref={paymentSectionRef}>
+            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            <div className="grid grid-cols-2 gap-2">
+              <PayOnlineUnavailableButton />
+              <button
+                type="button"
+                aria-pressed="true"
+                className="rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm font-bold text-tan-dark"
+              >
+                Pay at counter
+              </button>
+            </div>
+            <p className="mt-2 rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+              Online payment is temporarily unavailable — pay at the counter on pickup.
+            </p>
           </div>
         )}
 
@@ -771,8 +856,8 @@ export function CheckoutForm({
           marketing.
         </p>
 
-        {guestMustVerify ? (
-          // An unverified guest's next step: get a code and enter it. That
+        {mustVerify ? (
+          // An unverified number's next step: get a code and enter it. That
           // reveals the payment choice and the Place Order button above.
           // GetOtpButton/PhoneOtpPanel self-hide based on otp.step, so exactly
           // one of them is visible at a time.
@@ -793,20 +878,36 @@ export function CheckoutForm({
         ) : (
           <button
             type="submit"
-            disabled={submitting || otp.busy || !canSubmit}
+            disabled={submitting || otp.busy || !canSubmit || guestCannotPay || !authChecked}
             className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting
               ? 'Placing Order…'
               : !storeAcceptingOrders
                 ? 'Checkout Unavailable'
-                : ONLINE_PAYMENT_AVAILABLE && paymentMode === 'online'
+                : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online'
                   ? `Pay ₹${displayBill.total_inr} & Place Order`
                   : 'Place Order'}
           </button>
         )}
       </form>
     </div>
+  );
+}
+
+// Shown in place of the live "Pay online" choice while the gateway is not
+// configured — disabled, so the option stays visible without being usable.
+function PayOnlineUnavailableButton() {
+  return (
+    <button
+      type="button"
+      disabled
+      aria-disabled="true"
+      className="w-full cursor-not-allowed rounded-md border border-dashed border-[#e5e5e5] px-3 py-2 text-sm font-bold text-muted opacity-60"
+    >
+      Pay online
+      <span className="block text-xs font-normal">Temporarily unavailable</span>
+    </button>
   );
 }
 

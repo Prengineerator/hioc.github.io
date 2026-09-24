@@ -71,8 +71,16 @@ export interface PrintQueueOptions {
   /**
    * Start one print and resolve when the page reports `afterprint`. Rejecting
    * (or never settling — see `timeoutMs`) marks the job failed.
+   *
+   * PRN-4 — a desktop executor talks to the printer itself and can VOUCH for
+   * the paper in a way `afterprint` never could: resolving `{ confirmed: true }`
+   * means the printer reported healthy after the job, so it skips the
+   * hand-off/"Didn't print" window entirely and leaves the queue clean, exactly
+   * like today's silent success. Resolving with no value, or `{ confirmed:
+   * false }` (an OS-driver print, or the existing iframe path), is unchanged:
+   * the job still can't be vouched for, so it goes through hand-off as before.
    */
-  execute: (job: PrintJob) => Promise<void>;
+  execute: (job: PrintJob) => Promise<void | { confirmed: boolean }>;
   /**
    * Called when a job stops being this queue's concern while `execute` may still
    * be in flight — i.e. it timed out. The caller must tear the frame down here,
@@ -301,12 +309,12 @@ export class PrintQueue {
 
     // The snapshot copy keeps the executor from mutating queue state.
     this.#opts.execute({ ...job }).then(
-      () => this.#settle(token, true),
+      (result) => this.#settle(token, true, result?.confirmed === true),
       () => this.#settle(token, false),
     );
   }
 
-  #settle(token: number, ok: boolean): void {
+  #settle(token: number, ok: boolean, confirmed = false): void {
     // A resolve that arrives after its own timeout lost the race — the job has
     // already been reported failed and may even be printing again.
     if (token !== this.#activeToken || !this.#running) return;
@@ -318,7 +326,12 @@ export class PrintQueue {
 
     const job = this.#jobs.find((j) => j.state === 'printing');
     if (job) {
-      if (ok) {
+      if (ok && confirmed) {
+        // The printer itself vouched for this one (PRN-4) — there is nothing
+        // for a human to contradict, so it leaves the queue exactly like
+        // today's silent success, with no hand-off chip at all.
+        this.#jobs = this.#jobs.filter((j) => j.id !== job.id);
+      } else if (ok) {
         // NOT "printed" — "the browser accepted it". It leaves the work queue
         // and waits briefly in #handedOff where a human can contradict it; see
         // PrintQueueSnapshot.handedOff for why that is the strongest claim

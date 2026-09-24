@@ -174,8 +174,9 @@ describe('POST /api/orders — table QR channel (QR-1 / D6)', () => {
     expect(state.eventRow?.to_status).toBe('placed');
     expect(state.eventRow?.actor_role).toBe('system');
 
-    // A QR customer gets the live bill link at placement (RCT-1, !isStaff).
-    expect(sendBillNotification).toHaveBeenCalledTimes(1);
+    // No bill/confirmation yet: the order is still waiting on payment. It goes
+    // out when payment is captured (lib/payments/reconcile.ts).
+    expect(sendBillNotification).not.toHaveBeenCalled();
   });
 
   it('flags payment_unavailable when the gateway fails and the order falls back to counter', async () => {

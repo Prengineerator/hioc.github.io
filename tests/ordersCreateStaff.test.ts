@@ -49,7 +49,11 @@ vi.mock('@/lib/supabase-server', () => ({
           }
           return Promise.resolve({ error: null });
         },
-        maybeSingle: () => Promise.resolve({ data: state.tableRow, error: null }),
+        maybeSingle: () =>
+          table === 'profiles'
+            ? // The verified-number check (VERIFY-1) for a web customer.
+              Promise.resolve({ data: { phone: '+919000000000', phone_verified: true }, error: null })
+            : Promise.resolve({ data: state.tableRow, error: null }),
         single: () => {
           if (table === 'order_items') {
             return Promise.resolve({ data: { id: 'oi-1' }, error: null });
@@ -136,7 +140,10 @@ beforeEach(() => {
 });
 
 describe('POST /api/orders — web channel (unchanged, FND3-2)', () => {
-  it('creates a guest takeaway order as customer_web / received and sends the bill', async () => {
+  it('creates a verified customer\'s takeaway order as customer_web / received and sends the bill', async () => {
+    // Web orders need a WhatsApp-verified number (VERIFY-1); a customer who
+    // was logged in before checkout may still pay at the counter.
+    state.sessionUser = { id: 'cust-1' };
     const res = await POST(req({ customer_name: 'Asha', customer_phone: '9000000000', pickup_slot_label: 'ASAP', items: oneLatte }));
     expect(res.status).toBe(201);
     expect(state.orderInsert?.channel).toBe('customer_web');
@@ -156,6 +163,7 @@ describe('POST /api/orders — web channel (unchanged, FND3-2)', () => {
   });
 
   it('400s a guest attempting a dine-in order (staff-only channel)', async () => {
+    state.sessionUser = { id: 'cust-1' }; // verified web customer — past VERIFY-1
     const res = await POST(
       req({ customer_name: 'Asha', customer_phone: '9000000000', pickup_slot_label: 'ASAP', order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }),
     );

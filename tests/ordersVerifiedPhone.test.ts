@@ -21,7 +21,11 @@ const state: {
   profileError: { message: string } | null;
   menuRows: Record<string, unknown>[];
   orderInsert?: Record<string, unknown>;
+  orderDeleted?: boolean;
+  /** What the (mocked) gateway returns — null = Razorpay unavailable. */
+  intent: Record<string, unknown> | null;
 } = {
+  intent: null,
   verifiedOrders: true,
   actor: null,
   sessionUser: null,
@@ -56,6 +60,15 @@ vi.mock('@/lib/supabase-server', () => ({
         eq: () => chain,
         not: () => chain,
         in: () => Promise.resolve({ data: state.menuRows, error: null }),
+        // Gateway-failure paths: the counter fallback (update) and the guest
+        // withdrawal (delete) both end in .eq('id', …).
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        delete: () => ({
+          eq: () => {
+            if (table === 'orders') state.orderDeleted = true;
+            return Promise.resolve({ error: null });
+          },
+        }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
           if (table === 'orders' || table === 'order_items') {
@@ -112,14 +125,16 @@ vi.mock('@/lib/promotions/coupons', () => ({ validateAndComputeCoupon: () => Pro
 vi.mock('@/lib/loyalty/ledger', () => ({
   quoteRedemption: () => Promise.resolve({ ok: false }),
   redeemForOrder: () => Promise.resolve(),
+  reverseForOrder: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('@/lib/payments/gateway', () => ({ createPaymentIntent: () => Promise.resolve(null) }));
+vi.mock('@/lib/payments/gateway', () => ({ createPaymentIntent: () => Promise.resolve(state.intent) }));
 
 const { POST } = await import('@/app/api/orders/route');
+const { reverseForOrder } = await import('@/lib/loyalty/ledger');
 
 const oneLatte = [{ menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 1, addon_option_ids: [] }];
 
-function order(phone = '9876543210') {
+function order(phone = '9876543210', extra: Record<string, unknown> = {}) {
   return new Request('http://t/api/orders', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -128,6 +143,7 @@ function order(phone = '9876543210') {
       customer_phone: phone,
       pickup_slot_label: 'ASAP',
       items: oneLatte,
+      ...extra,
     }),
   });
 }
@@ -140,6 +156,8 @@ beforeEach(() => {
   state.profile = null;
   state.profileError = null;
   state.orderInsert = undefined;
+  state.orderDeleted = false;
+  state.intent = null;
   state.menuRows = [
     {
       id: MENU_ID,
@@ -154,12 +172,10 @@ beforeEach(() => {
 });
 
 describe('POST /api/orders — the verified-number rule is enforced server-side', () => {
-  it('refuses an anonymous guest, and creates nothing', async () => {
+  it('refuses an anonymous guest paying at the counter, and creates nothing', async () => {
+    // A web guest (no session) is online-payment only.
     const res = await POST(order());
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.code).toBe('no_session');
-    // The assertion that matters: not merely a 403, but no order row.
+    expect(res.status).toBe(400);
     expect(state.orderInsert).toBeUndefined();
   });
 
@@ -219,12 +235,97 @@ describe('POST /api/orders — the verified-number rule is enforced server-side'
     expect(state.orderInsert?.customer_phone).toBe('');
   });
 
-  it('changes nothing at all while the flag is off', async () => {
-    // The state production ships in. A guest checkout keeps working exactly as
-    // it does today until an OTP has been proven to arrive.
+  it('still requires a verified number from a SIGNED-IN web customer while the flag is off', async () => {
+    // Owner rule: a signed-in customer's web order carries a WhatsApp-verified
+    // mobile. The flag now only governs the table-QR channel.
     state.verifiedOrders = false;
+    state.sessionUser = { id: 'u1' };
+    state.profile = { phone: null, phone_verified: false };
     const res = await POST(order());
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('not_verified');
+    expect(state.orderInsert).toBeUndefined();
+  });
+});
+
+describe('POST /api/orders — web guest checkout (no session): name only, pay online', () => {
+  function guestOrder(extra: Record<string, unknown> = {}) {
+    return new Request('http://t/api/orders', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        customer_name: 'Walk-by guest',
+        pickup_slot_label: 'ASAP',
+        items: oneLatte,
+        payment_mode: 'online',
+        ...extra,
+      }),
+    });
+  }
+
+  it('places a guest order with no phone or email, waiting on payment', async () => {
+    state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_x', amountInr: 125, keyId: 'rzp_live_x' };
+    const res = await POST(guestOrder());
     expect(res.status).toBe(201);
-    expect(state.orderInsert?.channel).toBe('customer_web');
+    expect(state.orderInsert?.customer_phone).toBe('');
+    expect(state.orderInsert?.status).toBe('placed');
+    expect(state.orderInsert?.payment_status).toBe('payment_pending');
+    expect(state.orderInsert?.user_id).toBeNull();
+  });
+
+  it('IGNORES a phone or email a guest request carries — an unverified number is never stored', async () => {
+    state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_x', amountInr: 125, keyId: 'rzp_live_x' };
+    const res = await POST(guestOrder({ customer_phone: '9876543210', customer_email: 'x@example.com' }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.customer_phone).toBe('');
+    expect(state.orderInsert?.customer_email).toBeUndefined();
+  });
+
+  it('still requires a name', async () => {
+    const res = await POST(guestOrder({ customer_name: '' }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('withdraws the guest order if online payment cannot start', async () => {
+    const res = await POST(guestOrder());
+    expect(res.status).toBe(502);
+    expect(state.orderDeleted).toBe(true);
+  });
+});
+
+describe('POST /api/orders — guest checkout is online-payment only', () => {
+  beforeEach(() => {
+    // A guest who verified their number at checkout is signed in by that step,
+    // so from the server's side they look like any verified customer — the
+    // checkout marks them with require_online.
+    state.sessionUser = { id: 'u1' };
+    state.profile = { phone: '+919876543210', phone_verified: true };
+  });
+
+  it('refuses a guest paying at the counter, and creates nothing', async () => {
+    const res = await POST(order('9876543210', { require_online: true }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('withdraws a guest order whose online payment cannot start, instead of switching it to counter', async () => {
+    const res = await POST(order('9876543210', { require_online: true, payment_mode: 'online' }));
+    expect(res.status).toBe(502);
+    expect(state.orderDeleted).toBe(true);
+    expect(reverseForOrder).toHaveBeenCalledTimes(1); // points returned before the delete
+  });
+
+  it('still lets a logged-in customer pay at the counter', async () => {
+    const res = await POST(order('9876543210', { payment_mode: 'counter' }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.status).toBe('received');
+  });
+
+  it('keeps the counter fallback for a logged-in customer when the gateway fails', async () => {
+    const res = await POST(order('9876543210', { payment_mode: 'online' }));
+    expect(res.status).toBe(201);
+    expect(state.orderDeleted).toBe(false);
+    expect((await res.json()).payment_unavailable).toBe(true);
   });
 });

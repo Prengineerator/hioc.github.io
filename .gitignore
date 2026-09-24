@@ -33,3 +33,8 @@ yarn-error.log*
 *key*.txt
 *secret*.txt
 *credentials*.txt
+
+# Desktop shell (Phase 7)
+/desktop/node_modules/
+/desktop/dist/
+/desktop/release/

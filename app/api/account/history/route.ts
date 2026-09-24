@@ -8,6 +8,7 @@ import {
   filterOrderRowsByStatus,
   includeGuestOrdersByPhone,
   isValidHistoryStatusFilter,
+  verifiedEmailOf,
   mergeOrderRows,
   paginateOrderRows,
   type HistoryStatusFilter,
@@ -41,6 +42,11 @@ const PAGE_SIZE = 10;
 //                                            (a stranger's phone typed at
 //                                            checkout must never leak into
 //                                            someone else's history).
+//   4. orders.customer_email = the CALLER's OWN verified login email, with
+//      user_id still null                — the same rule as (3) for a guest
+//                                            who gave an email at checkout
+//                                            and later logs in with it (or
+//                                            adds it to a phone login).
 //
 // customer_user_id may not exist yet on a pending deploy — this degrades to
 // (1) + (3) rather than failing the request, the same tolerance
@@ -129,7 +135,31 @@ export async function GET(request: Request) {
     guestRows = (guest.data ?? []) as OrderStatusRow[];
   }
 
-  const merged = filterOrderRowsByStatus(mergeOrderRows([ownedRows, guestRows]), statusFilter);
+  // Source 4: unclaimed guest orders placed with the caller's verified login
+  // email. Same trust direction as source 3 — never an order's own email.
+  let emailRows: OrderStatusRow[] = [];
+  const verifiedEmail = verifiedEmailOf(user);
+  if (verifiedEmail) {
+    const byEmail = await admin
+      .from('orders')
+      .select('id, created_at, status')
+      .eq('customer_email', verifiedEmail)
+      .is('user_id', null);
+    if (byEmail.error) {
+      // orders.customer_email arrives with 2026-07-order-email.sql; without
+      // it there is simply nothing to match by email — not a failed history.
+      if (!isMissingColumnError(byEmail.error)) {
+        return errorResponse(500, 'Failed to load order history');
+      }
+    } else {
+      emailRows = (byEmail.data ?? []) as OrderStatusRow[];
+    }
+  }
+
+  const merged = filterOrderRowsByStatus(
+    mergeOrderRows([ownedRows, guestRows, emailRows]),
+    statusFilter,
+  );
   const { items, total, hasMore } = paginateOrderRows(merged, page, PAGE_SIZE);
 
   if (items.length === 0) {

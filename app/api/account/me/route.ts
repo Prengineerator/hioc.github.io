@@ -4,6 +4,8 @@ import { getAuthUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderType } from '@/lib/api/constants';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { verifiedEmailOf } from '@/lib/account/history';
+import { checkoutPrefill } from '@/lib/account/prefill';
 import type { OrderType } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -46,6 +48,9 @@ const EMPTY_PROFILE: ProfileRow = {
 };
 
 // GET /api/account/me — the caller's own profile. 401 if not logged in.
+// Adds, beyond the stable shape above: `email` (the login email, if any),
+// `email_verified`, and `prefill` — the name/email checkout should prefill,
+// falling back to the caller's most recent order (lib/account/prefill.ts).
 export async function GET() {
   const user = await getAuthUser();
   if (!user) {
@@ -63,7 +68,29 @@ export async function GET() {
     return errorResponse(500, 'Failed to load profile');
   }
 
-  return NextResponse.json(shapeMe((profile as ProfileRow | null) ?? EMPTY_PROFILE));
+  const row = (profile as ProfileRow | null) ?? EMPTY_PROFILE;
+  const verifiedEmail = verifiedEmailOf(user);
+
+  // Only consulted when the profile itself can't fill a field. Best-effort:
+  // a failure here just means less prefill, never a failed request.
+  let lastOrder: { customer_name: string | null; customer_email: string | null } | null = null;
+  if (!row.name.trim() || !verifiedEmail) {
+    const { data: recent } = await admin
+      .from('orders')
+      .select('customer_name, customer_email')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    lastOrder = recent ?? null;
+  }
+
+  return NextResponse.json({
+    ...shapeMe(row),
+    email: (user.email ?? '').trim().toLowerCase(),
+    email_verified: Boolean(verifiedEmail),
+    prefill: checkoutPrefill(row.name, verifiedEmail, lastOrder),
+  });
 }
 
 // PATCH /api/account/me — update the whitelisted profile columns (ACC-3):
