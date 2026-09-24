@@ -21,20 +21,6 @@ export function canPayAtCounter(order: Pick<Order, 'channel' | 'user_id'>): bool
 // Set by CheckoutForm when the Razorpay modal closes without a verified
 // payment, and re-derived from the ?payment= flag once the order (and
 // therefore whether it can pay at counter) has loaded.
-// Issue: "why am I still seeing View bill on a cancelled/unpaid order?" — a
-// bill (RCT-1/2) only ever gets *created* once a payment is recorded
-// (sendBillNotification fires on ₹0-at-creation, gateway capture, staff
-// settle, or paid-completion — see lib/payments/reconcile.ts and
-// app/api/orders/[id]/payment/route.ts). So the "View / print bill" link
-// must track that exact condition, not order status alone: a cancelled or
-// rejected order never has a bill even if it was paid before cancellation
-// (refund reverses payment_status away from 'paid'), and a merely
-// 'completed' order that was never paid (e.g. collect-later, never settled)
-// still has no bill to show.
-export function hasBill(order: Pick<Order, 'status' | 'payment_status'>): boolean {
-  return order.payment_status === 'paid' && order.status !== 'cancelled' && order.status !== 'rejected';
-}
-
 export function paymentFlagMessage(flag: string | null, allowCounter: boolean): string {
   if (flag === 'cancelled') {
     return allowCounter
@@ -47,4 +33,13 @@ export function paymentFlagMessage(flag: string | null, allowCounter: boolean): 
       : "Your payment didn't go through — please retry the payment.";
   }
   return '';
+}
+
+// A bill (RCT-1/2) only ever gets *created* once a payment is recorded
+// (sendBillNotification fires on ₹0-at-creation, gateway capture, staff
+// settle, or paid-completion). Cancelled/rejected are carved out even if
+// paid before cancellation, since a refund would move payment_status off
+// 'paid' anyway; a merely 'completed'-but-never-paid order has no bill.
+export function hasBill(order: Pick<Order, 'status' | 'payment_status'>): boolean {
+  return order.payment_status === 'paid' && order.status !== 'cancelled' && order.status !== 'rejected';
 }
