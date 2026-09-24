@@ -28,10 +28,12 @@ const ORDER_TYPE_OPTIONS: { value: OrderType; label: string }[] = [
 // counter, matching Phase-1 behavior exactly (FND-1 "gateway unset" fallback).
 const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID);
 
-// Every web order needs a WhatsApp-verified mobile (owner rule, enforced by
-// POST /api/orders too). A customer who logged in with that number is already
-// verified; anyone else — a guest, or an email login — verifies it here.
-// Guests (not logged in when they reach checkout) must also pay online.
+// Two ways to check out (owner rule, enforced by POST /api/orders too):
+//  * Signed in — the order carries a WhatsApp-verified mobile. A mobile login
+//    is already verified; an email login verifies (and links) it here. Pay
+//    online or at the counter.
+//  * Guest — name only: no mobile, no email, no code. Online payment only; the
+//    order reaches the kitchen once paid, and is tracked on the order page.
 
 // Guest-order claim (ACC-4). Fired once right after a guest verifies their
 // number at checkout (which logs them in), so any past orders they placed as a
@@ -76,6 +78,9 @@ export function CheckoutForm({
 
   const [paymentMode, setPaymentMode] = useState<'online' | 'counter'>('counter');
   const [userId, setUserId] = useState<string | null>(null);
+  // False until the session lookup below answers — the form must not pick the
+  // guest or signed-in layout (or submit) before it knows which it is.
+  const [authChecked, setAuthChecked] = useState(false);
   // The signed-in account's already-verified number ('+91…'), if any.
   const [verifiedAccountPhone, setVerifiedAccountPhone] = useState<string | null>(null);
 
@@ -172,6 +177,7 @@ export function CheckoutForm({
       if (cancelled) return;
       const uid = data.user?.id ?? null;
       setUserId(uid);
+      setAuthChecked(true);
       if (!uid) return;
       // Best-effort prefill (ACC-1/ACC-3 contract) — gracefully no-ops if the
       // Accounts pillar's route isn't built yet (404) or the shape differs.
@@ -333,11 +339,10 @@ export function CheckoutForm({
       verifiedAccountPhone &&
       normalizeIndianMobile(phone) === verifiedAccountPhone.replace(/^\+91/, ''),
   );
-  const mustVerify = !accountPhoneMatches && !phoneVerified;
+  // A guest — not signed in — gives no number, so there is nothing to verify.
+  const isGuest = authChecked && !userId;
+  const mustVerify = authChecked && !isGuest && !accountPhoneMatches && !phoneVerified;
 
-  // A guest — not signed in when they reached checkout — pays online only
-  // (verifying the number at checkout signs them in, but they stay a guest).
-  const isGuest = !userId;
   const effectivePaymentMode: 'online' | 'counter' = isGuest ? 'online' : paymentMode;
   const guestCannotPay = isGuest && !ONLINE_PAYMENT_AVAILABLE;
 
@@ -379,8 +384,9 @@ export function CheckoutForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer_name: name,
-          customer_phone: phone,
-          customer_email: email.trim() || undefined,
+          // A guest gives no contact details (the server ignores any anyway).
+          customer_phone: isGuest ? '' : phone,
+          customer_email: isGuest ? undefined : email.trim() || undefined,
           order_type: orderType,
           pickup_slot_label: selectedSlot?.label ?? 'ASAP',
           pickup_slot_start:
@@ -449,11 +455,11 @@ export function CheckoutForm({
     e.preventDefault();
     setServerError(null);
 
-    const phoneOk = validatePhone(phone);
-    if (!phoneOk || !canSubmit) return;
+    if (!authChecked || !canSubmit) return;
+    if (!isGuest && !validatePhone(phone)) return;
 
     // Email is optional, but if given it must be valid (it's where the e-bill goes).
-    if (email.trim() && normalizeEmail(email) === null) {
+    if (!isGuest && email.trim() && normalizeEmail(email) === null) {
       setEmailError('Enter a valid email address, or leave it blank.');
       return;
     }
@@ -524,6 +530,17 @@ export function CheckoutForm({
           />
         </div>
 
+        {isGuest ? (
+          <p className="rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+            Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
+            follow your order on the next page.{' '}
+            <a href="/login?next=/checkout" className="font-bold text-tan underline">
+              Log in
+            </a>{' '}
+            to get WhatsApp updates or pay at the counter.
+          </p>
+        ) : (
+          <>
         <div>
           <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
             Phone
@@ -570,6 +587,8 @@ export function CheckoutForm({
           />
           {emailError ? <p className="mt-1 text-sm text-charcoal">{emailError}</p> : null}
         </div>
+          </>
+        )}
 
         <div>
           <label htmlFor="order-type" className="mb-1 block text-sm font-bold text-charcoal">
@@ -835,7 +854,7 @@ export function CheckoutForm({
         ) : (
           <button
             type="submit"
-            disabled={submitting || otp.busy || !canSubmit || guestCannotPay}
+            disabled={submitting || otp.busy || !canSubmit || guestCannotPay || !authChecked}
             className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting
