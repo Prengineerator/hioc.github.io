@@ -5,7 +5,7 @@ import { errorResponse, notFound, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { isMissingColumnError } from '@/lib/api/postgrest';
-import { ownsOrder } from '@/lib/account/history';
+import { ownsOrder, verifiedEmailOf } from '@/lib/account/history';
 import type { AddonGroup, MenuItem, OrderItem, OrderItemAddon } from '@/lib/types';
 import type { CartAddonSelection, CartItem } from '@/lib/cart/CartContext';
 
@@ -70,20 +70,24 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
 
   const admin = createAdminSupabaseClient();
 
-  // customer_user_id may not exist yet on a pending deploy — degrades to
-  // treating every order as unlinked (same tolerance as
-  // app/api/account/history/route.ts) rather than failing the request.
+  // customer_user_id (or customer_email) may not exist yet on a pending
+  // deploy — degrades to treating every order as unlinked and skipping the
+  // email match (same tolerance as app/api/account/history/route.ts) rather
+  // than failing the request.
   type OrderRow = {
     id: string;
     user_id: string | null;
     customer_user_id?: string | null;
     customer_phone: string | null;
+    customer_email?: string | null;
     order_items: (OrderItem & { order_item_addons: OrderItemAddon[] | null })[] | null;
   };
   let orderRow: OrderRow | null = null;
   const linked = await admin
     .from('orders')
-    .select('id, user_id, customer_user_id, customer_phone, order_items(*, order_item_addons(*))')
+    .select(
+      'id, user_id, customer_user_id, customer_phone, customer_email, order_items(*, order_item_addons(*))',
+    )
     .eq('id', params.orderId)
     .maybeSingle();
   if (linked.error) {
@@ -108,12 +112,13 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
   }
 
   // Ownership check doubles as the 404 — never reveal that an order id
-  // belongs to someone else. Matches GET /api/account/history's three rules
+  // belongs to someone else. Matches GET /api/account/history's rules
   // (ACC-2/ACC-4): own web order, staff-linked counter order, or an
-  // unclaimed guest order matched by the CALLER's own verified phone. The
-  // profiles lookup only runs when the cheap checks above didn't already
-  // settle it, and only for an order that could possibly be an unclaimed
-  // guest order (user_id null) — never for one plainly owned by someone else.
+  // unclaimed guest order matched by the CALLER's own verified phone or
+  // verified login email. The profiles lookup only runs when the cheap
+  // checks above didn't already settle it, and only for an order that could
+  // possibly be an unclaimed guest order (user_id null) — never for one
+  // plainly owned by someone else.
   let owns = orderRow.user_id === user.id || orderRow.customer_user_id === user.id;
   if (!owns && !orderRow.user_id) {
     const { data: profile } = await admin
@@ -121,7 +126,7 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
       .select('phone, phone_verified')
       .eq('id', user.id)
       .maybeSingle();
-    owns = ownsOrder(orderRow, user.id, profile);
+    owns = ownsOrder(orderRow, user.id, profile, verifiedEmailOf(user));
   }
   if (!owns) {
     return notFound();

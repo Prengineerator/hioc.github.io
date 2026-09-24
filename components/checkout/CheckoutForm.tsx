@@ -184,10 +184,21 @@ export function CheckoutForm({
           const profile =
             ('profile' in data ? (data as { profile?: unknown }).profile : data) ?? {};
           if (profile && typeof profile === 'object') {
-            const p = profile as { name?: unknown; phone?: unknown };
-            const prefillName = typeof p.name === 'string' ? p.name.trim() : '';
+            const p = profile as {
+              name?: unknown;
+              phone?: unknown;
+              prefill?: { name?: unknown; email?: unknown };
+            };
+            // `prefill` falls back to the customer's most recent order when the
+            // profile has no name / no verified email (most WhatsApp-code
+            // logins) — see lib/account/prefill.ts.
+            const fromPrefill = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+            const prefillName =
+              fromPrefill(p.prefill?.name) || (typeof p.name === 'string' ? p.name.trim() : '');
+            const prefillEmail = fromPrefill(p.prefill?.email);
             const prefillPhone = typeof p.phone === 'string' ? p.phone.trim() : '';
             if (prefillName) setName((n) => n || prefillName);
+            if (prefillEmail) setEmail((e) => e || prefillEmail);
             // Only prefill an EMPTY field: someone who has already started
             // typing must not have it overwritten when the profile lands.
             if (prefillPhone) {

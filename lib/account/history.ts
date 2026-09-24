@@ -16,8 +16,8 @@ import type { OrderStatus } from '@/lib/types';
 // here can never silently drift from what the rest of the app calls active.
 //
 // A caller's orders come from up to three Supabase queries run by the route
-// handler (owner-linked, and — only when the caller's own phone is verified
-// — unclaimed guest orders). This module is what turns those lists into one
+// handler (owner-linked, and unclaimed guest orders matched by the caller's
+// own verified phone and/or verified login email). This module is what turns those lists into one
 // correct page.
 
 export interface OrderIdRow {
@@ -130,31 +130,59 @@ export function includeGuestOrdersByPhone(profile: CallerProfile | null | undefi
   return Boolean(profile?.phone_verified && profile.phone);
 }
 
+/**
+ * The caller's VERIFIED login email, lowercased — or null. Supabase Auth only
+ * sets `email_confirmed_at` once the address has been proven (magic link /
+ * confirmation link / email-change confirmation), so an unconfirmed address
+ * a caller merely typed never counts. Orders store `customer_email` already
+ * lowercased (lib/email.ts normalizeEmail), so an exact match is enough.
+ */
+export function verifiedEmailOf(
+  user: { email?: string | null; email_confirmed_at?: string | null } | null | undefined,
+): string | null {
+  if (!user?.email || !user.email_confirmed_at) return null;
+  const email = user.email.trim().toLowerCase();
+  return email || null;
+}
+
 export interface OwnedOrderFields {
   user_id?: string | null;
   customer_user_id?: string | null;
   customer_phone?: string | null;
+  customer_email?: string | null;
 }
 
 /**
- * Whether an order belongs to `userId`, by the same three rules
+ * Whether an order belongs to `userId`, by the same rules
  * GET /api/account/history applies above — reused by the reorder route
  * (ACC-4) so a past order that surfaces in history only because of a
  * counter link or an unclaimed guest match is also reorderable, not just
  * viewable, instead of silently 404ing.
+ *
+ * An unclaimed guest order (user_id null) matches by the caller's verified
+ * phone OR verified login email — the same direction-of-trust rule for both:
+ * what the ORDER says is only ever compared against what the CALLER proved.
  */
 export function ownsOrder(
   order: OwnedOrderFields | null | undefined,
   userId: string,
   profile: CallerProfile | null | undefined,
+  verifiedEmail: string | null = null,
 ): boolean {
   if (!order || !userId) return false;
   if (order.user_id === userId) return true;
   if (order.customer_user_id === userId) return true;
-  return (
-    !order.user_id &&
+  if (order.user_id) return false;
+  if (
     includeGuestOrdersByPhone(profile) &&
     Boolean(order.customer_phone) &&
     order.customer_phone === profile!.phone
+  ) {
+    return true;
+  }
+  return (
+    Boolean(verifiedEmail) &&
+    Boolean(order.customer_email) &&
+    order.customer_email!.toLowerCase() === verifiedEmail
   );
 }
