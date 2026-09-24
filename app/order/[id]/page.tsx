@@ -255,7 +255,7 @@ export default function OrderStatusPage() {
   const cancelled = order.status === 'cancelled';
   const negative = rejected || cancelled;
   const awaitingPayment = order.status === 'placed'; // gated on online payment (PAY-1)
-  const allowCounter = canPayAtCounter(order); // issue-1: guest/table-QR orders never see this offered
+  const allowCounter = canPayAtCounter(order); // issue-1: web guests never see this offered
   const displayedPaymentError =
     paymentActionError ||
     (flagDismissed ? '' : paymentFlagMessage(searchParams.get('payment'), allowCounter));

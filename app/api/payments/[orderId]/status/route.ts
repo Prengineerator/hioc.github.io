@@ -100,14 +100,15 @@ export async function POST(request: Request, { params }: RouteParams) {
     return errorResponse(409, 'This order is already paid.');
   }
 
-  // Issue-1: a web GUEST (no session — see POST /api/orders' isWebGuest) and a
-  // table-QR order (QR-1/D6) must pay online — "nothing enters the queue
-  // unpaid" for either. There is no pay-at-counter flow for them, so a failed
-  // or abandoned online payment must not be routed around that rule.
+  // Issue-1: a web GUEST (no session — see POST /api/orders' isWebGuest) has
+  // no pay-at-counter flow at all — a guest order carries no verified phone,
+  // so there's nothing else to place it on. A failed or abandoned online
+  // payment must not be routed around that rule. A table-QR order still
+  // starts pay-online-first at placement (POST /api/orders), but its diner is
+  // physically at the table, so switching to pay at counter after a failed
+  // attempt is fine for them.
   if (action === 'switch_to_counter') {
-    const mustPayOnline =
-      current.channel === 'table_qr' ||
-      (current.channel === 'customer_web' && !current.user_id);
+    const mustPayOnline = current.channel === 'customer_web' && !current.user_id;
     if (mustPayOnline) {
       return errorResponse(
         403,

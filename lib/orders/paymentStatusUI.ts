@@ -7,12 +7,13 @@
 
 import type { Order } from '@/lib/types';
 
-// Issue-1: a web guest (no session) or a table-QR order must pay online —
-// there's no pay-at-counter fallback for them (see POST /api/orders' isWebGuest
-// and POST /api/payments/[orderId]/status), so neither is ever offered, or
-// told about, "pay at counter".
+// Issue-1: a web guest (no session, no verified phone) has no pay-at-counter
+// fallback (see POST /api/orders' isWebGuest and POST
+// /api/payments/[orderId]/status), so they're never offered, or told about,
+// "pay at counter". A table-QR order still starts pay-online-first at
+// placement, but its diner is physically at the table, so switching to pay at
+// counter after a failed/cancelled attempt is fine for them.
 export function canPayAtCounter(order: Pick<Order, 'channel' | 'user_id'>): boolean {
-  if (order.channel === 'table_qr') return false;
   if (order.channel === 'customer_web' && !order.user_id) return false;
   return true;
 }

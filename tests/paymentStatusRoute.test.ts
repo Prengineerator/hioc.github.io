@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Handler-level test for POST /api/payments/[orderId]/status (PAY-2).
 //
-// Issue-1 regression lock: a web GUEST (no session) or a table-QR order must
-// pay online — there is no pay-at-counter fallback for either (see
-// POST /api/orders' isWebGuest / QR-1 comments) — so 'switch_to_counter' must
-// be refused for them, and left available for a logged-in web customer and a
-// staff_pos order.
+// Issue-1 regression lock: a web GUEST (no session, no verified phone) has no
+// pay-at-counter fallback (see POST /api/orders' isWebGuest comments), so
+// 'switch_to_counter' must be refused for them. A table-QR order still starts
+// pay-online-first at placement, but its diner is physically at the table, so
+// it — like a logged-in web customer and a staff_pos order — may switch after
+// a failed/cancelled attempt.
 
 const UUID = '5f9d3b2a-1e4c-4a7b-9c3d-2b1a4e6f7c8d';
 
@@ -90,14 +91,14 @@ describe('POST /api/payments/[orderId]/status — switch_to_counter guest gate (
     expect(state.eventRow).toBeUndefined();
   });
 
-  it('rejects a table-QR order (always pays online first)', async () => {
+  it('allows a table-QR order to switch to pay at counter (diner is at the table)', async () => {
     state.order = {
       id: UUID, status: 'placed', version: 0, payment_status: 'payment_pending',
       total_inr: 250, channel: 'table_qr', user_id: null,
     };
     const res = await call({ action: 'switch_to_counter' });
-    expect(res.status).toBe(403);
-    expect(state.updatedPatch).toBeUndefined();
+    expect(res.status).toBe(200);
+    expect(state.updatedPatch).toMatchObject({ status: 'received', payment_status: 'unpaid' });
   });
 
   it('allows a logged-in web customer to switch to pay at counter', async () => {
@@ -111,13 +112,13 @@ describe('POST /api/payments/[orderId]/status — switch_to_counter guest gate (
     expect(state.eventRow?.to_status).toBe('received');
   });
 
-  it('a table-QR order with a logged-in user_id is still refused (channel always pays online)', async () => {
+  it('allows a table-QR order with a logged-in user_id too', async () => {
     state.order = {
       id: UUID, status: 'placed', version: 0, payment_status: 'payment_pending',
       total_inr: 250, channel: 'table_qr', user_id: 'cust-1',
     };
     const res = await call({ action: 'switch_to_counter' });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
   });
 
   it('does not reject retry for a guest order — only switch_to_counter is gated', async () => {
