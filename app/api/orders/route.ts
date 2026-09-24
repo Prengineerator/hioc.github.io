@@ -25,6 +25,7 @@ import {
   releaseIdempotencyKey,
 } from '@/lib/orders/idempotency';
 import { getStoreSettings } from '@/lib/store/settings';
+import { runAfterResponse } from '@/lib/api/background';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
@@ -96,7 +97,20 @@ export async function POST(request: Request) {
   // optional, no pickup slot for dine-in, store-open bypassed) and attributes the
   // order to the acting staff member. A plain guest checkout leaves `actor` null
   // and behaves exactly as in Phase 1/2.
-  const actor = await getStaffOrOwner();
+  //
+  // Perf: getStaffOrOwner() and getAuthUser() each make their own
+  // supabase.auth.getUser() network round trip (they can't share one — the
+  // mocked test harnesses drive them independently, and getStaffOrOwner()
+  // additionally needs the profiles.role lookup that getAuthUser() doesn't do).
+  // getStoreSettings() below is also independent of everything above it and
+  // was previously fetched much later, purely sequentially. All three are
+  // fired together instead of one-after-another — three round trips collapse
+  // into the time of the slowest one.
+  const [actor, sessionUser, settings] = await Promise.all([
+    getStaffOrOwner(),
+    getAuthUser(),
+    getStoreSettings(),
+  ]);
   const isStaff = actor !== null;
 
   // Phase-3 (QR-1/D6): a NON-staff request carrying a `qr_token` is the third
@@ -107,12 +121,6 @@ export async function POST(request: Request) {
   // order is forced dine-in, and it pays online first (nothing enters the queue
   // unpaid). Guarded by `!isStaff` so a staff session never takes this branch.
   const isTableQr = !isStaff && typeof rawQrToken === 'string' && rawQrToken.trim().length > 0;
-
-  // For a guest/customer checkout this is the verified customer session (or null
-  // for an anonymous guest). For a STAFF-created order the session belongs to the
-  // staff member, not the customer. Looked up this early because a web guest is
-  // validated differently from the first field on (below).
-  const sessionUser = await getAuthUser();
 
   // Web GUEST checkout (owner rule): no session, pays online, and gives only a
   // name — no mobile, no email, no verification. Nothing reaches the kitchen
@@ -343,7 +351,7 @@ export async function POST(request: Request) {
   // orders (closed, paused, past last-order cutoff). Staff presence implies the
   // store is open, so a staff-created order bypasses this (FND3-3) — logged, not
   // blocked. Staff accept existing orders via a separate flow anyway.
-  const settings = await getStoreSettings();
+  // (`settings` was fetched concurrently with the auth lookups above.)
   const openState = computeStoreOpenState(settings);
   if (!openState.acceptingOrders) {
     if (isStaff) {
@@ -386,17 +394,7 @@ export async function POST(request: Request) {
 
   // Per-slot capacity (C4 edge case): if a real slot was chosen and capacity is
   // capped, reject when it's already full (excludes rejected/cancelled orders).
-  if (slotStartIso && settings.pickup_slot_capacity > 0) {
-    const { count } = await admin
-      .from('orders')
-      .select('id', { count: 'exact', head: true })
-      .eq('pickup_slot_start', slotStartIso)
-      .not('status', 'in', '("rejected","cancelled")');
-    if ((count ?? 0) >= settings.pickup_slot_capacity) {
-      return errorResponse(409, 'That pickup slot is full — please choose another time.');
-    }
-  }
-
+  //
   // VAL-2 (D4-3) — link a counter order to the regular standing at the counter.
   //
   // Derived HERE, from the phone the staffer typed, exactly like user_id is
@@ -407,7 +405,25 @@ export async function POST(request: Request) {
   // a number would hand them a stranger's balance.
   //
   // No match ⇒ the order proceeds unlinked and no account is ever created.
-  const linkedCustomer = isStaff ? await findVerifiedCustomerByPhone(admin, trimmedPhone) : null;
+  //
+  // Perf: these two lookups (a count query, a profiles-by-phone lookup) don't
+  // depend on each other, so they run concurrently rather than back-to-back.
+  // The coupon/points checks further down DO have a real dependency chain
+  // (points needs the coupon's discount first) and stay sequential.
+  const wantsSlotCapacityCheck = Boolean(slotStartIso && settings.pickup_slot_capacity > 0);
+  const [slotCapacityResult, linkedCustomer] = await Promise.all([
+    wantsSlotCapacityCheck
+      ? admin
+          .from('orders')
+          .select('id', { count: 'exact', head: true })
+          .eq('pickup_slot_start', slotStartIso)
+          .not('status', 'in', '("rejected","cancelled")')
+      : Promise.resolve(null),
+    isStaff ? findVerifiedCustomerByPhone(admin, trimmedPhone) : Promise.resolve(null),
+  ]);
+  if (wantsSlotCapacityCheck && ((slotCapacityResult?.count ?? 0) >= settings.pickup_slot_capacity)) {
+    return errorResponse(409, 'That pickup slot is full — please choose another time.');
+  }
   const customerUserId = linkedCustomer?.userId ?? null;
 
   // Whose promotions and points this order draws on. For a web checkout that is
@@ -611,45 +627,62 @@ export async function POST(request: Request) {
   // here on replays instead of racing.
   if (idempotencyKey) await completeIdempotencyKey(admin, idempotencyKey, orderRow.id as string);
 
-  for (const line of resolvedLines) {
+  // Perf: this used to be one `order_items` insert + one
+  // `order_item_addons` insert PER LINE (an N+1 that dominated latency on a
+  // multi-item cart — e.g. 3 lines with addons meant up to 6 round trips just
+  // for line items). Ids are generated here instead of read back via
+  // `.select('id').single()`, so every line's row — and its addons, which
+  // reference it by id — can go in ONE bulk insert each, independent of
+  // insert/return order. order_items.id has a `default gen_random_uuid()` in
+  // the schema; supplying our own uuid here is equally valid.
+  const lineIds = resolvedLines.map(() => crypto.randomUUID());
+  const orderItemRows = resolvedLines.map((line, i) => {
     const { addons, ...lineFields } = line;
-    const { data: orderItemRow, error: orderItemError } = await admin
-      .from('order_items')
-      .insert({ ...lineFields, order_id: orderRow.id })
-      .select('id')
-      .single();
+    return { id: lineIds[i], ...lineFields, order_id: orderRow.id };
+  });
+  const addonRows = resolvedLines.flatMap((line, i) =>
+    line.addons.map((a) => ({ ...a, order_item_id: lineIds[i] })),
+  );
 
-    if (orderItemError || !orderItemRow) {
-      console.error('order_items insert failed', orderItemError);
-      await admin.from('orders').delete().eq('id', orderRow.id);
-      return errorResponse(500, orderItemError?.message ? `Failed to create order items: ${orderItemError.message}` : 'Failed to create order items');
-    }
+  // The initial lifecycle event only needs the order id, which we already
+  // have — it doesn't depend on the items existing, so it fires alongside the
+  // items insert instead of waiting behind it.
+  const [itemsInsertResult] = await Promise.all([
+    admin.from('order_items').insert(orderItemRows),
+    // Seed the lifecycle event log with the initial transition (F1) so SLA
+    // metrics have an anchor for every order — 'received'/'placed' for the
+    // guest/web path (system actor), or 'accepted' attributed to the staff
+    // member who punched a staff_pos order (null → accepted, FND3-3).
+    admin.from('order_status_events').insert({
+      order_id: orderRow.id,
+      from_status: null,
+      to_status: initialStatus,
+      actor_id: actor ? actor.user.id : null,
+      actor_role: actor ? actorRoleFor(actor.role) : 'system',
+      reason: '',
+    }),
+  ]);
 
-    if (addons.length > 0) {
-      const { error: addonsError } = await admin
-        .from('order_item_addons')
-        .insert(addons.map((a) => ({ ...a, order_item_id: orderItemRow.id })));
-
-      if (addonsError) {
-        console.error('order_item_addons insert failed', addonsError);
-        await admin.from('orders').delete().eq('id', orderRow.id);
-        return errorResponse(500, addonsError?.message ? `Failed to create order item addons: ${addonsError.message}` : 'Failed to create order item addons');
-      }
-    }
+  if (itemsInsertResult.error) {
+    console.error('order_items insert failed', itemsInsertResult.error);
+    await admin.from('orders').delete().eq('id', orderRow.id);
+    return errorResponse(
+      500,
+      itemsInsertResult.error.message
+        ? `Failed to create order items: ${itemsInsertResult.error.message}`
+        : 'Failed to create order items',
+    );
   }
 
-  // Seed the lifecycle event log with the initial transition (F1) so SLA metrics
-  // have an anchor for every order — 'received'/'placed' for the guest/web path
-  // (system actor), or 'accepted' attributed to the staff member who punched a
-  // staff_pos order (null → accepted, FND3-3).
-  await admin.from('order_status_events').insert({
-    order_id: orderRow.id,
-    from_status: null,
-    to_status: initialStatus,
-    actor_id: actor ? actor.user.id : null,
-    actor_role: actor ? actorRoleFor(actor.role) : 'system',
-    reason: '',
-  });
+  if (addonRows.length > 0) {
+    const { error: addonsError } = await admin.from('order_item_addons').insert(addonRows);
+
+    if (addonsError) {
+      console.error('order_item_addons insert failed', addonsError);
+      await admin.from('orders').delete().eq('id', orderRow.id);
+      return errorResponse(500, addonsError.message ? `Failed to create order item addons: ${addonsError.message}` : 'Failed to create order item addons');
+    }
+  }
 
   // Snapshot the coupon redemption ATOMICALLY (FND-3 / H1): try_redeem_coupon
   // re-checks usage_limit/per_user_limit under a per-coupon lock and inserts in
@@ -757,18 +790,29 @@ export async function POST(request: Request) {
   // AFTER the order and its items are fully committed. Both helpers are
   // wrapped internally and never throw — a broken suggestion session or a
   // stale-marking failure must never touch this response.
+  //
+  // Perf: none of these three side effects (attribution, profile staleness,
+  // the e-bill's email/WhatsApp sends) can change the response any more — the
+  // order is already fully committed above — so they no longer block it.
+  // runAfterResponse() fires them and returns immediately; on Vercel,
+  // waitUntil() keeps the function alive until they finish, and in dev/tests
+  // the promise just keeps running on its own. This is the single biggest
+  // latency win in this route: sendBillNotification alone can involve an
+  // email provider AND a WhatsApp provider call.
   if (suggestionSessionIds.length > 0) {
-    await writeOrderAttribution(admin, {
-      orderId: orderRow.id as string,
-      sessionIds: suggestionSessionIds,
-      lines: resolvedLines.map((l) => ({ menu_item_id: l.menu_item_id, line_total_inr: l.line_total_inr })),
-    });
+    runAfterResponse(
+      writeOrderAttribution(admin, {
+        orderId: orderRow.id as string,
+        sessionIds: suggestionSessionIds,
+        lines: resolvedLines.map((l) => ({ menu_item_id: l.menu_item_id, line_total_inr: l.line_total_inr })),
+      }),
+    );
   }
   // Only while the engine is live: profiles are built only then, and a
   // recompute also triggers on "an order newer than source_order_at", so this
   // is a freshness nudge — not worth two round-trips on every order otherwise.
   if (flags.suggest) {
-    await Promise.all([markProfileStale(userId), markProfileStale(customerUserId)]);
+    runAfterResponse(Promise.all([markProfileStale(userId), markProfileStale(customerUserId)]));
   }
 
   // Send the link-based e-bill (RCT-1/2) on email + WhatsApp, logged + idempotent
@@ -782,7 +826,7 @@ export async function POST(request: Request) {
   // A staff-created order is settled later (POS-2); its bill fires at settle
   // (RCT-1), so we don't send an unpaid bill at creation time.
   if (!isStaff && response.status !== 'placed') {
-    await sendBillNotification(response);
+    runAfterResponse(sendBillNotification(response));
   }
 
   // `payment_unavailable` tells the client the customer asked to pay online but
