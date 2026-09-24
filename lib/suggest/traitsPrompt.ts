@@ -72,7 +72,11 @@ export interface TagTraitsResult {
   needsReview: string[];
 }
 
-const BATCH_SIZE = 40;
+// Anthropic: small batches, all sent at once. One Opus request writing traits
+// for 40 items can run past the 50 s budget (then the whole batch is lost and
+// every click makes zero progress); 12 items per request keeps each call well
+// inside it, and ~10 parallel requests is far below any API tier's rate limit.
+const ANTHROPIC_BATCH_SIZE = 12;
 const MAX_TOKENS = 16000;
 const ANTHROPIC_TIMEOUT_MS = 50000; // under the route's 60 s maxDuration, leaving time to upsert
 
@@ -262,7 +266,7 @@ async function tagWithAnthropic(items: MenuItemForTagging[]): Promise<TagTraitsR
   if (!client) throw new Error('ANTHROPIC_API_KEY is not set');
 
   const model = deciderModel();
-  const batches = chunk(items, BATCH_SIZE);
+  const batches = chunk(items, ANTHROPIC_BATCH_SIZE);
   const outcomes = await Promise.all(batches.map((batch) => tagBatchWithAnthropic(client, model, batch)));
   return finishResult(outcomes, model, batches.length);
 }
