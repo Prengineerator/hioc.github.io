@@ -22,7 +22,10 @@ const state: {
   menuRows: Record<string, unknown>[];
   orderInsert?: Record<string, unknown>;
   orderDeleted?: boolean;
+  /** What the (mocked) gateway returns — null = Razorpay unavailable. */
+  intent: Record<string, unknown> | null;
 } = {
+  intent: null,
   verifiedOrders: true,
   actor: null,
   sessionUser: null,
@@ -124,7 +127,7 @@ vi.mock('@/lib/loyalty/ledger', () => ({
   redeemForOrder: () => Promise.resolve(),
   reverseForOrder: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('@/lib/payments/gateway', () => ({ createPaymentIntent: () => Promise.resolve(null) }));
+vi.mock('@/lib/payments/gateway', () => ({ createPaymentIntent: () => Promise.resolve(state.intent) }));
 
 const { POST } = await import('@/app/api/orders/route');
 const { reverseForOrder } = await import('@/lib/loyalty/ledger');
@@ -154,6 +157,7 @@ beforeEach(() => {
   state.profileError = null;
   state.orderInsert = undefined;
   state.orderDeleted = false;
+  state.intent = null;
   state.menuRows = [
     {
       id: MENU_ID,
@@ -168,12 +172,10 @@ beforeEach(() => {
 });
 
 describe('POST /api/orders — the verified-number rule is enforced server-side', () => {
-  it('refuses an anonymous guest, and creates nothing', async () => {
+  it('refuses an anonymous guest paying at the counter, and creates nothing', async () => {
+    // A web guest (no session) is online-payment only.
     const res = await POST(order());
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.code).toBe('no_session');
-    // The assertion that matters: not merely a 403, but no order row.
+    expect(res.status).toBe(400);
     expect(state.orderInsert).toBeUndefined();
   });
 
@@ -233,14 +235,62 @@ describe('POST /api/orders — the verified-number rule is enforced server-side'
     expect(state.orderInsert?.customer_phone).toBe('');
   });
 
-  it('still requires a verified number for a WEB order while the flag is off', async () => {
-    // Owner rule: every web checkout order carries a WhatsApp-verified mobile.
-    // The flag now only governs the table-QR channel.
+  it('still requires a verified number from a SIGNED-IN web customer while the flag is off', async () => {
+    // Owner rule: a signed-in customer's web order carries a WhatsApp-verified
+    // mobile. The flag now only governs the table-QR channel.
     state.verifiedOrders = false;
+    state.sessionUser = { id: 'u1' };
+    state.profile = { phone: null, phone_verified: false };
     const res = await POST(order());
     expect(res.status).toBe(403);
-    expect((await res.json()).code).toBe('no_session');
+    expect((await res.json()).code).toBe('not_verified');
     expect(state.orderInsert).toBeUndefined();
+  });
+});
+
+describe('POST /api/orders — web guest checkout (no session): name only, pay online', () => {
+  function guestOrder(extra: Record<string, unknown> = {}) {
+    return new Request('http://t/api/orders', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        customer_name: 'Walk-by guest',
+        pickup_slot_label: 'ASAP',
+        items: oneLatte,
+        payment_mode: 'online',
+        ...extra,
+      }),
+    });
+  }
+
+  it('places a guest order with no phone or email, waiting on payment', async () => {
+    state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_x', amountInr: 125, keyId: 'rzp_live_x' };
+    const res = await POST(guestOrder());
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.customer_phone).toBe('');
+    expect(state.orderInsert?.status).toBe('placed');
+    expect(state.orderInsert?.payment_status).toBe('payment_pending');
+    expect(state.orderInsert?.user_id).toBeNull();
+  });
+
+  it('IGNORES a phone or email a guest request carries — an unverified number is never stored', async () => {
+    state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_x', amountInr: 125, keyId: 'rzp_live_x' };
+    const res = await POST(guestOrder({ customer_phone: '9876543210', customer_email: 'x@example.com' }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.customer_phone).toBe('');
+    expect(state.orderInsert?.customer_email).toBeUndefined();
+  });
+
+  it('still requires a name', async () => {
+    const res = await POST(guestOrder({ customer_name: '' }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('withdraws the guest order if online payment cannot start', async () => {
+    const res = await POST(guestOrder());
+    expect(res.status).toBe(502);
+    expect(state.orderDeleted).toBe(true);
   });
 });
 

@@ -98,6 +98,19 @@ export async function POST(request: Request) {
   // unpaid). Guarded by `!isStaff` so a staff session never takes this branch.
   const isTableQr = !isStaff && typeof rawQrToken === 'string' && rawQrToken.trim().length > 0;
 
+  // For a guest/customer checkout this is the verified customer session (or null
+  // for an anonymous guest). For a STAFF-created order the session belongs to the
+  // staff member, not the customer. Looked up this early because a web guest is
+  // validated differently from the first field on (below).
+  const sessionUser = await getAuthUser();
+
+  // Web GUEST checkout (owner rule): no session, pays online, and gives only a
+  // name — no mobile, no email, no verification. Nothing reaches the kitchen
+  // until the payment is captured, which is the proof a verified number
+  // otherwise provides. Any phone/email a guest request carries is IGNORED, never
+  // stored: an unverified number must never receive the cafe's WhatsApp sends.
+  const isWebGuest = !isStaff && !isTableQr && !sessionUser;
+
   // Customer name — mandatory for guest checkout, optional for a staff-created
   // order (anonymous walk-in allowed, FND3-3). Stored '' when absent (NOT NULL).
   let trimmedName = '';
@@ -115,7 +128,8 @@ export async function POST(request: Request) {
   // claimable/loyalty-eligible; a staff order without one stores '' so the
   // notification engine skips cleanly (no_phone). NOT NULL column.
   let trimmedPhone = '';
-  const phoneProvided = typeof customer_phone === 'string' && customer_phone.trim().length > 0;
+  const phoneProvided =
+    !isWebGuest && typeof customer_phone === 'string' && customer_phone.trim().length > 0;
   if (phoneProvided) {
     const normalizedPhone = normalizeIndianMobile(customer_phone as string);
     if (!normalizedPhone) {
@@ -123,14 +137,19 @@ export async function POST(request: Request) {
     }
     // Stored in E.164 form (see components/staff/OrderCard.tsx tel: link).
     trimmedPhone = `+91${normalizedPhone}`;
-  } else if (!isStaff && !isTableQr) {
+  } else if (!isStaff && !isTableQr && !isWebGuest) {
     return errorResponse(400, 'customer_phone is required and must be a string');
   }
 
   // Optional customer email (RCT-2 e-bill). Blank/absent is fine; when present
   // it must be a plausibly-valid address. Stored normalized (trimmed+lowercased).
   let customerEmail: string | null = null;
-  if (customer_email !== undefined && customer_email !== null && String(customer_email).trim().length > 0) {
+  if (
+    !isWebGuest &&
+    customer_email !== undefined &&
+    customer_email !== null &&
+    String(customer_email).trim().length > 0
+  ) {
     if (typeof customer_email !== 'string') {
       return errorResponse(400, 'customer_email must be a string');
     }
@@ -195,16 +214,12 @@ export async function POST(request: Request) {
     paymentMode = rawPaymentMode;
   }
 
-  // user_id is ALWAYS derived from the verified session, never trusted from
-  // the request body — a client-supplied user_id would let a guest redeem
-  // someone else's loyalty points or attribute an order to any account.
-  // A guest has a session too by the time they order: verifying their number
-  // at checkout signs them in (VERIFY-1 below rejects a web order without one).
-  // For a guest/customer checkout this is the verified customer session (or null
-  // for an anonymous guest). For a STAFF-created order the session belongs to the
-  // staff member, not the customer, so user_id stays null — attribution is
-  // captured separately in created_by. Never trust a client-supplied user_id.
-  const sessionUser = await getAuthUser();
+  // user_id is ALWAYS derived from the verified session (sessionUser, above),
+  // never trusted from the request body — a client-supplied user_id would let a
+  // guest redeem someone else's loyalty points or attribute an order to any
+  // account. A web guest has none (null). For a STAFF-created order the session
+  // belongs to the staff member, not the customer, so user_id stays null —
+  // attribution is captured separately in created_by.
 
   const userId = isStaff ? null : (sessionUser?.id ?? null);
 
@@ -215,9 +230,10 @@ export async function POST(request: Request) {
   // disabled button is not a rule: this route is reachable directly, and the
   // table-QR checkout never had the button at all. Staff orders are exempt —
   // see lib/orders/phoneVerification.ts for why that is not a loophole.
-  // Web checkout orders always require it (owner rule: every web order carries
-  // a WhatsApp-verified mobile); table-QR orders still follow the flag.
-  if ((flags.verifiedOrders || !isTableQr) && !isStaff) {
+  // A signed-in web customer always needs it (owner rule: their order carries a
+  // WhatsApp-verified mobile); a web GUEST carries no number at all and pays
+  // online instead (isWebGuest above); table-QR orders still follow the flag.
+  if ((flags.verifiedOrders || !isTableQr) && !isStaff && !isWebGuest) {
     // Read through the admin client, not the caller's session: profiles is
     // RLS-protected and this is a question about the session's own row, asked
     // by the server about itself.
@@ -258,12 +274,11 @@ export async function POST(request: Request) {
   }
 
   // Guest checkout is online-payment only (owner rule): pay-at-counter is for
-  // customers who were logged in before checkout. The checkout sends
-  // `require_online` for a guest — trusting it is safe because it can only make
-  // the order STRICTER — and a request with no session at all is a guest by
-  // definition. Staff and table-QR orders have their own payment rules. Checked
-  // after VERIFY-1 so an unverified guest is told to verify first.
-  const requireOnline = !isStaff && !isTableQr && (rawRequireOnline === true || !sessionUser);
+  // signed-in customers. A request with no session is a guest by definition; the
+  // checkout also sends `require_online` for one — trusting it is safe because it
+  // can only make the order STRICTER. Staff and table-QR orders have their own
+  // payment rules.
+  const requireOnline = !isStaff && !isTableQr && (rawRequireOnline === true || isWebGuest);
   if (requireOnline && paymentMode !== 'online') {
     return errorResponse(400, 'Guest orders must be paid online. Log in to pay at the counter.');
   }
