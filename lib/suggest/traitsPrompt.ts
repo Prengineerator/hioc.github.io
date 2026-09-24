@@ -22,6 +22,7 @@
 // tagging" and "upsert, never overwrite confirmed" decisions; this module
 // only tags whatever it's given.
 
+import { toAnthropicSchema } from './schema';
 import 'server-only';
 import { choice, noul, score } from '@typesafe-ai/sdk';
 import { getAnthropicClient } from './anthropic';
@@ -161,7 +162,7 @@ const TRAIT_ITEM_SCHEMA = {
   },
 } as const;
 
-const OUTPUT_SCHEMA = {
+export const OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['items'],
@@ -169,6 +170,24 @@ const OUTPUT_SCHEMA = {
     items: { type: 'array', items: TRAIT_ITEM_SCHEMA },
   },
 } as const;
+
+// Anthropic rejects minimum/maximum/maxItems (lib/suggest/schema.ts). Those
+// rules move into the field descriptions and are enforced after the reply by
+// validateOpusTraitRows.
+export const ANTHROPIC_OUTPUT_SCHEMA = toAnthropicSchema(OUTPUT_SCHEMA);
+
+// A model may propose more than MAX flavour notes once maxItems isn't
+// enforced by the schema; trim the extras instead of letting the validator
+// discard the whole item's row over them.
+const MAX_MODEL_FLAVOR_NOTES = 5;
+function capFlavorNotes(items: unknown): unknown {
+  if (!Array.isArray(items)) return items;
+  return items.map((it) =>
+    it && typeof it === 'object' && Array.isArray((it as { flavor_notes?: unknown }).flavor_notes)
+      ? { ...(it as object), flavor_notes: (it as { flavor_notes: unknown[] }).flavor_notes.slice(0, MAX_MODEL_FLAVOR_NOTES) }
+      : it,
+  );
+}
 
 const SYSTEM_PROMPT = [
   'You are a barista tagging real cafe menu items with objective taste facts an ordering engine relies on.',
@@ -231,7 +250,7 @@ async function tagBatchWithAnthropic(
       {
         model,
         max_tokens: MAX_TOKENS,
-        output_config: { effort: 'medium', format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
+        output_config: { effort: 'medium', format: { type: 'json_schema', schema: ANTHROPIC_OUTPUT_SCHEMA } },
         system: [{ type: 'text', text: SYSTEM_PROMPT }],
         messages: [{ role: 'user', content: JSON.stringify(batchPayload(batch)) }],
       },
@@ -242,7 +261,7 @@ async function tagBatchWithAnthropic(
       const textBlock = response.content.find((b) => b.type === 'text');
       if (textBlock && textBlock.type === 'text') {
         const parsed = JSON.parse(textBlock.text) as { items?: unknown };
-        rows = validateOpusTraitRows(parsed.items, allowedIds);
+        rows = validateOpusTraitRows(capFlavorNotes(parsed.items), allowedIds);
       }
     }
     const usage = response.usage;
@@ -292,7 +311,7 @@ async function tagBatchWithGemini(model: string, batch: MenuItemForTagging[], ti
       thinkingLevel: 'low',
     });
     const parsed = json as { items?: unknown };
-    const rows = validateOpusTraitRows(parsed.items, allowedIds);
+    const rows = validateOpusTraitRows(capFlavorNotes(parsed.items), allowedIds);
     return {
       rows,
       usage: { inputTokens: usage.inputTokens, cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: 0, outputTokens: usage.outputTokens },

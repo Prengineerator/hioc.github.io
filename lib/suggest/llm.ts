@@ -20,6 +20,7 @@
 
 import 'server-only';
 import Anthropic from '@anthropic-ai/sdk';
+import { toAnthropicSchema } from './schema';
 import { getAnthropicClient, SERVER_FALLBACK_BETA, SERVER_FALLBACKS } from './anthropic';
 import { DeciderError, type DeciderErrorKind } from './deciderError';
 import { geminiGenerateJson } from './gemini';
@@ -35,7 +36,7 @@ const MAX_TOKENS = 1500;
 
 const REASON_CODES = [...MOODS, 'trait', 'usual', 'popular'] as const;
 
-const OUTPUT_SCHEMA = {
+export const OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['header', 'picks'],
@@ -58,6 +59,10 @@ const OUTPUT_SCHEMA = {
     },
   },
 } as const;
+
+// Anthropic rejects minItems/maxItems (lib/suggest/schema.ts); the pick count
+// is enforced after the reply by validateDeciderPicks either way.
+export const ANTHROPIC_OUTPUT_SCHEMA = toAnthropicSchema(OUTPUT_SCHEMA);
 
 // §4 tone guide + role + output rules. NEVER varies per request (no
 // timestamps, no customer data) — this is the first half of the stable,
@@ -192,7 +197,7 @@ async function callOpus(args: {
         max_tokens: MAX_TOKENS,
         betas: [SERVER_FALLBACK_BETA],
         fallbacks: SERVER_FALLBACKS,
-        output_config: { effort: 'low', format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
+        output_config: { effort: 'low', format: { type: 'json_schema', schema: ANTHROPIC_OUTPUT_SCHEMA } },
         system: [{ type: 'text', text: STABLE_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
         messages: [
           {
