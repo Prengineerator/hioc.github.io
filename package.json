@@ -13,6 +13,7 @@
     "verify:notifications": "node scripts/verify-notifications.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@supabase/ssr": "^0.4.0",
     "@supabase/supabase-js": "^2.44.4",
     "@vercel/analytics": "^2.0.1",

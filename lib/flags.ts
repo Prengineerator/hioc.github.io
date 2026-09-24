@@ -60,6 +60,12 @@ export const flags = {
   // as well as the client, so NEXT_PUBLIC_ on purpose: the checkout needs to
   // know whether to show the OTP step at all.
   verifiedOrders: boolEnv(process.env.NEXT_PUBLIC_FLAG_VERIFIED_ORDERS, false),
+  // Phase-7 "Help me choose" suggestion engine (SUG-1). Default OFF: it must
+  // stay dark until Gate 7A (every item has owner-confirmed traits) and Gate 7B
+  // (offline eval ≥ 90% top-3 hit) pass. Gates /suggest, the home/menu entry
+  // points and the owner Suggestions tab. NEXT_PUBLIC_ because the menu and
+  // home pages decide client-side whether to show the entry banner.
+  suggest: boolEnv(process.env.NEXT_PUBLIC_FLAG_SUGGEST, false),
 } as const;
 
 export type FeatureFlags = typeof flags;
