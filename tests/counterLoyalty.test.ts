@@ -35,6 +35,8 @@ const state: {
   quotedFor: string | null;
   /** Simulates a deploy that predates 2026-08-counter-loyalty.sql. */
   rejectLinkedInsert: boolean;
+  /** A web customer's own verified number (the VERIFY-1 profiles lookup). */
+  webCustomerPhone?: string;
 } = {
   actor: null,
   sessionUser: null,
@@ -87,7 +89,11 @@ vi.mock('@/lib/supabase-server', () => ({
           }
           return Promise.resolve({ error: null });
         },
-        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        maybeSingle: () =>
+          table === 'profiles' && state.sessionUser && !state.actor
+            ? // A web customer's own verified number (VERIFY-1), matching the order.
+              Promise.resolve({ data: { phone: state.webCustomerPhone, phone_verified: true }, error: null })
+            : Promise.resolve({ data: null, error: null }),
         single: () => {
           if (table === 'order_items') return Promise.resolve({ data: { id: 'oi-1' }, error: null });
           if (table === 'orders' && ctx.inserted) {
@@ -253,15 +259,19 @@ describe('VAL-2 — linking a counter order to an account', () => {
     // A web guest typing a regular's number would otherwise inherit their
     // account — the counter's linkage is safe only because a staffer is
     // standing there confirming the name.
+    // Web orders need a verified number now, so the "guest" here is a signed-in
+    // web customer who verified that number — and it must STILL not attach
+    // the regular's account as customer_user_id.
     state.actor = null;
-    state.sessionUser = null;
+    state.sessionUser = { id: 'web-customer' };
+    state.webCustomerPhone = `+91${REGULAR}`;
     const res = await POST(
       req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_name: 'Guest', customer_phone: REGULAR }),
     );
     expect(res.status).toBe(201);
     expect(state.orderInsert?.channel).toBe('customer_web');
     expect(state.orderInsert?.customer_user_id).toBeUndefined();
-    expect(state.orderInsert?.user_id).toBeNull();
+    expect(state.orderInsert?.user_id).toBe('web-customer');
   });
 });
 

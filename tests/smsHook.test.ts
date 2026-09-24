@@ -87,6 +87,39 @@ describe('POST /api/auth/sms-hook', () => {
     });
   });
 
+  it('sends a phone-change code to the NEW number (email account linking its first phone)', async () => {
+    const res = await POST(
+      makeReq({ user: { phone: '', new_phone: '919111111111' }, sms: { otp: '654321' } }, { sign: true }),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body);
+    expect(sent.to).toBe('919111111111');
+  });
+
+  it('sends a phone_change code to the new number even when the account has an old one', async () => {
+    const res = await POST(
+      makeReq(
+        { user: { phone: '919000000000', new_phone: '919111111111' }, sms: { otp: '654321', sms_type: 'phone_change' } },
+        { sign: true },
+      ),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body);
+    expect(sent.to).toBe('919111111111');
+  });
+
+  it('never redirects a LOGIN code to a pending new number', async () => {
+    const res = await POST(
+      makeReq(
+        { user: { phone: '919000000000', new_phone: '919111111111' }, sms: { otp: '123456', sms_type: 'otp' } },
+        { sign: true },
+      ),
+    );
+    expect(res.status).toBe(200);
+    const sent = JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body);
+    expect(sent.to).toBe('919000000000');
+  });
+
   it('400s when the payload has no otp', async () => {
     const res = await POST(makeReq({ user: { phone: '+919000000000' } }, { sign: true }));
     expect(res.status).toBe(400);

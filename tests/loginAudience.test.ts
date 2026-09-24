@@ -156,6 +156,18 @@ describe('POST /api/auth/login — door enforcement', () => {
     expect((await res.json()).error).toBe('Invalid email or password');
   });
 
+  it('refuses a CUSTOMER password sign-in at any door, and signs the session out', async () => {
+    // Owner rule: customers sign in with a WhatsApp or email code only.
+    state.role = 'customer';
+    const res = await POST(loginReq({ email: 'c@x.com', password: 'p', audience: 'customer' }));
+    expect(res.status).toBe(403);
+    expect(state.signedOut).toBe(true);
+    state.signedOut = false;
+    const noDoor = await POST(loginReq({ email: 'c@x.com', password: 'p' }));
+    expect(noDoor.status).toBe(403);
+    expect(state.signedOut).toBe(true);
+  });
+
   it('stays backwards compatible when no audience is declared', async () => {
     // Any client that has not been updated keeps working rather than being
     // locked out by a field it does not send.

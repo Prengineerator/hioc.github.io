@@ -27,7 +27,7 @@ import {
 import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
-import { quoteRedemption, redeemForOrder } from '@/lib/loyalty/ledger';
+import { quoteRedemption, redeemForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import { findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
 import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
@@ -75,6 +75,7 @@ export async function POST(request: Request) {
     notes,
     items: rawItems,
     payment_mode: rawPaymentMode,
+    require_online: rawRequireOnline,
     coupon_code,
     redeem_points,
   } = body;
@@ -197,12 +198,14 @@ export async function POST(request: Request) {
   // user_id is ALWAYS derived from the verified session, never trusted from
   // the request body — a client-supplied user_id would let a guest redeem
   // someone else's loyalty points or attribute an order to any account.
-  // Guest checkout (no session) keeps working exactly as in Phase 1.
+  // A guest has a session too by the time they order: verifying their number
+  // at checkout signs them in (VERIFY-1 below rejects a web order without one).
   // For a guest/customer checkout this is the verified customer session (or null
   // for an anonymous guest). For a STAFF-created order the session belongs to the
   // staff member, not the customer, so user_id stays null — attribution is
   // captured separately in created_by. Never trust a client-supplied user_id.
   const sessionUser = await getAuthUser();
+
   const userId = isStaff ? null : (sessionUser?.id ?? null);
 
   const admin = createAdminSupabaseClient();
@@ -212,7 +215,9 @@ export async function POST(request: Request) {
   // disabled button is not a rule: this route is reachable directly, and the
   // table-QR checkout never had the button at all. Staff orders are exempt —
   // see lib/orders/phoneVerification.ts for why that is not a loophole.
-  if (flags.verifiedOrders && !isStaff) {
+  // Web checkout orders always require it (owner rule: every web order carries
+  // a WhatsApp-verified mobile); table-QR orders still follow the flag.
+  if ((flags.verifiedOrders || !isTableQr) && !isStaff) {
     // Read through the admin client, not the caller's session: profiles is
     // RLS-protected and this is a question about the session's own row, asked
     // by the server about itself.
@@ -250,6 +255,17 @@ export async function POST(request: Request) {
       // a sentence and leaving the customer to work out what to do.
       return NextResponse.json({ error: verdict.message, code: verdict.code }, { status: 403 });
     }
+  }
+
+  // Guest checkout is online-payment only (owner rule): pay-at-counter is for
+  // customers who were logged in before checkout. The checkout sends
+  // `require_online` for a guest — trusting it is safe because it can only make
+  // the order STRICTER — and a request with no session at all is a guest by
+  // definition. Staff and table-QR orders have their own payment rules. Checked
+  // after VERIFY-1 so an unverified guest is told to verify first.
+  const requireOnline = !isStaff && !isTableQr && (rawRequireOnline === true || !sessionUser);
+  if (requireOnline && paymentMode !== 'online') {
+    return errorResponse(400, 'Guest orders must be paid online. Log in to pay at the counter.');
   }
 
   // Dine-in requires a valid, active table (FND3-3). Its label is snapshotted
@@ -666,10 +682,20 @@ export async function POST(request: Request) {
   // Create the gateway payment intent now that the order + items are fully
   // committed. If the gateway is unconfigured/unavailable, fall back to
   // pay-at-counter rather than stranding the order at 'placed' with no way
-  // to pay (FND-1 edge case: "partial gateway outage").
+  // to pay (FND-1 edge case: "partial gateway outage") — except for a guest,
+  // who may not pay at the counter: their order is withdrawn instead (points
+  // returned first — loyalty_transactions does not cascade on delete).
   let paymentIntent: CreatedPaymentIntent | null = null;
   if (needsOnlinePayment) {
     paymentIntent = await createPaymentIntent(orderRow.id, bill.total_inr);
+    if (!paymentIntent && requireOnline) {
+      await reverseForOrder(orderRow.id);
+      await admin.from('orders').delete().eq('id', orderRow.id);
+      return errorResponse(
+        502,
+        'Online payment is unavailable right now, so your order was not placed. Please try again in a few minutes.',
+      );
+    }
     if (!paymentIntent) {
       const { error: fallbackError } = await admin
         .from('orders')
@@ -705,13 +731,14 @@ export async function POST(request: Request) {
   // Send the link-based e-bill (RCT-1/2) on email + WhatsApp, logged + idempotent
   // via the notification engine. Best-effort and never throws — a slow or
   // unconfigured provider can't block or fail order creation. Each channel is
-  // dormant until configured. Online orders send at placement too; the linked
-  // bill page always reflects live payment status when opened.
+  // dormant until configured.
+  // It is the customer's order confirmation, so it goes out only for an order
+  // that is actually confirmed: an online order still waiting on payment
+  // ('placed') gets it from lib/payments/reconcile.ts at the moment payment is
+  // captured and the order enters the queue — never for an abandoned payment.
   // A staff-created order is settled later (POS-2); its bill fires at settle
-  // (RCT-1), so we don't send an unpaid bill at creation time. A web or table-QR
-  // customer (both `!isStaff`) gets the live bill link now; the linked page
-  // reflects real payment status once the online payment (D6) confirms.
-  if (!isStaff) {
+  // (RCT-1), so we don't send an unpaid bill at creation time.
+  if (!isStaff && response.status !== 'placed') {
     await sendBillNotification(response);
   }
 
