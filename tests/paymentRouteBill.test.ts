@@ -138,6 +138,29 @@ describe('PATCH /api/orders/[id]/payment — bill at settle (BILL-1)', () => {
     await expect(res.json()).resolves.toMatchObject({ order: { payment_status: 'paid' } });
   });
 
+  // Issue-2/3: a web guest can no longer switch to pay at counter (issue-1),
+  // but a LOGGED-IN customer still can (POST /api/payments/[orderId]/status,
+  // 'switch_to_counter') — that leaves the order 'received'/unpaid with no
+  // bill sent (issue-3). Its bill must arrive here, at staff settlement, same
+  // as any other counter order.
+  it('bills a web order that was switched to pay at counter, once staff settle it', async () => {
+    state.existing = { payment_method: null, payment_status: 'unpaid', total_inr: 250, subtotal_inr: 230 };
+    state.updated = { id: ORDER_ID, channel: 'customer_web', payment_method: 'cash', payment_status: 'paid' };
+    state.full = {
+      id: ORDER_ID,
+      channel: 'customer_web',
+      payment_method: 'cash',
+      payment_status: 'paid',
+      customer_phone: '+919876543210',
+      order_items: [{ id: 'i1', order_item_addons: [] }],
+    };
+
+    const res = await call({ payment_method: 'cash' });
+
+    expect(res.status).toBe(200);
+    expect(sendBillNotification).toHaveBeenCalledTimes(1);
+  });
+
   it('does not bill when the settle is refused (online payment guard)', async () => {
     state.existing = { payment_method: 'online', payment_status: 'paid' };
 

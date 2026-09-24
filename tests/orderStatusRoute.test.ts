@@ -166,6 +166,21 @@ describe('PATCH /api/orders/[id]/status', () => {
     expect(sendBillNotification).not.toHaveBeenCalled();
   });
 
+  // Issue-3: most order types (takeaway/delivery) have no settlement guard on
+  // ready → completed, so an UNPAID one could complete without ever being
+  // billed at creation (issue-3 also stops that) or at settle. The completed
+  // transition must not paper over that with an unpaid bill either.
+  it('does NOT fire the settle bill completing an UNPAID non-dine-in order', async () => {
+    state.current = {
+      id: UUID, status: 'ready', version: 3, customer_phone: '+919000000000',
+      order_number: 1003, order_type: 'takeaway', payment_status: 'unpaid',
+    };
+    state.updated = { ...state.current, status: 'completed', version: 4 };
+    const res = await PATCH(req({ status: 'completed' }), params);
+    expect(res.status).toBe(200);
+    expect(sendBillNotification).not.toHaveBeenCalled();
+  });
+
   // FND3-5: dine-in must be settled before it completes (guard → 409), unless a
   // manager comps it. Takeaway (default fixture) is unaffected by these rules.
   describe('dine-in settlement (FND3-5)', () => {
@@ -217,6 +232,9 @@ describe('PATCH /api/orders/[id]/status', () => {
       expect(state.amendmentRow?.staff_id).toBe('mgr-1');
       expect((state.amendmentRow?.payload as { reason: string }).reason).toBe('VIP on the house');
       expect(state.patch?.status).toBe('completed'); // then the transition lands
+      // The comp set payment_status='paid' before the transition, so the
+      // completed-transition bill gate (issue-3) still fires for it.
+      expect(sendBillNotification).toHaveBeenCalledTimes(1);
     });
 
     it('400s a manager comp with an empty reason', async () => {

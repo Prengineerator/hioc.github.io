@@ -22,6 +22,7 @@ import { useOrderRealtime, type RealtimeConnection } from '@/lib/realtime/hooks'
 import { Spinner } from '@/components/ui/Spinner';
 import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
+import { canPayAtCounter, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[]; coupon_code?: string | null };
@@ -39,20 +40,10 @@ const STEP_LABEL: Record<string, string> = {
 const PAYMENT_POLL_MS = 4000;
 const PAYMENT_POLL_MAX_ATTEMPTS = 30; // ~2 minutes bounded reconciliation window
 
-const PAYMENT_CANCELLED_MSG = 'Payment was cancelled — you can retry or pay at the counter.';
-const PAYMENT_FAILED_MSG = "Your payment didn't go through — you can retry or pay at the counter.";
-
 // Set by the checkout pages when the customer chose to pay online but the
 // gateway was unavailable, so the server placed the order as pay-at-counter.
 const PAYMENT_UNAVAILABLE_MSG =
   "Online payment isn't available right now, so your order was placed as pay at the counter. Please pay when you collect it.";
-
-// Set by CheckoutForm when the Razorpay modal closes without a verified payment.
-function initialPaymentMessage(flag: string | null): string {
-  if (flag === 'cancelled') return PAYMENT_CANCELLED_MSG;
-  if (flag === 'failed') return PAYMENT_FAILED_MSG;
-  return '';
-}
 
 export default function OrderStatusPage() {
   const params = useParams<{ id: string }>();
@@ -67,10 +58,20 @@ export default function OrderStatusPage() {
   const [cancelError, setCancelError] = useState('');
   const [paying, setPaying] = useState(false);
   const [switching, setSwitching] = useState(false);
-  const [paymentActionError, setPaymentActionError] = useState(() =>
-    initialPaymentMessage(searchParams.get('payment')),
-  );
+  const [paymentActionError, setPaymentActionError] = useState('');
+  // The ?payment= flag's message is only a fallback for paymentActionError
+  // (below) — once the customer has actually taken an action (retry or
+  // switch), the stale "didn't go through"/"was cancelled" copy from the URL
+  // must not reappear just because paymentActionError was cleared back to ''
+  // for the new attempt.
+  const [flagDismissed, setFlagDismissed] = useState(false);
   const pollAttempts = useRef(0);
+  // Bumped whenever a retry starts or a Razorpay attempt succeeds, so the
+  // reconciliation-poll effect below tears down and restarts with a fresh
+  // budget instead of quietly staying exhausted from an earlier failed
+  // attempt (PAY-2 issue-2: a retry's poll window must never inherit a spent
+  // one from a previous failed/abandoned attempt on the same order).
+  const [pollEpoch, setPollEpoch] = useState(0);
 
   const fetchOrder = useCallback(async () => {
     if (!orderId) return;
@@ -104,6 +105,10 @@ export default function OrderStatusPage() {
       pollAttempts.current = 0;
       return;
     }
+    // A fresh window every time this effect (re)starts — including on a
+    // pollEpoch bump — so a retry always gets its own ~2 minutes rather than
+    // continuing to spend down whatever budget a prior failed attempt left.
+    pollAttempts.current = 0;
     const interval = setInterval(async () => {
       if (pollAttempts.current >= PAYMENT_POLL_MAX_ATTEMPTS) {
         clearInterval(interval);
@@ -118,7 +123,7 @@ export default function OrderStatusPage() {
       fetchOrder();
     }, PAYMENT_POLL_MS);
     return () => clearInterval(interval);
-  }, [orderId, order?.payment_status, fetchOrder]);
+  }, [orderId, order?.payment_status, pollEpoch, fetchOrder]);
 
   const handleCancel = useCallback(async () => {
     if (!orderId) return;
@@ -142,6 +147,15 @@ export default function OrderStatusPage() {
     if (!orderId || !order) return;
     setPaying(true);
     setPaymentActionError('');
+    setFlagDismissed(true);
+    // Issue-2: a retry always gets a fresh reconciliation-poll budget, even if
+    // an earlier failed/abandoned attempt on this order already spent one out
+    // sitting on the "waiting on payment" screen — otherwise a payment that
+    // captures on THIS attempt could go unnoticed until the webhook (if any)
+    // arrives, and the order would never enter the queue or get its bill.
+    pollAttempts.current = 0;
+    setPollEpoch((e) => e + 1);
+    const allowCounter = canPayAtCounter(order);
     try {
       const res = await fetch(`/api/payments/${orderId}/status`, {
         method: 'POST',
@@ -157,10 +171,22 @@ export default function OrderStatusPage() {
         name: order.customer_name,
         phone: order.customer_phone,
         description: `Order #${formatOrderNumber(order.order_number)}`,
-        onSuccess: fetchOrder,
+        onSuccess: () => {
+          // The signature verified, but the payment may still only be
+          // 'authorized' (not yet captured) — see app/api/payments/verify —
+          // so re-arm the poll here too: this is exactly the moment a fresh
+          // reconciliation window matters most.
+          pollAttempts.current = 0;
+          setPollEpoch((e) => e + 1);
+          fetchOrder();
+        },
         onDismiss: (lastFailure) => {
           setPaymentActionError(
-            lastFailure ? `Payment failed: ${lastFailure}` : PAYMENT_CANCELLED_MSG,
+            lastFailure
+              ? `Payment failed: ${lastFailure}`
+              : allowCounter
+                ? 'Payment was cancelled — you can retry or pay at the counter.'
+                : 'Payment was cancelled — please retry the payment.',
           );
           fetchOrder();
         },
@@ -181,6 +207,7 @@ export default function OrderStatusPage() {
     if (!orderId) return;
     setSwitching(true);
     setPaymentActionError('');
+    setFlagDismissed(true);
     try {
       const res = await fetch(`/api/payments/${orderId}/status`, {
         method: 'POST',
@@ -228,6 +255,10 @@ export default function OrderStatusPage() {
   const cancelled = order.status === 'cancelled';
   const negative = rejected || cancelled;
   const awaitingPayment = order.status === 'placed'; // gated on online payment (PAY-1)
+  const allowCounter = canPayAtCounter(order); // issue-1: web guests never see this offered
+  const displayedPaymentError =
+    paymentActionError ||
+    (flagDismissed ? '' : paymentFlagMessage(searchParams.get('payment'), allowCounter));
 
   return (
     <div className="mx-auto max-w-xl px-4 py-12">
@@ -258,8 +289,8 @@ export default function OrderStatusPage() {
             Your order will join the kitchen queue as soon as payment is confirmed — this
             updates automatically, usually within a few seconds.
           </p>
-          {paymentActionError ? (
-            <p className="mt-3 text-sm font-bold text-red-700">{paymentActionError}</p>
+          {displayedPaymentError ? (
+            <p className="mt-3 text-sm font-bold text-red-700">{displayedPaymentError}</p>
           ) : null}
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
             <button
@@ -270,14 +301,16 @@ export default function OrderStatusPage() {
             >
               {paying ? 'Opening payment…' : 'Retry payment'}
             </button>
-            <button
-              type="button"
-              onClick={handleSwitchToCounter}
-              disabled={switching}
-              className="rounded-md border border-[#e5e5e5] px-5 py-2.5 font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
-            >
-              {switching ? 'Switching…' : 'Switch to pay at counter'}
-            </button>
+            {allowCounter ? (
+              <button
+                type="button"
+                onClick={handleSwitchToCounter}
+                disabled={switching}
+                className="rounded-md border border-[#e5e5e5] px-5 py-2.5 font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
+              >
+                {switching ? 'Switching…' : 'Switch to pay at counter'}
+              </button>
+            ) : null}
           </div>
         </div>
       ) : negative ? (

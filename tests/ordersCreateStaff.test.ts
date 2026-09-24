@@ -140,19 +140,22 @@ beforeEach(() => {
 });
 
 describe('POST /api/orders — web channel (unchanged, FND3-2)', () => {
-  it('creates a verified customer\'s takeaway order as customer_web / received and sends the bill', async () => {
+  it('creates a verified customer\'s takeaway order as customer_web / received, unpaid, and sends NO bill yet (issue-3)', async () => {
     // Web orders need a WhatsApp-verified number (VERIFY-1); a customer who
-    // was logged in before checkout may still pay at the counter.
+    // was logged in before checkout may still pay at the counter. That order
+    // is unpaid at creation — its bill must wait until a payment is actually
+    // recorded (staff settlement or the completed transition), not fire here.
     state.sessionUser = { id: 'cust-1' };
     const res = await POST(req({ customer_name: 'Asha', customer_phone: '9000000000', pickup_slot_label: 'ASAP', items: oneLatte }));
     expect(res.status).toBe(201);
     expect(state.orderInsert?.channel).toBe('customer_web');
     expect(state.orderInsert?.status).toBe('received');
+    expect(state.orderInsert?.payment_status).toBe('unpaid');
     expect(state.orderInsert?.table_id).toBeNull();
     expect(state.orderInsert?.created_by).toBeNull();
     expect(state.orderInsert?.packaging_inr).toBe(20); // takeaway keeps packaging
     expect(state.eventRow?.actor_role).toBe('system');
-    expect(sendBillNotification).toHaveBeenCalledTimes(1);
+    expect(sendBillNotification).not.toHaveBeenCalled();
   });
 
   it('400s a guest order missing name or phone', async () => {
