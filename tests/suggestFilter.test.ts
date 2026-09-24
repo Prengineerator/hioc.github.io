@@ -5,7 +5,17 @@ import { scoreCandidates, buildShortlist } from '@/lib/suggest/score';
 import { deterministicPicks } from '@/lib/suggest/templates';
 import { validateDeciderPicks } from '@/lib/suggest/validate';
 import type { MenuItem } from '@/lib/types';
-import type { MenuItemTraits, SuggestInputs, TemperaturePref, BasePref, Budget, Need } from '@/lib/suggest/types';
+import type {
+  Extra,
+  MenuItemTraits,
+  Mood,
+  SuggestInputs,
+  TemperaturePref,
+  BasePref,
+  Budget,
+  Need,
+} from '@/lib/suggest/types';
+import { MOODS } from '@/lib/suggest/types';
 import {
   buildFixtureMenu,
   buildFixtureTraitsById,
@@ -18,9 +28,31 @@ import {
 // §6.1: "a property-style unit test runs the filter plus the full pipeline
 // ... across every combination of chips × a fixture menu, and asserts no
 // violating item is ever returned." This is that test. `spec5_2Violation`
-// is an INDEPENDENT re-statement of §5.2's six rules (not a call into the
-// code under test) so a bug in filter.ts can't also hide from its own check.
+// is an INDEPENDENT re-statement of §5.2's rules (not a call into the code
+// under test) so a bug in filter.ts can't also hide from its own check.
+//
+// Two invariants added alongside the original six (root causes #1 of the
+// Phase-7 "help me choose" quality pass):
+//  (a) temperature only ever gates DRINKS — a hot/iced food or dessert item
+//      is never excluded just because the customer's temperature chip
+//      doesn't match it.
+//  (b) composition — food is a candidate only when 'eat' or 'filling' was
+//      chosen; dessert only when 'eat'/'sweet'/'filling' was chosen or the
+//      mood is 'celebrate'. Neither 'chocolatey' nor 'fruity' admits either.
 // ---------------------------------------------------------------------------
+
+function compositionAllows(t: MenuItemTraits, inputs: SuggestInputs): boolean {
+  if (t.kind === 'food') return inputs.extras.includes('eat') || inputs.extras.includes('filling');
+  if (t.kind === 'dessert') {
+    return (
+      inputs.extras.includes('eat') ||
+      inputs.extras.includes('sweet') ||
+      inputs.extras.includes('filling') ||
+      inputs.mood === 'celebrate'
+    );
+  }
+  return true; // drinks are never gated by composition.
+}
 
 function spec5_2Violation(
   item: MenuItem,
@@ -31,8 +63,14 @@ function spec5_2Violation(
   if (!t) return 'no traits row (§5.2.1)';
   if (!isMenuItemAvailable(item)) return 'unavailable (§5.2.1)';
   if (excludeIds.includes(item.id)) return 'in excludeItemIds (§5.2.6)';
-  if (inputs.temperature === 'hot' && t.temperature === 'iced') return 'Hot chip returned an iced item (§5.2.2)';
-  if (inputs.temperature === 'iced' && t.temperature === 'hot') return 'Iced chip returned a hot item (§5.2.2)';
+  if (!compositionAllows(t, inputs)) return 'food/dessert admitted without the customer asking to eat (§5.2.2b)';
+  // (a) drinks-only temperature.
+  if (t.kind === 'drink' && inputs.temperature === 'hot' && t.temperature === 'iced') {
+    return 'Hot chip returned an iced drink (§5.2.2)';
+  }
+  if (t.kind === 'drink' && inputs.temperature === 'iced' && t.temperature === 'hot') {
+    return 'Iced chip returned a hot drink (§5.2.2)';
+  }
   if (inputs.base === 'no_coffee' && t.is_coffee) return 'No-coffee chip returned a coffee item (§5.2.3)';
   if (inputs.base === 'coffee' && t.kind === 'drink' && !t.is_coffee) {
     return 'Coffee chip returned a non-coffee drink (§5.2.3)';
@@ -182,6 +220,79 @@ describe('§6.1 exhaustive hard-constraint suite', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Dedicated composition-rule matrix: extras subsets × every mood × every
+// temperature chip (§6.1's own wording for this ticket: "add both as
+// asserted invariants across every combination — extras subsets and moods
+// included"). Kept as its own smaller matrix (not folded into the ×432-combo
+// suite above, which already re-checks these same two invariants on every
+// one of its combinations at extras=[]/mood='boost') so varying extras and
+// mood doesn't multiply the whole existing suite out to an unworkable size.
+// ---------------------------------------------------------------------------
+
+const EXTRAS_SUBSETS_FOR_COMPOSITION: Extra[][] = [
+  [],
+  ['eat'],
+  ['sweet'],
+  ['filling'],
+  ['light'],
+  ['chocolatey'],
+  ['fruity'],
+  ['eat', 'chocolatey'],
+  ['sweet', 'fruity'],
+];
+
+describe('§5.2 composition rule (food/dessert) × drinks-only temperature — extras × mood × temperature', () => {
+  const items = buildFixtureMenu();
+
+  for (const mood of MOODS as readonly Mood[]) {
+    for (const extras of EXTRAS_SUBSETS_FOR_COMPOSITION) {
+      for (const temperature of TEMPERATURES) {
+        const inputs = makeInputs({ mood, extras, temperature });
+        const label = `mood=${mood} extras=${extras.join('+') || 'none'} T=${temperature}`;
+
+        it(`filterCandidates never violates the composition/temperature invariants [${label}]`, () => {
+          const traitsById = buildFixtureTraitsById();
+          const candidates = filterCandidates(items, traitsById, inputs, []);
+          for (const c of candidates) {
+            const violation = spec5_2Violation(c.item, traitsById.get(c.item.id), inputs, []);
+            expect(violation, `${c.item.id}: ${violation}`).toBeNull();
+          }
+        });
+
+        it(`(a) a hot/iced food or dessert composition allows is never excluded by the temperature chip [${label}]`, () => {
+          const traitsById = buildFixtureTraitsById();
+          const candidates = filterCandidates(items, traitsById, inputs, []);
+          const candidateIds = new Set(candidates.map((c) => c.item.id));
+          for (const item of items) {
+            const t = traitsById.get(item.id);
+            if (!t || (t.kind !== 'food' && t.kind !== 'dessert')) continue;
+            if (t.temperature !== 'hot' && t.temperature !== 'iced') continue; // ambient — nothing to prove here
+            if (!isMenuItemAvailable(item)) continue;
+            if (!compositionAllows(t, inputs)) continue; // correctly excluded by composition, not temperature
+            expect(
+              candidateIds.has(item.id),
+              `${item.id} (kind=${t.kind}, temp=${t.temperature}) wrongly excluded by the ${temperature} chip`,
+            ).toBe(true);
+          }
+        });
+
+        it(`(b) no food/dessert candidate unless the composition rule allows it [${label}]`, () => {
+          const traitsById = buildFixtureTraitsById();
+          const candidates = filterCandidates(items, traitsById, inputs, []);
+          for (const c of candidates) {
+            if (c.traits.kind !== 'food' && c.traits.kind !== 'dessert') continue;
+            expect(
+              compositionAllows(c.traits, inputs),
+              `${c.item.id} (kind=${c.traits.kind}) admitted without eat/sweet/filling/celebrate`,
+            ).toBe(true);
+          }
+        });
+      }
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Unit-level coverage of the individual exports.
 // ---------------------------------------------------------------------------
 
@@ -236,15 +347,28 @@ describe('relaxHintFor', () => {
 
   it('names budget when tightening the budget is what starved the results', () => {
     const traitsById = buildFixtureTraitsById();
-    // Iced + under_150 alone leaves 5 candidates (on-the-rocks, iced-latte,
-    // iced-americano, cold-brew, red-velvet-cupcake — ambient items pass any
-    // temperature chip). Excluding all but on-the-rocks pins the baseline at
-    // 1, and makes the trade-off unambiguous: relaxing budget re-admits 6
-    // pricier iced drinks + 4 pricier ambient desserts (10 items) while
-    // relaxing temperature alone (keeping the ₹150 cap) only re-admits the
-    // 4 hot drinks priced ≤ ₹150 — so budget must win the "most candidates"
-    // comparison.
-    const excludeItemIds = ['iced-latte', 'iced-americano', 'cold-brew', 'red-velvet-cupcake'];
+    // Iced + under_150, with no extras chosen, leaves only on-the-rocks
+    // (₹140) — every other iced drink is either over ₹150 or excluded below,
+    // and the composition rule (§5.2) keeps every food/dessert out entirely
+    // since no extras/celebrate mood admit them. Excluding the other cheap
+    // iced drinks AND the cheap hot coffees pins the baseline at 1 and makes
+    // the trade-off unambiguous: relaxing budget re-admits 6 pricier iced
+    // drinks, while relaxing temperature alone (still under the ₹150 cap,
+    // with the cheap hot coffees excluded) only re-admits the 4 remaining
+    // hot drinks priced ≤ ₹150 (espresso, cappuccino, cafe-latte,
+    // chai-latte) — so budget must win the "most candidates" comparison.
+    const excludeItemIds = [
+      'iced-latte',
+      'iced-americano',
+      'cold-brew',
+      'red-velvet-cupcake',
+      'doppio',
+      'flat-white',
+      'cortado',
+      'ristretto',
+      'hot-americano',
+      'macchiato',
+    ];
     const inputs = makeInputs({ temperature: 'iced', budget: 'under_150' });
     const before = filterCandidates(buildFixtureMenu(), traitsById, inputs, excludeItemIds);
     expect(before.length).toBeLessThan(3);

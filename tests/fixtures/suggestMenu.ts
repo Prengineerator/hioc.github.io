@@ -124,6 +124,159 @@ export const CAFE_LATTE_TRAITS = traits({
   flavor_notes: ['smooth', 'milky'],
 });
 
+// Seven more hot coffees (alongside ESPRESSO/CAPPUCCINO/CAFE_LATTE above —
+// 10 total in the 'Coffee' category) so a "hot coffee" request has enough
+// same-category candidates to exercise the no-longer-2-per-category
+// diversity cap (root cause #2 — buildShortlist used to starve the decider
+// down to just 2 coffees). Most are tagged 'boost' so a boost+hot+coffee
+// request scores them competitively against each other.
+export const DOPPIO = menuItem({
+  id: 'doppio',
+  name: 'Doppio',
+  description: 'A double shot of espresso, pulled short and strong.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 90,
+});
+export const DOPPIO_TRAITS = traits({
+  menu_item_id: 'doppio',
+  temperature: 'hot',
+  caffeine: 'high',
+  is_coffee: true,
+  sweetness: 0,
+  body: 'light',
+  kind: 'drink',
+  moods: ['boost'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['bold', 'intense'],
+});
+
+export const FLAT_WHITE = menuItem({
+  id: 'flat-white',
+  name: 'Flat White',
+  description: 'Espresso with steamed milk and a thin layer of microfoam.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 150,
+});
+export const FLAT_WHITE_TRAITS = traits({
+  menu_item_id: 'flat-white',
+  temperature: 'hot',
+  caffeine: 'medium',
+  is_coffee: true,
+  sweetness: 1,
+  body: 'medium',
+  kind: 'drink',
+  moods: ['boost', 'cosy'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['velvety', 'smooth'],
+});
+
+export const MOCHA = menuItem({
+  id: 'mocha',
+  name: 'Mocha',
+  description: 'Espresso with steamed milk and rich chocolate syrup.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 170,
+});
+export const MOCHA_TRAITS = traits({
+  menu_item_id: 'mocha',
+  temperature: 'hot',
+  caffeine: 'medium',
+  is_coffee: true,
+  sweetness: 2,
+  body: 'rich',
+  kind: 'drink',
+  moods: ['comfort', 'celebrate'],
+  dayparts: ['afternoon', 'evening'],
+  flavor_notes: ['chocolate', 'coffee-forward'],
+});
+
+export const CORTADO = menuItem({
+  id: 'cortado',
+  name: 'Cortado',
+  description: 'Espresso cut with a small, equal amount of warm milk.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 140,
+});
+export const CORTADO_TRAITS = traits({
+  menu_item_id: 'cortado',
+  temperature: 'hot',
+  caffeine: 'medium',
+  is_coffee: true,
+  sweetness: 1,
+  body: 'medium',
+  kind: 'drink',
+  moods: ['boost'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['balanced', 'nutty'],
+});
+
+export const RISTRETTO = menuItem({
+  id: 'ristretto',
+  name: 'Ristretto',
+  description: 'A short, concentrated espresso pull — bold and syrupy.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 95,
+});
+export const RISTRETTO_TRAITS = traits({
+  menu_item_id: 'ristretto',
+  temperature: 'hot',
+  caffeine: 'high',
+  is_coffee: true,
+  sweetness: 0,
+  body: 'light',
+  kind: 'drink',
+  moods: ['boost'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['concentrated', 'bold'],
+});
+
+export const HOT_AMERICANO = menuItem({
+  id: 'hot-americano',
+  name: 'Americano',
+  description: 'Espresso lengthened with hot water — bold and clean.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 100,
+});
+export const HOT_AMERICANO_TRAITS = traits({
+  menu_item_id: 'hot-americano',
+  temperature: 'hot',
+  caffeine: 'high',
+  is_coffee: true,
+  sweetness: 0,
+  body: 'light',
+  kind: 'drink',
+  moods: ['boost'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['bold', 'clean'],
+});
+
+export const CAFE_MACCHIATO = menuItem({
+  id: 'macchiato',
+  name: 'Cafe Macchiato',
+  description: 'Espresso "marked" with a dash of foamed milk.',
+  category: 'Coffee',
+  parent_category: 'Hot',
+  priceInr: 120,
+});
+export const CAFE_MACCHIATO_TRAITS = traits({
+  menu_item_id: 'macchiato',
+  temperature: 'hot',
+  caffeine: 'high',
+  is_coffee: true,
+  sweetness: 1,
+  body: 'medium',
+  kind: 'drink',
+  moods: ['boost', 'cosy'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['sweet', 'bold'],
+});
+
 export const CHAI_LATTE = menuItem({
   id: 'chai-latte',
   name: 'Chai Latte',
@@ -404,6 +557,54 @@ export const NUTELLA_WAFFLE_TRAITS = traits({
   flavor_notes: ['chocolate', 'hazelnut'],
 });
 
+// Two HOT (not 'ambient') food items — the exact dishes named in the real
+// production sessions this ticket fixes (root cause #1: food leaking into
+// plain drink requests, and hot food wrongly excluded by an iced-drink
+// chip). temperature: 'hot' here specifically exercises "the temperature
+// constraint applies to drinks only" (§5.2) — before that fix, requesting an
+// iced drink would have wrongly excluded these.
+export const GARLIC_BREAD_TOAST = menuItem({
+  id: 'garlic-bread-toast',
+  name: 'Garlic Bread Toast',
+  description: 'Toasted bread with garlic butter, baked hot and crisp.',
+  category: 'Savouries',
+  parent_category: 'Eatery',
+  priceInr: 160,
+});
+export const GARLIC_BREAD_TOAST_TRAITS = traits({
+  menu_item_id: 'garlic-bread-toast',
+  temperature: 'hot',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness: 0,
+  body: 'medium',
+  kind: 'food',
+  moods: ['comfort'],
+  dayparts: ['afternoon', 'evening'],
+  flavor_notes: ['garlicky', 'buttery'],
+});
+
+export const BAKED_CHEESE_NACHOS = menuItem({
+  id: 'baked-cheese-nachos',
+  name: 'Baked Cheese Nachos',
+  description: 'Corn chips baked hot under melted cheese, lightly spiced.',
+  category: 'Savouries',
+  parent_category: 'Eatery',
+  priceInr: 220,
+});
+export const BAKED_CHEESE_NACHOS_TRAITS = traits({
+  menu_item_id: 'baked-cheese-nachos',
+  temperature: 'hot',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness: 0,
+  body: 'rich',
+  kind: 'food',
+  moods: ['comfort', 'celebrate'],
+  dayparts: ['afternoon', 'evening', 'late'],
+  flavor_notes: ['cheesy', 'spiced'],
+});
+
 export const BLUEBERRY_CHEESECAKE = menuItem({
   id: 'blueberry-cheesecake',
   name: 'Blueberry Cheesecake',
@@ -519,6 +720,13 @@ export const SUGGEST_FIXTURE_ITEMS: MenuItem[] = [
   ESPRESSO,
   CAPPUCCINO,
   CAFE_LATTE,
+  DOPPIO,
+  FLAT_WHITE,
+  MOCHA,
+  CORTADO,
+  RISTRETTO,
+  HOT_AMERICANO,
+  CAFE_MACCHIATO,
   CHAI_LATTE,
   HOT_CHOCOLATE,
   SIGNATURE_CREME,
@@ -533,6 +741,8 @@ export const SUGGEST_FIXTURE_ITEMS: MenuItem[] = [
   VANILLA_COLD_BREW,
   BELGIAN_WAFFLE,
   NUTELLA_WAFFLE,
+  GARLIC_BREAD_TOAST,
+  BAKED_CHEESE_NACHOS,
   BLUEBERRY_CHEESECAKE,
   BISCOFF_CHEESECAKE,
   RED_VELVET_CUPCAKE,
@@ -545,6 +755,13 @@ const TRAITS_LIST: MenuItemTraits[] = [
   ESPRESSO_TRAITS,
   CAPPUCCINO_TRAITS,
   CAFE_LATTE_TRAITS,
+  DOPPIO_TRAITS,
+  FLAT_WHITE_TRAITS,
+  MOCHA_TRAITS,
+  CORTADO_TRAITS,
+  RISTRETTO_TRAITS,
+  HOT_AMERICANO_TRAITS,
+  CAFE_MACCHIATO_TRAITS,
   CHAI_LATTE_TRAITS,
   HOT_CHOCOLATE_TRAITS,
   SIGNATURE_CREME_TRAITS,
@@ -559,6 +776,8 @@ const TRAITS_LIST: MenuItemTraits[] = [
   VANILLA_COLD_BREW_TRAITS,
   BELGIAN_WAFFLE_TRAITS,
   NUTELLA_WAFFLE_TRAITS,
+  GARLIC_BREAD_TOAST_TRAITS,
+  BAKED_CHEESE_NACHOS_TRAITS,
   BLUEBERRY_CHEESECAKE_TRAITS,
   BISCOFF_CHEESECAKE_TRAITS,
   RED_VELVET_CUPCAKE_TRAITS,

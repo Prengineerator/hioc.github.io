@@ -57,7 +57,9 @@ export function validateDeciderPicks(
 
     const reasonCode = isValidReasonCode(pick.reasonCode) ? pick.reasonCode : 'trait';
     const lint = typeof pick.reason === 'string' ? lintReason(pick.reason) : { ok: false as const };
-    const reason = lint.ok ? (pick.reason as string) : templateReason(candidate.traits, inputs, reasonCode);
+    const reason = lint.ok
+      ? (pick.reason as string)
+      : templateReason(candidate.traits, inputs, reasonCode, candidate.name);
 
     out.push({ menuItemId: pick.menuItemId, reason, reasonCode });
   }

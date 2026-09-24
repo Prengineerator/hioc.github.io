@@ -101,7 +101,7 @@ function topUpPicks(picks: SuggestionPick[], shortlist: Candidate[], inputs: Sug
     if (seen.has(c.menuItemId)) continue;
     seen.add(c.menuItemId);
     const reasonCode: SuggestionPick['reasonCode'] = c.traits.moods.includes(inputs.mood) ? inputs.mood : 'trait';
-    out.push({ menuItemId: c.menuItemId, reason: templateReason(c.traits, inputs, reasonCode), reasonCode });
+    out.push({ menuItemId: c.menuItemId, reason: templateReason(c.traits, inputs, reasonCode, c.name), reasonCode });
   }
   return out;
 }
@@ -198,8 +198,9 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
   }
 
   const usualTraits = usualItemId ? traitsById.get(usualItemId) : undefined;
+  const usualName = usualItemId ? menu.find((m) => m.id === usualItemId)?.name : undefined;
   const usual: SuggestionPick | null = usualItemId && usualTraits
-    ? { menuItemId: usualItemId, reason: templateReason(usualTraits, inputs, 'usual'), reasonCode: 'usual' }
+    ? { menuItemId: usualItemId, reason: templateReason(usualTraits, inputs, 'usual', usualName), reasonCode: 'usual' }
     : null;
 
   // 7 — tone lint on the header (model-written OR our own template — belt and

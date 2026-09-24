@@ -194,7 +194,7 @@ const SYSTEM_PROMPT = [
   'For EVERY item given, return exactly one object with these fields:',
   '- menu_item_id: the id given for that item, copied exactly — never invent one.',
   '- temperature: "hot", "iced", "either" (served both ways), or "ambient" (food/dessert — no serving temperature).',
-  '- caffeine: "none", "low", "medium", or "high".',
+  '- caffeine: "none", "low", "medium", or "high". Chocolate, cocoa, Nutella, Oreo and hot chocolate are ALWAYS "none" — they contain no caffeine, regardless of how rich or intense they taste. Only coffee/espresso drinks (usually "medium" or "high") and tea/matcha/chai drinks (usually "low" or "medium") ever carry caffeine.',
   '- is_coffee: true only for coffee-based drinks; false for tea, other drinks, food and desserts.',
   '- sweetness: an integer 0-3 (0 = unsweetened/savoury, 3 = very sweet).',
   '- body: "light", "medium", or "rich" — for food/dessert this is portion heaviness, not taste.',
@@ -421,10 +421,10 @@ const JEV_TEMPERATURE_CRITERIA = {
 };
 
 const JEV_CAFFEINE_CRITERIA = {
-  none: 'No coffee, tea, matcha or chocolate — no caffeine at all.',
-  low: 'Chocolate-based, with a small amount of caffeine.',
-  medium: 'Tea-, matcha- or chai-based, with a moderate amount of caffeine.',
-  high: 'Coffee-based — an espresso drink — with a high amount of caffeine.',
+  none: 'No caffeine at all — no coffee, tea or matcha. This ALWAYS includes chocolate, cocoa, Nutella, Oreo and hot chocolate, none of which contain caffeine no matter how rich they taste.',
+  low: 'A light amount of caffeine — typically a milk-heavy tea-, chai- or matcha-based drink.',
+  medium: 'A moderate amount of caffeine — a milkier coffee drink, or a stronger tea-, matcha- or chai-based drink.',
+  high: 'A high amount of caffeine — a coffee-based espresso drink.',
 };
 
 const JEV_BODY_CRITERIA = {

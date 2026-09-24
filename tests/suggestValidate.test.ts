@@ -114,6 +114,12 @@ describe('validateSuggestInputs', () => {
     }
   });
 
+  it('accepts the "chocolatey" and "fruity" extras (owner addition)', () => {
+    const out = validateSuggestInputs({ ...valid(), extras: ['chocolatey', 'fruity'] });
+    expect(typeof out).not.toBe('string');
+    if (typeof out !== 'string') expect(out.extras).toEqual(['chocolatey', 'fruity']);
+  });
+
   it('defaults an absent note to an empty string', () => {
     const body = valid() as Record<string, unknown>;
     delete body.note;
