@@ -17,12 +17,21 @@
 //     guest in on success, which is what makes profiles.phone_verified true and
 //     therefore what POST /api/orders will accept.
 //
+// Two modes. A guest verifies through the phone-otp endpoints, which sign
+// them in as that number's account. A customer who is ALREADY signed in (e.g.
+// by email) must not be switched to a different account — `linkToAccount`
+// instead attaches the number to their current account via Supabase's
+// updateUser({ phone }) + verifyOtp('phone_change'), then mirrors it into
+// profiles.phone_verified through PATCH /api/account/me (the same flow the
+// Profile page uses).
+//
 // Verifying is NOT placing. They stay separate actions so a validation failure
 // at placement never drops someone back into re-entering a code that has since
 // expired.
 
 import { useCallback, useState } from 'react';
 import { normalizeIndianMobile } from '@/lib/phone';
+import { createClient } from '@/lib/supabase';
 
 export type PhoneOtpStep = 'idle' | 'sent';
 
@@ -51,6 +60,8 @@ export function usePhoneOtp(options?: {
   /** Runs once, after a code checks out. The checkout uses it to claim the
    *  guest's past orders now that they are signed in. */
   onVerified?: () => void;
+  /** Signed-in customer: add the number to THIS account instead of signing in. */
+  linkToAccount?: boolean;
 }): PhoneOtp {
   const [phone, setPhoneState] = useState(options?.initialPhone ?? '');
   const [verified, setVerified] = useState(false);
@@ -60,6 +71,7 @@ export function usePhoneOtp(options?: {
   const [error, setError] = useState<string | null>(null);
 
   const onVerified = options?.onVerified;
+  const linkToAccount = Boolean(options?.linkToAccount);
 
   const setPhone = useCallback((value: string) => {
     // Editing the number resets the whole flow, unconditionally. Without this,
@@ -88,20 +100,33 @@ export function usePhoneOtp(options?: {
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch('/api/auth/customer/phone-otp/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? 'Could not send the verification code.');
+      if (linkToAccount) {
+        const normalized = normalizeIndianMobile(phone);
+        if (!normalized) throw new Error('Enter a valid 10-digit mobile number.');
+        const { error: linkError } = await createClient().auth.updateUser({ phone: `+91${normalized}` });
+        if (linkError) {
+          throw new Error(
+            /already|registered|exists/i.test(linkError.message)
+              ? 'This number already has its own login. Log out and log in with your mobile number instead.'
+              : linkError.message,
+          );
+        }
+      } else {
+        const res = await fetch('/api/auth/customer/phone-otp/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? 'Could not send the verification code.');
+      }
       setStep('sent');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send the verification code.');
     } finally {
       setBusy(false);
     }
-  }, [phone]);
+  }, [phone, linkToAccount]);
 
   const verifyOtp = useCallback(async () => {
     if (!code.trim()) {
@@ -111,13 +136,34 @@ export function usePhoneOtp(options?: {
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch('/api/auth/customer/phone-otp/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, token: code.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? 'Invalid or expired code.');
+      if (linkToAccount) {
+        const normalized = normalizeIndianMobile(phone);
+        if (!normalized) throw new Error('Enter a valid 10-digit mobile number.');
+        const e164 = `+91${normalized}`;
+        const { error: otpError } = await createClient().auth.verifyOtp({
+          phone: e164,
+          token: code.trim(),
+          type: 'phone_change',
+        });
+        if (otpError) throw new Error('Invalid or expired code.');
+        // Supabase now holds the number on this account; mirror it into
+        // profiles (what POST /api/orders checks).
+        const res = await fetch('/api/account/me', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: e164 }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? 'Verified, but could not save the number to your account.');
+      } else {
+        const res = await fetch('/api/auth/customer/phone-otp/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, token: code.trim() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? 'Invalid or expired code.');
+      }
       setVerified(true);
       setStep('idle');
       setCode('');
@@ -127,7 +173,7 @@ export function usePhoneOtp(options?: {
     } finally {
       setBusy(false);
     }
-  }, [phone, code, onVerified]);
+  }, [phone, code, onVerified, linkToAccount]);
 
   const cancel = useCallback(() => {
     setStep('idle');

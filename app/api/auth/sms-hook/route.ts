@@ -97,14 +97,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: { message: 'invalid signature' } }, { status: 401 });
   }
 
-  let payload: { user?: { phone?: string }; phone?: string; sms?: { otp?: string }; otp?: string };
+  let payload: {
+    user?: { phone?: string; new_phone?: string };
+    phone?: string;
+    sms?: { otp?: string; sms_type?: string };
+    otp?: string;
+  };
   try {
     payload = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: { message: 'invalid json' } }, { status: 400 });
   }
 
-  const phone = payload.user?.phone ?? payload.phone;
+  // Adding / changing a number (updateUser({ phone }) → 'phone_change'): the
+  // code must go to the NEW number, which Supabase carries as user.new_phone —
+  // user.phone is still the old one, and is empty for an email-login account
+  // linking its first number at checkout. A normal login code never uses
+  // new_phone unless the account has no phone at all, so a pending change can
+  // never redirect someone's login code.
+  const isPhoneChange = payload.sms?.sms_type === 'phone_change';
+  const phone =
+    (isPhoneChange || !payload.user?.phone ? payload.user?.new_phone : undefined) ||
+    payload.user?.phone ||
+    payload.phone;
   const otp = payload.sms?.otp ?? payload.otp;
   if (!phone || !otp) {
     return NextResponse.json({ error: { message: 'missing phone or otp' } }, { status: 400 });

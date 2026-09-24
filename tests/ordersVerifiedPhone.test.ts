@@ -21,6 +21,7 @@ const state: {
   profileError: { message: string } | null;
   menuRows: Record<string, unknown>[];
   orderInsert?: Record<string, unknown>;
+  orderDeleted?: boolean;
 } = {
   verifiedOrders: true,
   actor: null,
@@ -56,6 +57,15 @@ vi.mock('@/lib/supabase-server', () => ({
         eq: () => chain,
         not: () => chain,
         in: () => Promise.resolve({ data: state.menuRows, error: null }),
+        // Gateway-failure paths: the counter fallback (update) and the guest
+        // withdrawal (delete) both end in .eq('id', …).
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        delete: () => ({
+          eq: () => {
+            if (table === 'orders') state.orderDeleted = true;
+            return Promise.resolve({ error: null });
+          },
+        }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
           if (table === 'orders' || table === 'order_items') {
@@ -112,14 +122,16 @@ vi.mock('@/lib/promotions/coupons', () => ({ validateAndComputeCoupon: () => Pro
 vi.mock('@/lib/loyalty/ledger', () => ({
   quoteRedemption: () => Promise.resolve({ ok: false }),
   redeemForOrder: () => Promise.resolve(),
+  reverseForOrder: vi.fn(() => Promise.resolve()),
 }));
 vi.mock('@/lib/payments/gateway', () => ({ createPaymentIntent: () => Promise.resolve(null) }));
 
 const { POST } = await import('@/app/api/orders/route');
+const { reverseForOrder } = await import('@/lib/loyalty/ledger');
 
 const oneLatte = [{ menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 1, addon_option_ids: [] }];
 
-function order(phone = '9876543210') {
+function order(phone = '9876543210', extra: Record<string, unknown> = {}) {
   return new Request('http://t/api/orders', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -128,6 +140,7 @@ function order(phone = '9876543210') {
       customer_phone: phone,
       pickup_slot_label: 'ASAP',
       items: oneLatte,
+      ...extra,
     }),
   });
 }
@@ -140,6 +153,7 @@ beforeEach(() => {
   state.profile = null;
   state.profileError = null;
   state.orderInsert = undefined;
+  state.orderDeleted = false;
   state.menuRows = [
     {
       id: MENU_ID,
@@ -219,12 +233,49 @@ describe('POST /api/orders — the verified-number rule is enforced server-side'
     expect(state.orderInsert?.customer_phone).toBe('');
   });
 
-  it('changes nothing at all while the flag is off', async () => {
-    // The state production ships in. A guest checkout keeps working exactly as
-    // it does today until an OTP has been proven to arrive.
+  it('still requires a verified number for a WEB order while the flag is off', async () => {
+    // Owner rule: every web checkout order carries a WhatsApp-verified mobile.
+    // The flag now only governs the table-QR channel.
     state.verifiedOrders = false;
     const res = await POST(order());
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('no_session');
+    expect(state.orderInsert).toBeUndefined();
+  });
+});
+
+describe('POST /api/orders — guest checkout is online-payment only', () => {
+  beforeEach(() => {
+    // A guest who verified their number at checkout is signed in by that step,
+    // so from the server's side they look like any verified customer — the
+    // checkout marks them with require_online.
+    state.sessionUser = { id: 'u1' };
+    state.profile = { phone: '+919876543210', phone_verified: true };
+  });
+
+  it('refuses a guest paying at the counter, and creates nothing', async () => {
+    const res = await POST(order('9876543210', { require_online: true }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('withdraws a guest order whose online payment cannot start, instead of switching it to counter', async () => {
+    const res = await POST(order('9876543210', { require_online: true, payment_mode: 'online' }));
+    expect(res.status).toBe(502);
+    expect(state.orderDeleted).toBe(true);
+    expect(reverseForOrder).toHaveBeenCalledTimes(1); // points returned before the delete
+  });
+
+  it('still lets a logged-in customer pay at the counter', async () => {
+    const res = await POST(order('9876543210', { payment_mode: 'counter' }));
     expect(res.status).toBe(201);
-    expect(state.orderInsert?.channel).toBe('customer_web');
+    expect(state.orderInsert?.status).toBe('received');
+  });
+
+  it('keeps the counter fallback for a logged-in customer when the gateway fails', async () => {
+    const res = await POST(order('9876543210', { payment_mode: 'online' }));
+    expect(res.status).toBe(201);
+    expect(state.orderDeleted).toBe(false);
+    expect((await res.json()).payment_unavailable).toBe(true);
   });
 });

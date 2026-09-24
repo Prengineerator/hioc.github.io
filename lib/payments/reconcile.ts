@@ -9,6 +9,8 @@ import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { canTransition } from '@/lib/orders/stateMachine';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { sendBillNotification } from '@/lib/notifications/engine';
+import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { mapRazorpayMethod } from './gateway';
 import type { Order, PaymentMethod } from '@/lib/types';
 
@@ -128,6 +130,23 @@ export async function captureGatewayPayment(params: {
       reason: 'Payment captured',
     });
     await broadcastOrderEvent(payment.order_id, 'received');
+
+    // The order confirmation (bill) was held back at placement while payment
+    // was pending (app/api/orders/route.ts). This is the one place an online
+    // order becomes confirmed — the version-guarded 'placed' → 'received' step
+    // above succeeds exactly once, whichever of verify/webhook/poll gets here
+    // first — so it is sent here. Reloaded with its lines for the item count.
+    // Best-effort: a failed send must never undo a captured payment.
+    try {
+      const { data: full } = await admin
+        .from('orders')
+        .select('*, order_items(*, order_item_addons(*))')
+        .eq('id', payment.order_id)
+        .single();
+      await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : (updated as Order));
+    } catch (billError) {
+      console.error('captureGatewayPayment: bill notification failed', billError);
+    }
   }
 
   return { ok: true, order: updated as Order };

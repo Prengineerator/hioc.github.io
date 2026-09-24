@@ -4,13 +4,14 @@ import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-type Mode = 'otp' | 'phone' | 'password';
+// Customers sign in with a one-time code only — WhatsApp or email (owner
+// rule). Staff keep their password login at /staff/login.
+type Mode = 'otp' | 'phone';
 type OtpStep = 'email' | 'code';
 type PhoneStep = 'phone' | 'code';
-type PasswordAction = 'login' | 'signup';
 
 // Guest-order claim (ACC-4) — fired once, right after ANY successful login
-// path below (email-OTP, phone-OTP, password, or signup-with-session), so a
+// path below (email-OTP or phone-OTP), so a
 // returning guest's past orders link onto their account regardless of how
 // they signed in. Best-effort: a failure here must never block login.
 async function claimGuestOrders() {
@@ -39,12 +40,10 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
   // guests already verify at checkout (VERIFY-2), so it's the one most
   // returning customers already have a code path for.
   const [mode, setMode] = useState<Mode>('phone');
-  const [passwordAction, setPasswordAction] = useState<PasswordAction>('login');
   const [otpStep, setOtpStep] = useState<OtpStep>('email');
   const [phoneStep, setPhoneStep] = useState<PhoneStep>('phone');
 
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [phone, setPhone] = useState('');
   const [phoneCode, setPhoneCode] = useState('');
@@ -163,67 +162,6 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
     }
   }
 
-  async function handlePasswordLogin(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    resetMessages();
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Declares which door this is; a staff or owner account signing in here
-        // is refused and pointed at its own entrance (lib/auth/audience.ts).
-        body: JSON.stringify({ email, password, audience: 'customer' }),
-      });
-      if (res.ok) {
-        await claimGuestOrders();
-        router.push(next);
-        router.refresh();
-        return;
-      }
-      setError(res.status === 401 ? 'Invalid email or password.' : 'Login failed.');
-    } catch {
-      setError('Network error — please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleSignup(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    resetMessages();
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/customer/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        if (data.needsEmailConfirmation) {
-          setInfo('Account created — check your email to confirm it, then log in below.');
-          setPasswordAction('login');
-          setPassword('');
-        } else {
-          await claimGuestOrders();
-          router.push(next);
-          router.refresh();
-        }
-        return;
-      }
-      setError(data.error ?? 'Could not create account.');
-    } catch {
-      setError('Network error — please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#faf7f4] px-4">
       <div className="mt-24 w-full max-w-sm rounded-md border border-[#e5e5e5] bg-cream p-8 shadow-sm">
@@ -253,15 +191,6 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             }`}
           >
             Email
-          </button>
-          <button
-            type="button"
-            onClick={() => switchMode('password')}
-            className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-bold transition-colors ${
-              mode === 'password' ? 'bg-tan text-cream' : 'text-charcoal'
-            }`}
-          >
-            Password
           </button>
         </div>
 
@@ -411,76 +340,6 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
               Use a different number
             </button>
           </form>
-        ) : null}
-
-        {mode === 'password' ? (
-          <>
-            <div className="mb-4 flex justify-center gap-4 text-sm">
-              <button
-                type="button"
-                onClick={() => {
-                  setPasswordAction('login');
-                  resetMessages();
-                }}
-                className={passwordAction === 'login' ? 'font-bold text-tan' : 'text-charcoal'}
-              >
-                Log In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setPasswordAction('signup');
-                  resetMessages();
-                }}
-                className={passwordAction === 'signup' ? 'font-bold text-tan' : 'text-charcoal'}
-              >
-                Create Account
-              </button>
-            </div>
-            <form
-              onSubmit={passwordAction === 'login' ? handlePasswordLogin : handleSignup}
-              className="flex flex-col gap-4"
-            >
-              <div>
-                <label htmlFor="pw-email" className="mb-1 block text-sm font-bold text-charcoal">
-                  Email
-                </label>
-                <input
-                  id="pw-email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-                />
-              </div>
-              <div>
-                <label htmlFor="password" className="mb-1 block text-sm font-bold text-charcoal">
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  required
-                  minLength={passwordAction === 'signup' ? 8 : undefined}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
-                />
-                {passwordAction === 'signup' ? (
-                  <p className="mt-1 text-xs text-muted">At least 8 characters.</p>
-                ) : null}
-              </div>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {submitting ? 'Please wait…' : passwordAction === 'login' ? 'Log In' : 'Create Account'}
-              </button>
-            </form>
-          </>
         ) : null}
 
         <p className="mt-6 text-center text-xs text-muted">
