@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { getCounterActor } from '@/lib/api/auth';
 import { getEnrolledDevice } from '@/lib/api/device';
+import { operatorFeatureConfigured } from '@/lib/api/operator';
 import { flags } from '@/lib/flags';
 import { StaffHeader } from '@/components/staff/StaffHeader';
 import { StaffPinOverlay } from '@/components/staff/pin/StaffPinOverlay';
@@ -44,16 +45,24 @@ export default async function StaffLayout({
   }
 
   const actor = await getCounterActor();
+  // PIN-2/3: the flag AND the secret must both check out — with either one
+  // off/missing/short, no lock screen and no overlay ever mount, matching
+  // the same guard operatorFeatureConfigured() applies to the API routes
+  // themselves (lib/api/operator.ts). Computed once so both branches below
+  // agree; getEnrolledDevice() still re-verifies against the database either
+  // way (D-3), this only decides whether to ask it at all.
+  const pinEligible = flags.pinSwitch && operatorFeatureConfigured();
 
   if (!actor) {
     // PIN-2: middleware.ts let a session-less request through to here for
-    // exactly one reason — an enrolled, unrevoked device with the flag on.
-    // getEnrolledDevice() re-verifies against the database (middleware's
-    // cheap cookie-presence check is never the last word, D-3): only a REAL
-    // device gets the lock screen; anything else — flag off, no device, a
-    // revoked device, a personal phone's plain browser tab — redirects to
-    // classic login exactly as this always has.
-    const device = flags.pinSwitch ? await getEnrolledDevice() : null;
+    // exactly one reason — an enrolled, unrevoked device with the flag AND
+    // secret both good. getEnrolledDevice() re-verifies against the database
+    // (middleware's cheap cookie-presence check is never the last word,
+    // D-3): only a REAL device gets the lock screen; anything else — flag
+    // off, secret missing, no device, a revoked device, a personal phone's
+    // plain browser tab — redirects to classic login exactly as this always
+    // has.
+    const device = pinEligible ? await getEnrolledDevice() : null;
     if (device) {
       return (
         <div className="min-h-screen bg-charcoal">
@@ -71,10 +80,10 @@ export default async function StaffLayout({
     '';
 
   // PIN-2: the lock/switch overlay mounts only on an enrolled device with the
-  // flag on — StaffPinOverlay itself further gates on being inside the
-  // desktop app (getDesktopBridge()), so a personal phone or a plain browser
-  // tab on this same machine still gets the plain shell below.
-  const device = flags.pinSwitch ? await getEnrolledDevice() : null;
+  // flag AND secret both good — StaffPinOverlay itself further gates on
+  // being inside the desktop app (getDesktopBridge()), so a personal phone or
+  // a plain browser tab on this same machine still gets the plain shell below.
+  const device = pinEligible ? await getEnrolledDevice() : null;
 
   if (device) {
     return (
