@@ -17,8 +17,28 @@ const GS = 0x1d;
 
 type Size = 'normal' | 'large' | 'xlarge';
 
+/**
+ * How the paper is cut when `cut: true` (PRN-3 field report: many cheaper
+ * 80mm printers only implement ESC/POS "function A" (`GS V 0`/`GS V 1`) or
+ * the legacy `ESC i`/`ESC m` commands, not "function B" (`GS V 66`) that used
+ * to be hard-coded here — so those printers silently never cut.
+ * - standard: `GS V 66 0` (function B). It feeds to the cutting position
+ *   itself, so no separate feed is sent first — sending one anyway is what
+ *   caused the "huge wastage" bug (double feed).
+ * - partial / full: function A (`GS V 1` / `GS V 0`), which does NOT feed to
+ *   the cutter itself, so a feed is sent first.
+ * - legacy: `ESC i`, likewise preceded by a feed.
+ */
+export type CutMode = 'standard' | 'partial' | 'full' | 'legacy';
+
 const ALIGN_CODE: Record<TicketAlign, number> = { left: 0, center: 1, right: 2 };
 const SIZE_CODE: Record<Size, number> = { normal: 0x00, large: 0x01, xlarge: 0x11 };
+
+// Lines to feed so the print head reaches the cutter (or, when not cutting,
+// the tear bar) before a non-self-feeding trailer command. 4 lines at the
+// printer's default 1/6" (~4.23mm) line spacing is ~17mm — the typical
+// print-head-to-cutter (or tear-bar) distance on 58/80mm thermal printers.
+const FEED_TO_CUTTER_LINES = 4;
 
 // Characters known to appear in ticket content that have no place on a
 // 7-bit ASCII code page. Anything else non-ASCII falls back to '?'.
@@ -111,10 +131,15 @@ function qrCommandBytes(data: string): number[] {
  * Renders a printer-neutral TicketDoc to raw ESC/POS bytes for a given paper
  * width. Font A columns: 48 @ 80mm, 32 @ 58mm; halved again under `xlarge`
  * (double-width) text. Voided (`strike`) lines get a "[VOID] " prefix since
- * ESC/POS has no strikethrough. Ends with a 4-line feed and, when `cut` is
- * requested, a partial cut (`GS V 66 0`).
+ * ESC/POS has no strikethrough. Trailer: when `cut` is false, a tear-off feed
+ * (the tear bar still needs paper fed to it); when `cut` is true, the cut
+ * command for `cutMode` (default `'standard'`) — see `CutMode` above for why
+ * `standard` sends no separate feed while the others do.
  */
-export function renderEscPos(doc: TicketDoc, opts: { paperWidthMm: 58 | 80; cut: boolean }): Uint8Array {
+export function renderEscPos(
+  doc: TicketDoc,
+  opts: { paperWidthMm: 58 | 80; cut: boolean; cutMode?: CutMode },
+): Uint8Array {
   const cols = opts.paperWidthMm === 80 ? 48 : 32;
   const bytes: number[] = [];
 
@@ -213,13 +238,31 @@ export function renderEscPos(doc: TicketDoc, opts: { paperWidthMm: 58 | 80; cut:
   }
 
   // Leave the printer in its default state (no dangling bold/alignment/size)
-  // regardless of how the last block left it, then trailer feed + cut.
+  // regardless of how the last block left it, then the trailer (feed and/or
+  // cut — see `CutMode` above; nothing else in this renderer emits a feed
+  // after this point).
   setAlign('left');
   setBold(false);
   setSize('normal');
-  bytes.push(ESC, 0x64, 4); // feed 4 lines
-  if (opts.cut) {
-    bytes.push(GS, 0x56, 0x42, 0x00); // GS V 66 0 — partial cut with feed
+
+  if (!opts.cut) {
+    bytes.push(ESC, 0x64, FEED_TO_CUTTER_LINES); // tear-off feed — no cutter, the tear bar needs it
+  } else {
+    const mode = opts.cutMode ?? 'standard';
+    if (mode === 'standard') {
+      // GS V 66 0 (function B) feeds to the cutting position itself — an
+      // extra feed first would double-feed and waste paper.
+      bytes.push(GS, 0x56, 0x42, 0x00);
+    } else {
+      bytes.push(ESC, 0x64, FEED_TO_CUTTER_LINES); // function A / legacy don't feed themselves
+      if (mode === 'partial') {
+        bytes.push(GS, 0x56, 0x01); // GS V 1 — function A partial cut
+      } else if (mode === 'full') {
+        bytes.push(GS, 0x56, 0x00); // GS V 0 — function A full cut
+      } else {
+        bytes.push(ESC, 0x69); // ESC i — legacy full cut
+      }
+    }
   }
 
   return new Uint8Array(bytes);

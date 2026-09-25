@@ -8,10 +8,12 @@
 import { app } from 'electron';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import type { PrinterConfig, PrinterConnection, PrinterRole } from '@/lib/desktop/bridge';
+import type { CutMode, PrinterConfig, PrinterConnection, PrinterRole } from '@/lib/desktop/bridge';
 
 const FILE_NAME = 'printers.json';
 const VALID_ROLES: readonly PrinterRole[] = ['kot', 'receipt', 'token'];
+const VALID_CUT_MODES: readonly CutMode[] = ['standard', 'partial', 'full', 'legacy'];
+const DEFAULT_CUT_MODE: CutMode = 'standard';
 const MIN_COPIES = 1;
 const MAX_COPIES = 5;
 
@@ -72,6 +74,16 @@ function validateConnection(conn: unknown, printerLabel: string): PrinterConnect
   throw new PrinterConfigError(`"${printerLabel}" has an unknown connection kind: ${String((c as { kind?: unknown }).kind)}`);
 }
 
+/** Unknown or missing cut style silently falls back to `'standard'` rather
+ * than rejecting the whole printer — a config saved by an older build (before
+ * `cutMode` existed) or a future one (a cut style this build doesn't know
+ * yet) must still load. */
+function validateCutMode(value: unknown): CutMode {
+  return typeof value === 'string' && (VALID_CUT_MODES as readonly string[]).includes(value)
+    ? (value as CutMode)
+    : DEFAULT_CUT_MODE;
+}
+
 function validateCopies(copies: unknown, printerLabel: string): Partial<Record<PrinterRole, number>> {
   if (copies === undefined || copies === null) return {};
   if (typeof copies !== 'object' || Array.isArray(copies)) {
@@ -127,6 +139,7 @@ export function validatePrinterConfig(value: unknown): PrinterConfig {
     roles: [...new Set(v.roles as PrinterRole[])],
     copies,
     cut: v.cut,
+    cutMode: validateCutMode(v.cutMode),
     drawer: v.drawer,
   };
 }

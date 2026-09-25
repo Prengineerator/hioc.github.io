@@ -11,8 +11,10 @@
 // printer and reports what the printer says.
 
 import type { PrintType } from '@/lib/staff/autoPrint';
+import type { CutMode } from '@/lib/print/escpos';
 
 export type PrinterRole = PrintType;
+export type { CutMode };
 
 /**
  * How the machine reaches the printer.
@@ -42,6 +44,13 @@ export interface PrinterConfig {
   copies: Partial<Record<PrinterRole, number>>;
   /** Send a paper cut after each ticket (raw connections only). */
   cut: boolean;
+  /**
+   * Which ESC/POS cut command to send when `cut` is true (see `CutMode` in
+   * lib/print/escpos.ts — many cheaper printers only support one of these).
+   * Optional so printer configs saved before this field existed keep
+   * loading; treat a missing value as `'standard'`.
+   */
+  cutMode?: CutMode;
   /** This printer drives the cash drawer (RJ11 kick port). */
   drawer: boolean;
 }

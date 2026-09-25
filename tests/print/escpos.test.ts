@@ -76,7 +76,13 @@ describe('renderEscPos — init and cut', () => {
     expect(bytes[1]).toBe(0x40);
   });
 
-  it('includes the partial-cut command only when cut is requested', () => {
+  it('emits no feed command right after ESC @ — nothing wastes paper at the top of a ticket', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
+    // Byte 2 (right after the 2-byte ESC @) must not start an ESC d (0x1b 0x64) feed.
+    expect(bytes[2]).not.toBe(0x1b);
+  });
+
+  it('includes the standard partial-cut command (GS V 66 0) only when cut is requested, with no cutMode set', () => {
     const cutBytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
     const noCutBytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false });
     // GS V 66 0
@@ -84,10 +90,54 @@ describe('renderEscPos — init and cut', () => {
     expect(findAll(noCutBytes, [0x1d, 0x56, 0x42, 0x00])).toHaveLength(0);
   });
 
-  it('always ends with a 4-line feed (ESC d 4)', () => {
-    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
-    // The trailer feed is the last ESC d command before an optional cut.
-    expect(findAll(bytes, [0x1b, 0x64, 0x04]).length).toBeGreaterThanOrEqual(1);
+  it('cut: false trailer is exactly the tear-off feed (ESC d 4), no cut command at all', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false });
+    expect(Array.from(bytes.slice(-3))).toEqual([0x1b, 0x64, 0x04]);
+  });
+});
+
+describe('renderEscPos — cutMode trailer bytes', () => {
+  // Golden trailer bytes for each cutMode, and old configs with no cutMode
+  // set at all (undefined) — the exact contract this feature must not regress.
+  const cases: Array<{ cutMode: 'standard' | 'partial' | 'full' | 'legacy' | undefined; trailer: number[] }> = [
+    // standard: GS V 66 0, no preceding feed — function B feeds itself.
+    { cutMode: 'standard', trailer: [0x1d, 0x56, 0x42, 0x00] },
+    // undefined (old saved config, pre-cutMode) renders identically to 'standard'.
+    { cutMode: undefined, trailer: [0x1d, 0x56, 0x42, 0x00] },
+    // partial: feed to the cutter (ESC d 4), then GS V 1.
+    { cutMode: 'partial', trailer: [0x1b, 0x64, 0x04, 0x1d, 0x56, 0x01] },
+    // full: feed to the cutter (ESC d 4), then GS V 0.
+    { cutMode: 'full', trailer: [0x1b, 0x64, 0x04, 0x1d, 0x56, 0x00] },
+    // legacy: feed to the cutter (ESC d 4), then ESC i.
+    { cutMode: 'legacy', trailer: [0x1b, 0x64, 0x04, 0x1b, 0x69] },
+  ];
+
+  for (const { cutMode, trailer } of cases) {
+    it(`cutMode=${cutMode ?? '(unset)'} ends with exactly ${JSON.stringify(trailer)}`, () => {
+      const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true, cutMode });
+      expect(Array.from(bytes.slice(-trailer.length))).toEqual(trailer);
+    });
+  }
+
+  it('never double-feeds: standard cutMode has exactly one ESC d in the whole trailer region', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), {
+      paperWidthMm: 80,
+      cut: true,
+      cutMode: 'standard',
+    });
+    // The trailer is everything after the last text line's \n — no ESC d (feed)
+    // anywhere in it, since GS V 66 0 feeds to the cutter on its own.
+    const lastNewline = bytes.lastIndexOf(0x0a);
+    const trailerBytes = bytes.slice(lastNewline + 1);
+    expect(findAll(trailerBytes, [0x1b, 0x64])).toHaveLength(0);
+  });
+
+  it('a printer with cut: false never receives any cut command, regardless of cutMode', () => {
+    for (const cutMode of ['standard', 'partial', 'full', 'legacy'] as const) {
+      const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false, cutMode });
+      expect(findAll(bytes, [0x1d, 0x56])).toHaveLength(0); // no GS V (any function)
+      expect(findAll(bytes, [0x1b, 0x69])).toHaveLength(0); // no ESC i
+    }
   });
 });
 

@@ -79,7 +79,11 @@ export function createDesktopExecutor(
         try {
           if (isRawCapable(printer)) {
             const doc = await getTicketDoc();
-            const bytes = renderEscPos(doc, { paperWidthMm: printer.paperWidthMm, cut: printer.cut });
+            const bytes = renderEscPos(doc, {
+              paperWidthMm: printer.paperWidthMm,
+              cut: printer.cut,
+              cutMode: printer.cutMode,
+            });
             let confirmed = true;
             for (let i = 0; i < copies; i++) {
               const result = await bridge.printRaw(printer.id, bytes);

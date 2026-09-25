@@ -27,6 +27,7 @@ function printer(overrides: Partial<PrinterConfig> = {}): PrinterConfig {
     roles: overrides.roles ?? ['kot'],
     copies: overrides.copies ?? {},
     cut: overrides.cut ?? true,
+    cutMode: overrides.cutMode,
     drawer: overrides.drawer ?? false,
   };
 }
@@ -102,8 +103,19 @@ describe('createDesktopExecutor — raw-capable printers (network / usb / system
     expect(bridge.printRaw).toHaveBeenCalledTimes(1);
     const [printerId, bytes] = (bridge.printRaw as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(printerId).toBe('kitchen');
-    expect(bytes).toEqual(renderEscPos(TICKET_DOC, { paperWidthMm: 80, cut: true }));
+    expect(bytes).toEqual(renderEscPos(TICKET_DOC, { paperWidthMm: 80, cut: true, cutMode: undefined }));
     expect(result).toEqual({ confirmed: true });
+  });
+
+  it('passes the printer\'s saved cutMode through to renderEscPos', async () => {
+    const p = printer({ id: 'kitchen', roles: ['kot'], paperWidthMm: 58, cut: true, cutMode: 'legacy' });
+    const bridge = fakeBridge([p]);
+    const exec = createDesktopExecutor(bridge);
+
+    await exec(job({ orderId: 'order-42', type: 'kot' }));
+
+    const [, bytes] = (bridge.printRaw as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(bytes).toEqual(renderEscPos(TICKET_DOC, { paperWidthMm: 58, cut: true, cutMode: 'legacy' }));
   });
 
   it('sends one printRaw call per configured copy', async () => {

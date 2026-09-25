@@ -188,6 +188,27 @@ describe('buildTicketDoc — receipt', () => {
   });
 });
 
+describe('buildTicketDoc — no wasted paper at the top', () => {
+  // PRN-3 field report: "huge wastage at top" — guards against a `feed` block
+  // or a blank leading line ever being reintroduced at the start of a ticket.
+  // (The renderer itself starts every ticket with ESC @ + no feed; this just
+  // makes sure the content these docs describe doesn't add one either.)
+  it.each(['kot', 'receipt', 'token'] as const)('%s starts with real content, not a feed or a blank line', (type) => {
+    const doc = buildTicketDoc(order(), type);
+    expect(doc.blocks.length).toBeGreaterThan(0);
+    const first = doc.blocks[0];
+    expect(first.kind).not.toBe('feed');
+    if (first.kind === 'text') {
+      expect(first.text.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it.each(['kot', 'receipt', 'token'] as const)('%s never emits a feed block at all', (type) => {
+    const doc = buildTicketDoc(order(), type);
+    expect(doc.blocks.some((b) => b.kind === 'feed')).toBe(false);
+  });
+});
+
 describe('buildTicketDoc — token', () => {
   it('shows the token, order number, item count, time, and wait line', () => {
     const doc = buildTicketDoc(

@@ -14,6 +14,10 @@ export default defineConfig({
       // resolution, so anything importing it (the notification engine) can't be
       // unit-tested without a stub. Vitest already runs in a server context.
       'server-only': path.resolve(__dirname, 'tests/stubs/server-only.ts'),
+      // `desktop/src/printers/store.ts` imports Electron's `app` only for
+      // `app.getPath('userData')` — stubbed so its pure validation logic is
+      // unit-testable without a real Electron main process (see the stub).
+      electron: path.resolve(__dirname, 'tests/stubs/electron.ts'),
     },
   },
   test: {
