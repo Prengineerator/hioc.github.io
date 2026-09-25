@@ -1,4 +1,4 @@
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { getDeviceRegistryState } from '@/lib/api/device';
 import { DeviceEnrollment } from '@/components/staff/DeviceEnrollment';
 
@@ -13,11 +13,18 @@ export const dynamic = 'force-dynamic';
 // any of it: see DeviceEnrollment's comment for why no new API route was
 // needed.
 //
-// /staff/** is already gated to a signed-in staff/owner/manager session by
-// middleware.ts and app/staff/layout.tsx (getStaffOrOwner()) — this page adds
-// no separate check, matching every other page under /staff/**.
+// /staff/** is already gated to a resolved actor by middleware.ts and
+// app/staff/layout.tsx (getCounterActor() — PIN-3: a classic session, or an
+// enrolled device's PIN operator) — this page adds no separate auth check,
+// matching every other page under /staff/**.
+//
+// PIN-3: getCounterActor() (not getStaffOrOwner()) is load-bearing for the
+// `isOwner` prop below — it caps a device-unlocked owner's role to 'manager'
+// (lib/api/operator.ts), so a PIN unlock can never surface the "Sign out
+// owner" escape hatch meant for a genuine classic owner session; only an
+// owner who actually signed in with their password sees it.
 export default async function StaffDevicePage() {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   const registry = await getDeviceRegistryState();
 
   return (

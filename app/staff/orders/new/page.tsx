@@ -43,10 +43,11 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
 }
 
 // Staff POS-lite order entry (POS-1). The /staff/** layout already gates this
-// route behind getStaffOrOwner(), so no extra auth check is needed here — a
-// signed-in staff/manager/owner is guaranteed. This page is dark-launched
-// behind the staffPos flag (default ON): when off it renders a clear
-// "not enabled" state rather than the entry screen.
+// route behind getCounterActor() (PIN-3: a classic session, or an enrolled
+// device's PIN operator), so no extra auth check is needed here — this IS the
+// screen the whole PIN feature exists for. This page is dark-launched behind
+// the staffPos flag (default ON): when off it renders a clear "not enabled"
+// state rather than the entry screen.
 export default async function NewOrderPage({
   searchParams,
 }: {
