@@ -50,11 +50,19 @@ jobs:
 
       # Builds dist/main.js + dist/preload.js, installs the prebuilt Windows
       # `usb` native binary, then packages + publishes the NSIS installer.
-      # `--publish always` makes electron-builder create (or update) the
-      # GitHub Release for this version's tag and upload the .exe, latest.yml
-      # and .blockmap to it. GH_TOKEN is the built-in per-job token; it needs
-      # no secret of our own, only `permissions.contents: write` above.
+      # Uses the dedicated `release:win` script (identical to `dist:win` but
+      # with `--publish always` baked into its own electron-builder
+      # invocation) instead of `npm run dist:win -- --publish always`: the
+      # default shell here is PowerShell 7, which swallows npm's `--`
+      # separator, so `--publish` was consumed by npm itself and
+      # electron-builder only ever saw a stray `always` argument. Baking the
+      # flag into the script sidesteps arg-forwarding entirely, so no shell
+      # change is needed. `--publish always` makes electron-builder create
+      # (or update) the GitHub Release for this version's tag and upload the
+      # .exe, latest.yml and .blockmap to it. GH_TOKEN is the built-in
+      # per-job token; it needs no secret of our own, only
+      # `permissions.contents: write` above.
       - name: Build and publish Windows installer
-        run: npm run dist:win -- --publish always
+        run: npm run release:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -73,7 +73,7 @@ dmg:
 # `electron-updater` and a plain download link both see it immediately — a
 # draft release is invisible to both.
 #
-# Local release: GH_TOKEN=... npm run dist:win -- --publish always
+# Local release: GH_TOKEN=... npm run release:win
 # CI release: .github/workflows/pos-desktop-release.yml (workflow_dispatch,
 # or push a tag matching pos-v*). See desktop/README.md "Releasing".
 publish:

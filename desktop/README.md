@@ -128,7 +128,7 @@ caveats below).
 |---|---|---|
 | `CSC_LINK`, `CSC_KEY_PASSWORD` | Win + Mac | Code-signing certificate (`.p12`/`.pfx`) and its password. Unset → unsigned installer; **Windows SmartScreen shows "Windows protected your PC" on first run** — this is expected for every install today (click **More info → Run anyway**), not a sign of a broken build. |
 | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Mac | Notarization credentials (electron-builder calls `@electron/notarize` automatically when these are set and the build is signed). Unset → the `.dmg` is not notarized; Gatekeeper blocks it on any Mac other than the one that built it, until the user right-click → Open's past the warning. There is currently no macOS release job — see "Releasing" below. |
-| `GH_TOKEN` | Win | Needed only when actually publishing a release (`--publish always`, below); not needed for a plain `dist:win` build. In CI this is the repo's own built-in Actions token — no secret to configure. |
+| `GH_TOKEN` | Win | Needed only when actually publishing a release (`npm run release:win`, below); not needed for a plain `dist:win` build. In CI this is the repo's own built-in Actions token — no secret to configure. |
 
 electron-updater's `autoUpdater.checkForUpdatesAndNotify()` runs once at
 launch, but only in a packaged build (`app.isPackaged`) — a dev checkout never
