@@ -68,14 +68,16 @@ export async function POST(request: Request) {
   // fires on every cart change for what's usually an anonymous visitor, so
   // paying for a second round trip only when a session actually exists is the
   // right trade — see that route's own comment on why they can't share one.
-  const [user, actor] = await Promise.all([getAuthUser(), getCounterActor()]);
+  // Perf: getStoreSettings() depends on none of the auth/phone-link work above
+  // it (same reasoning as POST /api/orders), so it's fired alongside those
+  // instead of waiting behind them — this route runs on every cart edit, so
+  // that's a round trip shaved off of every keystroke's re-quote, not just one.
+  const [user, actor, settings] = await Promise.all([getAuthUser(), getCounterActor(), getStoreSettings()]);
   const isStaff = actor !== null;
   const linked = isStaff
     ? await findVerifiedCustomerByPhone(createAdminSupabaseClient(), toStoredPhone(customer_phone))
     : null;
   const userId = linked?.userId ?? (isStaff ? null : (user?.id ?? null));
-
-  const settings = await getStoreSettings();
 
   let couponResult: Awaited<ReturnType<typeof validateAndComputeCoupon>> | null = null;
   let couponDiscountInr = 0;
@@ -98,7 +100,10 @@ export async function POST(request: Request) {
     balance = await getBalance(userId);
     if (typeof redeem_points === 'number' && redeem_points > 0) {
       const remaining = Math.max(0, subtotal_inr - couponDiscountInr);
-      pointsResult = await quoteRedemption(userId, redeem_points, remaining);
+      // `balance` was just fetched above for the response's own `balance`
+      // field — hand it to quoteRedemption so it doesn't re-scan
+      // loyalty_transactions for the same number a moment later.
+      pointsResult = await quoteRedemption(userId, redeem_points, remaining, balance);
       if (pointsResult.ok) {
         pointsDiscountInr = pointsResult.discountInr;
       }

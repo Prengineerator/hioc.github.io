@@ -6,6 +6,7 @@ import { isPaymentMethod, isUuid, PAYMENT_METHODS } from '@/lib/api/constants';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { sendBillNotification } from '@/lib/notifications/engine';
 import { dominantMethod, validateParts, type PaymentPart } from '@/lib/orders/payments';
+import { runAfterResponse } from '@/lib/api/background';
 import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -201,17 +202,28 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // above is a plain select('*') and carries no items. Best-effort and fully
   // wrapped: a slow or failing provider must never fail settlement — the printed
   // bill remains the guaranteed copy.
+  //
+  // Perf: this can involve an email provider AND a WhatsApp provider round trip
+  // (plus the reload query above it), and none of it can change this response —
+  // the payment is already fully recorded by this point. It used to be awaited
+  // here, which meant the counter's "settled, change due ₹X" confirmation sat
+  // behind however long Meta/the email provider took to answer. Backgrounded via
+  // runAfterResponse exactly like the create route's own bill send, with the
+  // same never-throws contract (still logged on failure, never surfaced to the
+  // counter or the caller).
   if (paymentStatus === 'paid') {
-    try {
-      const { data: full } = await admin
-        .from('orders')
-        .select('*, order_items(*, order_item_addons(*))')
-        .eq('id', id)
-        .single();
-      await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : (data as Order));
-    } catch (billError) {
-      console.error('settle bill notification failed', billError);
-    }
+    runAfterResponse(
+      (async () => {
+        const { data: full } = await admin
+          .from('orders')
+          .select('*, order_items(*, order_item_addons(*))')
+          .eq('id', id)
+          .single();
+        await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : (data as Order));
+      })().catch((billError) => {
+        console.error('settle bill notification failed', billError);
+      }),
+    );
   }
 
   // `change_due_inr` lets the POS show "give ₹120 back" without recomputing it.

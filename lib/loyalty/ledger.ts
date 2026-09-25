@@ -70,11 +70,20 @@ export interface RedeemQuote {
   reason?: string;
 }
 
-/** Quotes redeeming `points` against a `subtotalInr` bill (validates min/max/%). */
+/**
+ * Quotes redeeming `points` against a `subtotalInr` bill (validates min/max/%).
+ *
+ * `knownBalance` lets a caller that has ALREADY fetched this user's balance a
+ * moment ago (POST /api/orders/quote, which returns it separately in the same
+ * response) hand it over instead of paying for a second identical
+ * `loyalty_transactions` scan. Omit it and this fetches the balance itself,
+ * exactly as before — every other call site is unaffected.
+ */
 export async function quoteRedemption(
   userId: string,
   points: number,
   subtotalInr: number,
+  knownBalance?: number,
 ): Promise<RedeemQuote> {
   if (!userId) {
     return { ok: false, points: 0, discountInr: 0, reason: 'Log in to redeem points' };
@@ -100,7 +109,7 @@ export async function quoteRedemption(
     };
   }
 
-  const balance = await getBalance(userId);
+  const balance = knownBalance ?? (await getBalance(userId));
   if (points > balance) {
     return { ok: false, points: 0, discountInr: 0, reason: `You only have ${balance} points available` };
   }
