@@ -36,7 +36,7 @@ export function CartDrawer({
       />
       <div className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col bg-cream shadow-sm">
         <div className="flex items-center justify-between border-b border-[#e5e5e5] px-4 py-4">
-          <h2 className="text-lg font-bold text-charcoal">Your Cart</h2>
+          <h2 className="text-lg font-semibold text-charcoal">Your Cart</h2>
           <button
             type="button"
             aria-label="Close cart"
@@ -61,19 +61,19 @@ export function CartDrawer({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <span className="font-bold text-charcoal">
+                      <span className="font-semibold text-charcoal">
                         {item.name}
                       </span>
                       <span className="ml-1 text-sm text-muted">
                         ({item.variantLabel})
                       </span>
                       {item.addons.length > 0 ? (
-                        <p className="mt-0.5 text-xs text-muted">
+                        <p className="mt-0.5 text-sm text-muted">
                           {item.addons.map((a) => a.optionName).join(', ')}
                         </p>
                       ) : null}
                       {item.specialInstructions ? (
-                        <p className="mt-0.5 text-xs italic text-muted">
+                        <p className="mt-0.5 text-sm italic text-muted">
                           Note: {item.specialInstructions}
                         </p>
                       ) : null}
@@ -97,7 +97,7 @@ export function CartDrawer({
                       >
                         &minus;
                       </button>
-                      <span className="min-w-[1.25rem] text-center text-sm font-bold text-charcoal">
+                      <span className="min-w-[1.25rem] text-center text-sm font-mono font-semibold tabular-nums text-charcoal">
                         {item.qty}
                       </span>
                       <button
@@ -110,8 +110,8 @@ export function CartDrawer({
                       </button>
                     </div>
                     <div className="text-right text-sm">
-                      <div className="text-muted">₹{item.unitPriceInr} each</div>
-                      <div className="font-bold text-charcoal">
+                      <div className="font-mono tabular-nums text-muted">₹{item.unitPriceInr} each</div>
+                      <div className="font-mono font-bold tabular-nums text-charcoal">
                         ₹{item.unitPriceInr * item.qty}
                       </div>
                     </div>
@@ -126,17 +126,17 @@ export function CartDrawer({
           <div className="mb-4 flex flex-col gap-1 text-sm text-charcoal">
             <div className="flex items-center justify-between">
               <span>Subtotal</span>
-              <span>₹{bill ? bill.subtotal_inr : totalPrice}</span>
+              <span className="font-mono tabular-nums">₹{bill ? bill.subtotal_inr : totalPrice}</span>
             </div>
             {bill && (bill.tax_inr > 0 || bill.packaging_inr > 0) ? (
               <div className="flex items-center justify-between font-bold text-charcoal">
                 <span>Total (incl. GST)</span>
-                <span className="text-tan">₹{bill.total_inr}</span>
+                <span className="font-mono tabular-nums text-tan">₹{bill.total_inr}</span>
               </div>
             ) : null}
           </div>
           {checkoutDisabledReason ? (
-            <p className="mb-3 text-center text-xs font-bold text-charcoal">
+            <p className="mb-3 text-center text-sm font-semibold text-charcoal">
               {checkoutDisabledReason}
             </p>
           ) : null}
@@ -152,7 +152,7 @@ export function CartDrawer({
               if (checkoutDisabled) e.preventDefault();
             }}
             className={
-              'block w-full rounded-md px-4 py-3 text-center font-bold transition-colors ' +
+              'block w-full rounded-md px-4 py-3 text-center font-semibold transition-colors ' +
               (checkoutDisabled
                 ? 'cursor-not-allowed bg-[#e5e5e5] text-muted'
                 : 'bg-tan text-cream hover:bg-tan-dark')

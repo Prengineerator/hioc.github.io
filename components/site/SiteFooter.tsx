@@ -70,7 +70,7 @@ export function SiteFooter() {
         </div>
 
         <div className="flex flex-col items-center gap-2 text-center sm:items-start sm:text-left">
-          <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-tan">Explore</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-tan">Explore</h3>
           {QUICK_LINKS.map((link) => (
             <Link
               key={link.href}
@@ -83,7 +83,7 @@ export function SiteFooter() {
         </div>
 
         <div className="flex flex-col items-center gap-1 text-center sm:items-start sm:text-left">
-          <h3 className="mb-1 text-xs font-bold uppercase tracking-[0.2em] text-tan">Visit Us</h3>
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-tan">Visit Us</h3>
           <p className="text-cream/70">{CAFE_ADDRESS}</p>
           <p className="text-cream/70">{CAFE_HOURS}</p>
           <a

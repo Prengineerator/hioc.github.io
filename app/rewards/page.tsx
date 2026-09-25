@@ -20,7 +20,7 @@ export default async function RewardsPage() {
         <p className="mt-4 text-muted">Log in to see your points balance and history.</p>
         <Link
           href="/login?next=/rewards"
-          className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-bold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark"
         >
           Log In
         </Link>
@@ -40,16 +40,19 @@ export default async function RewardsPage() {
 
       <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 text-center shadow-sm">
         <p className="text-xs uppercase tracking-wide text-muted">Your balance</p>
-        <p className="mt-1 text-4xl font-bold text-tan">{balance} pts</p>
+        <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-tan">{balance} pts</p>
         {config ? (
-          <p className="mt-2 text-sm text-muted">≈ ₹{Math.floor(balance * config.inr_per_point)} in redeemable value</p>
+          <p className="mt-2 text-sm text-muted">
+            ≈ <span className="font-mono tabular-nums">₹{Math.floor(balance * config.inr_per_point)}</span> in
+            redeemable value
+          </p>
         ) : null}
       </div>
 
       <HowItWorks config={config} />
 
       <div className="mt-8">
-        <h2 className="mb-3 text-lg font-bold text-charcoal">History</h2>
+        <h2 className="mb-3 text-lg font-semibold text-charcoal">History</h2>
         {transactions.length === 0 ? (
           <p className="rounded-md border border-[#e5e5e5] bg-cream p-6 text-center text-sm text-muted">
             No points activity yet — place an order to start earning.
@@ -76,7 +79,7 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
   }
   return (
     <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
-      <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-charcoal">How points work</h2>
+      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-charcoal">How points work</h2>
       <ul className="flex flex-col gap-1 text-sm text-charcoal">
         <li>• Earn {Number(config.points_per_inr)} point(s) for every ₹1 spent on a completed, paid order.</li>
         <li>• Redeem points for ₹{Number(config.inr_per_point)} each at checkout.</li>
@@ -102,13 +105,13 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
   return (
     <li className="flex items-center justify-between rounded-md border border-[#e5e5e5] bg-cream px-4 py-3">
       <div>
-        <p className="text-sm font-bold capitalize text-charcoal">{tx.type}</p>
-        <p className="text-xs text-muted">
+        <p className="text-sm font-semibold capitalize text-charcoal">{tx.type}</p>
+        <p className="text-sm text-muted">
           {dateLabel}
           {tx.note ? ` · ${tx.note}` : ''}
         </p>
       </div>
-      <span className={'shrink-0 font-bold ' + (positive ? 'text-green-600' : 'text-red-600')}>
+      <span className={'shrink-0 font-mono font-bold tabular-nums ' + (positive ? 'text-green-600' : 'text-red-600')}>
         {positive ? '+' : ''}
         {tx.points}
       </span>

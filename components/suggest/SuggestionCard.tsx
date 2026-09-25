@@ -35,7 +35,7 @@ export function SuggestionCard({
   return (
     <div className="flex flex-col rounded-md border border-line bg-cream p-4 shadow-card">
       {isUsual ? (
-        <span className="mb-2 inline-block w-fit rounded-full bg-surface px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-tan">
+        <span className="mb-2 inline-block w-fit rounded-full bg-surface px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-tan">
           Your usual
         </span>
       ) : null}
@@ -54,13 +54,13 @@ export function SuggestionCard({
               className={'h-1.5 w-1.5 rounded-full ' + (item.is_veg ? 'bg-green-700' : 'bg-red-700')}
             />
           </span>
-          <h3 className="font-bold text-charcoal">{item.name}</h3>
+          <h3 className="font-semibold text-charcoal">{item.name}</h3>
         </div>
-        <span className="shrink-0 font-bold text-tan">{priceLabel(item)}</span>
+        <span className="shrink-0 font-mono font-bold tabular-nums text-tan">{priceLabel(item)}</span>
       </div>
       <p className="mt-1 text-sm text-muted">{pick.reason}</p>
       {!available ? (
-        <p className="mt-2 text-sm font-bold text-muted">Currently unavailable</p>
+        <p className="mt-2 text-sm font-medium text-muted">Currently unavailable</p>
       ) : null}
 
       <div className="mt-3 flex items-center gap-2">
@@ -73,7 +73,7 @@ export function SuggestionCard({
             Add to cart
           </button>
         ) : (
-          <span className="text-xs text-muted">We&apos;ll suggest something else next time.</span>
+          <span className="text-sm text-muted">We&apos;ll suggest something else next time.</span>
         )}
         <div className="ml-auto flex items-center gap-1">
           <button

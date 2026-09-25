@@ -48,7 +48,7 @@ export function ItemCustomizer({
     <div className="divide-y divide-line">
       {hasRequiredSection ? (
         <section className="py-2 first:pt-0">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Required</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Required</h3>
           <div className="space-y-3">
             {showSize ? (
               <SizePicker item={item} variantId={variantId} onVariantChange={onVariantChange} size={size} />
@@ -68,7 +68,7 @@ export function ItemCustomizer({
 
       {hasOptionalSection ? (
         <section className="py-2 first:pt-0">
-          <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">Add-ons (optional)</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Add-ons (optional)</h3>
           <div className="space-y-3">
             {optionalGroups.map((group) => (
               <AddonGroupBlock
@@ -105,7 +105,7 @@ function SizePicker({
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span id={labelId} className="truncate text-sm font-bold text-charcoal">
+        <span id={labelId} className="truncate text-sm font-semibold text-charcoal">
           Size
         </span>
       </div>
@@ -120,7 +120,7 @@ function SizePicker({
               onClick={() => onVariantChange(v.id)}
               className={chipClasses(selected, size)}
             >
-              {v.label} · ₹{v.price_inr}
+              {v.label} · <span className="font-mono tabular-nums">₹{v.price_inr}</span>
             </button>
           );
         })}
@@ -160,11 +160,11 @@ function AddonGroupBlock({
   return (
     <div role="group" aria-labelledby={labelId}>
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span id={labelId} className="truncate text-sm font-bold text-charcoal" title={group.display_name}>
+        <span id={labelId} className="truncate text-sm font-semibold text-charcoal" title={group.display_name}>
           {group.display_name}
         </span>
         <span
-          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold ${badgeClass}`}
+          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeClass}`}
           aria-label={selectionLabel(group)}
         >
           {badge}
@@ -186,7 +186,9 @@ function AddonGroupBlock({
               {group.selection_type === 'multi' && selected ? <span aria-hidden="true">✓ </span> : null}
               {option.name}
               {option.price_inr > 0 ? (
-                <span className={selected ? 'ml-1 text-cream/80' : 'ml-1 text-muted'}>+₹{option.price_inr}</span>
+                <span className={'ml-1 font-mono tabular-nums ' + (selected ? 'text-cream/80' : 'text-muted')}>
+                  +₹{option.price_inr}
+                </span>
               ) : null}
             </button>
           );
@@ -218,7 +220,7 @@ function InstructionsField({ value, onChange }: { value: string; onChange: (valu
       <button
         type="button"
         onClick={() => setRevealed(true)}
-        className="text-sm font-bold text-tan hover:text-tan-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+        className="text-sm font-semibold text-tan hover:text-tan-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
       >
         + Add note
       </button>
@@ -227,7 +229,7 @@ function InstructionsField({ value, onChange }: { value: string; onChange: (valu
 
   return (
     <div>
-      <label htmlFor={inputId} className="mb-1 block text-xs font-bold uppercase tracking-wide text-muted">
+      <label htmlFor={inputId} className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
         Note
       </label>
       <input

@@ -122,13 +122,13 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
 
         {/* Order meta */}
         <div className="flex flex-col gap-0.5 text-xs">
-          <MetaRow label="Order" value={formatOrderNumber(order.order_number)} />
+          <MetaRow label="Order" value={formatOrderNumber(order.order_number)} mono />
           <MetaRow label="Date" value={formatIstDateTime(order.created_at)} />
           <MetaRow label="Customer" value={order.customer_name} />
-          <MetaRow label="Phone" value={order.customer_phone} />
+          <MetaRow label="Phone" value={order.customer_phone} mono />
           <MetaRow label="Type" value={ORDER_TYPE_LABEL[order.order_type] ?? order.order_type} />
           <MetaRow label="Pickup" value={order.pickup_slot_label || order.pickup_time} />
-          {order.pickup_code ? <MetaRow label="Pickup code" value={order.pickup_code} /> : null}
+          {order.pickup_code ? <MetaRow label="Pickup code" value={order.pickup_code} mono /> : null}
         </div>
 
         <Divider />
@@ -142,7 +142,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
                   {item.quantity} × {item.name_snapshot}
                   {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
                 </span>
-                <span className="shrink-0 font-bold">₹{item.line_total_inr}</span>
+                <span className="shrink-0 font-mono font-bold tabular-nums">₹{item.line_total_inr}</span>
               </div>
               {item.addons.length > 0 ? (
                 <p className="pl-4 text-[11px] text-muted print:text-black">
@@ -168,7 +168,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`-₹${order.discount_inr}`} /> : null}
           <div className="mt-1 flex items-center justify-between border-t border-[#c9c9c9] pt-1 text-sm font-bold">
             <span>Total</span>
-            <span>₹{total}</span>
+            <span className="font-mono tabular-nums">₹{total}</span>
           </div>
           <div className="mt-1 flex items-center justify-between">
             <span>Payment</span>
@@ -195,11 +195,11 @@ function Divider() {
   return <div className="my-4 border-t border-dashed border-[#c9c9c9]" />;
 }
 
-function MetaRow({ label, value }: { label: string; value: string }) {
+function MetaRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-start justify-between gap-4">
       <span className="text-muted print:text-black">{label}</span>
-      <span className="text-right font-bold">{value}</span>
+      <span className={'text-right font-bold' + (mono ? ' font-mono tabular-nums' : '')}>{value}</span>
     </div>
   );
 }
@@ -208,7 +208,7 @@ function BillRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between">
       <span>{label}</span>
-      <span>{value}</span>
+      <span className="font-mono tabular-nums">{value}</span>
     </div>
   );
 }

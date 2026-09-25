@@ -177,7 +177,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
           <button
             type="button"
             onClick={() => switchMode('phone')}
-            className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-bold transition-colors ${
+            className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-semibold transition-colors ${
               mode === 'phone' ? 'bg-tan text-cream' : 'text-charcoal'
             }`}
           >
@@ -186,7 +186,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
           <button
             type="button"
             onClick={() => switchMode('otp')}
-            className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-bold transition-colors ${
+            className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-semibold transition-colors ${
               mode === 'otp' ? 'bg-tan text-cream' : 'text-charcoal'
             }`}
           >
@@ -211,7 +211,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
         {mode === 'otp' && otpStep === 'email' ? (
           <form onSubmit={handleOtpRequest} className="flex flex-col gap-4">
             <div>
-              <label htmlFor="email" className="mb-1 block text-sm font-bold text-charcoal">
+              <label htmlFor="email" className="mb-1 block text-sm font-semibold text-charcoal">
                 Email
               </label>
               <input
@@ -227,7 +227,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Sending…' : 'Send Code'}
             </button>
@@ -237,7 +237,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
         {mode === 'otp' && otpStep === 'code' ? (
           <form onSubmit={handleOtpVerify} className="flex flex-col gap-4">
             <div>
-              <label htmlFor="code" className="mb-1 block text-sm font-bold text-charcoal">
+              <label htmlFor="code" className="mb-1 block text-sm font-semibold text-charcoal">
                 6-digit code
               </label>
               <input
@@ -256,7 +256,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Verifying…' : 'Verify & Log In'}
             </button>
@@ -276,7 +276,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
         {mode === 'phone' && phoneStep === 'phone' ? (
           <form onSubmit={handlePhoneRequest} className="flex flex-col gap-4">
             <div>
-              <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
+              <label htmlFor="phone" className="mb-1 block text-sm font-semibold text-charcoal">
                 WhatsApp number
               </label>
               <input
@@ -289,14 +289,14 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 placeholder="98765 43210"
                 className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
               />
-              <p className="mt-1 text-xs text-muted">
+              <p className="mt-1 text-sm text-muted">
                 We&apos;ll send a 6-digit code on WhatsApp to this number.
               </p>
             </div>
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Sending…' : 'Send WhatsApp Code'}
             </button>
@@ -306,7 +306,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
         {mode === 'phone' && phoneStep === 'code' ? (
           <form onSubmit={handlePhoneVerify} className="flex flex-col gap-4">
             <div>
-              <label htmlFor="phoneCode" className="mb-1 block text-sm font-bold text-charcoal">
+              <label htmlFor="phoneCode" className="mb-1 block text-sm font-semibold text-charcoal">
                 WhatsApp code
               </label>
               <input
@@ -325,7 +325,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Verifying…' : 'Verify & Log In'}
             </button>
@@ -342,7 +342,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
           </form>
         ) : null}
 
-        <p className="mt-6 text-center text-xs text-muted">
+        <p className="mt-6 text-center text-sm text-muted">
           <Link href="/" className="hover:text-tan hover:underline">
             Back to menu
           </Link>

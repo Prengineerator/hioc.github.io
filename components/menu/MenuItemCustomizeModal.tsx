@@ -62,7 +62,7 @@ export function MenuItemCustomizeModal({
         >
           &minus;
         </button>
-        <span className="min-w-[1.5rem] text-center font-bold text-charcoal">{qty}</span>
+        <span className="min-w-[1.5rem] text-center font-mono font-semibold tabular-nums text-charcoal">{qty}</span>
         <button
           type="button"
           aria-label="Increase quantity"
@@ -73,7 +73,13 @@ export function MenuItemCustomizeModal({
         </button>
       </div>
       <Button disabled={!canSubmit} onClick={handleAdd} className="flex-1">
-        {canSubmit ? `Add to Cart · ₹${unitPrice * qty}` : 'Select required options'}
+        {canSubmit ? (
+          <>
+            Add to Cart · <span className="font-mono tabular-nums">₹{unitPrice * qty}</span>
+          </>
+        ) : (
+          'Select required options'
+        )}
       </Button>
     </div>
   );

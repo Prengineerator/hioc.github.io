@@ -61,16 +61,16 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
               className={'h-1.5 w-1.5 rounded-full ' + (item.is_veg ? 'bg-green-700' : 'bg-red-700')}
             />
           </span>
-          <h4 className="font-bold text-charcoal">{item.name}</h4>
+          <h4 className="font-semibold text-charcoal">{item.name}</h4>
         </div>
-        <span className="shrink-0 font-bold text-tan">{priceLabel(item)}</span>
+        <span className="shrink-0 font-mono font-bold tabular-nums text-tan">{priceLabel(item)}</span>
       </div>
       {item.description ? (
         <p className="mt-1 line-clamp-2 text-sm text-muted">{item.description}</p>
       ) : null}
 
       {!available ? (
-        <p className="mt-2 text-sm font-bold text-muted">{unavailableLabel(item)}</p>
+        <p className="mt-2 text-sm font-medium text-muted">{unavailableLabel(item)}</p>
       ) : null}
 
       <div className="mt-4">
@@ -78,7 +78,7 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
           <button
             type="button"
             disabled
-            className="w-full cursor-not-allowed rounded-md bg-line px-4 py-2 text-sm font-bold text-muted"
+            className="w-full cursor-not-allowed rounded-md bg-line px-4 py-2 text-sm font-semibold text-muted"
           >
             Unavailable
           </button>
@@ -111,7 +111,7 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
               >
                 &minus;
               </button>
-              <span className="min-w-[1.5rem] text-center font-bold text-charcoal">{qty}</span>
+              <span className="min-w-[1.5rem] text-center font-mono font-semibold tabular-nums text-charcoal">{qty}</span>
               <button
                 type="button"
                 aria-label="Increase quantity"

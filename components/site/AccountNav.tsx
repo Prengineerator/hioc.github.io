@@ -99,7 +99,7 @@ export function AccountNav() {
       <li>
         <Link
           href="/login"
-          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-charcoal transition-colors hover:bg-surface hover:text-tan"
         >
           Log In
         </Link>
@@ -115,7 +115,7 @@ export function AccountNav() {
         <Link
           href="/account"
           title={title}
-          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-charcoal transition-colors hover:bg-surface hover:text-tan"
         >
           My Account
         </Link>
@@ -124,7 +124,7 @@ export function AccountNav() {
         <button
           type="button"
           onClick={handleLogout}
-          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+          className="inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold text-charcoal transition-colors hover:bg-surface hover:text-tan"
         >
           Log Out
         </button>

@@ -25,7 +25,7 @@ export function PolicyLayout({
       <h1 className="text-3xl font-bold text-charcoal">{title}</h1>
       <p className="mt-1 text-sm text-muted">Last updated: {BUSINESS.lastUpdated}</p>
 
-      <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 border-b border-[#e5e5e5] pb-4 text-xs">
+      <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 border-b border-[#e5e5e5] pb-4 text-sm">
         {POLICIES.map((p) => (
           <Link key={p.href} href={p.href} className="text-tan hover:underline">
             {p.label}
@@ -38,7 +38,7 @@ export function PolicyLayout({
       </article>
 
       <div className="mt-10 rounded-md border border-[#e5e5e5] bg-cream p-5 text-sm">
-        <h2 className="font-bold text-charcoal">Contact us</h2>
+        <h2 className="font-semibold text-charcoal">Contact us</h2>
         <p className="mt-2 text-muted">{BUSINESS.legalName} (operating {BUSINESS.name})</p>
         <p className="text-muted">{BUSINESS.address}</p>
         {BUSINESS.gstin ? <p className="text-muted">GSTIN: {BUSINESS.gstin}</p> : null}
@@ -56,7 +56,7 @@ export function PolicyLayout({
 export function PolicySection({ heading, children }: { heading: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-2">
-      <h2 className="mt-2 text-lg font-bold text-charcoal">{heading}</h2>
+      <h2 className="mt-2 text-lg font-semibold text-charcoal">{heading}</h2>
       {children}
     </section>
   );

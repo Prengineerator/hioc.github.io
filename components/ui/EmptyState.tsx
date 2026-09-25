@@ -18,7 +18,7 @@ export function EmptyState({
       <span aria-hidden="true" className="text-3xl">
         {icon}
       </span>
-      <h3 className="text-lg font-bold text-charcoal">{heading}</h3>
+      <h3 className="text-lg font-semibold text-charcoal">{heading}</h3>
       <p className="text-sm text-muted">{body}</p>
       {action ? <div className="mt-2">{action}</div> : null}
     </div>

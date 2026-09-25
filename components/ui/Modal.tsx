@@ -87,7 +87,7 @@ export function Modal({
             <h2 id={titleId} className={`font-bold text-charcoal ${dense ? 'text-base' : 'text-lg'}`}>
               {title}
             </h2>
-            {subtitle ? <p className="mt-0.5 line-clamp-2 text-xs text-muted">{subtitle}</p> : null}
+            {subtitle ? <p className="mt-0.5 line-clamp-2 text-sm text-muted">{subtitle}</p> : null}
           </div>
           <button
             type="button"

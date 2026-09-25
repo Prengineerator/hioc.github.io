@@ -149,7 +149,7 @@ function MenuPageContent() {
         {flags.suggest ? (
           <Link
             href="/suggest"
-            className="mb-6 flex items-center justify-center gap-2 rounded-md border border-tan bg-surface px-4 py-3 text-center text-sm font-bold text-charcoal transition-colors hover:bg-[#f0e6da]"
+            className="mb-6 flex items-center justify-center gap-2 rounded-md border border-tan bg-surface px-4 py-3 text-center text-sm font-semibold text-charcoal transition-colors hover:bg-[#f0e6da]"
           >
             Can&apos;t decide? Tell us your mood <span aria-hidden="true">→</span>
           </Link>

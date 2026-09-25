@@ -29,7 +29,7 @@ export function MoodCard({
       <span aria-hidden="true" className="text-2xl">
         {icon}
       </span>
-      <span className="text-sm font-bold text-charcoal">{label}</span>
+      <span className="text-sm font-semibold text-charcoal">{label}</span>
     </button>
   );
 }

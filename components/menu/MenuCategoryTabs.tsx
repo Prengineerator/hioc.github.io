@@ -23,7 +23,7 @@ export function MenuCategoryTabs({
             onClick={() => onChange(cat.slug)}
             aria-current={isActive ? 'true' : undefined}
             className={
-              'inline-flex min-h-[40px] shrink-0 items-center rounded-full px-5 text-sm font-bold transition-colors ' +
+              'inline-flex min-h-[40px] shrink-0 items-center rounded-full px-5 text-sm font-semibold transition-colors ' +
               'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
               (isActive
                 ? 'bg-tan text-cream'

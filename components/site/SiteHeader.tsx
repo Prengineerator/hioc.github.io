@@ -87,7 +87,7 @@ export function SiteHeader() {
                     href={link.href}
                     aria-current={active ? 'page' : undefined}
                     className={
-                      'inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-bold transition-colors ' +
+                      'inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold transition-colors ' +
                       (active ? 'text-tan' : 'text-charcoal hover:text-tan')
                     }
                   >
@@ -141,7 +141,7 @@ export function SiteHeader() {
                     href={link.href}
                     aria-current={active ? 'page' : undefined}
                     className={
-                      'flex min-h-[44px] items-center rounded-md px-3 text-base font-bold transition-colors ' +
+                      'flex min-h-[44px] items-center rounded-md px-3 text-base font-semibold transition-colors ' +
                       (active ? 'bg-surface text-tan' : 'text-charcoal hover:bg-surface hover:text-tan')
                     }
                   >
@@ -153,7 +153,7 @@ export function SiteHeader() {
             <li>
               <Link
                 href="/menu"
-                className="flex min-h-[44px] items-center gap-2 rounded-md px-3 text-base font-bold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+                className="flex min-h-[44px] items-center gap-2 rounded-md px-3 text-base font-semibold text-charcoal transition-colors hover:bg-surface hover:text-tan"
               >
                 <CartIcon />
                 Your Order

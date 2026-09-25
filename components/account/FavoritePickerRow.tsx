@@ -52,7 +52,7 @@ export function FavoritePickerRow({
           <span className={'h-1.5 w-1.5 rounded-full ' + (item.is_veg ? 'bg-green-700' : 'bg-red-700')} />
         </span>
         <span className="text-sm text-charcoal">{item.name}</span>
-        <span className="text-xs text-muted">{priceLabel(item)}</span>
+        <span className="font-mono text-sm tabular-nums text-muted">{priceLabel(item)}</span>
       </div>
       <button
         type="button"

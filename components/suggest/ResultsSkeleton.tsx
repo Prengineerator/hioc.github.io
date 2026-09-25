@@ -36,7 +36,7 @@ export function ResultsSkeleton() {
 
   return (
     <div aria-live="polite" className="flex flex-col items-center gap-6">
-      <p className="text-center text-sm font-bold text-tan">{ROTATING_COPY[copyIndex]}</p>
+      <p className="text-center text-sm font-semibold text-tan">{ROTATING_COPY[copyIndex]}</p>
       <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2">
         {Array.from({ length: 3 }).map((_, i) => (
           <SkeletonCard key={i} />

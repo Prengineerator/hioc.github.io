@@ -541,7 +541,7 @@ export function CheckoutForm({
           role="alert"
           className="rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
         >
-          <p className="font-bold">
+          <p className="font-semibold">
             {unavailableNames.join(', ')} {unavailableNames.length === 1 ? 'is' : 'are'} no
             longer available.
           </p>
@@ -556,7 +556,7 @@ export function CheckoutForm({
       <form onSubmit={handleSubmit} className="flex flex-col gap-4 md:gap-5" noValidate>
         <Section title="1 · Your details">
           <div>
-            <label htmlFor="name" className="mb-1 block text-sm font-bold text-charcoal">
+            <label htmlFor="name" className="mb-1 block text-sm font-semibold text-charcoal">
               Name
             </label>
             <input
@@ -574,7 +574,7 @@ export function CheckoutForm({
             <p className="rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
               Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
               follow your order on the next page.{' '}
-              <a href="/login?next=/checkout" className="font-bold text-tan underline">
+              <a href="/login?next=/checkout" className="font-semibold text-tan underline">
                 Log in
               </a>{' '}
               to get WhatsApp updates or pay at the counter.
@@ -582,7 +582,7 @@ export function CheckoutForm({
           ) : (
             <>
               <div>
-                <label htmlFor="phone" className="mb-1 block text-sm font-bold text-charcoal">
+                <label htmlFor="phone" className="mb-1 block text-sm font-semibold text-charcoal">
                   Phone
                 </label>
                 <input
@@ -603,7 +603,7 @@ export function CheckoutForm({
                     form now, as the last step before placing the order — see the
                     submit area below. This just sets the expectation early. */}
                 {!accountPhoneMatches ? (
-                  <p className="mt-1 text-xs text-muted">
+                  <p className="mt-1 text-sm text-muted">
                     We&apos;ll WhatsApp a verification code to this number as the last step, right
                     before your order is placed.
                   </p>
@@ -611,7 +611,7 @@ export function CheckoutForm({
               </div>
 
               <div>
-                <label htmlFor="email" className="mb-1 block text-sm font-bold text-charcoal">
+                <label htmlFor="email" className="mb-1 block text-sm font-semibold text-charcoal">
                   Email <span className="font-normal text-muted">(optional — for your bill)</span>
                 </label>
                 <input
@@ -633,7 +633,7 @@ export function CheckoutForm({
 
         <Section title="2 · Order details">
           <div>
-            <span id="order-type" className="mb-1 block text-sm font-bold text-charcoal">
+            <span id="order-type" className="mb-1 block text-sm font-semibold text-charcoal">
               Order Type
             </span>
             <div role="group" aria-labelledby="order-type" className="grid grid-cols-2 gap-2">
@@ -644,7 +644,7 @@ export function CheckoutForm({
                   aria-pressed={orderType === opt.value}
                   onClick={() => setOrderType(opt.value)}
                   className={
-                    'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                    'rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                     (orderType === opt.value
                       ? 'border-tan bg-surface text-tan-dark'
                       : 'border-line text-charcoal hover:border-tan')
@@ -657,7 +657,7 @@ export function CheckoutForm({
           </div>
 
           <div>
-            <label htmlFor="pickup" className="mb-1 block text-sm font-bold text-charcoal">
+            <label htmlFor="pickup" className="mb-1 block text-sm font-semibold text-charcoal">
               Pickup Time
             </label>
             {slots.length === 0 ? (
@@ -681,7 +681,7 @@ export function CheckoutForm({
           </div>
 
           <div>
-            <label htmlFor="notes" className="mb-1 block text-sm font-bold text-charcoal">
+            <label htmlFor="notes" className="mb-1 block text-sm font-semibold text-charcoal">
               Notes (optional)
             </label>
             <textarea
@@ -699,23 +699,23 @@ export function CheckoutForm({
             with a coupon-like dashed tan border so it reads as a distinct,
             discoverable perk rather than blending into the rest of the form. */}
         <div className="rounded-md border border-dashed border-tan bg-surface p-4 md:p-5">
-          <h2 className="mb-3 text-sm font-bold text-tan-dark">Offers &amp; rewards</h2>
+          <h2 className="mb-3 text-sm font-semibold text-tan-dark">Offers &amp; rewards</h2>
           <div className="flex flex-col gap-4">
             {/* Coupon code. */}
             <div>
               <div className="mb-1 flex items-center gap-1.5">
                 <TicketIcon />
-                <label htmlFor="coupon" className="text-sm font-bold text-charcoal">
+                <label htmlFor="coupon" className="text-sm font-semibold text-charcoal">
                   Have a coupon?
                 </label>
               </div>
               {couponApplied ? (
                 <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
                   <span>
-                    <span className="font-bold uppercase">{couponApplied}</span> applied · You
-                    save ₹{couponDiscountInr}
+                    <span className="font-mono font-bold uppercase tabular-nums">{couponApplied}</span> applied · You
+                    save <span className="font-mono tabular-nums">₹{couponDiscountInr}</span>
                   </span>
-                  <button type="button" onClick={removeCoupon} className="shrink-0 text-xs font-bold text-muted underline">
+                  <button type="button" onClick={removeCoupon} className="shrink-0 text-sm font-semibold text-muted underline">
                     Remove
                   </button>
                 </div>
@@ -733,13 +733,13 @@ export function CheckoutForm({
                     type="button"
                     onClick={applyCoupon}
                     disabled={couponBusy || !couponInput.trim()}
-                    className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+                    className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
                   >
                     {couponBusy ? '…' : 'Apply'}
                   </button>
                 </div>
               )}
-              {couponError ? <p className="mt-1 text-xs text-red-700">{couponError}</p> : null}
+              {couponError ? <p className="mt-1 text-sm text-red-700">{couponError}</p> : null}
             </div>
 
             {/* Points redemption — logged-in customers only (coupons need no
@@ -751,22 +751,23 @@ export function CheckoutForm({
                   <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                     <div className="flex items-center gap-1.5">
                       <StarIcon />
-                      <label htmlFor="points" className="text-sm font-bold text-charcoal">
+                      <label htmlFor="points" className="text-sm font-semibold text-charcoal">
                         Redeem points
                       </label>
                     </div>
                     {balance !== null ? (
-                      <span className="rounded-full border border-tan/50 bg-cream px-2 py-0.5 text-xs font-bold text-tan-dark">
-                        Balance: {balance} pts
+                      <span className="rounded-full border border-tan/50 bg-cream px-2 py-0.5 text-xs font-semibold text-tan-dark">
+                        Balance: <span className="font-mono tabular-nums">{balance}</span> pts
                       </span>
                     ) : null}
                   </div>
                   {pointsApplied ? (
                     <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
                       <span>
-                        {pointsApplied} pts applied · You save ₹{pointsDiscountInr}
+                        <span className="font-mono tabular-nums">{pointsApplied}</span> pts applied · You save{' '}
+                        <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>
                       </span>
-                      <button type="button" onClick={removePoints} className="shrink-0 text-xs font-bold text-muted underline">
+                      <button type="button" onClick={removePoints} className="shrink-0 text-sm font-semibold text-muted underline">
                         Remove
                       </button>
                     </div>
@@ -786,20 +787,20 @@ export function CheckoutForm({
                         type="button"
                         onClick={applyPoints}
                         disabled={pointsBusy || !pointsInput.trim()}
-                        className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+                        className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
                       >
                         {pointsBusy ? '…' : 'Apply'}
                       </button>
                     </div>
                   )}
-                  {pointsError ? <p className="mt-1 text-xs text-red-700">{pointsError}</p> : null}
+                  {pointsError ? <p className="mt-1 text-sm text-red-700">{pointsError}</p> : null}
                 </div>
               </>
             ) : null}
 
             {anySavings ? (
               <p className="border-t border-dashed border-tan/50 pt-3 text-sm font-bold text-tan-dark">
-                Total savings ₹{couponDiscountInr + pointsDiscountInr}
+                Total savings <span className="font-mono tabular-nums">₹{couponDiscountInr + pointsDiscountInr}</span>
               </p>
             ) : null}
           </div>
@@ -820,7 +821,7 @@ export function CheckoutForm({
             ) : null}
             <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
               <span className="font-bold text-charcoal">Total</span>
-              <span className="font-bold text-tan">₹{displayBill.total_inr}</span>
+              <span className="font-mono font-bold tabular-nums text-tan">₹{displayBill.total_inr}</span>
             </div>
           </div>
         </Section>
@@ -832,7 +833,7 @@ export function CheckoutForm({
             verified — see mustVerify. Guests get online payment only. */}
         {mustVerify ? null : isGuest ? (
           <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
-            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            <p className="mb-1 text-sm font-semibold text-charcoal">Payment</p>
             {guestCannotPay ? (
               <div className="mb-2">
                 <PayOnlineUnavailableButton />
@@ -847,7 +848,7 @@ export function CheckoutForm({
                   kitchen queue as soon as payment is confirmed.{' '}
                 </>
               )}
-              <a href="/login?next=/checkout" className="font-bold text-tan underline">
+              <a href="/login?next=/checkout" className="font-semibold text-tan underline">
                 Log in
               </a>{' '}
               to pay at the counter instead.
@@ -855,13 +856,13 @@ export function CheckoutForm({
           </div>
         ) : ONLINE_PAYMENT_AVAILABLE ? (
           <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
-            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            <p className="mb-1 text-sm font-semibold text-charcoal">Payment</p>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setPaymentMode('online')}
                 className={
-                  'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                  'rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                   (paymentMode === 'online'
                     ? 'border-tan bg-surface text-tan-dark'
                     : 'border-line text-charcoal hover:border-tan')
@@ -873,7 +874,7 @@ export function CheckoutForm({
                 type="button"
                 onClick={() => setPaymentMode('counter')}
                 className={
-                  'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
+                  'rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                   (paymentMode === 'counter'
                     ? 'border-tan bg-surface text-tan-dark'
                     : 'border-line text-charcoal hover:border-tan')
@@ -893,13 +894,13 @@ export function CheckoutForm({
           // switched off: keep online payment VISIBLE but greyed out, so it
           // reads as "temporarily unavailable" rather than as a missing feature.
           <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
-            <p className="mb-1 text-sm font-bold text-charcoal">Payment</p>
+            <p className="mb-1 text-sm font-semibold text-charcoal">Payment</p>
             <div className="grid grid-cols-2 gap-2">
               <PayOnlineUnavailableButton />
               <button
                 type="button"
                 aria-pressed="true"
-                className="rounded-md border border-tan bg-surface px-3 py-2 text-sm font-bold text-tan-dark"
+                className="rounded-md border border-tan bg-surface px-3 py-2 text-sm font-semibold text-tan-dark"
               >
                 Pay at counter
               </button>
@@ -913,7 +914,7 @@ export function CheckoutForm({
         {/* DPDP transactional-consent notice (F3t/NFR-005). Order updates are
             transactional, not marketing, so no opt-in checkbox is required —
             but we disclose the use of the number clearly at the point of entry. */}
-        <p className="text-xs text-muted">
+        <p className="text-sm text-muted">
           By placing this order you agree to receive order-status updates (accepted, ready,
           etc.) on this number via WhatsApp/SMS. We use it only for this order — never for
           marketing.
@@ -932,7 +933,7 @@ export function CheckoutForm({
               onBeforeSend={() => validatePhone(phone)}
             />
             {otp.step === 'idle' ? (
-              <p className="text-center text-xs text-muted">
+              <p className="text-center text-sm text-muted">
                 {guestBlocker ?? "You'll choose how to pay after verifying your number."}
               </p>
             ) : null}
@@ -942,15 +943,19 @@ export function CheckoutForm({
           <button
             type="submit"
             disabled={submitting || otp.busy || !canSubmit || guestCannotPay || !authChecked}
-            className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {submitting
-              ? 'Placing Order…'
-              : !storeAcceptingOrders
-                ? 'Checkout Unavailable'
-                : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online'
-                  ? `Pay ₹${displayBill.total_inr} & Place Order`
-                  : 'Place Order'}
+            {submitting ? (
+              'Placing Order…'
+            ) : !storeAcceptingOrders ? (
+              'Checkout Unavailable'
+            ) : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online' ? (
+              <>
+                Pay <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span> & Place Order
+              </>
+            ) : (
+              'Place Order'
+            )}
           </button>
         )}
       </form>
@@ -966,7 +971,7 @@ export function CheckoutForm({
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="rounded-md border border-line bg-cream p-4 md:p-5">
-      <h2 className="mb-3 text-sm font-bold text-charcoal">{title}</h2>
+      <h2 className="mb-3 text-sm font-semibold text-charcoal">{title}</h2>
       <div className="flex flex-col gap-4">{children}</div>
     </div>
   );
@@ -980,10 +985,10 @@ function PayOnlineUnavailableButton() {
       type="button"
       disabled
       aria-disabled="true"
-      className="w-full cursor-not-allowed rounded-md border border-dashed border-line px-3 py-2 text-sm font-bold text-muted opacity-60"
+      className="w-full cursor-not-allowed rounded-md border border-dashed border-line px-3 py-2 text-sm font-semibold text-muted opacity-60"
     >
       Pay online
-      <span className="block text-xs font-normal">Temporarily unavailable</span>
+      <span className="block text-sm font-normal">Temporarily unavailable</span>
     </button>
   );
 }
@@ -996,7 +1001,9 @@ function BillRow({ label, value, tone }: { label: string; value: number; tone?: 
   return (
     <div className="flex items-center justify-between py-0.5">
       <span className={toneClass}>{label}</span>
-      <span className={toneClass}>{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
+      <span className={`font-mono tabular-nums ${toneClass}`}>
+        {value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}
+      </span>
     </div>
   );
 }

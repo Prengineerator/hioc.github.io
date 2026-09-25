@@ -45,7 +45,7 @@ function HeroSection() {
           />
         </div>
         <div className="flex flex-col items-center gap-4 text-center md:items-start md:text-left">
-          <span className="text-xs font-bold uppercase tracking-[0.2em] text-tan">
+          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-tan">
             Kamla Nagar, Agra
           </span>
           <h1 className="text-3xl font-bold tracking-tight text-charcoal md:text-5xl">
@@ -88,7 +88,7 @@ function CategoryTeaser() {
         {MENU_CATEGORIES.map((cat) => (
           <Link key={cat.slug} href={`/menu?category=${encodeURIComponent(cat.slug)}`}>
             <Card interactive className="group h-full">
-              <h3 className="font-bold text-charcoal group-hover:text-tan">
+              <h3 className="font-semibold text-charcoal group-hover:text-tan">
                 {cat.label}
               </h3>
               {cat.parent ? (
@@ -107,8 +107,8 @@ function VisitStrip() {
     <section className="mx-auto max-w-6xl px-4 pb-4">
       <Card className="flex flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-tan">Visit Us</p>
-          <p className="mt-1 font-bold text-charcoal">{CAFE_ADDRESS}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan">Visit Us</p>
+          <p className="mt-1 font-semibold text-charcoal">{CAFE_ADDRESS}</p>
           <p className="mt-1 text-sm text-muted">{CAFE_HOURS_HOME}</p>
         </div>
         <Link href="/contact" className={buttonVariants({ variant: 'secondary' })}>
@@ -134,7 +134,7 @@ function AboutTeaser() {
       </p>
       <Link
         href="/about"
-        className="mt-4 inline-block font-bold text-tan hover:underline"
+        className="mt-4 inline-block font-semibold text-tan hover:underline"
       >
         Learn more →
       </Link>
