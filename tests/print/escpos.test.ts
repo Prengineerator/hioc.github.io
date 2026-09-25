@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { renderEscPos, transliterate, wrapText } from '@/lib/print/escpos';
-import type { TicketDoc } from '@/lib/print/ticketDoc';
+import { renderEscPos, transliterate, wrapText, layoutColumns } from '@/lib/print/escpos';
+import type { TicketDoc, TicketColumn } from '@/lib/print/ticketDoc';
 
 // PRN-3 — pure byte-level tests for the ESC/POS renderer. No printer, no I/O:
 // every assertion is on the Uint8Array (or the plain string helpers) the
@@ -160,6 +160,177 @@ describe('wrapText', () => {
       expect(line.length).toBeLessThanOrEqual(32);
     }
     expect(lines.join('')).toBe('a'.repeat(100));
+  });
+});
+
+// The receipt item table's real column spec (lib/print/ticketModel.ts
+// itemColumns) — reused here so these tests pin the actual drop/no-drop
+// behavior at 48 vs 32 cols, not just a synthetic example.
+function receiptItemColumns(no: string, name: string, qty: string, price: string, amount: string): TicketColumn[] {
+  return [
+    { text: no, weight: 2, align: 'left', minWidth: 3 },
+    { text: name, weight: 18, align: 'left', minWidth: 14 },
+    { text: qty, weight: 4, align: 'right', minWidth: 4 },
+    { text: price, weight: 7, align: 'right', minWidth: 6, optional: true },
+    { text: amount, weight: 7, align: 'right', minWidth: 6 },
+  ];
+}
+
+describe('layoutColumns', () => {
+  it('every returned line is exactly totalCols characters wide, at both 32 and 48', () => {
+    for (const cols of [32, 48]) {
+      const lines = layoutColumns(receiptItemColumns('1', 'Cold Coffee', '2', '120.00', '240.00'), cols);
+      for (const line of lines) {
+        expect(line.length).toBe(cols);
+      }
+    }
+  });
+
+  it('right-aligns a numeric column flush against its own column boundary', () => {
+    const lines = layoutColumns(
+      [
+        { text: 'Item', weight: 3, align: 'left', minWidth: 4 },
+        { text: '240.00', weight: 1, align: 'right', minWidth: 6 },
+      ],
+      20,
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0].endsWith('240.00')).toBe(true);
+    expect(lines[0].startsWith('Item')).toBe(true);
+  });
+
+  it('wraps a long item name within its own column instead of overflowing into the next one', () => {
+    const longName = 'Hazelnut Hot Chocolate with Extra Whipped Cream (Large)';
+    const lines = layoutColumns(receiptItemColumns('1', longName, '1', '290.00', '290.00'), 48);
+    expect(lines.length).toBeGreaterThan(1);
+    // Every line stays exactly 48 wide (padded), and the qty/price/amount
+    // values only ever appear on the FIRST wrapped line — later lines are
+    // blank in those columns, not repeated or corrupted.
+    for (const line of lines) {
+      expect(line.length).toBe(48);
+    }
+    expect(lines[0]).toContain('290.00');
+    expect(lines[1]).not.toContain('290.00');
+    // No word from the long name is truncated mid-token across the wrap —
+    // rejoining the item column's own text across lines reproduces it.
+    // (No. is 3 chars + 1 gap = column 4; Item is 19 wide at 48 cols here.)
+    const rejoined = lines
+      .map((l) => l.slice(4, 23).trimEnd())
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    for (const word of longName.split(' ')) {
+      expect(rejoined).toContain(word);
+    }
+  });
+
+  it('drops the optional Price column at 32 cols when the others do not leave it room, but keeps it at 48', () => {
+    const cells = ['1', 'Hazelnut Hot Chocolate', '1', '290.00', '290.00'] as const;
+    const at48 = layoutColumns(receiptItemColumns(...cells), 48);
+    const at32 = layoutColumns(receiptItemColumns(...cells), 32);
+
+    // 48 cols: every cell's text appears somewhere (Price survives).
+    expect(at48.join('\n')).toContain('290.00');
+    expect(at48.join('\n').match(/290\.00/g)?.length).toBe(2); // price AND amount both "290.00"
+
+    // 32 cols: Price is dropped, so "290.00" (shared by price+amount in this
+    // fixture) appears only once now — from Amount alone.
+    expect(at32.join('\n').match(/290\.00/g)?.length).toBe(1);
+  });
+
+  it('never drops a non-optional column, even when nothing fits comfortably', () => {
+    const lines = layoutColumns(receiptItemColumns('1', 'X', '1', '9.00', '9.00'), 32);
+    const joined = lines.join('\n');
+    expect(joined).toContain('1'); // No. and Qty.
+    expect(joined).toContain('X'); // Item
+    expect(joined).toContain('9.00'); // Amount
+  });
+
+  it('returns an empty array for an empty column list', () => {
+    expect(layoutColumns([], 48)).toEqual([]);
+  });
+});
+
+describe('renderEscPos — columns block', () => {
+  it('emits one line per wrapped row, padded to the full column width', () => {
+    const bytes = renderEscPos(
+      doc([
+        {
+          kind: 'columns',
+          columns: [
+            { text: 'No.', weight: 2, align: 'left', minWidth: 2 },
+            { text: 'Item', weight: 10, align: 'left', minWidth: 8 },
+            { text: 'Amount', weight: 5, align: 'right', minWidth: 6 },
+          ],
+          bold: true,
+        },
+      ]),
+      { paperWidthMm: 80, cut: false },
+    );
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].length).toBe(48);
+    expect(lines[0].startsWith('No.')).toBe(true);
+    expect(lines[0].trimEnd().endsWith('Amount')).toBe(true);
+    // bold is toggled on for the block.
+    expect(findAll(bytes, [0x1b, 0x45, 0x01]).length).toBeGreaterThan(0);
+  });
+});
+
+describe('renderEscPos — text block hanging indent', () => {
+  it('indents a single short line by the requested number of columns', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'Milk: Oat', indent: 4 }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    expect(lines).toEqual(['    Milk: Oat']);
+  });
+
+  it('applies the SAME indent to every wrapped continuation line, not just the first (the actual bug report: "40.00)" wrapped to column 0)', () => {
+    const longAddon =
+      'Choose Extra Toppings: Chocolate Sauce, Caramel Drizzle, Whipped Cream, Sprinkles - 1x40 = 40';
+    const bytes = renderEscPos(doc([{ kind: 'text', text: longAddon, indent: 4 }]), {
+      paperWidthMm: 58, // 32 cols — narrow enough to force a wrap
+      cut: false,
+    });
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    expect(lines.length).toBeGreaterThan(1);
+    for (const line of lines) {
+      expect(line.startsWith('    ')).toBe(true); // every line, not just the first
+      expect(line.length).toBeLessThanOrEqual(32);
+    }
+  });
+
+  it('shrinks the wrap width by the indent so an indented line never exceeds cols', () => {
+    const bytes = renderEscPos(
+      doc([{ kind: 'text', text: 'a'.repeat(40), indent: 4 }]),
+      { paperWidthMm: 58, cut: false }, // 32 cols
+    );
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    for (const line of lines) {
+      expect(line.length).toBeLessThanOrEqual(32);
+    }
+    // The indent (4 spaces) is real: every line's non-indent content is at
+    // most 32 - 4 = 28 characters.
+    for (const line of lines) {
+      expect(line.slice(4).length).toBeLessThanOrEqual(28);
+    }
+  });
+
+  it('ignores indent on a centered/right-aligned block — alignment already positions the whole line', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'HIOC.', align: 'center', indent: 4 }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    expect(lines).toEqual(['HIOC.']); // no leading spaces baked into the text itself
+  });
+
+  it('defaults to no indent when omitted — unchanged from before this feature', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'Plain line' }]), { paperWidthMm: 80, cut: false });
+    const lines = decodeLines(bytes).filter((l) => l.length > 0);
+    expect(lines).toEqual(['Plain line']);
   });
 });
 

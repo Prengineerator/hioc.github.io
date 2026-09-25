@@ -25,3 +25,28 @@ export function safeNextPath(raw: string | null | undefined): string | null {
   if (/[\u0000-\u001f]/.test(v)) return null;
   return v;
 }
+
+/**
+ * SET-1 — old-URL redirects (e.g. /staff/printers → /staff/settings/printers)
+ * must preserve whatever query string the visitor arrived with: a bookmark,
+ * or a link the desktop app still has open, may carry one. Next's Server
+ * Component `searchParams` prop is already parsed into an object (repeated
+ * keys become an array), so this rebuilds the query string from that shape
+ * rather than re-parsing raw text.
+ */
+export function appendSearchParams(
+  path: string,
+  searchParams: Record<string, string | string[] | undefined>,
+): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(searchParams)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) qs.append(key, v);
+    } else {
+      qs.append(key, value);
+    }
+  }
+  const s = qs.toString();
+  return s ? `${path}?${s}` : path;
+}

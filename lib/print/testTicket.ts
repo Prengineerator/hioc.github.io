@@ -1,5 +1,5 @@
 // PRN-3 — the fixed TicketDocs behind the Printers screen's "Test print" and
-// "Test cut" buttons (components/staff/PrinterSettings.tsx). Pulled out of
+// "Test cut" buttons (components/staff/settings/PrinterSettings.tsx). Pulled out of
 // that component so the pure layout — in particular the alignment ruler,
 // which must be exactly the paper's column count wide — is unit-testable
 // without a DOM/React test harness, which this repo doesn't otherwise use.

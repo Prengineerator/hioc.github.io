@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // DEV-2 — getDeviceRegistryState() / isMissingTableError(), the shared answer
-// to "is the pos_devices table set up at all" that app/staff/device/page.tsx
-// (in-app enrolment) needs and app/api/owner/devices' route also uses, so the
-// two never drift on what counts as "the migration hasn't been applied yet".
+// to "is the pos_devices table set up at all" that
+// app/staff/settings/counter/page.tsx (in-app enrolment, formerly
+// app/staff/device/page.tsx) needs and app/api/owner/devices' route also
+// uses, so the two never drift on what counts as "the migration hasn't been
+// applied yet".
 
 const state: {
   cookieToken: string | undefined;

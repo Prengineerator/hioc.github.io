@@ -78,7 +78,8 @@ export type DeviceRegistryState =
  * isn't enrolled" — a plain `getEnrolledDevice()` deliberately collapses both
  * into `null` (failing to "unenrolled" is the right call for every OTHER
  * caller, which only cares whether it may skip owner-only defaults). The
- * in-app "This counter" screen (app/staff/device/page.tsx) needs to show a
+ * in-app "This counter" screen (app/staff/settings/counter/page.tsx,
+ * formerly app/staff/device/page.tsx) needs to show a
  * different message for each, so it uses this instead.
  *
  * Probes the table even when there is no device cookie at all, so a fresh,

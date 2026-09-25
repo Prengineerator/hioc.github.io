@@ -39,7 +39,8 @@ function disabled() {
 // anything with a PIN. What it returns is exactly what PIN-2 describes
 // showing pre-authentication (name tiles) and nothing more — no roles, no
 // contact info, no lock state. The device itself only exists because an
-// owner's full classic session enrolled it (app/staff/device/page.tsx).
+// owner's full classic session enrolled it (app/staff/settings/counter/page.tsx,
+// formerly app/staff/device/page.tsx).
 export async function GET() {
   if (!flags.pinSwitch || !operatorFeatureConfigured()) return NextResponse.json({ operators: [] });
 

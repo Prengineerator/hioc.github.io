@@ -1,50 +1,18 @@
-import { getCounterActor } from '@/lib/api/auth';
-import { getDeviceRegistryState } from '@/lib/api/device';
-import { DeviceEnrollment } from '@/components/staff/DeviceEnrollment';
+import { redirect } from 'next/navigation';
+import { appendSearchParams } from '@/lib/url';
 
-export const dynamic = 'force-dynamic';
-
-// DEV-2/SHL — "This counter": trusted-device enrolment, reached from INSIDE
-// the desktop app. Phase 7 (owner request: "more trusted and more powerful")
-// locked the app window down to the staff surface only — it can no longer
-// navigate to /owner/**, so /owner/devices (DeviceManager) isn't reachable
-// from it. This page reuses the exact same server-side enrolment logic
-// (app/api/owner/devices' POST, still owner-gated) rather than duplicating
-// any of it: see DeviceEnrollment's comment for why no new API route was
-// needed.
+// SET-1 — "This counter" moved under the consolidated /staff/settings area
+// (app/staff/settings/counter/page.tsx). This route stays as a plain
+// redirect rather than disappearing: it's bookmarked, and the desktop app
+// itself may still have it open in a tab that hasn't reloaded. Preserves any
+// query string the visitor arrived with (appendSearchParams, lib/url.ts).
 //
-// /staff/** is already gated to a resolved actor by middleware.ts and
-// app/staff/layout.tsx (getCounterActor() — PIN-3: a classic session, or an
-// enrolled device's PIN operator) — this page adds no separate auth check,
-// matching every other page under /staff/**.
-//
-// PIN-3: getCounterActor() (not getStaffOrOwner()) is load-bearing for the
-// `isOwner` prop below — it caps a device-unlocked owner's role to 'manager'
-// (lib/api/operator.ts), so a PIN unlock can never surface the "Sign out
-// owner" escape hatch meant for a genuine classic owner session; only an
-// owner who actually signed in with their password sees it.
-export default async function StaffDevicePage() {
-  const account = await getCounterActor();
-  const registry = await getDeviceRegistryState();
-
-  return (
-    <div className="mx-auto flex max-w-lg flex-col gap-5 px-4 py-6">
-      <div>
-        <h1 className="text-2xl font-bold text-charcoal">This counter</h1>
-        <p className="text-sm text-muted">
-          Enrolling this machine tells HIOC it&apos;s a known, trusted counter — a fact about the machine,
-          not a login.
-        </p>
-      </div>
-      <DeviceEnrollment
-        isOwner={account?.role === 'owner'}
-        registryAvailable={registry.available}
-        device={
-          registry.device
-            ? { name: registry.device.name, enrolled_at: registry.device.enrolled_at }
-            : null
-        }
-      />
-    </div>
-  );
+// /staff/** is already gated by middleware.ts + app/staff/layout.tsx before
+// this ever renders — nothing route-specific to carry over here.
+export default function StaffDeviceRedirectPage({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>;
+}) {
+  redirect(appendSearchParams('/staff/settings/counter', searchParams));
 }

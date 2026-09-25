@@ -1,15 +1,18 @@
-import { PrinterSettings } from '@/components/staff/PrinterSettings';
+import { redirect } from 'next/navigation';
+import { appendSearchParams } from '@/lib/url';
 
-// PRN-1 — printer configuration for this counter machine. The /staff/**
-// layout already gates this route behind getCounterActor() (PIN-3: a classic
-// session, or an enrolled device's PIN operator); there's no extra permission
-// split here, matching the pattern of sibling pages like
-// app/staff/tables/page.tsx.
+// SET-1 — printer settings moved under the consolidated /staff/settings
+// area (app/staff/settings/printers/page.tsx). This route stays as a plain
+// redirect rather than disappearing: it's bookmarked, and the desktop app
+// itself may still have it open in a tab that hasn't reloaded. Preserves any
+// query string the visitor arrived with (appendSearchParams, lib/url.ts).
 //
-// The page itself is desktop-only in effect: outside the HIOC POS desktop app
-// (no `window.hiocDesktop`), PrinterSettings renders a panel pointing staff at
-// the app instead of the settings form — so this route is always in the web
-// nav (StaffHeader) and safe to load directly, from a browser or the app.
-export default function StaffPrintersPage() {
-  return <PrinterSettings />;
+// /staff/** is already gated by middleware.ts + app/staff/layout.tsx before
+// this ever renders — nothing route-specific to carry over here.
+export default function StaffPrintersRedirectPage({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>;
+}) {
+  redirect(appendSearchParams('/staff/settings/printers', searchParams));
 }

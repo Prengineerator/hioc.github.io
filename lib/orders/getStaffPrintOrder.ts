@@ -3,16 +3,24 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOrderWithCoupon, type OrderWithCoupon } from '@/lib/orders/getOrder';
 import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { getBalance, getLoyaltyConfig, computeEarnedPoints } from '@/lib/loyalty/ledger';
+import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { OrderStatus } from '@/lib/types';
 
 // The order shape the staff KOT/receipt/token print pages render: the customer
 // receipt loader's output (order + items + addons + coupon label) plus the
-// loyalty points *earned* and *redeemed* on this order, and the customer's
-// current points *balance* — all surfaced on the receipt when present.
+// loyalty points *earned* and *redeemed* on this order, the customer's
+// current points *balance*, and the resolved cashier name — all surfaced on
+// the receipt when present.
 export type StaffPrintOrder = OrderWithCoupon & {
   points_earned: number | null;
   points_redeemed: number | null;
   points_balance: number | null;
+  // "Cashier: <name>" on the receipt. 'Online' for a web order (no
+  // `created_by` at all — nobody punched it in), a resolved staff display
+  // name for a staff-created order, or null when it can't be resolved to
+  // anything meaningful (the row is then omitted entirely — see
+  // buildReceiptBlocks / ReceiptTicket).
+  cashier_name: string | null;
 };
 
 // PRN-8: an order's 'earn' row (lib/loyalty/ledger.ts earnForOrder) is only
@@ -23,6 +31,29 @@ export type StaffPrintOrder = OrderWithCoupon & {
 // case that's NOT just "not completed yet" — they will never earn, so no
 // projection applies there.
 const NEVER_EARNS: ReadonlySet<OrderStatus> = new Set(['cancelled', 'rejected']);
+
+// "Cashier: <name>" — best-effort, same spirit as the loyalty lookups below:
+// never fails or slows the print, just resolves to whatever it can.
+// - No `created_by` at all: the order was placed by the customer themself
+//   (web/table-QR channel), not punched in by staff — "Online".
+// - `created_by` set: resolve the staff display name via the shared
+//   `getStaffDisplayNames` helper (profiles.name → the email's local part,
+//   title-cased → 'Unknown staff', same precedence every other staff-name
+//   surface uses). That last fallback ('Unknown staff') is treated as "not
+//   really resolved" here — printing it on a customer-facing bill would be
+//   worse than just omitting the row, so this returns null for it instead.
+// - Any lookup failure (DB error, etc.): null — omit the row.
+async function resolveCashierName(createdBy: string | null): Promise<string | null> {
+  if (!createdBy) return 'Online';
+  try {
+    const admin = createAdminSupabaseClient();
+    const names = await getStaffDisplayNames(admin, [createdBy]);
+    const name = names.get(createdBy);
+    return name && name !== 'Unknown staff' ? name : null;
+  } catch {
+    return null;
+  }
+}
 
 async function fetchLoyaltyTransactions(orderId: string): Promise<{ type: string; points: number }[] | null> {
   try {
@@ -75,12 +106,13 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
 
   const loyaltyUserId = loyaltyUserIdFor(order);
 
-  const [rows, config, ledgerBalance] = await Promise.all([
+  const [rows, config, ledgerBalance, cashier_name] = await Promise.all([
     fetchLoyaltyTransactions(id),
     getLoyaltyConfig().catch(() => null),
     loyaltyUserId
       ? getBalance(loyaltyUserId).catch(() => null)
       : Promise.resolve(null),
+    resolveCashierName(order.created_by),
   ]);
 
   const earnRows = (rows ?? []).filter((r) => r.type === 'earn');
@@ -115,5 +147,5 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
   // is 0 whenever an 'earn' row already exists, so this never double-counts.
   const points_balance: number | null = ledgerBalance !== null ? ledgerBalance + projectedEarn : null;
 
-  return { ...order, points_earned, points_redeemed, points_balance };
+  return { ...order, points_earned, points_redeemed, points_balance, cashier_name };
 }

@@ -7,7 +7,6 @@ import {
   type MenuItemFormValues,
 } from '@/components/staff/MenuItemFormModal';
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
-import { StoreControls } from '@/components/staff/StoreControls';
 import { Spinner } from '@/components/ui/Spinner';
 import type { MenuItem } from '@/lib/types';
 
@@ -123,10 +122,6 @@ export default function StaffMenuPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
-      <div id="store" className="mb-8 scroll-mt-20">
-        <StoreControls />
-      </div>
-
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-charcoal">Menu Items</h1>
         <button

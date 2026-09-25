@@ -1,7 +1,8 @@
 'use client';
 
-// DEV-2/SHL — "This counter". Shown at /staff/device, linked from the
-// Printers page and the staff header.
+// DEV-2/SHL — "This counter". Shown at /staff/settings/counter (SET-1 —
+// formerly /staff/device, still a redirect for old links), reachable from
+// the Settings sidebar/pill nav and the "Settings" tab in the staff header.
 //
 // Desktop-only, like PrinterSettings: the whole point is a FACT ABOUT THE
 // MACHINE the browser is running on, and a plain browser tab has no

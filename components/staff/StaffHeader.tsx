@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
 import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
+import { isActiveSettingsSection, SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -33,11 +34,12 @@ const TABS = [
       ]
     : []),
   { href: '/staff/menu', label: 'Menu' },
-  // PRN-1 — always shown, even in a plain browser tab with no desktop bridge:
-  // staff need to be able to find printer setup to learn it exists and that
-  // it needs the HIOC POS desktop app (PrinterSettings explains why when
-  // there's no bridge). Hiding the tab entirely made it undiscoverable.
-  { href: '/staff/printers', label: 'Printers' },
+  // SET-1 — every POS/counter setting (printers & cash drawer, store,
+  // this counter's device enrolment) lives under /staff/settings now.
+  // Always shown, even in a plain browser tab with no desktop bridge: staff
+  // need to be able to find it to learn what needs the HIOC POS desktop app
+  // (PrinterSettings explains why when there's no bridge). Kept last.
+  { href: SETTINGS_ROOT, label: 'Settings' },
 ];
 
 export interface StaffPinControls {
@@ -78,7 +80,7 @@ export function StaffHeader({
   const tabs = TABS;
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
-  // the Store controls section on the Menu page. Best-effort — a failed fetch
+  // /staff/settings/store (SET-1 — moved off the Menu page). Best-effort — a failed fetch
   // just leaves the badge hidden. Refreshed on a poll, on window focus, and
   // instantly when the Store controls fire 'hioc:store-changed', so it never
   // goes stale after an override/pause toggle (or a time-based open/close).
@@ -142,7 +144,7 @@ export function StaffHeader({
 
   const storeBadge = openState ? (
     <Link
-      href="/staff/menu#store"
+      href="/staff/settings/store"
       onClick={() => setMenuOpen(false)}
       className={
         'inline-block rounded-md px-3 py-2 text-xs font-bold transition-colors ' +
@@ -178,7 +180,13 @@ export function StaffHeader({
           <nav className="hidden md:block">
             <ul className="flex items-center gap-4 text-sm">
               {tabs.map((tab) => {
-                const isActive = pathname === toHref(tab.href);
+                // Every other tab matches only its own exact path; the
+                // Settings tab (SET-1) matches any /staff/settings/** path,
+                // via the same helper the settings sidebar itself uses.
+                const isActive =
+                  tab.href === SETTINGS_ROOT
+                    ? isActiveSettingsSection(pathname, toHref(tab.href))
+                    : pathname === toHref(tab.href);
                 return (
                   <li key={tab.href}>
                     <Link
@@ -252,7 +260,13 @@ export function StaffHeader({
           <nav>
             <ul className="flex flex-col gap-1 pt-3 text-sm">
               {tabs.map((tab) => {
-                const isActive = pathname === toHref(tab.href);
+                // Every other tab matches only its own exact path; the
+                // Settings tab (SET-1) matches any /staff/settings/** path,
+                // via the same helper the settings sidebar itself uses.
+                const isActive =
+                  tab.href === SETTINGS_ROOT
+                    ? isActiveSettingsSection(pathname, toHref(tab.href))
+                    : pathname === toHref(tab.href);
                 return (
                   <li key={tab.href}>
                     <Link
