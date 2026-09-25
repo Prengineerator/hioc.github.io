@@ -96,6 +96,17 @@ describe('describeCustomer', () => {
     expect(note).toEqual({ ok: true, text: 'Ravi (no HIOC account)' });
   });
 
+  it('names a Petpooja-only match (no hioc order ever placed) the same way as order_history', () => {
+    const note = describeCustomer({
+      found: true,
+      source: 'petpooja',
+      name: 'Test Customer',
+      order_count: 6,
+      last_order_at: '2026-08-01T09:00:00Z',
+    });
+    expect(note).toEqual({ ok: true, text: 'Test Customer (no HIOC account)' });
+  });
+
   it('says "no account" without making it sound like a failure', () => {
     const note = describeCustomer({ found: false });
     expect(note?.ok).toBe(false);
@@ -144,6 +155,18 @@ describe('canRedeemPoints', () => {
       }),
     ).toBe(false);
   });
+
+  it('is false for a Petpooja-only match — same reason as order_history', () => {
+    expect(
+      canRedeemPoints({
+        found: true,
+        source: 'petpooja',
+        name: 'Test Customer',
+        order_count: 6,
+        last_order_at: null,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('hasOrderHistory', () => {
@@ -164,6 +187,15 @@ describe('hasOrderHistory', () => {
         source: 'order_history',
         name: 'Ravi',
         order_count: 4,
+        last_order_at: null,
+      }),
+    ).toBe(true);
+    expect(
+      hasOrderHistory({
+        found: true,
+        source: 'petpooja',
+        name: 'Test Customer',
+        order_count: 6,
         last_order_at: null,
       }),
     ).toBe(true);
@@ -220,6 +252,27 @@ describe('customerChip', () => {
     ).toBe('Returning customer · 12 orders');
   });
 
+  it("shows 'Petpooja customer' (singular/plural) for a Petpooja-only match", () => {
+    expect(
+      customerChip({
+        found: true,
+        source: 'petpooja',
+        name: 'Test Customer',
+        order_count: 1,
+        last_order_at: null,
+      }),
+    ).toBe('Petpooja customer · 1 order');
+    expect(
+      customerChip({
+        found: true,
+        source: 'petpooja',
+        name: 'Test Customer',
+        order_count: 9,
+        last_order_at: null,
+      }),
+    ).toBe('Petpooja customer · 9 orders');
+  });
+
   it('is null with no lookup, nothing found, or no orders to count', () => {
     expect(customerChip(null)).toBeNull();
     expect(customerChip({ found: false })).toBeNull();
@@ -228,6 +281,15 @@ describe('customerChip', () => {
         found: true,
         source: 'order_history',
         name: 'Ravi',
+        order_count: 0,
+        last_order_at: null,
+      }),
+    ).toBeNull();
+    expect(
+      customerChip({
+        found: true,
+        source: 'petpooja',
+        name: 'Test Customer',
         order_count: 0,
         last_order_at: null,
       }),

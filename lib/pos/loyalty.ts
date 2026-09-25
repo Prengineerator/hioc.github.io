@@ -16,17 +16,22 @@
  * `source` says how much the name is worth trusting:
  *  - 'account'       — a VERIFIED phone-linked account; `points_balance` is
  *                       real spendable balance.
- *  - 'order_history'  — no account, but a past order used this exact phone;
- *                       the name is recalled from that order, never
+ *  - 'order_history'  — no account, but a past hioc order used this exact
+ *                       phone; the name is recalled from that order, never
  *                       verified, and there is no balance to spend
  *                       (`points_balance` is omitted, not zero — zero would
  *                       claim a real, empty account).
+ *  - 'petpooja'        — no account and no hioc order either, but the
+ *                       imported Petpooja history has this phone: a regular
+ *                       from before this app existed. Same "no balance"
+ *                       rule as order_history — there is no account here to
+ *                       hold one.
  */
 export type CustomerLookup =
   | { found: false }
   | {
       found: true;
-      source: 'account' | 'order_history';
+      source: 'account' | 'order_history' | 'petpooja';
       name: string;
       points_balance?: number;
       order_count: number;
@@ -74,9 +79,10 @@ export function describeCustomer(lookup: CustomerLookup | null): Feedback | null
   if (lookup.source === 'account') {
     return { ok: true, text: `${name} · ${formatPoints(lookup.points_balance ?? 0)}` };
   }
-  // order_history: a name recalled from a past order, not a verified account
-  // — still worth confirming against the person at the counter, but there is
-  // no balance to offer (canRedeemPoints below keeps that control hidden).
+  // order_history / petpooja: a name recalled from a past order (this app's
+  // or the old Petpooja POS's), not a verified account — still worth
+  // confirming against the person at the counter, but there is no balance to
+  // offer (canRedeemPoints below keeps that control hidden either way).
   return { ok: true, text: `${name} (no HIOC account)` };
 }
 
@@ -98,7 +104,8 @@ export function hasOrderHistory(lookup: CustomerLookup | null): boolean {
  * `describeCustomer`'s fuller line further down the form, and shown the
  * moment a lookup resolves rather than only once the fuller line is visible.
  * Wording matches what the phone actually means: a real account carries
- * points, a bare order-history match doesn't.
+ * points, a bare order-history match doesn't, and a Petpooja-only match says
+ * so plainly rather than implying a hioc history that doesn't exist.
  */
 export function customerChip(lookup: CustomerLookup | null): string | null {
   if (!lookup || !lookup.found) return null;
@@ -106,7 +113,9 @@ export function customerChip(lookup: CustomerLookup | null): string | null {
     return `HIOC account · ${formatPoints(lookup.points_balance ?? 0)}`;
   }
   if (lookup.order_count <= 0) return null;
-  return `Returning customer · ${lookup.order_count} order${lookup.order_count === 1 ? '' : 's'}`;
+  const orders = `${lookup.order_count} order${lookup.order_count === 1 ? '' : 's'}`;
+  if (lookup.source === 'petpooja') return `Petpooja customer · ${orders}`;
+  return `Returning customer · ${orders}`;
 }
 
 /**

@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 // past order's items against an in-memory MenuItem[], exactly like the
 // component does against the already-loaded menu grid.
 
-import { mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
-import type { CustomerOrderItemResponse } from '@/lib/api/customerOrders';
+import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
+import type { CustomerOrderItemResponse, LegacyOrderItemResponse } from '@/lib/api/customerOrders';
 import type { MenuItem } from '@/lib/types';
 
 function menuItem(overrides: Partial<MenuItem> = {}): MenuItem {
@@ -160,5 +160,114 @@ describe('mapOrderItemsToCartLines — mixed order', () => {
 
   it('returns empty lines/skipped/modified for an empty order', () => {
     expect(mapOrderItemsToCartLines([], [menuItem()])).toEqual({ lines: [], skipped: [], modified: [] });
+  });
+});
+
+// Petpooja history — the sibling mapper for a legacy bill's items
+// (lib/legacy/history.ts's `source: 'petpooja'` entries). Same
+// current-menu resolution as above, minus quantity/add-ons/price snapshots,
+// which the Petpooja export never had. Invented data only (SPEC.md PII rule).
+
+function legacyItem(overrides: Partial<LegacyOrderItemResponse> = {}): LegacyOrderItemResponse {
+  return {
+    name_snapshot: 'Latte',
+    variant_label_snapshot: 'Regular',
+    menu_item_id: 'menu-1',
+    variant_id: 'variant-1',
+    quantity: null,
+    ...overrides,
+  };
+}
+
+describe('mapLegacyBillItemsToCartLines', () => {
+  it('adds a matched item (menu_item_id + variant_id both present) at qty 1, current price', () => {
+    const result = mapLegacyBillItemsToCartLines([legacyItem()], [menuItem()]);
+    expect(result.skipped).toEqual([]);
+    expect(result.modified).toEqual([]);
+    expect(result.lines).toEqual([
+      {
+        menuItemId: 'menu-1',
+        variantId: 'variant-1',
+        name: 'Latte',
+        variantLabel: 'Regular',
+        unitPriceInr: 100, // the variant's CURRENT price — no old snapshot to trust
+        addons: [],
+        specialInstructions: '',
+        qty: 1,
+      },
+    ]);
+  });
+
+  it('skips an item never matched to a menu item at all (no menu_item_id)', () => {
+    const result = mapLegacyBillItemsToCartLines([legacyItem({ menu_item_id: null })], [menuItem()]);
+    expect(result.lines).toEqual([]);
+    expect(result.skipped).toEqual([{ name: 'Latte', reason: 'Not matched to a menu item' }]);
+  });
+
+  it('skips an item that is currently unavailable (86\'d)', () => {
+    const menu = [menuItem({ is_available: false })];
+    const result = mapLegacyBillItemsToCartLines([legacyItem()], menu);
+    expect(result.skipped).toEqual([{ name: 'Latte', reason: 'Currently unavailable' }]);
+  });
+
+  it('skips an item that no longer exists on the current menu', () => {
+    const result = mapLegacyBillItemsToCartLines([legacyItem({ menu_item_id: 'gone' })], [menuItem()]);
+    expect(result.skipped).toEqual([{ name: 'Latte', reason: 'Currently unavailable' }]);
+  });
+
+  it('skips a recorded variant_id that is no longer offered', () => {
+    const result = mapLegacyBillItemsToCartLines([legacyItem({ variant_id: 'gone' })], [menuItem()]);
+    expect(result.skipped).toEqual([{ name: 'Latte', reason: 'This option is no longer offered' }]);
+  });
+
+  it('uses the sole variant when variant_id is null and the item currently has exactly one', () => {
+    const result = mapLegacyBillItemsToCartLines([legacyItem({ variant_id: null })], [menuItem()]);
+    expect(result.skipped).toEqual([]);
+    expect(result.lines).toEqual([
+      {
+        menuItemId: 'menu-1',
+        variantId: 'variant-1',
+        name: 'Latte',
+        variantLabel: 'Regular',
+        unitPriceInr: 100,
+        addons: [],
+        specialInstructions: '',
+        qty: 1,
+      },
+    ]);
+  });
+
+  it('skips (never guesses) when variant_id is null and the item currently has more than one variant', () => {
+    const menu = [
+      menuItem({
+        variants: [
+          { id: 'variant-1', menu_item_id: 'menu-1', label: 'Regular', price_inr: 100, sort_order: 0 },
+          { id: 'variant-2', menu_item_id: 'menu-1', label: 'Large', price_inr: 140, sort_order: 1 },
+        ],
+      }),
+    ];
+    const result = mapLegacyBillItemsToCartLines([legacyItem({ variant_id: null })], menu);
+    expect(result.lines).toEqual([]);
+    expect(result.skipped).toEqual([{ name: 'Latte', reason: 'This option is no longer offered' }]);
+  });
+
+  it('never adds addons and always reports empty modified — Petpooja items have neither', () => {
+    const result = mapLegacyBillItemsToCartLines([legacyItem()], [menuItem()]);
+    expect(result.lines[0].addons).toEqual([]);
+    expect(result.modified).toEqual([]);
+  });
+
+  it('processes several legacy items independently: one kept, one skipped', () => {
+    const items = [
+      legacyItem({ name_snapshot: 'Latte', menu_item_id: 'menu-1', variant_id: 'variant-1' }),
+      legacyItem({ name_snapshot: 'Discontinued Cake', menu_item_id: null }),
+    ];
+    const result = mapLegacyBillItemsToCartLines(items, [menuItem()]);
+    expect(result.lines).toHaveLength(1);
+    expect(result.skipped).toEqual([{ name: 'Discontinued Cake', reason: 'Not matched to a menu item' }]);
+  });
+
+  it('returns empty lines/skipped/modified for an empty bill', () => {
+    expect(mapLegacyBillItemsToCartLines([], [menuItem()])).toEqual({ lines: [], skipped: [], modified: [] });
   });
 });
