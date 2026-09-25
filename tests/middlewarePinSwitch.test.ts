@@ -65,4 +65,20 @@ describe('middleware — PIN-2/3 session-less staff shell', () => {
     const res = await middleware(reqTo('/staff/login'));
     expect(res.headers.get('location')).toBeNull();
   });
+
+  // PIN-3: /staff-print/** is the desktop shell's hidden print surface
+  // (PRT-1) — it must get the SAME session-less+device-cookie pass-through as
+  // every other /staff/** page, or printing breaks the moment PIN switching
+  // is on. It does, because '/staff-print'.startsWith('/staff') is true —
+  // this pins that down explicitly rather than leaving it as an accident of
+  // string prefixing.
+  it('covers /staff-print/** with the same pass-through as /staff/**', async () => {
+    const res = await middleware(reqTo('/staff-print/11111111-1111-1111-1111-111111111111/kot', { deviceCookie: 'sometoken' }));
+    expect(res.headers.get('location')).toBeNull();
+  });
+
+  it('/staff-print/** still redirects with no device cookie, same as any other /staff/** page', async () => {
+    const res = await middleware(reqTo('/staff-print/11111111-1111-1111-1111-111111111111/kot'));
+    expect(res.headers.get('location')).toContain('/staff/login');
+  });
 });

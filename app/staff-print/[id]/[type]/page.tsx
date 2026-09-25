@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { isUuid } from '@/lib/api/constants';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { getStaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { KotTicket, ReceiptTicket, TokenSlip } from '@/components/print/StaffTickets';
 import { AutoPrint } from '@/components/print/AutoPrint';
@@ -11,14 +11,23 @@ import { PrintOnLoad } from './PrintOnLoad';
 // / token slip). Decision D3: the thermal printer is USB-connected, so v1 prints
 // through the browser's system print dialog — no driver code.
 //
-// Chrome-hiding: this route lives OUTSIDE /staff/** on purpose, so it inherits
-// the ROOT layout (app/layout.tsx) whose SiteHeader/SiteFooter are already
-// `print:hidden` — the exact approach the customer receipt (app/order/[id]/
-// receipt) uses — instead of the /staff layout's StaffHeader (which has no
-// print-hidden and is owned by another engineer). Access is gated in-page via
-// getStaffOrOwner() → redirect to /staff/login, since middleware only guards
-// /staff/** and /owner/**. The order is regenerated from the stored row, so it's
-// always current and needs no client fetch.
+// Chrome-hiding: this route lives OUTSIDE app/staff/** (the layout tree) on
+// purpose, so it inherits the ROOT layout (app/layout.tsx) whose SiteHeader/
+// SiteFooter are already `print:hidden` — the exact approach the customer
+// receipt (app/order/[id]/receipt) uses — instead of the /staff layout's
+// StaffHeader (which has no print-hidden and is owned by another engineer).
+// Access is gated in-page via getCounterActor() → redirect to /staff/login.
+// middleware.ts DOES still guard this path — '/staff-print'.startsWith('/staff')
+// is true, so it gets the same classic-session-or-PIN-bypass treatment as
+// every other /staff/** page (including the PIN-2/3 session-less+enrolled-
+// device pass-through) — this in-page check is the belt-and-suspenders second
+// layer, same posture as app/staff/layout.tsx.
+//
+// PIN-3: getCounterActor() (not getStaffOrOwner()) is load-bearing here, not
+// cosmetic — this is the page the desktop shell's hidden iframe loads to
+// print (PRT-1/PRN-1), and it must keep working with no classic session on an
+// enrolled, PIN-switched counter. The order is regenerated from the stored
+// row, so it's always current and needs no client fetch.
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = { title: 'Print' };
@@ -42,11 +51,12 @@ export default async function StaffPrintPage({
     notFound();
   }
 
-  // In-page staff gate (this route is outside the middleware-guarded /staff/**).
-  // It stands unchanged for the PRT-1 iframe: the frame is same-origin, so this
-  // runs with the staffer's own cookies, and an unauthenticated embed renders the
-  // login redirect inside a 0×0 frame — printing nothing, leaking nothing.
-  const account = await getStaffOrOwner();
+  // In-page staff gate. It stands unchanged for the PRT-1 iframe: the frame is
+  // same-origin, so this runs with the staffer's own cookies (or, PIN-3, the
+  // enrolled device + operator cookie pair), and an unauthenticated embed
+  // renders the login redirect inside a 0×0 frame — printing nothing, leaking
+  // nothing.
+  const account = await getCounterActor();
   if (!account) {
     redirect('/staff/login');
   }
