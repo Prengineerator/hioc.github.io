@@ -107,6 +107,33 @@ npx tsc --noEmit -p .     # type-check only, no output
 npm run build              # esbuild → dist/main.js, dist/preload.js
 ```
 
+## Closing, updating and uninstalling
+
+- **Quitting**: close the window (click the **X**, or **Ctrl+Q**) — this is a
+  single-window app, so that always quits it fully; **Alt+F4** works too. A
+  third-party script running inside the loaded page (e.g. a payment
+  checkout's `beforeunload`) can never block this — `will-prevent-unload` in
+  `src/main.ts` overrides it — and if the process is somehow still alive ~3s
+  after quit was requested, `app.exit(0)` forces it closed.
+- **It relaunches at Windows sign-in.** That's by design (`configureLoginItem()`
+  in `src/main.ts`, `openAtLogin: true`) — the counter machine should have the
+  POS ready with no one having to remember to open it.
+- **Installing a newer version closes the running one automatically** — the
+  installer force-closes any running `HIOC POS.exe` before touching files
+  (`build/installer.nsh`), so there's no need to close the app by hand first.
+- **Uninstalling**: **Settings → Apps → HIOC POS → Uninstall** (or the old
+  Control Panel "Programs and Features"). This also force-closes the app
+  first and removes its Windows-login autostart entry; it does **not** delete
+  `printers.json` (saved printer setup) — reinstalling later picks it back up
+  (`nsis.deleteAppDataOnUninstall` is left at its default, `false`,
+  intentionally).
+- **One-time recovery for a machine still on 0.1.0** (before this fix): open
+  Task Manager and end every **HIOC POS** process (or, from Command Prompt:
+  `taskkill /F /T /IM "HIOC POS.exe"`), *then* run the 0.1.1 installer, or
+  uninstall. 0.1.0's window could fail to close and its uninstaller didn't
+  force-close it first, so on that version alone this manual step may be
+  needed once.
+
 ## Packaging
 
 ```sh

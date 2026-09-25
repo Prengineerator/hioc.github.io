@@ -20,6 +20,8 @@ import { autoUpdater } from 'electron-updater';
 import { DESKTOP_IPC, type PrinterConfig } from '@/lib/desktop/bridge';
 import { createOriginAllowlist } from './allowedOrigin';
 import { PrinterService } from './printers';
+import { killAllSpoolerChildren } from './printers/spooler';
+import { releaseUsbForShutdown } from './printers/usb';
 
 const HIOC_POS_URL = process.env.HIOC_POS_URL ?? 'https://staff.hioc.in';
 const isAllowedOrigin = createOriginAllowlist(HIOC_POS_URL);
@@ -33,6 +35,16 @@ const isAllowedOrigin = createOriginAllowlist(HIOC_POS_URL);
 // partition's cookies at rest with DPAPI, tied to the machine's OS user
 // account — see desktop/README.md.
 const POS_PARTITION = 'persist:hioc-pos';
+
+// SHL-4 — the exact `Run` registry value name `configureLoginItem()` below
+// writes to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (Electron
+// docs: `setLoginItemSettings`'s `name` option "Defaults to the app's
+// AppUserModelId()" if omitted, which is itself unset here — an
+// Electron-computed value we don't control and don't want to depend on).
+// Passed explicitly so `build/installer.nsh`'s `customUnInstall` macro can
+// delete this exact value name on uninstall without guessing at Electron's
+// default. Kept equal to `productName` for a human-readable registry entry.
+const LOGIN_ITEM_NAME = 'HIOC POS';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -122,6 +134,15 @@ function guardKeyboardShortcuts(contents: WebContents): void {
     if (isDevToolsCombo && app.isPackaged) {
       event.preventDefault();
     }
+
+    // Owner report (0.1.0): the window sometimes wouldn't close at all.
+    // Ctrl+Q is an explicit, always-available quit — Alt+F4 already quits
+    // natively and needs no handler here.
+    const isQuit = (input.control || input.meta) && key === 'q' && !input.shift && !input.alt;
+    if (isQuit) {
+      event.preventDefault();
+      app.quit();
+    }
   });
 }
 
@@ -157,6 +178,21 @@ function createWindow(): BrowserWindow {
   guardExternalNavigation(win.webContents);
   guardKeyboardShortcuts(win.webContents);
 
+  // Owner report (0.1.0): closing the window sometimes did nothing. Root
+  // cause: a page-level `beforeunload` handler (there is none in this repo's
+  // own app/ code — third-party script such as Razorpay's checkout.js is the
+  // known culprit) can set `event.returnValue`, and Electron silently cancels
+  // the window close for that, with no dialog shown (there's no
+  // `--disable-popup-blocking`-style override needed; this is deliberate
+  // Electron behavior, unlike a real browser which shows a confirmation
+  // dialog). This is a single-window kiosk app — nothing on this screen ever
+  // depends on a beforeunload prompt to save work — so that veto is never
+  // wanted here. See https://www.electronjs.org/docs/latest/api/web-contents
+  // ("will-prevent-unload").
+  win.webContents.on('will-prevent-unload', (event) => {
+    event.preventDefault();
+  });
+
   // A dropped file (or any other drag-and-drop navigation attempt) fires
   // will-navigate with a file:// URL, which the guard above already refuses
   // — and, being non-https, guardExternalNavigation never hands it to
@@ -182,6 +218,16 @@ function createWindow(): BrowserWindow {
 
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null;
+  });
+
+  // Single-window app: closing the (only) window means the app is done, on
+  // every platform this ships for (Windows counter machines; the mac build
+  // is a pilot dev tool, not a background-dock app either). Explicit and
+  // immediate rather than relying solely on `window-all-closed` below, which
+  // only fires once Electron finishes tearing the window down — `close` is
+  // the user's actual intent and should request quit right away.
+  win.on('close', () => {
+    app.quit();
   });
 
   return win;
@@ -230,7 +276,42 @@ function configureLoginItem(): void {
   // Calling it at all from an unpackaged app makes macOS log "Operation not
   // permitted", so dev skips the call entirely.
   if (!app.isPackaged) return;
-  app.setLoginItemSettings({ openAtLogin: true });
+  // `name` is explicit (see LOGIN_ITEM_NAME above) so the uninstaller can
+  // remove this exact `Run` entry deterministically.
+  app.setLoginItemSettings({ openAtLogin: true, name: LOGIN_ITEM_NAME });
+}
+
+let quitCleanupDone = false;
+
+/** Owner report (0.1.0): the process would sometimes outlive its window,
+ * which is also what let it block the NSIS installer/uninstaller from
+ * replacing or removing its files. Runs once, on the way out, no matter which
+ * of the several quit paths (window close, Ctrl+Q, Alt+F4, autoUpdater, a
+ * second-instance relaunch handoff) got us here. */
+function cleanupBeforeQuit(): void {
+  if (quitCleanupDone) return;
+  quitCleanupDone = true;
+
+  // Every window, including any hidden PRN-5 driver-print window
+  // (src/printers/driver.ts opens its own BrowserWindow per job) — destroy()
+  // skips `beforeunload`/`close` entirely, so nothing can veto this.
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.destroy();
+  }
+
+  releaseUsbForShutdown();
+  killAllSpoolerChildren();
+
+  // Hard failsafe: if the process is somehow still alive ~3s after quit was
+  // requested (a lingering native handle/thread — e.g. from the `usb`
+  // package's underlying Rust/N-API runtime — outside anything the app
+  // itself can reach), force it closed rather than leave a zombie process
+  // that (per the owner's report) blocks reinstalling or uninstalling.
+  const failsafe = setTimeout(() => {
+    if (!app.isPackaged) console.error('[hioc-pos] quit failsafe: forcing app.exit(0)');
+    app.exit(0);
+  }, 3000);
+  failsafe.unref();
 }
 
 function checkForUpdates(): void {
@@ -268,4 +349,6 @@ if (!gotLock) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
+
+  app.on('before-quit', cleanupBeforeQuit);
 }

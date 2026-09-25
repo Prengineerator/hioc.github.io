@@ -269,3 +269,25 @@ export async function checkUsbStatus(target: UsbPrinterTarget): Promise<ParsedSt
     releaseInterface(claimed);
   }
 }
+
+/** Called once on app quit (main.ts). Nothing in this file keeps a USB device
+ * handle open outside the lifetime of a single detect/print/status call
+ * (each of those always closes its device in a `finally`, even on error), and
+ * nothing here registers hotplug ('attach'/'detach') listeners, so there is
+ * no known persistent handle to release. Still, best-effort: if the native
+ * module was ever loaded, drop any listeners it might hold and unref its
+ * hotplug event thread (present on some `usb` versions/platforms) so it can
+ * never itself be the reason the process outlives its window. */
+export function releaseUsbForShutdown(): void {
+  if (!cachedUsb) return;
+  try {
+    cachedUsb.unrefHotplugEvents?.();
+  } catch {
+    // best-effort only
+  }
+  try {
+    cachedUsb.removeAllListeners?.();
+  } catch {
+    // best-effort only
+  }
+}

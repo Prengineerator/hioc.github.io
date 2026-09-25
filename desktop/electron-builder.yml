@@ -44,6 +44,13 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
+  # Force-closes a running "HIOC POS" before install AND before uninstall —
+  # electron-builder's own built-in running-app check
+  # (allowOnlyOneInstallerInstance.nsh's CHECK_APP_RUNNING) only ever runs for
+  # the UNINSTALLER on a silent run or a one-click build, neither of which
+  # this is; see the long comment at the top of build/installer.nsh for why
+  # that gap matters here and exactly what this macro does.
+  include: build/installer.nsh
 
 mac:
   target:
