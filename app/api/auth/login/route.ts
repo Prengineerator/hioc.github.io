@@ -56,15 +56,20 @@ export async function POST(request: Request) {
     // Customers sign in with a one-time code only (WhatsApp or email) — owner
     // rule. Password sign-in is for the staff and owner portals, so a customer
     // account is refused here whichever door it claims (or none).
+    // scope: 'local' — this signOut() is undoing the wrong-door sign-in this
+    // very request just made; the default 'global' scope would instead revoke
+    // every refresh token this user holds everywhere, logging them out of
+    // Chrome, the Electron app, and any other device that happened to be
+    // signed in, for a mistake made on this one request.
     if (audienceForRole(role) === 'customer') {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: 'local' });
       return errorResponse(
         403,
         'Customers sign in with a one-time code — use the WhatsApp or Email option on the login page.',
       );
     }
     if (isValidAudience(audience) && !mayUseDoor(role, audience)) {
-      await supabase.auth.signOut();
+      await supabase.auth.signOut({ scope: 'local' });
       return errorResponse(403, wrongDoorMessage(audienceForRole(role), audience));
     }
   }

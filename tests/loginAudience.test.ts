@@ -71,9 +71,15 @@ describe('isValidAudience', () => {
 
 // --- route behaviour -------------------------------------------------------
 
-const state: { role: string | null; signedOut: boolean; signInError: unknown } = {
+const state: {
+  role: string | null;
+  signedOut: boolean;
+  signOutScope: unknown;
+  signInError: unknown;
+} = {
   role: null,
   signedOut: false,
+  signOutScope: undefined,
   signInError: null,
 };
 
@@ -84,8 +90,9 @@ vi.mock('@/lib/supabase-server', () => ({
         state.signInError
           ? { data: { user: null }, error: state.signInError }
           : { data: { user: { id: 'u1' } }, error: null },
-      signOut: async () => {
+      signOut: async (options?: { scope?: string }) => {
         state.signedOut = true;
+        state.signOutScope = options?.scope;
         return { error: null };
       },
     },
@@ -115,6 +122,7 @@ function loginReq(body: unknown) {
 beforeEach(() => {
   state.role = null;
   state.signedOut = false;
+  state.signOutScope = undefined;
   state.signInError = null;
 });
 
@@ -140,6 +148,16 @@ describe('POST /api/auth/login — door enforcement', () => {
     state.role = 'staff';
     await POST(loginReq({ email: 's@x.com', password: 'p', audience: 'owner' }));
     expect(state.signedOut).toBe(true);
+  });
+
+  it('signs out with LOCAL scope only — a wrong-door attempt must not revoke every device', async () => {
+    // The default supabase-js scope is 'global', which revokes every refresh
+    // token the account holds everywhere. Undoing a wrong-door sign-in on
+    // THIS request must never log the account out of Chrome or the Electron
+    // POS app elsewhere — logins are independent per device (Phase 7).
+    state.role = 'staff';
+    await POST(loginReq({ email: 's@x.com', password: 'p', audience: 'owner' }));
+    expect(state.signOutScope).toBe('local');
   });
 
   it('refuses an owner at the customer door', async () => {
