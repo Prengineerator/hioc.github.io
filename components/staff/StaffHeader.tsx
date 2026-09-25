@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
+import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -103,10 +104,34 @@ export function StaffHeader({
     };
   }, []);
 
+  // PIN-2 — the owner's report: on an enrolled PIN counter, "Logout" was
+  // leaving the operator cookie in place AND sending the browser to the
+  // classic sign-in form instead of back to the PIN lock screen. Both bugs
+  // trace to this function only ever having cleared/known about the classic
+  // session. Fixed by always clearing BOTH credential types (best-effort —
+  // whichever one wasn't in use is simply a no-op to clear, same as DELETE
+  // /api/device/operator already promises), then routing based on whether
+  // this counter is PIN-capable (`pinControls` is only ever handed to this
+  // component under exactly that condition — see StaffPinOverlay).
   async function handleLogout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push(toHref('/staff/login'));
+    await Promise.allSettled([
+      fetch('/api/device/operator', { method: 'DELETE' }),
+      fetch('/api/auth/logout', { method: 'POST' }),
+    ]);
+
+    const { href, hardReload } = logoutDestination(Boolean(pinControls));
+    if (hardReload) {
+      // A full navigation, not router.push: only a fresh request re-runs
+      // getCounterActor()/getEnrolledDevice() on the server and renders the
+      // full-screen LockScreen — a client-side push would land on whatever
+      // the router already has cached for this route.
+      window.location.assign(toHref(href));
+    } else {
+      router.push(toHref(href));
+    }
   }
+
+  const logoutLabel = logoutButtonLabel(Boolean(pinControls));
 
   // The drawer is per-navigation, not per-render — a tapped link (or a route
   // change from anywhere else, e.g. router.push after logout) should always
@@ -199,7 +224,7 @@ export function StaffHeader({
             onClick={handleLogout}
             className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
           >
-            Logout
+            {logoutLabel}
           </button>
         </div>
 
@@ -273,7 +298,7 @@ export function StaffHeader({
                   onClick={handleLogout}
                   className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
                 >
-                  Logout
+                  {logoutLabel}
                 </button>
               </div>
             </div>
