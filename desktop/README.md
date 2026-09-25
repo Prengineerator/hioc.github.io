@@ -45,21 +45,60 @@ npm run dist:win   # → release/*.exe (NSIS, x64)
 npm run dist:mac   # → release/*.dmg (universal)
 ```
 
+These build a local installer only — no `--publish` flag, so nothing is
+uploaded anywhere. See "Releasing" below for that.
+
 ### Signing & notarization env vars
 
 All optional — omitting them produces an unsigned build (D7-7: acceptable for
-an internal pilot, with the caveats below).
+the pilot and for the unsigned installer this repo currently ships, with the
+caveats below).
 
 | Var | Platform | Effect |
 |---|---|---|
-| `CSC_LINK`, `CSC_KEY_PASSWORD` | Win + Mac | Code-signing certificate (`.p12`/`.pfx`) and its password. Unset → unsigned installer; Windows SmartScreen will warn on first run. |
-| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Mac | Notarization credentials (electron-builder calls `@electron/notarize` automatically when these are set and the build is signed). Unset → the `.dmg` is not notarized; Gatekeeper blocks it on any Mac other than the one that built it, until the user right-click → Open's past the warning. |
-| `HIOC_POS_GH_OWNER`, `HIOC_POS_GH_REPO` | Both | GitHub repo for `electron-updater`'s auto-update feed (`publish.provider: github`). |
-| `GH_TOKEN` | Both | Needed only when actually publishing a release (`electron-builder --publish always`); not needed for a local `dist:*` build. |
+| `CSC_LINK`, `CSC_KEY_PASSWORD` | Win + Mac | Code-signing certificate (`.p12`/`.pfx`) and its password. Unset → unsigned installer; **Windows SmartScreen shows "Windows protected your PC" on first run** — this is expected for every install today (click **More info → Run anyway**), not a sign of a broken build. |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Mac | Notarization credentials (electron-builder calls `@electron/notarize` automatically when these are set and the build is signed). Unset → the `.dmg` is not notarized; Gatekeeper blocks it on any Mac other than the one that built it, until the user right-click → Open's past the warning. There is currently no macOS release job — see "Releasing" below. |
+| `GH_TOKEN` | Win | Needed only when actually publishing a release (`--publish always`, below); not needed for a plain `dist:win` build. In CI this is the repo's own built-in Actions token — no secret to configure. |
 
 electron-updater's `autoUpdater.checkForUpdatesAndNotify()` runs once at
 launch, but only in a packaged build (`app.isPackaged`) — a dev checkout never
-tries to hit the update feed.
+tries to hit the update feed. It reads its feed from `electron-builder.yml`'s
+`publish` block (this repo, GitHub Releases) — nothing to set per machine.
+
+## Releasing
+
+Installers are built and published by `.github/workflows/pos-desktop-release.yml`
+(Windows only — see below), which creates a **published** (not draft) GitHub
+Release on **this repo** carrying the `.exe` installer, `latest.yml` and its
+`.blockmap`, so both a direct download and `electron-updater`'s auto-update
+check work immediately.
+
+**To cut a release:**
+
+1. Bump the `version` field in `desktop/package.json` (semver, e.g.
+   `0.1.0` → `0.2.0`) and commit that to `main`.
+2. Trigger the build either way:
+   - **GitHub Actions tab** → "POS desktop release (Windows)" → **Run
+     workflow** (simplest — no tag to get right), or
+   - push a git tag named `pos-v<version>` (matching the version you just
+     set, e.g. `pos-v0.2.0`) — the workflow also triggers on any `pos-v*` tag
+     push.
+3. Wait for the job to finish. The release appears at
+   <https://github.com/Prengineerator/hioc.github.io/releases/latest> under
+   tag `pos-v<version>`.
+
+The tag name is **not** something this workflow invents: electron-builder
+derives it itself from `desktop/package.json`'s version plus
+`electron-builder.yml`'s `publish.tagNamePrefix: pos-v`. If you push a tag by
+hand, it must equal what electron-builder will derive (`pos-v<version>`) —
+pushing a differently-named tag still builds, but the Release still lands
+under `pos-v<version>`, not the tag you pushed.
+
+There is intentionally no macOS release job yet: an unsigned, non-notarized
+`.dmg` needs its own Gatekeeper workaround on every machine, the owner's
+counter is Windows, and a flaky macOS leg is not worth risking the Windows
+release for. `npm run dist:mac` still works locally when a macOS build is
+needed by hand.
 
 ### Windows USB note
 

@@ -1,0 +1,60 @@
+name: POS desktop release (Windows)
+
+# Builds the HIOC POS Electron shell (desktop/) into a Windows NSIS installer
+# and publishes it as a GitHub Release on THIS repo, together with
+# `latest.yml` (+ blockmap) so electron-updater's auto-update check works.
+#
+# Release/tag/version scheme (kept in sync with desktop/electron-builder.yml
+# `publish.tagNamePrefix: pos-v` — do not change one without the other):
+#   - The release tag is always `pos-v<version>`, where <version> is
+#     desktop/package.json's "version" field. electron-builder derives this
+#     itself; nothing here computes or overrides it.
+#   - Trigger A: "Run workflow" from the Actions tab (workflow_dispatch). No
+#     tag needs to exist beforehand — electron-builder creates the
+#     `pos-v<version>` tag and Release together when it publishes.
+#   - Trigger B: pushing a tag matching `pos-v*`. Push a tag that does NOT
+#     match `pos-v<version>` for the current desktop/package.json version and
+#     you get a build, but electron-builder will still publish under
+#     `pos-v<version>` — so keep the pushed tag identical to that if you use
+#     this trigger, or just use workflow_dispatch instead.
+#
+# See desktop/README.md "Releasing" for the exact step-by-step procedure.
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - 'pos-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit -p .
+
+      # Builds dist/main.js + dist/preload.js, installs the prebuilt Windows
+      # `usb` native binary, then packages + publishes the NSIS installer.
+      # `--publish always` makes electron-builder create (or update) the
+      # GitHub Release for this version's tag and upload the .exe, latest.yml
+      # and .blockmap to it. GH_TOKEN is the built-in per-job token; it needs
+      # no secret of our own, only `permissions.contents: write` above.
+      - name: Build and publish Windows installer
+        run: npm run dist:win -- --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
