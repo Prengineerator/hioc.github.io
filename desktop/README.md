@@ -29,6 +29,76 @@ Printer config lives outside the repo, in this OS user's Electron `userData`
 directory (`printers.json`) — deleting that file resets printer setup without
 touching anything else.
 
+## Isolation & lockdown (Phase 7)
+
+Owner request: "totally an isolated interface for POS... more trusted and more
+powerful". Four things make that true.
+
+**A dedicated session.** The POS window loads in its own persistent Electron
+partition (`persist:hioc-pos`), set via `webPreferences.partition` in
+`src/main.ts`. Its cookies, `localStorage` and IndexedDB are entirely separate
+from any other Electron/Chrome profile on the machine — signing in or out in
+Chrome never touches the POS app's session, and the reverse (root cause of the
+old "syncing" bug: `supabase.auth.signOut()`'s default scope is `'global'`,
+which revokes every device's refresh tokens; the auth routes now pass
+`{ scope: 'local' }`). PRN-5's hidden driver-print window (`src/printers/driver.ts`)
+is opened in this SAME session explicitly (`webPreferences.session`, not
+`partition`, so it's the exact same session object) — it must never fall back
+to Electron's default session, or the staffer's login simply wouldn't be there
+for that same-origin `/staff-print/` page.
+
+On Windows, Chromium/Electron encrypts this partition's cookies at rest with
+DPAPI (Windows Data Protection API), tied to the machine's OS user account —
+this is Electron's default cookie-encryption behavior and needs no extra
+configuration; verified still the default as of Electron 44 (this repo's
+version, `desktop/package.json`).
+
+**POS-only navigation.** `src/allowedOrigin.ts` exports the pure, unit-tested
+`isPosNavigationAllowed(url, opts)` (tests: `tests/desktop/allowedOrigin.test.ts`).
+The app window may load or navigate to:
+
+- `https://staff.hioc.in/**` — the staff surface host, any path.
+- `https://hioc.in` (the main domain, path-based routing) — but only
+  `/staff/**`, `/staff-print/**`, and `/login`.
+- `http://localhost:3001` — only when the shell itself was launched with
+  `HIOC_POS_URL` pointed at it (dev only; never implied by any other value).
+
+Everything else — the customer site, `https://owner.hioc.in` and `/owner/**`
+on the main domain, any other external link, and lookalike hosts
+(`staff.hioc.in.evil.com`, `evilhioc.in`) — is refused in the window. An
+`https://` link still opens in the OS's default browser
+(`shell.openExternal`, `src/main.ts`); `file:`, `javascript:` and any custom
+scheme are dropped outright and never handed to `shell.openExternal`. This
+one predicate gates navigation (`will-navigate`, `will-redirect`,
+`setWindowOpenHandler`, and the initial `loadURL`), every IPC handler's
+sender check, and the `window.hiocDesktop` bridge exposure in `preload.ts` —
+none of them can drift from the others.
+
+**No dev tools, no browser chrome, in a packaged build.**
+`webPreferences.devTools: !app.isPackaged` disables DevTools entirely in a
+packaged build (F12/Ctrl+Shift+I do nothing); `Menu.setApplicationMenu(null)` +
+`autoHideMenuBar` remove the application menu; Ctrl+R/F5 still reload the
+page (recovers a frozen screen) but devtools accelerators are blocked as a
+second layer on top of `devTools: false`. `window.open`/`target=_blank` never
+opens a popup — an allowed URL navigates the same window, anything else goes
+to the OS browser (or is dropped) — so there's no popup path at all, matching
+how the POS actually prints (PRN-5's driver window is opened directly by the
+main process, never via a renderer's `window.open`). A dropped file (or any
+other drag-and-drop navigation) is just another `will-navigate` attempt, so
+it's covered by the same allowlist. `contextIsolation: true`, `sandbox: true`,
+`nodeIntegration: false` and `webSecurity: true` are all explicit in
+`webPreferences` (the preload script only uses `contextBridge`/`ipcRenderer`,
+both available under `sandbox: true`).
+
+**App identity marker — a UI hint only, never trust.** The window's user
+agent gets ` HIOCPOS/<app version>` appended (`src/main.ts`,
+`webContents.setUserAgent`) — useful for reading server logs, never for
+authorization. In the web app, `lib/desktop/isDesktopApp.ts` is the reliable
+in-page signal (`getDesktopBridge() !== null`); server-side trust for
+anything that matters (enrolling a counter, printing, the cash drawer) comes
+from the enrolled-device cookie (`lib/api/device.ts`), never from the UA or
+any client-reported header.
+
 ## Building / type-checking
 
 ```sh
