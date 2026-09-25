@@ -39,14 +39,27 @@ const TABS = [
   { href: '/staff/printers', label: 'Printers' },
 ];
 
+export interface StaffPinControls {
+  /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
+   * decides which — this component just renders the label it's given). */
+  label: 'Switch' | 'Lock';
+  onLock: () => void;
+}
+
 export function StaffHeader({
   userEmail,
   userName,
   role,
+  pinControls,
 }: {
   userEmail: string;
   userName?: string;
   role: string;
+  /** PIN-2 — present only on an enrolled device with the flag on, inside the
+   * desktop app (StaffPinOverlay decides all of that; this component only
+   * renders the button when it's handed one). Omitted everywhere else, so
+   * every other caller of StaffHeader is completely unaffected. */
+  pinControls?: StaffPinControls;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -172,6 +185,15 @@ export function StaffHeader({
               <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
             ) : null}
           </div>
+          {pinControls ? (
+            <button
+              type="button"
+              onClick={pinControls.onLock}
+              className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+            >
+              {pinControls.label}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={handleLogout}
@@ -236,13 +258,24 @@ export function StaffHeader({
                   <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
                 ) : null}
               </div>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="shrink-0 rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
-              >
-                Logout
-              </button>
+              <div className="flex shrink-0 gap-2">
+                {pinControls ? (
+                  <button
+                    type="button"
+                    onClick={pinControls.onLock}
+                    className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+                  >
+                    {pinControls.label}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
           </div>
         </div>

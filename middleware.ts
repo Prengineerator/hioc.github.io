@@ -1,6 +1,17 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 import { surfaceForHost, rewriteForSurface } from '@/lib/routing/surface';
+import { flags } from '@/lib/flags';
+
+// PIN-2/3 — the enrolled-device cookie's name, duplicated here as a literal
+// rather than imported from lib/api/deviceCookie.ts. That module pulls in
+// Node's `crypto` (createHash/randomBytes) for the token itself, which this
+// file must NOT import: middleware runs on the Edge runtime, where a Node
+// built-in import can fail the whole build, not just this feature — the
+// nightmare scenario the PIN-3 risk note (R2, "locks staff out") exists to
+// avoid, applied to the one file that gates every /staff and /owner request.
+// Must stay byte-identical to DEVICE_COOKIE there.
+const DEVICE_COOKIE_NAME = 'hioc_device';
 
 /**
  * Gates everything under /staff/** behind a valid Supabase session that
@@ -101,6 +112,23 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   if (!user) {
+    // PIN-2/3: an enrolled counter with no classic session at all is the
+    // NORMAL state for a machine set up for PIN operator switching (the
+    // owner enrols it, then signs out — app/staff/device/page.tsx). Such a
+    // request may reach the /staff/** SHELL (never /owner/**, and never with
+    // the flag off) so its lock screen can render and offer a PIN. This is
+    // NOT an authorization decision — merely checking a cookie is PRESENT
+    // grants nothing, per D-1 (docs/SECURITY-PLAYBOOK.md): every real read or
+    // write still goes through getCounterActor() at the API layer, which
+    // re-verifies the device against the database and requires a further,
+    // separately-issued operator cookie before it resolves to anyone.
+    // app/staff/layout.tsx performs the actual "is this really an enrolled,
+    // unrevoked device" check before rendering anything beyond the lock
+    // screen itself.
+    const hasDeviceCookie = Boolean(request.cookies.get(DEVICE_COOKIE_NAME)?.value);
+    if (isStaffRoute && !isOwnerRoute && flags.pinSwitch && hasDeviceCookie) {
+      return response;
+    }
     return redirectToLogin();
   }
 
