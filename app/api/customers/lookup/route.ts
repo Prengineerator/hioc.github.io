@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, unauthorized } from '@/lib/api/http';
 import { rateLimitOk } from '@/lib/api/rateLimit';
 import { normalizeIndianMobile } from '@/lib/phone';
@@ -21,9 +21,12 @@ export const dynamic = 'force-dynamic';
 // The name is not decoration: it is the confirmation step VAL-2 requires before
 // a linkage takes effect, so a mistyped digit is caught by a human rather than
 // spending a stranger's points.
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function GET(request: Request) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
 
   const raw = new URL(request.url).searchParams.get('phone') ?? '';
   const normalized = normalizeIndianMobile(raw);

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { unauthorized } from '@/lib/api/http';
 import { getEnrolledDevice, touchDeviceSeen } from '@/lib/api/device';
 import type { PosDeviceContext } from '@/lib/types';
@@ -20,8 +20,13 @@ export const dynamic = 'force-dynamic';
 // staff session above is what let this request through. From PIN-3 the same
 // cookie also gates the operator-switch surface, and the authority there comes
 // from the operator's PIN, not from being a known machine.
+//
+// PIN-3: "the staff session above" is now getCounterActor() — classic
+// session first, unchanged; an enrolled-device PIN operator only when there
+// is no session at all. The POS boot read must keep working once someone has
+// unlocked via PIN, same as every other staff-surface read.
 export async function GET() {
-  const user = await getStaffUser();
+  const user = await getCounterActor();
   if (!user) return unauthorized();
 
   const device = await getEnrolledDevice();
