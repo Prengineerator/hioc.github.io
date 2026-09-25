@@ -104,6 +104,50 @@ Cancel or void the test orders afterwards so they don't land in the day's taking
 
 ---
 
+## Turning on PIN unlock (Phase 6, PIN-2/3)
+
+**Ticket:** PIN-1..5 (Phase 6 §6) · **Audience:** the owner, once per deployment (not once per machine)
+**Result:** once a counter is enrolled (step 3 above), staff unlock it by tapping their name and a 4-digit
+PIN instead of signing in with an email and password every time someone's shift starts. The browser fallback
+below is unaffected — it keeps working with a normal per-person login regardless of this setting.
+
+This is a one-time setup across the whole deployment, done in this order:
+
+1. **Apply both migrations**, in this order (each is idempotent — safe to run again):
+   - `supabase/2026-08-pos-devices.sql` (device enrolment — if you followed step 3 above, this is likely
+     already applied).
+   - `supabase/2026-08-staff-pins.sql` (the PIN credentials themselves).
+
+   Run `npm run verify:db` afterwards and confirm the **PIN-1/PIN-5 · staff PINs** section passes.
+
+2. **Set `OPERATOR_JWT_SECRET`** in the Vercel project's Environment Variables (Production). This is a
+   dedicated secret — do not reuse `CRON_SECRET` or anything else. Generate one with:
+
+   ```
+   openssl rand -base64 48
+   ```
+
+   It must be at least 32 characters or the whole feature reports itself disabled rather than running with
+   a weak secret — see `.env.local.example` for the same note.
+
+3. **Set `NEXT_PUBLIC_FLAG_PIN_SWITCH=true`** in the same place, and redeploy. With this off (the default),
+   nothing about the app changes — no lock screen, no new cookie, every existing sign-in flow untouched.
+
+4. **The owner sets PINs** for each staff member: **Owner → Staff**, the **⋯** menu on their row → **PIN**.
+   Type one or leave it blank to have one generated. It is shown **once**, on that screen — write it down or
+   tell the person immediately, because neither you nor anyone else can look it up again afterwards (only
+   reset it). A deactivated login has no PIN option — there's nothing to unlock with it.
+
+5. **The enrolled counter shows the lock screen** the next time it's opened in the HIOC POS app (not the
+   browser fallback): a grid of names, tap one, enter the 4-digit PIN. It auto-locks after 2 minutes idle,
+   and **Switch** in the header locks it manually — an order in progress underneath is not lost either way.
+
+If a PIN is entered wrong 5 times in a row it locks that person out for 60 seconds, doubling on each further
+wrong entry, capped at 15 minutes — the owner can clear this early from the same **⋯ → PIN** screen (a fresh
+set/reset also clears it).
+
+---
+
 ## Fallback: browser-only setup (Chrome/Edge kiosk-printing)
 
 Use this only when the desktop app genuinely isn't an option (e.g. a locked-down machine that can't run

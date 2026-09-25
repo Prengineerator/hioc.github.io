@@ -1097,6 +1097,116 @@ async function checkPosDevices() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 6 · PIN-1/PIN-5 — staff PINs.
+//
+// Same shape as pos_devices: staff_pins holds a CREDENTIAL (pin_hash), so RLS
+// on with no policy is the load-bearing probe, and it only means anything with
+// a row actually present. pin_audit's own RLS probe reuses whatever real row
+// the app has already written (owner set/reset actions) rather than planting
+// one, since it carries no free-text column to tag a probe row with safely.
+// ---------------------------------------------------------------------------
+async function checkStaffPins() {
+  heading('PIN-1/PIN-5 · staff PINs', '2026-08-staff-pins.sql');
+
+  const pinCols = await rest('/staff_pins?select=user_id,failed_attempts,locked_until,set_by,updated_at&limit=1');
+  const auditCols = await rest('/pin_audit?select=id,user_id,action,performed_by,performed_at&limit=1');
+  if (!pinCols.ok || !auditCols.ok) {
+    const broken = !pinCols.ok ? pinCols : auditCols;
+    const kind = errKind(broken);
+    if (kind === 'no_table' || kind === 'no_column') {
+      fail('staff_pins + pin_audit exist', 'apply supabase/2026-08-staff-pins.sql');
+    } else {
+      fail('staff_pins + pin_audit exist', errText(broken));
+    }
+    skip('staff_pins.user_id/set_by must be real profiles', 'the tables are missing');
+    skip('pin_audit.action CHECK rejects an unknown action', 'the tables are missing');
+    skip('staff_pins is not readable by the anon key', 'the tables are missing');
+    skip('pin_audit is not readable by the anon key', 'the tables are missing');
+    return;
+  }
+  pass('staff_pins + pin_audit exist', 'all PIN-1/PIN-5 columns present');
+
+  // Both FKs (user_id, set_by) point at profiles — a fully bogus row proves
+  // SOME foreign key is enforced; which one doesn't matter to this probe.
+  const badFk = await doomedInsert('staff_pins', {
+    user_id: BOGUS_ORDER_ID, pin_hash: SENTINEL, set_by: BOGUS_ORDER_ID,
+  });
+  expectKind('staff_pins.user_id/set_by must be real profiles', badFk, 'fk', 'a non-existent profile was refused');
+
+  // pin_audit.action CHECK — a valid action reaches the FK (both ids bogus, so
+  // it's still doomed, but on the right constraint); an unknown one is
+  // rejected before that, same technique as order_amendments.kind above.
+  const validAction = await doomedInsert('pin_audit', {
+    user_id: BOGUS_ORDER_ID, action: 'set', performed_by: BOGUS_ORDER_ID,
+  });
+  expectKind("pin_audit.action CHECK accepts 'set'", validAction, 'fk', 'reached the FK, so the CHECK passed');
+
+  const bogusAction = await doomedInsert('pin_audit', {
+    user_id: BOGUS_ORDER_ID, action: `bogus_${RUN_ID}`, performed_by: BOGUS_ORDER_ID,
+  });
+  expectKind('pin_audit.action CHECK rejects an unknown action', bogusAction, 'check', 'constraint is present, not merely dropped');
+
+  // staff_pins RLS: plant a real row (needs a real profile to hang it off —
+  // same profile for user_id and set_by is fine, this is a probe, not a real
+  // credential) and ask the anon key what it can see. A PIN hash readable
+  // through PostgREST would hand every browser a bcrypt hash to crack offline.
+  const who = await rest('/profiles?select=id&limit=1');
+  const profileId = Array.isArray(who.body) && who.body[0] ? who.body[0].id : null;
+  if (!profileId) {
+    skip('staff_pins is not readable by the anon key', 'no profile row to plant a probe against');
+  } else {
+    const planted = await rest('/staff_pins', {
+      method: 'POST', prefer: 'return=representation',
+      body: { user_id: profileId, pin_hash: SENTINEL, set_by: profileId },
+    });
+    if (!planted.ok) {
+      // Most likely a real PIN already exists for this profile (user_id is
+      // the primary key) — that's fine, it just means this probe can't plant
+      // its own row without clobbering a real credential, so it skips rather
+      // than risk locking someone out.
+      skip('staff_pins is not readable by the anon key', `could not plant a probe row (${errText(planted)})`);
+    } else {
+      const asService = await rest(`/staff_pins?select=user_id,pin_hash&pin_hash=eq.${SENTINEL}`);
+      const serviceRows = Array.isArray(asService.body) ? asService.body.length : 0;
+      const asAnon = await rest(`/staff_pins?select=user_id,pin_hash&pin_hash=eq.${SENTINEL}`, { key: ANON });
+      const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : 0;
+
+      if (serviceRows !== 1) {
+        fail('staff_pins is not readable by the anon key', `probe row not visible even to the service role (${serviceRows} rows) — result would be meaningless`);
+      } else if (!asAnon.ok) {
+        pass('staff_pins is not readable by the anon key', `anon was refused outright (${errText(asAnon)})`);
+      } else if (anonRows === 0) {
+        pass('staff_pins is not readable by the anon key', 'service role sees the planted row, anon sees 0');
+      } else {
+        fail('staff_pins is not readable by the anon key', `anon read back ${anonRows} PIN hash(es) — RLS is NOT protecting this table`);
+      }
+
+      const removed = await rest(`/staff_pins?pin_hash=eq.${SENTINEL}`, { method: 'DELETE', prefer: 'return=representation' });
+      const left = await rest(`/staff_pins?select=user_id&pin_hash=eq.${SENTINEL}`);
+      const leftRows = Array.isArray(left.body) ? left.body.length : -1;
+      if (removed.ok && leftRows === 0) pass('probe row removed from staff_pins', 're-queried: 0 rows remain');
+      else fail('probe row removed from staff_pins', `${leftRows} row(s) still present — DELETE FROM staff_pins WHERE pin_hash='${SENTINEL}' BY HAND`);
+    }
+  }
+
+  // pin_audit RLS: reuses a REAL row rather than planting one — the table has
+  // no free-text column safe to tag a probe with (action is enum-shaped, the
+  // ids are real profiles). Skips honestly on a fresh deploy with no PIN
+  // actions yet, same posture as checkStaffAccounts() below.
+  const existingAudit = await rest('/pin_audit?select=id&limit=1');
+  const auditRow = Array.isArray(existingAudit.body) ? existingAudit.body[0] : null;
+  if (!auditRow) {
+    skip('pin_audit is not readable by the anon key', 'no row yet — verify again once the owner has set a PIN');
+  } else {
+    const asAnon = await rest(`/pin_audit?select=id&id=eq.${auditRow.id}`, { key: ANON });
+    const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : -1;
+    if (!asAnon.ok) pass('pin_audit is not readable by the anon key', `anon was refused outright (${errText(asAnon)})`);
+    else if (anonRows === 0) pass('pin_audit is not readable by the anon key', 'a real row exists; anon sees 0');
+    else fail('pin_audit is not readable by the anon key', `anon read back ${anonRows} row(s) — RLS is NOT protecting this table`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // SA-1 · staff accounts (docs/PHASE-5-STAFF-ACCOUNTS.md). Personal emails are
 // PII: both tables must be service-role only. RLS with no policy returns an
@@ -1305,6 +1415,7 @@ async function main() {
   await checkAnonSurface();
   await checkAttendance();
   await checkPosDevices();
+  await checkStaffPins();
   await checkStaffAccounts();
   await checkCashCounts();
   await checkSuggestionEngine();
