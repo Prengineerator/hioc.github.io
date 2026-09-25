@@ -114,7 +114,8 @@ export async function middleware(request: NextRequest) {
   if (!user) {
     // PIN-2/3: an enrolled counter with no classic session at all is the
     // NORMAL state for a machine set up for PIN operator switching (the
-    // owner enrols it, then signs out — app/staff/device/page.tsx). Such a
+    // owner enrols it, then signs out — app/staff/settings/counter/page.tsx,
+    // formerly app/staff/device/page.tsx). Such a
     // request may reach the /staff/** SHELL (never /owner/**, and never with
     // the flag off) so its lock screen can render and offer a PIN. This is
     // NOT an authorization decision — merely checking a cookie is PRESENT

@@ -21,7 +21,8 @@
 // classic Supabase session underneath, so a request issued directly against
 // the API (not through this UI) would still succeed. That is out of scope for
 // a PIN feature: a classic session belongs to the device-enrollment flow
-// signing itself out afterwards (app/staff/device/page.tsx), not to this
+// signing itself out afterwards (app/staff/settings/counter/page.tsx,
+// formerly app/staff/device/page.tsx), not to this
 // overlay pretending it can revoke a login it didn't issue.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
