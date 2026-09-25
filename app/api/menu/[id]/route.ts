@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, isUuid, MENU_CATEGORIES } from '@/lib/api/constants';
@@ -56,17 +56,24 @@ function parseShortCode(value: unknown): { code: string | null } | { error: stri
   return { code: trimmed.toUpperCase() };
 }
 
-// PATCH /api/menu/[id] — staff-only. Partial update.
+// PATCH /api/menu/[id] — staff-only. Partial update — this is ALSO the S6
+// availability toggle / snooze path (`is_available`, `unavailable_until`),
+// same route and same gate as a full edit.
 // `variants`, if present, fully replaces the item's variant list.
 // `addon_group_ids`, if present, fully replaces the item's addon group associations.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
+  const user = actor.user;
   // FND3-6: menu edits go through the owner-configurable 'menu_edit' gate
-  // (default = staff-and-up, preserving prior behavior).
-  if (!(await hasPermission(user, 'menu_edit'))) {
+  // (default = staff-and-up, preserving prior behavior). roleHint = actor.role,
+  // see the POST handler's sibling note in ../route.ts.
+  if (!(await hasPermission(user, 'menu_edit', actor.role))) {
     return errorResponse(403, 'You do not have permission to edit the menu');
   }
 
@@ -281,14 +288,17 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
 // DELETE /api/menu/[id] — staff-only. Hard delete (variants, addon links
 // cascade via FK; order_items keep a snapshot so past orders are unaffected).
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function DELETE(_request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
   // FND3-6: menu edits go through the owner-configurable 'menu_edit' gate
-  // (default = staff-and-up, preserving prior behavior).
-  if (!(await hasPermission(user, 'menu_edit'))) {
+  // (default = staff-and-up, preserving prior behavior). roleHint = actor.role.
+  if (!(await hasPermission(actor.user, 'menu_edit', actor.role))) {
     return errorResponse(403, 'You do not have permission to edit the menu');
   }
 

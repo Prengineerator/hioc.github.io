@@ -109,7 +109,8 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffUser: () => Promise.resolve(state.user),
+  getCounterActor: () =>
+    Promise.resolve(state.user ? { user: state.user, role: 'staff', via: 'session' } : null),
 }));
 vi.mock('@/lib/permissions', () => ({
   hasPermission: (_user: unknown, key: string) => Promise.resolve(state.perms[key] ?? false),

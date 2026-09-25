@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
@@ -15,7 +15,7 @@ import {
 import { getStoreSettings } from '@/lib/store/settings';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
-import type { OrderStatus, OrderType } from '@/lib/types';
+import type { OrderStatus, OrderType, UserRole } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,9 +56,15 @@ type LoadedOrder = {
 // `pos_order_entry` permission as punching the order in the first place. Using a
 // new key here would fail CLOSED to manager on any deploy whose seed row is
 // missing (see lib/permissions.ts), quietly breaking normal service.
+//
+// PIN-3/PIN-4: gated by getCounterActor() — classic session first, unchanged;
+// an enrolled-device PIN operator only when there is no session at all.
+// hasPermission() below evaluates the OPERATOR's role, and every attribution
+// column (voided_by, order_amendments.staff_id) records the operator's id.
 export async function POST(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
 
   const { id } = params;
   if (!isUuid(id)) return notFound();
@@ -67,13 +73,16 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
   if (body.op === 'add') {
-    return addLines(request, id, user, body);
+    return addLines(request, id, user, actor.role, body);
   }
 
   // --- VOID (FND3-4) --------------------------------------------------------
   // UI hiding is not authorization (§5.2); this is the real gate, checked
   // per-request so an owner flipping the matrix mid-shift takes effect at once.
-  if (!(await hasPermission(user, 'void_line'))) {
+  // roleHint = actor.role: see hasPermission()'s own comment for why a device
+  // operator's role must be passed rather than re-derived from a session that,
+  // for that path, does not exist.
+  if (!(await hasPermission(user, 'void_line', actor.role))) {
     return errorResponse(403, 'Manager permission required to void a line');
   }
 
@@ -224,9 +233,13 @@ async function addLines(
   _request: Request,
   id: string,
   user: { id: string },
+  roleHint: UserRole,
   body: Record<string, unknown>,
 ) {
-  if (!(await hasPermission(user as never, 'pos_order_entry'))) {
+  // roleHint = actor.role from the caller's getCounterActor() — see
+  // hasPermission()'s own comment: a device operator has no classic session
+  // for it to re-derive the role from.
+  if (!(await hasPermission(user as never, 'pos_order_entry', roleHint))) {
     return errorResponse(403, 'You do not have permission to add items to an order');
   }
 

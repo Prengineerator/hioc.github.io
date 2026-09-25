@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { flags } from '@/lib/flags';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { LeavePlanner } from '@/components/staff/LeavePlanner';
 
@@ -28,8 +28,8 @@ export default async function StaffLeavePage() {
     );
   }
 
-  const account = await getStaffOrOwner();
-  const canApprove = account ? await hasPermission(account.user, 'leave_approve') : false;
+  const account = await getCounterActor();
+  const canApprove = account ? await hasPermission(account.user, 'leave_approve', account.role) : false;
 
   return <LeavePlanner canApprove={canApprove} />;
 }

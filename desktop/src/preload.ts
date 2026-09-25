@@ -1,8 +1,11 @@
 // SHL-2 — the bridge. Exposes `window.hiocDesktop` via contextBridge, but ONLY
 // when the loaded document's own origin is allowlisted — a compromised or
 // mis-navigated page never gets printer/IPC access just because it happened to
-// load inside this shell. `lib/desktop/bridge.ts` (HiocDesktopBridge,
-// DESKTOP_IPC) is the exact contract implemented here; do not diverge from it.
+// load inside this shell. Built on the exact same `isPosNavigationAllowed`
+// predicate main.ts uses to gate navigation (via `createOriginAllowlist`), so
+// this gate can never drift from the POS-only navigation rule in
+// allowedOrigin.ts. `lib/desktop/bridge.ts` (HiocDesktopBridge, DESKTOP_IPC)
+// is the exact contract implemented here; do not diverge from it.
 
 import { contextBridge, ipcRenderer } from 'electron';
 import { DESKTOP_IPC, type HiocDesktopBridge, type PrinterConfig } from '@/lib/desktop/bridge';

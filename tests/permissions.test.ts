@@ -111,4 +111,35 @@ describe('hasPermission', () => {
     state.role = 'manager';
     expect(await hasPermission(USER, 'refund')).toBe(true);
   });
+
+  // PIN-3: a device operator has no classic Supabase session, so getUserRole()
+  // (RLS: profiles_select_own, auth.uid() = id) cannot see their row at all —
+  // exactly what `state.role = null` simulates here. Without the hint this
+  // would deny a legitimately-permitted operator every time.
+  describe('roleHint (PIN-3 — an operator with no session getUserRole() can read)', () => {
+    it('uses the hint instead of re-deriving the role when one is given', async () => {
+      state.role = null; // getUserRole() would see nothing under RLS
+      state.permRow = { min_role: 'staff' };
+      expect(await hasPermission(USER, 'pos_order_entry', 'staff')).toBe(true);
+    });
+
+    it('the hint still fails closed for an insufficient role', async () => {
+      state.role = null;
+      state.permRow = { min_role: 'manager' };
+      expect(await hasPermission(USER, 'void_line', 'staff')).toBe(false);
+      expect(await hasPermission(USER, 'void_line', 'manager')).toBe(true);
+    });
+
+    it('the hint still grants owner every permission', async () => {
+      state.role = null;
+      state.permRow = null;
+      expect(await hasPermission(USER, 'totally_unknown_key', 'owner')).toBe(true);
+    });
+
+    it('omitting the hint keeps the original re-derive-from-session behaviour', async () => {
+      state.role = 'manager';
+      state.permRow = { min_role: 'manager' };
+      expect(await hasPermission(USER, 'refund')).toBe(true);
+    });
+  });
 });

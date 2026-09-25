@@ -8,12 +8,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // exactly as a bare browser is, and the enrolled name must not come back.
 
 const state: {
-  staff: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   device: Record<string, unknown> | null;
   touched: string[];
-} = { staff: { id: 'u1' }, device: null, touched: [] };
+} = { actor: { user: { id: 'u1' }, role: 'staff', via: 'session' }, device: null, touched: [] };
 
-vi.mock('@/lib/api/auth', () => ({ getStaffUser: () => Promise.resolve(state.staff) }));
+vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
 
 vi.mock('@/lib/api/device', () => ({
   DEVICE_COLUMNS: 'id, name',
@@ -39,14 +39,14 @@ const ENROLLED = {
 };
 
 beforeEach(() => {
-  state.staff = { id: 'u1' };
+  state.actor = { user: { id: 'u1' }, role: 'staff', via: 'session' };
   state.device = null;
   state.touched = [];
 });
 
 describe('GET /api/device/context', () => {
-  it('refuses an enrolled machine with no staff session', async () => {
-    state.staff = null;
+  it('refuses an enrolled machine with no session and no operator', async () => {
+    state.actor = null;
     state.device = ENROLLED;
     const res = await GET();
     expect(res.status).toBe(401);
@@ -85,5 +85,13 @@ describe('GET /api/device/context', () => {
     state.device = ENROLLED;
     await GET();
     expect(state.touched).toEqual(['d1']);
+  });
+
+  it('PIN-3: an enrolled-device operator (no classic session) reads its own device context', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    state.device = ENROLLED;
+    const res = await GET();
+    expect(res.status).toBe(200);
+    expect((await res.json()).device.id).toBe('d1');
   });
 });

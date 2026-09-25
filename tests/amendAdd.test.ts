@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // order half-extended.
 
 const state: {
-  user: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   permitted: boolean;
   order: Record<string, unknown> | null;
   guarded: Record<string, unknown> | null; // null = lost version race
@@ -21,7 +21,7 @@ const state: {
   insertedItems: Record<string, unknown>[];
   deletedIds: string[];
 } = {
-  user: null,
+  actor: null,
   permitted: true,
   order: null,
   guarded: null,
@@ -86,8 +86,14 @@ vi.mock('@/lib/supabase-server', () => ({
   }),
 }));
 
-vi.mock('@/lib/api/auth', () => ({ getStaffUser: () => Promise.resolve(state.user) }));
-vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(state.permitted) }));
+vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
+const hasPermissionCalls: unknown[][] = [];
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: (...args: unknown[]) => {
+    hasPermissionCalls.push(args);
+    return Promise.resolve(state.permitted);
+  },
+}));
 vi.mock('@/lib/store/settings', () => ({
   getStoreSettings: () =>
     Promise.resolve({ gst_percent: 5, gst_inclusive: false, packaging_charge_inr: 20 }),
@@ -116,12 +122,13 @@ const addBody = (quantity = 2) => ({
 
 beforeEach(() => {
   itemSeq = 0;
-  state.user = { id: 'staff-1' };
+  state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
   state.permitted = true;
   state.insertedItems = [];
   state.deletedIds = [];
   state.orderPatch = undefined;
   state.amendmentRow = undefined;
+  hasPermissionCalls.length = 0;
   state.order = {
     id: ORDER_ID,
     status: 'accepted',
@@ -148,9 +155,18 @@ beforeEach(() => {
 });
 
 describe('POST /api/orders/[id]/amend { op: add } — TAB-1', () => {
-  it('401s without a staff session', async () => {
-    state.user = null;
+  it('401s without a staff session or operator', async () => {
+    state.actor = null;
     expect((await POST(req(addBody()), params)).status).toBe(401);
+  });
+
+  it('PIN-3: an enrolled-device operator (no classic session) can still add lines', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    expect((await POST(req(addBody()), params)).status).toBe(200);
+    expect(state.amendmentRow?.staff_id).toBe('ravi');
+    // The operator's role travels as hasPermission()'s roleHint — a device
+    // operator has no classic session for it to re-derive from otherwise.
+    expect(hasPermissionCalls[0]).toEqual([{ id: 'ravi' }, 'pos_order_entry', 'staff']);
   });
 
   it('403s without the pos_order_entry permission', async () => {

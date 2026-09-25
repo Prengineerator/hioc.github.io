@@ -3,18 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Handler-level test for GET /api/tables — the staff-readable tables list that
 // feeds the POS-1 dine-in table picker (the owner CRUD is owner-only; this is
 // the missing staff read path). Verifies:
-//  * it is gated by getStaffUser() (401 for a non-staff caller);
+//  * it is gated by getCounterActor() (401 with no session and no operator, PIN-3);
+//  * a classic staff session OR an enrolled-device operator both succeed;
 //  * it returns only ACTIVE tables, in display order;
 //  * it NEVER selects qr_token (column-sensitive — the QR-1 order link);
 //  * a DB error surfaces as a 500.
 
 const state: {
-  staffUser: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   rows: Record<string, unknown>[];
   error: { message: string } | null;
   selectArg: string;
   eqArgs: [string, unknown] | null;
-} = { staffUser: null, rows: [], error: null, selectArg: '', eqArgs: null };
+} = { actor: null, rows: [], error: null, selectArg: '', eqArgs: null };
 
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
@@ -40,13 +41,13 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffUser: () => Promise.resolve(state.staffUser),
+  getCounterActor: () => Promise.resolve(state.actor),
 }));
 
 const { GET } = await import('@/app/api/tables/route');
 
 beforeEach(() => {
-  state.staffUser = null;
+  state.actor = null;
   state.rows = [];
   state.error = null;
   state.selectArg = '';
@@ -54,14 +55,14 @@ beforeEach(() => {
 });
 
 describe('GET /api/tables', () => {
-  it('401s a non-staff caller', async () => {
-    state.staffUser = null;
+  it('401s a caller with neither a session nor an operator', async () => {
+    state.actor = null;
     const res = await GET();
     expect(res.status).toBe(401);
   });
 
-  it('returns active tables for a staff caller and never selects qr_token', async () => {
-    state.staffUser = { id: 'staff-1' };
+  it('returns active tables for a classic staff session and never selects qr_token', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
     state.rows = [
       { id: 't1', label: 'T1', zone: 'Terrace', capacity: 4, is_active: true, sort_order: 0 },
       { id: 't2', label: 'T2', zone: '', capacity: 2, is_active: true, sort_order: 10 },
@@ -82,9 +83,17 @@ describe('GET /api/tables', () => {
   });
 
   it('500s on a database error', async () => {
-    state.staffUser = { id: 'staff-1' };
+    state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
     state.error = { message: 'boom' };
     const res = await GET();
     expect(res.status).toBe(500);
+  });
+
+  it('PIN-3: an enrolled-device operator (no classic session) reads the same list', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    state.rows = [{ id: 't1', label: 'T1', zone: '', capacity: 4, is_active: true, sort_order: 0 }];
+    const res = await GET();
+    expect(res.status).toBe(200);
+    expect((await res.json()).tables).toHaveLength(1);
   });
 });

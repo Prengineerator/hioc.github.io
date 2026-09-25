@@ -50,15 +50,16 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffOrOwner: () => Promise.resolve(state.actor),
+  getCounterActor: () => Promise.resolve(state.actor),
   actorRoleFor: (role: string) => (role === 'owner' || role === 'manager' ? 'owner' : 'staff'),
-  // FND3-5 comp gate: a manager/owner session resolves to a user, staff → null.
-  getManagerUser: () =>
-    Promise.resolve(
-      state.actor && (state.actor.role === 'owner' || state.actor.role === 'manager')
-        ? state.actor.user
-        : null,
-    ),
+}));
+// FND3-5 comp gate: hasPermission('comp_order', roleHint) — a manager/owner
+// role passes, staff does not. The roleHint IS the third arg, so this mock
+// exercises exactly what the real permission matrix would for the default
+// (manager-and-up) min_role, without touching a live role_permissions table.
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: (_user: unknown, _key: string, roleHint?: string) =>
+    Promise.resolve(roleHint === 'owner' || roleHint === 'manager'),
 }));
 // RCT-1: the route fires sendBillNotification at settle (to === 'completed').
 // Hoisted so the vi.mock factory can reference the spy, and so tests can assert
@@ -235,6 +236,18 @@ describe('PATCH /api/orders/[id]/status', () => {
       // The comp set payment_status='paid' before the transition, so the
       // completed-transition bill gate (issue-3) still fires for it.
       expect(sendBillNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it('PIN-3: an enrolled-device manager operator (no classic session) can comp too', async () => {
+      state.actor = { user: { id: 'ravi' }, role: 'manager' };
+      state.current = readyDineIn('unpaid');
+      state.updated = { ...readyDineIn('paid'), status: 'completed', version: 4 };
+      const res = await PATCH(
+        req({ status: 'completed', comp: { reason: 'VIP on the house' } }),
+        params,
+      );
+      expect(res.status).toBe(200);
+      expect(state.amendmentRow?.staff_id).toBe('ravi');
     });
 
     it('400s a manager comp with an empty reason', async () => {

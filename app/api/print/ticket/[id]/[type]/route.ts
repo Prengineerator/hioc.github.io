@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { unauthorized, notFound } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { getStaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
@@ -22,8 +22,15 @@ function isPrintType(value: string): value is PrintType {
 // the printed paper and the on-screen ticket can never disagree. Never
 // cached — a reprint must reflect the order's current state (voids, payment,
 // points earned), not a stale snapshot.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all. This is
+// the route the desktop shell's native printer driver calls directly (no
+// browser tab, no cookies-from-a-page-load) — it must keep working on an
+// enrolled counter with nobody signed in classically, or printing breaks
+// outright the moment PIN switching is turned on.
 export async function GET(_request: Request, { params }: RouteParams) {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
 
   const { id, type } = params;

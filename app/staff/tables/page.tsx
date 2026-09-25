@@ -3,10 +3,10 @@ import { flags } from '@/lib/flags';
 import { TablesBoard } from '@/components/staff/TablesBoard';
 
 // Staff tables board (POS-3). The /staff/** layout already gates this route
-// behind getStaffOrOwner(), so no extra auth check is needed here — a signed-in
-// staff/manager/owner is guaranteed. Dark-launched behind the same staffPos flag
-// as POS-1 (default ON): when off it renders a clear "not enabled" state rather
-// than the board, matching the New-order page.
+// behind getCounterActor() (PIN-3: a classic session, or an enrolled device's
+// PIN operator), so no extra auth check is needed here. Dark-launched behind
+// the same staffPos flag as POS-1 (default ON): when off it renders a clear
+// "not enabled" state rather than the board, matching the New-order page.
 export default function TablesPage() {
   if (!flags.staffPos) {
     return (

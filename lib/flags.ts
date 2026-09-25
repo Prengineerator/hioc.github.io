@@ -66,6 +66,15 @@ export const flags = {
   // points and the owner Suggestions tab. NEXT_PUBLIC_ because the menu and
   // home pages decide client-side whether to show the entry banner.
   suggest: boolEnv(process.env.NEXT_PUBLIC_FLAG_SUGGEST, false),
+  // Phase-6 PIN operator switching (PIN-2/3). Default OFF (D6-7/R2): even with
+  // an enrolled device, the lock screen stays dark and every staff route keeps
+  // answering the classic session only, until this is explicitly turned on —
+  // the mitigation the sprint plan names for "PIN-3 destabilises staff APIs"
+  // (P2/R2). Read on the server too (middleware.ts, app/staff/layout.tsx
+  // decide whether a session-less-but-enrolled request may even reach the
+  // page), so NEXT_PUBLIC_ on purpose. Turning this on with OPERATOR_JWT_SECRET
+  // unset or too short still shows nothing — see lib/api/operator.ts.
+  pinSwitch: boolEnv(process.env.NEXT_PUBLIC_FLAG_PIN_SWITCH, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

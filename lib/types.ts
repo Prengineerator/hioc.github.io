@@ -876,3 +876,34 @@ export type PosDeviceContext = Pick<
   PosDevice,
   'id' | 'name' | 'default_order_type' | 'auto_print_kot' | 'auto_print_bill'
 >;
+
+// --- Phase 6 · PIN-1/5 (supabase/2026-08-staff-pins.sql) -------------------
+// A staffer's PIN credential + lockout state. `pin_hash` is intentionally NOT
+// in this type for the same reason PosDevice omits token_hash: no route ever
+// selects it into application code except the one that verifies it, and
+// leaving it out means a careless `select *` cannot leak it into a response.
+export interface StaffPinState {
+  user_id: string;
+  failed_attempts: number;
+  locked_until: string | null;
+  set_by: string;
+  updated_at: string;
+}
+
+export type PinAuditAction = 'set' | 'reset' | 'unlock';
+
+/** One owner set/reset/unlock action (PIN-5) — never the PIN itself. */
+export interface PinAudit {
+  id: string;
+  user_id: string;
+  action: PinAuditAction;
+  performed_by: string;
+  performed_at: string;
+}
+
+/** One name+id an enrolled device's lock screen can offer as a tile (PIN-2) —
+ * active staff who have a PIN set. Never carries PIN data. */
+export interface OperatorOption {
+  id: string;
+  name: string;
+}

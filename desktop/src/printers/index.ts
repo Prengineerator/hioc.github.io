@@ -4,7 +4,7 @@
 // same device can never interleave their bytes (a KOT and a reprint racing
 // for the same kitchen printer, say).
 
-import type { WebContents } from 'electron';
+import type { Session, WebContents } from 'electron';
 import type { DetectedPrinter, PrinterConfig, PrinterStatus, PrintResult } from '@/lib/desktop/bridge';
 import { checkNetworkStatus, printOverNetwork } from './network';
 import { printUrlWithDriver } from './driver';
@@ -27,6 +27,11 @@ export interface PrinterServiceDeps {
   /** Reused from main.ts (SHL-2) so the /staff-print/ URL check in PRN-5's
    * driver route can never drift from the navigation/IPC allowlist. */
   isAllowedOrigin: (url: string) => boolean;
+  /** The main POS window's session (the dedicated `persist:hioc-pos`
+   * partition) — threaded into the hidden driver-print window so it shares
+   * the staffer's login instead of falling back to Electron's default
+   * session. Null when no window exists yet. */
+  getSession: () => Session | null;
 }
 
 export class PrinterService {
@@ -146,9 +151,13 @@ export class PrinterService {
     if (printer.connection.kind !== 'system' || printer.connection.mode !== 'driver') {
       throw new Error(`${friendlyName(printer)} is not configured for driver printing`);
     }
+    const session = this.deps.getSession();
+    if (!session) {
+      throw new Error('The POS window is not ready yet — try again in a moment');
+    }
     const deviceName = printer.connection.deviceName;
     return this.serialize(printerId, () =>
-      printUrlWithDriver(url, { deviceName }, this.deps.isAllowedOrigin),
+      printUrlWithDriver(url, { deviceName }, this.deps.isAllowedOrigin, session),
     );
   }
 

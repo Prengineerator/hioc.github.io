@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, notFound, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { getOrderWithCoupon } from '@/lib/orders/getOrder';
@@ -16,9 +16,12 @@ type RouteParams = { params: { id: string } };
 // idempotency guard. The send stays best-effort and logged in `notifications`;
 // this route never mutates the order and never blocks. Rate-limited so a
 // staffer can't spam a customer's phone/inbox.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function POST(_request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
 
   const { id } = params;
   if (!isUuid(id)) return notFound();

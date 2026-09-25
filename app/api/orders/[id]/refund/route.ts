@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
@@ -28,12 +28,17 @@ type RouteParams = { params: { id: string } };
 // 'partially_refunded'. Any points earned/redeemed on the order are clawed
 // back (FND-4 edge case). Body: { amount_inr?: number, reason: string } —
 // amount_inr omitted = full refund of whatever remains unrefunded.
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
+// roleHint = actor.role: hasPermission() would otherwise re-derive the role
+// via the RLS-bound session client, which a device operator has none of.
 export async function POST(request: Request, { params }: RouteParams) {
   // Gate via the owner-configurable matrix (FND3-6): a valid staff session, then
   // the 'refund' permission (default = manager-and-up, preserving FND-5 behavior).
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
-  if (!(await hasPermission(user, 'refund'))) {
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
+  if (!(await hasPermission(user, 'refund', actor.role))) {
     return errorResponse(403, 'Manager permission required for refunds');
   }
 

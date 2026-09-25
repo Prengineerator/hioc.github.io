@@ -14,6 +14,8 @@ export interface MemberRowProps {
   busy?: boolean;
   onEdit: (member: TeamMember) => void;
   onPassword: (member: TeamMember) => void;
+  /** PIN-5 — set/reset this member's counter PIN. */
+  onPin: (member: TeamMember) => void;
   onDeactivate: (member: TeamMember) => void;
   onReactivate: (member: TeamMember) => void;
   onDelete: (member: TeamMember) => void;
@@ -29,7 +31,7 @@ function PersonalEmailCell({ email }: { email: string | null }) {
   );
 }
 
-export function MemberRow({ member, busy, onEdit, onPassword, onDeactivate, onReactivate, onDelete }: MemberRowProps) {
+export function MemberRow({ member, busy, onEdit, onPassword, onPin, onDeactivate, onReactivate, onDelete }: MemberRowProps) {
   const isOwner = member.role === 'owner';
   const loginEmail = member.loginId ? loginEmailFor(member.loginId) : member.email;
   const label = roleLabel(member.role);
@@ -43,6 +45,7 @@ export function MemberRow({ member, busy, onEdit, onPassword, onDeactivate, onRe
       busy={busy}
       onEdit={onEdit}
       onPassword={onPassword}
+      onPin={onPin}
       onDeactivate={onDeactivate}
       onReactivate={onReactivate}
       onDelete={onDelete}
@@ -92,7 +95,7 @@ interface MenuItem {
   danger?: boolean;
 }
 
-function RowActionsMenu({ member, busy, onEdit, onPassword, onDeactivate, onReactivate, onDelete }: MemberRowProps) {
+function RowActionsMenu({ member, busy, onEdit, onPassword, onPin, onDeactivate, onReactivate, onDelete }: MemberRowProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -116,6 +119,11 @@ function RowActionsMenu({ member, busy, onEdit, onPassword, onDeactivate, onReac
     { label: 'Edit', onClick: () => onEdit(member) },
     { label: 'Password', onClick: () => onPassword(member) },
   ];
+  // PIN-5: a deactivated login is blocked outright, so a PIN for it would be
+  // dead weight nobody can use — offered only for an active member.
+  if (member.status === 'active') {
+    items.push({ label: 'PIN', onClick: () => onPin(member) });
+  }
   if (member.status === 'active') {
     items.push({ label: 'Deactivate', onClick: () => onDeactivate(member) });
   } else {

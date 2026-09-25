@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isPaymentMethod, isUuid, PAYMENT_METHODS } from '@/lib/api/constants';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
@@ -23,9 +23,12 @@ const PAYMENT_STATUSES: readonly PaymentStatus[] = [
 // order: the POS4-1 parts if it was split, else a single synthetic part for the
 // whole total. REF-1's refund panel uses this to ask which tender to give back
 // on, and to cap the amount per tender.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function GET(_request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
 
   const { id } = params;
   if (!isUuid(id)) return notFound();
@@ -70,11 +73,17 @@ export async function GET(_request: Request, { params }: RouteParams) {
 // Fulfillment status is untouched — payment tracking is deliberately independent
 // of the order_status lifecycle. Since BILL-1, a settle to 'paid' also delivers
 // the bill.
+//
+// PIN-3/PIN-4: gated by getCounterActor() — classic session first, unchanged;
+// an enrolled-device PIN operator only when there is no session at all. The
+// operator's id is what order_payments.created_by attributes the settle to,
+// same as a classic session's id would.
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
+  const user = actor.user;
 
   const { id } = params;
   if (!isUuid(id)) {

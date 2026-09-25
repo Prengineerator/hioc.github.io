@@ -234,7 +234,7 @@ vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => admin,
 }));
 vi.mock('@/lib/api/auth', () => ({
-  getStaffOrOwner: () => Promise.resolve(account),
+  getCounterActor: () => Promise.resolve(account),
 }));
 
 const { POST } = await import('@/app/api/attendance/punch/route');

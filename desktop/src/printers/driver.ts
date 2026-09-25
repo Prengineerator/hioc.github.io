@@ -1,14 +1,16 @@
 // PRN-5 (system+driver half) — for a printer with only a normal OS driver (no
 // ESC/POS raw support), print the existing staff-print HTML page through that
-// driver, silently, off-screen. The hidden window uses the app's DEFAULT
-// session, so it shares cookies with the main window — the same-origin
-// /staff-print/ page sees the staffer's login exactly as it would in a
-// visible tab. Only ever loads a URL whose origin is allowlisted AND whose
+// driver, silently, off-screen. The hidden window is opened in the SAME
+// session as the main POS window (the dedicated `persist:hioc-pos` partition,
+// SHL-1) — passed in explicitly as `posSession` rather than inherited via the
+// Electron default session, so it shares the staffer's login cookies with the
+// main window while staying isolated from any other Chrome/Electron profile
+// on the machine. Only ever loads a URL whose origin is allowlisted AND whose
 // path starts with /staff-print/ — this is the one place in the shell that
 // loads a URL supplied at call time rather than a fixed constant, so both
 // checks are mandatory, not defense in depth.
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, type Session } from 'electron';
 
 const PRINT_TIMEOUT_MS = 20_000;
 const SETTLE_MS = 300;
@@ -48,6 +50,7 @@ export async function printUrlWithDriver(
   url: string,
   target: DriverPrintTarget,
   isAllowedOrigin: AllowedOriginCheck,
+  posSession: Session,
 ): Promise<{ confirmed: boolean }> {
   assertPrintableUrl(url, isAllowedOrigin);
 
@@ -59,8 +62,11 @@ export async function printUrlWithDriver(
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // No `session` override — deliberately inherits the default session so
-      // the staffer's cookies carry over to this same-origin page.
+      devTools: false,
+      // The main window's session (persist:hioc-pos), passed in explicitly —
+      // this must NEVER fall back to Electron's default session, or the
+      // staffer's login simply wouldn't be there for this same-origin page.
+      session: posSession,
     },
   });
 

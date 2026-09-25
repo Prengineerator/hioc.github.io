@@ -76,6 +76,7 @@ vi.mock('@/lib/api/device', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api/device')>('@/lib/api/device');
   return {
     DEVICE_COLUMNS: actual.DEVICE_COLUMNS,
+    isMissingTableError: actual.isMissingTableError,
     getEnrolledDevice: () => Promise.resolve(state.currentDevice),
     touchDeviceSeen: () => Promise.resolve(),
   };

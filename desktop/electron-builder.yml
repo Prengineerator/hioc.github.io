@@ -1,9 +1,11 @@
 # SHL-3 — packaging & distribution for the HIOC POS desktop shell.
 #
-# Signing/notarization/publish are all env-var driven placeholders (D7-7):
-# unset, the build is unsigned (Windows shows a SmartScreen warning during
-# pilot; macOS builds cannot be notarized and Gatekeeper will block them on
-# another machine). See desktop/README.md for exactly which vars to set.
+# Signing/notarization are env-var driven placeholders (D7-7): unset, the
+# build is unsigned (Windows shows a SmartScreen warning on first run; macOS
+# builds cannot be notarized and Gatekeeper will block them on another
+# machine). See desktop/README.md for exactly which vars to set, and for the
+# release procedure (bump the version below, then run the "POS desktop
+# release" GitHub Actions workflow).
 
 appId: in.hioc.pos
 productName: HIOC POS
@@ -61,11 +63,22 @@ mac:
 dmg:
   sign: false
 
-# Auto-update feed. A SEPARATE public repo that only ever holds installers —
-# the app's source stays private, and counter machines need no token to read
-# a public release. Until the repo exists the update check fails quietly.
-# Release: GH_TOKEN=... npm run dist:win -- --publish always
+# Auto-update feed AND release target: GitHub Releases on THIS repo (it's
+# public, so counter machines need no token to read a release; the app's own
+# source being public too is an accepted tradeoff — see desktop/README.md).
+#
+# `tagNamePrefix: pos-v` keeps this repo's POS desktop releases (tag
+# `pos-v<version>`) distinct from any other tag scheme this repo might use.
+# `releaseType: release` publishes a normal (non-draft) Release directly, so
+# `electron-updater` and a plain download link both see it immediately — a
+# draft release is invisible to both.
+#
+# Local release: GH_TOKEN=... npm run dist:win -- --publish always
+# CI release: .github/workflows/pos-desktop-release.yml (workflow_dispatch,
+# or push a tag matching pos-v*). See desktop/README.md "Releasing".
 publish:
   provider: github
   owner: Prengineerator
-  repo: hioc-pos-releases
+  repo: hioc.github.io
+  tagNamePrefix: pos-v
+  releaseType: release

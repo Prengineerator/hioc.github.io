@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
-import { DEVICE_COLUMNS, getEnrolledDevice } from '@/lib/api/device';
+import { DEVICE_COLUMNS, getEnrolledDevice, isMissingTableError } from '@/lib/api/device';
 import {
   DEVICE_COOKIE,
   clearedDeviceCookieOptions,
@@ -31,17 +31,8 @@ const ORDER_TYPES = ['takeaway', 'dine_in'] as const;
  * table 'public.pos_devices' in the schema cache" reads as a broken page rather
  * than as one instruction away from working.
  */
-const MISSING_TABLE = 'PGRST205';
 const MISSING_TABLE_MSG =
   'Device registry is not set up yet — apply supabase/2026-08-pos-devices.sql';
-
-function isMissingTable(error: { code?: string; message?: string } | null): boolean {
-  return (
-    error?.code === MISSING_TABLE ||
-    error?.code === '42P01' ||
-    /could not find the table/i.test(error?.message ?? '')
-  );
-}
 
 /** Reads a three-state DEV-3 field: absent = leave alone, null = defer to the
  *  store setting, value = this device's own answer. */
@@ -70,7 +61,7 @@ export async function GET() {
     .from('pos_devices')
     .select(DEVICE_COLUMNS)
     .order('enrolled_at', { ascending: false });
-  if (error) return errorResponse(500, isMissingTable(error) ? MISSING_TABLE_MSG : error.message);
+  if (error) return errorResponse(500, isMissingTableError(error) ? MISSING_TABLE_MSG : error.message);
 
   const current = await getEnrolledDevice();
   return NextResponse.json({
@@ -136,7 +127,7 @@ export async function POST(request: Request) {
     if (error.code === '23505') {
       return errorResponse(409, `A device called "${name}" is already enrolled`);
     }
-    if (isMissingTable(error)) return errorResponse(500, MISSING_TABLE_MSG);
+    if (isMissingTableError(error)) return errorResponse(500, MISSING_TABLE_MSG);
     return errorResponse(500, error.message);
   }
   // Only reachable on the re-key path (maybeSingle), and only if the device was
@@ -215,7 +206,7 @@ export async function PATCH(request: Request) {
 
   if (error) {
     if (error.code === '23505') return errorResponse(409, 'Another active device already has that name');
-    if (isMissingTable(error)) return errorResponse(500, MISSING_TABLE_MSG);
+    if (isMissingTableError(error)) return errorResponse(500, MISSING_TABLE_MSG);
     return errorResponse(500, error.message);
   }
   if (!data) return errorResponse(404, 'Device not found, or already revoked');

@@ -9,14 +9,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // actually paid, and can never fail the payment write.
 
 const state: {
-  user: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   existing: Record<string, unknown> | null;
   updated: Record<string, unknown> | null;
   full: Record<string, unknown> | null;
   orderPatch?: Record<string, unknown>;
   insertedParts: Record<string, unknown>[];
   deletedParts: boolean;
-} = { user: null, existing: null, updated: null, full: null, insertedParts: [], deletedParts: false };
+} = { actor: null, existing: null, updated: null, full: null, insertedParts: [], deletedParts: false };
 
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
@@ -54,7 +54,7 @@ vi.mock('@/lib/supabase-server', () => ({
   }),
 }));
 
-vi.mock('@/lib/api/auth', () => ({ getStaffUser: () => Promise.resolve(state.user) }));
+vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
 
 // Typed args (rather than a bare `vi.fn()`) so `mock.calls[0][0]` is a real
 // tuple element — otherwise tsc infers a zero-length tuple and the assertion on
@@ -82,7 +82,7 @@ const call = (body: Record<string, unknown>) => PATCH(request(body), { params: {
 
 beforeEach(() => {
   sendBillNotification.mockClear();
-  state.user = { id: 'staff-1' };
+  state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
   state.insertedParts = [];
   state.deletedParts = false;
   state.orderPatch = undefined;
@@ -171,12 +171,24 @@ describe('PATCH /api/orders/[id]/payment — bill at settle (BILL-1)', () => {
   });
 
   it('rejects an unauthenticated caller without billing', async () => {
-    state.user = null;
+    state.actor = null;
 
     const res = await call({ payment_method: 'cash' });
 
     expect(res.status).toBe(401);
     expect(sendBillNotification).not.toHaveBeenCalled();
+  });
+
+  it('PIN-3: an enrolled-device operator settles and is attributed on order_payments', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+
+    const res = await PATCH(
+      request({ parts: [{ method: 'cash', amount_inr: 480, tendered_inr: 500 }] }),
+      { params: { id: ORDER_ID } },
+    );
+
+    expect(res.status).toBe(200);
+    expect(state.insertedParts[0]).toMatchObject({ created_by: 'ravi' });
   });
 });
 

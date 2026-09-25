@@ -6,7 +6,6 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
-import { getDesktopBridge } from '@/lib/desktop/bridge';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -33,16 +32,34 @@ const TABS = [
       ]
     : []),
   { href: '/staff/menu', label: 'Menu' },
+  // PRN-1 — always shown, even in a plain browser tab with no desktop bridge:
+  // staff need to be able to find printer setup to learn it exists and that
+  // it needs the HIOC POS desktop app (PrinterSettings explains why when
+  // there's no bridge). Hiding the tab entirely made it undiscoverable.
+  { href: '/staff/printers', label: 'Printers' },
 ];
+
+export interface StaffPinControls {
+  /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
+   * decides which — this component just renders the label it's given). */
+  label: 'Switch' | 'Lock';
+  onLock: () => void;
+}
 
 export function StaffHeader({
   userEmail,
   userName,
   role,
+  pinControls,
 }: {
   userEmail: string;
   userName?: string;
   role: string;
+  /** PIN-2 — present only on an enrolled device with the flag on, inside the
+   * desktop app (StaffPinOverlay decides all of that; this component only
+   * renders the button when it's handed one). Omitted everywhere else, so
+   * every other caller of StaffHeader is completely unaffected. */
+  pinControls?: StaffPinControls;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -57,15 +74,7 @@ export function StaffHeader({
   // into a collapsible drawer behind a hamburger button instead.
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // PRN-1 — "Printers" only makes sense inside the desktop app, which is the
-  // only place `window.hiocDesktop` exists. Checked after mount, not during
-  // render: SSR has no `window` at all, so doing this synchronously would
-  // make the very first client render disagree with the server-rendered HTML.
-  const [hasDesktopBridge, setHasDesktopBridge] = useState(false);
-  useEffect(() => {
-    setHasDesktopBridge(getDesktopBridge() !== null);
-  }, []);
-  const tabs = hasDesktopBridge ? [...TABS, { href: '/staff/printers', label: 'Printers' }] : TABS;
+  const tabs = TABS;
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
   // the Store controls section on the Menu page. Best-effort — a failed fetch
@@ -176,6 +185,15 @@ export function StaffHeader({
               <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
             ) : null}
           </div>
+          {pinControls ? (
+            <button
+              type="button"
+              onClick={pinControls.onLock}
+              className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+            >
+              {pinControls.label}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={handleLogout}
@@ -240,13 +258,24 @@ export function StaffHeader({
                   <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
                 ) : null}
               </div>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="shrink-0 rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
-              >
-                Logout
-              </button>
+              <div className="flex shrink-0 gap-2">
+                {pinControls ? (
+                  <button
+                    type="button"
+                    onClick={pinControls.onLock}
+                    className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+                  >
+                    {pinControls.label}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
           </div>
         </div>

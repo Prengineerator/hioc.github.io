@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getAuthUser, getUserRole, isStaffRole } from '@/lib/api/auth';
+import { getAuthUser, getCounterActor } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { getStoreSettings } from '@/lib/store/settings';
 import { computeBill } from '@/lib/store/hours';
@@ -53,21 +53,23 @@ export async function POST(request: Request) {
   // VAL-1 — whose promotions and points this preview is about.
   //
   // On the web that is the caller's own session, as it always was. At the
-  // counter the caller is a STAFF session and the beneficiary is the customer
-  // in front of them, resolved from their phone by the same server-side,
-  // verified-only rule POST /api/orders uses (never a body-supplied user id).
+  // counter the caller is STAFF (a classic session, or — PIN-3 — an enrolled
+  // device's operator) and the beneficiary is the customer in front of them,
+  // resolved from their phone by the same server-side, verified-only rule
+  // POST /api/orders uses (never a body-supplied user id).
   //
-  // Gated on a staff session on purpose: this route is public and returns a
+  // Gated on staff access on purpose: this route is public and returns a
   // points balance, so resolving a phone for anyone would turn it into a
   // "how many points does this number have?" oracle for the whole internet.
   //
-  // The role comes off the session we already hold rather than from
-  // getStaffOrOwner(), which would re-verify the JWT a second time: this is the
-  // web checkout's live preview, it fires on every cart change, and its most
-  // common caller is an anonymous visitor who should pay for none of this.
-  const user = await getAuthUser();
-  const role = user ? await getUserRole(user) : null;
-  const isStaff = isStaffRole(role);
+  // getAuthUser() and getCounterActor() are fetched concurrently rather than
+  // one deriving the other (same accepted duplication as POST /api/orders):
+  // getCounterActor() re-resolves its own session internally, and this route
+  // fires on every cart change for what's usually an anonymous visitor, so
+  // paying for a second round trip only when a session actually exists is the
+  // right trade — see that route's own comment on why they can't share one.
+  const [user, actor] = await Promise.all([getAuthUser(), getCounterActor()]);
+  const isStaff = actor !== null;
   const linked = isStaff
     ? await findVerifiedCustomerByPhone(createAdminSupabaseClient(), toStoredPhone(customer_phone))
     : null;

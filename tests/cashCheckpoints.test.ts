@@ -549,6 +549,13 @@ describe('lastRealCount', () => {
 vi.mock('@/lib/api/auth', () => ({
   getStaffUser: () => Promise.resolve(routeState.staffUser),
   getManagerUser: () => Promise.resolve(routeState.managerUser),
+  // PIN-3: /api/cash-counts (unlike overrides/movements, unmigrated here) now
+  // resolves via getCounterActor()/getCounterManager() — mirrored 1:1 off the
+  // same routeState so every existing case above keeps meaning what it did.
+  getCounterActor: () =>
+    Promise.resolve(routeState.staffUser ? { user: routeState.staffUser, role: 'staff', via: 'session' } : null),
+  getCounterManager: () =>
+    Promise.resolve(routeState.managerUser ? { user: routeState.managerUser, role: 'manager', via: 'session' } : null),
 }));
 
 const routeState: { staffUser: Row | null; managerUser: Row | null } = {

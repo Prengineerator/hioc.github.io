@@ -15,7 +15,7 @@ import { recomputeOrderTotals } from '@/lib/orders/amend';
 
 // --- Shared, per-test mutable state the route mocks read from. ---------------
 const state: {
-  user: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   canVoid: boolean;
   current: Record<string, unknown> | null; // the loaded order (+ embedded order_items)
   updated: Record<string, unknown> | null; // the guarded totals update result (null = lost race)
@@ -23,7 +23,7 @@ const state: {
   orderPatch?: Record<string, unknown>; // the guarded totals write payload
   itemUpdate?: Record<string, unknown>; // the order_items void (or rollback) payload
   amendmentRow?: Record<string, unknown>; // the order_amendments audit row
-} = { user: null, canVoid: true, current: null, updated: null, fullOrder: null };
+} = { actor: null, canVoid: true, current: null, updated: null, fullOrder: null };
 
 vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient: () => ({}),
@@ -60,10 +60,14 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffUser: () => Promise.resolve(state.user),
+  getCounterActor: () => Promise.resolve(state.actor),
 }));
+const hasPermissionCalls: unknown[][] = [];
 vi.mock('@/lib/permissions', () => ({
-  hasPermission: () => Promise.resolve(state.canVoid),
+  hasPermission: (...args: unknown[]) => {
+    hasPermissionCalls.push(args);
+    return Promise.resolve(state.canVoid);
+  },
 }));
 // Real computeBill (money is under test) fed by a deterministic settings row.
 vi.mock('@/lib/store/settings', () => ({
@@ -146,7 +150,7 @@ describe('recomputeOrderTotals (FND3-4 money, no mocks)', () => {
 // ---------------------------------------------------------------------------
 describe('POST /api/orders/[id]/amend', () => {
   beforeEach(() => {
-    state.user = { id: 'mgr-1' };
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager', via: 'session' };
     state.canVoid = true;
     state.current = {
       id: ORDER_ID,
@@ -165,10 +169,11 @@ describe('POST /api/orders/[id]/amend', () => {
     state.orderPatch = undefined;
     state.itemUpdate = undefined;
     state.amendmentRow = undefined;
+    hasPermissionCalls.length = 0;
   });
 
-  it('401s without a staff session', async () => {
-    state.user = null;
+  it('401s without a staff session or operator', async () => {
+    state.actor = null;
     const res = await POST(req({ item_id: ITEM_A, reason: 'wrong item' }), params);
     expect(res.status).toBe(401);
   });
@@ -222,6 +227,20 @@ describe('POST /api/orders/[id]/amend', () => {
     const payload = state.amendmentRow?.payload as { order_item_id: string; line_total_inr: number };
     expect(payload.order_item_id).toBe(ITEM_A);
     expect(payload.line_total_inr).toBe(200);
+  });
+
+  it('PIN-3/PIN-4: an enrolled-device operator voids a line, attributed to THEM', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'manager', via: 'device' };
+    const res = await POST(req({ item_id: ITEM_A, reason: 'wrong size' }), params);
+    expect(res.status).toBe(200);
+    expect(state.itemUpdate?.voided_by).toBe('ravi');
+    expect(state.amendmentRow?.staff_id).toBe('ravi');
+  });
+
+  it('PIN-3: passes the operator\'s role as hasPermission()\'s roleHint — a device operator has no session for it to re-derive from', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'manager', via: 'device' };
+    await POST(req({ item_id: ITEM_A, reason: 'wrong size' }), params);
+    expect(hasPermissionCalls[0]).toEqual([{ id: 'ravi' }, 'void_line', 'manager']);
   });
 
   it('409s a paid order (corrections go through the refund path)', async () => {

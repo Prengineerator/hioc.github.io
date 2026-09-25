@@ -13,6 +13,7 @@ import type { EmailOutcome, TeamMember } from '@/lib/staff/accounts';
 import { AddStaffModal } from './team/AddStaffModal';
 import { EditStaffModal } from './team/EditStaffModal';
 import { PasswordModal } from './team/PasswordModal';
+import { PinModal } from './team/PinModal';
 import { MemberRow } from './team/MemberRow';
 import { passwordToast, type ToastState } from './team/shared';
 
@@ -27,6 +28,7 @@ export function TeamManager() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
   const [passwordMember, setPasswordMember] = useState<TeamMember | null>(null);
+  const [pinMember, setPinMember] = useState<TeamMember | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deactivatedOpen, setDeactivatedOpen] = useState(false);
@@ -80,6 +82,11 @@ export function TeamManager() {
     setPasswordMember(null);
     setToast(passwordToast(member.personalEmail || 'their personal email', mode, email));
     void load();
+  }
+
+  function handlePinDone(member: TeamMember) {
+    setPinMember(null);
+    setToast({ tone: 'success', text: `PIN set for ${member.name || 'this member'}.` });
   }
 
   async function handleDeactivate(member: TeamMember) {
@@ -157,6 +164,7 @@ export function TeamManager() {
                 busy={busyId === m.id}
                 onEdit={setEditingMember}
                 onPassword={setPasswordMember}
+                onPin={setPinMember}
                 onDeactivate={(mem) => setConfirmAction({ type: 'deactivate', member: mem })}
                 onReactivate={handleReactivate}
                 onDelete={(mem) => setConfirmAction({ type: 'delete', member: mem })}
@@ -186,6 +194,7 @@ export function TeamManager() {
                   busy={busyId === m.id}
                   onEdit={setEditingMember}
                   onPassword={setPasswordMember}
+                  onPin={setPinMember}
                   onDeactivate={(mem) => setConfirmAction({ type: 'deactivate', member: mem })}
                   onReactivate={handleReactivate}
                   onDelete={(mem) => setConfirmAction({ type: 'delete', member: mem })}
@@ -199,6 +208,7 @@ export function TeamManager() {
       <AddStaffModal open={showAdd} onClose={() => setShowAdd(false)} onCreated={handleCreated} />
       <EditStaffModal member={editingMember} onClose={() => setEditingMember(null)} onUpdated={handleUpdated} />
       <PasswordModal member={passwordMember} onClose={() => setPasswordMember(null)} onDone={handlePasswordDone} />
+      <PinModal member={pinMember} onClose={() => setPinMember(null)} onDone={handlePinDone} />
 
       {confirmAction?.type === 'deactivate' ? (
         <ConfirmDialog
