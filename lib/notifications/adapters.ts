@@ -9,6 +9,8 @@
 //   WhatsApp (Meta Cloud API): WHATSAPP_TOKEN, WHATSAPP_PHONE_ID [, WHATSAPP_API_VERSION]
 //     bill template: WHATSAPP_TPL_BILL (approved name) [, WHATSAPP_TPL_BILL_HEADER_IMAGE
 //     = public HTTPS logo URL, only if the approved template has an image header]
+//     feedback template: WHATSAPP_TPL_FEEDBACK (default 'order_feedback_1')
+//     [, WHATSAPP_TPL_FEEDBACK_LANG] — see docs/WHATSAPP-FEEDBACK-TEMPLATE.md
 //   SMS (Twilio):              TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM
 
 import type { NotificationChannel, NotificationEvent } from '@/lib/types';
@@ -24,6 +26,12 @@ export interface SendInput {
   // image header — Meta rejects a header component the template doesn't declare.
   // Must be a public HTTPS URL Meta's servers can fetch.
   headerImageUrl?: string;
+  // Template BUTTON components (feedback's 3 quick-replies + 1 dynamic URL
+  // button). `index` must match the button's position in the approved
+  // template. A quick-reply carries `payload` (echoed back verbatim on tap,
+  // parsed by lib/feedback/payload.ts); a dynamic URL button carries `text`,
+  // which Meta appends to the template's configured URL suffix.
+  templateButtons?: { index: number; payload?: string; text?: string }[];
   subject?: string; // email only
   html?: string; // email only (falls back to <pre>body</pre>)
   from?: string; // email only: overrides RESEND_FROM (e.g. staff mail from RESEND_FROM_STAFF)
@@ -43,6 +51,10 @@ function whatsappTemplateName(event: NotificationEvent): string {
     // name is set in WHATSAPP_TPL_BILL (see sendBillNotification); this is the
     // default name once approved.
     bill: process.env.WHATSAPP_TPL_BILL || 'order_bill_1',
+    // Post-order feedback (30 min after completion). 2-var template with 3
+    // quick-reply buttons + a dynamic URL button — see
+    // docs/WHATSAPP-FEEDBACK-TEMPLATE.md and lib/feedback/payload.ts.
+    feedback: process.env.WHATSAPP_TPL_FEEDBACK || 'order_feedback_1',
   };
   return map[event];
 }
@@ -68,6 +80,7 @@ function whatsappTemplateLang(event: NotificationEvent): string {
     rejected: process.env.WHATSAPP_TPL_REJECTED_LANG,
     cancelled: process.env.WHATSAPP_TPL_CANCELLED_LANG,
     bill: process.env.WHATSAPP_TPL_BILL_LANG,
+    feedback: process.env.WHATSAPP_TPL_FEEDBACK_LANG,
   };
   return perEvent[event] || process.env.WHATSAPP_TPL_LANG || 'en';
 }
@@ -188,7 +201,7 @@ async function describeAvailableTemplates(
 export const whatsappAdapter: NotificationAdapter = {
   name: 'whatsapp',
   channel: 'whatsapp',
-  async send({ to, body, event, templateVars, headerImageUrl }: SendInput): Promise<SendResult> {
+  async send({ to, body, event, templateVars, headerImageUrl, templateButtons }: SendInput): Promise<SendResult> {
     const token = process.env.WHATSAPP_TOKEN;
     const phoneId = process.env.WHATSAPP_PHONE_ID;
     const version = process.env.WHATSAPP_API_VERSION ?? 'v21.0';
@@ -212,6 +225,24 @@ export const whatsappAdapter: NotificationAdapter = {
         type: 'body',
         parameters: templateVars.map((t) => ({ type: 'text', text: t })),
       });
+      // Button components (feedback's 3 quick-replies + 1 dynamic URL button).
+      // A quick-reply's parameter type is 'payload'; a dynamic URL button's is
+      // 'text' (Meta appends it to the template's configured URL suffix).
+      // Omitted entirely for templates with no dynamic buttons (Meta rejects a
+      // button component on a template that doesn't declare one, same rule as
+      // the header).
+      for (const b of templateButtons ?? []) {
+        components.push({
+          type: 'button',
+          sub_type: b.payload !== undefined ? 'quick_reply' : 'url',
+          index: String(b.index),
+          parameters: [
+            b.payload !== undefined
+              ? { type: 'payload', payload: b.payload }
+              : { type: 'text', text: b.text ?? '' },
+          ],
+        });
+      }
       payload = {
         messaging_product: 'whatsapp',
         to: digits,

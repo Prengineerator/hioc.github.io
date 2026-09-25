@@ -45,6 +45,10 @@ const WRITABLE_KEYS = [
   // on or off from the settings screen rather than through a redeploy.
   'auto_print_kot',
   'auto_print_bill',
+  // Post-order feedback (2026-10-order-feedback.sql).
+  'feedback_enabled',
+  'feedback_delay_min',
+  'google_review_url',
 ] as const;
 
 export type StoreSettingsPatch = Partial<Pick<StoreSettings, (typeof WRITABLE_KEYS)[number]>>;

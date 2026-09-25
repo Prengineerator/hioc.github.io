@@ -13,7 +13,14 @@ import { flags } from '@/lib/flags';
 import { readAutoPrintSettings } from '@/lib/staff/autoPrint';
 import type { StoreSettings } from '@/lib/types';
 
-type Num = 'gst_percent' | 'packaging_charge_inr' | 'default_prep_min' | 'busy_buffer_min' | 'pickup_slot_len_min' | 'pickup_slot_capacity' | 'last_order_cutoff_min';
+type Num =
+  | 'gst_percent'
+  | 'packaging_charge_inr'
+  | 'default_prep_min'
+  | 'busy_buffer_min'
+  | 'pickup_slot_len_min'
+  | 'pickup_slot_capacity'
+  | 'last_order_cutoff_min';
 
 const NUM_FIELDS: { key: Num; label: string }[] = [
   { key: 'gst_percent', label: 'GST %' },
@@ -186,6 +193,55 @@ export default function OwnerSettingsPage() {
           this is read-only status the owner can't change from a browser. */}
       <div className="mt-8 border-t border-[#e5e5e5] pt-8">
         <ChannelHealthSummary />
+      </div>
+
+      {/* Post-order feedback (2026-10-order-feedback.sql). Same Save button as
+          everything else above — no separate save round trip needed. */}
+      <div className="mt-8 rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+        <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Post-order feedback</h2>
+        <p className="mb-3 text-sm text-muted">
+          A WhatsApp message asking how the order went, sent a while after it&apos;s marked completed. Replies land in{' '}
+          <a href="/owner/feedback" className="font-bold text-tan hover:underline">
+            the feedback inbox
+          </a>
+          .
+        </p>
+        <div className="flex items-center justify-between gap-4 border-b border-[#f2efe9] py-3">
+          <div>
+            <p className="text-sm font-bold text-charcoal">Send feedback requests</p>
+            <p className="text-xs text-muted">Turn this off to stop asking entirely — no code change needed.</p>
+          </div>
+          <ToggleSwitch
+            checked={settings.feedback_enabled}
+            onChange={(next) => set({ feedback_enabled: next })}
+            label="Send feedback requests"
+          />
+        </div>
+        <label className="mt-3 block text-sm">
+          <span className="text-charcoal">Delay after an order completes (minutes)</span>
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            value={settings.feedback_delay_min}
+            onChange={(e) => set({ feedback_delay_min: Number(e.target.value) })}
+            className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2"
+          />
+        </label>
+        <label className="mt-3 block text-sm">
+          <span className="text-charcoal">Google review link</span>
+          <input
+            type="url"
+            value={settings.google_review_url}
+            onChange={(e) => set({ google_review_url: e.target.value })}
+            placeholder="https://g.page/r/…/review"
+            className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2"
+          />
+          <span className="mt-1 block text-xs text-muted">
+            Offered to a customer who taps &quot;Loved it&quot;. A GOOGLE_REVIEW_URL environment variable, if set,
+            overrides this.
+          </span>
+        </label>
       </div>
 
       {/* OPS5-1a. Saves itself per field rather than through the Save button

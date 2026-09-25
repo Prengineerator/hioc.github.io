@@ -27,6 +27,7 @@ import {
   whatsappBillHealth,
 } from '@/lib/notifications/health';
 import { hasBeenSent } from '@/lib/notifications/status';
+import { FEEDBACK_BUTTONS, formatFeedbackButtonPayload } from '@/lib/feedback/payload';
 import { flags } from '@/lib/flags';
 import type { NotificationChannel, NotificationEvent, Order } from '@/lib/types';
 
@@ -100,7 +101,7 @@ async function deliverAndLog(
   adapter: NotificationAdapter,
   input: SendInput,
   force = false,
-): Promise<{ sent: boolean; skipped?: string; error?: string }> {
+): Promise<{ sent: boolean; skipped?: string; error?: string; providerRef?: string }> {
   const channel = adapter.channel;
 
   // Idempotency guard: skip a channel that already sent for this (order,event).
@@ -108,7 +109,7 @@ async function deliverAndLog(
   // resend deliberately skips this so it re-delivers.
   const { data: existing } = await admin
     .from('notifications')
-    .select('id, status, attempts')
+    .select('id, status, attempts, provider_ref')
     .eq('order_id', order.id)
     .eq('event', event)
     .eq('channel', channel)
@@ -119,7 +120,7 @@ async function deliverAndLog(
   // literal would re-fire a billable template at a customer who already read
   // their bill, and overwrite the receipt that proved it.
   if (!force && hasBeenSent(existing?.status)) {
-    return { sent: true, skipped: 'already_sent' };
+    return { sent: true, skipped: 'already_sent', providerRef: existing?.provider_ref ?? '' };
   }
 
   // The attempt budget was already spent by an earlier call for this same
@@ -202,7 +203,7 @@ async function deliverAndLog(
   // send writes no row at all) would otherwise be left with the constant
   // 'send_failed' — which renders an expired token and a paused template as the
   // same sentence, and those have completely different remedies.
-  return { sent: ok, error: ok ? '' : lastError };
+  return { sent: ok, error: ok ? '' : lastError, providerRef: ok ? providerRef : '' };
 }
 
 /**
@@ -250,6 +251,79 @@ export async function sendOrderNotification(
     event,
     templateVars,
   });
+}
+
+/**
+ * Sends the post-order feedback request (order_feedback_1): 2 body vars
+ * (name, order number) + the 3 quick-reply rating buttons + the dynamic URL
+ * button carrying the feedback-page token. Logged in `notifications` under
+ * event 'feedback' — same idempotency key shape as every other event
+ * (order_id, event, channel) — so the delivery-status webhook's receipts
+ * apply to it exactly like a bill or status message.
+ *
+ * This is deliberately NOT layered on sendOrderNotification: that function's
+ * templateVars come from a single generic path with no button support, and
+ * 'feedback' is not one of the lifecycle events it (or the D7 dine-in
+ * suppression) reasons about. Callers (the feedback cron) have already
+ * decided this order is eligible — opted-out/skip-reason checks happen there,
+ * against feedback_requests, not here.
+ */
+export async function sendFeedbackRequestNotification(
+  params: {
+    orderId: string;
+    phone: string;
+    customerName: string;
+    orderNumber: number;
+    requestId: string;
+    token: string;
+  },
+  opts: { force?: boolean } = {},
+): Promise<{ sent: boolean; skipped?: string; error?: string; providerRef?: string }> {
+  if (!flags.notifications) {
+    return { sent: false, skipped: 'notifications_disabled' };
+  }
+
+  const blocked = blockedProviderVars();
+  // Minimal Order-shaped object: deliverAndLog only reads `.id`, and
+  // templateVarsFor only reads customer_name/order_number for this event.
+  const orderStub = {
+    id: params.orderId,
+    customer_name: params.customerName,
+    order_number: params.orderNumber,
+  } as Order;
+
+  if (blocked.length > 0) {
+    const reason = providerSkipReason();
+    await logSkip(createAdminSupabaseClient(), orderStub, 'feedback', 'whatsapp', reason);
+    return { sent: false, skipped: reason };
+  }
+
+  const adapter = getAdapter();
+  const admin = createAdminSupabaseClient();
+  const templateVars = templateVarsFor(orderStub, 'feedback');
+  const templateButtons = [
+    ...FEEDBACK_BUTTONS.map((b) => ({
+      index: b.index,
+      payload: formatFeedbackButtonPayload(params.requestId, b.rating),
+    })),
+    { index: 3, text: params.token },
+  ];
+
+  return deliverAndLog(
+    admin,
+    orderStub,
+    'feedback',
+    adapter,
+    {
+      to: params.phone,
+      channel: adapter.channel,
+      body: renderNotification(orderStub, 'feedback').body,
+      event: 'feedback',
+      templateVars,
+      templateButtons,
+    },
+    opts.force ?? false,
+  );
 }
 
 /**
