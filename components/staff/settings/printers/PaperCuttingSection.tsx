@@ -16,7 +16,10 @@ export function PaperCuttingSection({
 }: {
   printers: PrinterConfig[];
   savingId: string | null;
-  onChange: (next: PrinterConfig[]) => void;
+  /** Takes an updater, not a finished list — see TicketRoutingTable's note
+   * on why (SaveQueue applies it to the latest enqueued list, not this
+   * component's possibly-stale `printers` prop). */
+  onChange: (updater: (prev: PrinterConfig[]) => PrinterConfig[]) => void;
 }) {
   const eligible = printers.filter(printerIsRawCapable);
 
@@ -30,11 +33,11 @@ export function PaperCuttingSection({
   }
 
   function setCut(id: string, cut: boolean) {
-    onChange(printers.map((p) => (p.id === id ? { ...p, cut } : p)));
+    onChange((prev) => prev.map((p) => (p.id === id ? { ...p, cut } : p)));
   }
 
   function setCutMode(id: string, cutMode: CutMode) {
-    onChange(printers.map((p) => (p.id === id ? { ...p, cutMode } : p)));
+    onChange((prev) => prev.map((p) => (p.id === id ? { ...p, cutMode } : p)));
   }
 
   return (

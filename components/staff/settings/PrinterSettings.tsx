@@ -39,6 +39,7 @@ import type {
 import { renderEscPos } from '@/lib/print/escpos';
 import { resolveBrandHeader } from '@/lib/desktop/printExecutor';
 import { CUT_MODE_LABELS, cutTestTicketDoc, testTicketDoc } from '@/lib/print/testTicket';
+import { SaveQueue } from '@/lib/staff/saveQueue';
 import { PrinterCard } from './printers/PrinterCard';
 import { PrinterForm } from './printers/PrinterForm';
 import { TicketRoutingTable } from './printers/TicketRoutingTable';
@@ -174,10 +175,27 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
   const printersRef = useRef(printers);
   printersRef.current = printers;
 
+  // Backs the Ticket routing / Paper & cutting / Cash drawer sections' auto-
+  // save (see lib/staff/saveQueue.ts for why: it fixes two toggled changes
+  // in a row deriving from the same stale `printers` snapshot and one
+  // silently clobbering the other). Built once per mount via the
+  // lazy-ref-init pattern — `bridge` is stable for the component's lifetime,
+  // so the queue's own `save` closure never needs to change.
+  const saveQueueRef = useRef<SaveQueue<PrinterConfig[]>>();
+  if (!saveQueueRef.current) {
+    saveQueueRef.current = new SaveQueue<PrinterConfig[]>([], (list) => bridge.printers.save(list));
+  }
+  // Identifies the MOST RECENT autosave request, so that if a change is
+  // superseded by a newer one before its own save settles, its (now
+  // irrelevant) result doesn't clear the busy indicator or show an error out
+  // from under the newer, still-in-flight one.
+  const autosaveSeqRef = useRef(0);
+
   const loadPrinters = useCallback(async () => {
     setLoading(true);
     try {
       const list = await bridge.printers.list();
+      saveQueueRef.current?.reset(list);
       setPrinters(list);
     } catch {
       setSaveError('Could not load the printer list.');
@@ -264,6 +282,12 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
       const deduped = config.drawer ? withoutThis.map((p) => ({ ...p, drawer: false })) : withoutThis;
       const next = [...deduped, config];
       await bridge.printers.save(next);
+      // Keep the autosave queue's own notion of "latest" in sync — it isn't
+      // used for THIS save (the form keeps its own explicit save button,
+      // unchanged), but the next toggle in Ticket routing/Paper & cutting/
+      // Cash drawer must build on this printer's addition/edit, not on
+      // whatever the queue last saw.
+      saveQueueRef.current?.reset(next);
       setPrinters(next);
       setDraft(null);
     } catch (err) {
@@ -278,6 +302,10 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     try {
       const next = printers.filter((p) => p.id !== id);
       await bridge.printers.save(next);
+      // Same as saveDraft() above — keep the autosave queue's "latest" in
+      // sync so a subsequent routing/cutting/drawer toggle doesn't build on
+      // a list that still contains the printer just deleted.
+      saveQueueRef.current?.reset(next);
       setPrinters(next);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not delete the printer.');
@@ -350,24 +378,61 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     }
   }
 
-  /** Ticket routing / Paper & cutting / Cash drawer all mutate the saved
-   * printer list directly and save immediately — same bridge.printers.save()
-   * IPC call the Add/Edit form uses, just triggered without an intermediate
-   * draft. `focusId` is only for the inline "Saving…" state on that row; the
-   * cash-drawer "None" case touches every printer at once, so it's omitted. */
-  async function applyChange(next: PrinterConfig[], section: string, focusId?: string) {
-    setAutosave({ savingId: focusId ?? null, error: null, section });
+  // On a failed autosave, the save that failed may be the only optimistic
+  // update in flight (no later enqueue is going to re-attempt it — see
+  // saveQueue.ts's "self-healing" note for when one IS), so the UI can be
+  // showing a change that was never actually persisted. Reloading from the
+  // bridge is the one way to know what's really saved; best-effort, since a
+  // second failure here isn't worth stacking a second error message.
+  const resyncAfterFailedAutosave = useCallback(async () => {
     try {
-      await bridge.printers.save(next);
-      setPrinters(next);
-      setAutosave({ savingId: null, error: null, section: null });
-    } catch (err) {
+      const list = await bridge.printers.list();
+      saveQueueRef.current?.reset(list);
+      setPrinters(list);
+    } catch {
+      // Leave whatever's on screen — the autosave error already shown covers it.
+    }
+  }, [bridge]);
+
+  /**
+   * Ticket routing / Paper & cutting / Cash drawer all mutate the saved
+   * printer list and save immediately — same bridge.printers.save() IPC call
+   * the Add/Edit form uses, just triggered without an intermediate draft.
+   * Routed through `saveQueueRef` (lib/staff/saveQueue.ts) rather than
+   * building `next` from the `printers` prop/state directly: two quick
+   * changes before the first save resolves must both land, in order, not
+   * have the second silently overwrite the first with a stale snapshot.
+   * `updater` therefore takes the LATEST enqueued list as `prev`, not
+   * whatever `printers` happened to hold when the section component was
+   * last rendered. `focusId` is only for the inline "Saving…" state on that
+   * row; the cash-drawer "None" case touches every printer at once, so it's
+   * omitted there.
+   */
+  function applyChange(updater: (prev: PrinterConfig[]) => PrinterConfig[], section: string, focusId?: string) {
+    const queue = saveQueueRef.current;
+    if (!queue) return;
+    const seq = ++autosaveSeqRef.current;
+    const next = queue.enqueue(updater, (result) => {
+      // A newer change already took over the busy/error UI for this
+      // section by the time this one's save settled — its own callback (or
+      // a later one still) is the one that gets the final say.
+      if (autosaveSeqRef.current !== seq) return;
+      if (result.status === 'saved') {
+        setAutosave({ savingId: null, error: null, section: null });
+        return;
+      }
       setAutosave({
         savingId: null,
-        error: err instanceof Error ? err.message : 'Could not save that change.',
+        error: result.error instanceof Error ? result.error.message : 'Could not save that change.',
         section,
       });
-    }
+      void resyncAfterFailedAutosave();
+    });
+    // Optimistic: render the change immediately rather than waiting on the
+    // IPC round-trip — `next` is already the queue's up-to-date value, so
+    // this is always the freshest state, even mid a run of quick toggles.
+    setPrinters(next);
+    setAutosave({ savingId: focusId ?? null, error: null, section });
   }
 
   const detectedUsb = detected.filter(
@@ -452,7 +517,7 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
         <TicketRoutingTable
           printers={printers}
           savingId={autosave.savingId}
-          onChange={(next) => void applyChange(next, 'routing')}
+          onChange={(updater) => applyChange(updater, 'routing')}
         />
         {autosave.section === 'routing' && autosave.error ? (
           <p className="mt-2 text-sm text-red-700">{autosave.error}</p>
@@ -463,7 +528,7 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
         <PaperCuttingSection
           printers={printers}
           savingId={autosave.savingId}
-          onChange={(next) => void applyChange(next, 'cutting')}
+          onChange={(updater) => applyChange(updater, 'cutting')}
         />
         {autosave.section === 'cutting' && autosave.error ? (
           <p className="mt-2 text-sm text-red-700">{autosave.error}</p>
@@ -475,7 +540,7 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
           printers={printers}
           notice={drawerNotice}
           testing={drawerTesting}
-          onChange={(next) => void applyChange(next, 'drawer')}
+          onChange={(updater) => applyChange(updater, 'drawer')}
           onTest={(p) => void testDrawer(p)}
         />
         {autosave.section === 'drawer' && autosave.error ? (

@@ -16,15 +16,19 @@ export function TicketRoutingTable({
 }: {
   printers: PrinterConfig[];
   savingId: string | null;
-  onChange: (next: PrinterConfig[]) => void;
+  /** Takes an updater, not a finished list — SaveQueue (lib/staff/saveQueue.ts)
+   * applies it to the latest ACTUALLY-enqueued list, not this component's
+   * possibly-stale `printers` prop, so two quick toggles never both derive
+   * from the same snapshot and clobber each other. */
+  onChange: (updater: (prev: PrinterConfig[]) => PrinterConfig[]) => void;
 }) {
   if (printers.length === 0) {
     return <p className="text-sm text-muted">Add a printer above, then assign it to Receipt, KOT or Token here.</p>;
   }
 
   function toggle(printerId: string, role: PrinterRole) {
-    onChange(
-      printers.map((p) => {
+    onChange((prev) =>
+      prev.map((p) => {
         if (p.id !== printerId) return p;
         const has = p.roles.includes(role);
         const roles = has ? p.roles.filter((r) => r !== role) : [...p.roles, role];
@@ -38,8 +42,8 @@ export function TicketRoutingTable({
 
   function setCopies(printerId: string, role: PrinterRole, value: number) {
     const clamped = Math.min(5, Math.max(1, Math.trunc(value) || 1));
-    onChange(
-      printers.map((p) => (p.id === printerId ? { ...p, copies: { ...p.copies, [role]: clamped } } : p)),
+    onChange((prev) =>
+      prev.map((p) => (p.id === printerId ? { ...p, copies: { ...p.copies, [role]: clamped } } : p)),
     );
   }
 

@@ -15,17 +15,20 @@ export function CashDrawerSection({
   printers: PrinterConfig[];
   notice: string | null;
   testing: boolean;
-  onChange: (next: PrinterConfig[]) => void;
+  /** Takes an updater, not a finished list — see TicketRoutingTable's note
+   * on why (SaveQueue applies it to the latest enqueued list, not this
+   * component's possibly-stale `printers` prop). */
+  onChange: (updater: (prev: PrinterConfig[]) => PrinterConfig[]) => void;
   onTest: (printer: PrinterConfig) => void;
 }) {
   const current = printers.find((p) => p.drawer) ?? null;
 
   function selectDrawer(id: string) {
     if (!id) {
-      onChange(printers.map((p) => (p.drawer ? { ...p, drawer: false } : p)));
+      onChange((prev) => prev.map((p) => (p.drawer ? { ...p, drawer: false } : p)));
       return;
     }
-    onChange(printers.map((p) => ({ ...p, drawer: p.id === id })));
+    onChange((prev) => prev.map((p) => ({ ...p, drawer: p.id === id })));
   }
 
   if (printers.length === 0) {
