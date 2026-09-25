@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dedupeOrders, parseOrderSheet } from '@/lib/petpooja/orders';
+import { dedupeOrders, legacyOrderKey, parseOrderSheet } from '@/lib/petpooja/orders';
 import type { MenuSnapshotItem, ParsedLegacyOrder } from '@/lib/petpooja/types';
 
 // All names/phones below are invented (PII rule: never real customer data).
@@ -156,6 +156,38 @@ describe('parseOrderSheet', () => {
     const { orders, skipped } = parseOrderSheet(rows, menu);
     expect(orders).toHaveLength(0);
     expect(skipped.find((s) => s.reason === 'orphan_continuation_row')?.count).toBe(1);
+  });
+});
+
+describe('legacyOrderKey', () => {
+  it('keys the same instant the same, regardless of which offset it is spelled with', () => {
+    // Locally-produced IST wall-clock spelling vs. how PostgREST renders the
+    // same timestamptz back out in UTC after a round trip through Postgres.
+    const ist = legacyOrderKey('101', '2026-09-25T23:00:56+05:30');
+    const utc = legacyOrderKey('101', '2026-09-25T17:30:56+00:00');
+    expect(ist).toBe(utc);
+  });
+
+  it('keys different bill_nos differently even at the same instant', () => {
+    const a = legacyOrderKey('101', '2026-09-25T23:00:56+05:30');
+    const b = legacyOrderKey('102', '2026-09-25T23:00:56+05:30');
+    expect(a).not.toBe(b);
+  });
+
+  it('keys different instants differently even for the same bill_no', () => {
+    const a = legacyOrderKey('101', '2026-09-25T23:00:56+05:30');
+    const b = legacyOrderKey('101', '2026-09-26T23:00:56+05:30');
+    expect(a).not.toBe(b);
+  });
+
+  it('also matches PostgREST forms with fractional seconds and a no-colon offset', () => {
+    const base = legacyOrderKey('101', '2026-09-25T17:30:56+00:00');
+    expect(legacyOrderKey('101', '2026-09-25T17:30:56.000000+00:00')).toBe(base);
+    expect(legacyOrderKey('101', '2026-09-25T17:30:56+0000')).toBe(base);
+  });
+
+  it('throws on an unparseable ordered_at instead of silently colliding', () => {
+    expect(() => legacyOrderKey('101', 'not-a-date')).toThrow();
   });
 });
 

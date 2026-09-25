@@ -50,6 +50,7 @@ import {
   dedupeOrders,
   parseCustomerCsv,
   parsePetpoojaDateTime,
+  legacyOrderKey,
 } from '../lib/petpooja';
 import type {
   MenuSnapshotItem,
@@ -646,7 +647,7 @@ async function runCommit(
   base: string,
   key: string,
 ): Promise<CommitResult> {
-  const idMap = new Map<string, string>(); // `${bill_no}\0${ordered_at}` -> legacy_order_id
+  const idMap = new Map<string, string>(); // legacyOrderKey(bill_no, ordered_at) -> legacy_order_id
   let ordersWritten = 0;
   let itemsWritten = 0;
 
@@ -688,7 +689,16 @@ async function runCommit(
     });
     if (!res.ok) failHttp(`POST /legacy_orders (batch ${i + 1}/${orderBatches.length})`, res);
     const returned = (res.body as { id: string; bill_no: string; ordered_at: string }[] | null) ?? [];
-    for (const r of returned) idMap.set(`${r.bill_no}\0${r.ordered_at}`, r.id);
+    if (returned.length !== batch.length) {
+      die(
+        `POST /legacy_orders (batch ${i + 1}/${orderBatches.length}) returned ${returned.length} row(s) ` +
+          `but the batch had ${batch.length} — an upsert must return one row per input row (Prefer: ` +
+          'return=representation). Refusing to continue: legacy_order_items would be written for an ' +
+          'incomplete/uncertain set of orders. Nothing after this batch was written; earlier batches are ' +
+          'safe to keep (the import is idempotent) — fix the problem and re-run the same command.',
+      );
+    }
+    for (const r of returned) idMap.set(legacyOrderKey(r.bill_no, r.ordered_at), r.id);
     ordersWritten += returned.length;
 
     const batchIds = returned.map((r) => r.id);
@@ -700,9 +710,13 @@ async function runCommit(
     }
 
     const itemRows: Record<string, unknown>[] = [];
+    const unmapped: ParsedLegacyOrder[] = [];
     for (const o of batch) {
-      const orderId = idMap.get(`${o.bill_no}\0${o.ordered_at}`);
-      if (!orderId) continue; // should not happen — every row in `rows` was returned
+      const orderId = idMap.get(legacyOrderKey(o.bill_no, o.ordered_at));
+      if (!orderId) {
+        unmapped.push(o);
+        continue;
+      }
       for (const item of o.items) {
         itemRows.push({
           legacy_order_id: orderId,
@@ -715,6 +729,16 @@ async function runCommit(
           quantity: null, // Petpooja's export never carries quantities
         });
       }
+    }
+    if (unmapped.length) {
+      const first = unmapped[0];
+      die(
+        `${unmapped.length} order(s) in batch ${i + 1}/${orderBatches.length} had no matching legacy_order_id ` +
+          `after the upsert — legacy_order_items would silently be dropped for them. First: ` +
+          `${JSON.stringify(legacyOrderKey(first.bill_no, first.ordered_at))} (bill_no ${JSON.stringify(first.bill_no)}, ` +
+          `ordered_at ${JSON.stringify(first.ordered_at)}). Nothing after this point in the batch was written; ` +
+          'earlier batches are safe to keep (the import is idempotent) — fix the problem and re-run the same command.',
+      );
     }
     for (const itemChunk of chunk(itemRows, 1000)) {
       const ins = await rest(base, key, '/legacy_order_items', {

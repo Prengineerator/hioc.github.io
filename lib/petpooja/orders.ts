@@ -251,6 +251,28 @@ export function parseOrderSheet(
   return { orders, skipped: [...skipped].map(([reason, count]) => ({ reason, count })) };
 }
 
+/**
+ * Keys a legacy bill by `bill_no` + the *instant* `ordered_at` names, not by
+ * its string spelling. `ordered_at` round-trips through Postgres/PostgREST,
+ * which renders timestamptz back out in UTC (e.g.
+ * '2026-09-25T17:30:56+00:00') — a different string than the
+ * '2026-09-25T23:00:56+05:30' this module produces for the same instant, so
+ * comparing the raw strings silently never matches. `Date.parse` normalizes
+ * both: it accepts a colon or no-colon offset and any fractional-second
+ * precision, which covers every form PostgREST is known to emit.
+ *
+ * Throws if `orderedAt` doesn't parse, so a malformed timestamp fails loudly
+ * (as `NaN\0...`) rather than silently colliding with every other malformed
+ * row.
+ */
+export function legacyOrderKey(billNo: string, orderedAt: string): string {
+  const instant = Date.parse(orderedAt);
+  if (Number.isNaN(instant)) {
+    throw new Error(`legacyOrderKey: unparseable ordered_at: ${JSON.stringify(orderedAt)}`);
+  }
+  return `${billNo}\u0000${instant}`;
+}
+
 /** Dedupes on `bill_no + ordered_at` (the export files overlap); first
  * occurrence wins. */
 export function dedupeOrders(orders: ParsedLegacyOrder[]): { orders: ParsedLegacyOrder[]; duplicates: number } {
@@ -259,7 +281,7 @@ export function dedupeOrders(orders: ParsedLegacyOrder[]): { orders: ParsedLegac
   let duplicates = 0;
 
   for (const order of orders) {
-    const key = `${order.bill_no}\u0000${order.ordered_at}`;
+    const key = legacyOrderKey(order.bill_no, order.ordered_at);
     if (seen.has(key)) {
       duplicates++;
       continue;
