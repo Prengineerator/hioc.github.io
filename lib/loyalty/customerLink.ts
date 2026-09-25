@@ -82,3 +82,52 @@ export async function findVerifiedCustomerByPhone(
 
   return { userId: rows[0].id, name: (rows[0].name ?? '').trim() };
 }
+
+/**
+ * Wraps a value in PostgREST's double-quoted-literal syntax, for embedding in
+ * a raw `.or()`/`.in()` filter string. Not strictly required for a plain
+ * digit string (none of the characters `.or()`'s own parser treats specially
+ * — comma, period, parentheses — appear in a phone number), but `+` is the
+ * one character that a naive/double URL-decode could turn into a space, and
+ * quoting removes that ambiguity outright rather than leaning on supabase-js
+ * encoding it correctly (it does: `.or()` appends through `URLSearchParams`,
+ * which percent-encodes a literal `+` to `%2B` — but this is what PostgREST's
+ * own docs recommend for any value that isn't a bare identifier or number,
+ * and costs nothing to do here too).
+ */
+function quotePostgrestValue(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * The `.or()` expression for "every order that belongs to whoever this phone
+ * belongs to" — the read side of `loyaltyUserIdFor` (lib/loyalty/
+ * beneficiary.ts writes that same relationship onto an order at creation
+ * time; this finds every order it was written onto). Used by both
+ * GET /api/customers/lookup (to count past orders) and GET /api/customers/
+ * orders (to list them), so the two can never disagree about whose history a
+ * phone number surfaces.
+ *
+ * `phoneE164` must already be stored form (`+91XXXXXXXXXX`); `accountUserId`
+ * is the linked account's id from `findVerifiedCustomerByPhone`, or null when
+ * the phone matches no verified account. With no account, only the phone
+ * itself counts — a counter order is filed under `customer_phone` regardless
+ * of who typed it, so this deliberately does NOT fall back to `user_id`/
+ * `customer_user_id` being null (that would match every unrelated guest order
+ * in the building).
+ *
+ * `customer_phone` is matched against BOTH the `+91`-prefixed form every
+ * order since `toStoredPhone` shipped is written in, and the bare 10-digit
+ * form a handful of older rows still store — an order predating that
+ * normalization must not silently vanish from someone's order_count or
+ * "Last orders" list just because its format is a year out of date.
+ */
+export function orderMatchFilter(phoneE164: string, accountUserId: string | null): string {
+  const bareDigits = phoneE164.startsWith('+91') ? phoneE164.slice(3) : phoneE164;
+  const phoneVariants = [...new Set([phoneE164, bareDigits])].map(quotePostgrestValue).join(',');
+  const clauses = [`customer_phone.in.(${phoneVariants})`];
+  if (accountUserId) {
+    clauses.push(`customer_user_id.eq.${accountUserId}`, `user_id.eq.${accountUserId}`);
+  }
+  return clauses.join(',');
+}

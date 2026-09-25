@@ -10,10 +10,28 @@
 // money; it does not compute it (POST /api/orders/quote is authoritative, and
 // POST /api/orders re-derives it all again at submit).
 
-/** What the customer lookup (GET /api/customers/lookup) says about a number. */
+/**
+ * What the customer lookup (GET /api/customers/lookup) says about a number.
+ *
+ * `source` says how much the name is worth trusting:
+ *  - 'account'       — a VERIFIED phone-linked account; `points_balance` is
+ *                       real spendable balance.
+ *  - 'order_history'  — no account, but a past order used this exact phone;
+ *                       the name is recalled from that order, never
+ *                       verified, and there is no balance to spend
+ *                       (`points_balance` is omitted, not zero — zero would
+ *                       claim a real, empty account).
+ */
 export type CustomerLookup =
   | { found: false }
-  | { found: true; name: string; points_balance: number };
+  | {
+      found: true;
+      source: 'account' | 'order_history';
+      name: string;
+      points_balance?: number;
+      order_count: number;
+      last_order_at: string | null;
+    };
 
 /**
  * A discount the server has judged — the `coupon` and `points` blocks of the
@@ -53,12 +71,42 @@ export function describeCustomer(lookup: CustomerLookup | null): Feedback | null
     return { ok: false, text: 'No account for this number — the order still gets a bill.' };
   }
   const name = lookup.name.trim() || 'Account';
-  return { ok: true, text: `${name} · ${formatPoints(lookup.points_balance)}` };
+  if (lookup.source === 'account') {
+    return { ok: true, text: `${name} · ${formatPoints(lookup.points_balance ?? 0)}` };
+  }
+  // order_history: a name recalled from a past order, not a verified account
+  // — still worth confirming against the person at the counter, but there is
+  // no balance to offer (canRedeemPoints below keeps that control hidden).
+  return { ok: true, text: `${name} (no HIOC account)` };
 }
 
-/** Whether the points control is worth showing at all. */
+/** Whether the points control is worth showing at all — only a verified
+ * account can hold a spendable balance. */
 export function canRedeemPoints(lookup: CustomerLookup | null): boolean {
-  return Boolean(lookup && lookup.found && lookup.points_balance > 0);
+  return Boolean(lookup && lookup.found && lookup.source === 'account' && (lookup.points_balance ?? 0) > 0);
+}
+
+/** Whether the phone typed so far has ANY past order worth a "Last orders"
+ * button for — true for both a verified account and the order-history
+ * fallback, as long as at least one past order was found. */
+export function hasOrderHistory(lookup: CustomerLookup | null): boolean {
+  return Boolean(lookup && lookup.found && lookup.order_count > 0);
+}
+
+/**
+ * The small chip shown right by the phone field (POS-5) — distinct from
+ * `describeCustomer`'s fuller line further down the form, and shown the
+ * moment a lookup resolves rather than only once the fuller line is visible.
+ * Wording matches what the phone actually means: a real account carries
+ * points, a bare order-history match doesn't.
+ */
+export function customerChip(lookup: CustomerLookup | null): string | null {
+  if (!lookup || !lookup.found) return null;
+  if (lookup.source === 'account') {
+    return `HIOC account · ${formatPoints(lookup.points_balance ?? 0)}`;
+  }
+  if (lookup.order_count <= 0) return null;
+  return `Returning customer · ${lookup.order_count} order${lookup.order_count === 1 ? '' : 's'}`;
 }
 
 /**
