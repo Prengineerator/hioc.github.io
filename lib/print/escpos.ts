@@ -47,7 +47,17 @@ const SIZE_CODE: Record<Size, number> = { normal: 0x00, large: 0x01, xlarge: 0x1
 const FEED_TO_CUTTER_LINES = 4;
 
 // Characters known to appear in ticket content that have no place on a
-// 7-bit ASCII code page. Anything else non-ASCII falls back to '?'.
+// 7-bit ASCII code page. Anything else non-ASCII falls back to '?' — except
+// the two broader classes handled after the map lookup in `transliterate`
+// below (emoji/symbols, which are dropped; and non-breaking/narrow spaces,
+// which become a plain space).
+//
+// PRN-7 field report: a real receipt printed "Paid ? cash" and "Thank you
+// for your order! ? HIOC." — both from '·' (U+00B7 MIDDLE DOT), used as a
+// separator in lib/print/ticketModel.ts, having no entry here at all and so
+// falling through to the generic '?' fallback. '•' and '∙' are the same kind
+// of separator glyph and would hit the same bug the moment either showed up
+// in ticket content, so all three are mapped alongside it.
 const CHAR_MAP: Record<string, string> = {
   '₹': 'Rs.',
   '‘': "'", // ‘
@@ -57,12 +67,43 @@ const CHAR_MAP: Record<string, string> = {
   '×': 'x',
   '—': '-', // em dash
   '–': '-', // en dash
+  '·': '-', // middle dot (U+00B7) — PRN-7: the actual cause of the "?" bug
+  '•': '-', // bullet
+  '∙': '-', // bullet operator
+  '…': '...', // horizontal ellipsis
 };
+
+// Non-breaking/narrow space variants that visually read as a plain space but
+// aren't printable ASCII 0x20 — collapse them to one before the generic
+// range check, rather than letting them fall through to '?'.
+const SPACE_CHARS = new Set([' ', ' ', ' ', ' ', ' ']);
+
+/**
+ * Whether `ch` is an emoji or other symbol/pictograph — the Unicode blocks a
+ * thermal printer's code page could never represent meaningfully. These are
+ * dropped entirely (rendered as nothing) rather than printed as '?', since a
+ * missing decoration reads better on a receipt than a wall of "?"s. Letters
+ * from other scripts (e.g. a stray Devanagari character outside the
+ * rasterized brand header) are NOT covered here and still fall back to '?'.
+ */
+function isSymbolOrPictograph(code: number): boolean {
+  return (
+    (code >= 0x2600 && code <= 0x27bf) || // Misc symbols, Dingbats
+    (code >= 0x1f300 && code <= 0x1faff) || // Misc Symbols & Pictographs, Emoticons, Transport, Supplemental Symbols, Symbols & Pictographs Extended-A
+    (code >= 0x2190 && code <= 0x21ff) || // Arrows
+    (code >= 0x2300 && code <= 0x23ff) || // Misc Technical (includes many emoji-ish symbols)
+    (code >= 0x2b00 && code <= 0x2bff) || // Misc Symbols and Arrows
+    (code >= 0xfe00 && code <= 0xfe0f) || // Variation selectors (emoji presentation)
+    code === 0x200d // zero-width joiner (emoji ZWJ sequences)
+  );
+}
 
 /**
  * Maps a string to 7-bit printable ASCII: known symbols get a sensible
- * fallback (₹ → "Rs.", smart quotes → straight, × → x, — → -), and anything
- * else outside the printable ASCII range becomes '?'. `\n` passes through
+ * fallback (₹ → "Rs.", smart quotes → straight, × → x, — / · / • / ∙ → -,
+ * … → "...", non-breaking/narrow spaces → " "), emoji/pictographs are
+ * dropped rather than printed, and any remaining non-ASCII character (e.g. a
+ * letter from another script) falls back to '?'. `\n` passes through
  * unchanged — callers only ever feed it deliberately as a line separator.
  */
 export function transliterate(text: string): string {
@@ -77,8 +118,19 @@ export function transliterate(text: string): string {
       out += mapped;
       continue;
     }
+    if (SPACE_CHARS.has(ch)) {
+      out += ' ';
+      continue;
+    }
     const code = ch.codePointAt(0) ?? 0;
-    out += code >= 0x20 && code <= 0x7e ? ch : '?';
+    if (code >= 0x20 && code <= 0x7e) {
+      out += ch;
+      continue;
+    }
+    if (isSymbolOrPictograph(code)) {
+      continue; // dropped, not '?'
+    }
+    out += '?';
   }
   return out;
 }

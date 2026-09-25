@@ -12,6 +12,18 @@ import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
 
+/**
+ * The earn formula, factored out so `earnForOrder` (the actual ledger write)
+ * and `getStaffPrintOrder` (PRN-8: projecting "points earned" on a receipt
+ * printed at payment/settle, before the order reaches 'completed' and
+ * actually earns) can't drift on how many points an order is worth. Floors
+ * down, same as the ledger write — a projected receipt total must match the
+ * real ledger entry once it's posted.
+ */
+export function computeEarnedPoints(amountInr: number, config: LoyaltyConfig): number {
+  return Math.floor(amountInr * config.points_per_inr);
+}
+
 export async function getLoyaltyConfig(): Promise<LoyaltyConfig | null> {
   const admin = createAdminSupabaseClient();
   const { data, error } = await admin
@@ -246,7 +258,7 @@ export async function earnForOrder(orderId: string): Promise<void> {
   if (!config) return;
 
   const amountInr = order.total_inr ?? order.subtotal_inr ?? 0;
-  const points = Math.floor(amountInr * config.points_per_inr);
+  const points = computeEarnedPoints(amountInr, config);
   if (points <= 0) return;
 
   const { error: insertError } = await admin.from('loyalty_transactions').insert({
