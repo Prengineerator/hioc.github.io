@@ -1,23 +1,105 @@
 # Counter machine setup — printing, install, enrolment
 
 **Ticket:** PRT-2 (Phase 6 §4) · **Audience:** the cafe owner, following this alone, once per counter machine
-**Time:** about 20 minutes the first time
-**Result:** an order placed at the counter prints its ticket with **no dialog, no flicker, and no change to what is on screen**. The POS opens in its own window like an installed app and comes back by itself after a reboot.
+**Time:** about 15 minutes the first time
+**Result:** an order placed at the counter prints its ticket — and, if the receipt printer has a cash drawer
+wired into it, pops the drawer on a cash sale — with **no dialog, no flicker, and no change to what is on
+screen**.
 
-> Do the steps in order. Step 5 (enrolment) only works if step 4 is done first — that is the one place where doing it out of order silently gives you the wrong result.
-
----
-
-## What you need
-
-- The counter PC (Windows 10 or 11) — these instructions are for Windows; macOS notes are at the end.
-- An **80 mm thermal receipt printer**, USB, with its driver installed.
-- Google Chrome (or Microsoft Edge — both work, the commands are the same with `msedge.exe`).
-- Your owner login.
+There are two ways to set up a counter machine. **Use the HIOC POS desktop app** (below) unless you have a
+specific reason not to — it is what makes the cash drawer possible, it lets kitchen tickets and the receipt
+go to two different printers from the same machine, and it is what the printer setup screen at
+**Staff → Printers** is for. The older Chrome-shortcut method still works and is kept as a documented
+fallback further down, but it can only ever print to a single default printer and it can never open a cash
+drawer — a browser has no way to do either.
 
 ---
 
-## 1. Install the printer and prove it works on its own
+## Recommended: the HIOC POS desktop app
+
+### What you need
+
+- The counter PC (Windows 10 or 11).
+- A receipt printer with its normal Windows driver installed (USB is the common case; network printers
+  work too). If it has a cash drawer wired into it (the RJ11 "kick" port on the back of the printer), the
+  drawer is driven through the printer — no separate cable to the PC.
+- Your staff or owner login.
+
+### 1. Install the printer and prove it works on its own
+
+Install the printer's driver from its CD or the manufacturer's site, then:
+
+**Settings → Bluetooth & devices → Printers & scanners → [your printer] → Printer properties → Print Test Page**
+
+Do not continue until a test page comes out. If it does not print here, nothing later in this guide will
+make it print — it is a driver or cable problem, and it is much easier to solve now than after.
+
+### 2. Download and install HIOC POS
+
+Download the installer from
+**[github.com/Prengineerator/hioc.github.io/releases/latest](https://github.com/Prengineerator/hioc.github.io/releases/latest)**
+(the `.exe` under "Assets") and run it.
+
+Windows will very likely show a blue **"Windows protected your PC"** screen — the installer isn't
+code-signed yet. This is expected, not a sign anything is wrong: click **More info**, then **Run anyway**.
+The installer adds a **HIOC POS** desktop shortcut and start-menu entry; it opens on its own like a normal
+installed app from then on.
+
+### 3. Sign in and enrol the machine
+
+Open **HIOC POS** and sign in with a staff or owner account. It behaves like its own private browser
+profile, so device enrolment works exactly as it does for a browser-based counter (see steps 3–4 of the
+fallback method below if you also want to set this machine's default order type or auto-print behaviour at
+**Owner → Devices**) — do that from inside the HIOC POS window, not from your everyday browser.
+
+### 4. Add your printer
+
+Go to **Printers** in the staff nav (it's always there; it just points here if you open it from a plain
+browser tab).
+
+1. **Add printer** → choose the connection:
+   - **USB printer with its normal Windows driver** (the common case): choose **Installed printer**, click
+     **Scan for printers**, pick it from the list, and leave the mode on **Raw**. This uses the printer's
+     stock driver through the Windows spooler — no separate USB driver install needed.
+   - **Network printer** (Ethernet/WiFi, port 9100): choose **Network** and enter its IP.
+2. Set the **paper width** (58mm or 80mm).
+3. Tick which tickets print here — **KOT**, **Receipt**, **Token** — and how many copies of each.
+4. If this is the printer with the cash drawer wired into it, tick **Drives the cash drawer**. Only one
+   printer can drive it; turning this on here turns it off anywhere else automatically.
+5. **Save printer**.
+
+Repeat for a second printer (e.g. a separate kitchen printer) if you have one — this is exactly what a
+browser-only setup cannot do.
+
+### 5. Test print and test drawer
+
+Back on the printer list, each printer has a **Test print** button — use it to confirm paper actually comes
+out before trusting it with a real order. The printer wired to the drawer also has a **Test drawer**
+button — use it to confirm the drawer pops without needing a cash sale.
+
+### 6. Prove it — the test that actually matters
+
+With the printer on:
+
+1. Place a small test order at the counter and settle it with **cash**.
+2. It passes when **all** of these are true:
+   - [ ] The kitchen/receipt tickets print, with no dialog and no change to what's on screen.
+   - [ ] The cash drawer pops open (if one is wired in and ticked above).
+3. **Switch the printer off** and place another test order. A chip should appear saying the ticket didn't
+   print. Switch the printer back on and retry from that chip.
+
+Cancel or void the test orders afterwards so they don't land in the day's takings.
+
+---
+
+## Fallback: browser-only setup (Chrome/Edge kiosk-printing)
+
+Use this only when the desktop app genuinely isn't an option (e.g. a locked-down machine that can't run
+installers). It has real limits the desktop app doesn't: it can only ever print to **one** default printer
+for the whole machine, and **it can never open a cash drawer** — a browser has no API for either. If a cash
+drawer is wired to the printer, this method cannot use it; go back to the desktop app above.
+
+### 1. Install the printer and prove it works on its own
 
 Install the printer's driver from its CD or the manufacturer's site, then:
 
@@ -25,7 +107,7 @@ Install the printer's driver from its CD or the manufacturer's site, then:
 
 Do not continue until a test page comes out. If it does not print here, nothing later in this guide will make it print — it is a driver or cable problem, and it is much easier to solve now than after five more steps.
 
-## 2. Stop Windows from moving your default printer
+### 2. Stop Windows from moving your default printer
 
 This is the single most common cause of "it printed to the wrong printer" — and it costs nothing to prevent.
 
@@ -33,7 +115,7 @@ This is the single most common cause of "it printed to the wrong printer" — an
 
 Windows leaves that on by default, and it means *the last printer you used becomes the default*. Print one thing to a PDF or an office printer and every kitchen ticket silently follows it there.
 
-## 3. Make the thermal printer the default, on the right paper
+### 3. Make the thermal printer the default, on the right paper
 
 Still in **Printers & scanners**: open your thermal printer → **Set as default**.
 
@@ -41,7 +123,7 @@ Then **Printer properties → Preferences** and set the paper size to the **80 m
 
 The tickets already declare their own width and remove page margins, so this is belt-and-braces — but a driver defaulting to A4 can still stretch or split a receipt, and this is where that gets fixed.
 
-## 4. Create the POS shortcut
+### 4. Create the POS shortcut
 
 Right-click the desktop → **New → Shortcut**, and paste this as the location:
 
@@ -63,7 +145,7 @@ What each part is doing, because you will want to know when something misbehaves
 
 > On the main domain rather than the subdomain? Use `--app=https://hioc.in/staff`. Both work.
 
-## 5. Sign in and enrol the machine — from inside this window
+### 5. Sign in and enrol the machine — from inside this window
 
 **Open the HIOC POS shortcut you just made, and do this inside it.** Not in your normal Chrome.
 
@@ -82,13 +164,13 @@ Now set what this machine should do by default, on the same screen:
 
 While you are on the cafe's WiFi, this is also the moment to open **Owner → Settings → Attendance** and press **Add this network**, so staff punches from this connection stop getting flagged.
 
-## 6. Make it come back after a restart
+### 6. Make it come back after a restart
 
 Press **Windows + R**, type `shell:startup`, press Enter. Copy your **HIOC POS** shortcut into the folder that opens.
 
 The POS now reopens by itself whenever the machine is switched on.
 
-## 7. Prove it — the test that actually matters
+### 7. Prove it — the test that actually matters
 
 With the printer on, in the POS window:
 
@@ -111,7 +193,7 @@ Finally, cancel or void the test orders so they do not land in the day's takings
 
 ---
 
-## When it misbehaves
+### When it misbehaves
 
 **A print dialog appears.**
 The shortcut is not the one being used — Windows probably opened Chrome normally, or the POS was launched from a pinned icon made before step 4. Close every Chrome window (check the system tray) and reopen using the HIOC POS shortcut. Right-click the taskbar icon → Pin to taskbar to get a correct pinned copy.
@@ -133,17 +215,30 @@ Step 5 was done in a different Chrome profile. Open the HIOC POS shortcut and en
 
 ---
 
-## The limitation, stated plainly
+### The limitation, stated plainly
 
-`--kiosk-printing` prints **everything to the one default printer** of that profile. One counter printer is exactly what this handles well.
+`--kiosk-printing` prints **everything to the one default printer** of that profile, and can never touch a
+cash drawer. One counter printer with no drawer is exactly what this handles well.
 
-If you later want **kitchen tickets on a kitchen printer and receipts at the counter from this same machine**, this method cannot do it — a browser has no way to choose a printer per job. That needs a small helper application installed on the counter PC, which is a real piece of work with its own installer and updates, and is deliberately not built until a second printer actually exists. See `docs/COUNTER-PAYMENTS-SPEC.md` §5 for where that decision is recorded and what would re-open it.
+If you want **kitchen tickets on a kitchen printer and receipts at the counter from the same machine**, or a
+**cash drawer that pops on a cash sale**, this method cannot do either — a browser has no way to choose a
+printer per job or to send the drawer's kick pulse. That is exactly what the HIOC POS desktop app (the
+recommended method, above) is for; it now exists, so there is no reason to build around this limitation —
+switch to the desktop app instead of working around it.
 
-The workaround in the meantime is a second Chrome profile (another shortcut with a different `--user-data-dir`) with the kitchen printer as *its* default, opened on the order board. It works, and it is clumsy.
+The old workaround, kept here only for machines still on this method: a second Chrome profile (another
+shortcut with a different `--user-data-dir`) with the kitchen printer as *its* default, opened on the order
+board. It works, and it is clumsy — the desktop app replaces it.
 
 ---
 
-## macOS
+## macOS (desktop app)
+
+The desktop app also builds for macOS (`npm run dist:mac` in `desktop/`, see `desktop/README.md`), though
+there is currently no downloadable release for it — only Windows is built and published automatically.
+Everything above (Printers screen, test print/drawer) works the same once it's installed.
+
+### macOS (browser fallback)
 
 Same idea, different shortcut. Create `~/hioc-pos.command` containing:
 
