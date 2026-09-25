@@ -58,11 +58,21 @@ const config: Config = {
           from: { opacity: '0', transform: 'scale(0.96) translateY(4px)' },
           to: { opacity: '1', transform: 'scale(1) translateY(0)' },
         },
+        // PIN-2 — the lock screen's wrong-PIN feedback (components/staff/pin/
+        // LockScreen.tsx). The global `prefers-reduced-motion: reduce` rule in
+        // app/globals.css already forces every animation's duration to
+        // 0.01ms, so this needs no separate reduced-motion handling here.
+        shake: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '20%, 60%': { transform: 'translateX(-6px)' },
+          '40%, 80%': { transform: 'translateX(6px)' },
+        },
       },
       animation: {
         // Used by components/ui/Modal.tsx for the overlay + panel entrance.
         'fade-in': 'fade-in 150ms ease-out',
         'scale-in': 'scale-in 150ms ease-out',
+        shake: 'shake 400ms ease-in-out',
       },
     },
   },

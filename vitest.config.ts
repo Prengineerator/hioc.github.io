@@ -7,6 +7,16 @@ import path from 'node:path';
 // (lib/store/hours.ts). The `@/*` alias mirrors tsconfig.json so test imports
 // match app imports exactly.
 export default defineConfig({
+  // tsconfig.json sets "jsx": "preserve" (Next's own SWC/babel pipeline does
+  // the actual JSX transform at build time), so vitest's esbuild transform
+  // needs its own jsx settings here or a .tsx/.ts file that returns JSX (e.g.
+  // a page.tsx tested directly, PIN-2's staffLoginPinRedirect.test.ts) fails
+  // at runtime with "React is not defined" — automatic/react matches what
+  // Next actually does (the automatic JSX runtime, no React import needed).
+  esbuild: {
+    jsx: 'automatic',
+    jsxImportSource: 'react',
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, '.'),
