@@ -4,19 +4,42 @@ name: POS desktop release (Windows)
 # and publishes it as a GitHub Release on THIS repo, together with
 # `latest.yml` (+ blockmap) so electron-updater's auto-update check works.
 #
+# electron-builder only *builds* here (`--publish never`); the GitHub Release
+# itself is created afterwards by a separate `gh release create` step. Two
+# reasons:
+#   - GitHub refuses to create a *published* (non-draft) release against a
+#     tag that doesn't exist yet ("Published releases must have a valid
+#     tag"), which is exactly electron-builder's own `--publish always` path
+#     when no `pos-v<version>` tag exists beforehand (the workflow_dispatch
+#     case). `gh release create <tag> --target <sha>` creates the tag and the
+#     release together in one call, which GitHub does allow.
+#   - electron-builder's own release-creation and asset-upload race (it can
+#     issue two concurrent "create release" calls for the same tag) is gone
+#     when only one process ever creates the release.
+# electron-builder still writes `latest.yml` + `.blockmap` into
+# `desktop/release/` and embeds `app-update.yml` in the packaged app from its
+# `publish:` config even with `--publish never` (confirmed against
+# app-builder-lib's PublishManager: update-info-file generation and the
+# app-update.yml write in onAfterPack both key off a resolved publish config,
+# not off whether an actual upload/publish is requested) — only the GitHub
+# upload and release creation are skipped by `never`.
+#
 # Release/tag/version scheme (kept in sync with desktop/electron-builder.yml
 # `publish.tagNamePrefix: pos-v` — do not change one without the other):
 #   - The release tag is always `pos-v<version>`, where <version> is
-#     desktop/package.json's "version" field. electron-builder derives this
-#     itself; nothing here computes or overrides it.
+#     desktop/package.json's "version" field, computed by the publish step
+#     below (electron-builder no longer touches GitHub at all).
 #   - Trigger A: "Run workflow" from the Actions tab (workflow_dispatch). No
-#     tag needs to exist beforehand — electron-builder creates the
-#     `pos-v<version>` tag and Release together when it publishes.
-#   - Trigger B: pushing a tag matching `pos-v*`. Push a tag that does NOT
-#     match `pos-v<version>` for the current desktop/package.json version and
-#     you get a build, but electron-builder will still publish under
-#     `pos-v<version>` — so keep the pushed tag identical to that if you use
+#     tag needs to exist beforehand — the publish step creates the
+#     `pos-v<version>` tag and Release together.
+#   - Trigger B: pushing a tag matching `pos-v*`. The publish step still
+#     computes the tag from desktop/package.json's version, not from the
+#     pushed tag ref — push a tag that doesn't match `pos-v<version>` for the
+#     current version and you get a build, but the release still lands under
+#     `pos-v<version>`, so keep the pushed tag identical to that if you use
 #     this trigger, or just use workflow_dispatch instead.
+#   - Either trigger fails loudly (before touching GitHub) if a release for
+#     that tag already exists — bump desktop/package.json's version first.
 #
 # See desktop/README.md "Releasing" for the exact step-by-step procedure.
 
@@ -49,20 +72,70 @@ jobs:
         run: npx tsc --noEmit -p .
 
       # Builds dist/main.js + dist/preload.js, installs the prebuilt Windows
-      # `usb` native binary, then packages + publishes the NSIS installer.
-      # Uses the dedicated `release:win` script (identical to `dist:win` but
-      # with `--publish always` baked into its own electron-builder
-      # invocation) instead of `npm run dist:win -- --publish always`: the
-      # default shell here is PowerShell 7, which swallows npm's `--`
-      # separator, so `--publish` was consumed by npm itself and
-      # electron-builder only ever saw a stray `always` argument. Baking the
-      # flag into the script sidesteps arg-forwarding entirely, so no shell
-      # change is needed. `--publish always` makes electron-builder create
-      # (or update) the GitHub Release for this version's tag and upload the
-      # .exe, latest.yml and .blockmap to it. GH_TOKEN is the built-in
-      # per-job token; it needs no secret of our own, only
-      # `permissions.contents: write` above.
-      - name: Build and publish Windows installer
+      # `usb` native binary, then packages the NSIS installer with the
+      # dedicated `release:win` script (`electron-builder --win --x64
+      # --publish never` — build only, no GitHub calls; see the top-of-file
+      # comment for why publishing is a separate step below). It still writes
+      # `release/latest.yml` and `release/*.exe.blockmap` and embeds
+      # `app-update.yml` in the packaged app, because a `publish:` provider
+      # is configured in electron-builder.yml — electron-builder generates
+      # those from that config regardless of `--publish`, only the actual
+      # upload/release-creation is skipped by `never`.
+      - name: Build Windows installer
         run: npm run release:win
+
+      # electron-builder itself no longer talks to GitHub (see above), so
+      # this step does that in one place: compute the release tag from
+      # desktop/package.json's version (the same `pos-v<version>` scheme
+      # electron-builder.yml's `publish.tagNamePrefix` expects), refuse to
+      # continue if that tag's release already exists (the usual cause is a
+      # forgotten version bump), then create the release and upload the
+      # installer + update-feed files in one `gh release create` call so the
+      # tag and release are created together — sidestepping both the
+      # "release doesn't exist" 422 and electron-builder's create-release
+      # race. `shell: bash` because windows-latest's default shell is
+      # PowerShell 7, which doesn't support this script's syntax (`[[`,
+      # arrays, `set -euo pipefail`); Git Bash and the `gh` CLI are both
+      # preinstalled on windows-latest. GH_TOKEN is the built-in per-job
+      # token; it needs no secret of our own, only `permissions.contents:
+      # write` above.
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="pos-v$VERSION"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists on GitHub. Bump the \"version\" field in desktop/package.json before releasing again." >&2
+            exit 1
+          fi
+
+          exes=(release/*.exe)
+          blockmaps=(release/*.exe.blockmap)
+          latest_yml="release/latest.yml"
+
+          if [ "${#exes[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one .exe installer in desktop/release/, found ${#exes[@]}: ${exes[*]:-none}" >&2
+            exit 1
+          fi
+          if [ "${#blockmaps[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one .exe.blockmap in desktop/release/, found ${#blockmaps[@]}: ${blockmaps[*]:-none}" >&2
+            exit 1
+          fi
+          if [ ! -f "$latest_yml" ]; then
+            echo "::error::desktop/release/latest.yml is missing; electron-updater's auto-update check needs it." >&2
+            exit 1
+          fi
+
+          echo "Publishing $TAG: ${exes[0]}, ${blockmaps[0]}, $latest_yml"
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "HIOC POS $VERSION" \
+            --notes "HIOC POS desktop release $VERSION." \
+            --latest \
+            "${exes[0]}" "${blockmaps[0]}" "$latest_yml"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
