@@ -44,6 +44,13 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
+  # Force-closes a running "HIOC POS" before install AND before uninstall —
+  # electron-builder's own built-in running-app check
+  # (allowOnlyOneInstallerInstance.nsh's CHECK_APP_RUNNING) only ever runs for
+  # the UNINSTALLER on a silent run or a one-click build, neither of which
+  # this is; see the long comment at the top of build/installer.nsh for why
+  # that gap matters here and exactly what this macro does.
+  include: build/installer.nsh
 
 mac:
   target:
@@ -63,19 +70,29 @@ mac:
 dmg:
   sign: false
 
-# Auto-update feed AND release target: GitHub Releases on THIS repo (it's
-# public, so counter machines need no token to read a release; the app's own
-# source being public too is an accepted tradeoff — see desktop/README.md).
+# Auto-update feed: GitHub Releases on THIS repo (it's public, so counter
+# machines need no token to read a release; the app's own source being
+# public too is an accepted tradeoff — see desktop/README.md).
 #
 # `tagNamePrefix: pos-v` keeps this repo's POS desktop releases (tag
-# `pos-v<version>`) distinct from any other tag scheme this repo might use.
-# `releaseType: release` publishes a normal (non-draft) Release directly, so
-# `electron-updater` and a plain download link both see it immediately — a
-# draft release is invisible to both.
+# `pos-v<version>`) distinct from any other tag scheme this repo might use,
+# and must match the tag the release step below actually creates.
+# `releaseType: release` documents that releases here are normal (non-draft),
+# so `electron-updater` and a plain download link both see them immediately —
+# a draft release would be invisible to both.
 #
-# Local release: GH_TOKEN=... npm run dist:win -- --publish always
-# CI release: .github/workflows/pos-desktop-release.yml (workflow_dispatch,
-# or push a tag matching pos-v*). See desktop/README.md "Releasing".
+# electron-builder itself never uploads to GitHub any more — `npm run
+# release:win` runs it with `--publish never`, build only. This block still
+# matters: it's what makes electron-builder write `release/latest.yml` +
+# `.blockmap` and embed `app-update.yml` in the packaged app (it does this
+# from the `publish:` config regardless of `--publish`), which
+# electron-updater's feed needs. The actual GitHub Release — tag, upload of
+# the installer, latest.yml and blockmap — is created afterwards by a
+# `gh release create` step, in CI (.github/workflows/pos-desktop-release.yml,
+# on workflow_dispatch or a pushed `pos-v*` tag) or by hand locally
+# (`gh release create "pos-v$(node -p "require('./package.json').version")"
+# release/*.exe release/*.exe.blockmap release/latest.yml`, after `npm run
+# release:win`). See desktop/README.md "Releasing" for the full procedure.
 publish:
   provider: github
   owner: Prengineerator

@@ -107,6 +107,33 @@ npx tsc --noEmit -p .     # type-check only, no output
 npm run build              # esbuild → dist/main.js, dist/preload.js
 ```
 
+## Closing, updating and uninstalling
+
+- **Quitting**: close the window (click the **X**, or **Ctrl+Q**) — this is a
+  single-window app, so that always quits it fully; **Alt+F4** works too. A
+  third-party script running inside the loaded page (e.g. a payment
+  checkout's `beforeunload`) can never block this — `will-prevent-unload` in
+  `src/main.ts` overrides it — and if the process is somehow still alive ~3s
+  after quit was requested, `app.exit(0)` forces it closed.
+- **It relaunches at Windows sign-in.** That's by design (`configureLoginItem()`
+  in `src/main.ts`, `openAtLogin: true`) — the counter machine should have the
+  POS ready with no one having to remember to open it.
+- **Installing a newer version closes the running one automatically** — the
+  installer force-closes any running `HIOC POS.exe` before touching files
+  (`build/installer.nsh`), so there's no need to close the app by hand first.
+- **Uninstalling**: **Settings → Apps → HIOC POS → Uninstall** (or the old
+  Control Panel "Programs and Features"). This also force-closes the app
+  first and removes its Windows-login autostart entry; it does **not** delete
+  `printers.json` (saved printer setup) — reinstalling later picks it back up
+  (`nsis.deleteAppDataOnUninstall` is left at its default, `false`,
+  intentionally).
+- **One-time recovery for a machine still on 0.1.0** (before this fix): open
+  Task Manager and end every **HIOC POS** process (or, from Command Prompt:
+  `taskkill /F /T /IM "HIOC POS.exe"`), *then* run the 0.1.1 installer, or
+  uninstall. 0.1.0's window could fail to close and its uninstaller didn't
+  force-close it first, so on that version alone this manual step may be
+  needed once.
+
 ## Packaging
 
 ```sh
@@ -128,7 +155,7 @@ caveats below).
 |---|---|---|
 | `CSC_LINK`, `CSC_KEY_PASSWORD` | Win + Mac | Code-signing certificate (`.p12`/`.pfx`) and its password. Unset → unsigned installer; **Windows SmartScreen shows "Windows protected your PC" on first run** — this is expected for every install today (click **More info → Run anyway**), not a sign of a broken build. |
 | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Mac | Notarization credentials (electron-builder calls `@electron/notarize` automatically when these are set and the build is signed). Unset → the `.dmg` is not notarized; Gatekeeper blocks it on any Mac other than the one that built it, until the user right-click → Open's past the warning. There is currently no macOS release job — see "Releasing" below. |
-| `GH_TOKEN` | Win | Needed only when actually publishing a release (`--publish always`, below); not needed for a plain `dist:win` build. In CI this is the repo's own built-in Actions token — no secret to configure. |
+| `GH_TOKEN` | Win | Needed only for the `gh release create` publish step (below), not for `npm run dist:win` / `release:win`, which only build — those never talk to GitHub (`--publish never`). In CI this is the repo's own built-in Actions token — no secret to configure. |
 
 electron-updater's `autoUpdater.checkForUpdatesAndNotify()` runs once at
 launch, but only in a packaged build (`app.isPackaged`) — a dev checkout never
@@ -143,10 +170,24 @@ Release on **this repo** carrying the `.exe` installer, `latest.yml` and its
 `.blockmap`, so both a direct download and `electron-updater`'s auto-update
 check work immediately.
 
+The job runs in two steps, not one: `npm run release:win` (electron-builder,
+`--publish never`) only builds the installer and writes `release/latest.yml`
++ `.blockmap`; a second `gh release create` step then creates the GitHub tag
+and Release and uploads those three files in a single call. They're split
+because GitHub refuses to create a *published* release for a tag that doesn't
+exist yet, which is exactly what electron-builder's own `--publish always`
+tries to do on a fresh version (no tag pushed beforehand) — `gh release
+create <tag> --target <sha>` creates the tag and the release together, which
+GitHub does allow. It also removes a release-creation race electron-builder's
+own publisher had.
+
 **To cut a release:**
 
 1. Bump the `version` field in `desktop/package.json` (semver, e.g.
-   `0.1.0` → `0.2.0`) and commit that to `main`.
+   `0.1.0` → `0.2.0`) and commit that to `main`. This is required, not just
+   convention: the publish step looks up a release for `pos-v<version>` and
+   **fails on purpose** if one already exists, so a forgotten version bump is
+   caught immediately instead of silently overwriting the last release.
 2. Trigger the build either way:
    - **GitHub Actions tab** → "POS desktop release (Windows)" → **Run
      workflow** (simplest — no tag to get right), or
@@ -157,12 +198,19 @@ check work immediately.
    <https://github.com/Prengineerator/hioc.github.io/releases/latest> under
    tag `pos-v<version>`.
 
-The tag name is **not** something this workflow invents: electron-builder
-derives it itself from `desktop/package.json`'s version plus
-`electron-builder.yml`'s `publish.tagNamePrefix: pos-v`. If you push a tag by
-hand, it must equal what electron-builder will derive (`pos-v<version>`) —
+The tag name is **not** something this workflow invents: the publish step
+computes it from `desktop/package.json`'s version plus
+`electron-builder.yml`'s `publish.tagNamePrefix: pos-v` (kept in sync with
+that file for latest.yml/app-update.yml's benefit, even though
+electron-builder no longer uploads anything itself). If you push a tag by
+hand, it must equal what the publish step will compute (`pos-v<version>`) —
 pushing a differently-named tag still builds, but the Release still lands
 under `pos-v<version>`, not the tag you pushed.
+
+To cut a release by hand instead of via CI: `cd desktop && GH_TOKEN=... npm
+run release:win`, then `gh release create "pos-v$(node -p
+"require('./package.json').version")" --latest release/*.exe
+release/*.exe.blockmap release/latest.yml`.
 
 There is intentionally no macOS release job yet: an unsigned, non-notarized
 `.dmg` needs its own Gatekeeper workaround on every machine, the owner's

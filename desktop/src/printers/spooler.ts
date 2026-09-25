@@ -9,12 +9,18 @@
 // interpolated into the script text, so an odd printer name can't inject
 // PowerShell.
 
-import { execFile } from 'node:child_process';
+import { execFile, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { WebContents } from 'electron';
+
+// Tracked so `killAllSpoolerChildren()` (called from main.ts on app quit) can
+// end any print job's `powershell.exe`/`lp` child that's still in flight,
+// instead of leaving it to finish on its own after the app has otherwise shut
+// down.
+const activeChildren = new Set<ChildProcess>();
 
 export interface SystemPrinterJobResult {
   confirmed: boolean;
@@ -28,18 +34,32 @@ export interface SystemPrinterInfo {
 function execFileAsync(cmd: string, args: string[], input?: Buffer): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = execFile(cmd, args, { encoding: 'utf8', maxBuffer: 1024 * 1024 }, (err, _stdout, stderr) => {
+      activeChildren.delete(child);
       if (err) {
         reject(new Error(stderr?.trim() || err.message));
       } else {
         resolve();
       }
     });
+    activeChildren.add(child);
     if (input) {
       child.stdin?.end(input);
     } else {
       child.stdin?.end();
     }
   });
+}
+
+/** Called once on app quit (main.ts). Ends any `powershell.exe` (Windows) or
+ * `lp` (mac/Linux) print job still running so it can't outlive the app. */
+export function killAllSpoolerChildren(): void {
+  for (const child of activeChildren) {
+    try {
+      child.kill();
+    } catch {
+      // best-effort only
+    }
+  }
 }
 
 async function printRawUnix(deviceName: string, bytes: Uint8Array): Promise<void> {

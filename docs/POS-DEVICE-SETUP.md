@@ -102,6 +102,19 @@ With the printer on:
 
 Cancel or void the test orders afterwards so they don't land in the day's takings.
 
+### Closing, updating and uninstalling
+
+- **To close it**, click the **X** on the window, or press **Ctrl+Q** — it quits fully every time.
+- **It reopens on its own at Windows sign-in** — that's intentional, so the counter is always ready.
+- **To install a newer version**, just run the new installer over the old one — it closes the running app
+  for you first, no need to close it by hand.
+- **To uninstall**, go to **Settings → Apps → HIOC POS → Uninstall**. Your saved printer setup is kept, so
+  reinstalling later picks it back up.
+- **If a machine was set up with an early version (0.1.0)** and its window won't close, or a new installer
+  or the uninstaller seems stuck: open Task Manager, find every **HIOC POS** entry, and **End task** on each
+  one (or, from Command Prompt: `taskkill /F /T /IM "HIOC POS.exe"`), then try the install or uninstall
+  again. This is a one-time step for machines on that early version only.
+
 ---
 
 ## Turning on PIN unlock (Phase 6, PIN-2/3)
