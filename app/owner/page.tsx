@@ -21,6 +21,8 @@ import {
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { getFeedbackSummary } from '@/lib/feedback/summary';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import {
   Card,
   GlanceCards,
@@ -67,6 +69,7 @@ export default async function OwnerOverviewPage() {
     recentOrders,
     todaySplit,
     last30Split,
+    feedback,
   ] = await Promise.all([
     getTodayAtAGlance(),
     getDailySales(30),
@@ -82,6 +85,7 @@ export default async function OwnerOverviewPage() {
     getRecentOrders(20),
     getCustomerSegmentSplit(startOfTodayIstIso()),
     getCustomerSegmentSplit(new Date(Date.now() - 30 * DAY_MS).toISOString()),
+    getFeedbackSummary(),
   ]);
 
   // Recent-orders "Entered by <name>" needs the same profiles.name → email
@@ -115,6 +119,22 @@ export default async function OwnerOverviewPage() {
 
       <Card title="Recent orders">
         <RecentOrdersCard rows={recentOrders} staffNames={staffNames} />
+      </Card>
+
+      <Card title="Post-order feedback">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <FeedbackStat label="Avg rating · 7d" value={feedback.avgRating7d === null ? '—' : feedback.avgRating7d.toFixed(2)} />
+          <FeedbackStat label="Avg rating · 30d" value={feedback.avgRating30d === null ? '—' : feedback.avgRating30d.toFixed(2)} />
+          <FeedbackStat
+            label="Response rate · 30d"
+            value={feedback.responseRate30d === null ? '—' : `${Math.round(feedback.responseRate30d * 100)}%`}
+            hint={`${feedback.responseCount30d}/${feedback.sentCount30d} sent`}
+          />
+          <FeedbackStat label="Needs attention" value={String(feedback.needsAttention)} />
+        </div>
+        <Link href="/owner/feedback" className="mt-4 inline-block text-sm font-bold text-tan hover:underline">
+          Open the feedback inbox →
+        </Link>
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-2">
@@ -170,6 +190,16 @@ export default async function OwnerOverviewPage() {
         <Card title="Table turnover · last 30 days"><TableTurnoverList rows={turnover} /></Card>
         <Card title="Staff-entry leaderboard · last 30 days"><StaffLeaderboard rows={leaderboard} /></Card>
       </div>
+    </div>
+  );
+}
+
+function FeedbackStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-md bg-[#f2efe9] p-3 text-center">
+      <p className="text-lg font-bold text-charcoal">{value}</p>
+      <p className="text-[10px] uppercase text-muted">{label}</p>
+      {hint ? <p className="text-[10px] text-muted">{hint}</p> : null}
     </div>
   );
 }

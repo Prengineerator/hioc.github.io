@@ -7,6 +7,7 @@
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { Card } from '@/components/owner/dashboard';
 import { ReviewModeration } from '@/components/reviews/ReviewModeration';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import type { Review, ReviewSummaryRow } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -55,7 +56,20 @@ export default async function OwnerReviewsPage() {
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 px-4 py-6">
-      <h1 className="text-2xl font-bold text-charcoal">Reviews</h1>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h1 className="text-2xl font-bold text-charcoal">Reviews</h1>
+        {/* These review rows are submitted through the checkout invite (LOY-3)
+            AND, since the post-order feedback feature, through the
+            /feedback/[token] web form — the same `reviews` table either way.
+            The WhatsApp side of that conversation (ratings from the quick-reply
+            buttons, replies, the owner's chat-back) lives in its own inbox. */}
+        <Link
+          href="/owner/feedback"
+          className="rounded-md border-2 border-tan px-3 py-1.5 text-sm font-bold text-tan hover:bg-tan hover:text-cream"
+        >
+          Open WhatsApp feedback inbox →
+        </Link>
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">

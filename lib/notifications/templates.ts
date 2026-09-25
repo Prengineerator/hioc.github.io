@@ -97,6 +97,16 @@ export function renderNotification(order: Order, event: NotificationEvent): Rend
         body: `Hi ${name}, thanks for visiting ${CAFE_NAME} Your bill for order ${num}: ₹${total} for ${itemCountOf(order)} item(s), paid via ${paymentLabel(order.payment_method)}. View your itemized receipt: ${billLink}`,
       };
     }
+    case 'feedback': {
+      // The plain-text fallback body (console/log adapter, and the shape a
+      // free-text send would use). The real send is a template with buttons —
+      // see lib/notifications/engine.ts's sendFeedbackRequestNotification and
+      // lib/feedback/payload.ts for the button layout.
+      return {
+        event,
+        body: `Hi ${name}, how was your order ${num} at ${CAFE_NAME}? Reply "Loved it", "Okay" or "Not happy", or rate it here: ${link}`,
+      };
+    }
   }
 }
 
@@ -134,5 +144,10 @@ export function templateVarsFor(order: Order, event: NotificationEvent): string[
         absoluteUrl(`/order/${order.id}/receipt`),
       ];
     }
+    case 'feedback':
+      // order_feedback_1: {{1}}first name (fallback "there") {{2}}order number
+      // exactly as formatOrderNumber prints it (e.g. "HIOC-001089") — the
+      // template body has no literal '#' before it (unlike order_bill_1).
+      return [name, num];
   }
 }

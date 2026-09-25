@@ -14,6 +14,7 @@ const LINKS = [
   { href: '/owner/payments', label: 'Payments' },
   { href: '/owner/promotions', label: 'Promotions' },
   { href: '/owner/reviews', label: 'Reviews' },
+  { href: '/owner/feedback', label: 'Feedback' },
   { href: '/owner/tables', label: 'Tables' },
   // DEV-2. Next to Tables because both are the physical cafe described to the
   // software — the furniture and the machines.

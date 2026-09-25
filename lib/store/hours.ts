@@ -5,6 +5,7 @@
 // matching lib/api/date.ts.
 
 import type { OpeningHoursWindow, StoreSettings } from '@/lib/types';
+import { GOOGLE_REVIEW_URL_DEFAULT } from '@/lib/constants';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
@@ -224,5 +225,8 @@ export const FALLBACK_STORE_SETTINGS: StoreSettings = {
   packaging_charge_inr: 0,
   auto_print_kot: true,
   auto_print_bill: false,
+  feedback_enabled: true,
+  feedback_delay_min: 30,
+  google_review_url: GOOGLE_REVIEW_URL_DEFAULT,
   updated_at: new Date(0).toISOString(),
 };

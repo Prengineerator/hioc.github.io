@@ -7,6 +7,7 @@ import { isOrderStatus, isUuid } from '@/lib/api/constants';
 import { canTransition } from '@/lib/orders/stateMachine';
 import { getStoreSettings } from '@/lib/store/settings';
 import { sendBillNotification, sendOrderNotification } from '@/lib/notifications/engine';
+import { enqueueFeedbackRequest } from '@/lib/feedback/enqueue';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
@@ -222,6 +223,18 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         console.error('settle bill notification failed', billError);
       }
     }
+
+    // Post-order feedback: queue the WhatsApp feedback request for ~30 min
+    // (store-configurable) from now. Best-effort and never able to fail the
+    // transition — the cron (app/api/cron/feedback-requests) re-checks every
+    // skip rule (opt-out, disabled, no phone) again at send time, so queueing
+    // here only has to get the row + token created, not decide eligibility
+    // for good.
+    await enqueueFeedbackRequest({
+      orderId: id,
+      customerPhone: order.customer_phone,
+      customerName: order.customer_name,
+    });
   } else if (to === 'rejected' || to === 'cancelled') {
     await reverseForOrder(id);
   }

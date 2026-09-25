@@ -1,18 +1,35 @@
-// WA-4 — Meta's delivery-status webhook: the only thing that can answer
-// "did the customer's phone actually receive this?"
+// WA-4 — Meta's delivery-status webhook, later widened (post-order feedback)
+// to also handle INBOUND messages: the only thing that can answer both "did
+// the customer's phone actually receive this?" and "what did they say back?"
 //
 // Until this endpoint existed our knowledge stopped at status='sent', which
 // means "the Cloud API accepted the HTTP request" and nothing more. Meta
 // reports the rest — sent → delivered → read, or failed with an error code —
 // by POSTing here, correlated to nothing but the message id we already keep in
-// notifications.provider_ref.
+// notifications.provider_ref. The feedback widening reuses the SAME `messages`
+// field subscription to receive the customer's side of the conversation: a
+// quick-reply button tap on order_feedback_1 (sets the rating + triggers a
+// follow-up), plain text (stored for the owner inbox), and STOP/UNSUBSCRIBE
+// (records an opt-out). See parseInboundMessages/applyInboundMessage below and
+// lib/feedback/payload.ts for the button-payload vocabulary.
 //
 // Setup: Meta App → WhatsApp → Configuration → Webhook →
 //   Callback URL https://hioc.in/api/webhooks/whatsapp
 //   Verify token = WHATSAPP_WEBHOOK_VERIFY_TOKEN (any long random string)
-//   Subscribe to the `messages` field (status callbacks ride on it)
+//   Subscribe to the `messages` field (status callbacks AND inbound messages
+//   both ride on this one field — nothing extra to subscribe to)
 //   WHATSAPP_APP_SECRET = App → Settings → Basic → App Secret
-// Requires supabase/2026-08-notify-delivery.sql to be applied first.
+// Requires supabase/2026-08-notify-delivery.sql to be applied first, and
+// supabase/2026-10-order-feedback.sql for the feedback tables.
+//
+// ⚠ WHATSAPP_APP_SECRET IS NOT SET IN PRODUCTION as of the feedback feature's
+// launch. Rule 1 below means this endpoint fails EVERY inbound request closed
+// (401, nothing written) until an operator sets it — so button taps, opt-outs
+// and typed replies all silently bounce off until that happens. Delivery
+// STATUS callbacks (what this endpoint already did) are equally blocked, so
+// this is not a new gap the feedback feature introduces — it is the same gap,
+// now blocking more. See docs/WHATSAPP-FEEDBACK-TEMPLATE.md §"Before this
+// works at all".
 //
 // Three rules govern everything below:
 //   1. FAIL CLOSED. No app secret configured means every POST is rejected. A
@@ -30,7 +47,16 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { replaceableBy } from '@/lib/notifications/status';
-import type { NotificationStatus } from '@/lib/types';
+import { whatsappAdapter } from '@/lib/notifications/adapters';
+import {
+  isOptOutKeyword,
+  parseFeedbackButtonPayload,
+  ratingFromButtonText,
+  type FeedbackButtonRating,
+} from '@/lib/feedback/payload';
+import { getStoreSettings } from '@/lib/store/settings';
+import { resolveGoogleReviewUrl } from '@/lib/feedback/reviewLink';
+import type { FeedbackRequest, NotificationStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -157,6 +183,291 @@ function parseStatusUpdates(rawBody: string): StatusUpdate[] {
     }
   }
   return updates;
+}
+
+/** One inbound customer message, normalised out of Meta's several shapes. */
+interface InboundMessage {
+  waMessageId: string;
+  /** E.164, '+' + Meta's digits-only `from` — matches how orders.customer_phone is stored. */
+  fromPhone: string;
+  at: string; // ISO
+  kind: 'text' | 'button' | 'interactive' | 'other';
+  text: string; // free-typed body (type 'text') or the tapped button's label
+  buttonPayload: string; // the payload we originally put on the button, verbatim
+}
+
+/**
+ * Pulls every inbound MESSAGE (as opposed to a delivery-status callback) out
+ * of a webhook body — ignores everything else (parseStatusUpdates handles the
+ * `statuses` array in the same `value` object; a real webhook delivery can
+ * carry both in one POST). Never throws, same contract as parseStatusUpdates.
+ *
+ * Two message shapes matter here:
+ *   - `type: 'button'` — a tap on one of order_feedback_1's quick-reply
+ *     buttons. Carries `button.payload` (what we put there) and `button.text`
+ *     (the label), which is the sturdier field on some WhatsApp client
+ *     versions when the payload comes through empty.
+ *   - `type: 'interactive'` with `interactive.type === 'button_reply'` — the
+ *     equivalent shape for an interactive (non-template) button, handled the
+ *     same way for robustness even though this template doesn't send one.
+ *   - `type: 'text'` — anything typed, including "STOP".
+ * Anything else (image, location, template-status echoes, …) is 'other' and
+ * carries no text — recorded, never acted on.
+ */
+function parseInboundMessages(rawBody: string): InboundMessage[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return [];
+  }
+  const body = asRecord(parsed);
+  if (!body) return [];
+
+  const messages: InboundMessage[] = [];
+  for (const entry of asArray(body.entry)) {
+    for (const change of asArray(asRecord(entry)?.changes)) {
+      const value = asRecord(asRecord(change)?.value);
+      if (!value) continue;
+      for (const raw of asArray(value.messages)) {
+        const msg = asRecord(raw);
+        if (!msg) continue;
+        const id = typeof msg.id === 'string' ? msg.id : '';
+        const from = typeof msg.from === 'string' ? msg.from.replace(/^\+/, '') : '';
+        // Never act on a message we can't dedup or can't reply to.
+        if (!id || !from) continue;
+        const type = typeof msg.type === 'string' ? msg.type : '';
+        const at = isoFrom(msg.timestamp);
+
+        if (type === 'text') {
+          const text = typeof asRecord(msg.text)?.body === 'string' ? (asRecord(msg.text)!.body as string) : '';
+          messages.push({ waMessageId: id, fromPhone: `+${from}`, at, kind: 'text', text, buttonPayload: '' });
+          continue;
+        }
+        if (type === 'button') {
+          const btn = asRecord(msg.button);
+          const payload = typeof btn?.payload === 'string' ? btn.payload : '';
+          const text = typeof btn?.text === 'string' ? btn.text : '';
+          messages.push({ waMessageId: id, fromPhone: `+${from}`, at, kind: 'button', text, buttonPayload: payload });
+          continue;
+        }
+        if (type === 'interactive') {
+          const interactive = asRecord(msg.interactive);
+          const reply = asRecord(interactive?.button_reply);
+          const payload = typeof reply?.id === 'string' ? reply.id : '';
+          const text = typeof reply?.title === 'string' ? reply.title : '';
+          messages.push({
+            waMessageId: id,
+            fromPhone: `+${from}`,
+            at,
+            kind: 'interactive',
+            text,
+            buttonPayload: payload,
+          });
+          continue;
+        }
+        messages.push({ waMessageId: id, fromPhone: `+${from}`, at, kind: 'other', text: '', buttonPayload: '' });
+      }
+    }
+  }
+  return messages;
+}
+
+// ---------------------------------------------------------------------------
+// Feedback thread — button taps, opt-outs, and plain replies
+// ---------------------------------------------------------------------------
+
+const SORRY_FOLLOWUP = 'Sorry to hear that — what could we do better? Just reply here.';
+const STOP_CONFIRMATION = "You're unsubscribed from HIOC feedback messages. Reply START any time to opt back in.";
+
+/** Fire-and-forget free-text WhatsApp send + its own feedback_messages row. Never throws. */
+async function sendFollowUp(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  phone: string,
+  body: string,
+  requestId: string | null,
+  orderId: string | null,
+): Promise<void> {
+  try {
+    const result = await whatsappAdapter.send({ to: phone, channel: 'whatsapp', body });
+    await admin.from('feedback_messages').insert({
+      request_id: requestId,
+      order_id: orderId,
+      phone,
+      direction: 'out',
+      body,
+      wa_message_id: result.providerRef || null,
+      status: result.ok ? 'sent' : 'failed',
+      error: result.ok ? '' : result.error,
+    });
+  } catch (err) {
+    console.error('[whatsapp:webhook] follow-up send failed', err);
+  }
+}
+
+/**
+ * Resolves which feedback_requests row (if any) an inbound message belongs
+ * to. A button tap's payload names one explicitly — but the payload is
+ * attacker-shaped input the moment it leaves our own template (nothing stops
+ * a client from sending an arbitrary `button.payload` string, even though
+ * this endpoint only accepts HMAC-signed bodies FROM META), so it is only
+ * trusted when the request it names actually belongs to the phone that sent
+ * it. Every other case (unparseable payload, plain text, a payload for
+ * someone else's phone) falls back to the customer's most recent request —
+ * a phone with no request at all gets `null`, a phone-only thread.
+ */
+async function resolveFeedbackRequest(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  phone: string,
+  payloadRequestId: string | null,
+): Promise<FeedbackRequest | null> {
+  if (payloadRequestId) {
+    const { data } = await admin.from('feedback_requests').select('*').eq('id', payloadRequestId).maybeSingle();
+    if (data && (data as FeedbackRequest).phone === phone) return data as FeedbackRequest;
+  }
+  const { data } = await admin
+    .from('feedback_requests')
+    .select('*')
+    .eq('phone', phone)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as FeedbackRequest | null) ?? null;
+}
+
+/**
+ * Applies one inbound message: records it in the thread, and reacts (rating +
+ * follow-up, opt-out + confirmation) exactly once per message — dedup on
+ * wa_message_id happens in the caller before this runs. Never throws.
+ */
+async function applyInboundMessage(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  msg: InboundMessage,
+): Promise<void> {
+  try {
+    if (msg.kind === 'text' && isOptOutKeyword(msg.text)) {
+      const request = await resolveFeedbackRequest(admin, msg.fromPhone, null);
+      const { error: insertError } = await admin.from('feedback_messages').insert({
+        request_id: request?.id ?? null,
+        order_id: request?.order_id ?? null,
+        phone: msg.fromPhone,
+        direction: 'in',
+        body: msg.text,
+        wa_message_id: msg.waMessageId,
+      });
+      // 23505 = unique_violation on wa_message_id: a race with another
+      // delivery of the SAME message already recorded it. Stop here —
+      // proceeding would opt the customer out and send a second confirmation
+      // for one inbound message.
+      if (insertError) {
+        if ((insertError as { code?: string }).code !== '23505') {
+          console.error('[whatsapp:webhook] inbound insert failed', insertError);
+        }
+        return;
+      }
+      await admin
+        .from('whatsapp_opt_outs')
+        .upsert({ phone: msg.fromPhone, source: 'stop_keyword' }, { onConflict: 'phone' });
+      if (request) {
+        await admin
+          .from('feedback_requests')
+          .update({ unread: true, last_inbound_at: msg.at })
+          .eq('id', request.id);
+      }
+      await sendFollowUp(admin, msg.fromPhone, STOP_CONFIRMATION, request?.id ?? null, request?.order_id ?? null);
+      return;
+    }
+
+    // A button tap (template quick-reply or interactive equivalent): resolve
+    // the rating from the payload we put there, falling back to matching the
+    // tapped label when the payload didn't come through.
+    let rating: FeedbackButtonRating | null = null;
+    let payloadRequestId: string | null = null;
+    if (msg.kind === 'button' || msg.kind === 'interactive') {
+      const parsed = parseFeedbackButtonPayload(msg.buttonPayload);
+      if (parsed) {
+        rating = parsed.rating;
+        payloadRequestId = parsed.requestId;
+      } else {
+        rating = ratingFromButtonText(msg.text);
+      }
+    }
+
+    const request = await resolveFeedbackRequest(admin, msg.fromPhone, payloadRequestId);
+
+    const { error: insertError } = await admin.from('feedback_messages').insert({
+      request_id: request?.id ?? null,
+      order_id: request?.order_id ?? null,
+      phone: msg.fromPhone,
+      direction: 'in',
+      body: msg.kind === 'text' ? msg.text : msg.text || msg.buttonPayload,
+      button_payload: msg.buttonPayload,
+      wa_message_id: msg.waMessageId,
+    });
+    // Same race guard as the STOP branch above — a duplicate delivery of this
+    // message must not set the rating or send the follow-up twice.
+    if (insertError) {
+      if ((insertError as { code?: string }).code !== '23505') {
+        console.error('[whatsapp:webhook] inbound insert failed', insertError);
+      }
+      return;
+    }
+
+    if (request) {
+      const patch: Record<string, unknown> = { unread: true, last_inbound_at: msg.at };
+      if (rating !== null) {
+        patch.rating = rating;
+        patch.rating_source = 'whatsapp_button';
+        patch.responded_at = msg.at;
+      }
+      await admin.from('feedback_requests').update(patch).eq('id', request.id);
+    }
+
+    if (rating === 5) {
+      const settings = await getStoreSettings();
+      const reviewUrl = resolveGoogleReviewUrl(settings.google_review_url);
+      await sendFollowUp(
+        admin,
+        msg.fromPhone,
+        `So glad you loved it! If you have a moment, a Google review means a lot to us: ${reviewUrl}`,
+        request?.id ?? null,
+        request?.order_id ?? null,
+      );
+    } else if (rating === 3 || rating === 1) {
+      await sendFollowUp(admin, msg.fromPhone, SORRY_FOLLOWUP, request?.id ?? null, request?.order_id ?? null);
+    }
+    // Plain text (no rating resolved) is just stored above — the owner reads
+    // and replies from /owner/feedback; no automated follow-up.
+  } catch (err) {
+    console.error('[whatsapp:webhook] applyInboundMessage failed', err);
+  }
+}
+
+/**
+ * Dedup on wa_message_id (Meta retries on anything but a clean 2xx, so the
+ * same inbound message can arrive twice) and apply each new one. Returns how
+ * many were new vs already-seen, for the response tally.
+ */
+async function processInboundMessages(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  messages: InboundMessage[],
+): Promise<{ applied: number; duplicate: number }> {
+  let applied = 0;
+  let duplicate = 0;
+  for (const msg of messages) {
+    const { data: existing } = await admin
+      .from('feedback_messages')
+      .select('id')
+      .eq('wa_message_id', msg.waMessageId)
+      .maybeSingle();
+    if (existing) {
+      duplicate++;
+      continue;
+    }
+    await applyInboundMessage(admin, msg);
+    applied++;
+  }
+  return { applied, duplicate };
 }
 
 // ---------------------------------------------------------------------------
@@ -302,6 +613,7 @@ export async function POST(request: Request) {
   if (!signatureOk(raw, request.headers)) return errorResponse(401, 'Unauthorized');
 
   const tally: Record<Outcome, number> = { applied: 0, ignored: 0, unknown: 0, failed: 0 };
+  let messages = { applied: 0, duplicate: 0 };
   try {
     const updates = parseStatusUpdates(raw);
     if (updates.length > 0) {
@@ -325,5 +637,17 @@ export async function POST(request: Request) {
     console.error('[whatsapp:webhook] processing failed', err);
   }
 
-  return NextResponse.json({ received: true, ...tally });
+  // Inbound feedback replies — a separate try/catch so a fault in one never
+  // stops the other from being processed (both still answer 200 either way).
+  try {
+    const inbound = parseInboundMessages(raw);
+    if (inbound.length > 0) {
+      const admin = createAdminSupabaseClient();
+      messages = await processInboundMessages(admin, inbound);
+    }
+  } catch (err) {
+    console.error('[whatsapp:webhook] inbound message processing failed', err);
+  }
+
+  return NextResponse.json({ received: true, ...tally, messages });
 }

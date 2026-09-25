@@ -29,6 +29,14 @@ export const CAFE_MAPS_EMBED_SRC =
 export const CAFE_DIRECTIONS_URL =
   'https://www.google.com/maps/dir/?api=1&destination=27.2144382%2C78.0218036';
 
+// Post-order feedback (order_feedback_1 / the "Loved it" follow-up,
+// lib/notifications/templates.ts, app/api/webhooks/whatsapp/route.ts). The
+// owner-editable copy lives in store_settings.google_review_url (defaulted to
+// this same value by supabase/2026-10-order-feedback.sql); this constant is
+// the final fallback when that column is empty or unreadable, and
+// GOOGLE_REVIEW_URL env — if set — overrides both (lib/feedback/reviewLink.ts).
+export const GOOGLE_REVIEW_URL_DEFAULT = 'https://g.page/r/CVAlGTvqRc1fEBM/review';
+
 // The cafe's real menu categories, sourced from its live Petpooja POS export
 // (Menu_sheet.zip) — `slug` is the exact `category` value stored on each
 // menu_items row. `parent` groups related categories (e.g. Hot Coffee /

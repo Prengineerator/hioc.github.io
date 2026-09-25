@@ -49,7 +49,12 @@ export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
 // 'bill' = the link-based e-bill (RCT-1/2), delivered on email + WhatsApp via the
 // notification engine (sendBillNotification). Its handlers live alongside the
 // status events: template name in adapters.ts, body/vars in templates.ts.
-export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill';
+// 'feedback' = the post-order WhatsApp feedback request (30 min after
+// completion, supabase/2026-10-order-feedback.sql). Logged in `notifications`
+// exactly like every other event so the delivery-status webhook's receipts
+// (delivered/read) apply to it too; its own conversation thread — replies,
+// follow-ups, the owner's chat-back — lives in `feedback_messages`, not here.
+export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill' | 'feedback';
 // 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
 // attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
 // or "channel not configured" from a send that was tried and failed.
@@ -274,6 +279,13 @@ export interface StoreSettings {
   // settle.
   auto_print_kot: boolean;
   auto_print_bill: boolean;
+  // Post-order feedback (2026-10-order-feedback.sql). `feedback_delay_min` is
+  // how long after an order completes the WhatsApp feedback request fires;
+  // `google_review_url` is the link the "Loved it" follow-up offers (env
+  // GOOGLE_REVIEW_URL, when set, overrides this — lib/feedback/reviewLink.ts).
+  feedback_enabled: boolean;
+  feedback_delay_min: number;
+  google_review_url: string;
   updated_at: string;
 }
 
@@ -505,6 +517,64 @@ export interface ReviewSummaryRow {
   menu_item_id: string | null;
   reviews: number;
   avg_rating: number;
+}
+
+// ---------------------------------------------------------------------------
+// Post-order feedback (supabase/2026-10-order-feedback.sql).
+// NOTE: token_hash is intentionally OMITTED from FeedbackRequest — like
+// tables.qr_token / pos_devices.token_hash, it must never reach a client.
+// Server routes select an explicit column list excluding it; only the
+// /feedback/[token] page's own lookup hashes an incoming token to match it.
+// ---------------------------------------------------------------------------
+
+export type FeedbackRequestStatus = 'pending' | 'sent' | 'skipped' | 'failed';
+export type FeedbackRatingSource = 'whatsapp_button' | 'web_form';
+export type FeedbackThreadStatus = 'open' | 'in_progress' | 'resolved';
+
+export interface FeedbackRequest {
+  id: string;
+  order_id: string;
+  phone: string;
+  customer_name: string;
+  scheduled_for: string;
+  claimed_at: string | null;
+  sent_at: string | null;
+  status: FeedbackRequestStatus;
+  skip_reason: string;
+  provider_ref: string;
+  rating: number | null;
+  rating_source: FeedbackRatingSource | null;
+  responded_at: string | null;
+  thread_status: FeedbackThreadStatus;
+  owner_notes: string;
+  assignee_id: string | null;
+  unread: boolean;
+  last_inbound_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FeedbackMessageDirection = 'in' | 'out';
+
+export interface FeedbackMessage {
+  id: string;
+  request_id: string | null;
+  order_id: string | null;
+  phone: string;
+  direction: FeedbackMessageDirection;
+  body: string;
+  button_payload: string;
+  wa_message_id: string | null;
+  status: '' | 'queued' | 'sent' | 'failed';
+  error: string;
+  sent_by: string | null;
+  created_at: string;
+}
+
+export interface WhatsappOptOut {
+  phone: string;
+  opted_out_at: string;
+  source: string;
 }
 
 // ===========================================================================
