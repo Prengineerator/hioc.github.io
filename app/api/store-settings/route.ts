@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import {
   getStoreSettings,
@@ -22,9 +22,13 @@ export async function GET() {
 
 // PATCH /api/store-settings — staff/owner only (S7 busy-mode + O5 owner UI).
 // Only the whitelisted writable keys are applied; id/is_singleton are ignored.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all. This is
+// what the staff header's store-open/busy toggle writes through.
 export async function PATCH(request: Request) {
-  const user = await getStaffUser(); // getStaffUser accepts staff OR owner
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
 

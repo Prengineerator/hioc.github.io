@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import type { Review } from '@/lib/types';
@@ -13,9 +13,12 @@ type RouteParams = { params: { id: string } };
 
 // PATCH /api/reviews/[id] — staff/owner only. Owner moderation: post a
 // response and/or hide abusive content (LOY-3 edge case).
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
 

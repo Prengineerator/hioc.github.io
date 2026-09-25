@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getAuthUser, getStaffUser } from '@/lib/api/auth';
+import { getAuthUser, getCounterActor } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import type { Review } from '@/lib/types';
@@ -119,8 +119,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ reviews: (data ?? []) as Review[] });
   }
 
-  const user = await getStaffUser();
-  if (!user) {
+  // PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+  // enrolled-device PIN operator only when there is no session at all.
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
 
