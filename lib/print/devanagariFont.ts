@@ -11,4 +11,11 @@ export const devanagariFont = Noto_Sans_Devanagari({
   weight: ['400', '700'],
   variable: '--font-noto-devanagari',
   display: 'swap',
+  // The variable is declared on the ROOT layout (app/layout.tsx), so every
+  // customer page (menu, checkout, …) would otherwise get a <link
+  // rel="preload"> for a font it never renders. The @font-face rule is still
+  // declared site-wide, so the staff-print page and the canvas rasterizer
+  // (brandHeaderRaster.ts, via `document.fonts.load`) still fetch it on
+  // demand — only when "हाईओक" is actually drawn.
+  preload: false,
 });
