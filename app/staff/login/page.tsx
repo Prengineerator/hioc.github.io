@@ -4,6 +4,7 @@ import { Suspense, useState, type FormEvent } from 'react';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { normalizeLoginId, loginEmailFor } from '@/lib/staff/accounts';
+import { isEnrolledNotice } from '@/lib/staff/deviceEnrollment';
 
 const FORGOT_SENT_MESSAGE =
   'If that login ID has a personal email on file, a reset link is on its way. Otherwise ask the owner.';
@@ -43,6 +44,12 @@ function StaffLoginForm() {
     searchParams.get('error') === 'not_staff'
       ? "That account is signed in, but it doesn't have staff access. Contact the cafe owner if this is unexpected."
       : null,
+  );
+  // Set by components/staff/DeviceEnrollment.tsx after the owner enrols this
+  // counter from inside the app and is immediately signed out again — this
+  // is the only place that explains why the screen landed back here.
+  const [notice] = useState<string | null>(() =>
+    isEnrolledNotice(searchParams.get('notice')) ? 'Counter enrolled. Staff can sign in now.' : null,
   );
   const [submitting, setSubmitting] = useState(false);
 
@@ -122,6 +129,12 @@ function StaffLoginForm() {
             Staff Portal
           </p>
         </div>
+
+        {notice ? (
+          <div role="status" className="mb-4 rounded-md border border-[#2f6b38]/30 bg-[#e8f3ea] px-4 py-3 text-sm text-[#2f6b38]">
+            {notice}
+          </div>
+        ) : null}
 
         {error ? (
           <div

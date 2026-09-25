@@ -18,12 +18,22 @@
 // POST /api/auth/login the owner's own login page uses, with
 // audience: 'owner' — same credential check, same door, just reachable from
 // this screen instead of a page the app window can no longer navigate to.
-// It replaces whatever session was active on this machine, which is the
-// expected one-time-setup trade — the counter's usual staff account signs
-// back in afterwards the same way it always has.
-import { useEffect, useState, type FormEvent } from 'react';
+//
+// An owner session must never be left sitting on this shared counter
+// machine, though: `/api/owner/*` calls would keep working from here (they
+// aren't gated by which page the app window can navigate to), and any order
+// or settle in the meantime would attribute to the owner instead of whoever
+// is actually behind the till. So every path that creates or finds an owner
+// session here (`isOwner`, the prop passed down from the Server Component
+// page — the one server-side signal this screen trusts for that, never
+// anything client-reported) ends with `signOutOwner()`: after a successful
+// enrol, automatically; otherwise, behind an explicit "Sign out owner"
+// button.
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSurfaceHref } from '@/components/SurfaceLink';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
+import { withEnrolledNotice } from '@/lib/staff/deviceEnrollment';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -33,6 +43,41 @@ const MAX_NAME_LEN = 40;
 interface DeviceInfo {
   name: string;
   enrolled_at: string;
+}
+
+/** Ends whatever session is signed in here and sends the browser back to
+ * staff sign-in — the one exit every owner-signed-in state on this screen
+ * shares. `notice: true` (post-enrol only) adds the query param that shows
+ * "Counter enrolled. Staff can sign in now." on that page. `/api/auth/logout`
+ * already uses `{ scope: 'local' }` (Phase 7: independent logins), so this
+ * only ever ends the session on THIS device, never anywhere else. */
+function useSignOutOwner(): (opts?: { notice?: boolean }) => Promise<void> {
+  const router = useRouter();
+  const toHref = useSurfaceHref();
+  return useCallback(
+    async (opts) => {
+      try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+      } catch {
+        // Best-effort — still leave the owner-signed-in screen either way.
+      }
+      const staffLogin = toHref('/staff/login');
+      router.push(opts?.notice ? withEnrolledNotice(staffLogin) : staffLogin);
+      router.refresh();
+    },
+    [router, toHref],
+  );
+}
+
+function SignOutOwnerButton({ signingOut, onSignOut }: { signingOut: boolean; onSignOut: () => void }) {
+  return (
+    <div className="mt-4 border-t border-line pt-4">
+      <p className="text-xs text-muted">Sign out before handing the counter back to staff.</p>
+      <Button variant="secondary" size="sm" className="mt-2" loading={signingOut} onClick={onSignOut}>
+        Sign out owner
+      </Button>
+    </div>
+  );
 }
 
 export function DeviceEnrollment({
@@ -66,7 +111,7 @@ export function DeviceEnrollment({
     );
   }
 
-  if (initialDevice) return <EnrolledPanel device={initialDevice} />;
+  if (initialDevice) return <EnrolledPanel device={initialDevice} isOwner={isOwner} />;
 
   return isOwner ? <EnrollForm /> : <AskOwnerPanel />;
 }
@@ -92,12 +137,24 @@ function BrowserNote() {
   );
 }
 
-function EnrolledPanel({ device }: { device: DeviceInfo }) {
+/** `isOwner` here is the case from the fix: already enrolled, but the owner
+ * (having signed in to check, or having just enrolled from elsewhere) is
+ * still the one signed in on this screen. Shows the sign-out escape hatch;
+ * a staff session sees the plain enrolled state with nothing extra. */
+function EnrolledPanel({ device, isOwner }: { device: DeviceInfo; isOwner?: boolean }) {
+  const signOutOwner = useSignOutOwner();
+  const [signingOut, setSigningOut] = useState(false);
   const enrolledDate = new Date(device.enrolled_at).toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
   });
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    await signOutOwner();
+  }
+
   return (
     <Panel>
       <div className="flex items-center gap-2">
@@ -105,6 +162,7 @@ function EnrolledPanel({ device }: { device: DeviceInfo }) {
       </div>
       <p className="mt-3 text-lg font-bold text-charcoal">{device.name}</p>
       <p className="text-sm text-muted">Enrolled {enrolledDate}</p>
+      {isOwner ? <SignOutOwnerButton signingOut={signingOut} onSignOut={handleSignOut} /> : null}
     </Panel>
   );
 }
@@ -182,8 +240,8 @@ function OwnerSignInForm({ onCancel }: { onCancel: () => void }) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
       <p className="text-xs text-muted">
-        This signs the owner in on this counter, replacing the session currently signed in here. Staff can
-        sign back in afterwards as usual.
+        This signs the owner in on this counter, replacing the session currently signed in here. The owner
+        should sign out again (below, once enrolled) before handing the counter back to staff.
       </p>
       {error ? (
         <p role="alert" className="text-sm font-semibold text-red-700">
@@ -220,13 +278,16 @@ function OwnerSignInForm({ onCancel }: { onCancel: () => void }) {
 
 /** Owner, not yet enrolled: name it and enrol. Enrolling always enrols the
  * machine making the request (POST /api/owner/devices), exactly as
- * DeviceManager on /owner/devices does — reused verbatim, not duplicated. */
+ * DeviceManager on /owner/devices does — reused verbatim, not duplicated.
+ * On success the owner session is signed out immediately (see the file
+ * comment) rather than showing a local "enrolled" success state — the
+ * banner on /staff/login says it instead, so there's nothing to skip past. */
 function EnrollForm() {
-  const router = useRouter();
+  const signOutOwner = useSignOutOwner();
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [enrolled, setEnrolled] = useState<DeviceInfo | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -243,24 +304,22 @@ function EnrollForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed }),
       });
-      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
         setError(data.error ?? 'Could not enrol this counter.');
         return;
       }
-      setEnrolled({ name: data.device.name, enrolled_at: data.device.enrolled_at });
-      // Picks up the enrolled-device cookie the response just set and
-      // re-runs the server check, so a reload of this page (or Printers)
-      // shows the enrolled state without a stale cache.
-      router.refresh();
+      // Enrolled — end the owner session on this shared counter right away
+      // rather than leaving it signed in with owner authority. The
+      // /staff/login page the owner lands on explains what just happened.
+      setSigningOut(true);
+      await signOutOwner({ notice: true });
     } catch {
       setError('Network error — please try again.');
     } finally {
       setSubmitting(false);
     }
   }
-
-  if (enrolled) return <EnrolledPanel device={enrolled} />;
 
   return (
     <Panel>
@@ -279,10 +338,17 @@ function EnrollForm() {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <Button type="submit" loading={submitting}>
+        <Button type="submit" loading={submitting || signingOut}>
           Enrol this counter
         </Button>
       </form>
+      <SignOutOwnerButton
+        signingOut={signingOut}
+        onSignOut={async () => {
+          setSigningOut(true);
+          await signOutOwner();
+        }}
+      />
     </Panel>
   );
 }
