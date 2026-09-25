@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
@@ -56,9 +56,15 @@ type LoadedOrder = {
 // `pos_order_entry` permission as punching the order in the first place. Using a
 // new key here would fail CLOSED to manager on any deploy whose seed row is
 // missing (see lib/permissions.ts), quietly breaking normal service.
+//
+// PIN-3/PIN-4: gated by getCounterActor() — classic session first, unchanged;
+// an enrolled-device PIN operator only when there is no session at all.
+// hasPermission() below evaluates the OPERATOR's role, and every attribution
+// column (voided_by, order_amendments.staff_id) records the operator's id.
 export async function POST(request: Request, { params }: RouteParams) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
 
   const { id } = params;
   if (!isUuid(id)) return notFound();

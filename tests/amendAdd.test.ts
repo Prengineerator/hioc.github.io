@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // order half-extended.
 
 const state: {
-  user: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   permitted: boolean;
   order: Record<string, unknown> | null;
   guarded: Record<string, unknown> | null; // null = lost version race
@@ -21,7 +21,7 @@ const state: {
   insertedItems: Record<string, unknown>[];
   deletedIds: string[];
 } = {
-  user: null,
+  actor: null,
   permitted: true,
   order: null,
   guarded: null,
@@ -86,7 +86,7 @@ vi.mock('@/lib/supabase-server', () => ({
   }),
 }));
 
-vi.mock('@/lib/api/auth', () => ({ getStaffUser: () => Promise.resolve(state.user) }));
+vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
 vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(state.permitted) }));
 vi.mock('@/lib/store/settings', () => ({
   getStoreSettings: () =>
@@ -116,7 +116,7 @@ const addBody = (quantity = 2) => ({
 
 beforeEach(() => {
   itemSeq = 0;
-  state.user = { id: 'staff-1' };
+  state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
   state.permitted = true;
   state.insertedItems = [];
   state.deletedIds = [];
@@ -148,9 +148,15 @@ beforeEach(() => {
 });
 
 describe('POST /api/orders/[id]/amend { op: add } — TAB-1', () => {
-  it('401s without a staff session', async () => {
-    state.user = null;
+  it('401s without a staff session or operator', async () => {
+    state.actor = null;
     expect((await POST(req(addBody()), params)).status).toBe(401);
+  });
+
+  it('PIN-3: an enrolled-device operator (no classic session) can still add lines', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    expect((await POST(req(addBody()), params)).status).toBe(200);
+    expect(state.amendmentRow?.staff_id).toBe('ravi');
   });
 
   it('403s without the pos_order_entry permission', async () => {

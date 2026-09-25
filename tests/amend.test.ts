@@ -15,7 +15,7 @@ import { recomputeOrderTotals } from '@/lib/orders/amend';
 
 // --- Shared, per-test mutable state the route mocks read from. ---------------
 const state: {
-  user: { id: string } | null;
+  actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
   canVoid: boolean;
   current: Record<string, unknown> | null; // the loaded order (+ embedded order_items)
   updated: Record<string, unknown> | null; // the guarded totals update result (null = lost race)
@@ -23,7 +23,7 @@ const state: {
   orderPatch?: Record<string, unknown>; // the guarded totals write payload
   itemUpdate?: Record<string, unknown>; // the order_items void (or rollback) payload
   amendmentRow?: Record<string, unknown>; // the order_amendments audit row
-} = { user: null, canVoid: true, current: null, updated: null, fullOrder: null };
+} = { actor: null, canVoid: true, current: null, updated: null, fullOrder: null };
 
 vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient: () => ({}),
@@ -60,7 +60,7 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffUser: () => Promise.resolve(state.user),
+  getCounterActor: () => Promise.resolve(state.actor),
 }));
 vi.mock('@/lib/permissions', () => ({
   hasPermission: () => Promise.resolve(state.canVoid),
@@ -146,7 +146,7 @@ describe('recomputeOrderTotals (FND3-4 money, no mocks)', () => {
 // ---------------------------------------------------------------------------
 describe('POST /api/orders/[id]/amend', () => {
   beforeEach(() => {
-    state.user = { id: 'mgr-1' };
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager', via: 'session' };
     state.canVoid = true;
     state.current = {
       id: ORDER_ID,
@@ -167,8 +167,8 @@ describe('POST /api/orders/[id]/amend', () => {
     state.amendmentRow = undefined;
   });
 
-  it('401s without a staff session', async () => {
-    state.user = null;
+  it('401s without a staff session or operator', async () => {
+    state.actor = null;
     const res = await POST(req({ item_id: ITEM_A, reason: 'wrong item' }), params);
     expect(res.status).toBe(401);
   });
@@ -222,6 +222,14 @@ describe('POST /api/orders/[id]/amend', () => {
     const payload = state.amendmentRow?.payload as { order_item_id: string; line_total_inr: number };
     expect(payload.order_item_id).toBe(ITEM_A);
     expect(payload.line_total_inr).toBe(200);
+  });
+
+  it('PIN-3/PIN-4: an enrolled-device operator voids a line, attributed to THEM', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'manager', via: 'device' };
+    const res = await POST(req({ item_id: ITEM_A, reason: 'wrong size' }), params);
+    expect(res.status).toBe(200);
+    expect(state.itemUpdate?.voided_by).toBe('ravi');
+    expect(state.amendmentRow?.staff_id).toBe('ravi');
   });
 
   it('409s a paid order (corrections go through the refund path)', async () => {
