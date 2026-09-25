@@ -256,7 +256,7 @@ export default function ProfilePage() {
         className="flex flex-col gap-4 rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm"
       >
         <div>
-          <label htmlFor="name" className="mb-1 block text-sm font-bold text-charcoal">
+          <label htmlFor="name" className="mb-1 block text-sm font-semibold text-charcoal">
             Name
           </label>
           <input
@@ -270,7 +270,7 @@ export default function ProfilePage() {
         </div>
 
         <div>
-          <label htmlFor="orderType" className="mb-1 block text-sm font-bold text-charcoal">
+          <label htmlFor="orderType" className="mb-1 block text-sm font-semibold text-charcoal">
             Default order type
           </label>
           <select
@@ -313,14 +313,14 @@ export default function ProfilePage() {
         <button
           type="submit"
           disabled={saving}
-          className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
         >
           {saving ? 'Saving…' : 'Save changes'}
         </button>
       </form>
 
       <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
-        <h2 className="font-bold text-charcoal">Phone number</h2>
+        <h2 className="font-semibold text-charcoal">Phone number</h2>
         <p className="mt-1 text-sm text-muted">
           {me?.phone ? (
             <>
@@ -335,7 +335,7 @@ export default function ProfilePage() {
           <button
             type="button"
             onClick={() => setPhoneStep('entering')}
-            className="mt-3 text-sm font-bold text-tan hover:underline"
+            className="mt-3 text-sm font-semibold text-tan hover:underline"
           >
             {me?.phone ? 'Change phone number' : 'Add a phone number'}
           </button>
@@ -357,7 +357,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={phoneBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
               >
                 {phoneBusy ? 'Sending…' : 'Send code'}
               </button>
@@ -367,7 +367,7 @@ export default function ProfilePage() {
                   setPhoneStep('idle');
                   setPhoneErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal"
+                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -393,7 +393,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={phoneBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
               >
                 {phoneBusy ? 'Verifying…' : 'Verify'}
               </button>
@@ -403,7 +403,7 @@ export default function ProfilePage() {
                   setPhoneStep('idle');
                   setPhoneErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal"
+                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -413,7 +413,7 @@ export default function ProfilePage() {
       </div>
 
       <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
-        <h2 className="font-bold text-charcoal">Email</h2>
+        <h2 className="font-semibold text-charcoal">Email</h2>
         <p className="mt-1 text-sm text-muted">
           {me?.email ? (
             <>
@@ -437,7 +437,7 @@ export default function ProfilePage() {
               setEmailStep('entering');
               setEmailMsg('');
             }}
-            className="mt-3 text-sm font-bold text-tan hover:underline"
+            className="mt-3 text-sm font-semibold text-tan hover:underline"
           >
             {me?.email ? 'Change email' : 'Link an email'}
           </button>
@@ -458,7 +458,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={emailBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
               >
                 {emailBusy ? 'Sending…' : 'Send code'}
               </button>
@@ -468,7 +468,7 @@ export default function ProfilePage() {
                   setEmailStep('idle');
                   setEmailErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal"
+                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -497,7 +497,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={emailBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
               >
                 {emailBusy ? 'Verifying…' : 'Verify'}
               </button>
@@ -507,7 +507,7 @@ export default function ProfilePage() {
                   setEmailStep('idle');
                   setEmailErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal"
+                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>

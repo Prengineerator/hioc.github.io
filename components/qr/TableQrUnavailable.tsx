@@ -21,7 +21,7 @@ export function TableQrUnavailable() {
       </p>
       <Link
         href="/menu"
-        className="mt-6 rounded-md border border-line px-5 py-2.5 text-sm font-bold text-charcoal transition-colors hover:border-tan hover:text-tan"
+        className="mt-6 rounded-md border border-line px-5 py-2.5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan"
       >
         Browse the menu
       </Link>

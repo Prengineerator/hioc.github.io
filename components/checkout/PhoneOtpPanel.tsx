@@ -41,8 +41,8 @@ export function GetOtpButton({
       disabled={otp.busy || !otp.phoneIsValid || extraDisabled}
       className={
         variant === 'primary'
-          ? 'w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60'
-          : 'shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50'
+          ? 'w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60'
+          : 'shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50'
       }
     >
       {otp.busy ? 'Sending…' : 'Get OTP'}
@@ -68,7 +68,7 @@ export function PhoneOtpPanel({
           opens if the send itself failed — leaving a button that appears to do
           nothing. */}
       {otp.step === 'idle' && !otp.verified && otp.error ? (
-        <p className="mt-1 text-xs text-red-700">{otp.error}</p>
+        <p className="mt-1 text-sm text-red-700">{otp.error}</p>
       ) : null}
 
       {otp.step === 'sent' && !otp.verified ? (
@@ -87,21 +87,21 @@ export function PhoneOtpPanel({
             placeholder="6-digit code"
             className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
-          {otp.error ? <p className="text-xs text-red-700">{otp.error}</p> : null}
+          {otp.error ? <p className="text-sm text-red-700">{otp.error}</p> : null}
           <button
             type="button"
             onClick={() => void otp.verifyOtp()}
             disabled={otp.busy}
-            className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
             {otp.busy ? verifyingLabel : verifyLabel}
           </button>
-          <div className="flex items-center justify-between text-xs">
+          <div className="flex items-center justify-between text-sm">
             <button
               type="button"
               onClick={() => void otp.sendOtp()}
               disabled={otp.busy}
-              className="font-bold text-tan underline disabled:opacity-50"
+              className="font-semibold text-tan underline disabled:opacity-50"
             >
               Resend code
             </button>

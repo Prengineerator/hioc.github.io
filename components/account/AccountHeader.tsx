@@ -72,13 +72,13 @@ export function AccountHeader() {
           <Link href="/" className="font-bold text-charcoal">
             HIOC · My Account
           </Link>
-          {whoLabel ? <p className="truncate text-xs text-muted">{whoLabel}</p> : null}
+          {whoLabel ? <p className="truncate text-sm text-muted">{whoLabel}</p> : null}
         </div>
         <button
           type="button"
           onClick={handleLogout}
           disabled={loggingOut}
-          className="inline-flex min-h-[40px] shrink-0 items-center text-sm font-bold text-muted hover:text-tan disabled:opacity-60"
+          className="inline-flex min-h-[40px] shrink-0 items-center text-sm font-semibold text-muted hover:text-tan disabled:opacity-60"
         >
           {loggingOut ? 'Logging out…' : 'Log out'}
         </button>
@@ -101,7 +101,7 @@ export function AccountHeader() {
               href={l.href}
               data-active={active ? 'true' : undefined}
               className={
-                'inline-flex min-h-[40px] shrink-0 items-center whitespace-nowrap rounded-md px-3 text-sm font-bold transition-colors ' +
+                'inline-flex min-h-[40px] shrink-0 items-center whitespace-nowrap rounded-md px-3 text-sm font-semibold transition-colors ' +
                 (active ? 'bg-charcoal text-cream' : 'text-charcoal hover:bg-[#f2efe9]')
               }
             >

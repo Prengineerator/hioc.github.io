@@ -78,7 +78,7 @@ export default function OrderReviewPage() {
       <div className="mx-auto max-w-xl px-4 py-16 text-center">
         <h1 className="text-2xl font-bold text-charcoal">Order Not Found</h1>
         <p className="mt-4 text-muted">We couldn&apos;t find that order. The link may be incorrect.</p>
-        <Link href="/menu" className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-bold text-cream hover:bg-tan-dark">
+        <Link href="/menu" className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-semibold text-cream hover:bg-tan-dark">
           Back to Menu
         </Link>
       </div>
@@ -88,11 +88,13 @@ export default function OrderReviewPage() {
   if (order.status !== 'completed') {
     return (
       <div className="mx-auto max-w-xl px-4 py-16 text-center">
-        <h1 className="text-2xl font-bold text-charcoal">Order #{formatOrderNumber(order.order_number)}</h1>
+        <h1 className="text-2xl font-bold text-charcoal">
+          Order #<span className="font-mono tabular-nums">{formatOrderNumber(order.order_number)}</span>
+        </h1>
         <p className="mt-4 text-muted">
           You can rate this order once it&apos;s been picked up. Check back after collection.
         </p>
-        <Link href={`/order/${order.id}`} className="mt-6 inline-block rounded-md border border-[#e5e5e5] px-6 py-3 font-bold text-charcoal hover:bg-[#f2efe9]">
+        <Link href={`/order/${order.id}`} className="mt-6 inline-block rounded-md border border-[#e5e5e5] px-6 py-3 font-semibold text-charcoal hover:bg-[#f2efe9]">
           Back to order status
         </Link>
       </div>
@@ -103,7 +105,7 @@ export default function OrderReviewPage() {
     <div className="mx-auto max-w-xl px-4 py-12">
       <h1 className="text-2xl font-bold text-charcoal">Rate your order</h1>
       <p className="mt-1 text-sm text-muted">
-        Order #{formatOrderNumber(order.order_number)} — how was it?
+        Order #<span className="font-mono tabular-nums">{formatOrderNumber(order.order_number)}</span> — how was it?
       </p>
 
       <div className="mt-8 flex flex-col gap-6">
@@ -117,7 +119,7 @@ export default function OrderReviewPage() {
 
         {uniqueItems.length > 0 ? (
           <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
-            <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-charcoal">Rate individual items</h2>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-charcoal">Rate individual items</h2>
             <div className="flex flex-col gap-5">
               {uniqueItems.map((item) => (
                 <ReviewBlock
@@ -166,17 +168,17 @@ function ReviewBlock({
     return (
       <div className={compact ? '' : 'rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm'}>
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-charcoal">{title}</h3>
+          <h3 className="text-sm font-semibold text-charcoal">{title}</h3>
           <StarRating value={existing.rating} size="sm" />
         </div>
         {existing.comment ? <p className="mt-2 text-sm text-muted">&ldquo;{existing.comment}&rdquo;</p> : null}
         {existing.staff_response ? (
-          <div className="mt-3 rounded-md bg-[#f2efe9] p-3 text-xs text-charcoal">
-            <span className="font-bold">HIOC replied: </span>
+          <div className="mt-3 rounded-md bg-[#f2efe9] p-3 text-sm text-charcoal">
+            <span className="font-semibold">HIOC replied: </span>
             {existing.staff_response}
           </div>
         ) : null}
-        <p className="mt-2 text-xs text-muted">Thanks for your feedback!</p>
+        <p className="mt-2 text-sm text-muted">Thanks for your feedback!</p>
       </div>
     );
   }
@@ -209,7 +211,7 @@ function ReviewBlock({
 
   return (
     <div className={compact ? '' : 'rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm'}>
-      <h3 className="text-sm font-bold text-charcoal">{title}</h3>
+      <h3 className="text-sm font-semibold text-charcoal">{title}</h3>
       <div className="mt-2">
         <StarRating value={rating} onChange={setRating} size={compact ? 'sm' : 'md'} />
       </div>
@@ -222,12 +224,12 @@ function ReviewBlock({
           className="mt-3 w-full rounded-md border border-[#e5e5e5] p-2 text-sm outline-none focus:border-tan"
         />
       ) : null}
-      {error ? <p className="mt-2 text-xs text-red-700">{error}</p> : null}
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
       <button
         type="button"
         onClick={handleSubmit}
         disabled={submitting || rating < 1}
-        className="mt-3 rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
+        className="mt-3 rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
       >
         {submitting ? 'Submitting…' : 'Submit rating'}
       </button>

@@ -176,7 +176,7 @@ function AccountOrdersContent() {
       {phoneVerified ? null : (
         <div className="rounded-md border border-[#e5e5e5] bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
           Placed an order at the counter?{' '}
-          <Link href="/account/profile" className="font-bold text-tan hover:underline">
+          <Link href="/account/profile" className="font-semibold text-tan hover:underline">
             Verify your WhatsApp number
           </Link>{' '}
           to see it here.
@@ -194,7 +194,7 @@ function AccountOrdersContent() {
           type="button"
           onClick={() => switchTab('active')}
           className={
-            'flex min-h-[40px] flex-1 items-center justify-center rounded px-3 font-bold transition-colors ' +
+            'flex min-h-[40px] flex-1 items-center justify-center rounded px-3 font-semibold transition-colors ' +
             (tab === 'active' ? 'bg-tan text-cream' : 'text-charcoal')
           }
         >
@@ -204,7 +204,7 @@ function AccountOrdersContent() {
           type="button"
           onClick={() => switchTab('past')}
           className={
-            'flex min-h-[40px] flex-1 items-center justify-center rounded px-3 font-bold transition-colors ' +
+            'flex min-h-[40px] flex-1 items-center justify-center rounded px-3 font-semibold transition-colors ' +
             (tab === 'past' ? 'bg-tan text-cream' : 'text-charcoal')
           }
         >
@@ -221,7 +221,7 @@ function AccountOrdersContent() {
           <p className="text-muted">{tab === 'active' ? 'No active orders.' : 'No past orders yet.'}</p>
           <Link
             href="/menu"
-            className="mt-4 inline-block rounded-md bg-tan px-5 py-2 text-sm font-bold text-cream hover:bg-tan-dark"
+            className="mt-4 inline-block rounded-md bg-tan px-5 py-2 text-sm font-semibold text-cream hover:bg-tan-dark"
           >
             Browse the menu
           </Link>
@@ -235,10 +235,13 @@ function AccountOrdersContent() {
               <li key={order.id} className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <Link href={`/order/${order.id}`} className="font-bold text-charcoal hover:underline">
+                    <Link
+                      href={`/order/${order.id}`}
+                      className="font-mono font-bold tabular-nums text-charcoal hover:underline"
+                    >
                       #{formatOrderNumber(order.order_number)}
                     </Link>
-                    <p className="text-xs text-muted">
+                    <p className="text-sm text-muted">
                       {formatIstDate(order.created_at)} · {formatIstTime(new Date(order.created_at))}
                       {typeLabel ? ` · ${typeLabel}` : ''}
                     </p>
@@ -246,12 +249,14 @@ function AccountOrdersContent() {
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     <span
                       className={
-                        'rounded-full px-2.5 py-1 text-xs font-bold ' + ORDER_STATUS_BADGE_CLASS[order.status]
+                        'rounded-full px-2.5 py-1 text-xs font-semibold ' + ORDER_STATUS_BADGE_CLASS[order.status]
                       }
                     >
                       {ORDER_STATUS_LABEL[order.status]}
                     </span>
-                    <p className="text-sm font-bold text-charcoal">₹{order.total_inr ?? order.subtotal_inr}</p>
+                    <p className="font-mono text-sm font-bold tabular-nums text-charcoal">
+                      ₹{order.total_inr ?? order.subtotal_inr}
+                    </p>
                   </div>
                 </div>
 
@@ -263,14 +268,14 @@ function AccountOrdersContent() {
 
                 <div className="mt-3 flex flex-wrap items-center gap-3">
                   {active ? (
-                    <Link href={`/order/${order.id}`} className="text-xs font-bold text-tan hover:underline">
+                    <Link href={`/order/${order.id}`} className="text-sm font-semibold text-tan hover:underline">
                       Track
                     </Link>
                   ) : null}
                   {hasBill(order) ? (
                     <Link
                       href={`/order/${order.id}/receipt`}
-                      className="text-xs font-bold text-tan hover:underline"
+                      className="text-sm font-semibold text-tan hover:underline"
                     >
                       View bill
                     </Link>
@@ -279,7 +284,7 @@ function AccountOrdersContent() {
                     type="button"
                     onClick={() => handleReorder(order.id)}
                     disabled={reorderingId === order.id}
-                    className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal transition-colors hover:border-tan hover:text-tan disabled:opacity-60"
+                    className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan disabled:opacity-60"
                   >
                     {reorderingId === order.id ? 'Adding to cart…' : 'Order again'}
                   </button>
@@ -296,7 +301,7 @@ function AccountOrdersContent() {
             type="button"
             onClick={() => tab && load(tab, page - 1)}
             disabled={page <= 1}
-            className="min-h-[40px] rounded-md border border-[#e5e5e5] px-4 text-sm font-bold text-charcoal disabled:opacity-40"
+            className="min-h-[40px] rounded-md border border-[#e5e5e5] px-4 text-sm font-semibold text-charcoal disabled:opacity-40"
           >
             Newer
           </button>
@@ -307,7 +312,7 @@ function AccountOrdersContent() {
             type="button"
             onClick={() => tab && load(tab, page + 1)}
             disabled={!hasMore}
-            className="min-h-[40px] rounded-md border border-[#e5e5e5] px-4 text-sm font-bold text-charcoal disabled:opacity-40"
+            className="min-h-[40px] rounded-md border border-[#e5e5e5] px-4 text-sm font-semibold text-charcoal disabled:opacity-40"
           >
             Older
           </button>

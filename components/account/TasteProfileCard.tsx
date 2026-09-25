@@ -91,23 +91,23 @@ export function TasteProfileCard() {
 
   return (
     <div className="rounded-md border border-line bg-cream p-5 shadow-card">
-      <h2 className="font-bold text-charcoal">Your taste profile</h2>
+      <h2 className="font-semibold text-charcoal">Your taste profile</h2>
       <p className="mt-1 text-sm text-muted">
         {data.summary || "We don't have enough orders yet to notice a pattern — that's alright."}
       </p>
 
-      {actionError ? <p className="mt-2 text-xs text-red-700">{actionError}</p> : null}
+      {actionError ? <p className="mt-2 text-sm text-red-700">{actionError}</p> : null}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <button
           type="button"
           onClick={handleReset}
           disabled={busy}
-          className="min-h-[44px] rounded-md border border-line px-4 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+          className="min-h-[44px] rounded-md border border-line px-4 text-sm font-semibold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
         >
           Reset
         </button>
-        <label className="flex items-center gap-2 text-sm font-bold text-charcoal">
+        <label className="flex items-center gap-2 text-sm font-semibold text-charcoal">
           Don&apos;t personalise
           <ToggleSwitch
             checked={data.optedOut}

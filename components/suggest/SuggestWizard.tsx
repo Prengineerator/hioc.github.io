@@ -78,7 +78,7 @@ const SUGGEST_TIMEOUT_MS = 15000;
 function FieldGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="mt-6">
-      <h2 className="mb-2 text-sm font-bold text-charcoal">{label}</h2>
+      <h2 className="mb-2 text-sm font-semibold text-charcoal">{label}</h2>
       <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
@@ -412,7 +412,7 @@ export function SuggestWizard() {
           <button
             type="button"
             onClick={() => setStep('preferences')}
-            className="mb-4 text-sm font-bold text-tan hover:underline"
+            className="mb-4 text-sm font-semibold text-tan hover:underline"
           >
             ← Back
           </button>
@@ -442,7 +442,7 @@ export function SuggestWizard() {
           </div>
 
           <div className="mt-6">
-            <label htmlFor="suggest-note" className="mb-1 block text-sm font-bold text-charcoal">
+            <label htmlFor="suggest-note" className="mb-1 block text-sm font-semibold text-charcoal">
               Anything else? <span className="font-normal text-muted">(optional)</span>
             </label>
             <input
@@ -454,7 +454,7 @@ export function SuggestWizard() {
               placeholder="e.g. meeting a friend"
               className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
-            <p className="mt-1 text-right text-xs text-muted">
+            <p className="mt-1 text-right text-sm text-muted">
               {note.length}/{SUGGEST_LIMITS.noteMaxChars}
             </p>
           </div>
@@ -477,7 +477,7 @@ export function SuggestWizard() {
           <button
             type="button"
             onClick={() => setStep('mood')}
-            className="mb-4 text-sm font-bold text-tan hover:underline"
+            className="mb-4 text-sm font-semibold text-tan hover:underline"
           >
             ← Back
           </button>
@@ -516,7 +516,7 @@ export function SuggestWizard() {
                   <button
                     type="button"
                     onClick={() => handleRelax(response.relaxHint!.constraint)}
-                    className="min-h-[44px] shrink-0 rounded-full border border-tan px-3 text-xs font-bold text-tan hover:bg-tan hover:text-cream"
+                    className="min-h-[44px] shrink-0 rounded-full border border-tan px-3 text-sm font-semibold text-tan hover:bg-tan hover:text-cream"
                   >
                     Show me more options
                   </button>

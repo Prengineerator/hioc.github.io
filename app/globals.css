@@ -13,7 +13,7 @@
   --color-tan: #ad825e;
   --color-tan-dark: #96714f;
   --color-cream: #ffffff;
-  --color-muted: #828282;
+  --color-muted: #6b6560;
 }
 
 /*
@@ -30,10 +30,10 @@ body {
   background-color: var(--color-cream);
   color: var(--color-charcoal);
   font-size: 16px;
-  /* Space Mono reads tighter than a proportional face at the default 1.5;
-     a touch more line-height keeps paragraphs (about/menu descriptions)
-     comfortable to read on mobile. */
-  line-height: 1.6;
+  /* DM Sans (proportional) doesn't need the extra breathing room Space Mono
+     did — the default 1.5 keeps paragraphs (about/menu descriptions)
+     comfortable to read on mobile without feeling loose. */
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }

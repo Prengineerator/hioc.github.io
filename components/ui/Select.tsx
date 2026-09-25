@@ -28,7 +28,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
   return (
     <div className="flex flex-col gap-1">
       {label ? (
-        <label htmlFor={selectId} className="text-sm font-bold text-charcoal">
+        <label htmlFor={selectId} className="text-sm font-semibold text-charcoal">
           {label}
         </label>
       ) : null}
@@ -70,11 +70,11 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         </svg>
       </div>
       {error ? (
-        <p id={`${selectId}-error`} role="alert" className="text-xs font-bold text-red-700">
+        <p id={`${selectId}-error`} role="alert" className="text-sm font-semibold text-red-700">
           {error}
         </p>
       ) : hint ? (
-        <p id={`${selectId}-hint`} className="text-xs text-muted">
+        <p id={`${selectId}-hint`} className="text-sm text-muted">
           {hint}
         </p>
       ) : null}

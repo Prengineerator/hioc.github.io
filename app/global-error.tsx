@@ -21,7 +21,7 @@ export default function GlobalError({
     <html lang="en">
       <body style={{ fontFamily: 'ui-monospace, monospace', textAlign: 'center', padding: '5rem 1rem' }}>
         <h1 style={{ fontWeight: 700 }}>Something went wrong</h1>
-        <p style={{ color: '#828282' }}>Please refresh the page.</p>
+        <p style={{ color: '#6b6560' }}>Please refresh the page.</p>
         <button
           onClick={reset}
           style={{ marginTop: '1.5rem', padding: '0.75rem 1.5rem', background: '#ad825e', color: '#fff', border: 0, borderRadius: 6, fontWeight: 700 }}

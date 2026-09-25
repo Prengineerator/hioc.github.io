@@ -100,7 +100,7 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
     <>
       <div className="mx-auto max-w-3xl px-4 py-8 pb-28">
         <div className="mb-6 flex flex-col items-center text-center">
-          <span className="mb-2 inline-flex items-center gap-2 rounded-full bg-tan px-4 py-1.5 text-sm font-bold text-cream">
+          <span className="mb-2 inline-flex items-center gap-2 rounded-full bg-tan px-4 py-1.5 text-sm font-semibold text-cream">
             <span aria-hidden>🍽️</span>
             Table {table.label}
           </span>
@@ -135,9 +135,10 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
         <button
           type="button"
           onClick={() => setView('checkout')}
-          className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full bg-charcoal px-6 py-3 font-bold text-cream shadow-sm transition-transform hover:scale-105"
+          className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full bg-charcoal px-6 py-3 font-semibold text-cream shadow-sm transition-transform hover:scale-105"
         >
-          Review order ({totalItems} item{totalItems === 1 ? '' : 's'} · ₹{totalPrice})
+          Review order ({totalItems} item{totalItems === 1 ? '' : 's'} ·{' '}
+          <span className="font-mono tabular-nums">₹{totalPrice}</span>)
         </button>
       ) : null}
     </>

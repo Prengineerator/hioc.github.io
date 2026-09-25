@@ -58,7 +58,7 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
 
   return (
     <section aria-labelledby="order-again-heading" className="mb-8">
-      <h2 id="order-again-heading" className="mb-3 text-lg font-bold text-charcoal">
+      <h2 id="order-again-heading" className="mb-3 text-lg font-semibold text-charcoal">
         Order again
       </h2>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -68,15 +68,15 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
             className="flex flex-col justify-between gap-3 rounded-md border border-line bg-cream p-4 shadow-card"
           >
             <div>
-              <p className="text-xs text-muted">{formatIstDate(order.created_at)}</p>
-              <p className="mt-1 text-sm font-bold text-charcoal">{itemsSummary(order)}</p>
-              <p className="mt-1 text-sm text-tan">₹{order.total_inr ?? order.subtotal_inr}</p>
+              <p className="text-sm text-muted">{formatIstDate(order.created_at)}</p>
+              <p className="mt-1 text-sm font-semibold text-charcoal">{itemsSummary(order)}</p>
+              <p className="mt-1 font-mono text-sm tabular-nums text-tan">₹{order.total_inr ?? order.subtotal_inr}</p>
             </div>
             <button
               type="button"
               onClick={() => handleClick(order.id)}
               disabled={reorderingId !== null}
-              className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
+              className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
             >
               {reorderingId === order.id ? 'Adding…' : 'Add to cart'}
             </button>

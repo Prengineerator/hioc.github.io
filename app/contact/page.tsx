@@ -27,7 +27,7 @@ function InfoBlock({
 }) {
   return (
     <div>
-      <p className="text-xs font-bold uppercase tracking-[0.2em] text-tan">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan">
         {label}
       </p>
       <div className="mt-1 text-charcoal">{children}</div>

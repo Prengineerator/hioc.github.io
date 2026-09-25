@@ -233,7 +233,7 @@ export function QrCheckout({
         <button
           type="button"
           onClick={onBackToMenu}
-          className="mt-5 rounded-md bg-tan px-5 py-2.5 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-5 rounded-md bg-tan px-5 py-2.5 text-sm font-semibold text-cream transition-colors hover:bg-tan-dark"
         >
           Back to the menu
         </button>
@@ -247,11 +247,11 @@ export function QrCheckout({
         <button
           type="button"
           onClick={onBackToMenu}
-          className="text-sm font-bold text-tan hover:underline"
+          className="text-sm font-semibold text-tan hover:underline"
         >
           &larr; Add more
         </button>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#f6efe9] px-3 py-1 text-xs font-bold text-charcoal">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#f6efe9] px-3 py-1 text-xs font-semibold text-charcoal">
           <span aria-hidden>🍽️</span> Table {table.label}
         </span>
       </div>
@@ -273,15 +273,15 @@ export function QrCheckout({
           <li key={item.key} className="flex flex-col gap-2 border-b border-[#e5e5e5] pb-3 last:border-b-0 last:pb-0">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <span className="font-bold text-charcoal">{item.name}</span>
+                <span className="font-semibold text-charcoal">{item.name}</span>
                 <span className="ml-1 text-sm text-muted">({item.variantLabel})</span>
                 {item.addons.length > 0 ? (
-                  <p className="mt-0.5 text-xs text-muted">
+                  <p className="mt-0.5 text-sm text-muted">
                     {item.addons.map((a) => a.optionName).join(', ')}
                   </p>
                 ) : null}
                 {item.specialInstructions ? (
-                  <p className="mt-0.5 text-xs italic text-muted">Note: {item.specialInstructions}</p>
+                  <p className="mt-0.5 text-sm italic text-muted">Note: {item.specialInstructions}</p>
                 ) : null}
               </div>
               <button
@@ -303,7 +303,7 @@ export function QrCheckout({
                 >
                   &minus;
                 </button>
-                <span className="min-w-[1.25rem] text-center text-sm font-bold text-charcoal">
+                <span className="min-w-[1.25rem] text-center text-sm font-mono font-semibold tabular-nums text-charcoal">
                   {item.qty}
                 </span>
                 <button
@@ -315,7 +315,7 @@ export function QrCheckout({
                   +
                 </button>
               </div>
-              <span className="font-bold text-charcoal">₹{item.unitPriceInr * item.qty}</span>
+              <span className="font-mono font-bold tabular-nums text-charcoal">₹{item.unitPriceInr * item.qty}</span>
             </div>
           </li>
         ))}
@@ -324,7 +324,7 @@ export function QrCheckout({
       {/* Optional contact — all skippable (server allows an anonymous QR order). */}
       <div className="mb-4 flex flex-col gap-3">
         <div>
-          <label htmlFor="qr-name" className="mb-1 block text-sm font-bold text-charcoal">
+          <label htmlFor="qr-name" className="mb-1 block text-sm font-semibold text-charcoal">
             Name <span className="font-normal text-muted">(optional)</span>
           </label>
           <input
@@ -337,7 +337,7 @@ export function QrCheckout({
           />
         </div>
         <div>
-          <label htmlFor="qr-phone" className="mb-1 block text-sm font-bold text-charcoal">
+          <label htmlFor="qr-phone" className="mb-1 block text-sm font-semibold text-charcoal">
             Phone{' '}
             <span className="font-normal text-muted">
               {phoneRequired
@@ -371,11 +371,11 @@ export function QrCheckout({
               />
             ) : null}
           </div>
-          {phoneError ? <p className="mt-1 text-xs text-red-700">{phoneError}</p> : null}
+          {phoneError ? <p className="mt-1 text-sm text-red-700">{phoneError}</p> : null}
           {verifyRequired ? <PhoneOtpPanel otp={otp} /> : null}
         </div>
         <div>
-          <label htmlFor="qr-email" className="mb-1 block text-sm font-bold text-charcoal">
+          <label htmlFor="qr-email" className="mb-1 block text-sm font-semibold text-charcoal">
             Email <span className="font-normal text-muted">(optional — for your bill)</span>
           </label>
           <input
@@ -389,10 +389,10 @@ export function QrCheckout({
             placeholder="you@example.com"
             className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
-          {emailError ? <p className="mt-1 text-xs text-red-700">{emailError}</p> : null}
+          {emailError ? <p className="mt-1 text-sm text-red-700">{emailError}</p> : null}
         </div>
         <div>
-          <label htmlFor="qr-notes" className="mb-1 block text-sm font-bold text-charcoal">
+          <label htmlFor="qr-notes" className="mb-1 block text-sm font-semibold text-charcoal">
             Notes <span className="font-normal text-muted">(optional)</span>
           </label>
           <textarea
@@ -415,7 +415,7 @@ export function QrCheckout({
         ) : null}
         <div className="mt-2 flex items-center justify-between border-t border-[#e5e5e5] pt-2">
           <span className="font-bold text-charcoal">Total</span>
-          <span className="font-bold text-tan">₹{displayBill.total_inr}</span>
+          <span className="font-mono font-bold tabular-nums text-tan">₹{displayBill.total_inr}</span>
         </div>
       </div>
 
@@ -424,7 +424,7 @@ export function QrCheckout({
         we&apos;ll bring it to table {table.label}.
       </p>
 
-      <p className="mb-4 text-xs text-muted">
+      <p className="mb-4 text-sm text-muted">
         If you share your number, you agree to receive your bill and order updates on it via
         WhatsApp/SMS. We use it only for this order — never for marketing.
       </p>
@@ -433,15 +433,19 @@ export function QrCheckout({
         type="button"
         onClick={placeOrder}
         disabled={submitting || otp.busy || !storeAcceptingOrders || mustVerify}
-        className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+        className="w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {submitting
-          ? 'Placing order…'
-          : !storeAcceptingOrders
-            ? 'Ordering unavailable right now'
-            : mustVerify
-              ? 'Verify your number to order'
-              : `Pay ₹${displayBill.total_inr} & place order`}
+        {submitting ? (
+          'Placing order…'
+        ) : !storeAcceptingOrders ? (
+          'Ordering unavailable right now'
+        ) : mustVerify ? (
+          'Verify your number to order'
+        ) : (
+          <>
+            Pay <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span> & place order
+          </>
+        )}
       </button>
     </div>
   );
@@ -451,7 +455,7 @@ function BillRow({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-center justify-between py-0.5">
       <span>{label}</span>
-      <span>{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
+      <span className="font-mono tabular-nums">{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
     </div>
   );
 }

@@ -72,7 +72,7 @@ export function AnnouncementBanner() {
             <img src={a.image_url} alt="" className="h-12 w-12 shrink-0 rounded-md object-cover" />
           ) : null}
           <div className="flex-1">
-            <p className="text-sm font-bold text-charcoal">{a.title}</p>
+            <p className="text-sm font-semibold text-charcoal">{a.title}</p>
             {a.body ? <p className="mt-0.5 text-sm text-muted">{a.body}</p> : null}
           </div>
           <button

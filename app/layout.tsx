@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { headers } from 'next/headers';
-import { Space_Mono } from 'next/font/google';
+import { DM_Sans, Space_Mono } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/next';
 import { SiteHeader } from '@/components/site/SiteHeader';
 import { SiteFooter } from '@/components/site/SiteFooter';
@@ -8,9 +8,17 @@ import { SurfaceProvider } from '@/components/SurfaceLink';
 import { surfaceForHost, type Surface } from '@/lib/routing/surface';
 import './globals.css';
 
-// Legacy site (see index.html / css/style.css) loads "Space Mono" from Google
-// Fonts and uses it for both headings and body copy — reused here via
-// next/font/google (instead of a <link> tag) for continuity of brand feel.
+// DM Sans is the body/heading face (readable at small sizes, real weight
+// range). Space Mono — the legacy site's only face (see index.html /
+// css/style.css) — is kept as a brand accent for prices, bill amounts,
+// order numbers and pickup codes, plus code/ID displays on staff surfaces.
+const dmSans = DM_Sans({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-dm-sans',
+  display: 'swap',
+});
+
 const spaceMono = Space_Mono({
   subsets: ['latin'],
   weight: ['400', '700'],
@@ -50,7 +58,7 @@ export default function RootLayout({
     (h.get('x-surface') as Surface | null) ?? surfaceForHost(h.get('host'));
 
   return (
-    <html lang="en" className={spaceMono.variable}>
+    <html lang="en" className={`${dmSans.variable} ${spaceMono.variable}`}>
       <body className="flex min-h-screen flex-col font-sans bg-cream text-charcoal">
         <SurfaceProvider surface={surface}>
           <SiteHeader />

@@ -85,16 +85,17 @@ export default function AccountHomePage() {
       {activeOrder ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
           <div className="min-w-0">
-            <p className="text-xs font-bold uppercase tracking-wide text-tan">
+            <p className="text-xs font-semibold uppercase tracking-wide text-tan">
               {ORDER_STATUS_LABEL[activeOrder.status]}
             </p>
             <p className="truncate text-sm font-bold text-charcoal">
-              Order #{formatOrderNumber(activeOrder.order_number)} is on its way
+              Order #<span className="font-mono tabular-nums">{formatOrderNumber(activeOrder.order_number)}</span> is
+              on its way
             </p>
           </div>
           <Link
             href={`/order/${activeOrder.id}`}
-            className="inline-flex min-h-[40px] shrink-0 items-center rounded-md bg-tan px-4 text-sm font-bold text-cream hover:bg-tan-dark"
+            className="inline-flex min-h-[40px] shrink-0 items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
           >
             Track
           </Link>
@@ -106,8 +107,8 @@ export default function AccountHomePage() {
       ) : recentOrders.length > 0 ? (
         <div>
           <div className="mb-2 flex items-center justify-between">
-            <h2 className="font-bold text-charcoal">Recent orders</h2>
-            <Link href="/account/orders" className="text-sm font-bold text-tan hover:underline">
+            <h2 className="font-semibold text-charcoal">Recent orders</h2>
+            <Link href="/account/orders" className="text-sm font-semibold text-tan hover:underline">
               View all
             </Link>
           </div>
@@ -119,22 +120,22 @@ export default function AccountHomePage() {
                   className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#e5e5e5] bg-cream p-3 shadow-sm transition-colors hover:border-tan"
                 >
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-bold text-charcoal">
+                    <p className="truncate text-sm font-mono font-bold tabular-nums text-charcoal">
                       #{formatOrderNumber(order.order_number)}
                     </p>
-                    <p className="text-xs text-muted">
+                    <p className="text-sm text-muted">
                       {formatIstDate(order.created_at)} · {formatIstTime(new Date(order.created_at))}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <span
                       className={
-                        'rounded-full px-2 py-0.5 text-xs font-bold ' + ORDER_STATUS_BADGE_CLASS[order.status]
+                        'rounded-full px-2 py-0.5 text-xs font-semibold ' + ORDER_STATUS_BADGE_CLASS[order.status]
                       }
                     >
                       {ORDER_STATUS_LABEL[order.status]}
                     </span>
-                    <span className="text-sm font-bold text-charcoal">
+                    <span className="font-mono text-sm font-bold tabular-nums text-charcoal">
                       ₹{order.total_inr ?? order.subtotal_inr}
                     </span>
                   </div>
@@ -154,7 +155,7 @@ export default function AccountHomePage() {
             href={s.href}
             className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm transition-colors hover:border-tan"
           >
-            <h2 className="font-bold text-charcoal">{s.title}</h2>
+            <h2 className="font-semibold text-charcoal">{s.title}</h2>
             <p className="mt-1 text-sm text-muted">{s.body}</p>
           </Link>
         ))}

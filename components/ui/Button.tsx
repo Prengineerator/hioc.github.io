@@ -35,7 +35,7 @@ export function buttonVariants({
   className?: string;
 } = {}): string {
   return [
-    'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md font-bold transition-colors',
+    'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-md font-semibold transition-colors',
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan',
     'disabled:cursor-not-allowed disabled:opacity-50',
     VARIANT_CLASSES[variant],

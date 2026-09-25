@@ -20,7 +20,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   return (
     <div className="flex flex-col gap-1">
       {label ? (
-        <label htmlFor={inputId} className="text-sm font-bold text-charcoal">
+        <label htmlFor={inputId} className="text-sm font-semibold text-charcoal">
           {label}
         </label>
       ) : null}
@@ -42,11 +42,11 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
         {...rest}
       />
       {error ? (
-        <p id={`${inputId}-error`} role="alert" className="text-xs font-bold text-red-700">
+        <p id={`${inputId}-error`} role="alert" className="text-sm font-semibold text-red-700">
           {error}
         </p>
       ) : hint ? (
-        <p id={`${inputId}-hint`} className="text-xs text-muted">
+        <p id={`${inputId}-hint`} className="text-sm text-muted">
           {hint}
         </p>
       ) : null}

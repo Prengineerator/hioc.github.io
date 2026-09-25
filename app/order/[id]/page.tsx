@@ -243,7 +243,7 @@ export default function OrderStatusPage() {
         </p>
         <Link
           href="/menu"
-          className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-bold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark"
         >
           Back to Menu
         </Link>
@@ -264,7 +264,7 @@ export default function OrderStatusPage() {
     <div className="mx-auto max-w-xl px-4 py-12">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-charcoal">
-          Order #{formatOrderNumber(order.order_number)}
+          Order #<span className="font-mono tabular-nums">{formatOrderNumber(order.order_number)}</span>
         </h1>
         <ConnectionDot connection={connection} />
       </div>
@@ -276,7 +276,7 @@ export default function OrderStatusPage() {
       {paymentUnavailable && !awaitingPayment && order.payment_status !== 'paid' ? (
         <p
           role="status"
-          className="mt-6 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm font-bold text-charcoal"
+          className="mt-6 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm font-semibold text-charcoal"
         >
           {PAYMENT_UNAVAILABLE_MSG}
         </p>
@@ -290,14 +290,14 @@ export default function OrderStatusPage() {
             updates automatically, usually within a few seconds.
           </p>
           {displayedPaymentError ? (
-            <p className="mt-3 text-sm font-bold text-red-700">{displayedPaymentError}</p>
+            <p className="mt-3 text-sm font-semibold text-red-700">{displayedPaymentError}</p>
           ) : null}
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
             <button
               type="button"
               onClick={handleRetryPayment}
               disabled={paying}
-              className="rounded-md bg-tan px-5 py-2.5 font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
+              className="rounded-md bg-tan px-5 py-2.5 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
             >
               {paying ? 'Opening payment…' : 'Retry payment'}
             </button>
@@ -306,7 +306,7 @@ export default function OrderStatusPage() {
                 type="button"
                 onClick={handleSwitchToCounter}
                 disabled={switching}
-                className="rounded-md border border-[#e5e5e5] px-5 py-2.5 font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
+                className="rounded-md border border-[#e5e5e5] px-5 py-2.5 font-semibold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
               >
                 {switching ? 'Switching…' : 'Switch to pay at counter'}
               </button>
@@ -348,7 +348,7 @@ export default function OrderStatusPage() {
             <div className="mt-4 text-center">
               <Link
                 href={`/order/${order.id}/review`}
-                className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-bold text-tan-dark hover:bg-[#f6efe9]"
+                className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-semibold text-tan-dark hover:bg-[#f6efe9]"
               >
                 Rate your order
               </Link>
@@ -359,7 +359,7 @@ export default function OrderStatusPage() {
           {order.pickup_code ? (
             <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 text-center shadow-sm">
               <p className="text-xs uppercase tracking-wide text-muted">Show this at the counter</p>
-              <p className="mt-1 text-4xl font-bold tracking-[0.3em] text-charcoal">
+              <p className="mt-1 font-mono text-4xl font-bold tracking-[0.3em] tabular-nums text-charcoal">
                 {order.pickup_code}
               </p>
             </div>
@@ -381,15 +381,15 @@ export default function OrderStatusPage() {
                   {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''} ×{' '}
                   {item.quantity}
                 </span>
-                <span className="shrink-0 font-bold">₹{item.line_total_inr}</span>
+                <span className="shrink-0 font-mono font-bold tabular-nums">₹{item.line_total_inr}</span>
               </div>
               {item.addons.length > 0 ? (
-                <p className="mt-0.5 text-xs text-muted">
+                <p className="mt-0.5 text-sm text-muted">
                   {item.addons.map((a) => a.option_name_snapshot).join(', ')}
                 </p>
               ) : null}
               {item.special_instructions ? (
-                <p className="mt-0.5 text-xs italic text-muted">Note: {item.special_instructions}</p>
+                <p className="mt-0.5 text-sm italic text-muted">Note: {item.special_instructions}</p>
               ) : null}
             </li>
           ))}
@@ -399,7 +399,7 @@ export default function OrderStatusPage() {
           <div className="mt-4 text-center">
             <Link
               href={`/order/${order.id}/receipt`}
-              className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-bold text-tan-dark hover:bg-[#f6efe9]"
+              className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-semibold text-tan-dark hover:bg-[#f6efe9]"
             >
               View / print bill
             </Link>
@@ -423,16 +423,16 @@ export default function OrderStatusPage() {
             type="button"
             onClick={handleCancel}
             disabled={cancelling}
-            className="rounded-md border border-[#e5e5e5] px-5 py-2 text-sm font-bold text-muted transition-colors hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+            className="rounded-md border border-[#e5e5e5] px-5 py-2 text-sm font-semibold text-muted transition-colors hover:border-red-300 hover:text-red-700 disabled:opacity-50"
           >
             {cancelling ? 'Cancelling…' : 'Cancel order'}
           </button>
-          {cancelError ? <p className="mt-2 text-xs text-red-700">{cancelError}</p> : null}
+          {cancelError ? <p className="mt-2 text-sm text-red-700">{cancelError}</p> : null}
         </div>
       ) : null}
 
       <div className="mt-10 rounded-md border border-[#e5e5e5] bg-cream p-6 text-center shadow-sm">
-        <h3 className="font-bold text-charcoal">Need help?</h3>
+        <h3 className="font-semibold text-charcoal">Need help?</h3>
         <p className="mt-2 text-sm text-muted">{CAFE_ADDRESS}</p>
         <a href={CAFE_PHONE_HREF} className="mt-1 inline-block text-sm text-tan hover:underline">
           {CAFE_PHONE_DISPLAY}
@@ -460,7 +460,7 @@ function PaymentBadge({ order }: { order: OrderWithItems }) {
           ? 'bg-[#f6efe9] text-tan-dark'
           : 'bg-[#f2efe9] text-muted';
   return (
-    <span className={'mt-2 inline-block rounded-md px-2.5 py-1 text-xs font-bold ' + tone}>
+    <span className={'mt-2 inline-block rounded-md px-2.5 py-1 text-xs font-semibold ' + tone}>
       Payment: {label[order.payment_status] ?? order.payment_status}
       {order.payment_status === 'paid' && order.payment_method ? ` · ${order.payment_method}` : ''}
     </span>
@@ -478,7 +478,7 @@ function BillRows({ order }: { order: OrderWithItems }) {
       {order.discount_inr > 0 ? <Row label={discountLabel} value={-order.discount_inr} /> : null}
       <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-2">
         <span className="font-bold text-charcoal">Total</span>
-        <span className="font-bold text-tan">₹{total}</span>
+        <span className="font-mono font-bold tabular-nums text-tan">₹{total}</span>
       </div>
     </div>
   );
@@ -488,7 +488,7 @@ function Row({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-center justify-between text-charcoal">
       <span>{label}</span>
-      <span>₹{value}</span>
+      <span className="font-mono tabular-nums">₹{value}</span>
     </div>
   );
 }
