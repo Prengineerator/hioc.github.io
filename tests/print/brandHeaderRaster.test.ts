@@ -43,19 +43,19 @@ describe('packMonochrome', () => {
   });
 });
 
-// PRN-7 — the pure layout math behind the logo/Hindi/English header stack.
-// No canvas involved: real ascent/descent and logo aspect ratio are supplied
-// directly, exactly as `buildRaster` would measure them, so this is fully
-// testable without a DOM.
+// PRN-7 / header redesign — the pure layout math behind the logo + shared
+// Hindi/English row. No canvas involved: real ascent/descent/width are
+// supplied directly, exactly as `buildRaster` would measure them, so this is
+// fully testable without a DOM.
 describe('computeHeaderLayout', () => {
   const widthDots = 576; // 80mm
 
-  it('stacks logo -> gap -> Hindi -> gap -> English with no overlaps, each fully inside the canvas', () => {
+  it('places logo above a single Hindi+English row, Hindi at the left edge and English at the right edge, no overlap', () => {
     const layout = computeHeaderLayout({
       widthDots,
       logo: { width: 480, height: 291 }, // real logo-black.png aspect ratio
-      hi: { ascent: 32, descent: 14 },
-      en: { ascent: 24, descent: 8 },
+      hi: { ascent: 32, descent: 14, width: 140 },
+      en: { ascent: 24, descent: 8, width: 90 },
     });
 
     expect(layout.logo).not.toBeNull();
@@ -63,16 +63,34 @@ describe('computeHeaderLayout', () => {
     // Logo starts at/after the top padding, never at y=0 (some margin above it).
     expect(logo.top).toBeGreaterThan(0);
 
-    // Hindi starts strictly after the logo ends — no overlap.
+    // Hindi and English start on the SAME row, strictly after the logo ends.
     expect(layout.hi.top).toBeGreaterThanOrEqual(logo.top + logo.height);
-    // English starts strictly after Hindi ends — no overlap.
-    expect(layout.en.top).toBeGreaterThanOrEqual(layout.hi.top + layout.hi.height);
+    expect(layout.hi.top).toBe(layout.en.top);
+
+    // Same shared baseline — neither sits higher than the other.
+    expect(layout.hi.baselineY).toBe(layout.en.baselineY);
+
+    // Hindi left-aligned at the inner margin; English right-aligned at
+    // widthDots - margin - its own measured width. Both inside [0, widthDots].
+    expect(layout.hi.left).toBeGreaterThan(0);
+    expect(layout.hi.left).toBeLessThan(20); // small inner margin (8-12 dots), not centered
+    expect(layout.en.left! + layout.en.width!).toBeLessThan(widthDots);
+    expect(layout.en.left! + layout.en.width!).toBeGreaterThan(widthDots - 20);
+
+    // No horizontal overlap between the two text boxes.
+    expect(layout.hi.left! + layout.hi.width!).toBeLessThanOrEqual(layout.en.left!);
+
+    // The row's height is the max of the two glyph boxes.
+    const rowHeight = Math.max(layout.hi.height, layout.en.height);
+    expect(layout.hi.height).toBeLessThanOrEqual(rowHeight);
+    expect(layout.en.height).toBeLessThanOrEqual(rowHeight);
 
     // Everything (including bottom padding) fits inside the reported canvas height.
-    expect(layout.en.top + layout.en.height).toBeLessThanOrEqual(layout.totalHeight);
-    // There's an actual gap left after English — the header doesn't end flush
+    const rowBottom = layout.hi.top + rowHeight;
+    expect(rowBottom).toBeLessThanOrEqual(layout.totalHeight);
+    // There's an actual gap left after the row — the header doesn't end flush
     // against the canvas edge (PRN-7: "no gap between header and address").
-    expect(layout.totalHeight).toBeGreaterThan(layout.en.top + layout.en.height);
+    expect(layout.totalHeight).toBeGreaterThan(rowBottom);
 
     // The logo is centered on the full dot width.
     expect(logo.left).toBeCloseTo((widthDots - logo.width!) / 2, 5);
@@ -81,23 +99,44 @@ describe('computeHeaderLayout', () => {
     const ratio = logo.width! / widthDots;
     expect(ratio).toBeGreaterThanOrEqual(0.5);
     expect(ratio).toBeLessThanOrEqual(0.6);
-
-    // baselineY = top + ascent for each text element (what fillText needs
-    // under textBaseline = 'alphabetic').
-    expect(layout.hi.baselineY).toBe(layout.hi.top + 32);
-    expect(layout.en.baselineY).toBe(layout.en.top + 24);
   });
 
-  it('still lays out Hindi and English correctly with no logo at all', () => {
+  it('still lays out the Hindi/English row correctly with no logo at all', () => {
     const layout = computeHeaderLayout({
       widthDots,
       logo: null,
-      hi: { ascent: 32, descent: 14 },
-      en: { ascent: 24, descent: 8 },
+      hi: { ascent: 32, descent: 14, width: 140 },
+      en: { ascent: 24, descent: 8, width: 90 },
     });
     expect(layout.logo).toBeNull();
     expect(layout.hi.top).toBeGreaterThan(0);
+    expect(layout.hi.top).toBe(layout.en.top);
+    expect(Math.max(layout.hi.top + layout.hi.height, layout.en.top + layout.en.height)).toBeLessThanOrEqual(
+      layout.totalHeight,
+    );
+  });
+
+  it('falls back to stacking Hindi above English, each centered, when they cannot both fit with the margin', () => {
+    // Two very wide strings that together (plus margins) exceed widthDots —
+    // e.g. the tight 58mm (384-dot) canvas with real-size glyphs.
+    const narrowWidthDots = 384; // 58mm
+    const layout = computeHeaderLayout({
+      widthDots: narrowWidthDots,
+      logo: { width: 480, height: 291 },
+      hi: { ascent: 32, descent: 14, width: 260 },
+      en: { ascent: 24, descent: 8, width: 200 },
+    });
+
+    // Falls back to stacked, not side-by-side: English starts strictly after
+    // Hindi ends (not sharing hi's top/baseline).
     expect(layout.en.top).toBeGreaterThanOrEqual(layout.hi.top + layout.hi.height);
+    expect(layout.hi.baselineY).not.toBe(layout.en.baselineY);
+
+    // Each is centered on the canvas width, not pinned to an edge.
+    expect(layout.hi.left).toBeCloseTo((narrowWidthDots - layout.hi.width!) / 2, 5);
+    expect(layout.en.left).toBeCloseTo((narrowWidthDots - layout.en.width!) / 2, 5);
+
+    // Still fully inside the canvas.
     expect(layout.en.top + layout.en.height).toBeLessThanOrEqual(layout.totalHeight);
   });
 
@@ -105,13 +144,13 @@ describe('computeHeaderLayout', () => {
     // PRN-7 root cause: a fixed CANVAS_MAX_HEIGHT (260) plus the real
     // logo-black.png aspect ratio (h/w ~0.61) left too little room for the
     // English line, and the old code just skipped drawing it. This asserts
-    // the new layout always reserves room for all three elements regardless
-    // of how tall the logo's aspect ratio makes it.
+    // the new layout always reserves room for the row regardless of how tall
+    // the logo's aspect ratio makes it.
     const layout = computeHeaderLayout({
       widthDots,
       logo: { width: 480, height: 291 },
-      hi: { ascent: 32, descent: 14 },
-      en: { ascent: 24, descent: 8 },
+      hi: { ascent: 32, descent: 14, width: 140 },
+      en: { ascent: 24, descent: 8, width: 90 },
     });
     // English's box is present and has positive height — never collapsed/omitted.
     expect(layout.en.height).toBeGreaterThan(0);
@@ -122,8 +161,8 @@ describe('computeHeaderLayout', () => {
     const input = {
       widthDots,
       logo: { width: 480, height: 291 },
-      hi: { ascent: 32, descent: 14 },
-      en: { ascent: 24, descent: 8 },
+      hi: { ascent: 32, descent: 14, width: 140 },
+      en: { ascent: 24, descent: 8, width: 90 },
     };
     expect(computeHeaderLayout(input)).toEqual(computeHeaderLayout(input));
   });

@@ -20,6 +20,8 @@ export const BUSINESS = {
   emailHref: 'mailto:business.highoncaff@gmail.com',
   // GST registration (shown on policy/contact pages).
   gstin: '09AGJPA9390E1Z9',
+  // FSSAI food business license (shown on the printed customer receipt).
+  fssaiLicense: '22723576000183',
   // Governing-law jurisdiction for Terms.
   jurisdiction: 'Agra, Uttar Pradesh, India',
   // Shown as "Last updated" on each policy page.

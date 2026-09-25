@@ -10,7 +10,7 @@
 // quotes, or other non-ASCII glyphs, so every string is transliterated to a
 // 7-bit-safe fallback before it's written out (see `transliterate`).
 
-import type { TicketAlign, TicketBlock, TicketDoc } from '@/lib/print/ticketDoc';
+import type { TicketAlign, TicketBlock, TicketColumn, TicketDoc } from '@/lib/print/ticketDoc';
 import { BRAND_NAME_EN } from '@/lib/print/brandHeader';
 
 const ESC = 0x1b;
@@ -165,6 +165,104 @@ export function wrapText(text: string, width: number): string[] {
   return lines.length > 0 ? lines : [''];
 }
 
+/** Pads/truncates `text` to exactly `width` characters for the given alignment. */
+function padToWidth(text: string, width: number, align: TicketAlign): string {
+  if (text.length >= width) return text.slice(0, width);
+  const pad = width - text.length;
+  if (align === 'right') return ' '.repeat(pad) + text;
+  if (align === 'center') {
+    const left = Math.floor(pad / 2);
+    return ' '.repeat(left) + text + ' '.repeat(pad - left);
+  }
+  return text + ' '.repeat(pad);
+}
+
+/** Total width `columns` needs (each column's `minWidth`, plus one space of
+ * gap between every pair of adjacent columns) — the floor `layoutColumns`
+ * checks against `totalCols` to decide whether an `optional` column fits. */
+function requiredWidth(columns: TicketColumn[]): number {
+  const minSum = columns.reduce((sum, c) => sum + Math.max(1, c.minWidth ?? 1), 0);
+  return minSum + Math.max(0, columns.length - 1);
+}
+
+/**
+ * Drops `optional` columns (in the order they appear), one at a time, until
+ * the remaining columns' `minWidth`s (+ gaps) fit `totalCols` — or none are
+ * left to drop. This is how the item table's Price column disappears at
+ * 32 cols (58mm) but never at 48 cols (80mm), where it always fits.
+ */
+function pickColumns(columns: TicketColumn[], totalCols: number): TicketColumn[] {
+  let cols = columns;
+  while (requiredWidth(cols) > totalCols) {
+    const dropIdx = cols.findIndex((c) => c.optional);
+    if (dropIdx === -1) break;
+    cols = cols.filter((_, i) => i !== dropIdx);
+  }
+  return cols;
+}
+
+/**
+ * Distributes `totalCols` (minus one gap column between each pair of
+ * columns) across `columns` by relative `weight`, with each column never
+ * going below its `minWidth`. Every column starts AT its `minWidth`, then
+ * whatever's left over (`available - sum(minWidths)`) is handed out by
+ * weight — never the other way around (computing a weighted share first and
+ * only enforcing `minWidth` after can, for some weight/minWidth
+ * combinations, push the total over `available` and silently shrink a later
+ * column back below ITS `minWidth` to compensate; starting from the floor
+ * makes that impossible). Any rounding remainder from the weighted split
+ * lands on the last column, so the returned widths sum to exactly
+ * `totalCols - gaps` whenever the minWidths themselves fit (the normal
+ * case — `pickColumns` already dropped whatever didn't); if even the
+ * minWidths don't fit (no optional column left to drop), every column gets
+ * exactly its minWidth and the row is left to overflow `totalCols` rather
+ * than cut a column's content short.
+ */
+function columnWidths(columns: TicketColumn[], totalCols: number): number[] {
+  if (columns.length === 0) return [];
+  const gaps = columns.length - 1;
+  const available = Math.max(columns.length, totalCols - gaps);
+  const minWidths = columns.map((c) => Math.max(1, c.minWidth ?? 1));
+  const minSum = minWidths.reduce((a, b) => a + b, 0);
+  const extra = Math.max(0, available - minSum);
+  if (extra === 0) return minWidths;
+
+  const totalWeight = columns.reduce((sum, c) => sum + c.weight, 0) || columns.length;
+  const widths = minWidths.slice();
+  let used = 0;
+  columns.forEach((c, i) => {
+    const share = Math.floor((c.weight / totalWeight) * extra);
+    widths[i] += share;
+    used += share;
+  });
+  widths[widths.length - 1] += extra - used; // rounding remainder
+  return widths;
+}
+
+/**
+ * Lays a `columns` block out into fixed-width text lines for `totalCols`
+ * columns of paper: computes each column's real character width (dropping
+ * `optional` columns first if they don't all fit — see `pickColumns`), word-
+ * wraps each column's text independently (`wrapText`, so a long item name
+ * wraps within its own column instead of overflowing into the next one),
+ * and re-joins column N's Nth wrapped line (or blank, once that column runs
+ * out of lines) with a single space between columns. Every returned line is
+ * therefore exactly `totalCols` characters wide.
+ */
+export function layoutColumns(columns: TicketColumn[], totalCols: number): string[] {
+  const cols = pickColumns(columns, totalCols);
+  if (cols.length === 0) return [];
+  const widths = columnWidths(cols, totalCols);
+  const wrapped = cols.map((c, i) => wrapText(transliterate(c.text), widths[i]));
+  const lineCount = Math.max(1, ...wrapped.map((w) => w.length));
+  const lines: string[] = [];
+  for (let li = 0; li < lineCount; li++) {
+    const parts = cols.map((c, i) => padToWidth(wrapped[i][li] ?? '', widths[i], c.align ?? 'left'));
+    lines.push(parts.join(' '));
+  }
+  return lines;
+}
+
 function qrCommandBytes(data: string): number[] {
   const bytes: number[] = [];
   const dataBytes = Array.from(data).map((c) => c.charCodeAt(0) & 0xff);
@@ -262,15 +360,23 @@ export function renderEscPos(
     setBold(b);
     setSize(s);
     const raw = transliterate(block.strike ? `[VOID] ${block.text}` : block.text);
-    for (const line of wrapText(raw, widthFor(s))) {
-      encodeLine(line);
+    // `indent` only makes sense against left alignment — ESC/POS's own
+    // centered/right alignment (`ESC a`) already positions the whole line,
+    // so hand-adding spaces there would just get re-centered/re-aligned
+    // with them baked in. The wrap width shrinks by `indent` so the
+    // indented line still fits `cols`, and EVERY wrapped line (not just the
+    // first) gets the same prefix — a hanging indent, not a one-off one.
+    const indent = a === 'left' ? Math.max(0, Math.min(widthFor(s) - 1, block.indent ?? 0)) : 0;
+    const prefix = ' '.repeat(indent);
+    for (const line of wrapText(raw, widthFor(s) - indent)) {
+      encodeLine(prefix + line);
     }
   };
 
   const emitRow = (block: Extract<TicketBlock, { kind: 'row' }>) => {
     setAlign('left');
     setBold(!!block.bold);
-    setSize('normal');
+    setSize(block.size ?? 'normal');
     const width = cols;
     const leftRaw = transliterate(block.left);
     const rightRaw = transliterate(block.right);
@@ -293,6 +399,15 @@ export function renderEscPos(
     } else {
       const gap = width - lastLeft.length - rightRaw.length;
       encodeLine(lastLeft + ' '.repeat(gap) + rightRaw);
+    }
+  };
+
+  const emitColumns = (block: Extract<TicketBlock, { kind: 'columns' }>) => {
+    setAlign('left');
+    setBold(!!block.bold);
+    setSize('normal');
+    for (const line of layoutColumns(block.columns, cols)) {
+      encodeLine(line);
     }
   };
 
@@ -332,6 +447,9 @@ export function renderEscPos(
         break;
       case 'row':
         emitRow(block);
+        break;
+      case 'columns':
+        emitColumns(block);
         break;
       case 'divider':
         setAlign('left');

@@ -50,6 +50,10 @@ const LOGO_WIDTH_RATIO = 0.55; // ~50-60% of paper width, per PRN-7.
 const HI_FONT_PX = 44;
 const EN_FONT_PX = 34;
 
+// Inner margin (dots) the Hindi/English row keeps off each edge when they sit
+// side by side — "8-12 dots so nothing clips" per the header redesign.
+const ROW_INNER_MARGIN = 10;
+
 const FALLBACK_STACK = `'Nirmala UI', 'Mangal', sans-serif`;
 
 // ---------------------------------------------------------------------------
@@ -57,12 +61,16 @@ const FALLBACK_STACK = `'Nirmala UI', 'Mangal', sans-serif`;
 // tests/print/brandHeaderRaster.test.ts.
 // ---------------------------------------------------------------------------
 
-/** The exact vertical extent of a piece of drawn text, as
+/** The exact extent of a piece of drawn text, as
  * `CanvasRenderingContext2D#measureText` reports it for the actual glyphs —
- * not the font's nominal (and, for Devanagari, unreliable) ascent/descent. */
+ * not the font's nominal (and, for Devanagari, unreliable) ascent/descent.
+ * `width` is needed (on top of the vertical ascent/descent PRN-7 already
+ * measured) to place the Hindi/English pair flush against each edge of the
+ * row they now share. */
 export interface HeaderTextMetrics {
   ascent: number;
   descent: number;
+  width: number;
 }
 
 /** A loaded image's pixel dimensions — either the raw natural size, or (once
@@ -84,8 +92,10 @@ export interface HeaderLayoutInput {
 /** One element's box in the composed header: `top`/`height` describe its
  * vertical extent (for overlap/bounds checks); `baselineY` is the y to pass
  * to `fillText` under `textBaseline = 'alphabetic'` (text elements only);
- * `left`/`width` are the logo's horizontal placement (logo only — text is
- * drawn with `textAlign = 'center'` at `widthDots / 2` instead). */
+ * `left`/`width` are every element's horizontal placement — the logo is
+ * still centered by the caller, but हाईओक/HIOC. are now each drawn with
+ * `textAlign = 'left'` at this `left` (computed here so the caller doesn't
+ * need to re-derive left- vs right-alignment itself). */
 export interface HeaderElementBox {
   top: number;
   height: number;
@@ -103,12 +113,21 @@ export interface HeaderLayout {
 }
 
 /**
- * Stacks logo → gap → Hindi → gap → English, each sized from real
- * measurements (never a guessed font-metric box), and returns the exact
- * vertical box every element needs plus the total canvas height required to
- * fit all of them plus top/bottom padding. Centers the logo horizontally on
- * `widthDots`; text elements are centered by the caller via `textAlign =
- * 'center'` at `fillText` time, using this function's `baselineY`.
+ * Stacks logo → gap → a Hindi/English row, each sized from real measurements
+ * (never a guessed font-metric box), and returns the exact box every element
+ * needs plus the total canvas height required to fit all of them plus top/
+ * bottom padding. Centers the logo horizontally on `widthDots`.
+ *
+ * The Hindi/English row puts both wordmarks "side by side … at both the
+ * corner" (the café's own phrasing): हाईओक left-aligned at `x =
+ * ROW_INNER_MARGIN`, HIOC. right-aligned at `x = widthDots -
+ * ROW_INNER_MARGIN - en.width`, sharing one baseline (`baselineY = top +
+ * max(hi.ascent, en.ascent)`) so neither sits higher than the other; the
+ * row's own height is the max of the two glyph boxes. When they wouldn't
+ * both fit with the margin (a real risk at 58mm/384 dots) — `hi.width +
+ * en.width + 2 * ROW_INNER_MARGIN > widthDots` — this falls back to the
+ * original stacked layout (Hindi above English, each centered) instead of
+ * letting them clip or overlap.
  */
 export function computeHeaderLayout(input: HeaderLayoutInput): HeaderLayout {
   const { widthDots, logo, hi, en } = input;
@@ -124,13 +143,31 @@ export function computeHeaderLayout(input: HeaderLayoutInput): HeaderLayout {
     }
   }
 
-  const hiHeight = hi.ascent + hi.descent;
-  const hiBox: HeaderElementBox = { top: y, height: hiHeight, baselineY: y + hi.ascent };
-  y += hiHeight + GAP_AFTER_HI;
+  let hiBox: HeaderElementBox;
+  let enBox: HeaderElementBox;
 
-  const enHeight = en.ascent + en.descent;
-  const enBox: HeaderElementBox = { top: y, height: enHeight, baselineY: y + en.ascent };
-  y += enHeight;
+  const fitsSideBySide = hi.width + en.width + ROW_INNER_MARGIN * 2 <= widthDots;
+  if (fitsSideBySide) {
+    const baselineY = y + Math.max(hi.ascent, en.ascent);
+    hiBox = { top: y, height: hi.ascent + hi.descent, baselineY, left: ROW_INNER_MARGIN, width: hi.width };
+    enBox = {
+      top: y,
+      height: en.ascent + en.descent,
+      baselineY,
+      left: widthDots - ROW_INNER_MARGIN - en.width,
+      width: en.width,
+    };
+    y += Math.max(hiBox.height, enBox.height);
+  } else {
+    // Fallback: stack, each centered — the original (pre-header-redesign) layout.
+    const hiHeight = hi.ascent + hi.descent;
+    hiBox = { top: y, height: hiHeight, baselineY: y + hi.ascent, left: (widthDots - hi.width) / 2, width: hi.width };
+    y += hiHeight + GAP_AFTER_HI;
+
+    const enHeight = en.ascent + en.descent;
+    enBox = { top: y, height: enHeight, baselineY: y + en.ascent, left: (widthDots - en.width) / 2, width: en.width };
+    y += enHeight;
+  }
 
   y += BOTTOM_PADDING;
 
@@ -294,12 +331,13 @@ function measureTextBox(ctx: CanvasRenderingContext2D, text: string, font: strin
   const m = ctx.measureText(text);
   const ascent = Number.isFinite(m.actualBoundingBoxAscent) ? Math.max(0, m.actualBoundingBoxAscent) : 0;
   const descent = Number.isFinite(m.actualBoundingBoxDescent) ? Math.max(0, m.actualBoundingBoxDescent) : 0;
+  const width = Number.isFinite(m.width) ? Math.max(0, m.width) : 0;
   // A font that reports a degenerate (zero) box for real text (e.g. glyphs
   // not yet painted anywhere) would otherwise collapse that element's box to
   // nothing and silently drop it — fall back to the pixel font size as a
   // floor so the layout always reserves *some* room for it.
   const px = Number.parseFloat(font) || 0;
-  return ascent + descent > 0 ? { ascent, descent } : { ascent: px * 0.8, descent: px * 0.2 };
+  return ascent + descent > 0 ? { ascent, descent, width } : { ascent: px * 0.8, descent: px * 0.2, width };
 }
 
 async function buildRaster(paperWidthMm: 58 | 80): Promise<RasterBlock | null> {
@@ -338,7 +376,6 @@ async function buildRaster(paperWidthMm: 58 | 80): Promise<RasterBlock | null> {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, widthDots, layout.totalHeight);
   ctx.fillStyle = '#000000';
-  ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic'; // paired with baselineY = top + ascent from computeHeaderLayout
 
   if (logo && logoBounds && layout.logo) {
@@ -356,11 +393,17 @@ async function buildRaster(paperWidthMm: 58 | 80): Promise<RasterBlock | null> {
     );
   }
 
+  // Both हाईओक and HIOC. are drawn `textAlign = 'left'` at the `left`
+  // computeHeaderLayout already resolved — left-aligned-at-margin when
+  // they're side by side, or centered-via-left when it fell back to
+  // stacking. Either way the layout math owns the x position, not the draw.
+  ctx.textAlign = 'left';
+
   ctx.font = `${HI_FONT_PX}px ${stack}`;
-  ctx.fillText(BRAND_NAME_HI, widthDots / 2, layout.hi.baselineY ?? layout.hi.top);
+  ctx.fillText(BRAND_NAME_HI, layout.hi.left ?? 0, layout.hi.baselineY ?? layout.hi.top);
 
   ctx.font = `bold ${EN_FONT_PX}px ${stack}`;
-  ctx.fillText(BRAND_NAME_EN, widthDots / 2, layout.en.baselineY ?? layout.en.top);
+  ctx.fillText(BRAND_NAME_EN, layout.en.left ?? 0, layout.en.baselineY ?? layout.en.top);
 
   const imageData = ctx.getImageData(0, 0, widthDots, layout.totalHeight);
   const packed = packMonochrome(imageData.data, widthDots, layout.totalHeight);

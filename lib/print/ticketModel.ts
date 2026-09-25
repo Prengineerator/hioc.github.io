@@ -12,18 +12,26 @@
 
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import type { PrintType } from '@/lib/staff/autoPrint';
-import type { TicketDoc, TicketBlock } from '@/lib/print/ticketDoc';
+import type { TicketDoc, TicketBlock, TicketColumn } from '@/lib/print/ticketDoc';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
-import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
+import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
-import { ORDER_TYPE_LABEL, PAYMENT_LABEL, formatIstDateTime } from '@/lib/print/labels';
+import {
+  ORDER_TYPE_LABEL,
+  PAYMENT_BANNER_LABEL,
+  PAYMENT_METHOD_LABEL,
+  formatIstDateTime,
+  formatIstDateShort,
+} from '@/lib/print/labels';
 
 // Thermal code pages (the ones ESC/POS printers actually ship with) have no
 // ₹ glyph — it prints as a mangled box or a wrong currency sign depending on
 // the code page. The HTML ticket keeps ₹ (a browser renders it fine); this is
-// the one place money gets the ASCII-safe "Rs. 120" form for print.
+// the one place money gets the ASCII-safe "Rs. 120.00" form for print, always
+// to two decimals (the reference Petpooja bill this receipt is modelled on
+// keeps two decimals throughout the item table and totals).
 function formatMoney(amountInr: number): string {
-  return `Rs. ${amountInr}`;
+  return `Rs. ${amountInr.toFixed(2)}`;
 }
 
 interface AddonForLine {
@@ -32,19 +40,35 @@ interface AddonForLine {
   price_inr_snapshot: number;
 }
 
+/** A rupee amount with no trailing zeros when it's whole, otherwise 2
+ * decimals — "1x40 = 40" reads cleaner on the receipt's addon lines than
+ * "1x40.00 = 40.00" when there's no paise involved anywhere in it. Rounds to
+ * the nearest paise first so float multiplication (qty * unit price) can't
+ * leave a `40.00000000001` that fails the whole-number check. */
+function formatUnits(amountInr: number): string {
+  const rounded = Math.round(amountInr * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
+}
+
 /**
- * One line per addon GROUP: "+ Sugar: Normal", or "+ Milk: Oat, Extra shot"
- * when several options share a group. PRN-7 field report: the KOT/receipt
- * used to print just "+ Normal" with no indication of what "Normal" was an
- * option OF — `group_name_snapshot` (e.g. "Sugar") was captured on every
- * order_item_addons row but never read here. Groups are kept in the order
- * their first option appears (Map insertion order), matching item.addons'
- * own order.
+ * Addon lines, grouped by `group_name_snapshot` (kept in the order each
+ * group's first option appears — Map insertion order — matching
+ * item.addons' own order). PRN-7 field report: the KOT/receipt used to print
+ * just "+ Normal" with no indication of what "Normal" was an option OF.
  *
- * `withPrice` (receipt only — the KOT stays money-free) appends the addon's
- * price in parens when it's > 0: "+ Extra shot: Double (Rs. 30)".
+ * KOT (`withPrice: false`, money-free, keeps the "+ " marker the kitchen is
+ * used to): one line per group, options comma-joined —
+ * "+ Milk: Oat, Extra shot".
+ *
+ * Receipt (`withPrice: true`, no leading "+ "): free options in a group
+ * still share one plain comma-joined line ("Sugar: Normal"), but each
+ * PRICED option gets its own line spelling out the math —
+ * "Choose Milk: Almond - 1x40 = 40" (qty = `opts.itemQuantity`, the parent
+ * item's quantity; unit price; qty × unit price) — one line per priced
+ * option rather than joining several onto one, so a long option name still
+ * wraps cleanly instead of producing one very long comma list.
  */
-function addonsLines(addons: AddonForLine[], opts: { withPrice: boolean }): string[] {
+function addonsLines(addons: AddonForLine[], opts: { withPrice: boolean; itemQuantity?: number }): string[] {
   if (addons.length === 0) return [];
   const groups = new Map<string, AddonForLine[]>();
   for (const addon of addons) {
@@ -55,22 +79,84 @@ function addonsLines(addons: AddonForLine[], opts: { withPrice: boolean }): stri
       groups.set(addon.group_name_snapshot, [addon]);
     }
   }
-  return [...groups.entries()].map(([group, options]) => {
-    const optionsText = options
-      .map((o) =>
-        opts.withPrice && o.price_inr_snapshot > 0
-          ? `${o.option_name_snapshot} (${formatMoney(o.price_inr_snapshot)})`
-          : o.option_name_snapshot,
-      )
-      .join(', ');
-    return `+ ${group}: ${optionsText}`;
-  });
+
+  const lines: string[] = [];
+  for (const [group, options] of groups) {
+    if (!opts.withPrice) {
+      lines.push(`+ ${group}: ${options.map((o) => o.option_name_snapshot).join(', ')}`);
+      continue;
+    }
+    const free = options.filter((o) => o.price_inr_snapshot <= 0);
+    const priced = options.filter((o) => o.price_inr_snapshot > 0);
+    if (free.length > 0) {
+      lines.push(`${group}: ${free.map((o) => o.option_name_snapshot).join(', ')}`);
+    }
+    const qty = opts.itemQuantity ?? 1;
+    for (const o of priced) {
+      lines.push(
+        `${group}: ${o.option_name_snapshot} - ${qty}x${formatUnits(o.price_inr_snapshot)} = ${formatUnits(qty * o.price_inr_snapshot)}`,
+      );
+    }
+  }
+  return lines;
 }
 
 function itemLabel(item: { quantity: number; name_snapshot: string; variant_label_snapshot: string }): string {
   const variant = item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : '';
   return `${item.quantity} × ${item.name_snapshot}${variant}`;
 }
+
+/** Item name + variant with no quantity prefix — the receipt's item table
+ * has its own Qty. column, unlike the KOT's single "2 × Name" line. */
+function itemDisplayName(item: { name_snapshot: string; variant_label_snapshot: string }): string {
+  const variant = item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : '';
+  return `${item.name_snapshot}${variant}`;
+}
+
+/**
+ * The item table's Price column: `line_total_inr / quantity`, NOT the raw
+ * `price_inr_snapshot` field. `resolveOrderLines` (lib/orders/lines.ts)
+ * already bakes selected add-ons into `price_inr_snapshot` (`unitPrice =
+ * variant.price_inr + addonsTotal`, then `line_total_inr = unitPrice *
+ * quantity`), so the two should already agree — but deriving Price FROM
+ * Amount here, rather than printing the snapshot field next to it, is what
+ * actually GUARANTEES `Qty × Price = Amount` on the printed table (the
+ * reference Petpooja bill's own invariant), with the addon line beneath it
+ * only explaining the breakdown, not looking like an extra, unaccounted-for
+ * charge. Never divides by zero — `quantity` is `>= 1` for every real order
+ * line (lib/orders/lines.ts `parseItems`).
+ */
+function unitPriceInclAddons(item: { price_inr_snapshot: number; line_total_inr: number; quantity: number }): number {
+  return item.quantity > 0 ? item.line_total_inr / item.quantity : item.price_inr_snapshot;
+}
+
+// The receipt's item table columns: No. / Item / Qty. / Price / Amount.
+// `weight`/`minWidth` are tuned so the Price column survives at 48 cols
+// (80mm) but is the one `optional` column `layoutColumns` (lib/print/
+// escpos.ts) drops at 32 cols (58mm) when the other four don't leave it
+// enough room — see that module for the actual per-width layout math.
+function itemColumns(cells: { no: string; name: string; qty: string; price: string; amount: string }): TicketColumn[] {
+  return [
+    // minWidths are floored to fit their own header label ("No.", "Qty.",
+    // "Price", "Amount") — wrapText hard-breaks any text (including a
+    // header) that doesn't fit its column, so a column narrower than its
+    // own heading would wrap "No." into "No" / "." on two lines.
+    { text: cells.no, weight: 2, align: 'left', minWidth: 3 },
+    { text: cells.name, weight: 18, align: 'left', minWidth: 14 },
+    { text: cells.qty, weight: 4, align: 'right', minWidth: 4 },
+    { text: cells.price, weight: 7, align: 'right', minWidth: 6, optional: true },
+    { text: cells.amount, weight: 7, align: 'right', minWidth: 6 },
+  ];
+}
+
+// The No. column is always exactly 3 wide (its `minWidth` above) plus the
+// 1-space gap `layoutColumns` puts before the next column — at BOTH 48 and
+// 32 cols, since its weight (2, the smallest of the five) never earns it
+// any of the leftover width. So the Item column always starts at char 4,
+// and addon/note lines hang-indent by that same amount (`text` block's
+// `indent`, lib/print/ticketDoc.ts) to sit directly under it, on every
+// wrapped line, not just the first.
+const ITEM_COLUMN_INDENT = 4;
 
 // --- KOT-1 — Kitchen Order Ticket -------------------------------------------
 // Mirrors components/print/StaffTickets.tsx `KotTicket`. Qty × name (variant)
@@ -109,9 +195,11 @@ function buildKotBlocks(order: StaffPrintOrder): TicketBlock[] {
 }
 
 // --- KOT-2 — Receipt --------------------------------------------------------
-// Mirrors `ReceiptTicket`. Non-voided items only, with line totals, GST
-// breakup, discount (coupon-labelled), bold total, payment line and points
-// earned. Starts with the brandHeader placeholder — logo + "हाईओक" / "HIOC."
+// Mirrors `ReceiptTicket`. Modelled on the café's previous POS (Petpooja)
+// paper bill: PAID/UNPAID banner, "RETAIL INVOICE", legal name + address +
+// phone + GSTIN, then customer/meta/item-table/totals/points/footer blocks,
+// each behind dividers, with no blank lines beyond them. Non-voided items
+// only. Starts with the brandHeader placeholder — logo + "हाईओक" / "HIOC."
 // — resolved to a raster image by printExecutor.ts's resolveBrandHeader; see
 // ticketDoc.ts for the fallback if that resolution ever fails.
 function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
@@ -120,79 +208,140 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   const total = order.total_inr ?? order.subtotal_inr;
   const discountLabel = order.coupon_code ? `Discount (${order.coupon_code})` : 'Discount';
   const points = order.points_earned ?? 0;
+  const redeemed = order.points_redeemed ?? 0;
+  const totalQty = activeItems.reduce((sum, i) => sum + i.quantity, 0);
+  const billNo = formatOrderNumber(order.order_number);
 
   const blocks: TicketBlock[] = [
     { kind: 'brandHeader' },
+    {
+      kind: 'text',
+      text: PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase(),
+      align: 'center',
+      bold: true,
+    },
+    { kind: 'text', text: 'RETAIL INVOICE', align: 'center' },
+    { kind: 'text', text: BUSINESS.legalName, align: 'center', bold: true },
     { kind: 'text', text: CAFE_ADDRESS, align: 'center' },
-    { kind: 'text', text: CAFE_PHONE_DISPLAY, align: 'center' },
+    { kind: 'text', text: `Phone No- ${CAFE_PHONE_DISPLAY}`, align: 'center' },
   ];
   if (BUSINESS.gstin) {
-    blocks.push({ kind: 'text', text: `GSTIN: ${BUSINESS.gstin}`, align: 'center' });
+    blocks.push({ kind: 'text', text: `GST No-${BUSINESS.gstin}`, align: 'center' });
+  }
+
+  if (order.customer_name || order.customer_phone) {
+    blocks.push({ kind: 'divider' });
+    if (order.customer_name) {
+      blocks.push({ kind: 'text', text: `Name: ${order.customer_name}` });
+    }
+    if (order.customer_phone) {
+      blocks.push({ kind: 'text', text: `Phone: ${order.customer_phone}` });
+    }
   }
 
   blocks.push({ kind: 'divider' });
-  blocks.push({ kind: 'row', left: 'Order', right: formatOrderNumber(order.order_number) });
-  blocks.push({ kind: 'row', left: 'Date', right: formatIstDateTime(order.created_at) });
-  blocks.push({ kind: 'row', left: 'Type', right: ORDER_TYPE_LABEL[order.order_type] ?? order.order_type });
+  blocks.push({
+    kind: 'columns',
+    columns: [
+      { text: `Date: ${formatIstDateShort(order.created_at)}`, weight: 1, align: 'left', minWidth: 10 },
+      { text: ORDER_TYPE_LABEL[order.order_type] ?? order.order_type, weight: 1, align: 'right', minWidth: 6 },
+    ],
+  });
+  if (order.cashier_name) {
+    blocks.push({
+      kind: 'columns',
+      columns: [
+        { text: `Cashier: ${order.cashier_name}`, weight: 1, align: 'left', minWidth: 10 },
+        { text: `Bill No.: ${billNo}`, weight: 1, align: 'right', minWidth: 10 },
+      ],
+    });
+  } else {
+    blocks.push({ kind: 'row', left: 'Bill No.', right: billNo });
+  }
   if (isDineIn && order.table_label) {
     blocks.push({ kind: 'row', left: 'Table', right: order.table_label });
-  }
-  if (!isDineIn && order.pickup_code) {
-    blocks.push({ kind: 'row', left: 'Token', right: order.pickup_code });
-  }
-  if (order.customer_name) {
-    blocks.push({ kind: 'row', left: 'Customer', right: order.customer_name });
-  }
-  if (order.customer_phone) {
-    blocks.push({ kind: 'row', left: 'Phone', right: order.customer_phone });
+  } else if (!isDineIn && order.pickup_code) {
+    blocks.push({ kind: 'row', left: 'Token No.', right: order.pickup_code });
   }
 
   blocks.push({ kind: 'divider' });
-  for (const item of activeItems) {
-    blocks.push({ kind: 'row', left: itemLabel(item), right: formatMoney(item.line_total_inr) });
-    for (const line of addonsLines(item.addons, { withPrice: true })) {
-      blocks.push({ kind: 'text', text: `  ${line}` });
+  blocks.push({
+    kind: 'columns',
+    bold: true,
+    columns: itemColumns({ no: 'No.', name: 'Item', qty: 'Qty.', price: 'Price', amount: 'Amount' }),
+  });
+  blocks.push({ kind: 'divider' });
+
+  activeItems.forEach((item, index) => {
+    blocks.push({
+      kind: 'columns',
+      columns: itemColumns({
+        no: String(index + 1),
+        name: itemDisplayName(item),
+        qty: String(item.quantity),
+        price: unitPriceInclAddons(item).toFixed(2),
+        amount: item.line_total_inr.toFixed(2),
+      }),
+    });
+    for (const line of addonsLines(item.addons, { withPrice: true, itemQuantity: item.quantity })) {
+      blocks.push({ kind: 'text', text: line, indent: ITEM_COLUMN_INDENT });
     }
     if (item.special_instructions) {
-      blocks.push({ kind: 'text', text: `  Note: ${item.special_instructions}` });
+      blocks.push({ kind: 'text', text: `Note: ${item.special_instructions}`, indent: ITEM_COLUMN_INDENT });
     }
-  }
+  });
 
   blocks.push({ kind: 'divider' });
-  blocks.push({ kind: 'row', left: 'Subtotal', right: formatMoney(order.subtotal_inr) });
+  blocks.push({ kind: 'row', left: 'Total Qty', right: String(totalQty) });
+  blocks.push({ kind: 'row', left: 'Sub Total', right: formatMoney(order.subtotal_inr) });
+  if (order.discount_inr > 0) {
+    blocks.push({ kind: 'row', left: discountLabel, right: `(${formatMoney(order.discount_inr)})` });
+  }
   if (order.tax_inr > 0) {
     blocks.push({ kind: 'row', left: 'GST', right: formatMoney(order.tax_inr) });
   }
   if (order.packaging_inr > 0) {
     blocks.push({ kind: 'row', left: 'Packaging', right: formatMoney(order.packaging_inr) });
   }
-  if (order.discount_inr > 0) {
-    blocks.push({ kind: 'row', left: discountLabel, right: `-${formatMoney(order.discount_inr)}` });
-  }
-  blocks.push({ kind: 'row', left: 'Total', right: formatMoney(total), bold: true });
+  blocks.push({ kind: 'row', left: 'Grand Total', right: formatMoney(total), bold: true, size: 'large' });
 
-  const paymentValue =
-    (PAYMENT_LABEL[order.payment_status] ?? order.payment_status) +
-    (order.payment_status === 'paid' && order.payment_method ? ` - ${order.payment_method}` : '');
-  blocks.push({ kind: 'row', left: 'Payment', right: paymentValue });
-
-  // Loyalty points, right after Total/Payment. Only ever populated for an
-  // order linked to a customer account (getStaffPrintOrder resolves all
-  // three best-effort from the ledger) — a guest/unlinked order leaves them
-  // null and none of these rows print.
-  const redeemed = order.points_redeemed ?? 0;
-  if (redeemed > 0) {
-    blocks.push({ kind: 'row', left: 'Points redeemed', right: String(redeemed) });
-  }
-  if (points > 0) {
-    blocks.push({ kind: 'row', left: 'Points earned', right: String(points) });
-  }
-  if (order.points_balance !== null && order.points_balance !== undefined) {
-    blocks.push({ kind: 'row', left: 'Points balance', right: String(order.points_balance) });
+  if (order.payment_status === 'paid' && order.payment_method) {
+    blocks.push({
+      kind: 'text',
+      text: `Paid via ${PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}`,
+      align: 'center',
+    });
   }
 
   blocks.push({ kind: 'divider' });
-  blocks.push({ kind: 'text', text: `Thank you for your order! - ${CAFE_NAME}`, align: 'center' });
+
+  if (order.notes) {
+    blocks.push({ kind: 'text', text: `Customer Notes: ${order.notes}` });
+    blocks.push({ kind: 'divider' });
+  }
+
+  // Loyalty points. Only ever populated for an order linked to a customer
+  // account (getStaffPrintOrder resolves all three best-effort from the
+  // ledger) — a guest/unlinked order leaves them null and none of these rows
+  // (or the divider around them) print.
+  const pointsRows: TicketBlock[] = [];
+  if (redeemed > 0) {
+    pointsRows.push({ kind: 'row', left: 'Points redeemed', right: String(redeemed) });
+  }
+  if (points > 0) {
+    pointsRows.push({ kind: 'row', left: 'Points earned', right: String(points) });
+  }
+  if (order.points_balance !== null && order.points_balance !== undefined) {
+    pointsRows.push({ kind: 'row', left: 'Points balance', right: String(order.points_balance) });
+  }
+  if (pointsRows.length > 0) {
+    blocks.push(...pointsRows);
+    blocks.push({ kind: 'divider' });
+  }
+
+  blocks.push({ kind: 'text', text: `FSSAI Lic No. ${BUSINESS.fssaiLicense}`, align: 'center' });
+  blocks.push({ kind: 'text', text: 'Love to get you high on Coffee!', align: 'center' });
+  blocks.push({ kind: 'text', text: 'Please Visit Again!', align: 'center' });
 
   return blocks;
 }
