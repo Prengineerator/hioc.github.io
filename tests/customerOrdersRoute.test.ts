@@ -5,6 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // customersLookupRoute.test.ts); this focuses on the beneficiary match (an
 // account widens the filter past the bare phone) and the one-query item
 // shaping (order_items → items, order_item_addons → addons).
+//
+// Petpooja history (lib/legacy/history.ts) — `legacyRows` defaults to [], so
+// every pre-existing test below still merges in nothing and is unaffected;
+// the dedicated `describe` block near the bottom exercises the merge/sort/
+// cap with legacy bills mixed in. Invented data only (SPEC.md PII rule).
 
 const state: {
   actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
@@ -13,7 +18,9 @@ const state: {
   rows: Record<string, unknown>[];
   orFilters: string[];
   selects: string[];
-} = { actor: null, customer: null, rateLimitKeys: [], rows: [], orFilters: [], selects: [] };
+  // legacy_orders rows (with embedded legacy_order_items) matching this phone.
+  legacyRows: Record<string, unknown>[];
+} = { actor: null, customer: null, rateLimitKeys: [], rows: [], orFilters: [], selects: [], legacyRows: [] };
 
 vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
 vi.mock('@/lib/api/rateLimit', () => ({
@@ -32,20 +39,32 @@ vi.mock('@/lib/loyalty/customerLink', async (importOriginal) => {
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
     from: (table: string) => {
-      expect(table).toBe('orders');
-      const chain = {
-        select: (cols: string) => {
-          state.selects.push(cols);
-          return chain;
-        },
-        or: (filter: string) => {
-          state.orFilters.push(filter);
-          return chain;
-        },
-        order: () => chain,
-        limit: () => Promise.resolve({ data: state.rows, error: null }),
-      };
-      return chain;
+      if (table === 'orders') {
+        const chain = {
+          select: (cols: string) => {
+            state.selects.push(cols);
+            return chain;
+          },
+          or: (filter: string) => {
+            state.orFilters.push(filter);
+            return chain;
+          },
+          order: () => chain,
+          limit: () => Promise.resolve({ data: state.rows, error: null }),
+        };
+        return chain;
+      }
+      if (table === 'legacy_orders') {
+        // lib/legacy/history.ts's latestLegacyBillsForPhone: select().eq(phone).order().limit(n).
+        const chain = {
+          select: (_cols: string) => chain,
+          eq: () => chain,
+          order: () => chain,
+          limit: () => Promise.resolve({ data: state.legacyRows, error: null }),
+        };
+        return chain;
+      }
+      throw new Error(`unexpected table: ${table}`);
     },
   }),
 }));
@@ -99,6 +118,19 @@ function orderRow(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+function legacyOrderRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 'legacy-order-1',
+    bill_no: '4021',
+    ordered_at: '2026-09-18T10:00:00Z',
+    total_inr: 180,
+    legacy_order_items: [
+      { position: 0, item_name: 'Choco Chip Cupcake', variant_label: '', menu_item_id: 'menu-2', variant_id: null },
+    ],
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   state.actor = null;
   state.customer = null;
@@ -106,6 +138,7 @@ beforeEach(() => {
   state.rows = [];
   state.orFilters = [];
   state.selects = [];
+  state.legacyRows = [];
 });
 
 describe('GET /api/customers/orders', () => {
@@ -183,5 +216,112 @@ describe('GET /api/customers/orders', () => {
     const res = await GET(req('9876543210'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ orders: [] });
+  });
+
+  it('tags every hioc order source: \'hioc\' — existing fields stay exactly as they were', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+    state.rows = [orderRow()];
+    const res = await GET(req('9876543210'));
+    const body = await res.json();
+    expect(body.orders[0].source).toBe('hioc');
+    expect(body.orders[0].order_number).toBe(1042);
+  });
+
+  describe('Petpooja history — merging legacy bills into the list', () => {
+    it('merges a legacy bill in as source: \'petpooja\', newest first alongside hioc orders', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      state.rows = [orderRow({ created_at: '2026-09-10T10:00:00Z' })]; // older
+      state.legacyRows = [legacyOrderRow({ ordered_at: '2026-09-18T10:00:00Z' })]; // newer
+      const res = await GET(req('9876543210'));
+      const body = await res.json();
+      expect(body.orders).toHaveLength(2);
+      expect(body.orders[0]).toMatchObject({ source: 'petpooja', bill_no: '4021' });
+      expect(body.orders[1]).toMatchObject({ source: 'hioc', order_number: 1042 });
+    });
+
+    it('shapes a legacy bill\'s items with name/variant snapshots, ids, and quantity: null — no prices, no addons', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      state.rows = [];
+      state.legacyRows = [
+        legacyOrderRow({
+          legacy_order_items: [
+            {
+              position: 0,
+              item_name: "Hioc's Signature Creme",
+              variant_label: 'Extra Large',
+              menu_item_id: 'menu-9',
+              variant_id: 'variant-9',
+            },
+          ],
+        }),
+      ];
+      const res = await GET(req('9876543210'));
+      const body = await res.json();
+      expect(body.orders[0]).toEqual({
+        source: 'petpooja',
+        id: 'legacy-order-1',
+        bill_no: '4021',
+        created_at: '2026-09-18T10:00:00Z',
+        total_inr: 180,
+        items: [
+          {
+            name_snapshot: "Hioc's Signature Creme",
+            variant_label_snapshot: 'Extra Large',
+            menu_item_id: 'menu-9',
+            variant_id: 'variant-9',
+            quantity: null,
+          },
+        ],
+      });
+    });
+
+    it('sorts legacy_order_items by position before shaping them', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      state.legacyRows = [
+        legacyOrderRow({
+          legacy_order_items: [
+            { position: 1, item_name: 'Second', variant_label: '', menu_item_id: null, variant_id: null },
+            { position: 0, item_name: 'First', variant_label: '', menu_item_id: null, variant_id: null },
+          ],
+        }),
+      ];
+      const res = await GET(req('9876543210'));
+      const body = await res.json();
+      expect(body.orders[0].items.map((i: { name_snapshot: string }) => i.name_snapshot)).toEqual([
+        'First',
+        'Second',
+      ]);
+    });
+
+    it('caps the merged list at 10 total, keeping only the newest across both sources', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      // 6 hioc orders, oldest to newest within the batch (Sep 1..6).
+      state.rows = Array.from({ length: 6 }, (_, i) =>
+        orderRow({ id: `order-${i}`, created_at: `2026-09-0${i + 1}T10:00:00Z` }),
+      );
+      // 6 legacy bills, newer than all of the above (Sep 10..15).
+      state.legacyRows = Array.from({ length: 6 }, (_, i) =>
+        legacyOrderRow({ id: `legacy-${i}`, bill_no: `${4000 + i}`, ordered_at: `2026-09-${10 + i}T10:00:00Z` }),
+      );
+      const res = await GET(req('9876543210'));
+      const body = await res.json();
+      expect(body.orders).toHaveLength(10);
+      // All 6 legacy bills (the newest 6) plus the newest 4 of the 6 hioc orders.
+      expect(body.orders.filter((o: { source: string }) => o.source === 'petpooja')).toHaveLength(6);
+      expect(body.orders.filter((o: { source: string }) => o.source === 'hioc')).toHaveLength(4);
+      // Strictly newest-first across the merged, capped list.
+      const timestamps = body.orders.map((o: { created_at: string }) => new Date(o.created_at).getTime());
+      expect(timestamps).toEqual([...timestamps].sort((a, b) => b - a));
+    });
+
+    it('still returns the plain hioc list when there is no legacy history for this phone', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      state.rows = [orderRow()];
+      state.legacyRows = [];
+      const res = await GET(req('9876543210'));
+      const body = await res.json();
+      expect(body.orders).toHaveLength(1);
+      expect(body.orders[0].source).toBe('hioc');
+    });
   });
 });

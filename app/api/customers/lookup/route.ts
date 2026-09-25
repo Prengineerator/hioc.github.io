@@ -6,6 +6,7 @@ import { rateLimitOk } from '@/lib/api/rateLimit';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { findVerifiedCustomerByPhone, orderMatchFilter } from '@/lib/loyalty/customerLink';
 import { getBalance } from '@/lib/loyalty/ledger';
+import { legacyCustomerByPhone, legacyOrderStatsForPhone } from '@/lib/legacy/history';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,13 +27,23 @@ export const dynamic = 'force-dynamic';
 //
 // `source` tells the POS how much to trust the name it's showing:
 //  - 'account'       — a VERIFIED phone-linked account (findVerifiedCustomerByPhone).
-//  - 'order_history'  — no account matched, but a past order used this exact
-//                        phone; the name comes from that order's own
+//  - 'order_history'  — no account matched, but a past hioc order used this
+//                        exact phone; the name comes from that order's own
 //                        customer_name (whatever a staffer typed for them
 //                        last time — never re-verified, just recalled).
+//  - 'petpooja'        — no account AND no hioc order ever used this phone,
+//                        but the imported Petpooja history (legacy_customers,
+//                        lib/legacy/history.ts) has it: a regular who only
+//                        ever ordered through the old POS. name/order_count/
+//                        last_order_at come from that table's own
+//                        precomputed stats (completed bills only).
 // The fallback exists because most regulars at a counter never make an
 // account; without it, "returning customer" would mean nothing for anyone
-// who has ordered ten times and signed up for zero accounts.
+// who has ordered ten times and signed up for zero accounts. `order_count`/
+// `last_order_at` for 'account' and 'order_history' also FOLD IN completed
+// legacy bills for the same phone (legacyOrderStatsForPhone) — a regular who
+// switched from Petpooja to an app account mid-history shouldn't look like a
+// first-timer just because their older bills live in a different table.
 //
 // PIN-3: gated by getCounterActor() — classic session first, unchanged; an
 // enrolled-device PIN operator only when there is no session at all.
@@ -63,13 +74,17 @@ export async function GET(request: Request) {
     // One query for both order_count and last_order_at: PostgREST's `count`
     // reflects every row matching the filter regardless of `.limit()`, so a
     // single indexed round trip (ordered, capped at 1 row of data) answers
-    // both without a second query.
-    const { data, count, error } = await admin
-      .from('orders')
-      .select('created_at', { count: 'exact' })
-      .or(orderMatchFilter(phoneE164, account.userId))
-      .order('created_at', { ascending: false })
-      .limit(1);
+    // both without a second query. The legacy stats query runs alongside it,
+    // not after — one round trip either way pays for both.
+    const [{ data, count, error }, legacyStats] = await Promise.all([
+      admin
+        .from('orders')
+        .select('created_at', { count: 'exact' })
+        .or(orderMatchFilter(phoneE164, account.userId))
+        .order('created_at', { ascending: false })
+        .limit(1),
+      legacyOrderStatsForPhone(admin, phoneE164),
+    ]);
     if (error) console.error('customers/lookup: order-history count failed', error);
 
     return NextResponse.json({
@@ -77,32 +92,59 @@ export async function GET(request: Request) {
       source: 'account',
       name: account.name,
       points_balance: await getBalance(account.userId),
-      order_count: count ?? 0,
-      last_order_at: data?.[0]?.created_at ?? null,
+      order_count: (count ?? 0) + legacyStats.count,
+      last_order_at: laterOf(data?.[0]?.created_at ?? null, legacyStats.lastOrderAt),
     });
   }
 
-  // No account — fall back to the most recent order placed with this exact
-  // phone. Not an error: most walk-ins have no account, and the POS shows
-  // that as "no order history either" rather than a failure.
-  const { data, count, error } = await admin
-    .from('orders')
-    .select('customer_name, created_at', { count: 'exact' })
-    .or(orderMatchFilter(phoneE164, null))
-    .order('created_at', { ascending: false })
-    .limit(1);
+  // No account — fall back to the most recent hioc order placed with this
+  // exact phone (order-history), and to Petpooja's imported history if even
+  // that comes up empty.
+  const [{ data, count, error }, legacyStats] = await Promise.all([
+    admin
+      .from('orders')
+      .select('customer_name, created_at', { count: 'exact' })
+      .or(orderMatchFilter(phoneE164, null))
+      .order('created_at', { ascending: false })
+      .limit(1),
+    legacyOrderStatsForPhone(admin, phoneE164),
+  ]);
   if (error) console.error('customers/lookup: order-history fallback failed', error);
 
   const lastOrder = data?.[0];
-  if (!lastOrder) {
+  if (lastOrder) {
+    return NextResponse.json({
+      found: true,
+      source: 'order_history',
+      name: lastOrder.customer_name,
+      order_count: (count ?? 0) + legacyStats.count,
+      last_order_at: laterOf(lastOrder.created_at, legacyStats.lastOrderAt),
+    });
+  }
+
+  // Not even a hioc order — this may still be a Petpooja-only regular who
+  // never ordered through this app at all. Not an error either way: most
+  // walk-ins have no history anywhere, and the POS shows that as "no order
+  // history" rather than a failure.
+  const legacyCustomer = await legacyCustomerByPhone(admin, phoneE164);
+  if (!legacyCustomer) {
     return NextResponse.json({ found: false });
   }
 
   return NextResponse.json({
     found: true,
-    source: 'order_history',
-    name: lastOrder.customer_name,
-    order_count: count ?? 0,
-    last_order_at: lastOrder.created_at,
+    source: 'petpooja',
+    name: legacyCustomer.name,
+    order_count: legacyCustomer.order_count,
+    last_order_at: legacyCustomer.last_order_at,
   });
+}
+
+/** The later (more recent) of two nullable ISO timestamps — null only when
+ * BOTH are null. Used to merge a hioc last_order_at with a legacy one
+ * without caring which table actually holds the more recent bill. */
+function laterOf(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return new Date(a).getTime() >= new Date(b).getTime() ? a : b;
 }

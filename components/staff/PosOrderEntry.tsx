@@ -58,7 +58,7 @@ import {
   type QuotedDiscount,
 } from '@/lib/pos/loyalty';
 import { shouldAutofillName } from '@/lib/pos/nameAutofill';
-import { mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
+import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
@@ -561,21 +561,30 @@ export function PosOrderEntry({
   // (no second server round trip — see lib/pos/repeatOrder.ts) and add each
   // resulting line through the same addLine() the menu grid uses, so pricing
   // still comes from the next /api/orders/quote call, not from the old order.
+  //
+  // Petpooja history: a legacy bill (`source: 'petpooja'`) goes through the
+  // sibling mapper instead — it has no quantities/add-ons to resolve and a
+  // different, more limited variant-matching rule (lib/pos/repeatOrder.ts).
   function handleRepeatOrder(order: CustomerOrderResponse) {
     setRepeatingOrderId(order.id);
     try {
-      const { lines, skipped, modified } = mapOrderItemsToCartLines(order.items, menuItems);
+      const { lines, skipped, modified } =
+        order.source === 'petpooja'
+          ? mapLegacyBillItemsToCartLines(order.items, menuItems)
+          : mapOrderItemsToCartLines(order.items, menuItems);
       for (const line of lines) {
         const { qty, ...rest } = line;
         addLine(rest, qty);
       }
       const notices = [...skipped, ...modified].map((n) => n.name);
+      const orderLabel =
+        order.source === 'petpooja' ? `Petpooja #${order.bill_no}` : `#${formatOrderNumber(order.order_number)}`;
       if (lines.length === 0) {
         showToast('None of that order’s items are available right now.');
       } else if (notices.length > 0) {
         showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} — skipped ${notices.join(', ')}.`);
       } else {
-        showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} from #${formatOrderNumber(order.order_number)}.`);
+        showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} from ${orderLabel}.`);
       }
       setOrdersModalOpen(false);
     } finally {

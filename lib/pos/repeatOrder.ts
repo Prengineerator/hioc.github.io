@@ -21,7 +21,7 @@
 
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { CartAddonSelection, CartItem } from '@/lib/cart/CartContext';
-import type { CustomerOrderItemResponse } from '@/lib/api/customerOrders';
+import type { CustomerOrderItemResponse, LegacyOrderItemResponse } from '@/lib/api/customerOrders';
 import type { MenuItem } from '@/lib/types';
 
 /** A cart-ready line — everything addLine() needs, including qty (the caller
@@ -122,4 +122,82 @@ export function mapOrderItemsToCartLines(
   }
 
   return { lines, skipped, modified };
+}
+
+/**
+ * Petpooja read-side sibling of `mapOrderItemsToCartLines`, for a legacy
+ * bill's items (GET /api/customers/orders' `source: 'petpooja'` entries —
+ * lib/legacy/history.ts). Same current-menu resolution, but two things a
+ * Petpooja item never carries that a hioc one does:
+ *
+ *  - No quantity was ever recorded (the Petpooja export has none at all —
+ *    see the shared import spec), so every kept line is added at qty 1, the
+ *    same "start from one" a fresh tile tap already uses.
+ *  - No add-ons and no per-item price snapshot: the cart line's price is
+ *    entirely the variant's CURRENT price, same "never trust an old number"
+ *    rule `mapOrderItemsToCartLines` holds for its own unitPriceInr.
+ *
+ * Variant resolution:
+ *  - `variant_id` set → must still exist on the item; skipped otherwise
+ *    (same "This option is no longer offered" as the hioc mapper).
+ *  - `variant_id` null and the item currently has exactly ONE variant → that
+ *    variant is the only possible choice, so it's used — this is exactly the
+ *    isSimpleItem/quick-add rule (lib/pos/quickAdd.ts, commitCandidate in
+ *    PosOrderEntry.tsx): with one variant there is nothing to guess.
+ *  - `variant_id` null and the item currently has MORE than one variant →
+ *    skipped, not guessed. Nowhere else in this app silently picks a variant
+ *    for someone: PosCustomizeModal seeds `variants[0]` only as a starting
+ *    point a human then confirms or changes before Add — Repeat never gets
+ *    that confirmation step, so guessing here could silently charge the
+ *    wrong size. Skip-and-tell matches the same call the Petpooja item
+ *    matcher itself makes (lib/petpooja/match.ts: "never fuzzy-match beyond
+ *    these rules — wrong matches are worse than none").
+ */
+export function mapLegacyBillItemsToCartLines(
+  items: readonly LegacyOrderItemResponse[],
+  menuItems: readonly MenuItem[],
+): RepeatOrderResult {
+  const menuById = new Map(menuItems.map((item) => [item.id, item]));
+
+  const lines: RepeatCartLine[] = [];
+  const skipped: RepeatNotice[] = [];
+
+  for (const legacyItem of items) {
+    const displayName = legacyItem.name_snapshot;
+
+    if (!legacyItem.menu_item_id) {
+      skipped.push({ name: displayName, reason: 'Not matched to a menu item' });
+      continue;
+    }
+    const menuItem = menuById.get(legacyItem.menu_item_id);
+    if (!menuItem || !isMenuItemAvailable(menuItem)) {
+      skipped.push({ name: displayName, reason: 'Currently unavailable' });
+      continue;
+    }
+
+    let variant = legacyItem.variant_id
+      ? menuItem.variants.find((v) => v.id === legacyItem.variant_id)
+      : undefined;
+    // No recorded variant, but there's only one to pick — unambiguous.
+    if (!variant && !legacyItem.variant_id && menuItem.variants.length === 1) {
+      variant = menuItem.variants[0];
+    }
+    if (!variant) {
+      skipped.push({ name: displayName, reason: 'This option is no longer offered' });
+      continue;
+    }
+
+    lines.push({
+      menuItemId: menuItem.id,
+      variantId: variant.id,
+      name: menuItem.name,
+      variantLabel: variant.label,
+      unitPriceInr: variant.price_inr,
+      addons: [],
+      specialInstructions: '',
+      qty: 1,
+    });
+  }
+
+  return { lines, skipped, modified: [] };
 }
