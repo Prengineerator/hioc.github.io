@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'crypto';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, unauthorized } from '@/lib/api/http';
 
 export const dynamic = 'force-dynamic';
@@ -22,9 +22,14 @@ const EXT_BY_MIME: Record<string, string> = {
 // field. Validates image mime + size, uploads to the public `menu-images`
 // bucket via the admin client, and returns { url } — the caller saves that
 // onto a menu item's image_url (POST/PATCH /api/menu).
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all. Kept in
+// step with POST/PATCH /api/menu, which it feeds — a menu-edit flow that
+// works via PIN everywhere except the image field would just fail partway.
 export async function POST(request: Request) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
 

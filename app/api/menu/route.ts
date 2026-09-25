@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, MENU_CATEGORIES } from '@/lib/api/constants';
@@ -98,14 +98,23 @@ export async function GET(request: Request) {
 }
 
 // POST /api/menu — staff-only.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all. The
+// item-availability toggle (S6) shares this route's PATCH sibling and the
+// same 'menu_edit' permission, so create/edit move together rather than
+// splitting an arbitrary "toggle only" carve-out out of one gate.
 export async function POST(request: Request) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
+  const user = actor.user;
   // FND3-6: menu edits go through the owner-configurable 'menu_edit' gate
-  // (default = staff-and-up, preserving prior behavior).
-  if (!(await hasPermission(user, 'menu_edit'))) {
+  // (default = staff-and-up, preserving prior behavior). roleHint = actor.role
+  // so hasPermission() doesn't re-derive it via a session a device operator
+  // has none of (see lib/permissions.ts's own note).
+  if (!(await hasPermission(user, 'menu_edit', actor.role))) {
     return errorResponse(403, 'You do not have permission to edit the menu');
   }
 
