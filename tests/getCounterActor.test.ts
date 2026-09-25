@@ -61,7 +61,7 @@ vi.mock('@/lib/api/device', () => ({
 
 process.env.OPERATOR_JWT_SECRET = SECRET;
 
-const { getCounterActor } = await import('@/lib/api/auth');
+const { getCounterActor, getCounterManager } = await import('@/lib/api/auth');
 
 beforeEach(() => {
   state.sessionUser = null;
@@ -125,5 +125,65 @@ describe('getCounterActor', () => {
     state.profileRole = 'customer'; // deactivated mid-shift
     state.authUser = { id: 'u1' };
     expect(await getCounterActor()).toBeNull();
+  });
+
+  // D6-6, applied to the operator's OWN authority: a PIN unlock must never
+  // carry full owner power on the staff surface, even for the real owner.
+  it('caps an owner operator at "manager" for the device path — never full owner', async () => {
+    state.operatorCookie = signOperatorToken({ op: 'owner-1', dev: 'device-1', iat: Math.floor(Date.now() / 1000) }, SECRET);
+    state.device = { id: 'device-1' };
+    state.profileRole = 'owner';
+    state.authUser = { id: 'owner-1' };
+
+    const actor = await getCounterActor();
+    expect(actor?.role).toBe('manager');
+    expect(actor?.via).toBe('device');
+  });
+
+  it('does NOT cap a classic owner session — full owner role passes through untouched', async () => {
+    state.sessionUser = { id: 'owner-1' };
+    state.sessionRole = 'owner';
+
+    const actor = await getCounterActor();
+    expect(actor).toEqual({ user: { id: 'owner-1' }, role: 'owner', via: 'session' });
+  });
+});
+
+describe('getCounterManager', () => {
+  it('is null with neither a session nor an operator', async () => {
+    expect(await getCounterManager()).toBeNull();
+  });
+
+  it('refuses a plain staff operator', async () => {
+    state.operatorCookie = signOperatorToken({ op: 'u1', dev: 'device-1', iat: Math.floor(Date.now() / 1000) }, SECRET);
+    state.device = { id: 'device-1' };
+    state.profileRole = 'staff';
+    state.authUser = { id: 'u1' };
+    expect(await getCounterManager()).toBeNull();
+  });
+
+  it('passes a manager-role operator', async () => {
+    state.operatorCookie = signOperatorToken({ op: 'u1', dev: 'device-1', iat: Math.floor(Date.now() / 1000) }, SECRET);
+    state.device = { id: 'device-1' };
+    state.profileRole = 'manager';
+    state.authUser = { id: 'u1' };
+    const actor = await getCounterManager();
+    expect(actor?.role).toBe('manager');
+  });
+
+  it('passes an owner operator (capped to "manager", but that still clears the manager bar)', async () => {
+    state.operatorCookie = signOperatorToken({ op: 'owner-1', dev: 'device-1', iat: Math.floor(Date.now() / 1000) }, SECRET);
+    state.device = { id: 'device-1' };
+    state.profileRole = 'owner';
+    state.authUser = { id: 'owner-1' };
+    const actor = await getCounterManager();
+    expect(actor?.role).toBe('manager');
+  });
+
+  it('passes a classic manager session', async () => {
+    state.sessionUser = { id: 'mgr-1' };
+    state.sessionRole = 'manager';
+    const actor = await getCounterManager();
+    expect(actor?.role).toBe('manager');
   });
 });

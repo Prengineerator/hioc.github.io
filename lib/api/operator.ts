@@ -89,8 +89,19 @@ export async function resolveOperatorActor(): Promise<OperatorActor | null> {
     .eq('id', payload.op)
     .maybeSingle();
   if (profileError || !profile) return null;
-  const role = (profile as { role?: string }).role as UserRole | undefined;
-  if (!role || !isStaffRole(role)) return null;
+  const realRole = (profile as { role?: string }).role as UserRole | undefined;
+  if (!realRole || !isStaffRole(realRole)) return null;
+
+  // D6-6, applied to the operator's OWN role, not just the surface: a 4-digit
+  // PIN on shared hardware must never carry full owner authority, even when
+  // the person who set it up is genuinely the owner. Capped to 'manager' for
+  // every staff-surface purpose (hasPermission() etc.) — owner-only screens
+  // and APIs never accept this path at all (they call getOwnerUser(), untouched),
+  // so this cap only ever narrows what a device+PIN session can do, never
+  // widens it. The real role stays in `profiles` and in the classic-session
+  // path (getStaffOrOwner()) exactly as before — an owner who signs in with
+  // their password still gets full owner authority everywhere that's legitimate.
+  const role: UserRole = realRole === 'owner' ? 'manager' : realRole;
 
   const { data: authUser, error: authError } = await admin.auth.admin.getUserById(payload.op);
   if (authError || !authUser?.user) return null;
@@ -116,6 +127,11 @@ export async function resolveOperatorActor(): Promise<OperatorActor | null> {
  * about the CALLER (the lock screen is shown to someone with no session yet)
  * — callers of this function are responsible for gating on an enrolled
  * device first, exactly like getEnrolledDevice() itself.
+ *
+ * Includes 'owner' profiles that happen to have a PIN set — safe to offer as
+ * a tile because resolveOperatorActor() above caps an owner's OWN role to
+ * 'manager' the moment they unlock through this path; tapping this tile can
+ * never yield full owner authority on the staff surface.
  */
 export async function listOperatorOptions(): Promise<OperatorOption[]> {
   const admin = createAdminSupabaseClient();

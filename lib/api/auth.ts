@@ -133,7 +133,8 @@ export async function getStaffOrOwner(): Promise<{ user: User; role: UserRole } 
  * the operator JWT's `dev` claim, and an operator still holding an active
  * staff/manager/owner role, re-read from `profiles` on every call (never
  * cached — E3: a role change mid-shift takes effect on the very next
- * request, same posture as hasPermission()).
+ * request, same posture as hasPermission()). An owner's OWN role is capped
+ * to 'manager' for this path (lib/api/operator.ts) — see D6-6 note there.
  *
  * `via` tells a caller which path answered, for the rare case that matters
  * (PIN-4 attribution surfaces that want to say "via PIN switch"); most
@@ -157,4 +158,21 @@ export async function getCounterActor(): Promise<{ user: User; role: UserRole; v
   const operator = await resolveOperatorActor();
   if (!operator) return null;
   return { ...operator, via: 'device' };
+}
+
+/**
+ * Like getManagerUser(), but additive over getCounterActor(): a classic
+ * session first, an enrolled device's PIN operator otherwise. Passes for
+ * 'manager' or 'owner' (a device operator's role is already capped to
+ * 'manager' at most — see getCounterActor()'s own note), refuses 'staff'.
+ *
+ * For a route whose existing gate is a plain role check (getManagerUser()),
+ * not the hasPermission() matrix — e.g. cash-counts' history view — this is
+ * the direct drop-in that adds the device path without inventing a
+ * permission-matrix key for something that was never one.
+ */
+export async function getCounterManager(): Promise<{ user: User; role: UserRole; via: 'session' | 'device' } | null> {
+  const actor = await getCounterActor();
+  if (!actor) return null;
+  return actor.role === 'manager' || actor.role === 'owner' ? actor : null;
 }
