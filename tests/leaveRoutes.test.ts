@@ -87,7 +87,7 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffOrOwner: () => Promise.resolve(state.account),
+  getCounterActor: () => Promise.resolve(state.account),
 }));
 vi.mock('@/lib/permissions', () => ({
   hasPermission: (_u: unknown, key: string) => Promise.resolve(state.perms[key] ?? false),
@@ -237,6 +237,14 @@ describe('PATCH /api/leave/team — deciding', () => {
     expect(res.status).toBe(200);
     expect(state.updatePayload?.status).toBe('approved');
     expect(state.updatePayload?.decided_by).toBe('staff-1');
+  });
+
+  it('PIN-3: an enrolled-device manager operator (no classic session) can approve too', async () => {
+    state.account = { user: { id: 'ravi' }, role: 'manager' };
+    state.perms.leave_approve = true;
+    const res = await team.PATCH(req('PATCH', { id: 'req-1', action: 'approve' }));
+    expect(res.status).toBe(200);
+    expect(state.updatePayload?.decided_by).toBe('ravi');
   });
 
   it('refuses a decline with no note — that is the one an argument starts over', async () => {

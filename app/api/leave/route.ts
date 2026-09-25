@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
@@ -24,10 +24,15 @@ export const dynamic = 'force-dynamic';
 //
 // THE WINDOW IS ENFORCED HERE, not in the UI. A closed window that only the
 // browser knows about is not closed.
+//
+// PIN-3: gated by getCounterActor() — the operator IS the person, and their
+// PIN on a trusted counter proves that the same way a classic session does.
+// Classic session first, unchanged; the device path only when there is no
+// session at all.
 
 /** The caller's own requests for the plannable week, plus the week itself. */
 export async function GET() {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
 
   const week = plannableWeek();
@@ -57,7 +62,7 @@ export async function GET() {
 
 // POST { leave_date, reason? } — request a day off.
 export async function POST(request: Request) {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
 
   const body = await parseJsonBody(request);
@@ -142,7 +147,7 @@ export async function POST(request: Request) {
 
 // DELETE { leave_date } — withdraw, while the window is still open.
 export async function DELETE(request: Request) {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
 
   const body = await parseJsonBody(request);

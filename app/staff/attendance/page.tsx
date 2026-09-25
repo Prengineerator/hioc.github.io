@@ -1,13 +1,14 @@
 import Link from 'next/link';
 import { flags } from '@/lib/flags';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { AttendancePunch } from '@/components/staff/AttendancePunch';
 import { CashOverridePanel } from '@/components/staff/CashOverridePanel';
 
 export const dynamic = 'force-dynamic';
 
 // ATT-1 — the staff attendance screen. The /staff/** layout already gates this
-// behind getStaffOrOwner(), so a signed-in staff/manager/owner is guaranteed.
+// behind getCounterActor() (PIN-3: classic session, or an enrolled device's
+// PIN operator — the operator IS the person, and their PIN proves that).
 //
 // Dark-launched behind the `attendance` flag, which defaults OFF and must stay
 // off until the geofence has been tuned on site (Gate 5A-i). An untuned radius
@@ -35,7 +36,7 @@ export default async function StaffAttendancePage() {
     );
   }
 
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   const canManageCash = account ? account.role === 'manager' || account.role === 'owner' : false;
 
   return (

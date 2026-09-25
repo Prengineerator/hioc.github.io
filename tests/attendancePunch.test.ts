@@ -13,7 +13,7 @@ const STORE_LNG = 77.209023;
 const M_PER_DEG_LAT = 111_320;
 
 const state: {
-  account: { user: { id: string }; role: string } | null;
+  account: { user: { id: string }; role: string; via?: 'session' | 'device' } | null;
   settings: Record<string, unknown>;
   openSession: Record<string, unknown> | null;
   /** The row the losing writer finds when it re-reads after a 23505. */
@@ -152,7 +152,7 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({
-  getStaffOrOwner: () => Promise.resolve(state.account),
+  getCounterActor: () => Promise.resolve(state.account),
 }));
 
 const { POST } = await import('@/app/api/attendance/punch/route');
@@ -206,6 +206,12 @@ describe('POST /api/attendance/punch — authorization', () => {
     // A new permission key would fail closed to manager wherever its seed row
     // is missing, stopping the whole team from marking attendance.
     state.account = { user: { id: 'staff-1' }, role: 'staff' };
+    const res = await POST(punchReq({ type: 'in', ...reading(10) }));
+    expect(res.status).toBe(200);
+  });
+
+  it('PIN-3: an enrolled-device operator (no classic session) can punch — the operator IS the person', async () => {
+    state.account = { user: { id: 'staff-1' }, role: 'staff', via: 'device' };
     const res = await POST(punchReq({ type: 'in', ...reading(10) }));
     expect(res.status).toBe(200);
   });

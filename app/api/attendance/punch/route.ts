@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { clientIp } from '@/lib/api/rateLimit';
 import { evaluateStoreNetwork } from '@/lib/attendance/network';
@@ -137,8 +137,13 @@ async function logAttempt(
   }
 }
 
+// PIN-3: gated by getCounterActor() — the operator IS the person, and their
+// PIN on a trusted counter proves that the same way a classic session does.
+// Classic session first, unchanged; the device path only when there is no
+// session at all. Every OTHER check on this route (geofence, network, the
+// deliberate absence of hasPermission()) is untouched — see the file comment.
 export async function POST(request: Request) {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
   const userId = account.user.id;
 

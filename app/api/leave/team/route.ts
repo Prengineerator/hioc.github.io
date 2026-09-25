@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
@@ -22,10 +22,14 @@ export const dynamic = 'force-dynamic';
 // and there are no reporting lines to model. If that ever changes, the change is
 // a filter here, not a redesign.
 
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
+// roleHint = account.role so hasPermission() doesn't try to re-derive the
+// role via a session a device operator has none of.
 export async function GET(request: Request) {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
-  if (!(await hasPermission(account.user, 'leave_approve'))) {
+  if (!(await hasPermission(account.user, 'leave_approve', account.role))) {
     return errorResponse(403, 'You do not have access to the team leave plan.');
   }
 
@@ -111,9 +115,9 @@ export async function GET(request: Request) {
 
 // PATCH { id, action: 'approve' | 'decline', note? }
 export async function PATCH(request: Request) {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
-  if (!(await hasPermission(account.user, 'leave_approve'))) {
+  if (!(await hasPermission(account.user, 'leave_approve', account.role))) {
     return errorResponse(403, 'You do not have permission to decide leave.');
   }
 

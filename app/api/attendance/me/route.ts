@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getStaffOrOwner } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, unauthorized } from '@/lib/api/http';
 import { istBusinessDate } from '@/lib/attendance/businessDate';
@@ -26,8 +26,12 @@ function minutesBetween(fromIso: string, toIso: string): number {
   return Math.max(0, Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 60_000));
 }
 
+// PIN-3: gated by getCounterActor() — the operator IS the person, and
+// unlocking with their own PIN on a trusted counter proves that the same way
+// a classic session does. Classic session first, unchanged; the device path
+// only when there is no session at all.
 export async function GET() {
-  const account = await getStaffOrOwner();
+  const account = await getCounterActor();
   if (!account) return unauthorized();
   const userId = account.user.id;
 
