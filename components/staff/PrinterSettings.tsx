@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { buttonVariants } from '@/components/ui/Button';
+import { SurfaceLink } from '@/components/SurfaceLink';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
 import type {
   DetectedPrinter,
@@ -457,6 +458,12 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
           <p className="mt-1 text-sm text-muted">
             Add the printers on this machine and assign KOT, Receipt and Token to them.
           </p>
+          <SurfaceLink
+            href="/staff/device"
+            className="mt-2 inline-block text-sm font-bold text-tan underline decoration-tan/50 underline-offset-2 hover:text-tan-dark"
+          >
+            This counter — trusted-device setup
+          </SurfaceLink>
         </div>
         {!draft ? (
           <button

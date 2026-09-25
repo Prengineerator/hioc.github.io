@@ -47,10 +47,22 @@ installed app from then on.
 
 ### 3. Sign in and enrol the machine
 
-Open **HIOC POS** and sign in with a staff or owner account. It behaves like its own private browser
-profile, so device enrolment works exactly as it does for a browser-based counter (see steps 3–4 of the
-fallback method below if you also want to set this machine's default order type or auto-print behaviour at
-**Owner → Devices**) — do that from inside the HIOC POS window, not from your everyday browser.
+Open **HIOC POS** and sign in with a staff account. It's its own private, isolated session — signing in or
+out here never affects Chrome, and signing in or out of Chrome never affects HIOC POS. The app also only
+ever shows the staff/POS screens: no address bar, no customer site, no owner pages.
+
+To enrol this counter as a trusted device, go to **Printers → This counter** in the app:
+
+1. If nobody has enrolled this machine yet and you (the owner) are signed in, name it — "Counter 1", "Front
+   till" — and press **Enrol this counter**.
+2. If a staffer is signed in instead, the screen shows **"Ask the owner to enrol this counter from this
+   app"** with an **Owner: sign in to enrol this counter** link. Use it to sign in with the owner account
+   right there — it replaces the session on this counter for a moment, so let the regular staffer sign back
+   in once enrolment is done.
+
+Once enrolled, the screen shows the device's name and the date it was enrolled — "Trusted counter". To set
+this machine's default order type or auto-print behaviour, that's still at **Owner → Devices** in a normal
+browser (the app itself only exposes the name-and-enrol step, not the full settings).
 
 ### 4. Add your printer
 
