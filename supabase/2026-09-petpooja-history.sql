@@ -235,7 +235,6 @@ declare
   v_floor        bigint;
   v_last_value   bigint;
   v_is_called    boolean;
-  v_start_value  bigint;
   v_increment_by bigint;
   v_seq_next     bigint;
 begin
@@ -250,18 +249,22 @@ begin
 
   v_floor := greatest(coalesce(v_legacy_max, 0), coalesce(v_orders_max, 0));
 
-  select last_value, is_called, start_value, increment_by
-    into v_last_value, v_is_called, v_start_value, v_increment_by
+  -- is_called only exists on the sequence relation itself, not in the
+  -- pg_sequences view. Before the first nextval() the relation reports
+  -- last_value = start_value with is_called = false, so that case needs no
+  -- special handling.
+  select last_value, is_called
+    into v_last_value, v_is_called
+    from public.orders_order_number_seq;
+
+  select increment_by into v_increment_by
     from pg_sequences
    where schemaname = 'public' and sequencename = 'orders_order_number_seq';
 
-  if v_last_value is null then
-    -- Never read yet: nextval() would hand out the sequence's own start value.
-    v_seq_next := coalesce(v_start_value, 1);
-  elsif v_is_called then
+  if v_is_called then
     v_seq_next := v_last_value + coalesce(v_increment_by, 1);
   else
-    -- setval(..., false) happened with no nextval() since: next call returns last_value itself.
+    -- Never read yet, or setval(..., false) with no nextval() since: the next call returns last_value itself.
     v_seq_next := v_last_value;
   end if;
 
