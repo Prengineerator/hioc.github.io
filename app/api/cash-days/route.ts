@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getStaffUser } from '@/lib/api/auth';
+import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import {
@@ -121,9 +121,12 @@ async function computeCashFlows(admin: Admin, businessDate: string) {
 
 // GET — the currently OPEN cash day (with its live expected-cash summary) plus
 // recent CLOSED history for the summary/over-short trend. Any staff session.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function GET() {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
 
   const admin = createAdminSupabaseClient();
 
@@ -178,10 +181,15 @@ export async function GET() {
 // POST — day-open. Enter the opening float as a denomination grid; the total is
 // COMPUTED here, never typed. Permission-gated (cash_day_open, default staff).
 // Body: { opening_denoms }.
+//
+// PIN-3: gated by getCounterActor(); roleHint = actor.role so hasPermission()
+// doesn't try to re-derive the role via a session a device operator has none
+// of (see lib/permissions.ts's own note).
 export async function POST(request: Request) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
-  if (!(await hasPermission(user, 'cash_day_open'))) {
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
+  if (!(await hasPermission(user, 'cash_day_open', actor.role))) {
     return errorResponse(403, 'You do not have permission to open the cash day');
   }
 
@@ -258,9 +266,10 @@ export async function POST(request: Request) {
 // day → closed under a status='open' guard, so a closed day can never be edited
 // here. Corrections are a next-day audited adjustment entry (out of v1 scope).
 export async function PATCH(request: Request) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
-  if (!(await hasPermission(user, 'cash_day_close'))) {
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
+  if (!(await hasPermission(user, 'cash_day_close', actor.role))) {
     return errorResponse(403, 'You do not have permission to close the cash day');
   }
 

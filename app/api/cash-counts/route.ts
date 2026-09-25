@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getManagerUser, getStaffUser } from '@/lib/api/auth';
+import { getCounterActor, getCounterManager } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { recordCount, type CashCountRow } from '@/lib/cash/checkpoints';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
@@ -16,9 +16,13 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
 // POST /api/cash-counts — any staff session. Body: { denoms }.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function POST(request: Request) {
-  const user = await getStaffUser();
-  if (!user) return unauthorized();
+  const actor = await getCounterActor();
+  if (!actor) return unauthorized();
+  const user = actor.user;
 
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
@@ -41,9 +45,15 @@ export async function POST(request: Request) {
 
 // GET /api/cash-counts?limit= — manager/owner only. Recent checkpoints of
 // every kind, newest first, with display names resolved.
+//
+// PIN-3: gated by getCounterManager() — the same classic-session-first,
+// device-path-otherwise resolution as getCounterActor(), additionally
+// requiring 'manager' or 'owner' (a device operator's role is already
+// capped to 'manager' at most). This is a plain role check, not the
+// hasPermission() matrix — getManagerUser() never was either.
 export async function GET(request: Request) {
-  const user = await getManagerUser();
-  if (!user) return unauthorized();
+  const manager = await getCounterManager();
+  if (!manager) return unauthorized();
 
   const url = new URL(request.url);
   const requested = Number(url.searchParams.get('limit'));
