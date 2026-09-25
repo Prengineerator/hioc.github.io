@@ -19,7 +19,11 @@ import { Button } from '@/components/ui/Button';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { ORDER_TYPE_LABEL, PAYMENT_LABEL, formatIstDateTime } from '@/lib/print/labels';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
-import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
+import type {
+  CustomerOrderResponse,
+  HiocCustomerOrderResponse,
+  LegacyCustomerOrderResponse,
+} from '@/lib/api/customerOrders';
 
 export function CustomerOrdersModal({
   onClose,
@@ -78,7 +82,11 @@ export function CustomerOrdersModal({
         <ul className="flex flex-col gap-3">
           {(orders ?? []).map((order) => (
             <li key={order.id}>
-              <OrderCard order={order} repeating={repeatingId === order.id} onRepeat={() => onRepeat(order)} />
+              {order.source === 'petpooja' ? (
+                <LegacyBillCard order={order} repeating={repeatingId === order.id} onRepeat={() => onRepeat(order)} />
+              ) : (
+                <OrderCard order={order} repeating={repeatingId === order.id} onRepeat={() => onRepeat(order)} />
+              )}
             </li>
           ))}
         </ul>
@@ -92,7 +100,7 @@ function OrderCard({
   repeating,
   onRepeat,
 }: {
-  order: CustomerOrderResponse;
+  order: HiocCustomerOrderResponse;
   repeating: boolean;
   onRepeat: () => void;
 }) {
@@ -132,6 +140,50 @@ function OrderCard({
 
       <div className="mt-3 border-t border-line pt-3">
         {/* min-h-[44px] via Button's own sizing — touch-friendly by default. */}
+        <Button variant="secondary" size="sm" loading={repeating} onClick={onRepeat} className="w-full sm:w-auto">
+          Repeat this order
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Petpooja history — a bill imported from the old POS (lib/legacy/history.ts),
+// deliberately a smaller card than OrderCard above: no status/payment chips
+// (a historical bill was never entered into this app's order lifecycle to
+// have one), no per-item add-ons (Petpooja doesn't model them), and a single
+// "qty not recorded" note in place of a quantity on every line — the export
+// this was imported from never had one (see the shared import spec).
+function LegacyBillCard({
+  order,
+  repeating,
+  onRepeat,
+}: {
+  order: LegacyCustomerOrderResponse;
+  repeating: boolean;
+  onRepeat: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-line p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="font-bold text-charcoal">Petpooja #{order.bill_no}</p>
+          <p className="text-xs text-muted">{formatIstDateTime(order.created_at)}</p>
+        </div>
+        <p className="shrink-0 font-bold text-tan">₹{order.total_inr}</p>
+      </div>
+
+      <ul className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-sm text-charcoal">
+        {order.items.map((item, i) => (
+          <li key={i}>
+            {item.name_snapshot}
+            {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-xs italic text-muted">Qty not recorded</p>
+
+      <div className="mt-3 border-t border-line pt-3">
         <Button variant="secondary" size="sm" loading={repeating} onClick={onRepeat} className="w-full sm:w-auto">
           Repeat this order
         </Button>

@@ -5,7 +5,8 @@ import { errorResponse, unauthorized } from '@/lib/api/http';
 import { rateLimitOk } from '@/lib/api/rateLimit';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { findVerifiedCustomerByPhone, orderMatchFilter } from '@/lib/loyalty/customerLink';
-import { toCustomerOrderResponse, type CustomerOrderRow } from '@/lib/api/customerOrders';
+import { toCustomerOrderResponse, type CustomerOrderRow, type CustomerOrderResponse } from '@/lib/api/customerOrders';
+import { latestLegacyBillsForPhone } from '@/lib/legacy/history';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,14 @@ const ORDERS_SELECT =
 // Top-level columns are the narrow set the modal actually renders (no
 // customer contact fields — this is staff-authenticated but still a
 // counter-visible screen, same discipline as lookup).
+//
+// Petpooja history: the same phone's latest imported bills (lib/legacy/
+// history.ts) are fetched alongside the hioc orders and merged into ONE
+// newest-first list capped at 10 total, `source` telling each entry apart
+// ('hioc' | 'petpooja') — see lib/api/customerOrders.ts. Fetching up to 10
+// from EACH side before merging/capping is deliberate: the final 10 could in
+// principle be all from one source, so trimming either side first could drop
+// a real entry.
 export async function GET(request: Request) {
   const actor = await getCounterActor();
   if (!actor) return unauthorized();
@@ -53,18 +62,24 @@ export async function GET(request: Request) {
   const phoneE164 = `+91${normalized}`;
   const account = await findVerifiedCustomerByPhone(admin, phoneE164);
 
-  const { data, error } = await admin
-    .from('orders')
-    .select(ORDERS_SELECT)
-    .or(orderMatchFilter(phoneE164, account?.userId ?? null))
-    .order('created_at', { ascending: false })
-    .limit(10);
+  const [{ data, error }, legacyOrders] = await Promise.all([
+    admin
+      .from('orders')
+      .select(ORDERS_SELECT)
+      .or(orderMatchFilter(phoneE164, account?.userId ?? null))
+      .order('created_at', { ascending: false })
+      .limit(10),
+    latestLegacyBillsForPhone(admin, phoneE164, 10),
+  ]);
 
   if (error) {
     console.error('customers/orders: query failed', error);
     return errorResponse(500, 'Failed to load order history');
   }
 
-  const orders = (data ?? []).map((row) => toCustomerOrderResponse(row as unknown as CustomerOrderRow));
+  const hiocOrders = (data ?? []).map((row) => toCustomerOrderResponse(row as unknown as CustomerOrderRow));
+  const orders: CustomerOrderResponse[] = [...hiocOrders, ...legacyOrders]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 10);
   return NextResponse.json({ orders });
 }

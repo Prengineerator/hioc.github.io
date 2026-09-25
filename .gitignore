@@ -38,3 +38,12 @@ yarn-error.log*
 /desktop/node_modules/
 /desktop/dist/
 /desktop/release/
+
+# Petpooja history import (scripts/import-petpooja.ts). These are the owner's
+# raw POS export and its dry-run report at the repo root — the exports hold
+# real customer names, phone numbers and addresses, and must never be
+# committed. Anchored with a leading `/` so this only ignores the repo root,
+# not an unrelated .xlsx/.csv/.md living elsewhere in the tree.
+/petpooja-*.md
+/*.xlsx
+/*.csv
