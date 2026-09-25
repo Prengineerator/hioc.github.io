@@ -8,8 +8,10 @@ import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import {
   canRedeemPoints,
   couponFeedback,
+  customerChip,
   describeCustomer,
   formatPoints,
+  hasOrderHistory,
   parsePointsInput,
   pointsFeedback,
 } from '@/lib/pos/loyalty';
@@ -58,16 +60,40 @@ describe('formatPoints', () => {
 
 describe('describeCustomer', () => {
   it('leads with the name so a mistyped digit is caught by a human', () => {
-    expect(describeCustomer({ found: true, name: 'Asha', points_balance: 240 })).toEqual({
-      ok: true,
-      text: 'Asha · 240 points',
-    });
+    expect(
+      describeCustomer({
+        found: true,
+        source: 'account',
+        name: 'Asha',
+        points_balance: 240,
+        order_count: 3,
+        last_order_at: '2026-09-20T10:00:00Z',
+      }),
+    ).toEqual({ ok: true, text: 'Asha · 240 points' });
   });
 
   it('stays confirmable when the account has no name saved', () => {
-    expect(describeCustomer({ found: true, name: '  ', points_balance: 0 })?.text).toBe(
-      'Account · 0 points',
-    );
+    expect(
+      describeCustomer({
+        found: true,
+        source: 'account',
+        name: '  ',
+        points_balance: 0,
+        order_count: 0,
+        last_order_at: null,
+      })?.text,
+    ).toBe('Account · 0 points');
+  });
+
+  it('names a no-account order-history match without claiming any points', () => {
+    const note = describeCustomer({
+      found: true,
+      source: 'order_history',
+      name: 'Ravi',
+      order_count: 4,
+      last_order_at: '2026-09-20T10:00:00Z',
+    });
+    expect(note).toEqual({ ok: true, text: 'Ravi (no HIOC account)' });
   });
 
   it('says "no account" without making it sound like a failure', () => {
@@ -82,11 +108,130 @@ describe('describeCustomer', () => {
 });
 
 describe('canRedeemPoints', () => {
-  it('is true only for a matched account with a balance', () => {
-    expect(canRedeemPoints({ found: true, name: 'Asha', points_balance: 240 })).toBe(true);
-    expect(canRedeemPoints({ found: true, name: 'Asha', points_balance: 0 })).toBe(false);
+  it('is true only for a VERIFIED account with a balance', () => {
+    expect(
+      canRedeemPoints({
+        found: true,
+        source: 'account',
+        name: 'Asha',
+        points_balance: 240,
+        order_count: 3,
+        last_order_at: null,
+      }),
+    ).toBe(true);
+    expect(
+      canRedeemPoints({
+        found: true,
+        source: 'account',
+        name: 'Asha',
+        points_balance: 0,
+        order_count: 3,
+        last_order_at: null,
+      }),
+    ).toBe(false);
     expect(canRedeemPoints({ found: false })).toBe(false);
     expect(canRedeemPoints(null)).toBe(false);
+  });
+
+  it('is false for an order-history match — there is no account to hold a balance', () => {
+    expect(
+      canRedeemPoints({
+        found: true,
+        source: 'order_history',
+        name: 'Ravi',
+        order_count: 4,
+        last_order_at: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('hasOrderHistory', () => {
+  it('is true whenever at least one past order was found, account or not', () => {
+    expect(
+      hasOrderHistory({
+        found: true,
+        source: 'account',
+        name: 'Asha',
+        points_balance: 0,
+        order_count: 1,
+        last_order_at: null,
+      }),
+    ).toBe(true);
+    expect(
+      hasOrderHistory({
+        found: true,
+        source: 'order_history',
+        name: 'Ravi',
+        order_count: 4,
+        last_order_at: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('is false with no order, no lookup, or nothing found', () => {
+    expect(
+      hasOrderHistory({
+        found: true,
+        source: 'account',
+        name: 'Asha',
+        points_balance: 0,
+        order_count: 0,
+        last_order_at: null,
+      }),
+    ).toBe(false);
+    expect(hasOrderHistory({ found: false })).toBe(false);
+    expect(hasOrderHistory(null)).toBe(false);
+  });
+});
+
+describe('customerChip', () => {
+  it('shows the points balance for a verified account', () => {
+    expect(
+      customerChip({
+        found: true,
+        source: 'account',
+        name: 'Asha',
+        points_balance: 240,
+        order_count: 3,
+        last_order_at: null,
+      }),
+    ).toBe('HIOC account · 240 points');
+  });
+
+  it('shows an order count (singular/plural) for an order-history match', () => {
+    expect(
+      customerChip({
+        found: true,
+        source: 'order_history',
+        name: 'Ravi',
+        order_count: 1,
+        last_order_at: null,
+      }),
+    ).toBe('Returning customer · 1 order');
+    expect(
+      customerChip({
+        found: true,
+        source: 'order_history',
+        name: 'Ravi',
+        order_count: 12,
+        last_order_at: null,
+      }),
+    ).toBe('Returning customer · 12 orders');
+  });
+
+  it('is null with no lookup, nothing found, or no orders to count', () => {
+    expect(customerChip(null)).toBeNull();
+    expect(customerChip({ found: false })).toBeNull();
+    expect(
+      customerChip({
+        found: true,
+        source: 'order_history',
+        name: 'Ravi',
+        order_count: 0,
+        last_order_at: null,
+      }),
+    ).toBeNull();
   });
 });
 

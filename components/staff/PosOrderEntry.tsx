@@ -29,9 +29,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
+import { CustomerOrdersModal } from '@/components/staff/CustomerOrdersModal';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
 import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentModal';
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
+import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
 import { flags } from '@/lib/flags';
 import { createClient } from '@/lib/supabase';
@@ -47,12 +49,17 @@ import { normalizeEmail } from '@/lib/email';
 import {
   canRedeemPoints,
   couponFeedback,
+  customerChip,
   describeCustomer,
+  hasOrderHistory,
   parsePointsInput,
   pointsFeedback,
   type CustomerLookup,
   type QuotedDiscount,
 } from '@/lib/pos/loyalty';
+import { shouldAutofillName } from '@/lib/pos/nameAutofill';
+import { mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
+import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
@@ -176,12 +183,33 @@ export function PosOrderEntry({
   const [custPhone, setCustPhone] = useState('');
   const [custEmail, setCustEmail] = useState('');
   const [contactError, setContactError] = useState<string | null>(null);
+  // POS-5 — phone-first name autofill. `custNameRef` mirrors `custName` for
+  // the autofill effect below (same ref-mirror pattern as `cartRef`), so it
+  // can read the field's CURRENT value without depending on it and re-running
+  // every keystroke. `custNameUserEdited` is the guard shouldAutofillName()
+  // (lib/pos/nameAutofill.ts) reads: true the instant the cashier types into
+  // the field by hand, reset to false right after an autofill (or a reset).
+  const custNameRef = useRef(custName);
+  custNameRef.current = custName;
+  const custNameUserEdited = useRef(false);
+  const custNameInputRef = useRef<HTMLInputElement>(null);
 
   // VAL-1/VAL-2 — the customer behind the phone, and what they're spending.
   // `couponCode` is what has actually been APPLIED (and therefore quoted);
   // `couponInput` is what's being typed. Quoting every keystroke would tell a
   // staffer "Invalid coupon code" three times while they type a valid one.
   const [customer, setCustomer] = useState<CustomerLookup | null>(null);
+  // POS-5 — "Last orders". `customerOrders` is null until the first fetch for
+  // the CURRENT phone resolves ([] once loaded with none found); the fetch is
+  // lazy (button press, or a hover/focus prefetch) — never on every keystroke,
+  // unlike the lookup above. `customerOrdersPhone` tracks which phone the
+  // cached list belongs to, so a stale list can't be shown for a new number.
+  const [ordersModalOpen, setOrdersModalOpen] = useState(false);
+  const [customerOrders, setCustomerOrders] = useState<CustomerOrderResponse[] | null>(null);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [repeatingOrderId, setRepeatingOrderId] = useState<string | null>(null);
+  const customerOrdersPhoneRef = useRef<string | null>(null);
   const [couponInput, setCouponInput] = useState('');
   const [couponCode, setCouponCode] = useState('');
   const [pointsInput, setPointsInput] = useState('');
@@ -471,6 +499,89 @@ export function PosOrderEntry({
       setQuotedPoints(null);
     }
   }, [customer]);
+
+  // A number that stops matching a lookup can't keep offering a "Last
+  // orders" list for the PREVIOUS number — clear the cache and close the
+  // modal rather than let a stale list sit behind a now-wrong phone.
+  useEffect(() => {
+    if (customerOrdersPhoneRef.current && customerOrdersPhoneRef.current !== lookupPhone) {
+      customerOrdersPhoneRef.current = null;
+      setCustomerOrders(null);
+      setOrdersError(null);
+      setOrdersModalOpen(false);
+    }
+  }, [lookupPhone]);
+
+  // POS-5 — phone-first name autofill (lib/pos/nameAutofill.ts holds the pure
+  // rule). Fires off the SAME lookup as the account/points line above, so a
+  // phone that resolves to a different person also offers a different name —
+  // and a phone that stops matching anyone simply offers nothing more.
+  // Reads `custNameRef` rather than depending on `custName` so this doesn't
+  // re-run (and re-litigate "was that edit by hand?") on every keystroke in
+  // the name field — only when a new lookup result actually arrives.
+  useEffect(() => {
+    if (!customer?.found) return;
+    const name = customer.name.trim();
+    if (!name) return;
+    if (shouldAutofillName(custNameRef.current, custNameUserEdited.current)) {
+      setCustName(name);
+      custNameUserEdited.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer]);
+
+  // POS-5 — lazy fetch for "Last orders": only on a button press or a
+  // hover/focus prefetch, never on every keystroke (that's the 350ms lookup
+  // above). Reuses the cached list for the SAME phone rather than re-fetching
+  // on a second hover/click.
+  const loadCustomerOrders = useCallback((phone: string) => {
+    // The ref (not `customerOrders`/`ordersLoading` state) is the guard: a
+    // `useCallback([])` closes over state from the render it was CREATED in,
+    // so reading those directly here would always see their first-render
+    // (empty) values instead of the current ones. The ref is mutable and
+    // always current, and the phone-change effect above already clears it
+    // the moment it stops matching — so "already set to this phone" alone is
+    // enough to mean "already fetching or fetched for this exact number".
+    if (!phone || customerOrdersPhoneRef.current === phone) return;
+    customerOrdersPhoneRef.current = phone;
+    setOrdersLoading(true);
+    setOrdersError(null);
+    fetch(`/api/customers/orders?phone=${phone}`, { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((data: { orders?: CustomerOrderResponse[] }) => setCustomerOrders(data.orders ?? []))
+      .catch(() => {
+        setOrdersError('Could not load past orders — please try again.');
+        // Allow a retry (another hover/click) for the same phone.
+        if (customerOrdersPhoneRef.current === phone) customerOrdersPhoneRef.current = null;
+      })
+      .finally(() => setOrdersLoading(false));
+  }, []);
+
+  // POS-5 — Repeat: resolve the picked order's items against the LIVE menu
+  // (no second server round trip — see lib/pos/repeatOrder.ts) and add each
+  // resulting line through the same addLine() the menu grid uses, so pricing
+  // still comes from the next /api/orders/quote call, not from the old order.
+  function handleRepeatOrder(order: CustomerOrderResponse) {
+    setRepeatingOrderId(order.id);
+    try {
+      const { lines, skipped, modified } = mapOrderItemsToCartLines(order.items, menuItems);
+      for (const line of lines) {
+        const { qty, ...rest } = line;
+        addLine(rest, qty);
+      }
+      const notices = [...skipped, ...modified].map((n) => n.name);
+      if (lines.length === 0) {
+        showToast('None of that order’s items are available right now.');
+      } else if (notices.length > 0) {
+        showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} — skipped ${notices.join(', ')}.`);
+      } else {
+        showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} from #${formatOrderNumber(order.order_number)}.`);
+      }
+      setOrdersModalOpen(false);
+    } finally {
+      setRepeatingOrderId(null);
+    }
+  }
 
   // --- Live bill from the quote endpoint (never computed client-side) -------
   // VAL-1: the coupon and the points ride along, so the discount lines shown
@@ -907,6 +1018,13 @@ export function PosOrderEntry({
     setPointsInput('');
     setQuotedCoupon(null);
     setQuotedPoints(null);
+    // POS-5 — a blank name field for the next customer is not "hand-typed",
+    // and their "Last orders" (if any) belong to a number not yet entered.
+    custNameUserEdited.current = false;
+    customerOrdersPhoneRef.current = null;
+    setCustomerOrders(null);
+    setOrdersError(null);
+    setOrdersModalOpen(false);
   }
 
   function showToast(msg: string) {
@@ -929,6 +1047,7 @@ export function PosOrderEntry({
   const displaySubtotal = bill?.subtotal_inr ?? subtotal;
   // Every one of these is the server's own verdict, rendered — not re-judged.
   const customerNote = describeCustomer(customer);
+  const chipText = customerChip(customer);
   const couponNote = couponFeedback(quotedCoupon);
   const pointsNote = pointsFeedback(quotedPoints);
   const pointsAvailable = canRedeemPoints(customer);
@@ -1225,35 +1344,79 @@ export function PosOrderEntry({
                       setCustPhone('');
                       setCustEmail('');
                       setContactError(null);
+                      custNameUserEdited.current = false;
                     }}
                     className="text-xs font-bold text-muted underline"
                   >
                     Skip
                   </button>
                 </div>
-                <input
-                  value={custName}
-                  onChange={(e) => setCustName(e.target.value)}
-                  placeholder="Name"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
-                />
+                {/* POS-5: phone leads — it's the field that drives everything
+                    else here (autofill, points, Last orders), so it's typed
+                    first. Enter moves straight to Name, the field a cashier
+                    would otherwise reach for next on a physical keyboard. */}
                 <input
                   value={custPhone}
                   onChange={(e) => {
                     setCustPhone(e.target.value);
                     if (contactError) setContactError(null);
                   }}
-                  inputMode="tel"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      custNameInputRef.current?.focus();
+                    }
+                  }}
+                  inputMode="numeric"
                   // Also asked (and focused) in the Collect-payment step — BILL-2.
                   placeholder="Phone (for the bill on WhatsApp)"
                   className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
                 />
+                {/* POS-5: the "who is this" chip, shown the moment a lookup
+                    resolves — ahead of the fuller account/points line below,
+                    which only appears once Name/Email are visible too. */}
+                {chipText ? <p className="-mt-1 text-xs font-bold text-tan-dark">{chipText}</p> : null}
+                <input
+                  ref={custNameInputRef}
+                  value={custName}
+                  onChange={(e) => {
+                    custNameUserEdited.current = true;
+                    setCustName(e.target.value);
+                  }}
+                  placeholder="Name"
+                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                />
                 {/* VAL-2: the matched name, so a mistyped digit is caught by a
-                    human before it spends someone else's points. */}
+                    human before it spends someone else's points. POS-5 adds
+                    "Last orders" right beside it — "a button in front of
+                    account options" — shown only once the lookup actually
+                    found past orders to list. */}
                 {customerNote ? (
-                  <p className={'-mt-1 text-xs ' + (customerNote.ok ? 'font-bold text-green-700' : 'text-muted')}>
-                    {customerNote.text}
-                  </p>
+                  <div className="-mt-1 flex items-center justify-between gap-2">
+                    <p className={'text-xs ' + (customerNote.ok ? 'font-bold text-green-700' : 'text-muted')}>
+                      {customerNote.text}
+                    </p>
+                    {/* min-h-[44px] via Button's own base sizing — a
+                        touchscreen-counter target, not the compact links the
+                        rest of this section uses (Skip, Apply/Clear). The
+                        count badge doubles as the "why is this here" cue. */}
+                    {hasOrderHistory(customer) ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          loadCustomerOrders(lookupPhone);
+                          setOrdersModalOpen(true);
+                        }}
+                        onMouseEnter={() => loadCustomerOrders(lookupPhone)}
+                        onFocus={() => loadCustomerOrders(lookupPhone)}
+                        className="shrink-0"
+                      >
+                        Last orders{customer?.found ? ` (${customer.order_count})` : ''}
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
                 <input
                   value={custEmail}
@@ -1493,6 +1656,20 @@ export function PosOrderEntry({
               setPaymentOpen(false);
               setSubmitError(null);
             }
+          }}
+        />
+      ) : null}
+
+      {ordersModalOpen ? (
+        <CustomerOrdersModal
+          orders={customerOrders}
+          loading={ordersLoading}
+          error={ordersError}
+          repeatingId={repeatingOrderId}
+          onRepeat={handleRepeatOrder}
+          onClose={() => {
+            setOrdersModalOpen(false);
+            focusBar();
           }}
         />
       ) : null}
