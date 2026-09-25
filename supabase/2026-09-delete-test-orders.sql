@@ -296,7 +296,8 @@ commit;
 --     from backup_20260925.loyalty_accounts b
 --    where b.user_id = la.user_id;
 --
---   insert into public.orders select * from backup_20260925.orders;
+--   -- order_number is GENERATED ALWAYS AS IDENTITY, so keep the original numbers explicitly:
+--   insert into public.orders overriding system value select * from backup_20260925.orders;
 --   insert into public.order_items select * from backup_20260925.order_items;
 --   insert into public.order_item_addons select * from backup_20260925.order_item_addons;
 --   insert into public.payments select * from backup_20260925.payments;
