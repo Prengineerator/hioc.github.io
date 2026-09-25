@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { actorRoleFor, getAuthUser, getCounterActor, getStaffUser } from '@/lib/api/auth';
+import { actorRoleFor, getAuthUser, getCounterActor } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { isMissingColumnError } from '@/lib/api/postgrest';
@@ -850,10 +850,13 @@ export async function POST(request: Request) {
   );
 }
 
-// GET /api/orders — staff-only.
+// GET /api/orders — staff-only. The order board itself.
+//
+// PIN-3: gated by getCounterActor() — classic session first, unchanged; an
+// enrolled-device PIN operator only when there is no session at all.
 export async function GET(request: Request) {
-  const user = await getStaffUser();
-  if (!user) {
+  const actor = await getCounterActor();
+  if (!actor) {
     return unauthorized();
   }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { actorRoleFor, getManagerUser, getStaffOrOwner } from '@/lib/api/auth';
+import { actorRoleFor, getCounterActor } from '@/lib/api/auth';
+import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isUuid } from '@/lib/api/constants';
 import { canTransition } from '@/lib/orders/stateMachine';
@@ -21,8 +22,11 @@ const MIN_ETA_LEAD_MS = 5 * 60 * 1000; // ETA must be at least +5 min (S3 edge c
 // check, appends an `order_status_events` row (who/when/why), and fires the
 // customer notification the transition maps to. Body:
 //   { status, reason?, promised_ready_at?, version? }
+//
+// PIN-3/PIN-4: gated by getCounterActor() — classic session first, unchanged;
+// an enrolled-device PIN operator only when there is no session at all.
 export async function PATCH(request: Request, { params }: RouteParams) {
-  const actor = await getStaffOrOwner();
+  const actor = await getCounterActor();
   if (!actor) {
     return unauthorized();
   }
@@ -73,8 +77,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // FND3-5 manager comp override: an unpaid dine-in at `ready` can be completed
   // without collecting payment when a manager explicitly comps it, with a
   // reason and an audit row. We resolve `isComp` BEFORE canTransition so the
-  // settlement guard can see it. TODO(FND3-6): swap getManagerUser() for
-  // hasPermission('comp_order') once the permission matrix lands.
+  // settlement guard can see it. PIN-3: gated by hasPermission('comp_order',
+  // roleHint) rather than getManagerUser() — that helper re-derives the role
+  // via the RLS-bound session client, which a device operator has none of
+  // (see lib/permissions.ts's own note on this). actor.role already carries
+  // the right answer either way (classic session or capped device operator).
   let isComp = false;
   const compBody = body.comp as { reason?: string } | undefined;
   const isDineInSettleCompletion =
@@ -84,8 +91,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     current.payment_status !== 'paid';
 
   if (isDineInSettleCompletion && compBody) {
-    const manager = await getManagerUser();
-    if (!manager) {
+    if (!(await hasPermission(actor.user, 'comp_order', actor.role))) {
       return errorResponse(403, 'A manager is required to comp an order');
     }
     const compReason = typeof compBody.reason === 'string' ? compBody.reason.trim() : '';
@@ -98,7 +104,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     await admin.from('orders').update({ payment_status: 'paid' }).eq('id', id);
     await admin.from('order_amendments').insert({
       order_id: id,
-      staff_id: manager.id,
+      staff_id: actor.user.id,
       kind: 'comp',
       payload: { reason: compReason },
     });
