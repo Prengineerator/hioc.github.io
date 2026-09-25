@@ -62,8 +62,12 @@ vi.mock('@/lib/supabase-server', () => ({
 vi.mock('@/lib/api/auth', () => ({
   getCounterActor: () => Promise.resolve(state.actor),
 }));
+const hasPermissionCalls: unknown[][] = [];
 vi.mock('@/lib/permissions', () => ({
-  hasPermission: () => Promise.resolve(state.canVoid),
+  hasPermission: (...args: unknown[]) => {
+    hasPermissionCalls.push(args);
+    return Promise.resolve(state.canVoid);
+  },
 }));
 // Real computeBill (money is under test) fed by a deterministic settings row.
 vi.mock('@/lib/store/settings', () => ({
@@ -165,6 +169,7 @@ describe('POST /api/orders/[id]/amend', () => {
     state.orderPatch = undefined;
     state.itemUpdate = undefined;
     state.amendmentRow = undefined;
+    hasPermissionCalls.length = 0;
   });
 
   it('401s without a staff session or operator', async () => {
@@ -230,6 +235,12 @@ describe('POST /api/orders/[id]/amend', () => {
     expect(res.status).toBe(200);
     expect(state.itemUpdate?.voided_by).toBe('ravi');
     expect(state.amendmentRow?.staff_id).toBe('ravi');
+  });
+
+  it('PIN-3: passes the operator\'s role as hasPermission()\'s roleHint — a device operator has no session for it to re-derive from', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'manager', via: 'device' };
+    await POST(req({ item_id: ITEM_A, reason: 'wrong size' }), params);
+    expect(hasPermissionCalls[0]).toEqual([{ id: 'ravi' }, 'void_line', 'manager']);
   });
 
   it('409s a paid order (corrections go through the refund path)', async () => {

@@ -15,7 +15,7 @@ import {
 import { getStoreSettings } from '@/lib/store/settings';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
-import type { OrderStatus, OrderType } from '@/lib/types';
+import type { OrderStatus, OrderType, UserRole } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -73,13 +73,16 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
   if (body.op === 'add') {
-    return addLines(request, id, user, body);
+    return addLines(request, id, user, actor.role, body);
   }
 
   // --- VOID (FND3-4) --------------------------------------------------------
   // UI hiding is not authorization (§5.2); this is the real gate, checked
   // per-request so an owner flipping the matrix mid-shift takes effect at once.
-  if (!(await hasPermission(user, 'void_line'))) {
+  // roleHint = actor.role: see hasPermission()'s own comment for why a device
+  // operator's role must be passed rather than re-derived from a session that,
+  // for that path, does not exist.
+  if (!(await hasPermission(user, 'void_line', actor.role))) {
     return errorResponse(403, 'Manager permission required to void a line');
   }
 
@@ -230,9 +233,13 @@ async function addLines(
   _request: Request,
   id: string,
   user: { id: string },
+  roleHint: UserRole,
   body: Record<string, unknown>,
 ) {
-  if (!(await hasPermission(user as never, 'pos_order_entry'))) {
+  // roleHint = actor.role from the caller's getCounterActor() — see
+  // hasPermission()'s own comment: a device operator has no classic session
+  // for it to re-derive the role from.
+  if (!(await hasPermission(user as never, 'pos_order_entry', roleHint))) {
     return errorResponse(403, 'You do not have permission to add items to an order');
   }
 

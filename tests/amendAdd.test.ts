@@ -87,7 +87,13 @@ vi.mock('@/lib/supabase-server', () => ({
 }));
 
 vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
-vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(state.permitted) }));
+const hasPermissionCalls: unknown[][] = [];
+vi.mock('@/lib/permissions', () => ({
+  hasPermission: (...args: unknown[]) => {
+    hasPermissionCalls.push(args);
+    return Promise.resolve(state.permitted);
+  },
+}));
 vi.mock('@/lib/store/settings', () => ({
   getStoreSettings: () =>
     Promise.resolve({ gst_percent: 5, gst_inclusive: false, packaging_charge_inr: 20 }),
@@ -122,6 +128,7 @@ beforeEach(() => {
   state.deletedIds = [];
   state.orderPatch = undefined;
   state.amendmentRow = undefined;
+  hasPermissionCalls.length = 0;
   state.order = {
     id: ORDER_ID,
     status: 'accepted',
@@ -157,6 +164,9 @@ describe('POST /api/orders/[id]/amend { op: add } — TAB-1', () => {
     state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
     expect((await POST(req(addBody()), params)).status).toBe(200);
     expect(state.amendmentRow?.staff_id).toBe('ravi');
+    // The operator's role travels as hasPermission()'s roleHint — a device
+    // operator has no classic session for it to re-derive from otherwise.
+    expect(hasPermissionCalls[0]).toEqual([{ id: 'ravi' }, 'pos_order_entry', 'staff']);
   });
 
   it('403s without the pos_order_entry permission', async () => {

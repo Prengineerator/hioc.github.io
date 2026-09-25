@@ -10,7 +10,7 @@
 import type { User } from '@supabase/supabase-js';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getUserRole } from '@/lib/api/auth';
-import type { PermissionKey, PermissionMinRole, RolePermission } from '@/lib/types';
+import type { PermissionKey, PermissionMinRole, RolePermission, UserRole } from '@/lib/types';
 
 // The 8 defined sensitive-action keys (must match the role_permissions seed and
 // the PermissionKey union in lib/types.ts). Used to validate owner edits and to
@@ -75,11 +75,23 @@ function isMinRole(value: unknown): value is PermissionMinRole {
  *   from role_permissions on every call (no cache — flips take effect immediately).
  * - A missing row, a read error, or a corrupt min_role → fails CLOSED to
  *   'manager' (staff denied, manager/owner allowed).
+ *
+ * `roleHint`, PIN-3: getUserRole(user) re-derives the role through the
+ * cookie-bound anon-key client (RLS: `profiles_select_own`, `auth.uid() =
+ * id`) — correct for a classic Supabase session, but an enrolled device's PIN
+ * operator has NO such session, so that read would come back invisible under
+ * RLS and silently resolve to 'customer', denying a legitimately-permitted
+ * operator every single time. A caller that already knows the role — every
+ * getCounterActor() result carries one, read via the admin client in
+ * lib/api/operator.ts — passes it here instead of asking this function to
+ * re-derive it. Omitted, behaviour is identical to before this parameter
+ * existed: every other call site (unchanged) still re-derives via
+ * getUserRole().
  */
-export async function hasPermission(user: User | null, key: string): Promise<boolean> {
+export async function hasPermission(user: User | null, key: string, roleHint?: UserRole): Promise<boolean> {
   if (!user) return false;
 
-  const role = await getUserRole(user);
+  const role = roleHint ?? (await getUserRole(user));
   if (role === 'owner') return true; // owner always has every permission
   if (role !== 'staff' && role !== 'manager') return false; // customer / null / anything else
 
