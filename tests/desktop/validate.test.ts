@@ -1,11 +1,11 @@
-// PRN-1/D7-6 — pure validation tests for printers.json (desktop/src/printers/store.ts).
-// Imported by relative path (not the `@/` alias), same as escposStatus.test.ts,
-// since it lives outside the `desktop/` TypeScript project that owns that
-// alias mapping; `electron` itself is stubbed (see vitest.config.ts) so the
-// module's pure `validatePrinterConfig(s)` can be exercised with no real
-// Electron main process.
+// PRN-1/D7-6 — pure validation tests for printers.json
+// (desktop/src/printers/validate.ts, re-exported by store.ts). Imported by
+// relative path (not the `@/` alias), same as escposStatus.test.ts, since it
+// lives outside the `desktop/` TypeScript project that owns that alias
+// mapping. validate.ts imports nothing from `electron`, so — unlike
+// store.ts — it can be followed by the web app's TypeScript project too.
 import { describe, expect, it } from 'vitest';
-import { validatePrinterConfig, validatePrinterConfigs } from '../../desktop/src/printers/store';
+import { validatePrinterConfig, validatePrinterConfigs } from '../../desktop/src/printers/validate';
 import type { PrinterConfig } from '@/lib/desktop/bridge';
 
 function rawConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {

@@ -14,10 +14,6 @@ export default defineConfig({
       // resolution, so anything importing it (the notification engine) can't be
       // unit-tested without a stub. Vitest already runs in a server context.
       'server-only': path.resolve(__dirname, 'tests/stubs/server-only.ts'),
-      // `desktop/src/printers/store.ts` imports Electron's `app` only for
-      // `app.getPath('userData')` — stubbed so its pure validation logic is
-      // unit-testable without a real Electron main process (see the stub).
-      electron: path.resolve(__dirname, 'tests/stubs/electron.ts'),
       // `next/font/google` only works inside Next's own build pipeline (its
       // loader swaps in a generated module); the real package is an empty
       // file otherwise and throws at import time. Stubbed so anything that
