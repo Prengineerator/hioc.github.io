@@ -40,6 +40,27 @@ win:
   # present; unsigned otherwise.
 
 nsis:
+  # Space-free on purpose: electron-builder's default NSIS artifact name is
+  # "${productName} Setup ${version}.${ext}" (spaces, from productName "HIOC
+  # POS"). GitHub's asset upload silently turns those spaces into dots
+  # ("HIOC.POS.Setup.0.1.1.exe"), but electron-builder's own "make it GitHub
+  # safe" fallback (computeSafeArtifactNameIfNeeded in
+  # app-builder-lib/out/platformPackager.js) instead turns them into dashes
+  # and writes THAT into latest.yml's `files[].url` / `path`
+  # (app-builder-lib/out/publish/updateInfoBuilder.js, createUpdateInfoTasks:
+  # `if (event.safeArtifactName != null && publishConfiguration.provider ===
+  # "github") { ...files[0].url = event.safeArtifactName; path:
+  # event.safeArtifactName }`) — two different guesses at the same name, so
+  # electron-updater ends up requesting an asset that was never uploaded.
+  # Setting an already GitHub-safe name here (no spaces) makes
+  # computeSafeArtifactNameIfNeeded a no-op (the name is safe as-is, so
+  # `event.safeArtifactName` stays null): latest.yml's url/path then falls
+  # back to `path.basename(event.file)` — the literal file written to disk —
+  # which is exactly what GitHub uploads unchanged (nothing to rewrite) and
+  # exactly what the blockmap is named too (NsisTarget builds it as
+  # `${installerPath}.blockmap`). All three — the .exe on disk, the asset
+  # GitHub serves, and latest.yml — now name the same file.
+  artifactName: "HIOC-POS-Setup-${version}.${ext}"
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

@@ -130,6 +130,30 @@ jobs:
             exit 1
           fi
 
+          # Guard against the exact failure mode that shipped in pos-v0.1.1: electron-builder's
+          # default NSIS artifact name contains spaces, GitHub's asset upload turns those spaces
+          # into dots, but electron-builder's own GitHub-safe fallback name (baked into
+          # latest.yml's `path:`/`files[].url:`) turns them into dashes instead — two different
+          # guesses, so latest.yml ends up pointing at an asset that was never uploaded and
+          # electron-updater's auto-update breaks silently. Catch it here, before the release is
+          # created, rather than after auto-update is already broken in the wild.
+          exe_name=$(basename "${exes[0]}")
+          case "$exe_name" in
+            *' '*)
+              echo "::error::Installer file name '$exe_name' contains a space; GitHub's asset upload will rewrite it (spaces become dots), which will not match latest.yml. Set a space-free nsis.artifactName in desktop/electron-builder.yml." >&2
+              exit 1
+              ;;
+          esac
+          yml_path=$(grep -E '^path:' "$latest_yml" | head -1 | sed -E 's/^path:[[:space:]]*//; s/[[:space:]]*$//' | tr -d '"'"'"'\r')
+          if [ -z "$yml_path" ]; then
+            echo "::error::Could not find a 'path:' entry in $latest_yml." >&2
+            exit 1
+          fi
+          if [ "$yml_path" != "$exe_name" ]; then
+            echo "::error::$latest_yml's path ('$yml_path') does not match the installer being uploaded ('$exe_name'). electron-updater would request an asset that doesn't exist. Check nsis.artifactName in desktop/electron-builder.yml." >&2
+            exit 1
+          fi
+
           echo "Publishing $TAG: ${exes[0]}, ${blockmaps[0]}, $latest_yml"
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
