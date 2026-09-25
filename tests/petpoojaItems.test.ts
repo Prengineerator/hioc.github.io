@@ -53,6 +53,12 @@ describe('splitItems', () => {
     ]);
   });
 
+  it('strips an upper-case [N] marker (older exports)', () => {
+    expect(splitItems('Hazelnut Creme Coffee [N] (Large)')).toEqual([
+      { raw_name: 'Hazelnut Creme Coffee [N] (Large)', item_name: 'Hazelnut Creme Coffee', variant_label: 'Large' },
+    ]);
+  });
+
   it('strips the [n] marker even with no variant present', () => {
     expect(splitItems('Test Item [n]')).toEqual([
       { raw_name: 'Test Item [n]', item_name: 'Test Item', variant_label: '' },

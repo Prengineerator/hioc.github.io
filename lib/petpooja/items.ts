@@ -7,7 +7,9 @@
 // parens, e.g. 'Ginger Orange Honey Tea (Mini(For Store))', so it has to be
 // pulled out with balanced matching rather than a naive '\([^)]*\)$' regex.
 
-const MARKER_RE = / \[n\]$/;
+// Case-insensitive: the newer exports write '[n]', the Aug 2023–Jul 2024
+// export writes '[N]'.
+const MARKER_RE = / \[n\]$/i;
 
 function extractTrailingParens(s: string): { rest: string; inside: string } {
   if (!s.endsWith(')')) return { rest: s, inside: '' };

@@ -25,6 +25,9 @@ const menu: MenuSnapshotItem[] = [
     ],
   },
   { name: 'Test Cookie', variants: [{ label: 'Regular' }] }, // no ids, like a dry-run snapshot
+  { id: 'm-hazelnut-creme', name: 'Hazelnut Creme', variants: [{ id: 'v-hc-large', label: 'Large' }] },
+  { id: 'm-oreo-creme', name: 'Oreo Creme', variants: [{ id: 'v-oc-large', label: 'Large' }] },
+  { id: 'm-sig-hot-choc', name: 'Signature Hot Chocolate', variants: [{ id: 'v-shc-large', label: 'Large' }] },
 ];
 
 describe('matchMenuItem', () => {
@@ -84,6 +87,34 @@ describe('matchMenuItem', () => {
     const r = matchMenuItem('Test Cookie', '', menu);
     expect(r.matched_menu_name).toBe('Test Cookie');
     expect(r.menu_item_id).toBeNull();
+  });
+
+  it("strips a relaunch-era ' Coffee' category suffix", () => {
+    const r = matchMenuItem('Hazelnut Creme Coffee', 'Large', menu);
+    expect(r.matched_menu_name).toBe('Hazelnut Creme');
+    expect(r.variant_id).toBe('v-hc-large');
+  });
+
+  it("strips ' Non-Coffee', falling back to the item's Creme", () => {
+    expect(matchMenuItem('Signature Hot Chocolate Non-Coffee', 'Large', menu).matched_menu_name).toBe(
+      'Signature Hot Chocolate',
+    );
+    expect(matchMenuItem('Oreo Non-Coffee', 'Large', menu).matched_menu_name).toBe('Oreo Creme');
+  });
+
+  it("turns ' Stick Waffle' into the plain waffle item", () => {
+    const r = matchMenuItem('Tripple Choco Stick Waffle', 'L', menu);
+    expect(r.matched_menu_name).toBe('Tripple Choco');
+    expect(r.variant_id).toBe('v-l');
+  });
+
+  it('maps a pre-relaunch name to its current successor', () => {
+    expect(matchMenuItem('Hazelnut Frappe', 'Large', menu).matched_menu_name).toBe('Hazelnut Creme');
+    expect(matchMenuItem('Hot Chocolate', 'Large', menu).matched_menu_name).toBe('Signature Hot Chocolate');
+  });
+
+  it('does not strip a suffix when the rest still matches nothing', () => {
+    expect(matchMenuItem('Corporate Coffee', '', menu).matched_menu_name).toBeNull();
   });
 
   it('returns all nulls for a genuinely unmatched (discontinued) item', () => {

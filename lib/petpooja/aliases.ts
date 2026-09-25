@@ -3,17 +3,25 @@
 // object hit; values are the exact (case-sensitive) menu item name.
 //
 // Built by comparing the real 'Items' column of the four Petpooja order
-// exports (182 distinct item names, ~54.9k line occurrences) against the
-// live menu snapshot. With this table, the generic exact/waffle-suffix/
-// plural rules in match.ts resolve 94.5% of occurrences (152/182 distinct
-// names). Genuinely discontinued or too-ambiguous-to-guess names — all
-// Crepes flavours (not on the current menu at all), 'Corporate Coffee',
-// 'Water Bottle', 'Paper Bag', 'Beans Sell', bare 'Rose'/'Cheesecake'/
-// 'Truffle Slice' (each could mean several current items), 'Fruits Creme
-// (mango|strawberry)' (the current menu split this into two separate
-// per-flavour items, which a flat name->name alias can't express) — are
-// deliberately left unmatched rather than guessed; a wrong match is worse
-// than none (see match.ts).
+// exports (Aug 2023 – Sep 2026) against the live menu snapshot, and — for
+// renames — checking each pair's first/last sale dates: an old name that
+// stops selling as the new one starts is a rename, two names sold side by
+// side for months are two items.
+//
+// The menu was relaunched in mid-May 2024: the old names (Frappes, Shakes,
+// 'Hot Chocolate', 'Mocha', ...) stop around 10–12 May 2024, '[N]'-marked
+// names with a category suffix ('Hazelnut Creme Coffee [N]', 'Oreo
+// Non-Coffee [N]') run 13 May – ~17 Jun 2024 (match.ts strips the suffix),
+// and today's names start ~17–19 Jun 2024. Each old item maps to the
+// current item its '[N]' successor became.
+//
+// Deliberately left unmatched rather than guessed (a wrong match is worse
+// than none — see match.ts): discontinued lines with no successor on the
+// menu (Crepes, Fries, Sandwiches other than the two below, scoops, other
+// Shakes), non-menu lines ('Water Bottle', 'Corporate Coffee', 'Paper Bag',
+// 'Beans Sell'), 'Chocochip Creme' / 'Choco-chip Frappe' (still sold in
+// Petpooja but not on this app's menu), and names sold alongside several
+// current items ('Rose', 'Rose Frappe', 'Cheesecake', 'Truffle Slice').
 export const ITEM_ALIASES: Record<string, string> = {
   // Same toasted-bread item; 'Garlic Bread' (946x) and 'Garlic Bread Toast'
   // (306x) never appear as two separate line items on the same bill.
@@ -59,4 +67,45 @@ export const ITEM_ALIASES: Record<string, string> = {
 
   // 'Cake' -> 'Slice' format rename, same flavour, both single-variant.
   'choco truffle cake': 'Choco Truffle Slice',
+
+  // Spelling fixes: each old spelling stops as the menu's starts.
+  'cappuccino': 'Cappucino', // until 3 Jun 2024; 'Cappucino' from 18 Jun
+  'cappuccino iced': 'Cappucino Iced',
+  'expresso': 'Espresso',
+  'cinnoffle': 'Cinoffle',
+  '90s sundae': "90's Sundae",
+  'devils fantasy': "Devil's Fantasy",
+  'on the rocks iced': 'On The Rocks', // 'On The Rocks Iced Coffee [N]' after match.ts strips ' coffee'
+
+  // Name shortened / lengthened, same item.
+  'devil s fantasy sundae': "Devil's Fantasy",
+  'devils own': 'Devils Own Stuffed',
+  'nutella croissant': 'Nutella Almond Croissant', // until 3 Jul 2024; new name from 4 Jul
+  'signature chocolate': 'Signature Chocolate Creme', // 17–18 Jun 2024; Creme from 19 Jun
+  'hioc s signature': "Hioc's Signature Creme",
+
+  // Per-flavour Cremes. The flavour is part of the Petpooja name, so a
+  // plain name -> name alias covers each one.
+  'fruits creme (strawberry)': 'Fruity Strawberry Creme',
+  'fruits creme (mango)': 'Fruity Mango Creme',
+  'fruits (strawberry)': 'Fruity Strawberry Creme', // 'Fruits (Strawberry) Non-Coffee [N]'
+  'fruits (mango)': 'Fruity Mango Creme',
+  'minion (nutella banana)': 'Minion Creme (Nutella-Banana)', // '... Non-Coffee [N]'
+
+  // Pre-relaunch (Aug 2023 – May 2024) names -> the current item their
+  // '[N]' successor became. Frappes -> '<flavour> Creme Coffee [N]' -> Creme;
+  // Shakes -> '<flavour> Non-Coffee [N]' -> Creme.
+  'hot chocolate': 'Signature Hot Chocolate', // until 12 May; '... Non-Coffee [N]' from 14 May
+  'mocha': 'Signature Mocha', // until 10 May; 'Signature Mocha Coffee [N]' from 14 May
+  'mocha iced': 'Signature Mocha Iced',
+  'signature frappe': "Hioc's Signature Creme",
+  'hazelnut frappe': 'Hazelnut Creme',
+  'caramel frappe': 'Caramel Creme',
+  'caramel chips frappe': 'Caramel Chip Creme',
+  'cookie crumble frappe': 'Cookie Crumble Creme',
+  'lotus biscoff frappe': 'Lotus Biscoff Creme',
+  'oreo shake': 'Oreo Creme',
+  'krazy kitkat shake': 'Krazy Kitkat Creme',
+  'chocolate shakes': 'Signature Chocolate Creme',
+  'strawberry shakes': 'Fruity Strawberry Creme',
 };
