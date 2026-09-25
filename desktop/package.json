@@ -1,6 +1,6 @@
 {
   "name": "hioc-pos",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "HIOC POS desktop shell (Electron) \u2014 Phase 7 SHL + PRN",
   "main": "dist/main.js",

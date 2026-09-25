@@ -114,6 +114,19 @@ Cancel or void the test orders afterwards so they don't land in the day's taking
   or the uninstaller seems stuck: open Task Manager, find every **HIOC POS** entry, and **End task** on each
   one (or, from Command Prompt: `taskkill /F /T /IM "HIOC POS.exe"`), then try the install or uninstall
   again. This is a one-time step for machines on that early version only.
+- **Installer says "HIOC POS cannot be closed. Please close it manually and click Retry to continue."
+  forever, even though nothing is actually running (0.1.2 and earlier)** — check Task Manager or
+  `taskkill /F /T /IM "HIOC POS.exe"`; if it reports HIOC POS isn't running and the installer still loops,
+  this is it. Cause: on that machine, an earlier install (or a directory you typed by hand) put HIOC POS in
+  a shared folder — the whole of `C:\Program Files`, `%LOCALAPPDATA%\Programs` itself, or your Windows user
+  folder — instead of its own dedicated one. The installer's "is it still running?" check matches by that
+  folder, so a shared folder makes it match (and try to close) other things on the machine entirely, and it
+  can never fully succeed. Fix: install **0.1.3 or later** — it always installs into its own folder and only
+  ever checks by the app's name, not by folder, so this can't happen again. If 0.1.3+ still won't get past
+  the same message on a machine that had this problem: open Registry Editor (`regedit`), delete the key
+  `HKEY_CURRENT_USER\Software\95dacd72-f399-5de5-844d-7e49549a979b` (this only clears HIOC POS's own
+  remembered install location, nothing else), then run the 0.1.3+ installer again — with that key gone it
+  has no shared folder left to remember and installs cleanly into its own folder.
 
 ---
 
