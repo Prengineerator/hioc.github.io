@@ -248,3 +248,72 @@ describe('renderEscPos — bold toggling stays balanced', () => {
     expect(boldOn).toBe(boldOff);
   });
 });
+
+// PRN-6 — the raster brand header (logo + "हाईओक" / "HIOC."). escpos.ts never
+// builds the pixels itself (that's lib/print/brandHeaderRaster.ts, client-only
+// and untestable here without a DOM) — these tests only pin the byte-level
+// contract of a `raster` block that already carries its pixel data.
+describe('renderEscPos — raster (GS v 0)', () => {
+  it('emits exactly the GS v 0 header + data bytes for a tiny known bitmap', () => {
+    // 8 dots wide (bytesPerRow = 1), 2 rows tall, arbitrary 1-bit pattern.
+    const bytes = renderEscPos(
+      doc([{ kind: 'raster', widthDots: 8, heightDots: 2, data: new Uint8Array([0xcc, 0x33]) }]),
+      { paperWidthMm: 80, cut: false },
+    );
+    // GS v 0, m=0, xL=1 xH=0 (bytesPerRow=1), yL=2 yH=0 (2 rows), then the 2 data bytes.
+    const expected = [0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 0x02, 0x00, 0xcc, 0x33];
+    expect(findAll(bytes, expected)).toHaveLength(1);
+  });
+
+  it('bands a raster taller than 128 rows into 128/128/44, each its own GS v 0 command', () => {
+    const widthDots = 8; // bytesPerRow = 1
+    const heightDots = 300;
+    const data = new Uint8Array(heightDots).fill(0xaa);
+    const bytes = renderEscPos(doc([{ kind: 'raster', widthDots, heightDots, data }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+
+    const headerStarts = findAll(bytes, [0x1d, 0x76, 0x30, 0x00]);
+    expect(headerStarts).toHaveLength(3);
+    const bandRowCounts = headerStarts.map((i) => bytes[i + 6] | (bytes[i + 7] << 8));
+    expect(bandRowCounts).toEqual([128, 128, 44]);
+    // Every band reports the same bytesPerRow (xL/xH) regardless of its height.
+    for (const i of headerStarts) {
+      expect(bytes[i + 4]).toBe(1); // xL
+      expect(bytes[i + 5]).toBe(0); // xH
+    }
+  });
+
+  it('centers the raster: ESC a 1 immediately precedes it and ESC a 0 immediately follows it', () => {
+    const bytes = renderEscPos(
+      doc([{ kind: 'raster', widthDots: 8, heightDots: 1, data: new Uint8Array([0xff]) }]),
+      { paperWidthMm: 80, cut: false },
+    );
+    // ESC @ (2 bytes), then ESC a 1 (center) right before the raster.
+    expect(Array.from(bytes.slice(2, 5))).toEqual([0x1b, 0x61, 0x01]);
+    // Header (8 bytes) + 1 data byte, then ESC a 0 (left) right after.
+    const afterRaster = 5 + 8 + 1;
+    expect(Array.from(bytes.slice(afterRaster, afterRaster + 3))).toEqual([0x1b, 0x61, 0x00]);
+  });
+
+  it('emits nothing for a zero-size raster (no widthDots/heightDots)', () => {
+    const bytes = renderEscPos(doc([{ kind: 'raster', widthDots: 0, heightDots: 0, data: new Uint8Array(0) }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    expect(findAll(bytes, [0x1d, 0x76, 0x30])).toHaveLength(0);
+  });
+});
+
+describe('renderEscPos — brandHeader fallback', () => {
+  it('falls back to centered, bold, double-size "HIOC." text when the placeholder reaches the renderer unresolved', () => {
+    const bytes = renderEscPos(doc([{ kind: 'brandHeader' }]), { paperWidthMm: 80, cut: false });
+    // No raster ever gets emitted for an unresolved brandHeader.
+    expect(findAll(bytes, [0x1d, 0x76, 0x30])).toHaveLength(0);
+    expect(findAll(bytes, [0x1b, 0x61, 0x01])).toHaveLength(1); // ESC a 1 — center
+    expect(findAll(bytes, [0x1b, 0x45, 0x01])).toHaveLength(1); // ESC E 1 — bold on
+    expect(findAll(bytes, [0x1d, 0x21, 0x11])).toHaveLength(1); // GS ! 0x11 — xlarge
+    expect(decodeLines(bytes)).toContain('HIOC.');
+  });
+});

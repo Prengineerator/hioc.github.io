@@ -18,6 +18,13 @@ export default defineConfig({
       // `app.getPath('userData')` — stubbed so its pure validation logic is
       // unit-testable without a real Electron main process (see the stub).
       electron: path.resolve(__dirname, 'tests/stubs/electron.ts'),
+      // `next/font/google` only works inside Next's own build pipeline (its
+      // loader swaps in a generated module); the real package is an empty
+      // file otherwise and throws at import time. Stubbed so anything that
+      // transitively imports a font loader (lib/print/devanagariFont.ts,
+      // lib/print/brandHeaderRaster.ts, lib/desktop/printExecutor.ts, …) can
+      // still be unit-tested (see the stub).
+      'next/font/google': path.resolve(__dirname, 'tests/stubs/next-font-google.ts'),
     },
   },
   test: {

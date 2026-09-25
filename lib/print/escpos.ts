@@ -11,9 +11,15 @@
 // 7-bit-safe fallback before it's written out (see `transliterate`).
 
 import type { TicketAlign, TicketBlock, TicketDoc } from '@/lib/print/ticketDoc';
+import { BRAND_NAME_EN } from '@/lib/print/brandHeader';
 
 const ESC = 0x1b;
 const GS = 0x1d;
+
+// `GS v 0` (raster bit image) takes a 2-byte row count (`yL yH`), but many
+// cheap 80mm printers' input buffers choke on one huge band — 128 rows keeps
+// each band comfortably small while still being well within the 2-byte limit.
+const MAX_RASTER_BAND_ROWS = 128;
 
 type Size = 'normal' | 'large' | 'xlarge';
 
@@ -128,13 +134,41 @@ function qrCommandBytes(data: string): number[] {
 }
 
 /**
+ * `GS v 0` bytes for one raster band: `1D 76 30 00 xL xH yL yH` + the band's
+ * row data. `bytesPerRow` is the same for every band of one image (it's
+ * `ceil(widthDots / 8)`, independent of height); `rows` is this band's height
+ * in dots (≤ `MAX_RASTER_BAND_ROWS`).
+ */
+function rasterBandBytes(bytesPerRow: number, rows: number, bandData: Uint8Array): number[] {
+  const bytes: number[] = [
+    GS,
+    0x76,
+    0x30,
+    0x00, // m = 0 (normal mode, no scaling)
+    bytesPerRow & 0xff,
+    (bytesPerRow >> 8) & 0xff,
+    rows & 0xff,
+    (rows >> 8) & 0xff,
+  ];
+  for (let i = 0; i < bandData.length; i++) bytes.push(bandData[i]);
+  return bytes;
+}
+
+/**
  * Renders a printer-neutral TicketDoc to raw ESC/POS bytes for a given paper
  * width. Font A columns: 48 @ 80mm, 32 @ 58mm; halved again under `xlarge`
  * (double-width) text. Voided (`strike`) lines get a "[VOID] " prefix since
- * ESC/POS has no strikethrough. Trailer: when `cut` is false, a tear-off feed
- * (the tear bar still needs paper fed to it); when `cut` is true, the cut
- * command for `cutMode` (default `'standard'`) — see `CutMode` above for why
- * `standard` sends no separate feed while the others do.
+ * ESC/POS has no strikethrough. `raster` blocks (the rasterized brand header,
+ * or any other 1-bit image) print centered via `GS v 0`, split into bands of
+ * at most `MAX_RASTER_BAND_ROWS` rows so no single command overwhelms a
+ * cheap printer's input buffer; a `brandHeader` block that reached here
+ * unresolved (rasterization unavailable or failed — see
+ * `lib/print/brandHeaderRaster.ts`) falls back to centered double-size
+ * "HIOC." text so a bad logo/font load can never break a print job. Trailer:
+ * when `cut` is false, a tear-off feed (the tear bar still needs paper fed
+ * to it); when `cut` is true, the cut command for `cutMode` (default
+ * `'standard'`) — see `CutMode` above for why `standard` sends no separate
+ * feed while the others do.
  */
 export function renderEscPos(
   doc: TicketDoc,
@@ -210,6 +244,33 @@ export function renderEscPos(
     }
   };
 
+  const emitRaster = (block: Extract<TicketBlock, { kind: 'raster' }>) => {
+    const widthDots = Math.max(0, Math.floor(block.widthDots));
+    const heightDots = Math.max(0, Math.floor(block.heightDots));
+    if (widthDots === 0 || heightDots === 0) return;
+    const bytesPerRow = Math.ceil(widthDots / 8);
+
+    setAlign('center');
+    let row = 0;
+    while (row < heightDots) {
+      const bandRows = Math.min(MAX_RASTER_BAND_ROWS, heightDots - row);
+      const start = row * bytesPerRow;
+      const end = start + bandRows * bytesPerRow;
+      bytes.push(...rasterBandBytes(bytesPerRow, bandRows, block.data.subarray(start, end)));
+      row += bandRows;
+    }
+    setAlign('left');
+  };
+
+  // Placeholder for an unresolved `brandHeader` block (see the function-level
+  // doc comment above) — centered, bold, double-width+height "HIOC.".
+  const emitBrandHeaderFallback = () => {
+    setAlign('center');
+    setBold(true);
+    setSize('xlarge');
+    encodeLine(transliterate(BRAND_NAME_EN));
+  };
+
   bytes.push(ESC, 0x40); // ESC @ — initialize
 
   for (const block of doc.blocks) {
@@ -231,6 +292,12 @@ export function renderEscPos(
         break;
       case 'qr':
         bytes.push(...qrCommandBytes(transliterate(block.data)));
+        break;
+      case 'raster':
+        emitRaster(block);
+        break;
+      case 'brandHeader':
+        emitBrandHeaderFallback();
         break;
       default:
         break;

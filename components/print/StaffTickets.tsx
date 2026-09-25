@@ -10,6 +10,7 @@ import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { ORDER_TYPE_LABEL, PAYMENT_LABEL, formatIstDateTime } from '@/lib/print/labels';
+import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -33,17 +34,34 @@ function BillRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-// Brand wordmark (public/images/logo-black.png). The logo already contains the
-// name, so it stands in for the text heading. Black art prints cleanly on the
-// 80mm thermal; a plain <img> is used (not next/image) for print reliability.
-function TicketLogo() {
+// Devanagari text needs a font that actually ships those glyphs — the app's
+// default (DM Sans, Latin-only) doesn't. app/layout.tsx (the root layout this
+// page inherits — see app/staff-print/[id]/[type]/page.tsx's own comment on
+// why) declares this CSS variable via next/font/google
+// (lib/print/devanagariFont.ts); 'Nirmala UI'/'Mangal' are the Windows-bundled
+// Devanagari fallbacks in case that variable is ever unavailable.
+const DEVANAGARI_FONT_STACK = "var(--font-noto-devanagari), 'Nirmala UI', 'Mangal', sans-serif";
+
+// Brand header for receipts and token slips (NOT the KOT — see KotTicket
+// below): the logo (public/images/logo-black.png), then "हाईओक", then
+// "HIOC.", centered. Black art prints cleanly on the 80mm thermal; a plain
+// <img> is used (not next/image) for print reliability. Mirrors the raster
+// header lib/print/brandHeaderRaster.ts draws for the ESC/POS raw-print path,
+// and lib/print/brandHeader.ts is the shared source for both strings.
+function BrandHeader() {
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src="/images/logo-black.png"
-      alt={CAFE_NAME}
-      className="mx-auto mb-1 h-auto w-[38mm] max-w-[70%]"
-    />
+    <div className="mx-auto mb-1 flex flex-col items-center gap-0.5">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/images/logo-black.png"
+        alt={CAFE_NAME}
+        className="h-auto w-[55%] max-w-[44mm]"
+      />
+      <p className="text-lg leading-tight" style={{ fontFamily: DEVANAGARI_FONT_STACK }}>
+        {BRAND_NAME_HI}
+      </p>
+      <p className="text-sm font-bold leading-tight">{BRAND_NAME_EN}</p>
+    </div>
   );
 }
 
@@ -117,7 +135,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   return (
     <div className="font-sans text-black">
       <div className="text-center">
-        <TicketLogo />
+        <BrandHeader />
         <p className="mt-1 text-[11px] leading-tight">{CAFE_ADDRESS}</p>
         <p className="text-[11px]">{CAFE_PHONE_DISPLAY}</p>
         {BUSINESS.gstin ? <p className="text-[11px]">GSTIN: {BUSINESS.gstin}</p> : null}
@@ -206,7 +224,7 @@ export function TokenSlip({ order }: { order: StaffPrintOrder }) {
 
   return (
     <div className="font-sans text-center text-black">
-      <TicketLogo />
+      <BrandHeader />
 
       <Divider />
 

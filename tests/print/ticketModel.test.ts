@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTicketDoc } from '@/lib/print/ticketModel';
+import { renderEscPos } from '@/lib/print/escpos';
 import type { TicketBlock } from '@/lib/print/ticketDoc';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import type { OrderItemAddon } from '@/lib/types';
@@ -206,6 +207,43 @@ describe('buildTicketDoc — no wasted paper at the top', () => {
   it.each(['kot', 'receipt', 'token'] as const)('%s never emits a feed block at all', (type) => {
     const doc = buildTicketDoc(order(), type);
     expect(doc.blocks.some((b) => b.kind === 'feed')).toBe(false);
+  });
+});
+
+describe('buildTicketDoc — brand header (logo + "हाईओक" / "HIOC.")', () => {
+  it('receipt starts with the brandHeader placeholder block', () => {
+    const doc = buildTicketDoc(order(), 'receipt');
+    expect(doc.blocks[0]).toEqual({ kind: 'brandHeader' });
+  });
+
+  it('token starts with the brandHeader placeholder block', () => {
+    const doc = buildTicketDoc(order(), 'token');
+    expect(doc.blocks[0]).toEqual({ kind: 'brandHeader' });
+  });
+
+  it('the KOT never carries a brandHeader block anywhere', () => {
+    const doc = buildTicketDoc(order(), 'kot');
+    expect(doc.blocks.some((b) => b.kind === 'brandHeader')).toBe(false);
+  });
+
+  it('renders byte-identical to before this feature: a KOT doc still produces zero raster/brandHeader bytes', () => {
+    // The KOT builder and renderEscPos's handling of its existing block kinds
+    // (text/row/divider/feed/qr) are untouched by this feature — this pins
+    // that a real KOT doc never triggers the new raster code path at all.
+    const doc = buildTicketDoc(order(), 'kot');
+    const bytes = renderEscPos(doc, { paperWidthMm: 80, cut: true });
+    const gsV0 = [0x1d, 0x76, 0x30];
+    let found = false;
+    outer: for (let i = 0; i <= bytes.length - gsV0.length; i++) {
+      for (let j = 0; j < gsV0.length; j++) {
+        if (bytes[i + j] !== gsV0[j]) continue outer;
+      }
+      found = true;
+      break;
+    }
+    expect(found).toBe(false);
+    expect(bytes[0]).toBe(0x1b); // ESC @ still opens the ticket, unchanged
+    expect(bytes[1]).toBe(0x40);
   });
 });
 

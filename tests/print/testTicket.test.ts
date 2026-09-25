@@ -57,6 +57,11 @@ describe('testTicketDoc', () => {
     expect(doc.blocks[0].kind).not.toBe('feed');
   });
 
+  it('starts with the brandHeader placeholder, same as a real receipt/token', () => {
+    const doc = testTicketDoc('Kitchen', 80);
+    expect(doc.blocks[0]).toEqual({ kind: 'brandHeader' });
+  });
+
   it('has no trailing feed block at all — renderEscPos alone owns the trailer feed', () => {
     const doc = testTicketDoc('Kitchen', 80);
     expect(doc.blocks.some((b) => b.kind === 'feed')).toBe(false);

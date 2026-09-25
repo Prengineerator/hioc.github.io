@@ -6,6 +6,7 @@ import { SiteHeader } from '@/components/site/SiteHeader';
 import { SiteFooter } from '@/components/site/SiteFooter';
 import { SurfaceProvider } from '@/components/SurfaceLink';
 import { surfaceForHost, type Surface } from '@/lib/routing/surface';
+import { devanagariFont } from '@/lib/print/devanagariFont';
 import './globals.css';
 
 // DM Sans is the body/heading face (readable at small sizes, real weight
@@ -57,8 +58,19 @@ export default function RootLayout({
   const surface: Surface =
     (h.get('x-surface') as Surface | null) ?? surfaceForHost(h.get('host'));
 
+  // The Devanagari font's variable is declared here — the ROOT layout —
+  // rather than app/staff/layout.tsx: the printed receipt/token page
+  // (app/staff-print/[id]/[type]) deliberately lives outside app/staff/** and
+  // only inherits this layout (see that page's own comment), and its HTML
+  // ticket (components/print/StaffTickets.tsx) needs "हाईओक" to render in the
+  // right font just as much as any /staff/** page does for the desktop app's
+  // canvas-rasterized ESC/POS header (lib/print/brandHeaderRaster.ts). This is
+  // the one layout both surfaces share.
   return (
-    <html lang="en" className={`${dmSans.variable} ${spaceMono.variable}`}>
+    <html
+      lang="en"
+      className={`${dmSans.variable} ${spaceMono.variable} ${devanagariFont.variable}`}
+    >
       <body className="flex min-h-screen flex-col font-sans bg-cream text-charcoal">
         <SurfaceProvider surface={surface}>
           <SiteHeader />

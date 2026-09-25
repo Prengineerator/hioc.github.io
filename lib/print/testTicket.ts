@@ -42,13 +42,19 @@ export function edgeLine(cols: number): string {
 
 /** The tiny fixed ticket a "Test print" sends — not a real order. Includes an
  * alignment ruler at the paper's actual column count so a mismatched paper
- * width shows up immediately as a wrapped or truncated ruler. */
+ * width shows up immediately as a wrapped or truncated ruler, and the same
+ * brandHeader placeholder a real receipt/token starts with, so "Test print"
+ * also proves out the logo + "हाईओक" / "HIOC." header (PrinterSettings
+ * resolves it via lib/desktop/printExecutor.ts's resolveBrandHeader, the same
+ * as a real print job). */
 export function testTicketDoc(printerName: string, paperWidthMm: 58 | 80): TicketDoc {
   const cols = colsFor(paperWidthMm);
   return {
     type: 'receipt',
     orderId: 'test',
     blocks: [
+      { kind: 'brandHeader' },
+      { kind: 'divider' },
       { kind: 'text', text: 'HIOC test print', align: 'center', bold: true, size: 'large' },
       { kind: 'text', text: printerName, align: 'center' },
       { kind: 'text', text: new Date().toLocaleString('en-IN'), align: 'center' },

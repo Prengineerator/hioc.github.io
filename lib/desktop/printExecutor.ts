@@ -13,8 +13,31 @@
 import type { HiocDesktopBridge, PrinterConfig } from '@/lib/desktop/bridge';
 import { routeJob } from '@/lib/desktop/routing';
 import { renderEscPos } from '@/lib/print/escpos';
-import type { TicketDoc } from '@/lib/print/ticketDoc';
+import { getBrandHeaderRaster } from '@/lib/print/brandHeaderRaster';
+import type { TicketBlock, TicketDoc } from '@/lib/print/ticketDoc';
 import { describePrintJob, type PrintJob } from '@/lib/pos/printQueue';
+
+/**
+ * Replaces a `{ kind: 'brandHeader' }` placeholder block in `doc` (receipts
+ * and token slips — see lib/print/ticketModel.ts) with the rasterized HIOC
+ * wordmark for this printer's paper width. `getBrandHeaderRaster` returns
+ * `null` on any failure (no canvas, a blocked logo/font load, …), in which
+ * case the placeholder is left exactly as-is and `renderEscPos`'s centered
+ * double-size "HIOC." text fallback prints instead — a bad rasterization can
+ * never block or break the print job. A doc with no `brandHeader` block
+ * (the KOT) is returned unchanged with no rasterization work done at all.
+ * Exported so PrinterSettings' "Test print" path (lib/print/testTicket.ts)
+ * resolves the header the same way.
+ */
+export async function resolveBrandHeader(doc: TicketDoc, paperWidthMm: 58 | 80): Promise<TicketDoc> {
+  if (!doc.blocks.some((b) => b.kind === 'brandHeader')) return doc;
+
+  const raster = await getBrandHeaderRaster(paperWidthMm);
+  if (!raster) return doc;
+
+  const blocks: TicketBlock[] = doc.blocks.map((b) => (b.kind === 'brandHeader' ? raster : b));
+  return { ...doc, blocks };
+}
 
 /**
  * This machine has NO printers configured at all — as opposed to printers
@@ -79,7 +102,8 @@ export function createDesktopExecutor(
         try {
           if (isRawCapable(printer)) {
             const doc = await getTicketDoc();
-            const bytes = renderEscPos(doc, {
+            const resolved = await resolveBrandHeader(doc, printer.paperWidthMm);
+            const bytes = renderEscPos(resolved, {
               paperWidthMm: printer.paperWidthMm,
               cut: printer.cut,
               cutMode: printer.cutMode,

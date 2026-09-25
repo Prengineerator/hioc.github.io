@@ -29,6 +29,7 @@ import type {
   PrinterStatus,
 } from '@/lib/desktop/bridge';
 import { renderEscPos } from '@/lib/print/escpos';
+import { resolveBrandHeader } from '@/lib/desktop/printExecutor';
 import {
   CUT_MODES,
   CUT_MODE_HINTS,
@@ -424,7 +425,8 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     }
     setNotice((n) => ({ ...n, [p.id]: 'Sending…' }));
     try {
-      const bytes = renderEscPos(testTicketDoc(p.name, p.paperWidthMm), {
+      const doc = await resolveBrandHeader(testTicketDoc(p.name, p.paperWidthMm), p.paperWidthMm);
+      const bytes = renderEscPos(doc, {
         paperWidthMm: p.paperWidthMm,
         cut: p.cut,
         cutMode: p.cutMode,
