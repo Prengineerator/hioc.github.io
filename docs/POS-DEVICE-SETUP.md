@@ -83,11 +83,23 @@ browser tab).
 Repeat for a second printer (e.g. a separate kitchen printer) if you have one — this is exactly what a
 browser-only setup cannot do.
 
-### 5. Test print and test drawer
+### 5. Test print, test cut, and test drawer
 
 Back on the printer list, each printer has a **Test print** button — use it to confirm paper actually comes
-out before trusting it with a real order. The printer wired to the drawer also has a **Test drawer**
-button — use it to confirm the drawer pops without needing a cash sale.
+out before trusting it with a real order. It also prints an alignment ruler the full width of the paper —
+if it wraps onto a second line or is cut off, the **Paper width** setting (58mm/80mm) doesn't match the
+roll actually loaded.
+
+If **Cut after print** is ticked, a **Cut style** dropdown appears (Standard, Partial, Full, Legacy) with a
+**Test cut** button on each raw-capable printer row — use it to confirm the printer actually cuts, without
+wasting a whole test ticket. **If the paper doesn't cut**, try the next style in the dropdown and press
+**Test cut** again — cheap 80mm printers commonly only support one of these command sets. If none of the
+four styles cuts, the printer likely has no auto-cutter, or its cutter has been switched off in the
+printer's own configuration utility or DIP switches (check the printer's manual) — in that case, leave
+**Cut after print** off and let staff tear the ticket at the built-in tear bar.
+
+The printer wired to the drawer also has a **Test drawer** button — use it to confirm the drawer pops
+without needing a cash sale.
 
 ### 6. Prove it — the test that actually matters
 
@@ -114,6 +126,19 @@ Cancel or void the test orders afterwards so they don't land in the day's taking
   or the uninstaller seems stuck: open Task Manager, find every **HIOC POS** entry, and **End task** on each
   one (or, from Command Prompt: `taskkill /F /T /IM "HIOC POS.exe"`), then try the install or uninstall
   again. This is a one-time step for machines on that early version only.
+- **Installer says "HIOC POS cannot be closed. Please close it manually and click Retry to continue."
+  forever, even though nothing is actually running (0.1.2 and earlier)** — check Task Manager or
+  `taskkill /F /T /IM "HIOC POS.exe"`; if it reports HIOC POS isn't running and the installer still loops,
+  this is it. Cause: on that machine, an earlier install (or a directory you typed by hand) put HIOC POS in
+  a shared folder — the whole of `C:\Program Files`, `%LOCALAPPDATA%\Programs` itself, or your Windows user
+  folder — instead of its own dedicated one. The installer's "is it still running?" check matches by that
+  folder, so a shared folder makes it match (and try to close) other things on the machine entirely, and it
+  can never fully succeed. Fix: install **0.1.3 or later** — it always installs into its own folder and only
+  ever checks by the app's name, not by folder, so this can't happen again. If 0.1.3+ still won't get past
+  the same message on a machine that had this problem: open Registry Editor (`regedit`), delete the key
+  `HKEY_CURRENT_USER\Software\95dacd72-f399-5de5-844d-7e49549a979b` (this only clears HIOC POS's own
+  remembered install location, nothing else), then run the 0.1.3+ installer again — with that key gone it
+  has no shared folder left to remember and installs cleanly into its own folder.
 
 ---
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDesktopExecutor, NoPrintersConfiguredError } from '@/lib/desktop/printExecutor';
+import { createDesktopExecutor, NoPrintersConfiguredError, resolveBrandHeader } from '@/lib/desktop/printExecutor';
 import { renderEscPos } from '@/lib/print/escpos';
 import type { HiocDesktopBridge, PrinterConfig } from '@/lib/desktop/bridge';
 import type { PrintJob } from '@/lib/pos/printQueue';
@@ -27,6 +27,7 @@ function printer(overrides: Partial<PrinterConfig> = {}): PrinterConfig {
     roles: overrides.roles ?? ['kot'],
     copies: overrides.copies ?? {},
     cut: overrides.cut ?? true,
+    cutMode: overrides.cutMode,
     drawer: overrides.drawer ?? false,
   };
 }
@@ -102,8 +103,19 @@ describe('createDesktopExecutor — raw-capable printers (network / usb / system
     expect(bridge.printRaw).toHaveBeenCalledTimes(1);
     const [printerId, bytes] = (bridge.printRaw as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(printerId).toBe('kitchen');
-    expect(bytes).toEqual(renderEscPos(TICKET_DOC, { paperWidthMm: 80, cut: true }));
+    expect(bytes).toEqual(renderEscPos(TICKET_DOC, { paperWidthMm: 80, cut: true, cutMode: undefined }));
     expect(result).toEqual({ confirmed: true });
+  });
+
+  it('passes the printer\'s saved cutMode through to renderEscPos', async () => {
+    const p = printer({ id: 'kitchen', roles: ['kot'], paperWidthMm: 58, cut: true, cutMode: 'legacy' });
+    const bridge = fakeBridge([p]);
+    const exec = createDesktopExecutor(bridge);
+
+    await exec(job({ orderId: 'order-42', type: 'kot' }));
+
+    const [, bytes] = (bridge.printRaw as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(bytes).toEqual(renderEscPos(TICKET_DOC, { paperWidthMm: 58, cut: true, cutMode: 'legacy' }));
   });
 
   it('sends one printRaw call per configured copy', async () => {
@@ -202,6 +214,39 @@ describe('createDesktopExecutor — system+driver printers', () => {
     const exec = createDesktopExecutor(bridge);
     await exec(job({ type: 'receipt' }));
     expect(bridge.printUrl).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('resolveBrandHeader', () => {
+  it('leaves a doc with no brandHeader block (the KOT) completely unchanged', async () => {
+    const resolved = await resolveBrandHeader(TICKET_DOC, 80);
+    expect(resolved).toBe(TICKET_DOC); // same reference — no rasterization work done at all
+  });
+
+  it('leaves the brandHeader placeholder in place when rasterization is unavailable (no DOM here) — never throws', async () => {
+    const receiptDoc: TicketDoc = { type: 'receipt', orderId: 'order-1', blocks: [{ kind: 'brandHeader' }] };
+    const resolved = await resolveBrandHeader(receiptDoc, 80);
+    expect(resolved.blocks).toEqual([{ kind: 'brandHeader' }]);
+  });
+
+  it('a printer routed a doc with an unresolved brandHeader still prints — renderEscPos falls back to text, never blocking the job', async () => {
+    const receiptDoc: TicketDoc = {
+      type: 'receipt',
+      orderId: 'order-1',
+      blocks: [{ kind: 'brandHeader' }, { kind: 'text', text: 'Thanks!' }],
+    };
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ doc: receiptDoc }) });
+    const p = printer({ id: 'kitchen', roles: ['receipt'], paperWidthMm: 80 });
+    const bridge = fakeBridge([p]);
+    const exec = createDesktopExecutor(bridge);
+
+    const result = await exec(job({ type: 'receipt' }));
+
+    expect(result).toEqual({ confirmed: true });
+    const [, bytes] = (bridge.printRaw as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(bytes).toEqual(
+      renderEscPos(receiptDoc, { paperWidthMm: 80, cut: true, cutMode: undefined }),
+    );
   });
 });
 

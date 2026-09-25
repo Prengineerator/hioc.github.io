@@ -76,7 +76,13 @@ describe('renderEscPos — init and cut', () => {
     expect(bytes[1]).toBe(0x40);
   });
 
-  it('includes the partial-cut command only when cut is requested', () => {
+  it('emits no feed command right after ESC @ — nothing wastes paper at the top of a ticket', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
+    // Byte 2 (right after the 2-byte ESC @) must not start an ESC d (0x1b 0x64) feed.
+    expect(bytes[2]).not.toBe(0x1b);
+  });
+
+  it('includes the standard partial-cut command (GS V 66 0) only when cut is requested, with no cutMode set', () => {
     const cutBytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
     const noCutBytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false });
     // GS V 66 0
@@ -84,10 +90,54 @@ describe('renderEscPos — init and cut', () => {
     expect(findAll(noCutBytes, [0x1d, 0x56, 0x42, 0x00])).toHaveLength(0);
   });
 
-  it('always ends with a 4-line feed (ESC d 4)', () => {
-    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true });
-    // The trailer feed is the last ESC d command before an optional cut.
-    expect(findAll(bytes, [0x1b, 0x64, 0x04]).length).toBeGreaterThanOrEqual(1);
+  it('cut: false trailer is exactly the tear-off feed (ESC d 4), no cut command at all', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false });
+    expect(Array.from(bytes.slice(-3))).toEqual([0x1b, 0x64, 0x04]);
+  });
+});
+
+describe('renderEscPos — cutMode trailer bytes', () => {
+  // Golden trailer bytes for each cutMode, and old configs with no cutMode
+  // set at all (undefined) — the exact contract this feature must not regress.
+  const cases: Array<{ cutMode: 'standard' | 'partial' | 'full' | 'legacy' | undefined; trailer: number[] }> = [
+    // standard: GS V 66 0, no preceding feed — function B feeds itself.
+    { cutMode: 'standard', trailer: [0x1d, 0x56, 0x42, 0x00] },
+    // undefined (old saved config, pre-cutMode) renders identically to 'standard'.
+    { cutMode: undefined, trailer: [0x1d, 0x56, 0x42, 0x00] },
+    // partial: feed to the cutter (ESC d 4), then GS V 1.
+    { cutMode: 'partial', trailer: [0x1b, 0x64, 0x04, 0x1d, 0x56, 0x01] },
+    // full: feed to the cutter (ESC d 4), then GS V 0.
+    { cutMode: 'full', trailer: [0x1b, 0x64, 0x04, 0x1d, 0x56, 0x00] },
+    // legacy: feed to the cutter (ESC d 4), then ESC i.
+    { cutMode: 'legacy', trailer: [0x1b, 0x64, 0x04, 0x1b, 0x69] },
+  ];
+
+  for (const { cutMode, trailer } of cases) {
+    it(`cutMode=${cutMode ?? '(unset)'} ends with exactly ${JSON.stringify(trailer)}`, () => {
+      const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: true, cutMode });
+      expect(Array.from(bytes.slice(-trailer.length))).toEqual(trailer);
+    });
+  }
+
+  it('never double-feeds: standard cutMode has exactly one ESC d in the whole trailer region', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), {
+      paperWidthMm: 80,
+      cut: true,
+      cutMode: 'standard',
+    });
+    // The trailer is everything after the last text line's \n — no ESC d (feed)
+    // anywhere in it, since GS V 66 0 feeds to the cutter on its own.
+    const lastNewline = bytes.lastIndexOf(0x0a);
+    const trailerBytes = bytes.slice(lastNewline + 1);
+    expect(findAll(trailerBytes, [0x1b, 0x64])).toHaveLength(0);
+  });
+
+  it('a printer with cut: false never receives any cut command, regardless of cutMode', () => {
+    for (const cutMode of ['standard', 'partial', 'full', 'legacy'] as const) {
+      const bytes = renderEscPos(doc([{ kind: 'text', text: 'hi' }]), { paperWidthMm: 80, cut: false, cutMode });
+      expect(findAll(bytes, [0x1d, 0x56])).toHaveLength(0); // no GS V (any function)
+      expect(findAll(bytes, [0x1b, 0x69])).toHaveLength(0); // no ESC i
+    }
   });
 });
 
@@ -196,5 +246,74 @@ describe('renderEscPos — bold toggling stays balanced', () => {
     const boldOff = findAll(bytes, [0x1b, 0x45, 0x00]).length;
     expect(boldOn).toBeGreaterThan(0);
     expect(boldOn).toBe(boldOff);
+  });
+});
+
+// PRN-6 — the raster brand header (logo + "हाईओक" / "HIOC."). escpos.ts never
+// builds the pixels itself (that's lib/print/brandHeaderRaster.ts, client-only
+// and untestable here without a DOM) — these tests only pin the byte-level
+// contract of a `raster` block that already carries its pixel data.
+describe('renderEscPos — raster (GS v 0)', () => {
+  it('emits exactly the GS v 0 header + data bytes for a tiny known bitmap', () => {
+    // 8 dots wide (bytesPerRow = 1), 2 rows tall, arbitrary 1-bit pattern.
+    const bytes = renderEscPos(
+      doc([{ kind: 'raster', widthDots: 8, heightDots: 2, data: new Uint8Array([0xcc, 0x33]) }]),
+      { paperWidthMm: 80, cut: false },
+    );
+    // GS v 0, m=0, xL=1 xH=0 (bytesPerRow=1), yL=2 yH=0 (2 rows), then the 2 data bytes.
+    const expected = [0x1d, 0x76, 0x30, 0x00, 0x01, 0x00, 0x02, 0x00, 0xcc, 0x33];
+    expect(findAll(bytes, expected)).toHaveLength(1);
+  });
+
+  it('bands a raster taller than 128 rows into 128/128/44, each its own GS v 0 command', () => {
+    const widthDots = 8; // bytesPerRow = 1
+    const heightDots = 300;
+    const data = new Uint8Array(heightDots).fill(0xaa);
+    const bytes = renderEscPos(doc([{ kind: 'raster', widthDots, heightDots, data }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+
+    const headerStarts = findAll(bytes, [0x1d, 0x76, 0x30, 0x00]);
+    expect(headerStarts).toHaveLength(3);
+    const bandRowCounts = headerStarts.map((i) => bytes[i + 6] | (bytes[i + 7] << 8));
+    expect(bandRowCounts).toEqual([128, 128, 44]);
+    // Every band reports the same bytesPerRow (xL/xH) regardless of its height.
+    for (const i of headerStarts) {
+      expect(bytes[i + 4]).toBe(1); // xL
+      expect(bytes[i + 5]).toBe(0); // xH
+    }
+  });
+
+  it('centers the raster: ESC a 1 immediately precedes it and ESC a 0 immediately follows it', () => {
+    const bytes = renderEscPos(
+      doc([{ kind: 'raster', widthDots: 8, heightDots: 1, data: new Uint8Array([0xff]) }]),
+      { paperWidthMm: 80, cut: false },
+    );
+    // ESC @ (2 bytes), then ESC a 1 (center) right before the raster.
+    expect(Array.from(bytes.slice(2, 5))).toEqual([0x1b, 0x61, 0x01]);
+    // Header (8 bytes) + 1 data byte, then ESC a 0 (left) right after.
+    const afterRaster = 5 + 8 + 1;
+    expect(Array.from(bytes.slice(afterRaster, afterRaster + 3))).toEqual([0x1b, 0x61, 0x00]);
+  });
+
+  it('emits nothing for a zero-size raster (no widthDots/heightDots)', () => {
+    const bytes = renderEscPos(doc([{ kind: 'raster', widthDots: 0, heightDots: 0, data: new Uint8Array(0) }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    expect(findAll(bytes, [0x1d, 0x76, 0x30])).toHaveLength(0);
+  });
+});
+
+describe('renderEscPos — brandHeader fallback', () => {
+  it('falls back to centered, bold, double-size "HIOC." text when the placeholder reaches the renderer unresolved', () => {
+    const bytes = renderEscPos(doc([{ kind: 'brandHeader' }]), { paperWidthMm: 80, cut: false });
+    // No raster ever gets emitted for an unresolved brandHeader.
+    expect(findAll(bytes, [0x1d, 0x76, 0x30])).toHaveLength(0);
+    expect(findAll(bytes, [0x1b, 0x61, 0x01])).toHaveLength(1); // ESC a 1 — center
+    expect(findAll(bytes, [0x1b, 0x45, 0x01])).toHaveLength(1); // ESC E 1 — bold on
+    expect(findAll(bytes, [0x1d, 0x21, 0x11])).toHaveLength(1); // GS ! 0x11 — xlarge
+    expect(decodeLines(bytes)).toContain('HIOC.');
   });
 });

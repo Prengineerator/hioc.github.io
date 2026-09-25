@@ -19,6 +19,7 @@ import { buttonVariants } from '@/components/ui/Button';
 import { SurfaceLink } from '@/components/SurfaceLink';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
 import type {
+  CutMode,
   DetectedPrinter,
   HiocDesktopBridge,
   PrinterConfig,
@@ -28,7 +29,14 @@ import type {
   PrinterStatus,
 } from '@/lib/desktop/bridge';
 import { renderEscPos } from '@/lib/print/escpos';
-import type { TicketDoc } from '@/lib/print/ticketDoc';
+import { resolveBrandHeader } from '@/lib/desktop/printExecutor';
+import {
+  CUT_MODES,
+  CUT_MODE_HINTS,
+  CUT_MODE_LABELS,
+  cutTestTicketDoc,
+  testTicketDoc,
+} from '@/lib/print/testTicket';
 
 const ROLES: PrinterRole[] = ['kot', 'receipt', 'token'];
 const ROLE_LABELS: Record<PrinterRole, string> = { kot: 'KOT', receipt: 'Receipt', token: 'Token' };
@@ -55,18 +63,11 @@ const HEALTH_DOT: Record<PrinterHealth, string> = {
 
 const STATUS_POLL_MS = 5000;
 
-/** The tiny fixed ticket a "Test print" sends — not a real order. */
-function testTicketDoc(printerName: string): TicketDoc {
-  return {
-    type: 'receipt',
-    orderId: 'test',
-    blocks: [
-      { kind: 'text', text: 'HIOC test print', align: 'center', bold: true, size: 'large' },
-      { kind: 'text', text: printerName, align: 'center' },
-      { kind: 'text', text: new Date().toLocaleString('en-IN'), align: 'center' },
-      { kind: 'feed', lines: 2 },
-    ],
-  };
+/** network and usb are always raw ESC/POS; system is raw only in 'raw' mode —
+ * mirrors `isRawCapable` in lib/desktop/printExecutor.ts, for a saved config
+ * rather than a draft. */
+function printerIsRawCapable(p: PrinterConfig): boolean {
+  return p.connection.kind !== 'system' || p.connection.mode === 'raw';
 }
 
 /** Everything the Add/Edit panel needs, in input-friendly (string) form. */
@@ -83,6 +84,7 @@ interface Draft {
   roles: PrinterRole[];
   copies: Partial<Record<PrinterRole, number>>;
   cut: boolean;
+  cutMode: CutMode;
   drawer: boolean;
 }
 
@@ -106,6 +108,7 @@ function blankDraft(): Draft {
     roles: [],
     copies: {},
     cut: true,
+    cutMode: 'standard',
     drawer: false,
   };
 }
@@ -124,6 +127,7 @@ function draftFromPrinter(p: PrinterConfig): Draft {
     roles: [...p.roles],
     copies: { ...p.copies },
     cut: p.cut,
+    cutMode: p.cutMode ?? 'standard',
     drawer: p.drawer,
   };
 }
@@ -170,6 +174,7 @@ function draftToConfig(draft: Draft): PrinterConfig {
     roles,
     copies,
     cut: isRawCapable(draft) ? draft.cut : false,
+    cutMode: draft.cutMode,
     drawer: draft.drawer,
   };
 }
@@ -420,7 +425,12 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     }
     setNotice((n) => ({ ...n, [p.id]: 'Sending…' }));
     try {
-      const bytes = renderEscPos(testTicketDoc(p.name), { paperWidthMm: p.paperWidthMm, cut: p.cut });
+      const doc = await resolveBrandHeader(testTicketDoc(p.name, p.paperWidthMm), p.paperWidthMm);
+      const bytes = renderEscPos(doc, {
+        paperWidthMm: p.paperWidthMm,
+        cut: p.cut,
+        cutMode: p.cutMode,
+      });
       const result = await bridge.printRaw(p.id, bytes);
       setNotice((n) => ({
         ...n,
@@ -428,6 +438,31 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
       }));
     } catch (err) {
       setNotice((n) => ({ ...n, [p.id]: err instanceof Error ? err.message : 'Test print failed.' }));
+    }
+  }
+
+  async function testCut(p: PrinterConfig) {
+    if (!printerIsRawCapable(p)) {
+      setNotice((n) => ({ ...n, [p.id]: 'Driver printers can’t send a cut command — set this printer to Raw.' }));
+      return;
+    }
+    const cutMode = p.cutMode ?? 'standard';
+    setNotice((n) => ({ ...n, [p.id]: 'Cutting…' }));
+    try {
+      const bytes = renderEscPos(cutTestTicketDoc(cutMode), {
+        paperWidthMm: p.paperWidthMm,
+        cut: true,
+        cutMode,
+      });
+      const result = await bridge.printRaw(p.id, bytes);
+      setNotice((n) => ({
+        ...n,
+        [p.id]: result.confirmed
+          ? `Test cut (${CUT_MODE_LABELS[cutMode]}) confirmed by the printer.`
+          : 'Sent — check the printer.',
+      }));
+    } catch (err) {
+      setNotice((n) => ({ ...n, [p.id]: err instanceof Error ? err.message : 'Test cut failed.' }));
     }
   }
 
@@ -556,6 +591,15 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
                   >
                     Test print
                   </button>
+                  {printerIsRawCapable(p) ? (
+                    <button
+                      type="button"
+                      onClick={() => void testCut(p)}
+                      className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                    >
+                      Test cut
+                    </button>
+                  ) : null}
                   {p.drawer ? (
                     <button
                       type="button"
@@ -794,6 +838,29 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
                 onChange={(v) => setDraft((d) => (d ? { ...d, cut: v } : d))}
                 label="Cut after print"
               />
+            </div>
+          ) : null}
+
+          {isRawCapable(draft) && draft.cut ? (
+            <div className="mt-3">
+              <span className="mb-1 block text-sm text-charcoal">Cut style</span>
+              <select
+                value={draft.cutMode}
+                onChange={(e) =>
+                  setDraft((d) => (d ? { ...d, cutMode: e.target.value as CutMode } : d))
+                }
+                className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+              >
+                {CUT_MODES.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {CUT_MODE_LABELS[mode]}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-muted">{CUT_MODE_HINTS[draft.cutMode]}</p>
+              <p className="mt-1 text-xs text-muted">
+                If the paper doesn’t cut, try the next style and press Test cut again.
+              </p>
             </div>
           ) : null}
 

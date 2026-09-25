@@ -76,8 +76,9 @@ function buildKotBlocks(order: StaffPrintOrder): TicketBlock[] {
 // --- KOT-2 — Receipt --------------------------------------------------------
 // Mirrors `ReceiptTicket`. Non-voided items only, with line totals, GST
 // breakup, discount (coupon-labelled), bold total, payment line and points
-// earned. No logo image (ESC/POS text can't render one) — CAFE_NAME stands in
-// as an xlarge header instead.
+// earned. Starts with the brandHeader placeholder — logo + "हाईओक" / "HIOC."
+// — resolved to a raster image by printExecutor.ts's resolveBrandHeader; see
+// ticketDoc.ts for the fallback if that resolution ever fails.
 function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   const isDineIn = order.order_type === 'dine_in';
   const activeItems = order.items.filter((i) => !i.voided);
@@ -86,7 +87,7 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   const points = order.points_earned ?? 0;
 
   const blocks: TicketBlock[] = [
-    { kind: 'text', text: CAFE_NAME, align: 'center', bold: true, size: 'xlarge' },
+    { kind: 'brandHeader' },
     { kind: 'text', text: CAFE_ADDRESS, align: 'center' },
     { kind: 'text', text: CAFE_PHONE_DISPLAY, align: 'center' },
   ];
@@ -159,11 +160,14 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
 
 // --- KOT-2 — Token slip -----------------------------------------------------
 // Mirrors `TokenSlip`. Minimal walk-in takeaway slip: big token number, order
-// number, item count, time, and the "wait to be called" line. No logo image.
+// number, item count, time, and the "wait to be called" line. Starts with the
+// same brandHeader placeholder as the receipt — see buildReceiptBlocks above.
 function buildTokenBlocks(order: StaffPrintOrder): TicketBlock[] {
   const itemCount = order.items.filter((i) => !i.voided).reduce((sum, i) => sum + i.quantity, 0);
 
   return [
+    { kind: 'brandHeader' },
+    { kind: 'divider' },
     { kind: 'text', text: 'Token', align: 'center' },
     { kind: 'text', text: order.pickup_code || '—', align: 'center', bold: true, size: 'large' },
     { kind: 'text', text: formatOrderNumber(order.order_number), align: 'center' },

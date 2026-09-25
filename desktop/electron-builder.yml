@@ -63,7 +63,17 @@ nsis:
   artifactName: "HIOC-POS-Setup-${version}.${ext}"
   oneClick: false
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  # false on purpose (SHL-3, v0.1.3): with this true, a picker page let an
+  # owner install into a shared/general folder (e.g. "C:\Program Files"
+  # itself, or the user's whole profile folder) instead of a dedicated
+  # per-app one. electron-builder's own built-in "is the app still running"
+  # check matches by $INSTDIR *prefix*, so a shared $INSTDIR made it match —
+  # and sometimes force-close — unrelated processes, and the installer would
+  # then loop on "cannot be closed" forever even when HIOC POS itself wasn't
+  # running. See the long comment at the top of build/installer.nsh for the
+  # full root cause and the fix (a name-only running-app check, plus always
+  # installing into our own dedicated folder regardless of this setting).
+  allowToChangeInstallationDirectory: false
   createDesktopShortcut: always
   # Force-closes a running "HIOC POS" before install AND before uninstall —
   # electron-builder's own built-in running-app check
