@@ -17,7 +17,7 @@ const TABLE_ID = '33333333-3333-4333-8333-333333333333';
 const ORDER_ID = '44444444-4444-4444-8444-444444444444';
 
 const state: {
-  actor: { user: { id: string }; role: string } | null;
+  actor: { user: { id: string }; role: string; via?: 'session' | 'device' } | null;
   sessionUser: { id: string } | null;
   tableRow: Record<string, unknown> | null;
   menuRows: Record<string, unknown>[];
@@ -82,6 +82,7 @@ vi.mock('@/lib/supabase-server', () => ({
 
 vi.mock('@/lib/api/auth', () => ({
   getStaffOrOwner: () => Promise.resolve(state.actor),
+  getCounterActor: () => Promise.resolve(state.actor),
   getAuthUser: () => Promise.resolve(state.sessionUser),
   getStaffUser: () => Promise.resolve(null),
   actorRoleFor: (role: string) => (role === 'owner' || role === 'manager' ? 'owner' : 'staff'),
@@ -198,6 +199,14 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
     expect(state.eventRow?.actor_id).toBe('staff-1');
     expect(state.eventRow?.actor_role).toBe('staff');
     expect(sendBillNotification).not.toHaveBeenCalled(); // bill fires at settle
+  });
+
+  it('PIN-3/PIN-4: an enrolled-device operator (no classic session) creates the order, attributed to them', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.created_by).toBe('ravi');
+    expect(state.eventRow?.actor_id).toBe('ravi');
   });
 
   it('400s a dine-in order with no table', async () => {

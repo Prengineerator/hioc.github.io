@@ -61,6 +61,7 @@ vi.mock('@/lib/supabase-server', () => ({
 
 vi.mock('@/lib/api/auth', () => ({
   getStaffOrOwner: () => Promise.resolve(null),
+  getCounterActor: () => Promise.resolve(null),
   getAuthUser: () => Promise.resolve(null),
   getStaffUser: () => Promise.resolve(null),
   actorRoleFor: () => 'staff',

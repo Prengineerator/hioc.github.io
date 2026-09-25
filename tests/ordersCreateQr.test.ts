@@ -80,6 +80,7 @@ vi.mock('@/lib/supabase-server', () => ({
 // the (possibly null) customer session, exactly like a web guest.
 vi.mock('@/lib/api/auth', () => ({
   getStaffOrOwner: () => Promise.resolve(state.actor),
+  getCounterActor: () => Promise.resolve(state.actor),
   getAuthUser: () => Promise.resolve(state.sessionUser),
   getStaffUser: () => Promise.resolve(null),
   actorRoleFor: (role: string) => (role === 'owner' || role === 'manager' ? 'owner' : 'staff'),

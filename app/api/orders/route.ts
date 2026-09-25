@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { actorRoleFor, getAuthUser, getStaffOrOwner, getStaffUser } from '@/lib/api/auth';
+import { actorRoleFor, getAuthUser, getCounterActor, getStaffUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { isMissingColumnError } from '@/lib/api/postgrest';
@@ -92,22 +92,24 @@ export async function POST(request: Request) {
   const suggestionSessionIds = parseSuggestionSessionIds(suggestion_session_ids, SUGGEST_LIMITS.orderSessionIdsMax);
 
   // Phase-3 (FND3-2/3): a request carrying an authenticated staff/manager/owner
-  // session is the second order-entry channel (POS-lite). It reuses this whole
-  // pricing/validation stack but relaxes the guest-checkout guards (name/phone
-  // optional, no pickup slot for dine-in, store-open bypassed) and attributes the
-  // order to the acting staff member. A plain guest checkout leaves `actor` null
-  // and behaves exactly as in Phase 1/2.
+  // session — or, PIN-3, an enrolled device's PIN operator — is the second
+  // order-entry channel (POS-lite). It reuses this whole pricing/validation
+  // stack but relaxes the guest-checkout guards (name/phone optional, no
+  // pickup slot for dine-in, store-open bypassed) and attributes the order to
+  // the acting staff member. A plain guest checkout leaves `actor` null and
+  // behaves exactly as in Phase 1/2.
   //
-  // Perf: getStaffOrOwner() and getAuthUser() each make their own
+  // Perf: getCounterActor() and getAuthUser() each make their own
   // supabase.auth.getUser() network round trip (they can't share one — the
-  // mocked test harnesses drive them independently, and getStaffOrOwner()
-  // additionally needs the profiles.role lookup that getAuthUser() doesn't do).
-  // getStoreSettings() below is also independent of everything above it and
-  // was previously fetched much later, purely sequentially. All three are
-  // fired together instead of one-after-another — three round trips collapse
-  // into the time of the slowest one.
+  // mocked test harnesses drive them independently, and getCounterActor()
+  // additionally needs the profiles.role lookup that getAuthUser() doesn't do,
+  // plus — only when there is no classic session — the device/operator
+  // resolution PIN-3 adds). getStoreSettings() below is also independent of
+  // everything above it and was previously fetched much later, purely
+  // sequentially. All three are fired together instead of one-after-another —
+  // three round trips collapse into the time of the slowest one.
   const [actor, sessionUser, settings] = await Promise.all([
-    getStaffOrOwner(),
+    getCounterActor(),
     getAuthUser(),
     getStoreSettings(),
   ]);
