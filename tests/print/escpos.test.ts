@@ -199,9 +199,27 @@ describe('transliterate', () => {
     expect(transliterate('Plain ASCII 123!?')).toBe('Plain ASCII 123!?');
   });
 
-  it('falls back unknown non-ASCII characters to "?"', () => {
+  it('falls back unknown non-ASCII letters (other scripts) to "?"', () => {
     expect(transliterate('café')).toBe('caf?'); // é
-    expect(transliterate('\u{1F600}')).toBe('?'); // emoji (surrogate pair)
+    expect(transliterate('日本語')).toBe('???'); // Japanese — letters, not symbols
+  });
+
+  it('drops emoji and other symbol/pictograph characters instead of printing "?"', () => {
+    expect(transliterate('\u{1F600}')).toBe(''); // 😀 emoji (surrogate pair) — dropped, not '?'
+    expect(transliterate('Order ready! 🎉')).toBe('Order ready! ');
+    expect(transliterate('★ Special ★')).toBe(' Special '); // dingbats/misc symbols dropped too
+  });
+
+  it('maps middle dot / bullet variants and ellipsis to plain ASCII (PRN-7: the actual "Paid ? cash" bug)', () => {
+    expect(transliterate('Paid · cash')).toBe('Paid - cash');
+    expect(transliterate('Thank you for your order! · HIOC.')).toBe('Thank you for your order! - HIOC.');
+    expect(transliterate('• bullet, ∙ operator')).toBe('- bullet, - operator');
+    expect(transliterate('Loading…')).toBe('Loading...');
+  });
+
+  it('collapses non-breaking and narrow spaces to a plain space', () => {
+    expect(transliterate('Rs. 120')).toBe('Rs. 120');
+    expect(transliterate('a b c')).toBe('a b c');
   });
 
   it('never leaves a byte above 0x7e once rendered', () => {
@@ -212,6 +230,50 @@ describe('transliterate', () => {
     for (const b of bytes) {
       expect(b).toBeLessThanOrEqual(0x7e);
     }
+  });
+});
+
+// PRN-7 — a real paid order's receipt must never print a stray '?' at all.
+// This mirrors the field report exactly: "Paid · cash" and the closing
+// "Thank you for your order! · HIOC." line both had a '·' separator, which
+// `transliterate` used to have no mapping for.
+describe('renderEscPos — no "?" on a typical paid order receipt', () => {
+  function decodedText(bytes: Uint8Array): string {
+    // Reuses the byte-stream decoder above but only cares about the text —
+    // command bytes never contain a literal '?' (0x3f) as a real parameter
+    // in any of the commands this renderer emits, so a straight decode of
+    // printable ASCII is enough to prove no stray '?' leaked into content.
+    return decodeLines(bytes).join('\n');
+  }
+
+  it('produces zero "?" characters for a paid cash order with the standard separators', () => {
+    const receiptDoc = doc([
+      { kind: 'row', left: 'Payment', right: 'Paid · cash' },
+      { kind: 'divider' },
+      { kind: 'text', text: 'Thank you for your order! · HIOC.', align: 'center' },
+    ]);
+    const bytes = renderEscPos(receiptDoc, { paperWidthMm: 80, cut: true });
+    expect(decodedText(bytes)).not.toContain('?');
+  });
+
+  it('produces zero "?" characters end-to-end for a realistic receipt TicketDoc', () => {
+    const receiptDoc: TicketDoc = {
+      type: 'receipt',
+      orderId: 'order-1',
+      blocks: [
+        { kind: 'text', text: 'Test Cafe', align: 'center' },
+        { kind: 'row', left: 'Order', right: 'HIOC-001042' },
+        { kind: 'row', left: '2 × Espresso (Large)', right: 'Rs. 240' },
+        { kind: 'text', text: '  + Sugar: Normal' },
+        { kind: 'row', left: 'Total', right: 'Rs. 252', bold: true },
+        { kind: 'row', left: 'Payment', right: 'Paid · cash' },
+        { kind: 'row', left: 'Points balance', right: '120' },
+        { kind: 'divider' },
+        { kind: 'text', text: 'Thank you for your order! · HIOC.', align: 'center' },
+      ],
+    };
+    const bytes = renderEscPos(receiptDoc, { paperWidthMm: 80, cut: true });
+    expect(decodedText(bytes)).not.toContain('?');
   });
 });
 

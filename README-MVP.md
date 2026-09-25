@@ -154,6 +154,8 @@ To build for production: `npm run build` then `npm run start`.
 Any host that runs Next.js works (e.g. Vercel is the simplest — connect the repo,
 add the three env vars above in the project's settings, deploy). No separate
 backend or server to stand up — the API routes ship inside the Next.js app itself.
+On Vercel, serverless functions are pinned to `icn1` (Seoul) via `vercel.json` so
+they sit next to the Supabase database in `ap-northeast-2`.
 
 ## What's in the seed menu
 

@@ -34,6 +34,43 @@ function BillRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+interface AddonForLine {
+  group_name_snapshot: string;
+  option_name_snapshot: string;
+  price_inr_snapshot: number;
+}
+
+/**
+ * One line per addon GROUP: "+ Sugar: Normal", or "+ Milk: Oat, Extra shot"
+ * when several options share a group — mirrors `addonsLines` in
+ * lib/print/ticketModel.ts so the printed KOT/receipt and this HTML mirror
+ * can't drift on what the group-name fix actually renders. `withPrice`
+ * (receipt only) appends "(Rs. N)" — wait, this is the HTML ticket, so the ₹
+ * glyph is fine here — when the option's price is > 0.
+ */
+function addonsLines(addons: AddonForLine[], opts: { withPrice: boolean }): string[] {
+  if (addons.length === 0) return [];
+  const groups = new Map<string, AddonForLine[]>();
+  for (const addon of addons) {
+    const list = groups.get(addon.group_name_snapshot);
+    if (list) {
+      list.push(addon);
+    } else {
+      groups.set(addon.group_name_snapshot, [addon]);
+    }
+  }
+  return [...groups.entries()].map(([group, options]) => {
+    const optionsText = options
+      .map((o) =>
+        opts.withPrice && o.price_inr_snapshot > 0
+          ? `${o.option_name_snapshot} (₹${o.price_inr_snapshot})`
+          : o.option_name_snapshot,
+      )
+      .join(', ');
+    return `+ ${group}: ${optionsText}`;
+  });
+}
+
 // Devanagari text needs a font that actually ships those glyphs — the app's
 // default (DM Sans, Latin-only) doesn't. app/layout.tsx (the root layout this
 // page inherits — see app/staff-print/[id]/[type]/page.tsx's own comment on
@@ -99,11 +136,11 @@ export function KotTicket({ order }: { order: StaffPrintOrder }) {
               {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
               {item.voided ? '  [VOID]' : ''}
             </p>
-            {item.addons.length > 0 ? (
-              <p className="pl-4 text-xs">
-                + {item.addons.map((a) => a.option_name_snapshot).join(', ')}
+            {addonsLines(item.addons, { withPrice: false }).map((line) => (
+              <p key={line} className="pl-4 text-xs">
+                {line}
               </p>
-            ) : null}
+            ))}
             {item.special_instructions ? (
               <p className="pl-4 text-xs italic">Note: {item.special_instructions}</p>
             ) : null}
@@ -131,6 +168,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   const total = order.total_inr ?? order.subtotal_inr;
   const discountLabel = order.coupon_code ? `Discount (${order.coupon_code})` : 'Discount';
   const points = order.points_earned ?? 0;
+  const redeemed = order.points_redeemed ?? 0;
 
   return (
     <div className="font-sans text-black">
@@ -165,11 +203,11 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
               </span>
               <span className="shrink-0 font-bold">₹{item.line_total_inr}</span>
             </div>
-            {item.addons.length > 0 ? (
-              <p className="pl-4 text-[11px]">
-                + {item.addons.map((a) => a.option_name_snapshot).join(', ')}
+            {addonsLines(item.addons, { withPrice: true }).map((line) => (
+              <p key={line} className="pl-4 text-[11px]">
+                {line}
               </p>
-            ) : null}
+            ))}
             {item.special_instructions ? (
               <p className="pl-4 text-[11px] italic">Note: {item.special_instructions}</p>
             ) : null}
@@ -197,16 +235,17 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
               : ''}
           </span>
         </div>
-      </div>
 
-      {points > 0 ? (
-        <>
-          <Divider />
-          <p className="text-center text-[11px] font-bold">
-            You earned {points} loyalty point{points === 1 ? '' : 's'}
-          </p>
-        </>
-      ) : null}
+        {/* Loyalty points, right after Total/Payment — only ever populated
+            for an order linked to a customer account (getStaffPrintOrder
+            resolves all three best-effort from the ledger); a guest order
+            leaves them null and none of these rows render. */}
+        {redeemed > 0 ? <BillRow label="Points redeemed" value={String(redeemed)} /> : null}
+        {points > 0 ? <BillRow label="Points earned" value={String(points)} /> : null}
+        {order.points_balance !== null && order.points_balance !== undefined ? (
+          <BillRow label="Points balance" value={String(order.points_balance)} />
+        ) : null}
+      </div>
 
       <Divider />
 

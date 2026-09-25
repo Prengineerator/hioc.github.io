@@ -26,9 +26,45 @@ function formatMoney(amountInr: number): string {
   return `Rs. ${amountInr}`;
 }
 
-function addonsLine(addons: { option_name_snapshot: string }[]): string | null {
-  if (addons.length === 0) return null;
-  return `+ ${addons.map((a) => a.option_name_snapshot).join(', ')}`;
+interface AddonForLine {
+  group_name_snapshot: string;
+  option_name_snapshot: string;
+  price_inr_snapshot: number;
+}
+
+/**
+ * One line per addon GROUP: "+ Sugar: Normal", or "+ Milk: Oat, Extra shot"
+ * when several options share a group. PRN-7 field report: the KOT/receipt
+ * used to print just "+ Normal" with no indication of what "Normal" was an
+ * option OF — `group_name_snapshot` (e.g. "Sugar") was captured on every
+ * order_item_addons row but never read here. Groups are kept in the order
+ * their first option appears (Map insertion order), matching item.addons'
+ * own order.
+ *
+ * `withPrice` (receipt only — the KOT stays money-free) appends the addon's
+ * price in parens when it's > 0: "+ Extra shot: Double (Rs. 30)".
+ */
+function addonsLines(addons: AddonForLine[], opts: { withPrice: boolean }): string[] {
+  if (addons.length === 0) return [];
+  const groups = new Map<string, AddonForLine[]>();
+  for (const addon of addons) {
+    const list = groups.get(addon.group_name_snapshot);
+    if (list) {
+      list.push(addon);
+    } else {
+      groups.set(addon.group_name_snapshot, [addon]);
+    }
+  }
+  return [...groups.entries()].map(([group, options]) => {
+    const optionsText = options
+      .map((o) =>
+        opts.withPrice && o.price_inr_snapshot > 0
+          ? `${o.option_name_snapshot} (${formatMoney(o.price_inr_snapshot)})`
+          : o.option_name_snapshot,
+      )
+      .join(', ');
+    return `+ ${group}: ${optionsText}`;
+  });
 }
 
 function itemLabel(item: { quantity: number; name_snapshot: string; variant_label_snapshot: string }): string {
@@ -56,9 +92,8 @@ function buildKotBlocks(order: StaffPrintOrder): TicketBlock[] {
 
   for (const item of order.items) {
     blocks.push({ kind: 'text', text: itemLabel(item), bold: true, strike: item.voided });
-    const addons = addonsLine(item.addons);
-    if (addons) {
-      blocks.push({ kind: 'text', text: `  ${addons}` });
+    for (const line of addonsLines(item.addons, { withPrice: false })) {
+      blocks.push({ kind: 'text', text: `  ${line}` });
     }
     if (item.special_instructions) {
       blocks.push({ kind: 'text', text: `  Note: ${item.special_instructions}` });
@@ -115,9 +150,8 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   blocks.push({ kind: 'divider' });
   for (const item of activeItems) {
     blocks.push({ kind: 'row', left: itemLabel(item), right: formatMoney(item.line_total_inr) });
-    const addons = addonsLine(item.addons);
-    if (addons) {
-      blocks.push({ kind: 'text', text: `  ${addons}` });
+    for (const line of addonsLines(item.addons, { withPrice: true })) {
+      blocks.push({ kind: 'text', text: `  ${line}` });
     }
     if (item.special_instructions) {
       blocks.push({ kind: 'text', text: `  Note: ${item.special_instructions}` });
@@ -139,21 +173,26 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
 
   const paymentValue =
     (PAYMENT_LABEL[order.payment_status] ?? order.payment_status) +
-    (order.payment_status === 'paid' && order.payment_method ? ` · ${order.payment_method}` : '');
+    (order.payment_status === 'paid' && order.payment_method ? ` - ${order.payment_method}` : '');
   blocks.push({ kind: 'row', left: 'Payment', right: paymentValue });
 
+  // Loyalty points, right after Total/Payment. Only ever populated for an
+  // order linked to a customer account (getStaffPrintOrder resolves all
+  // three best-effort from the ledger) — a guest/unlinked order leaves them
+  // null and none of these rows print.
+  const redeemed = order.points_redeemed ?? 0;
+  if (redeemed > 0) {
+    blocks.push({ kind: 'row', left: 'Points redeemed', right: String(redeemed) });
+  }
   if (points > 0) {
-    blocks.push({ kind: 'divider' });
-    blocks.push({
-      kind: 'text',
-      text: `You earned ${points} loyalty point${points === 1 ? '' : 's'}`,
-      align: 'center',
-      bold: true,
-    });
+    blocks.push({ kind: 'row', left: 'Points earned', right: String(points) });
+  }
+  if (order.points_balance !== null && order.points_balance !== undefined) {
+    blocks.push({ kind: 'row', left: 'Points balance', right: String(order.points_balance) });
   }
 
   blocks.push({ kind: 'divider' });
-  blocks.push({ kind: 'text', text: `Thank you for your order! · ${CAFE_NAME}`, align: 'center' });
+  blocks.push({ kind: 'text', text: `Thank you for your order! - ${CAFE_NAME}`, align: 'center' });
 
   return blocks;
 }

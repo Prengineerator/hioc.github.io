@@ -76,6 +76,8 @@ function order(overrides: Partial<StaffPrintOrder> = {}): StaffPrintOrder {
     items: [item()],
     coupon_code: null,
     points_earned: null,
+    points_redeemed: null,
+    points_balance: null,
     ...overrides,
   };
 }
@@ -140,6 +142,134 @@ describe('buildTicketDoc — kot', () => {
   });
 });
 
+// PRN-7 field report — "+ Normal" under "1 x Espresso (Large)" with no
+// indication of what group ("Sugar"?) it belonged to.
+describe('buildTicketDoc — addon group names', () => {
+  it('prints "+ Group: Option" on the KOT, not just the bare option name', () => {
+    const doc = buildTicketDoc(
+      order({
+        items: [
+          item({
+            addons: [addon({ group_name_snapshot: 'Sugar', option_name_snapshot: 'Normal', price_inr_snapshot: 0 })],
+          }),
+        ],
+      }),
+      'kot',
+    );
+    expect(allText(doc)).toContain('+ Sugar: Normal');
+  });
+
+  it('joins several options sharing a group onto one line: "+ Milk: Oat, Extra shot"', () => {
+    const doc = buildTicketDoc(
+      order({
+        items: [
+          item({
+            addons: [
+              addon({ id: 'a1', group_name_snapshot: 'Milk', option_name_snapshot: 'Oat', price_inr_snapshot: 0 }),
+              addon({
+                id: 'a2',
+                group_name_snapshot: 'Milk',
+                option_name_snapshot: 'Extra shot',
+                price_inr_snapshot: 0,
+              }),
+            ],
+          }),
+        ],
+      }),
+      'kot',
+    );
+    expect(allText(doc)).toContain('+ Milk: Oat, Extra shot');
+  });
+
+  it('emits one line per distinct group when an item has addons from multiple groups', () => {
+    const doc = buildTicketDoc(
+      order({
+        items: [
+          item({
+            addons: [
+              addon({ id: 'a1', group_name_snapshot: 'Sugar', option_name_snapshot: 'Normal', price_inr_snapshot: 0 }),
+              addon({ id: 'a2', group_name_snapshot: 'Milk', option_name_snapshot: 'Oat', price_inr_snapshot: 0 }),
+            ],
+          }),
+        ],
+      }),
+      'kot',
+    );
+    const text = allText(doc);
+    expect(text).toContain('+ Sugar: Normal');
+    expect(text).toContain('+ Milk: Oat');
+  });
+
+  it('keeps the KOT money-free even when an addon has a price', () => {
+    const doc = buildTicketDoc(
+      order({
+        items: [
+          item({
+            addons: [
+              addon({ group_name_snapshot: 'Extra shot', option_name_snapshot: 'Double', price_inr_snapshot: 30 }),
+            ],
+          }),
+        ],
+      }),
+      'kot',
+    );
+    const text = allText(doc);
+    expect(text).toContain('+ Extra shot: Double');
+    expect(text).not.toContain('Rs.');
+    expect(text).not.toContain('30');
+  });
+
+  it('shows the addon price on the receipt only when it is > 0: "+ Extra shot: Double (Rs. 30)"', () => {
+    const doc = buildTicketDoc(
+      order({
+        items: [
+          item({
+            addons: [
+              addon({ group_name_snapshot: 'Extra shot', option_name_snapshot: 'Double', price_inr_snapshot: 30 }),
+            ],
+          }),
+        ],
+      }),
+      'receipt',
+    );
+    expect(allText(doc)).toContain('+ Extra shot: Double (Rs. 30)');
+  });
+
+  it('omits the price on the receipt when the addon is free', () => {
+    const doc = buildTicketDoc(
+      order({
+        items: [
+          item({
+            addons: [addon({ group_name_snapshot: 'Sugar', option_name_snapshot: 'Normal', price_inr_snapshot: 0 })],
+          }),
+        ],
+      }),
+      'receipt',
+    );
+    const text = allText(doc);
+    expect(text).toContain('+ Sugar: Normal');
+    expect(text).not.toContain('+ Sugar: Normal (');
+  });
+});
+
+// PRN-7 field report — "Paid ? cash" / "Thank you for your order! ? HIOC."
+// on real thermal paper, caused by escpos.ts's transliterate() having no
+// mapping for '·'. ticketModel.ts's own separators are now plain ASCII so
+// the bug can't come back even if transliterate regresses.
+describe('buildTicketDoc — no "?"-prone separators', () => {
+  it('never uses a middle dot (·) anywhere in the receipt text', () => {
+    const doc = buildTicketDoc(order({ payment_status: 'paid', payment_method: 'cash' }), 'receipt');
+    expect(allText(doc)).not.toContain('·');
+  });
+
+  it('the payment row and closing thank-you line use a plain ASCII separator', () => {
+    const doc = buildTicketDoc(order({ payment_status: 'paid', payment_method: 'cash' }), 'receipt');
+    const rows = doc.blocks.filter((b): b is Extract<TicketBlock, { kind: 'row' }> => b.kind === 'row');
+    expect(rows.find((r) => r.left === 'Payment')?.right).toBe('Paid - cash');
+    expect(allText(doc)).toContain('Thank you for your order! - HIOC.');
+  });
+});
+
 describe('buildTicketDoc — receipt', () => {
   it('includes subtotal/GST/total and a bold Total row', () => {
     const doc = buildTicketDoc(order({ subtotal_inr: 240, tax_inr: 12, total_inr: 252 }), 'receipt');
@@ -166,12 +296,62 @@ describe('buildTicketDoc — receipt', () => {
     expect(rows.find((r) => r.left.startsWith('Discount'))?.left).toBe('Discount');
   });
 
-  it('shows loyalty points earned when present, omits the block otherwise', () => {
+  it('shows a "Points earned" row when present, omits it otherwise', () => {
     const withPoints = buildTicketDoc(order({ points_earned: 5 }), 'receipt');
-    expect(allText(withPoints)).toContain('You earned 5 loyalty points');
+    const rows = withPoints.blocks.filter((b): b is Extract<TicketBlock, { kind: 'row' }> => b.kind === 'row');
+    expect(rows.find((r) => r.left === 'Points earned')?.right).toBe('5');
 
     const withoutPoints = buildTicketDoc(order({ points_earned: 0 }), 'receipt');
-    expect(allText(withoutPoints)).not.toContain('loyalty point');
+    expect(allText(withoutPoints)).not.toContain('Points earned');
+
+    const nullPoints = buildTicketDoc(order({ points_earned: null }), 'receipt');
+    expect(allText(nullPoints)).not.toContain('Points earned');
+  });
+
+  it('shows "Points redeemed" only when points were redeemed on this order', () => {
+    const withRedeemed = buildTicketDoc(order({ points_redeemed: 40 }), 'receipt');
+    const rows = withRedeemed.blocks.filter((b): b is Extract<TicketBlock, { kind: 'row' }> => b.kind === 'row');
+    expect(rows.find((r) => r.left === 'Points redeemed')?.right).toBe('40');
+
+    const noneRedeemed = buildTicketDoc(order({ points_redeemed: null }), 'receipt');
+    expect(allText(noneRedeemed)).not.toContain('Points redeemed');
+  });
+
+  it('shows "Points balance" whenever it is known, even when nothing was earned/redeemed on this order', () => {
+    const withBalance = buildTicketDoc(
+      order({ points_earned: null, points_redeemed: null, points_balance: 210 }),
+      'receipt',
+    );
+    const rows = withBalance.blocks.filter((b): b is Extract<TicketBlock, { kind: 'row' }> => b.kind === 'row');
+    expect(rows.find((r) => r.left === 'Points balance')?.right).toBe('210');
+
+    const noBalance = buildTicketDoc(order({ points_balance: null }), 'receipt');
+    expect(allText(noBalance)).not.toContain('Points balance');
+  });
+
+  it('shows nothing loyalty-related for a guest order with no linked account', () => {
+    const guest = buildTicketDoc(
+      order({ points_earned: null, points_redeemed: null, points_balance: null }),
+      'receipt',
+    );
+    expect(allText(guest)).not.toContain('Points earned');
+    expect(allText(guest)).not.toContain('Points redeemed');
+    expect(allText(guest)).not.toContain('Points balance');
+  });
+
+  it('places Points redeemed/earned/balance rows right after Payment, before the closing divider', () => {
+    const withAll = buildTicketDoc(
+      order({ points_earned: 5, points_redeemed: 40, points_balance: 210 }),
+      'receipt',
+    );
+    const kinds = withAll.blocks.map((b) =>
+      b.kind === 'row' ? `row:${b.left}` : b.kind,
+    );
+    const paymentIdx = kinds.indexOf('row:Payment');
+    expect(kinds[paymentIdx + 1]).toBe('row:Points redeemed');
+    expect(kinds[paymentIdx + 2]).toBe('row:Points earned');
+    expect(kinds[paymentIdx + 3]).toBe('row:Points balance');
+    expect(kinds[paymentIdx + 4]).toBe('divider');
   });
 
   it('excludes voided items from the printed lines and totals section', () => {
