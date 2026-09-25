@@ -4,16 +4,18 @@
 // physical fact of this counter machine (which USB port, which IP), so it's
 // read and written entirely through `window.hiocDesktop` (lib/desktop/bridge)
 // and never touches the server (D7-6, PRN-1 "Stored locally"). In a plain
-// browser tab there is nothing to configure — the message below says so.
+// browser tab there is nothing to configure, so NoBridgePanel below explains
+// why and points at the HIOC POS desktop app instead.
 //
 // The bridge check is done after mount (not during the first render) so the
 // server-rendered HTML and the browser's first paint agree before hydration:
 // SSR has no `window` at all, and even in the desktop app the preload's
 // `window.hiocDesktop` may not be the very first thing React sees. Same
-// pattern as StaffHeader's "Printers" nav link and the store-open badge.
+// pattern as the store-open badge in StaffHeader.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
+import { buttonVariants } from '@/components/ui/Button';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
 import type {
   DetectedPrinter,
@@ -188,19 +190,71 @@ export function PrinterSettings() {
 
   if (!checked) return null;
 
-  if (!bridge) {
-    return (
-      <section className="mx-auto max-w-lg px-4 py-16 text-center">
-        <h1 className="text-2xl font-bold text-charcoal">Printer setup isn’t available here</h1>
-        <p className="mt-3 text-muted">
-          Configuring printers is only available in the HIOC POS desktop app. Open this page from the
-          counter machine’s app to add or edit printers.
-        </p>
-      </section>
-    );
-  }
+  if (!bridge) return <NoBridgePanel />;
 
   return <PrinterSettingsInner bridge={bridge} />;
+}
+
+const DESKTOP_APP_RELEASES_URL = 'https://github.com/Prengineerator/hioc.github.io/releases/latest';
+
+/**
+ * Shown instead of the settings form in a plain browser tab, where there is
+ * no `window.hiocDesktop` bridge at all (PRN-1). A browser genuinely cannot
+ * do either job here — it can't enumerate or choose OS printers for raw
+ * ESC/POS, and it has no way to pulse the cash drawer's kick port — so this
+ * explains that plainly and points staff at the one thing that fixes it:
+ * installing the HIOC POS desktop app on this counter machine.
+ */
+function NoBridgePanel() {
+  return (
+    <section className="mx-auto max-w-lg px-4 py-12">
+      <h1 className="text-2xl font-bold text-charcoal">Printing and the cash drawer need the HIOC POS app</h1>
+      <p className="mt-3 text-sm text-muted">
+        A browser tab can’t choose which printer to use or send raw commands to it, and it has no way to
+        pulse the cash drawer’s kick port. The HIOC POS desktop app runs on this counter machine and can do
+        both.
+      </p>
+
+      <a
+        href={DESKTOP_APP_RELEASES_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={buttonVariants({ className: 'mt-5' })}
+      >
+        Download HIOC POS for Windows
+      </a>
+
+      <ol className="mt-6 flex flex-col gap-2 text-sm text-charcoal">
+        <li className="flex gap-2">
+          <span className="font-bold text-tan-dark">1.</span>
+          <span>Download the <code className="rounded bg-surface px-1 py-0.5 text-xs">.exe</code> installer above and run it.</span>
+        </li>
+        <li className="flex gap-2">
+          <span className="font-bold text-tan-dark">2.</span>
+          <span>
+            If Windows shows “Windows protected your PC”, click <strong>More info</strong> →{' '}
+            <strong>Run anyway</strong>. This is expected — the installer isn’t code-signed yet.
+          </span>
+        </li>
+        <li className="flex gap-2">
+          <span className="font-bold text-tan-dark">3.</span>
+          <span>Open HIOC POS and sign in with your staff account.</span>
+        </li>
+        <li className="flex gap-2">
+          <span className="font-bold text-tan-dark">4.</span>
+          <span>
+            Go to <strong>Printers</strong> → add your printer → tick <strong>Cash drawer</strong> if it’s
+            plugged into that printer.
+          </span>
+        </li>
+      </ol>
+
+      <p className="mt-6 border-t border-line pt-4 text-xs text-muted">
+        Only one printer with no cash drawer? The browser-only fallback (a kiosk-printing Chrome shortcut,
+        no drawer) is still documented in <code className="rounded bg-surface px-1 py-0.5">docs/POS-DEVICE-SETUP.md</code>.
+      </p>
+    </section>
+  );
 }
 
 function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {

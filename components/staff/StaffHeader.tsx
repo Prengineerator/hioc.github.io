@@ -6,7 +6,6 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
-import { getDesktopBridge } from '@/lib/desktop/bridge';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -33,6 +32,11 @@ const TABS = [
       ]
     : []),
   { href: '/staff/menu', label: 'Menu' },
+  // PRN-1 — always shown, even in a plain browser tab with no desktop bridge:
+  // staff need to be able to find printer setup to learn it exists and that
+  // it needs the HIOC POS desktop app (PrinterSettings explains why when
+  // there's no bridge). Hiding the tab entirely made it undiscoverable.
+  { href: '/staff/printers', label: 'Printers' },
 ];
 
 export function StaffHeader({
@@ -57,15 +61,7 @@ export function StaffHeader({
   // into a collapsible drawer behind a hamburger button instead.
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // PRN-1 — "Printers" only makes sense inside the desktop app, which is the
-  // only place `window.hiocDesktop` exists. Checked after mount, not during
-  // render: SSR has no `window` at all, so doing this synchronously would
-  // make the very first client render disagree with the server-rendered HTML.
-  const [hasDesktopBridge, setHasDesktopBridge] = useState(false);
-  useEffect(() => {
-    setHasDesktopBridge(getDesktopBridge() !== null);
-  }, []);
-  const tabs = hasDesktopBridge ? [...TABS, { href: '/staff/printers', label: 'Printers' }] : TABS;
+  const tabs = TABS;
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
   // the Store controls section on the Menu page. Best-effort — a failed fetch

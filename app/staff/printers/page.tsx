@@ -5,10 +5,10 @@ import { PrinterSettings } from '@/components/staff/PrinterSettings';
 // staff/manager/owner is guaranteed); there's no extra permission split here,
 // matching the pattern of sibling pages like app/staff/tables/page.tsx.
 //
-// The page itself is desktop-only in effect: PrinterSettings renders a plain
-// "not available in a browser" message unless `window.hiocDesktop` exists, so
-// this route is safe to link from the web nav (StaffHeader hides the link
-// itself when there's no bridge) and safe to load directly too.
+// The page itself is desktop-only in effect: outside the HIOC POS desktop app
+// (no `window.hiocDesktop`), PrinterSettings renders a panel pointing staff at
+// the app instead of the settings form — so this route is always in the web
+// nav (StaffHeader) and safe to load directly, from a browser or the app.
 export default function StaffPrintersPage() {
   return <PrinterSettings />;
 }
