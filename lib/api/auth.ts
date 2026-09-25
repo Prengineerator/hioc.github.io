@@ -122,3 +122,39 @@ export async function getStaffOrOwner(): Promise<{ user: User; role: UserRole } 
   if (!isStaffRole(role)) return null;
   return { user, role: role as UserRole };
 }
+
+/**
+ * PIN-3 — additive. Resolves a classic Supabase staff session FIRST, via
+ * getStaffOrOwner() exactly unchanged: nothing about that path is touched by
+ * this function existing, and every test that already covers a session-based
+ * caller keeps meaning what it always meant. Only when there is NO classic
+ * session does this fall through to the device+operator cookie pair
+ * (lib/api/operator.ts): a valid, unrevoked enrolled device whose id matches
+ * the operator JWT's `dev` claim, and an operator still holding an active
+ * staff/manager/owner role, re-read from `profiles` on every call (never
+ * cached — E3: a role change mid-shift takes effect on the very next
+ * request, same posture as hasPermission()).
+ *
+ * `via` tells a caller which path answered, for the rare case that matters
+ * (PIN-4 attribution surfaces that want to say "via PIN switch"); most
+ * callers only need `.user` and `.role` and can otherwise treat this exactly
+ * like getStaffOrOwner()'s result.
+ *
+ * D6-6 (CRITICAL, never relax this): this function is for STAFF surfaces
+ * ONLY. `/owner/**` and every `app/api/owner/**` route must keep calling
+ * getOwnerUser() and must never be migrated to this — a 4-digit PIN on
+ * shared hardware must never reach payroll or settings.
+ */
+export async function getCounterActor(): Promise<{ user: User; role: UserRole; via: 'session' | 'device' } | null> {
+  const classic = await getStaffOrOwner();
+  if (classic) return { ...classic, via: 'session' };
+
+  // Deferred import: lib/api/operator.ts pulls in next/headers' cookies() and
+  // the admin Supabase client, which this module otherwise has no reason to
+  // load for every caller of getAuthUser()/getStaffUser() etc. — those stay
+  // exactly as cheap as they were before this function existed.
+  const { resolveOperatorActor } = await import('@/lib/api/operator');
+  const operator = await resolveOperatorActor();
+  if (!operator) return null;
+  return { ...operator, via: 'device' };
+}
