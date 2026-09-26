@@ -62,7 +62,7 @@ export async function PATCH(request: Request) {
   // and a menu change, so POS only like every other menu edit.
   if ('hidden_variant_labels' in patch || 'hidden_categories' in patch) {
     if ('hidden_variant_labels' in patch) {
-      const parsed = parseHiddenSizes(patch.hidden_variant_labels);
+      const parsed = parseHiddenSizes(patch.hidden_variant_labels, MENU_CATEGORIES);
       if (!parsed) return errorResponse(400, 'hidden_variant_labels must be a list of size names');
       patch.hidden_variant_labels = parsed;
     }
