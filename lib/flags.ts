@@ -75,6 +75,14 @@ export const flags = {
   // page), so NEXT_PUBLIC_ on purpose. Turning this on with OPERATOR_JWT_SECRET
   // unset or too short still shows nothing — see lib/api/operator.ts.
   pinSwitch: boolEnv(process.env.NEXT_PUBLIC_FLAG_PIN_SWITCH, false),
+  // Inventory (docs/INVENTORY-SPEC.md): stock items, "Request stock", assign →
+  // pick → verify at the POS with expiry dates, recipes, and usage taken off
+  // stock when an order completes. Default OFF: until the owner has entered
+  // the stock items and recipes, every completed order would record a
+  // shortfall against empty shelves. Gates the Stock tab and page, the
+  // /api/inventory routes, and the completion hook — so it is read on the
+  // server too, hence NEXT_PUBLIC_.
+  inventory: boolEnv(process.env.NEXT_PUBLIC_FLAG_INVENTORY, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

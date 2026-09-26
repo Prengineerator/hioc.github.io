@@ -93,6 +93,7 @@ export function StaffHeader({
     canTakeOrders: shell.canTakeOrders,
     staffPos: flags.staffPos,
     attendance: flags.attendance,
+    inventory: flags.inventory,
   });
   const primary = shell.counterMode ? nav.primary.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : nav.primary;
   const more = shell.counterMode ? [] : nav.more;
