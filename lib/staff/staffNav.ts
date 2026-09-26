@@ -2,7 +2,8 @@
 //
 //   POS          Live orders · Orders · Settle · New order · Tables · Menu ·
 //                Settings — what the counter does, every one a visible tab
-//                (Settings in the account menu was too easy to miss).
+//                (Settings in the account menu was too easy to miss) — plus
+//                Cash, Attendance and Leave under "More".
 //   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -28,7 +29,7 @@ export interface StaffNavInput {
 
 export interface StaffNav {
   primary: StaffTab[];
-  /** Under the "More" menu. Empty on the POS. */
+  /** Under the "More" menu. */
   more: StaffTab[];
   /** Extra links in the account menu. */
   account: StaffTab[];
@@ -42,29 +43,32 @@ const TABLES: StaffTab = { href: '/staff/tables', label: 'Tables' };
 const MENU: StaffTab = { href: '/staff/menu', label: 'Menu' };
 const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
 
+/** The occasional pages both surfaces keep under "More". */
+function backOffice(input: StaffNavInput): StaffTab[] {
+  return [
+    // OPS-2: cash drawer day-open/close by denomination.
+    ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),
+    // ATT-1 / LEAVE-3: their own flag — dark until the geofence is tuned.
+    ...(input.attendance
+      ? [
+          { href: '/staff/attendance', label: 'Attendance' },
+          { href: '/staff/leave', label: 'Leave' },
+        ]
+      : []),
+  ];
+}
+
 export function staffNav(input: StaffNavInput): StaffNav {
   if (input.surface === 'pos') {
     return {
       primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos ? [NEW_ORDER, TABLES] : []), MENU, SETTINGS],
-      more: [],
+      more: backOffice(input),
       account: [],
     };
   }
   return {
     primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos && input.canTakeOrders ? [NEW_ORDER, TABLES] : [])],
-    more: [
-      // OPS-2: cash drawer day-open/close by denomination.
-      ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),
-      // ATT-1 / LEAVE-3: their own flag — dark until the geofence is tuned.
-      ...(input.attendance
-        ? [
-            { href: '/staff/attendance', label: 'Attendance' },
-            { href: '/staff/leave', label: 'Leave' },
-          ]
-        : []),
-      MENU,
-      SETTINGS,
-    ],
+    more: [...backOffice(input), MENU, SETTINGS],
     account: [],
   };
 }

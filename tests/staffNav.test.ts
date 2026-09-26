@@ -12,8 +12,16 @@ describe('staffNav — POS', () => {
 
   it('shows Live orders, Orders, Settle, New order, Tables, Menu and Settings as tabs', () => {
     expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables', 'Menu', 'Settings']);
-    expect(nav.more).toEqual([]);
     expect(nav.account).toEqual([]);
+  });
+
+  it('keeps Cash, Attendance and Leave under More', () => {
+    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave']);
+  });
+
+  it('drops flagged-off back-office pages from More', () => {
+    const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: true, attendance: false });
+    expect(labels(off.more)).toEqual(['Cash']);
   });
 
   it('drops New order and Tables when the POS flag is off', () => {
