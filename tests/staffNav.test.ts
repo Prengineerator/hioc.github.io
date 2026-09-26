@@ -10,27 +10,27 @@ const labels = (tabs: { label: string }[]) => tabs.map((t) => t.label);
 describe('staffNav — POS', () => {
   const nav = staffNav({ surface: 'pos', canTakeOrders: true, ...flags });
 
-  it('shows Live orders, Orders, New order, Tables, Menu and Settings as tabs', () => {
-    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'New order', 'Tables', 'Menu', 'Settings']);
+  it('shows Live orders, Orders, Settle, New order, Tables, Menu and Settings as tabs', () => {
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables', 'Menu', 'Settings']);
     expect(nav.more).toEqual([]);
     expect(nav.account).toEqual([]);
   });
 
   it('drops New order and Tables when the POS flag is off', () => {
     const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: false, attendance: true });
-    expect(labels(off.primary)).toEqual(['Live orders', 'Orders', 'Menu', 'Settings']);
+    expect(labels(off.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'Menu', 'Settings']);
   });
 });
 
 describe('staffNav — staff website', () => {
   it('hides New order and Tables while web ordering is off (the default)', () => {
     const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags });
-    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders']);
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle']);
   });
 
   it('shows them once the owner switches web ordering on', () => {
     const nav = staffNav({ surface: 'web', canTakeOrders: true, ...flags });
-    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'New order', 'Tables']);
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables']);
   });
 
   it('keeps the back-office pages under More, Settings last', () => {
@@ -41,7 +41,7 @@ describe('staffNav — staff website', () => {
 
   it('drops flagged-off pages', () => {
     const nav = staffNav({ surface: 'web', canTakeOrders: true, staffPos: false, attendance: false });
-    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders']);
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle']);
     expect(labels(nav.more)).toEqual(['Menu', 'Settings']);
   });
 });

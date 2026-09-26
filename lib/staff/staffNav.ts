@@ -1,9 +1,9 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
-//   POS          Live orders · Orders · New order · Tables · Menu · Settings —
-//                what the counter does, every one a visible tab (Settings in
-//                the account menu was too easy to miss).
-//   staff site   Live orders · Orders, plus New order and Tables only when
+//   POS          Live orders · Orders · Settle · New order · Tables · Menu ·
+//                Settings — what the counter does, every one a visible tab
+//                (Settings in the account menu was too easy to miss).
+//   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
 //
@@ -36,6 +36,7 @@ export interface StaffNav {
 
 const LIVE: StaffTab = { href: '/staff', label: 'Live orders' };
 const ORDERS: StaffTab = { href: '/staff/orders', label: 'Orders' };
+const SETTLE: StaffTab = { href: '/staff/settle', label: 'Settle' };
 const NEW_ORDER: StaffTab = { href: '/staff/orders/new', label: 'New order' };
 const TABLES: StaffTab = { href: '/staff/tables', label: 'Tables' };
 const MENU: StaffTab = { href: '/staff/menu', label: 'Menu' };
@@ -44,13 +45,13 @@ const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
 export function staffNav(input: StaffNavInput): StaffNav {
   if (input.surface === 'pos') {
     return {
-      primary: [LIVE, ORDERS, ...(input.staffPos ? [NEW_ORDER, TABLES] : []), MENU, SETTINGS],
+      primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos ? [NEW_ORDER, TABLES] : []), MENU, SETTINGS],
       more: [],
       account: [],
     };
   }
   return {
-    primary: [LIVE, ORDERS, ...(input.staffPos && input.canTakeOrders ? [NEW_ORDER, TABLES] : [])],
+    primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos && input.canTakeOrders ? [NEW_ORDER, TABLES] : [])],
     more: [
       // OPS-2: cash drawer day-open/close by denomination.
       ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),
