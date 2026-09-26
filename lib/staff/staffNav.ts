@@ -1,9 +1,8 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
-//   POS          Live orders · Orders · Settle · New order · Tables · Menu ·
-//                Settings — what the counter does, every one a visible tab
-//                (Settings in the account menu was too easy to miss) — plus
-//                Cash, Attendance and Leave under "More".
+//   POS          Live orders · Orders · Settle · New order · Tables — what the
+//                counter does all day — and Cash, Attendance, Leave, Menu and
+//                Settings under "More".
 //   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -61,8 +60,8 @@ function backOffice(input: StaffNavInput): StaffTab[] {
 export function staffNav(input: StaffNavInput): StaffNav {
   if (input.surface === 'pos') {
     return {
-      primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos ? [NEW_ORDER, TABLES] : []), MENU, SETTINGS],
-      more: backOffice(input),
+      primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos ? [NEW_ORDER, TABLES] : [])],
+      more: [...backOffice(input), MENU, SETTINGS],
       account: [],
     };
   }

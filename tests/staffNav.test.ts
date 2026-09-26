@@ -10,23 +10,23 @@ const labels = (tabs: { label: string }[]) => tabs.map((t) => t.label);
 describe('staffNav — POS', () => {
   const nav = staffNav({ surface: 'pos', canTakeOrders: true, ...flags });
 
-  it('shows Live orders, Orders, Settle, New order, Tables, Menu and Settings as tabs', () => {
-    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables', 'Menu', 'Settings']);
+  it('shows Live orders, Orders, Settle, New order and Tables as tabs', () => {
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables']);
     expect(nav.account).toEqual([]);
   });
 
-  it('keeps Cash, Attendance and Leave under More', () => {
-    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave']);
+  it('keeps Cash, Attendance, Leave, Menu and Settings under More', () => {
+    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Menu', 'Settings']);
   });
 
   it('drops flagged-off back-office pages from More', () => {
     const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: true, attendance: false });
-    expect(labels(off.more)).toEqual(['Cash']);
+    expect(labels(off.more)).toEqual(['Cash', 'Menu', 'Settings']);
   });
 
   it('drops New order and Tables when the POS flag is off', () => {
     const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: false, attendance: true });
-    expect(labels(off.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'Menu', 'Settings']);
+    expect(labels(off.primary)).toEqual(['Live orders', 'Orders', 'Settle']);
   });
 });
 
