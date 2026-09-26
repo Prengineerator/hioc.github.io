@@ -10,13 +10,15 @@ const labels = (tabs: { label: string }[]) => tabs.map((t) => t.label);
 describe('staffNav — POS', () => {
   const nav = staffNav({ surface: 'pos', canTakeOrders: true, ...flags });
 
-  it('shows only Live orders, Orders, New order and Menu', () => {
-    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'New order', 'Menu']);
+  it('shows Live orders, Orders, New order, Tables, Menu and Settings as tabs', () => {
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'New order', 'Tables', 'Menu', 'Settings']);
     expect(nav.more).toEqual([]);
+    expect(nav.account).toEqual([]);
   });
 
-  it('keeps Settings (printers) reachable from the account menu', () => {
-    expect(labels(nav.account)).toEqual(['Settings']);
+  it('drops New order and Tables when the POS flag is off', () => {
+    const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: false, attendance: true });
+    expect(labels(off.primary)).toEqual(['Live orders', 'Orders', 'Menu', 'Settings']);
   });
 });
 
