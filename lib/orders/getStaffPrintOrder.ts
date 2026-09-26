@@ -4,6 +4,7 @@ import { getOrderWithCoupon, type OrderWithCoupon } from '@/lib/orders/getOrder'
 import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { getBalance, getLoyaltyConfig, computeEarnedPoints } from '@/lib/loyalty/ledger';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { DEFAULT_KOT_ROUTING, readKotRouting, type KotRouting } from '@/lib/print/kotRouting';
 import type { OrderStatus } from '@/lib/types';
 
 // The order shape the staff KOT/receipt/token print pages render: the customer
@@ -21,6 +22,12 @@ export type StaffPrintOrder = OrderWithCoupon & {
   // anything meaningful (the row is then omitted entirely — see
   // buildReceiptBlocks / ReceiptTicket).
   cashier_name: string | null;
+  // KOT counters (lib/print/kotRouting.ts): each line's menu category, keyed
+  // by menu_item_id, and the store's counter setup, so the KOT can split into
+  // one slip per counter. Optional because only this loader fills them — a
+  // missing value just prints the single classic KOT.
+  kot_categories?: Record<string, string>;
+  kot_routing?: KotRouting;
 };
 
 // PRN-8: an order's 'earn' row (lib/loyalty/ledger.ts earnForOrder) is only
@@ -52,6 +59,34 @@ async function resolveCashierName(createdBy: string | null): Promise<string | nu
     return name && name !== 'Unknown staff' ? name : null;
   } catch {
     return null;
+  }
+}
+
+// KOT counters — best-effort like everything else here: any failure (or the
+// column not existing yet) yields the default, which prints the single KOT.
+async function fetchKotRouting(): Promise<KotRouting> {
+  try {
+    const admin = createAdminSupabaseClient();
+    const { data, error } = await admin.from('store_settings').select('kot_routing').eq('is_singleton', true).maybeSingle();
+    if (error || !data) return DEFAULT_KOT_ROUTING;
+    return readKotRouting((data as { kot_routing?: unknown }).kot_routing);
+  } catch {
+    return DEFAULT_KOT_ROUTING;
+  }
+}
+
+// Categories are read live from menu_items rather than snapshotted on the
+// line: the question is which counter makes the item NOW, and a line whose
+// menu item is gone simply lands on the "Other items" slip.
+async function fetchItemCategories(menuItemIds: string[]): Promise<Record<string, string>> {
+  if (menuItemIds.length === 0) return {};
+  try {
+    const admin = createAdminSupabaseClient();
+    const { data, error } = await admin.from('menu_items').select('id, category').in('id', menuItemIds);
+    if (error || !data) return {};
+    return Object.fromEntries((data as { id: string; category: string }[]).map((r) => [r.id, r.category]));
+  } catch {
+    return {};
   }
 }
 
@@ -106,13 +141,17 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
 
   const loyaltyUserId = loyaltyUserIdFor(order);
 
-  const [rows, config, ledgerBalance, cashier_name] = await Promise.all([
+  const menuItemIds = [...new Set(order.items.map((i) => i.menu_item_id).filter((v): v is string => Boolean(v)))];
+
+  const [rows, config, ledgerBalance, cashier_name, kot_routing, kot_categories] = await Promise.all([
     fetchLoyaltyTransactions(id),
     getLoyaltyConfig().catch(() => null),
     loyaltyUserId
       ? getBalance(loyaltyUserId).catch(() => null)
       : Promise.resolve(null),
     resolveCashierName(order.created_by),
+    fetchKotRouting(),
+    fetchItemCategories(menuItemIds),
   ]);
 
   const earnRows = (rows ?? []).filter((r) => r.type === 'earn');
@@ -147,5 +186,5 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
   // is 0 whenever an 'earn' row already exists, so this never double-counts.
   const points_balance: number | null = ledgerBalance !== null ? ledgerBalance + projectedEarn : null;
 
-  return { ...order, points_earned, points_redeemed, points_balance, cashier_name };
+  return { ...order, points_earned, points_redeemed, points_balance, cashier_name, kot_routing, kot_categories };
 }
