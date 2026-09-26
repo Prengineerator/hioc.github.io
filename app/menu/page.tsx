@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CartProvider } from '@/lib/cart/CartContext';
@@ -110,6 +110,18 @@ function MenuPageContent() {
   // current category so the grey-out state updates in under ~5s.
   useMenuAvailabilityRealtime(fetchItems);
 
+  // A category switched off for now (POS → Menu → On / off) has no tab; if the
+  // URL points at one, move to the first category that is on.
+  const hiddenCategories = useMemo(() => settings?.hidden_categories ?? [], [settings]);
+  useEffect(() => {
+    if (!hiddenCategories.includes(category)) return;
+    const firstOn = CUSTOMER_MENU_CATEGORIES.find((c) => !hiddenCategories.includes(c.slug));
+    if (!firstOn) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('category', firstOn.slug);
+    router.replace(`/menu?${params.toString()}`);
+  }, [hiddenCategories, category, router, searchParams]);
+
   const handleCategoryChange = useCallback(
     (next: string) => {
       const params = new URLSearchParams(searchParams.toString());
@@ -155,7 +167,7 @@ function MenuPageContent() {
           </Link>
         ) : null}
 
-        <MenuCategoryTabs active={category} onChange={handleCategoryChange} />
+        <MenuCategoryTabs active={category} onChange={handleCategoryChange} hidden={hiddenCategories} />
 
         <div className="mt-8">
           {loading ? (

@@ -19,6 +19,7 @@
 import { isUuid } from '@/lib/api/constants';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { AddonGroup, MenuItem } from '@/lib/types';
+import { applyMenuSwitches, isCategoryHidden, type MenuSwitches } from '@/lib/menu/menuSwitches';
 
 export const MAX_INSTRUCTION_LENGTH = 200;
 
@@ -145,6 +146,7 @@ export type ResolveResult =
 export function resolveOrderLines(
   items: IncomingOrderItem[],
   menuById: Map<string, MenuItem>,
+  opts: MenuSwitches = {},
 ): ResolveResult {
   const lines: ResolvedLine[] = [];
   let subtotalInr = 0;
@@ -161,13 +163,23 @@ export function resolveOrderLines(
       return { ok: false, error: `"${menuItem.name}" is currently unavailable` };
     }
 
+    // Menu switches (lib/menu/menuSwitches.ts) — the same rules the menu
+    // applies, so what customers and the POS can't see can't be ordered.
+    if (isCategoryHidden(menuItem.category, opts.hiddenCategories)) {
+      return { ok: false, error: `"${menuItem.name}" isn't available right now` };
+    }
+    const visible = applyMenuSwitches(menuItem, opts);
+
     const variant = menuItem.variants.find((v) => v.id === item.variant_id);
     if (!variant) {
       return { ok: false, error: `"${menuItem.name}" has no such variant` };
     }
+    if (!visible.variants.some((v) => v.id === variant.id)) {
+      return { ok: false, error: `"${menuItem.name}" in ${variant.label} isn't available right now` };
+    }
 
     const optionById = new Map<string, { option: AddonGroup['options'][number]; group: AddonGroup }>();
-    for (const group of menuItem.addon_groups) {
+    for (const group of visible.addon_groups) {
       for (const option of group.options) {
         optionById.set(option.id, { option, group });
       }
@@ -177,6 +189,10 @@ export function resolveOrderLines(
     for (const optionId of item.addon_option_ids) {
       const found = optionById.get(optionId);
       if (!found) {
+        const offOption = menuItem.addon_groups.flatMap((g) => g.options).find((o) => o.id === optionId);
+        if (offOption) {
+          return { ok: false, error: `${offOption.name} isn't available right now` };
+        }
         return { ok: false, error: `"${menuItem.name}" has no such addon option` };
       }
       const list = selectedByGroup.get(found.group.id) ?? [];
@@ -184,7 +200,7 @@ export function resolveOrderLines(
       selectedByGroup.set(found.group.id, list);
     }
 
-    for (const group of menuItem.addon_groups) {
+    for (const group of visible.addon_groups) {
       const count = selectedByGroup.get(group.id)?.length ?? 0;
       if (count < group.min_select || count > group.max_select) {
         return {
@@ -199,7 +215,7 @@ export function resolveOrderLines(
     }
 
     const addonsFlat = [...selectedByGroup.entries()].flatMap(([groupId, options]) => {
-      const group = menuItem.addon_groups.find((g) => g.id === groupId)!;
+      const group = visible.addon_groups.find((g) => g.id === groupId)!;
       return options.map((option) => ({
         addon_option_id: option.id,
         group_name_snapshot: group.display_name,

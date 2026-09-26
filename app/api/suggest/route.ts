@@ -17,6 +17,8 @@ import { validateSuggestRequest } from '@/lib/suggest/validate';
 import type { Decider, FallbackReason, MenuItemTraits, SuggestResponse } from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
 import { isInStoreOnly } from '@/lib/menu/inStore';
+import { getStoreSettings } from '@/lib/store/settings';
+import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
 
 export const dynamic = 'force-dynamic';
 // SUGGEST_LIMITS.deciderTimeoutMs is 9s; with menu/traits/popularity loads,
@@ -41,9 +43,10 @@ let popularityCache: { at: number; map: Map<string, number> } | null = null;
 async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[]; traitsById: Map<string, MenuItemTraits> }> {
   if (menuCache && Date.now() - menuCache.at < CACHE_TTL_MS) return menuCache;
 
-  const [menuResult, traitsResult] = await Promise.all([
+  const [menuResult, traitsResult, settings] = await Promise.all([
     admin.from('menu_items').select(MENU_ITEM_SELECT).eq('is_available', true),
     admin.from('menu_item_traits').select('*'),
+    getStoreSettings(),
   ]);
   if (menuResult.error) {
     console.error('suggest route: menu load failed', menuResult.error);
@@ -57,7 +60,9 @@ async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[
   // regular's "usual", though their counter orders and Petpooja history may be
   // full of them.
   const items = (menuResult.data ?? [])
-    .map((row) => shapeMenuItem(row as unknown as MenuItemRow))
+    // Nothing switched off (category, size, add-on) is suggested either.
+    .map((row) => applyMenuSwitches(shapeMenuItem(row as unknown as MenuItemRow), switchesFromSettings(settings)))
+    .filter((item) => !isCategoryHidden(item.category, settings.hidden_categories))
     .filter((item) => !isInStoreOnly(item));
   const traitsById = new Map<string, MenuItemTraits>(
     ((traitsResult.data ?? []) as MenuItemTraits[]).map((t) => [t.menu_item_id, t]),
