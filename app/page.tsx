@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
 import { CartProvider } from '@/lib/cart/CartContext';
-import { CAFE_ADDRESS, CAFE_HOURS_HOME, MENU_CATEGORIES } from '@/lib/constants';
+import { CAFE_ADDRESS, CAFE_HOURS_HOME, CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
 import { buttonVariants } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { flags } from '@/lib/flags';
@@ -85,7 +85,7 @@ function CategoryTeaser() {
         <p className="mt-2 text-muted">Coffee, waffles, and more — something for every craving.</p>
       </div>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {MENU_CATEGORIES.map((cat) => (
+        {CUSTOMER_MENU_CATEGORIES.map((cat) => (
           <Link key={cat.slug} href={`/menu?category=${encodeURIComponent(cat.slug)}`}>
             <Card interactive className="group h-full">
               <h3 className="font-semibold text-charcoal group-hover:text-tan">

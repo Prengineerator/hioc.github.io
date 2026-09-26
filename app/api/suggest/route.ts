@@ -16,6 +16,7 @@ import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { validateSuggestRequest } from '@/lib/suggest/validate';
 import type { Decider, FallbackReason, MenuItemTraits, SuggestResponse } from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
+import { isInStoreOnly } from '@/lib/menu/inStore';
 
 export const dynamic = 'force-dynamic';
 // SUGGEST_LIMITS.deciderTimeoutMs is 9s; with menu/traits/popularity loads,
@@ -52,7 +53,12 @@ async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[
     console.error('suggest route: traits load failed', traitsResult.error);
   }
 
-  const items = (menuResult.data ?? []).map((row) => shapeMenuItem(row as unknown as MenuItemRow));
+  // In-store-only items (water bottles…) are never suggested — not even as a
+  // regular's "usual", though their counter orders and Petpooja history may be
+  // full of them.
+  const items = (menuResult.data ?? [])
+    .map((row) => shapeMenuItem(row as unknown as MenuItemRow))
+    .filter((item) => !isInStoreOnly(item));
   const traitsById = new Map<string, MenuItemTraits>(
     ((traitsResult.data ?? []) as MenuItemTraits[]).map((t) => [t.menu_item_id, t]),
   );

@@ -1,20 +1,24 @@
 'use client';
 
-import { MENU_CATEGORIES } from '@/lib/constants';
+import { CUSTOMER_MENU_CATEGORIES, MENU_CATEGORIES } from '@/lib/constants';
 
 export function MenuCategoryTabs({
   active,
   onChange,
+  includeInStore = false,
 }: {
   active: string;
   onChange: (category: string) => void;
+  /** Show in-store-only categories (water bottles…) — the POS only. */
+  includeInStore?: boolean;
 }) {
+  const categories = includeInStore ? MENU_CATEGORIES : CUSTOMER_MENU_CATEGORIES;
   return (
     <div
       className="flex gap-2 overflow-x-auto pb-1"
       style={{ scrollbarWidth: 'none' }}
     >
-      {MENU_CATEGORIES.map((cat) => {
+      {categories.map((cat) => {
         const isActive = cat.slug === active;
         return (
           <button

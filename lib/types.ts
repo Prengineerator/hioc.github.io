@@ -120,6 +120,11 @@ export interface MenuItem {
   // Stored UPPERCASE, ^[A-Za-z0-9]{1,8}$; null when unset. Powers the staff
   // quick-add bar's top-priority code tiers; case-insensitively unique per item.
   short_code: string | null;
+  // Sold only at the counter (2026-09-in-store-only migration): hidden from
+  // every customer menu and refused on online/table-QR orders. Optional so a
+  // row read before the migration still type-checks; use isInStoreOnly()
+  // (lib/menu/inStore.ts), which also honours the in-store category.
+  in_store_only?: boolean;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];

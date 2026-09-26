@@ -46,6 +46,9 @@ export const MENU_CATEGORIES: {
   slug: string;
   label: string;
   parent: string;
+  /** Sold only at the counter (water bottles…): shown on the POS and in the
+   * menu editor, never on a customer menu. See supabase/2026-09-in-store-only.sql. */
+  inStoreOnly?: boolean;
 }[] = [
   { slug: 'Coffee', label: 'Coffee', parent: 'Hot' },
   { slug: 'Hot Non-Coffee', label: 'Hot Non-Coffee', parent: 'Hot' },
@@ -63,4 +66,8 @@ export const MENU_CATEGORIES: {
   { slug: 'Cup Cakes', label: 'Cup Cakes', parent: '' },
   { slug: 'Cheesecakes', label: 'Cheesecakes', parent: '' },
   { slug: 'Monthly Drops', label: 'Monthly Drops', parent: '' },
+  { slug: 'In-store', label: 'In-store', parent: '', inStoreOnly: true },
 ];
+
+/** The categories a customer menu (website, homepage, table QR) shows. */
+export const CUSTOMER_MENU_CATEGORIES = MENU_CATEGORIES.filter((c) => !c.inStoreOnly);

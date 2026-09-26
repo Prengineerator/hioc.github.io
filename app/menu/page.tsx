@@ -14,13 +14,13 @@ import { OrderAgainStrip } from '@/components/account/OrderAgainStrip';
 import { Spinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { MENU_CATEGORIES } from '@/lib/constants';
+import { CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { flags } from '@/lib/flags';
 import type { MenuItem } from '@/lib/types';
 
-const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
-const VALID_CATEGORIES = MENU_CATEGORIES.map((c) => c.slug);
+const DEFAULT_CATEGORY = CUSTOMER_MENU_CATEGORIES[0].slug;
+const VALID_CATEGORIES = CUSTOMER_MENU_CATEGORIES.map((c) => c.slug);
 
 function isMenuCategory(value: string | null): value is string {
   return !!value && VALID_CATEGORIES.includes(value);

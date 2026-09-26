@@ -5,6 +5,7 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { formatIstTime } from '@/lib/store/hours';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { MenuItem } from '@/lib/types';
+import { isInStoreOnly } from '@/lib/menu/inStore';
 
 // S6 86/snooze durations the table offers. Page-level handler turns these
 // into the actual { is_available, unavailable_until } PATCH body — see
@@ -88,7 +89,14 @@ export function MenuItemTable({
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-bold text-charcoal">{item.name}</td>
+                      <td className="px-4 py-3 font-bold text-charcoal">
+                        {item.name}
+                        {isInStoreOnly(item) ? (
+                          <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+                            In-store
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3 text-tan">{variantSummary(item)}</td>
                       <td className="max-w-[220px] truncate px-4 py-3 text-muted">
                         {item.addon_groups.map((g) => g.display_name).join(', ') || '—'}
