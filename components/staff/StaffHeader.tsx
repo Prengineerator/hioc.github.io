@@ -8,6 +8,8 @@ import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
 import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
 import { isActiveSettingsSection, SETTINGS_ROOT } from '@/lib/staff/settingsNav';
+import { COUNTER_MODE_HREFS } from '@/lib/staff/newOrderWatch';
+import { useStaffShell } from '@/components/staff/StaffShell';
 
 const TABS = [
   { href: '/staff', label: 'Orders' },
@@ -77,7 +79,57 @@ export function StaffHeader({
   // into a collapsible drawer behind a hamburger button instead.
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const tabs = TABS;
+  // Counter mode trims the nav to what the counter works from — Orders, New
+  // order, Tables — instead of hiding it (it used to cover the whole screen
+  // with the Orders board, leaving no way to the other two).
+  const shell = useStaffShell();
+  const tabs = shell.counterMode ? TABS.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : TABS;
+  const tabLabel = (tab: { href: string; label: string }) =>
+    tab.href === '/staff' && shell.newOrderCount > 0 ? (
+      <>
+        {tab.label}{' '}
+        <span className="ml-1 rounded-full bg-tan px-1.5 py-0.5 text-[11px] font-bold text-charcoal">
+          {shell.newOrderCount} new
+        </span>
+      </>
+    ) : (
+      tab.label
+    );
+
+  const soundButton = (
+    <button
+      type="button"
+      onClick={shell.toggleSound}
+      aria-pressed={shell.soundOn}
+      title={shell.soundOn && !shell.soundReady ? 'Tap anywhere to allow the order alarm' : undefined}
+      className={
+        'rounded-md border px-3 py-2 text-xs font-bold transition-colors ' +
+        (!shell.soundOn
+          ? 'border-cream/30 text-cream/60 hover:text-cream'
+          : shell.soundReady
+            ? 'border-cream/40 text-cream hover:bg-cream hover:text-charcoal'
+            : 'border-amber-400 bg-amber-50 text-amber-800')
+      }
+    >
+      {!shell.soundOn ? '🔕 Sound off' : shell.soundReady ? '🔔 Sound on' : '🔔 Tap to enable sound'}
+    </button>
+  );
+
+  const counterModeButton = (
+    <button
+      type="button"
+      onClick={() => shell.setCounterMode(!shell.counterMode)}
+      aria-pressed={shell.counterMode}
+      className={
+        'rounded-md border px-3 py-2 text-xs font-bold transition-colors ' +
+        (shell.counterMode
+          ? 'border-tan bg-tan text-charcoal'
+          : 'border-cream/40 text-cream hover:bg-cream hover:text-charcoal')
+      }
+    >
+      {shell.counterMode ? 'Exit counter mode' : 'Counter mode'}
+    </button>
+  );
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
   // /staff/settings/store (SET-1 — moved off the Menu page). Best-effort — a failed fetch
@@ -198,7 +250,7 @@ export function StaffHeader({
                           : 'border-transparent text-cream/70 hover:text-cream')
                       }
                     >
-                      {tab.label}
+                      {tabLabel(tab)}
                     </Link>
                   </li>
                 );
@@ -209,6 +261,8 @@ export function StaffHeader({
 
         {/* Tablet/desktop account controls — unchanged, hidden below md. */}
         <div className="hidden items-center gap-3 md:flex">
+          {soundButton}
+          {counterModeButton}
           {storeBadge}
           <div className="text-right leading-tight" title={userEmail}>
             <div className="max-w-[36vw] truncate text-xs font-medium text-cream sm:max-w-none">
@@ -278,7 +332,7 @@ export function StaffHeader({
                           : 'text-cream/80 hover:bg-cream/5 hover:text-cream')
                       }
                     >
-                      {tab.label}
+                      {tabLabel(tab)}
                     </Link>
                   </li>
                 );
@@ -287,6 +341,10 @@ export function StaffHeader({
           </nav>
 
           <div className="mt-3 flex flex-col gap-3 border-t border-cream/10 pt-3">
+            <div className="flex flex-wrap gap-2">
+              {soundButton}
+              {counterModeButton}
+            </div>
             {storeBadge}
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 leading-tight" title={userEmail}>
