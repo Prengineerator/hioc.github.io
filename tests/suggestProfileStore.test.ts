@@ -16,6 +16,7 @@ const state: {
   ordersTableHitCount: number;
   upsertCalls: Record<string, unknown>[];
   profileUpdateCalls: { user_id: string; computed_at: string }[];
+  profileRow: { phone: string | null; phone_verified: boolean } | null;
 } = {
   existingRow: null,
   orders: [],
@@ -27,6 +28,7 @@ const state: {
   ordersTableHitCount: 0,
   upsertCalls: [],
   profileUpdateCalls: [],
+  profileRow: null,
 };
 
 function ordersChain() {
@@ -87,11 +89,22 @@ function simpleInChain(table: string) {
   return chain;
 }
 
+function profileRowChain() {
+  const chain: Record<string, unknown> = {};
+  Object.assign(chain, {
+    select: () => chain,
+    eq: () => chain,
+    maybeSingle: () => Promise.resolve({ data: state.profileRow, error: null }),
+  });
+  return chain;
+}
+
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
     from: (table: string) => {
       if (table === 'orders') return ordersChain();
       if (table === 'customer_taste_profiles') return profilesChain();
+      if (table === 'profiles') return profileRowChain();
       if (table === 'favorites') return favoritesChain();
       if (table === 'menu_items' || table === 'menu_item_traits') return simpleInChain(table);
       throw new Error(`unexpected table ${table}`);
@@ -112,6 +125,7 @@ beforeEach(() => {
   state.ordersTableHitCount = 0;
   state.upsertCalls = [];
   state.profileUpdateCalls = [];
+  state.profileRow = null;
 });
 
 describe('getOrBuildProfile', () => {

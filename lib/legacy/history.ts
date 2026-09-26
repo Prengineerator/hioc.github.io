@@ -85,6 +85,8 @@ interface LegacyOrderWithItemsRow {
   bill_no: string;
   ordered_at: string;
   total_inr: number;
+  status: string;
+  channel: string;
   legacy_order_items:
     | {
         position: number;
@@ -113,7 +115,7 @@ export async function latestLegacyBillsForPhone(
   const { data, error } = await admin
     .from('legacy_orders')
     .select(
-      'id, bill_no, ordered_at, total_inr, legacy_order_items(position, item_name, variant_label, menu_item_id, variant_id)',
+      'id, bill_no, ordered_at, total_inr, status, channel, legacy_order_items(position, item_name, variant_label, menu_item_id, variant_id)',
     )
     .eq('customer_phone', phoneE164)
     .order('ordered_at', { ascending: false })
@@ -142,6 +144,8 @@ function toLegacyCustomerOrderResponse(row: LegacyOrderWithItemsRow): LegacyCust
     bill_no: row.bill_no,
     created_at: row.ordered_at,
     total_inr: row.total_inr,
+    status: row.status,
+    channel: row.channel,
     items,
   };
 }

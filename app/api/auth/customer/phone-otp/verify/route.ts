@@ -3,6 +3,7 @@ import { createServerSupabaseClient, createAdminSupabaseClient } from '@/lib/sup
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { rateLimitOk, clientIp } from '@/lib/api/rateLimit';
+import { prefillProfileFromPetpooja } from '@/lib/legacy/account';
 
 export const dynamic = 'force-dynamic';
 
@@ -51,6 +52,8 @@ export async function POST(request: Request) {
   // than re-deriving from data.user.phone) guarantees the format matches
   // orders.customer_phone ("+91XXXXXXXXXX") for guest-claim matching (ACC-4).
   const admin = createAdminSupabaseClient();
+
+  // Core phone verification update — must not depend on prefill
   const { error: profileError } = await admin
     .from('profiles')
     .update({ phone: e164, phone_verified: true })
@@ -67,6 +70,13 @@ export async function POST(request: Request) {
     // Other failures are non-fatal — the session is valid either way; log so a
     // drifted profile row is diagnosable rather than silently wrong.
     console.error('phone-otp verify: profile update failed', profileError);
+  }
+
+  // Petpooja pre-fill (blank name/birthday/anniversary only) — only once the
+  // number is actually recorded as verified, and never able to change this
+  // route's outcome: prefillProfileFromPetpooja can't throw.
+  if (!profileError) {
+    await prefillProfileFromPetpooja(admin, data.user.id, e164);
   }
 
   return NextResponse.json({ success: true });

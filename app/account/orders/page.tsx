@@ -31,6 +31,30 @@ import type { OrderResponse } from '@/lib/api/orders';
 
 type Tab = 'active' | 'past';
 
+interface LegacyOrderResponse {
+  source: 'petpooja';
+  id: string;
+  bill_no: string;
+  created_at: string;
+  total_inr: number;
+  status: string;
+  channel: string;
+  items: Array<{ name_snapshot: string; variant_label_snapshot: string }>;
+}
+
+const CHANNEL_LABELS: Record<string, string> = {
+  counter: 'Counter',
+  delivery: 'Delivery',
+  zomato: 'Zomato',
+  swiggy: 'Swiggy',
+  qr: 'QR order',
+  dine_in: 'Dine-in',
+};
+
+function channelLabel(channel: string): string {
+  return CHANNEL_LABELS[channel] || channel;
+}
+
 interface HistoryResponse {
   orders: OrderResponse[];
   page: number;
@@ -38,6 +62,7 @@ interface HistoryResponse {
   total: number;
   hasMore: boolean;
   phoneVerified: boolean;
+  petpooja_orders?: LegacyOrderResponse[];
 }
 
 export default function AccountOrdersPage() {
@@ -55,6 +80,7 @@ function AccountOrdersContent() {
   // null tab = still deciding which one to default to (initial load).
   const [tab, setTab] = useState<Tab | null>(null);
   const [orders, setOrders] = useState<OrderResponse[]>([]);
+  const [petpoojaOrders, setPetpoojaOrders] = useState<LegacyOrderResponse[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
@@ -81,6 +107,7 @@ function AccountOrdersContent() {
     setTab(t);
     setPage(p);
     setOrders(data.orders ?? []);
+    setPetpoojaOrders(data.petpooja_orders ?? []);
     setPageSize(data.pageSize ?? 10);
     setTotal(data.total ?? 0);
     setHasMore(Boolean(data.hasMore));
@@ -293,6 +320,48 @@ function AccountOrdersContent() {
             );
           })}
         </ul>
+      )}
+
+      {petpoojaOrders.length > 0 && tab === 'past' && (
+        <div className="mt-8 flex flex-col gap-3">
+          <h2 className="text-lg font-semibold text-charcoal">Earlier orders (before our new app)</h2>
+          <ul className="flex flex-col gap-3">
+            {petpoojaOrders.map((order) => (
+              <li key={order.id} className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono font-bold tabular-nums text-charcoal">Bill #{order.bill_no}</p>
+                    <p className="text-sm text-muted">
+                      {formatIstDate(order.created_at)} · {formatIstTime(new Date(order.created_at))}
+                      {order.channel ? ` · ${channelLabel(order.channel)}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span
+                      className={
+                        'rounded-full px-2.5 py-1 text-xs font-semibold ' +
+                        (order.status === 'completed'
+                          ? 'bg-green-100 text-green-700'
+                          : order.status === 'cancelled'
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-gray-100 text-gray-700')
+                      }
+                    >
+                      {order.status === 'completed' ? 'Completed' : 'Cancelled'}
+                    </span>
+                    <p className="font-mono text-sm font-bold tabular-nums text-charcoal">
+                      ₹{Math.round(order.total_inr).toLocaleString('en-IN')}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="mt-2 line-clamp-2 text-sm text-muted">
+                  {order.items.map((i) => `${i.name_snapshot}${i.variant_label_snapshot ? ` (${i.variant_label_snapshot})` : ''}`).join(', ')}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {!loading && !error && orders.length > 0 ? (

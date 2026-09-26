@@ -55,8 +55,10 @@ export interface LegacyOrderItemResponse {
  * One imported Petpooja bill, shaped to slot into the SAME "Last orders" list
  * as a hioc order. `bill_no` stands in for `order_number` (Petpooja's own,
  * text, bill numbering — see legacy_orders.bill_no); `created_at` is the
- * bill's `ordered_at`. There is deliberately no `status`/`payment_status`/
- * `table_label`/`order_type` here — those are hioc order-lifecycle concepts
+ * bill's `ordered_at`. `status` is 'completed' or 'cancelled' (Petpooja's
+ * own bill status). `channel` is the sales channel (counter, delivery, zomato,
+ * swiggy, qr, dine_in). Unlike hioc orders, there is no `payment_status`,
+ * `table_label`, or `order_type` — those are hioc order-lifecycle concepts
  * that a historical Petpooja bill was never entered into this app's pipeline
  * to have.
  */
@@ -66,6 +68,8 @@ export interface LegacyCustomerOrderResponse {
   bill_no: string;
   created_at: string;
   total_inr: number;
+  status: string;
+  channel: string;
   items: LegacyOrderItemResponse[];
 }
 
