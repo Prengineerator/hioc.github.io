@@ -190,19 +190,20 @@ export function OrderDetailModal({
   // isn't a pop-up, so nothing has to happen inside the click any more. It still
   // does, because `onPayment` is fire-and-forget (the parent owns the request)
   // and this component has no way to learn that the settle succeeded.
-  // PRN-6 — the drawer is money, so unlike the print above it waits for the
-  // server to confirm the settle: a failed PATCH must never pop an open drawer
-  // with no cash recorded against it. No-op outside the desktop app or with no
-  // drawer printer configured; a drawer failure is a small note, never blocking.
+  // PRN-6 / DRW-1 — the drawer opens on the Cash tap itself, alongside the
+  // settle rather than after it: the staffer is holding the customer's notes
+  // now. If the settle then fails, the order stays unpaid on the board and is
+  // settled again — the cash is already in the right place. No-op outside the
+  // desktop app or with no drawer printer configured; a drawer failure is a
+  // small note, never blocking.
   const [drawerNote, setDrawerNote] = useState<string | null>(null);
   const settle = (method: PaymentMethod) => {
     for (const type of settlePrintPlan(autoPrint)) openPrint(type);
     setDrawerNote(null);
-    void onPayment(order, method).then(async (ok) => {
-      if (!ok) return;
-      const err = await openDrawerIfCash([{ method }]);
+    void openDrawerIfCash([{ method }], { orderId: order.id }).then((err) => {
       if (err) setDrawerNote(err);
     });
+    void onPayment(order, method);
   };
 
   // Resend the bill (BILL-4) — wires up the RCT-1 route that shipped with no

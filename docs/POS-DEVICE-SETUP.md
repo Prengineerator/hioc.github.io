@@ -177,7 +177,7 @@ This is a one-time setup across the whole deployment, done in this order:
    reset it). A deactivated login has no PIN option — there's nothing to unlock with it.
 
 5. **The enrolled counter shows the lock screen** the next time it's opened in the HIOC POS app (not the
-   browser fallback): a grid of names, tap one, enter the 4-digit PIN. It auto-locks after 2 minutes idle,
+   browser fallback): a grid of names, tap one, enter the 4-digit PIN. It auto-locks after 15 minutes idle,
    and **Switch** in the header locks it manually — an order in progress underneath is not lost either way.
 
 If a PIN is entered wrong 5 times in a row it locks that person out for 60 seconds, doubling on each further
