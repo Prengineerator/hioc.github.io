@@ -5,6 +5,8 @@ import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, isUuid, MENU_CATEGORIES } from '@/lib/api/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +77,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // see the POST handler's sibling note in ../route.ts.
   if (!(await hasPermission(user, 'menu_edit', actor.role))) {
     return errorResponse(403, 'You do not have permission to edit the menu');
+  }
+
+  // Menu changes are made on the POS only (the staff website shows the menu
+  // read-only) — see lib/staff/surfaceRules.ts.
+  if (!canEditMenu(await getStaffSurface())) {
+    return errorResponse(403, MENU_POS_ONLY_MESSAGE);
   }
 
   const { id } = params;
@@ -316,6 +324,12 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
   // (default = staff-and-up, preserving prior behavior). roleHint = actor.role.
   if (!(await hasPermission(actor.user, 'menu_edit', actor.role))) {
     return errorResponse(403, 'You do not have permission to edit the menu');
+  }
+
+  // Menu changes are made on the POS only (the staff website shows the menu
+  // read-only) — see lib/staff/surfaceRules.ts.
+  if (!canEditMenu(await getStaffSurface())) {
+    return errorResponse(403, MENU_POS_ONLY_MESSAGE);
   }
 
   const { id } = params;

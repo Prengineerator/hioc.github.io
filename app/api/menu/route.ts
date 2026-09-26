@@ -6,6 +6,8 @@ import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, MENU_CATEGORIES } from '@/lib/api/constants';
 import { isInStoreOnly, isInStoreOnlyCategory } from '@/lib/menu/inStore';
 import type { AddonGroup, MenuItem } from '@/lib/types';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -123,6 +125,12 @@ export async function POST(request: Request) {
   // has none of (see lib/permissions.ts's own note).
   if (!(await hasPermission(user, 'menu_edit', actor.role))) {
     return errorResponse(403, 'You do not have permission to edit the menu');
+  }
+
+  // Menu changes are made on the POS only (the staff website shows the menu
+  // read-only) — see lib/staff/surfaceRules.ts.
+  if (!canEditMenu(await getStaffSurface())) {
+    return errorResponse(403, MENU_POS_ONLY_MESSAGE);
   }
 
   const body = await parseJsonBody(request);

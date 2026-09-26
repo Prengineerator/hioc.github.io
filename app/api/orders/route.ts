@@ -35,6 +35,8 @@ import { parseSuggestionSessionIds, writeOrderAttribution } from '@/lib/suggest/
 import { markProfileStale } from '@/lib/suggest/profileStore';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -115,6 +117,13 @@ export async function POST(request: Request) {
     getStoreSettings(),
   ]);
   const isStaff = actor !== null;
+
+  // Staff orders come from the POS. The staff website (any other browser) may
+  // take them only when the owner/a manager has switched that on — off by
+  // default (2026-09-staff-web-ordering.sql). Customer channels are untouched.
+  if (isStaff && !canTakeOrders(await getStaffSurface(), settings.staff_web_ordering)) {
+    return errorResponse(403, ORDERING_OFF_MESSAGE);
+  }
 
   // Phase-3 (QR-1/D6): a NON-staff request carrying a `qr_token` is the third
   // order-entry channel — a seated customer who scanned the table QR. The token

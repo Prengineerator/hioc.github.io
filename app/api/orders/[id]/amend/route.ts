@@ -16,6 +16,8 @@ import { getStoreSettings } from '@/lib/store/settings';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import type { OrderStatus, OrderType, UserRole } from '@/lib/types';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -241,6 +243,14 @@ async function addLines(
   // for it to re-derive the role from.
   if (!(await hasPermission(user as never, 'pos_order_entry', roleHint))) {
     return errorResponse(403, 'You do not have permission to add items to an order');
+  }
+
+  // Adding items is taking an order: POS only, unless the staff website has
+  // been allowed to (2026-09-staff-web-ordering.sql). Voids are corrections,
+  // not order-taking, and stay available everywhere.
+  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
+  if (!canTakeOrders(surface, storeSettings.staff_web_ordering)) {
+    return errorResponse(403, ORDERING_OFF_MESSAGE);
   }
 
   const parsed = parseItems(body.items);

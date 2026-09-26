@@ -3,6 +3,10 @@ import { flags } from '@/lib/flags';
 import { PosOrderEntry, type AddToOrderTarget } from '@/components/staff/PosOrderEntry';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isUuid } from '@/lib/api/constants';
+import { OrderingOffNotice } from '@/components/staff/OrderingOffNotice';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { getStoreSettings } from '@/lib/store/settings';
+import { canTakeOrders } from '@/lib/staff/surfaceRules';
 
 // The states in which an order can still take more items (mirrors the amend
 // route's OPEN_STATUSES — the route is the real gate; this just avoids offering
@@ -68,6 +72,12 @@ export default async function NewOrderPage({
         </Link>
       </div>
     );
+  }
+
+  // Taking orders: the POS always; the staff website only when switched on.
+  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
+  if (!canTakeOrders(surface, storeSettings.staff_web_ordering)) {
+    return <OrderingOffNotice />;
   }
 
   // POS-3 deep-link: /staff/orders/new?table=<id> pre-selects that dine-in table

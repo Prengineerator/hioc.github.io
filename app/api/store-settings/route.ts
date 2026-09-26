@@ -42,6 +42,17 @@ export async function PATCH(request: Request) {
     return errorResponse(400, 'No writable settings fields provided');
   }
 
+  // Whether the staff website may take orders is an owner/manager decision
+  // (2026-09-staff-web-ordering.sql), unlike the other day-to-day switches here.
+  if ('staff_web_ordering' in patch) {
+    if (typeof patch.staff_web_ordering !== 'boolean') {
+      return errorResponse(400, 'staff_web_ordering must be true or false');
+    }
+    if (actor.role !== 'manager' && actor.role !== 'owner') {
+      return errorResponse(403, 'Only a manager or the owner can change where orders can be taken');
+    }
+  }
+
   const updated = await updateStoreSettings(patch);
   if (!updated) {
     return errorResponse(500, 'Failed to update store settings');

@@ -456,6 +456,14 @@ export function PosOrderEntry({
 
   // "Quick picks" strip (empty-query state): recent items resolved to the live
   // menu (drops any that were deleted / are missing).
+  // Items per category, for the category sidebar (a category with nothing in
+  // it isn't offered at all).
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of menuItems) counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
+    return counts;
+  }, [menuItems]);
+
   const recentItems = useMemo(() => {
     const byId = new Map(menuItems.map((i) => [i.id, i]));
     return recentIds
@@ -1064,7 +1072,7 @@ export function PosOrderEntry({
   const pointsAvailable = canRedeemPoints(customer);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 pb-28 lg:pb-6">
+    <div className="mx-auto max-w-[1600px] px-4 py-4 pb-28 lg:pb-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-charcoal">
@@ -1082,9 +1090,45 @@ export function PosOrderEntry({
         <OpenDrawerButton />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* ---- Menu ---- */}
-        <div className="lg:col-span-2">
+      {/* Three columns on a tablet/desktop: categories down the left, the
+          search bar and the chosen category's items in the middle, the order
+          (cart, customer, payment) on the right. Below lg the categories
+          fall back to the horizontal tabs and the order becomes a sheet. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[180px_minmax(0,1fr)_360px] xl:grid-cols-[210px_minmax(0,1fr)_400px]">
+        {/* ---- Categories (lg+) ---- */}
+        <aside className="hidden lg:block">
+          <nav
+            aria-label="Menu categories"
+            className="sticky top-20 flex max-h-[calc(100dvh-6rem)] flex-col gap-1 overflow-y-auto rounded-md border border-[#e5e5e5] bg-cream p-2"
+          >
+            {MENU_CATEGORIES.filter((c) => (categoryCounts.get(c.slug) ?? 0) > 0).map((c) => {
+              const isActive = !search && c.slug === category;
+              return (
+                <button
+                  key={c.slug}
+                  type="button"
+                  onClick={() => {
+                    setSearch('');
+                    setCategory(c.slug);
+                  }}
+                  aria-current={isActive ? 'true' : undefined}
+                  className={
+                    'flex min-h-[44px] items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm font-bold transition-colors ' +
+                    (isActive ? 'bg-charcoal text-cream' : 'text-charcoal hover:bg-[#f2efe9]')
+                  }
+                >
+                  <span className="min-w-0">{c.label}</span>
+                  <span className={'text-xs font-normal ' + (isActive ? 'text-cream/70' : 'text-muted')}>
+                    {categoryCounts.get(c.slug)}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        {/* ---- Menu: search on top, then the items ---- */}
+        <div className="min-w-0">
           <PosQuickAddBar
             items={menuItems}
             query={search}
@@ -1101,14 +1145,14 @@ export function PosOrderEntry({
                   <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">
                     Quick picks
                   </p>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {recentItems.map((item) => (
                       <PosMenuTile key={item.id} item={item} onTap={() => handleTapItem(item)} />
                     ))}
                   </div>
                 </div>
               ) : null}
-              <div className="mb-4">
+              <div className="mb-4 lg:hidden">
                 <MenuCategoryTabs active={category} onChange={setCategory} includeInStore />
               </div>
             </>
@@ -1121,7 +1165,7 @@ export function PosOrderEntry({
               {search ? 'No items match your search.' : 'No items in this category.'}
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
               {visibleItems.map((item) => (
                 <PosMenuTile key={item.id} item={item} onTap={() => handleTapItem(item)} />
               ))}
@@ -1136,7 +1180,7 @@ export function PosOrderEntry({
             off-screen (not unmounted) while closed so nothing inside it
             (coupon input, customer fields, the docked payment step) loses its
             state or re-renders from scratch when it's toggled. */}
-        <div className="lg:col-span-1">
+        <div>
           <div
             className={
               'fixed inset-x-0 bottom-0 z-40 flex max-h-[85dvh] flex-col gap-4 overflow-y-auto rounded-t-xl border border-[#e5e5e5] bg-cream p-4 shadow-elevated transition-transform duration-200 ease-out ' +

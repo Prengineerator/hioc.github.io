@@ -3,6 +3,8 @@ import { randomUUID } from 'crypto';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, unauthorized } from '@/lib/api/http';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +33,12 @@ export async function POST(request: Request) {
   const actor = await getCounterActor();
   if (!actor) {
     return unauthorized();
+  }
+
+  // Menu changes are made on the POS only (the staff website shows the menu
+  // read-only) — see lib/staff/surfaceRules.ts.
+  if (!canEditMenu(await getStaffSurface())) {
+    return errorResponse(403, MENU_POS_ONLY_MESSAGE);
   }
 
   let form: FormData;
