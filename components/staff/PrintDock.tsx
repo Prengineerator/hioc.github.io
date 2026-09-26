@@ -49,6 +49,10 @@ export interface PrintDock {
   enqueue: (specs: PrintJobSpec[]) => void;
   /** The iframe + failure chip. Render it once, at page level. */
   node: React.ReactNode;
+  /** A job is still waiting or printing — don't leave the page yet. */
+  busy: boolean;
+  /** A job failed and is waiting for Retry/Dismiss on this page. */
+  hasFailed: boolean;
 }
 
 export function usePrintDock(): PrintDock {
@@ -74,7 +78,7 @@ export function usePrintDock(): PrintDock {
     (job: PrintJob) =>
       new Promise<void>((resolve, reject) => {
         waiters.current.set(job.id, { resolve, reject });
-        setFrame({ jobId: job.id, src: printFrameSrc(job.orderId, job.type) });
+        setFrame({ jobId: job.id, src: printFrameSrc(job.orderId, job.type, job.itemIds) });
       }),
     [],
   );
@@ -217,5 +221,6 @@ export function usePrintDock(): PrintDock {
     </>
   );
 
-  return { enqueue, node };
+  const busy = status.jobs.some((j) => j.state === 'queued' || j.state === 'printing');
+  return { enqueue, node, busy, hasFailed: status.failed.length > 0 };
 }

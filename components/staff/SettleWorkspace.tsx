@@ -15,7 +15,7 @@ import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
-import { describePaymentMethod, groupForSettle, isSettleable } from '@/lib/orders/settleList';
+import { describeOrderPayment, groupForSettle, isSettleable } from '@/lib/orders/settleList';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
@@ -101,9 +101,9 @@ export function SettleWorkspace() {
       // Same print rule as settling from the order detail or the POS.
       const jobs = settlePrintPlan(autoPrint).map((type) => ({ orderId: order.id, type }));
       if (jobs.length > 0) printDock.enqueue(jobs);
-      setToast(`${label} settled · ${describePaymentMethod(updated.payment_method)}`);
+      setToast(`${label} settled · ${describeOrderPayment(updated)}`);
     } else {
-      setToast(`${label} changed to ${describePaymentMethod(updated.payment_method)}`);
+      setToast(`${label} changed to ${describeOrderPayment(updated)}`);
     }
     void fetchUnpaid();
   }
@@ -169,7 +169,7 @@ export function SettleWorkspace() {
                   <span className="font-mono font-bold tabular-nums text-charcoal">#{formatOrderNumber(o.order_number)}</span>
                   <span className="truncate text-charcoal">{o.customer_name || whereOf(o)}</span>
                   <PaymentBadge status={o.payment_status} />
-                  <span className="text-muted">{describePaymentMethod(o.payment_method)}</span>
+                  <span className="text-muted">{describeOrderPayment(o)}</span>
                 </span>
                 <span className="flex items-center gap-3">
                   <span className="font-mono font-bold tabular-nums text-charcoal">{rupees(totalOf(o))}</span>

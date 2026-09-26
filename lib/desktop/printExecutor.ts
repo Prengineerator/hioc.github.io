@@ -16,6 +16,8 @@ import { renderEscPos } from '@/lib/print/escpos';
 import { getBrandHeaderRaster } from '@/lib/print/brandHeaderRaster';
 import type { TicketBlock, TicketDoc } from '@/lib/print/ticketDoc';
 import { describePrintJob, type PrintJob } from '@/lib/pos/printQueue';
+import { kotItemsQuery } from '@/lib/print/kotAddition';
+import { printUrl } from '@/lib/staff/autoPrint';
 
 /**
  * Replaces a `{ kind: 'brandHeader' }` placeholder block in `doc` (receipts
@@ -53,8 +55,9 @@ export class NoPrintersConfiguredError extends Error {
   }
 }
 
-async function fetchTicketDoc(orderId: string, type: PrintJob['type']): Promise<TicketDoc> {
-  const res = await fetch(`/api/print/ticket/${orderId}/${type}`, { cache: 'no-store' });
+async function fetchTicketDoc(orderId: string, type: PrintJob['type'], itemIds?: string[]): Promise<TicketDoc> {
+  const query = type === 'kot' ? kotItemsQuery(itemIds) : '';
+  const res = await fetch(`/api/print/ticket/${orderId}/${type}${query ? `?${query}` : ''}`, { cache: 'no-store' });
   if (!res.ok) {
     throw new Error(`Could not load the ${describePrintJob({ type })} ticket to print (${res.status}).`);
   }
@@ -93,7 +96,7 @@ export function createDesktopExecutor(
     // the order, not two independently-fetched ones taken moments apart.
     let ticketDocPromise: Promise<TicketDoc> | null = null;
     const getTicketDoc = () => {
-      if (!ticketDocPromise) ticketDocPromise = fetchTicketDoc(job.orderId, job.type);
+      if (!ticketDocPromise) ticketDocPromise = fetchTicketDoc(job.orderId, job.type, job.itemIds);
       return ticketDocPromise;
     };
 
@@ -118,7 +121,8 @@ export function createDesktopExecutor(
 
           // system + driver — the shell prints the existing staff-gated HTML
           // ticket page off-screen, silently, with no Chrome print dialog.
-          const url = `${window.location.origin}/staff-print/${job.orderId}/${job.type}?silent=1`;
+          const path = printUrl(job.orderId, job.type, job.itemIds);
+          const url = `${window.location.origin}${path}${path.includes('?') ? '&' : '?'}silent=1`;
           let confirmed = true;
           for (let i = 0; i < copies; i++) {
             const result = await bridge.printUrl(printer.id, url);

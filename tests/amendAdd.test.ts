@@ -26,6 +26,7 @@ const state: {
   menuRows: Record<string, unknown>[];
   orderPatch?: Record<string, unknown>;
   amendmentRow?: Record<string, unknown>;
+  statusEvent?: Record<string, unknown>;
   insertedItems: Record<string, unknown>[];
   deletedIds: string[];
 } = {
@@ -57,6 +58,10 @@ vi.mock('@/lib/supabase-server', () => ({
           ctx.isInsert = true;
           if (table === 'order_amendments') {
             state.amendmentRow = row;
+            return Promise.resolve({ error: null });
+          }
+          if (table === 'order_status_events') {
+            state.statusEvent = row;
             return Promise.resolve({ error: null });
           }
           if (table === 'order_items') {
@@ -94,7 +99,10 @@ vi.mock('@/lib/supabase-server', () => ({
   }),
 }));
 
-vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
+vi.mock('@/lib/api/auth', () => ({
+  getCounterActor: () => Promise.resolve(state.actor),
+  actorRoleFor: (role: string) => (role === 'owner' ? 'owner' : 'staff'),
+}));
 const hasPermissionCalls: unknown[][] = [];
 vi.mock('@/lib/permissions', () => ({
   hasPermission: (...args: unknown[]) => {
@@ -136,6 +144,7 @@ beforeEach(() => {
   state.deletedIds = [];
   state.orderPatch = undefined;
   state.amendmentRow = undefined;
+  state.statusEvent = undefined;
   hasPermissionCalls.length = 0;
   state.order = {
     id: ORDER_ID,
@@ -310,5 +319,38 @@ describe('POST /api/orders/[id]/amend { op: add } — TAB-1', () => {
     // Falls through to the void path's manager gate, not the add path.
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('void') });
+  });
+});
+
+describe('POST /api/orders/[id]/amend { op: add } — back to the kitchen', () => {
+  it('moves a Ready order back to Preparing and logs why', async () => {
+    state.order = { ...state.order, status: 'ready' };
+    const res = await POST(req(addBody()), params);
+    expect(res.status).toBe(200);
+    expect(state.orderPatch).toMatchObject({ status: 'preparing' });
+    expect(state.statusEvent).toMatchObject({
+      from_status: 'ready',
+      to_status: 'preparing',
+      actor_id: 'staff-1',
+      actor_role: 'staff',
+      reason: 'Items added',
+    });
+  });
+
+  it('leaves Accepted and Preparing orders where they are', async () => {
+    for (const status of ['accepted', 'preparing']) {
+      state.order = { ...state.order, status };
+      state.orderPatch = undefined;
+      state.statusEvent = undefined;
+      expect((await POST(req(addBody()), params)).status).toBe(200);
+      expect(state.orderPatch).not.toHaveProperty('status');
+      expect(state.statusEvent).toBeUndefined();
+    }
+  });
+
+  it('returns the new line ids so only they go on the KOT', async () => {
+    const res = await POST(req(addBody()), params);
+    const data = (await res.json()) as { added_item_ids: string[] };
+    expect(data.added_item_ids).toEqual(['new-item-1']);
   });
 });

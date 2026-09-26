@@ -14,7 +14,7 @@
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { PosPaymentPanel } from '@/components/staff/PosPaymentModal';
-import { describePaymentMethod } from '@/lib/orders/settleList';
+import { describeOrderPayment } from '@/lib/orders/settleList';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { PaymentPart } from '@/lib/orders/payments';
 import type { Order, OrderItem } from '@/lib/types';
@@ -80,7 +80,7 @@ export function SettlePaymentDialog({
     <Modal open onClose={submitting ? () => {} : onClose} title={title}>
       {intent === 'change' ? (
         <p className="mb-3 rounded-md bg-surface px-4 py-2 text-sm text-charcoal">
-          Recorded as <span className="font-bold">{describePaymentMethod(order.payment_method)}</span>. Choose how
+          Recorded as <span className="font-bold">{describeOrderPayment(order)}</span>. Choose how
           the ₹{total} was actually paid — this replaces it.
         </p>
       ) : null}

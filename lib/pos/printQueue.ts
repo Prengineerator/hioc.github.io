@@ -30,6 +30,8 @@ export interface PrintJob {
   id: string;
   orderId: string;
   type: PrintType;
+  /** A KOT of only these lines — items added to a running order. */
+  itemIds?: string[];
   state: PrintJobState;
   /** How many times execute() has been started for this job. */
   attempts: number;
@@ -38,6 +40,8 @@ export interface PrintJob {
 export interface PrintJobSpec {
   orderId: string;
   type: PrintType;
+  /** A KOT of only these lines — items added to a running order. */
+  itemIds?: string[];
 }
 
 export interface PrintQueueSnapshot {
@@ -143,8 +147,9 @@ const TYPE_LABELS: Record<PrintType, string> = {
 };
 
 /** The print page, told to print itself on load and report back (PRT-1). */
-export function printFrameSrc(orderId: string, type: PrintType): string {
-  return `${printUrl(orderId, type)}?auto=1`;
+export function printFrameSrc(orderId: string, type: PrintType, itemIds?: readonly string[] | null): string {
+  const url = printUrl(orderId, type, itemIds);
+  return `${url}${url.includes('?') ? '&' : '?'}auto=1`;
 }
 
 /**
@@ -166,7 +171,8 @@ export interface PrintFrameMessage {
   type: string;
 }
 
-export function describePrintJob(job: Pick<PrintJob, 'type'>): string {
+export function describePrintJob(job: Pick<PrintJob, 'type'> & { itemIds?: string[] }): string {
+  if (job.type === 'kot' && job.itemIds && job.itemIds.length > 0) return 'Added-items KOT';
   return TYPE_LABELS[job.type];
 }
 
@@ -239,6 +245,7 @@ export class PrintQueue {
       id: this.#opts.newId(),
       orderId: spec.orderId,
       type: spec.type,
+      ...(spec.itemIds && spec.itemIds.length > 0 ? { itemIds: [...spec.itemIds] } : {}),
       state: 'queued' as const,
       attempts: 0,
     }));

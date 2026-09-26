@@ -4,6 +4,7 @@ import { unauthorized, notFound } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { getStaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { buildTicketDoc } from '@/lib/print/ticketModel';
+import { onlyKotItems, parseKotItemsParam } from '@/lib/print/kotAddition';
 import type { PrintType } from '@/lib/staff/autoPrint';
 
 export const dynamic = 'force-dynamic';
@@ -29,15 +30,18 @@ function isPrintType(value: string): value is PrintType {
 // browser tab, no cookies-from-a-page-load) — it must keep working on an
 // enrolled counter with nobody signed in classically, or printing breaks
 // outright the moment PIN switching is turned on.
-export async function GET(_request: Request, { params }: RouteParams) {
+export async function GET(request: Request, { params }: RouteParams) {
   const account = await getCounterActor();
   if (!account) return unauthorized();
 
   const { id, type } = params;
   if (!isUuid(id) || !isPrintType(type)) return notFound();
 
-  const order = await getStaffPrintOrder(id);
-  if (!order) return notFound();
+  const loaded = await getStaffPrintOrder(id);
+  if (!loaded) return notFound();
+  // `?items=` — a KOT of only the lines added to a running order.
+  const order =
+    type === 'kot' ? onlyKotItems(loaded, parseKotItemsParam(new URL(request.url).searchParams.get('items'))) : loaded;
 
   return NextResponse.json(
     { doc: buildTicketDoc(order, type) },

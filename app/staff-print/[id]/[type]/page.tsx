@@ -3,6 +3,7 @@ import { notFound, redirect } from 'next/navigation';
 import { isUuid } from '@/lib/api/constants';
 import { getCounterActor } from '@/lib/api/auth';
 import { getStaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
+import { onlyKotItems, parseKotItemsParam } from '@/lib/print/kotAddition';
 import { KotTicket, ReceiptTicket, TokenSlip } from '@/components/print/StaffTickets';
 import { AutoPrint } from '@/components/print/AutoPrint';
 import { PrintOnLoad } from './PrintOnLoad';
@@ -44,7 +45,7 @@ export default async function StaffPrintPage({
   searchParams,
 }: {
   params: { id: string; type: string };
-  searchParams?: { auto?: string; silent?: string };
+  searchParams?: { auto?: string; silent?: string; items?: string };
 }) {
   const { id, type } = params;
   if (!isUuid(id) || !TYPES.has(type)) {
@@ -73,10 +74,12 @@ export default async function StaffPrintPage({
   // printing. Independent of `auto`; when both are set, `silent` wins.
   const silent = searchParams?.silent === '1';
 
-  const order = await getStaffPrintOrder(id);
-  if (!order) {
+  const loaded = await getStaffPrintOrder(id);
+  if (!loaded) {
     notFound();
   }
+  // `?items=` — a KOT of only the lines added to a running order.
+  const order = type === 'kot' ? onlyKotItems(loaded, parseKotItemsParam(searchParams?.items)) : loaded;
 
   return (
     <div className="mx-auto w-[80mm] max-w-full px-3 py-6 text-black print:w-full print:px-0 print:py-0">

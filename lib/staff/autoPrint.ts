@@ -5,6 +5,7 @@
 // each one points. The POS and the order detail both read these rules so the
 // two settle paths can't drift into printing different things.
 
+import { kotItemsQuery } from '@/lib/print/kotAddition';
 import type { StoreSettings } from '@/lib/types';
 
 export type PrintType = 'kot' | 'receipt' | 'token';
@@ -32,8 +33,10 @@ export function readAutoPrintSettings(
 }
 
 /** The existing staff-gated 80mm print page (KOT-1 / KOT-2). */
-export function printUrl(orderId: string, type: PrintType): string {
-  return `/staff-print/${orderId}/${type}`;
+export function printUrl(orderId: string, type: PrintType, itemIds?: readonly string[] | null): string {
+  // A KOT for just the lines added to a running order (lib/print/kotAddition).
+  const query = type === 'kot' ? kotItemsQuery(itemIds) : '';
+  return `/staff-print/${orderId}/${type}${query ? `?${query}` : ''}`;
 }
 
 /**
