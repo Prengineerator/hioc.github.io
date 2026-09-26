@@ -6,13 +6,16 @@ export function MenuCategoryTabs({
   active,
   onChange,
   includeInStore = false,
+  leading = [],
 }: {
   active: string;
   onChange: (category: string) => void;
   /** Show in-store-only categories (water bottles…) — the POS only. */
   includeInStore?: boolean;
+  /** Extra tabs before the menu categories (the POS's "Quick picks"). */
+  leading?: { slug: string; label: string }[];
 }) {
-  const categories = includeInStore ? MENU_CATEGORIES : CUSTOMER_MENU_CATEGORIES;
+  const categories = [...leading, ...(includeInStore ? MENU_CATEGORIES : CUSTOMER_MENU_CATEGORIES)];
   return (
     <div
       className="flex gap-2 overflow-x-auto pb-1"

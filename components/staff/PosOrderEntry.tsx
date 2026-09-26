@@ -80,6 +80,10 @@ import type { BillBreakdown } from '@/lib/store/hours';
 import type { MenuItem, OrderType } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
+// "Quick picks" (items recently punched on this tablet) is its own entry in
+// the category list — never stacked above a real category, where it read as
+// part of it (Water Bottle "in Coffee"). Not a menu slug, so it can't clash.
+const QUICK_PICKS = '__quick_picks';
 
 // POS4-4 — how long the confirmation stays before clearing itself. Long enough
 // to read the change due and reach for an action, short enough that it's gone
@@ -425,6 +429,15 @@ export function PosOrderEntry({
     [cart],
   );
 
+  // "Quick picks": recent items resolved to the live menu (drops any that were
+  // deleted / are missing).
+  const recentItems = useMemo(() => {
+    const byId = new Map(menuItems.map((i) => [i.id, i]));
+    return recentIds
+      .map((id) => byId.get(id))
+      .filter((i): i is MenuItem => i !== undefined);
+  }, [recentIds, menuItems]);
+
   // Browse grid: when the bar has a shortform, mirror the SAME ranked resolver
   // the command-bar dropdown uses (so the big touch grid and the keyboard
   // dropdown never disagree); otherwise show the selected category.
@@ -433,8 +446,9 @@ export function PosOrderEntry({
     if (term) {
       return resolveQuickAdd(term, menuItems, { limit: 60 }).map((c) => c.item);
     }
+    if (category === QUICK_PICKS) return recentItems;
     return menuItems.filter((i) => i.category === category);
-  }, [menuItems, category, search]);
+  }, [menuItems, category, search, recentItems]);
 
   // POS4-5 — tables grouped by zone, filtered by the label search. Zone order
   // follows the tables' own sort_order (the API already returns them sorted), so
@@ -454,8 +468,6 @@ export function PosOrderEntry({
     return [...groups.entries()];
   }, [tables, tableFilter]);
 
-  // "Quick picks" strip (empty-query state): recent items resolved to the live
-  // menu (drops any that were deleted / are missing).
   // Items per category, for the category sidebar (a category with nothing in
   // it isn't offered at all).
   const categoryCounts = useMemo(() => {
@@ -464,12 +476,18 @@ export function PosOrderEntry({
     return counts;
   }, [menuItems]);
 
-  const recentItems = useMemo(() => {
-    const byId = new Map(menuItems.map((i) => [i.id, i]));
-    return recentIds
-      .map((id) => byId.get(id))
-      .filter((i): i is MenuItem => i !== undefined);
-  }, [recentIds, menuItems]);
+  // What the centre grid is showing, named above it.
+  const gridTitle = search
+    ? 'Search results'
+    : category === QUICK_PICKS
+      ? 'Quick picks'
+      : (MENU_CATEGORIES.find((c) => c.slug === category)?.label ?? category);
+  const showQuickPicks = recentItems.length > 0;
+
+  // Quick picks emptied (e.g. its items were deleted): back to the menu.
+  useEffect(() => {
+    if (category === QUICK_PICKS && !showQuickPicks) setCategory(DEFAULT_CATEGORY);
+  }, [category, showQuickPicks]);
 
   // Points the staffer has asked to burn. Parsed, never trusted as money — the
   // rupee value comes back from the quote.
@@ -1101,7 +1119,10 @@ export function PosOrderEntry({
             aria-label="Menu categories"
             className="sticky top-20 flex max-h-[calc(100dvh-6rem)] flex-col gap-1 overflow-y-auto rounded-md border border-[#e5e5e5] bg-cream p-2"
           >
-            {MENU_CATEGORIES.filter((c) => (categoryCounts.get(c.slug) ?? 0) > 0).map((c) => {
+            {[
+              ...(showQuickPicks ? [{ slug: QUICK_PICKS, label: 'Quick picks', count: recentItems.length }] : []),
+              ...MENU_CATEGORIES.map((c) => ({ ...c, count: categoryCounts.get(c.slug) ?? 0 })).filter((c) => c.count > 0),
+            ].map((c) => {
               const isActive = !search && c.slug === category;
               return (
                 <button
@@ -1119,7 +1140,7 @@ export function PosOrderEntry({
                 >
                   <span className="min-w-0">{c.label}</span>
                   <span className={'text-xs font-normal ' + (isActive ? 'text-cream/70' : 'text-muted')}>
-                    {categoryCounts.get(c.slug)}
+                    {c.count}
                   </span>
                 </button>
               );
@@ -1139,30 +1160,34 @@ export function PosOrderEntry({
           />
 
           {!search ? (
-            <>
-              {recentItems.length > 0 ? (
-                <div className="mb-4">
-                  <p className="mb-2 text-xs font-bold uppercase tracking-wide text-muted">
-                    Quick picks
-                  </p>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-                    {recentItems.map((item) => (
-                      <PosMenuTile key={item.id} item={item} onTap={() => handleTapItem(item)} />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-              <div className="mb-4 lg:hidden">
-                <MenuCategoryTabs active={category} onChange={setCategory} includeInStore />
-              </div>
-            </>
+            <div className="mb-4 lg:hidden">
+              <MenuCategoryTabs
+                active={category}
+                onChange={setCategory}
+                includeInStore
+                leading={showQuickPicks ? [{ slug: QUICK_PICKS, label: 'Quick picks' }] : []}
+              />
+            </div>
+          ) : null}
+
+          {!menuLoading ? (
+            <h2 className="mb-3 flex items-baseline gap-2 text-base font-bold text-charcoal">
+              {gridTitle}
+              <span className="text-xs font-normal text-muted">
+                {visibleItems.length} item{visibleItems.length === 1 ? '' : 's'}
+              </span>
+            </h2>
           ) : null}
 
           {menuLoading ? (
             <Spinner label="Loading menu…" />
           ) : visibleItems.length === 0 ? (
             <p className="rounded-md border border-line bg-cream p-6 text-center text-sm text-muted">
-              {search ? 'No items match your search.' : 'No items in this category.'}
+              {search
+                ? 'No items match your search.'
+                : category === QUICK_PICKS
+                  ? 'Nothing punched on this tablet yet.'
+                  : 'No items in this category.'}
             </p>
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
