@@ -5,6 +5,7 @@ import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { changeDueInr, type PaymentPart } from '@/lib/orders/payments';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
+import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
 import type { Feedback } from '@/lib/pos/loyalty';
 import type { BillBreakdown } from '@/lib/store/hours';
 import type { OrderType, PaymentMethod } from '@/lib/types';
@@ -129,6 +130,8 @@ export function PosPaymentPanel({
   }
   const [pending, setPending] = useState<{ parts: PaymentPart[] | null } | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const phoneMatches = useCustomerSuggestions(phone, !settling);
 
   // Cash step
   const [tendered, setTendered] = useState('');
@@ -230,21 +233,37 @@ export function PosPaymentPanel({
           <label htmlFor="pos-bill-phone" className="mb-1 block text-sm font-bold text-charcoal">
             Bill on WhatsApp
           </label>
+          <div className="relative">
           <input
             id="pos-bill-phone"
             ref={phoneRef}
             value={phone}
+            onFocus={() => setSuggestOpen(true)}
+            onBlur={() => setSuggestOpen(false)}
             onChange={(e) => {
               onPhoneChange(e.target.value);
+              setSuggestOpen(true);
               if (phoneError) setPhoneError(null);
               if (pending) setPending(null);
             }}
             inputMode="numeric"
-            autoComplete="tel"
+            // Our own suggestions replace the browser's autofill list here.
+            autoComplete="off"
             placeholder="10-digit mobile number"
             disabled={submitting}
             className="w-full rounded-md border border-[#e5e5e5] px-3 py-3 text-base outline-none focus:border-tan disabled:opacity-50"
           />
+          {/* Customer suggestions while the number is typed (4+ digits). */}
+          <CustomerSuggestionList
+            matches={suggestOpen ? phoneMatches : []}
+            onPick={(c) => {
+              onPhoneChange(c.phone);
+              setSuggestOpen(false);
+              if (phoneError) setPhoneError(null);
+              if (pending) setPending(null);
+            }}
+          />
+          </div>
           {phoneError ? (
             <p role="alert" className="mt-1 text-xs text-red-700">
               {phoneError}

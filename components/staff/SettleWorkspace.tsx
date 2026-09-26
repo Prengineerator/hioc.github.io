@@ -173,6 +173,14 @@ export function SettleWorkspace() {
                 </span>
                 <span className="flex items-center gap-3">
                   <span className="font-mono font-bold tabular-nums text-charcoal">{rupees(totalOf(o))}</span>
+                  {/* Bills print only when asked (auto-print for bills is off). */}
+                  <button
+                    type="button"
+                    onClick={() => printDock.enqueue([{ orderId: o.id, type: 'receipt' }])}
+                    className="min-h-[40px] rounded-md border border-[#e5e5e5] px-3 text-sm font-bold text-charcoal hover:border-tan"
+                  >
+                    Print bill
+                  </button>
                   <button
                     type="button"
                     onClick={() => setPaying({ order: o, intent: 'change' })}

@@ -1,10 +1,8 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
-//   POS          Live orders · Orders · Settle · New order · Tables · Menu ·
-//                (Stock ·) Settings — what the counter does, every one a
-//                visible tab (Settings in the account menu was too easy to
-//                miss). Stock is where deliveries are verified, so the counter
-//                needs it one tap away.
+//   POS          Live orders · Orders · Settle · New order · Tables — what the
+//                counter does all day — and Cash, Attendance, Leave, (Stock,)
+//                Menu and Settings under "More".
 //   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -32,7 +30,7 @@ export interface StaffNavInput {
 
 export interface StaffNav {
   primary: StaffTab[];
-  /** Under the "More" menu. Empty on the POS. */
+  /** Under the "More" menu. */
   more: StaffTab[];
   /** Extra links in the account menu. */
   account: StaffTab[];
@@ -47,38 +45,35 @@ const MENU: StaffTab = { href: '/staff/menu', label: 'Menu' };
 const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
 const STOCK: StaffTab = { href: '/staff/inventory', label: 'Stock' };
 
+/** The occasional pages both surfaces keep under "More". */
+function backOffice(input: StaffNavInput): StaffTab[] {
+  return [
+    // OPS-2: cash drawer day-open/close by denomination.
+    ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),
+    // ATT-1 / LEAVE-3: their own flag — dark until the geofence is tuned.
+    ...(input.attendance
+      ? [
+          { href: '/staff/attendance', label: 'Attendance' },
+          { href: '/staff/leave', label: 'Leave' },
+        ]
+      : []),
+    // Inventory (docs/INVENTORY-SPEC.md): requests, verifying deliveries at
+    // the POS, recipes.
+    ...(input.inventory ? [STOCK] : []),
+  ];
+}
+
 export function staffNav(input: StaffNavInput): StaffNav {
   if (input.surface === 'pos') {
     return {
-      primary: [
-        LIVE,
-        ORDERS,
-        SETTLE,
-        ...(input.staffPos ? [NEW_ORDER, TABLES] : []),
-        MENU,
-        ...(input.inventory ? [STOCK] : []),
-        SETTINGS,
-      ],
-      more: [],
+      primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos ? [NEW_ORDER, TABLES] : [])],
+      more: [...backOffice(input), MENU, SETTINGS],
       account: [],
     };
   }
   return {
     primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos && input.canTakeOrders ? [NEW_ORDER, TABLES] : [])],
-    more: [
-      // OPS-2: cash drawer day-open/close by denomination.
-      ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),
-      // ATT-1 / LEAVE-3: their own flag — dark until the geofence is tuned.
-      ...(input.attendance
-        ? [
-            { href: '/staff/attendance', label: 'Attendance' },
-            { href: '/staff/leave', label: 'Leave' },
-          ]
-        : []),
-      ...(input.inventory ? [STOCK] : []),
-      MENU,
-      SETTINGS,
-    ],
+    more: [...backOffice(input), MENU, SETTINGS],
     account: [],
   };
 }
