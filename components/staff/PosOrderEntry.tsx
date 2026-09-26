@@ -112,6 +112,8 @@ interface PlacementConfirmation {
   canResend: boolean;
   /** Something the staffer must act on: a failed settle, a blocked pop-up. */
   note: string | null;
+  /** POS-ACC: this order opened the customer's HIOC account. */
+  accountCreated: boolean;
 }
 
 // POS4-2 — a per-attempt key for POST /api/orders. crypto.randomUUID is present
@@ -850,8 +852,9 @@ export function PosOrderEntry({
         return;
       }
 
-      const { order } = (await res.json()) as {
+      const { order, customer_account_created: accountCreated } = (await res.json()) as {
         order: { id: string; order_number: number; total_inr: number | null; subtotal_inr: number };
+        customer_account_created?: boolean;
       };
       const numberLabel = formatOrderNumber(order.order_number);
       // Server-authoritative, like every other rupee on this screen.
@@ -913,6 +916,7 @@ export function PosOrderEntry({
         // A button that can only fail is the false-success this phase removes.
         canResend: settled && Boolean(phoneAtPlacement || emailAtPlacement),
         note,
+        accountCreated: accountCreated === true,
       });
     } catch {
       setSubmitError('Network error — please check the connection and try again.');
@@ -1739,7 +1743,7 @@ function PosPlacementConfirmation({
   onOpenOrder: () => void;
   onDismiss: () => void;
 }) {
-  const { numberLabel, totalInr, paidAs, changeDueInr, bill, canResend, note } = confirmation;
+  const { numberLabel, totalInr, paidAs, changeDueInr, bill, canResend, note, accountCreated } = confirmation;
   const billFailed = bill !== null && billStatusTone(bill) === 'bad';
 
   return (
@@ -1784,6 +1788,11 @@ function PosPlacementConfirmation({
         <p className="mt-2 text-xs text-muted">The bill goes out when the order is settled.</p>
       )}
 
+      {accountCreated ? (
+        <p className="mt-1 text-xs font-bold text-green-700">
+          HIOC account opened for this number — points are added once the order is completed.
+        </p>
+      ) : null}
       {note ? <p className="mt-1 text-xs font-bold text-red-700">{note}</p> : null}
 
       <div className="mt-3 grid grid-cols-2 gap-2">

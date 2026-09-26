@@ -29,7 +29,7 @@ import { runAfterResponse } from '@/lib/api/background';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
-import { findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
+import { createCounterCustomer, findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
 import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
 import { parseSuggestionSessionIds, writeOrderAttribution } from '@/lib/suggest/attribution';
 import { markProfileStale } from '@/lib/suggest/profileStore';
@@ -406,7 +406,9 @@ export async function POST(request: Request) {
   // the matched name, whereas letting a web or table-QR customer link by typing
   // a number would hand them a stranger's balance.
   //
-  // No match ⇒ the order proceeds unlinked and no account is ever created.
+  // No match ⇒ the order opens the customer's account (POS-ACC), just before
+  // it is inserted below — not here, so an order refused by a later check
+  // never leaves an account behind.
   //
   // Perf: these two lookups (a count query, a profiles-by-phone lookup) don't
   // depend on each other, so they run concurrently rather than back-to-back.
@@ -477,7 +479,7 @@ export async function POST(request: Request) {
         return errorResponse(
           400,
           isStaff
-            ? 'No customer account is linked to this number, so there are no points to redeem. Check the number, or ask the customer to verify it in the app.'
+            ? 'No customer account is linked to this number, so there are no points to redeem. Check the number — a new number opens its account with this order and starts earning from it.'
             : 'You must be logged in to redeem points',
         );
       }
@@ -555,6 +557,22 @@ export async function POST(request: Request) {
     // matters more than the guard, and claimIdempotencyKey logged it.
   }
 
+  // POS-ACC — a counter order with a number no account holds opens that
+  // customer's account now, so this order earns on completion (the ledger reads
+  // customer_user_id). Fails open: no account ⇒ the order is still taken.
+  let counterAccountCreated = false;
+  let orderCustomerUserId = customerUserId;
+  if (isStaff && trimmedPhone && !orderCustomerUserId) {
+    const opened = await createCounterCustomer(admin, trimmedPhone, {
+      name: trimmedName,
+      staffUserId: actor ? actor.user.id : null,
+    });
+    if (opened) {
+      orderCustomerUserId = opened.userId;
+      counterAccountCreated = opened.created;
+    }
+  }
+
   const orderFields: Record<string, unknown> = {
     customer_name: trimmedName,
     customer_phone: trimmedPhone,
@@ -587,8 +605,8 @@ export async function POST(request: Request) {
 
   // VAL-2: the link is sent only when there IS one, so an unlinked order never
   // depends on the column existing.
-  const linkedFields: Record<string, unknown> = customerUserId
-    ? { ...orderFields, customer_user_id: customerUserId }
+  const linkedFields: Record<string, unknown> = orderCustomerUserId
+    ? { ...orderFields, customer_user_id: orderCustomerUserId }
     : orderFields;
 
   let { data: orderRow, error: orderError } = await admin
@@ -601,12 +619,15 @@ export async function POST(request: Request) {
   // points; refusing to take a paying customer's order because a migration is
   // pending closes the counter. So this fails OPEN — unlinked, loudly, and
   // naming the file to apply (same posture as the idempotency claim).
-  if (customerUserId && isMissingColumnError(orderError)) {
+  if (orderCustomerUserId && isMissingColumnError(orderError)) {
     console.error(
       'orders.customer_user_id is missing — creating this order UNLINKED, so it will not earn. ' +
         'Is supabase/2026-08-counter-loyalty.sql applied?',
       orderError,
     );
+    // The account exists but this order isn't on it — don't tell the counter
+    // its points are waiting there.
+    counterAccountCreated = false;
     ({ data: orderRow, error: orderError } = await admin
       .from('orders')
       .insert(orderFields)
@@ -814,7 +835,7 @@ export async function POST(request: Request) {
   // recompute also triggers on "an order newer than source_order_at", so this
   // is a freshness nudge — not worth two round-trips on every order otherwise.
   if (flags.suggest) {
-    runAfterResponse(Promise.all([markProfileStale(userId), markProfileStale(customerUserId)]));
+    runAfterResponse(Promise.all([markProfileStale(userId), markProfileStale(orderCustomerUserId)]));
   }
 
   // Send the link-based e-bill (RCT-1/2) on email + WhatsApp, logged + idempotent
@@ -845,6 +866,9 @@ export async function POST(request: Request) {
       order: response,
       payment: paymentIntent,
       payment_unavailable: needsOnlinePayment && !paymentIntent,
+      // POS-ACC: the counter's confirmation says so, so the staffer can tell
+      // the customer their points are waiting under this number.
+      ...(counterAccountCreated ? { customer_account_created: true } : {}),
     },
     { status: 201 },
   );

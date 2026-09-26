@@ -73,7 +73,9 @@ export function formatPoints(points: number): string {
 export function describeCustomer(lookup: CustomerLookup | null): Feedback | null {
   if (!lookup) return null;
   if (!lookup.found) {
-    return { ok: false, text: 'No account for this number — the order still gets a bill.' };
+    // POS-ACC: placing the order opens the account (POST /api/orders), so the
+    // staffer can tell the customer they are earning from this order on.
+    return { ok: false, text: 'New customer — this order opens their HIOC account and earns points.' };
   }
   const name = lookup.name.trim() || 'Account';
   if (lookup.source === 'account') {
@@ -82,8 +84,9 @@ export function describeCustomer(lookup: CustomerLookup | null): Feedback | null
   // order_history / petpooja: a name recalled from a past order (this app's
   // or the old Petpooja POS's), not a verified account — still worth
   // confirming against the person at the counter, but there is no balance to
-  // offer (canRedeemPoints below keeps that control hidden either way).
-  return { ok: true, text: `${name} (no HIOC account)` };
+  // offer yet (canRedeemPoints below keeps that control hidden either way).
+  // Placing the order opens their account (POS-ACC).
+  return { ok: true, text: `${name} · HIOC account opens with this order` };
 }
 
 /** Whether the points control is worth showing at all — only a verified

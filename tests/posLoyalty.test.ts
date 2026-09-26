@@ -93,7 +93,7 @@ describe('describeCustomer', () => {
       order_count: 4,
       last_order_at: '2026-09-20T10:00:00Z',
     });
-    expect(note).toEqual({ ok: true, text: 'Ravi (no HIOC account)' });
+    expect(note).toEqual({ ok: true, text: 'Ravi · HIOC account opens with this order' });
   });
 
   it('names a Petpooja-only match (no hioc order ever placed) the same way as order_history', () => {
@@ -104,13 +104,13 @@ describe('describeCustomer', () => {
       order_count: 6,
       last_order_at: '2026-08-01T09:00:00Z',
     });
-    expect(note).toEqual({ ok: true, text: 'Test Customer (no HIOC account)' });
+    expect(note).toEqual({ ok: true, text: 'Test Customer · HIOC account opens with this order' });
   });
 
-  it('says "no account" without making it sound like a failure', () => {
+  it('tells the counter a new number opens an account with this order', () => {
     const note = describeCustomer({ found: false });
     expect(note?.ok).toBe(false);
-    expect(note?.text).toContain('still gets a bill');
+    expect(note?.text).toContain('opens their HIOC account');
   });
 
   it('says nothing at all before a lookup has happened', () => {
