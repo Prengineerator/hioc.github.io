@@ -14,6 +14,8 @@ import {
   type HistoryStatusFilter,
   type OrderStatusRow,
 } from '@/lib/account/history';
+import { latestLegacyBillsForPhone } from '@/lib/legacy/history';
+import type { LegacyCustomerOrderResponse } from '@/lib/api/customerOrders';
 
 export const dynamic = 'force-dynamic';
 
@@ -162,6 +164,13 @@ export async function GET(request: Request) {
   );
   const { items, total, hasMore } = paginateOrderRows(merged, page, PAGE_SIZE);
 
+  // Fetch Petpooja orders if the phone is verified — the same trust check as
+  // guest orders by phone (source 3 in the route's design doc above).
+  let petpoojaOrders: LegacyCustomerOrderResponse[] = [];
+  if (phoneVerified && profile?.phone) {
+    petpoojaOrders = await latestLegacyBillsForPhone(admin, profile.phone, 50);
+  }
+
   if (items.length === 0) {
     return NextResponse.json({
       orders: [],
@@ -171,6 +180,7 @@ export async function GET(request: Request) {
       hasMore,
       phoneVerified,
       status: statusFilter,
+      petpooja_orders: petpoojaOrders,
     });
   }
 
@@ -205,5 +215,6 @@ export async function GET(request: Request) {
     hasMore,
     phoneVerified,
     status: statusFilter,
+    petpooja_orders: petpoojaOrders,
   });
 }

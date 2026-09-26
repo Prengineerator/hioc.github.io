@@ -31,6 +31,8 @@ interface MeResponse {
   phone_verified: boolean;
   marketing_consent: boolean;
   prefs: { default_order_type?: OrderType; veg_only?: boolean };
+  date_of_birth?: string | null;
+  date_of_anniversary?: string | null;
   // GET-only extras (a PATCH response omits them — merged, never replaced).
   email?: string;
   email_verified?: boolean;
@@ -51,6 +53,8 @@ export default function ProfilePage() {
   const [defaultOrderType, setDefaultOrderType] = useState<OrderType>('takeaway');
   const [vegOnly, setVegOnly] = useState(false);
   const [marketingConsent, setMarketingConsent] = useState(false);
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [dateOfAnniversary, setDateOfAnniversary] = useState('');
 
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
@@ -87,6 +91,8 @@ export default function ProfilePage() {
         setDefaultOrderType(data.prefs?.default_order_type ?? 'takeaway');
         setVegOnly(Boolean(data.prefs?.veg_only));
         setMarketingConsent(data.marketing_consent);
+        setDateOfBirth(data.date_of_birth || '');
+        setDateOfAnniversary(data.date_of_anniversary || '');
       } finally {
         setLoading(false);
       }
@@ -99,6 +105,15 @@ export default function ProfilePage() {
     setSaveMsg('');
     setSaveErr('');
     try {
+      // Validate dates: they must be YYYY-MM-DD format or empty, and birthdays can't be in the future
+      const today = new Date().toISOString().split('T')[0];
+
+      if (dateOfBirth && dateOfBirth > today) {
+        setSaveErr('Birth date cannot be in the future.');
+        setSaving(false);
+        return;
+      }
+
       const res = await fetch('/api/account/me', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -107,6 +122,8 @@ export default function ProfilePage() {
           default_order_type: defaultOrderType,
           veg_only: vegOnly,
           marketing_consent: marketingConsent,
+          date_of_birth: dateOfBirth || null,
+          date_of_anniversary: dateOfAnniversary || null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -265,6 +282,32 @@ export default function ProfilePage() {
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="dateOfBirth" className="mb-1 block text-sm font-semibold text-charcoal">
+            Date of birth <span className="text-muted">(optional)</span>
+          </label>
+          <input
+            id="dateOfBirth"
+            type="date"
+            value={dateOfBirth}
+            onChange={(e) => setDateOfBirth(e.target.value)}
+            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="dateOfAnniversary" className="mb-1 block text-sm font-semibold text-charcoal">
+            Anniversary date <span className="text-muted">(optional)</span>
+          </label>
+          <input
+            id="dateOfAnniversary"
+            type="date"
+            value={dateOfAnniversary}
+            onChange={(e) => setDateOfAnniversary(e.target.value)}
             className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
