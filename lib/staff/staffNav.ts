@@ -1,7 +1,8 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
-//   POS          Live orders · Orders · New order · Menu — what the counter
-//                does. Settings (printers live there) sits in the account menu.
+//   POS          Live orders · Orders · New order · Tables · Menu · Settings —
+//                what the counter does, every one a visible tab (Settings in
+//                the account menu was too easy to miss).
 //   staff site   Live orders · Orders, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -29,7 +30,7 @@ export interface StaffNav {
   primary: StaffTab[];
   /** Under the "More" menu. Empty on the POS. */
   more: StaffTab[];
-  /** Extra links in the account menu (the POS's Settings). */
+  /** Extra links in the account menu. */
   account: StaffTab[];
 }
 
@@ -43,9 +44,9 @@ const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
 export function staffNav(input: StaffNavInput): StaffNav {
   if (input.surface === 'pos') {
     return {
-      primary: [LIVE, ORDERS, ...(input.staffPos ? [NEW_ORDER] : []), MENU],
+      primary: [LIVE, ORDERS, ...(input.staffPos ? [NEW_ORDER, TABLES] : []), MENU, SETTINGS],
       more: [],
-      account: [SETTINGS],
+      account: [],
     };
   }
   return {

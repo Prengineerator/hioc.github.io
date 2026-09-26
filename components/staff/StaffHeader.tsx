@@ -3,10 +3,11 @@
 // Staff header. It used to be one row of eight tabs plus the store badge,
 // sound, counter mode, name/role, Lock and Logout, which wrapped and pushed
 // options off-screen on a counter tablet. Now:
-//   left   logo · Live orders · Orders · New order · Tables · More ▾
+//   left   logo · the surface's tabs (POS: Live orders · Orders · New order ·
+//          Tables · Menu · Settings; staff website: fewer tabs + More ▾)
 //   right  store pill · sound icon · counter-mode icon · account ▾
-// The back-office pages (Cash, Attendance, Leave, Menu, Settings) live under
-// "More"; name, role, Lock/Switch and Logout under the account menu. Below md
+// On the staff website the back-office pages (Cash, Attendance, Leave, Menu,
+// Settings) live under "More"; name, role, Lock/Switch and Logout under the account menu. Below md
 // everything folds into the drawer, with the sound icon kept in the bar
 // because it is the one control a counter needs at a glance.
 // Tab lists: lib/staff/staffNav.ts. Sound and counter mode: StaffShell.
