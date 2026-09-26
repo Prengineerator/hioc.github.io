@@ -30,10 +30,13 @@ import { getDesktopBridge } from '@/lib/desktop/bridge';
 import { StaffHeader } from '@/components/staff/StaffHeader';
 import { LockScreen } from './LockScreen';
 
-/** D6-7's stated default. A per-device override is out of scope for this
- * ticket (PIN-2/3) — DEV-3's device-settings columns would be the natural
- * home for it later. */
-const IDLE_MS = 2 * 60 * 1000;
+/** LCK-1: 15 minutes. D6-7's original 2 minutes locked the counter mid-shift
+ * — a barista making a round of drinks, or staff watching the board without
+ * touching it, came back to the PIN screen every time. The operator cookie
+ * still expires after 12h idle (lib/api/operatorCookie.ts), and "Lock" in the
+ * header locks at once. A per-device override would live in DEV-3's
+ * device-settings columns. */
+const IDLE_MS = 15 * 60 * 1000;
 
 export function StaffPinOverlay({
   userEmail,
@@ -71,7 +74,8 @@ export function StaffPinOverlay({
   useEffect(() => {
     if (!inApp || locked) return;
     resetIdle();
-    const events: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart'];
+    // wheel: scrolling the board with a mouse is activity too.
+    const events: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart', 'wheel'];
     events.forEach((e) => window.addEventListener(e, resetIdle));
     return () => {
       if (idleTimer.current) clearTimeout(idleTimer.current);

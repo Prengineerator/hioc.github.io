@@ -63,8 +63,8 @@ import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
+import { OpenDrawerButton } from '@/components/staff/OpenDrawerButton';
 import { POS_FALLBACK_ORDER_TYPE, resolveDefaultOrderType } from '@/lib/pos/deviceSettings';
-import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import {
   billStatusFromDelivery,
   billStatusTone,
@@ -879,13 +879,9 @@ export function PosOrderEntry({
           changeDue = payData.change_due_inr ?? 0;
           if (payData.order) totalInr = payData.order.total_inr ?? payData.order.subtotal_inr;
           settled = true;
-          // PRN-6 — pop the drawer now that the cash (or cash-part) sale is
-          // actually recorded. No-op outside the desktop app or on a machine
-          // with no drawer printer; a real failure comes back as a message
-          // rather than throwing, so a dead drawer never looks like a failed
-          // sale — the money is already taken.
-          const drawerError = await openDrawerIfCash(parts);
-          if (drawerError) note = drawerError;
+          // PRN-6 / DRW-1 — no drawer kick here: it already opened when the
+          // staffer tapped Cash (PosPaymentPanel), which is when the notes
+          // actually go in.
         } else {
           // The order is already created and on the board — a settle failure is
           // recoverable from the queue, so don't strand the counter here. The
@@ -1080,6 +1076,8 @@ export function PosOrderEntry({
               : 'Punch in a dine-in or walk-in order.'}
           </p>
         </div>
+        {/* DRW-2: opens the drawer by hand, logged for the owner. */}
+        <OpenDrawerButton />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

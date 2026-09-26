@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { changeDueInr, type PaymentPart } from '@/lib/orders/payments';
+import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import type { Feedback } from '@/lib/pos/loyalty';
 import type { BillBreakdown } from '@/lib/store/hours';
 import type { OrderType, PaymentMethod } from '@/lib/types';
@@ -108,6 +109,15 @@ export function PosPaymentPanel({
   const busy = submitting || stale;
 
   const [step, setStep] = useState<Step>('choose');
+  // DRW-1: the drawer opens on the Cash tap, before anything is placed; a
+  // drawer that didn't open is a small note here, never a blocked sale.
+  const [drawerNote, setDrawerNote] = useState<string | null>(null);
+  function openDrawerFor(parts: PaymentPart[]) {
+    setDrawerNote(null);
+    void openDrawerIfCash(parts).then((err) => {
+      if (err) setDrawerNote(err);
+    });
+  }
   const [pending, setPending] = useState<{ parts: PaymentPart[] | null } | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
@@ -452,7 +462,12 @@ export function PosPaymentPanel({
             <button
               type="button"
               disabled={busy || !firstValid || splitCashShort || !splitParts}
-              onClick={() => splitParts && attempt(splitParts)}
+              onClick={() => {
+                if (!splitParts || stale) return;
+                // A cash part goes in the drawer, so it opens with this tap.
+                openDrawerFor(splitParts);
+                attempt(splitParts);
+              }}
               className="mt-4 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
             >
               {firstValid
@@ -471,12 +486,17 @@ export function PosPaymentPanel({
                     key={m.value}
                     type="button"
                     disabled={busy || !bill}
-                    onClick={() =>
+                    onClick={() => {
                       // Cash gets the tendered/change step; the others are exact.
-                      m.value === 'cash'
-                        ? setStep('cash')
-                        : attempt([{ method: m.value, amount_inr: total, tendered_inr: null }])
-                    }
+                      // DRW-1: the drawer opens now, so the staffer can take the
+                      // notes and count change while the step is on screen.
+                      if (m.value === 'cash') {
+                        openDrawerFor([{ method: 'cash', amount_inr: total, tendered_inr: null }]);
+                        setStep('cash');
+                      } else {
+                        attempt([{ method: m.value, amount_inr: total, tendered_inr: null }]);
+                      }
+                    }}
                     className="rounded-md bg-tan px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {m.label}
@@ -505,6 +525,7 @@ export function PosPaymentPanel({
           </>
         )}
 
+        {drawerNote ? <p className="text-center text-xs font-bold text-red-700">{drawerNote}</p> : null}
         {submitting ? <p className="text-center text-sm text-muted">Placing order…</p> : null}
       </div>
   );

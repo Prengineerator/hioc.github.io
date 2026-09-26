@@ -2,6 +2,12 @@
 
 // A single order card on the staff queue board (S1). Tap to open the detail
 // view; the primary button advances one step along the happy path.
+//
+// BRD-1: the card lists what was ordered, so the board can be reviewed and
+// prepped from at a glance — on the staff website and in the POS app, which
+// loads the same board. Voided lines stay visible, struck through, so a
+// correction is never silent; the detail view keeps the prices and the
+// prep/handover checklist.
 
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -72,6 +78,33 @@ export function OrderCard({
           {hasVoid ? <span className="ml-1 font-bold text-red-600">· voided</span> : null}
         </p>
       </div>
+
+      {order.items.length > 0 ? (
+        <ul className="flex flex-col gap-1 border-t border-[#e5e5e5] pt-2 text-sm text-charcoal">
+          {order.items.map((item) => (
+            <li key={item.id} className={item.voided ? 'text-muted line-through' : ''}>
+              <span className="font-bold">{item.quantity}×</span> {item.name_snapshot}
+              {item.variant_label_snapshot ? (
+                <span className="text-muted"> ({item.variant_label_snapshot})</span>
+              ) : null}
+              {item.addons.length > 0 ? (
+                <span className="block pl-4 text-xs text-muted">
+                  + {item.addons.map((a) => a.option_name_snapshot).join(', ')}
+                </span>
+              ) : null}
+              {item.special_instructions ? (
+                <span className="block pl-4 text-xs italic text-tan">Note: {item.special_instructions}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {order.notes ? (
+        <p className="rounded bg-[#f6efe9] px-2 py-1 text-xs text-charcoal">
+          <span className="font-bold">Order note:</span> {order.notes}
+        </p>
+      ) : null}
 
       <div className="flex items-center justify-between text-xs text-muted">
         {/* Live total age (amber >10m, red >20m) + time in the current stage. */}
