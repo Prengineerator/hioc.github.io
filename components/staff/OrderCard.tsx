@@ -10,6 +10,7 @@
 // prep/handover checklist.
 
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
+import { PaymentBadge } from '@/components/staff/PaymentBadge';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
@@ -66,8 +67,11 @@ export function OrderCard({
     >
       <div className="flex items-center justify-between">
         <span className="font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</span>
-        <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
-          {TYPE_LABEL[order.order_type]}
+        <span className="flex items-center gap-1.5">
+          <PaymentBadge status={order.payment_status} />
+          <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
+            {TYPE_LABEL[order.order_type]}
+          </span>
         </span>
       </div>
 

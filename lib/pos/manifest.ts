@@ -50,6 +50,6 @@ export const POS_MANIFEST: MetadataRoute.Manifest = {
   // actually does. Costs nothing when the OS ignores them.
   shortcuts: [
     { name: 'New order', short_name: 'New order', url: '/staff/orders/new' },
-    { name: 'Order board', short_name: 'Board', url: '/staff/orders' },
+    { name: 'Live orders', short_name: 'Live', url: '/staff' },
   ],
 };

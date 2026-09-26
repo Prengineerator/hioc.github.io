@@ -75,7 +75,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     return NextResponse.json({ order: unchanged as Order });
   }
 
-  // FND3-5 manager comp override: an unpaid dine-in at `ready` can be completed
+  // FND3-5 manager comp override: an unpaid order at `ready` can be completed
   // without collecting payment when a manager explicitly comps it, with a
   // reason and an audit row. We resolve `isComp` BEFORE canTransition so the
   // settlement guard can see it. PIN-3: gated by hasPermission('comp_order',
@@ -85,13 +85,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // the right answer either way (classic session or capped device operator).
   let isComp = false;
   const compBody = body.comp as { reason?: string } | undefined;
-  const isDineInSettleCompletion =
-    from === 'ready' &&
-    to === 'completed' &&
-    current.order_type === 'dine_in' &&
-    current.payment_status !== 'paid';
+  // Every order type now has to be settled before it completes (see the
+  // ready → completed guard in lib/orders/stateMachine.ts), so the comp
+  // override applies to every type too, not just dine-in.
+  const isUnpaidCompletion = from === 'ready' && to === 'completed' && current.payment_status !== 'paid';
 
-  if (isDineInSettleCompletion && compBody) {
+  if (isUnpaidCompletion && compBody) {
     if (!(await hasPermission(actor.user, 'comp_order', actor.role))) {
       return errorResponse(403, 'A manager is required to comp an order');
     }

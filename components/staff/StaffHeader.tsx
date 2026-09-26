@@ -1,54 +1,58 @@
 'use client';
 
+// Staff header. It used to be one row of eight tabs plus the store badge,
+// sound, counter mode, name/role, Lock and Logout, which wrapped and pushed
+// options off-screen on a counter tablet. Now:
+//   left   logo · Live orders · Orders · New order · Tables · More ▾
+//   right  store pill · sound icon · counter-mode icon · account ▾
+// The back-office pages (Cash, Attendance, Leave, Menu, Settings) live under
+// "More"; name, role, Lock/Switch and Logout under the account menu. Below md
+// everything folds into the drawer, with the sound icon kept in the bar
+// because it is the one control a counter needs at a glance.
+// Tab lists: lib/staff/staffNav.ts. Sound and counter mode: StaffShell.
+
 import Image from 'next/image';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
 import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
-import { isActiveSettingsSection, SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 import { COUNTER_MODE_HREFS } from '@/lib/staff/newOrderWatch';
+import { isActiveTab, moreTabs, primaryTabs, type StaffTab } from '@/lib/staff/staffNav';
+import { SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 import { useStaffShell } from '@/components/staff/StaffShell';
 
-const TABS = [
-  { href: '/staff', label: 'Orders' },
-  // POS-1/POS-3: the counter-tablet order-entry surface + tables board. Only
-  // shown when the staffPos flag is on (default ON, NEXT_PUBLIC_FLAG_STAFF_POS=
-  // false to hide both).
-  ...(flags.staffPos
-    ? [
-        { href: '/staff/orders/new', label: 'New order' },
-        { href: '/staff/tables', label: 'Tables' },
-        // OPS-2: cash drawer day-open/close by denomination.
-        { href: '/staff/cash', label: 'Cash' },
-      ]
-    : []),
-  // ATT-1: attendance. Its own flag, not staffPos — clocking in has nothing to
-  // do with whether the counter POS is enabled, and it stays dark until the
-  // geofence is tuned on site.
-  ...(flags.attendance
-    ? [
-        { href: '/staff/attendance', label: 'Attendance' },
-        // LEAVE-3. Under /staff, not /owner, because managers approve here and
-        // /owner/** is owner-only.
-        { href: '/staff/leave', label: 'Leave' },
-      ]
-    : []),
-  { href: '/staff/menu', label: 'Menu' },
-  // SET-1 — every POS/counter setting (printers & cash drawer, store,
-  // this counter's device enrolment) lives under /staff/settings now.
-  // Always shown, even in a plain browser tab with no desktop bridge: staff
-  // need to be able to find it to learn what needs the HIOC POS desktop app
-  // (PrinterSettings explains why when there's no bridge). Kept last.
-  { href: SETTINGS_ROOT, label: 'Settings' },
-];
+const NAV_FLAGS = { staffPos: flags.staffPos, attendance: flags.attendance };
+const PRIMARY_TABS = primaryTabs(NAV_FLAGS);
+const MORE_TABS = moreTabs(NAV_FLAGS);
 
 export interface StaffPinControls {
   /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
    * decides which — this component just renders the label it's given). */
   label: 'Switch' | 'Lock';
   onLock: () => void;
+}
+
+/** Closes a dropdown on an outside click or Escape. */
+function useDismiss(open: boolean, close: () => void) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, close]);
+  return ref;
 }
 
 export function StaffHeader({
@@ -72,70 +76,27 @@ export function StaffHeader({
   // '/orders' while the tab href is '/staff/orders'. Compare like with like or
   // no tab ever highlights on the subdomain.
   const toHref = useSurfaceHref();
-  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : '';
-  const [openState, setOpenState] = useState<StoreOpenState | null>(null);
-  // Mobile nav (< md): the tab row + account controls that sit inline on a
-  // tablet/desktop header don't fit a 360–414px phone, so below md they move
-  // into a collapsible drawer behind a hamburger button instead.
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  // Counter mode trims the nav to what the counter works from — Orders, New
-  // order, Tables — instead of hiding it (it used to cover the whole screen
-  // with the Orders board, leaving no way to the other two).
   const shell = useStaffShell();
-  const tabs = shell.counterMode ? TABS.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : TABS;
-  const tabLabel = (tab: { href: string; label: string }) =>
-    tab.href === '/staff' && shell.newOrderCount > 0 ? (
-      <>
-        {tab.label}{' '}
-        <span className="ml-1 rounded-full bg-tan px-1.5 py-0.5 text-[11px] font-bold text-charcoal">
-          {shell.newOrderCount} new
-        </span>
-      </>
-    ) : (
-      tab.label
-    );
+  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : '';
+  const displayName = userName || userEmail || 'Signed in';
+  const [openState, setOpenState] = useState<StoreOpenState | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false); // phone drawer
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const closeMore = useCallback(() => setMoreOpen(false), []);
+  const closeAccount = useCallback(() => setAccountOpen(false), []);
+  const moreRef = useDismiss(moreOpen, closeMore);
+  const accountRef = useDismiss(accountOpen, closeAccount);
 
-  const soundButton = (
-    <button
-      type="button"
-      onClick={shell.toggleSound}
-      aria-pressed={shell.soundOn}
-      title={shell.soundOn && !shell.soundReady ? 'Tap anywhere to allow the order alarm' : undefined}
-      className={
-        'rounded-md border px-3 py-2 text-xs font-bold transition-colors ' +
-        (!shell.soundOn
-          ? 'border-cream/30 text-cream/60 hover:text-cream'
-          : shell.soundReady
-            ? 'border-cream/40 text-cream hover:bg-cream hover:text-charcoal'
-            : 'border-amber-400 bg-amber-50 text-amber-800')
-      }
-    >
-      {!shell.soundOn ? '🔕 Sound off' : shell.soundReady ? '🔔 Sound on' : '🔔 Tap to enable sound'}
-    </button>
-  );
-
-  const counterModeButton = (
-    <button
-      type="button"
-      onClick={() => shell.setCounterMode(!shell.counterMode)}
-      aria-pressed={shell.counterMode}
-      className={
-        'rounded-md border px-3 py-2 text-xs font-bold transition-colors ' +
-        (shell.counterMode
-          ? 'border-tan bg-tan text-charcoal'
-          : 'border-cream/40 text-cream hover:bg-cream hover:text-charcoal')
-      }
-    >
-      {shell.counterMode ? 'Exit counter mode' : 'Counter mode'}
-    </button>
-  );
+  // Counter mode keeps only what the counter works from, and no More menu.
+  const primary = shell.counterMode ? PRIMARY_TABS.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : PRIMARY_TABS;
+  const more = shell.counterMode ? [] : MORE_TABS;
+  const active = (tab: StaffTab) => isActiveTab(pathname, toHref(tab.href), toHref(SETTINGS_ROOT));
+  const moreActive = more.find(active);
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
-  // /staff/settings/store (SET-1 — moved off the Menu page). Best-effort — a failed fetch
-  // just leaves the badge hidden. Refreshed on a poll, on window focus, and
-  // instantly when the Store controls fire 'hioc:store-changed', so it never
-  // goes stale after an override/pause toggle (or a time-based open/close).
+  // /staff/settings/store. Best-effort — a failed fetch just hides it.
+  // Refreshed on a poll, on focus, and on 'hioc:store-changed'.
   useEffect(() => {
     let cancelled = false;
     const load = () => {
@@ -158,15 +119,9 @@ export function StaffHeader({
     };
   }, []);
 
-  // PIN-2 — the owner's report: on an enrolled PIN counter, "Logout" was
-  // leaving the operator cookie in place AND sending the browser to the
-  // classic sign-in form instead of back to the PIN lock screen. Both bugs
-  // trace to this function only ever having cleared/known about the classic
-  // session. Fixed by always clearing BOTH credential types (best-effort —
-  // whichever one wasn't in use is simply a no-op to clear, same as DELETE
-  // /api/device/operator already promises), then routing based on whether
-  // this counter is PIN-capable (`pinControls` is only ever handed to this
-  // component under exactly that condition — see StaffPinOverlay).
+  // PIN-2 — always clear BOTH credential types (whichever wasn't in use is a
+  // no-op), then route to the PIN lock screen on a PIN counter or to the
+  // classic sign-in everywhere else.
   async function handleLogout() {
     await Promise.allSettled([
       fetch('/api/device/operator', { method: 'DELETE' }),
@@ -175,10 +130,8 @@ export function StaffHeader({
 
     const { href, hardReload } = logoutDestination(Boolean(pinControls));
     if (hardReload) {
-      // A full navigation, not router.push: only a fresh request re-runs
-      // getCounterActor()/getEnrolledDevice() on the server and renders the
-      // full-screen LockScreen — a client-side push would land on whatever
-      // the router already has cached for this route.
+      // A full navigation re-runs getCounterActor()/getEnrolledDevice() on the
+      // server and renders the LockScreen; a client push would reuse the cache.
       window.location.assign(toHref(href));
     } else {
       router.push(toHref(href));
@@ -187,173 +140,263 @@ export function StaffHeader({
 
   const logoutLabel = logoutButtonLabel(Boolean(pinControls));
 
-  // The drawer is per-navigation, not per-render — a tapped link (or a route
-  // change from anywhere else, e.g. router.push after logout) should always
-  // leave it closed on the next screen rather than reopened over it.
+  // Menus are per-navigation: a tapped link always lands on a closed menu.
   useEffect(() => {
     setMenuOpen(false);
+    setMoreOpen(false);
+    setAccountOpen(false);
   }, [pathname]);
 
-  const storeBadge = openState ? (
+  const storePill = openState ? (
     <Link
       href="/staff/settings/store"
-      onClick={() => setMenuOpen(false)}
+      title="Store status: tap to change"
       className={
-        'inline-block rounded-md px-3 py-2 text-xs font-bold transition-colors ' +
-        (openState.acceptingOrders
-          ? 'bg-[#e8f3ea] text-[#2f6b38] hover:opacity-80'
-          : 'bg-[#f6efe9] text-tan-dark hover:opacity-80')
+        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold transition-opacity hover:opacity-80 ' +
+        (openState.acceptingOrders ? 'bg-[#e8f3ea] text-[#2f6b38]' : 'bg-[#f6efe9] text-tan-dark')
       }
     >
-      {openState.acceptingOrders
-        ? 'Store: Accepting'
-        : openState.reason === 'paused'
-          ? 'Store: Paused'
-          : 'Store: Closed'}
+      <span
+        aria-hidden
+        className={'inline-block h-2 w-2 rounded-full ' + (openState.acceptingOrders ? 'bg-[#2f6b38]' : 'bg-tan-dark')}
+      />
+      {openState.acceptingOrders ? 'Open' : openState.reason === 'paused' ? 'Paused' : 'Closed'}
     </Link>
   ) : null;
 
+  const soundLabel = !shell.soundOn
+    ? 'Order alarm off: tap to turn on'
+    : shell.soundReady
+      ? 'Order alarm on: tap to turn off'
+      : 'Tap to allow the order alarm sound';
+  const soundButton = (
+    <button
+      type="button"
+      onClick={shell.toggleSound}
+      aria-pressed={shell.soundOn}
+      aria-label={soundLabel}
+      title={soundLabel}
+      className={
+        'relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md border text-lg transition-colors ' +
+        (!shell.soundOn
+          ? 'border-cream/30 text-cream/50 hover:text-cream'
+          : shell.soundReady
+            ? 'border-cream/30 hover:bg-cream/10'
+            : 'border-amber-400 bg-amber-400/20')
+      }
+    >
+      <span aria-hidden>{shell.soundOn ? '🔔' : '🔕'}</span>
+      {shell.soundOn && !shell.soundReady ? (
+        <span aria-hidden className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-amber-400" />
+      ) : null}
+    </button>
+  );
+
+  const counterLabel = shell.counterMode ? 'Exit counter mode' : 'Counter mode: full screen, screen stays on';
+  const counterButton = (
+    <button
+      type="button"
+      onClick={() => shell.setCounterMode(!shell.counterMode)}
+      aria-pressed={shell.counterMode}
+      aria-label={counterLabel}
+      title={counterLabel}
+      className={
+        'flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-md border px-2.5 text-sm font-bold transition-colors ' +
+        (shell.counterMode ? 'border-tan bg-tan text-charcoal' : 'border-cream/30 text-cream hover:bg-cream/10')
+      }
+    >
+      <span aria-hidden>⛶</span>
+      {shell.counterMode ? <span>Exit</span> : null}
+    </button>
+  );
+
+  const tabLabel = (tab: StaffTab) =>
+    tab.href === '/staff' && shell.newOrderCount > 0 ? (
+      <>
+        {tab.label}
+        <span className="ml-1.5 rounded-full bg-tan px-1.5 py-0.5 text-[11px] font-bold text-charcoal">
+          {shell.newOrderCount}
+        </span>
+      </>
+    ) : (
+      tab.label
+    );
+
   return (
     <header className="sticky top-0 z-40 bg-charcoal text-cream">
-      <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-        <div className="flex items-center gap-6">
-          <span className="flex items-center gap-2">
-            <Image
-              src="/images/logo-light.png"
-              alt="HIOC."
-              width={480}
-              height={291}
-              className="h-7 w-auto object-contain"
-            />
-            <span className="text-sm font-normal text-cream/60">Staff</span>
-          </span>
-          {/* Tablet/desktop tab row — unchanged from before; just hidden below
-              md, where it moves into the drawer instead. */}
-          <nav className="hidden md:block">
-            <ul className="flex items-center gap-4 text-sm">
-              {tabs.map((tab) => {
-                // Every other tab matches only its own exact path; the
-                // Settings tab (SET-1) matches any /staff/settings/** path,
-                // via the same helper the settings sidebar itself uses.
-                const isActive =
-                  tab.href === SETTINGS_ROOT
-                    ? isActiveSettingsSection(pathname, toHref(tab.href))
-                    : pathname === toHref(tab.href);
-                return (
-                  <li key={tab.href}>
-                    <Link
-                      href={tab.href}
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2.5">
+        <div className="flex min-w-0 items-center gap-5">
+          <Image
+            src="/images/logo-light.png"
+            alt="HIOC. Staff"
+            width={480}
+            height={291}
+            className="h-7 w-auto shrink-0 object-contain"
+          />
+          <nav className="hidden md:block" aria-label="Staff">
+            <ul className="flex items-center gap-1 text-sm">
+              {primary.map((tab) => (
+                <li key={tab.href}>
+                  <Link
+                    href={tab.href}
+                    aria-current={active(tab) ? 'page' : undefined}
+                    className={
+                      'flex items-center whitespace-nowrap rounded-md px-3 py-2 font-bold transition-colors ' +
+                      (active(tab) ? 'bg-cream/10 text-tan' : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
+                    }
+                  >
+                    {tabLabel(tab)}
+                  </Link>
+                </li>
+              ))}
+              {more.length > 0 ? (
+                <li>
+                  <div ref={moreRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setMoreOpen((v) => !v)}
+                      aria-expanded={moreOpen}
+                      aria-haspopup="menu"
                       className={
-                        'border-b-2 pb-1 transition-colors ' +
-                        (isActive
-                          ? 'border-tan text-tan'
-                          : 'border-transparent text-cream/70 hover:text-cream')
+                        'flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 font-bold transition-colors ' +
+                        (moreActive ? 'bg-cream/10 text-tan' : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
                       }
                     >
-                      {tabLabel(tab)}
-                    </Link>
-                  </li>
-                );
-              })}
+                      {moreActive ? moreActive.label : 'More'} <span aria-hidden>▾</span>
+                    </button>
+                    {moreOpen ? (
+                      <ul
+                        role="menu"
+                        className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-md border border-cream/10 bg-charcoal py-1 shadow-lg"
+                      >
+                        {more.map((tab) => (
+                          <li key={tab.href} role="none">
+                            <Link
+                              href={tab.href}
+                              role="menuitem"
+                              className={
+                                'block px-4 py-2.5 text-sm font-bold ' +
+                                (active(tab) ? 'text-tan' : 'text-cream/85 hover:bg-cream/5 hover:text-cream')
+                              }
+                            >
+                              {tab.label}
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                </li>
+              ) : null}
             </ul>
           </nav>
         </div>
 
-        {/* Tablet/desktop account controls — unchanged, hidden below md. */}
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden lg:inline-flex">{storePill}</span>
           {soundButton}
-          {counterModeButton}
-          {storeBadge}
-          <div className="text-right leading-tight" title={userEmail}>
-            <div className="max-w-[36vw] truncate text-xs font-medium text-cream sm:max-w-none">
-              {userName || userEmail || 'Signed in'}
-            </div>
-            {roleLabel ? (
-              <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
-            ) : null}
-          </div>
-          {pinControls ? (
+          <span className="hidden md:inline-flex">{counterButton}</span>
+
+          {/* Account menu — name, role, Lock/Switch, Logout. md+ only; the
+              drawer carries them on a phone. */}
+          <div ref={accountRef} className="relative hidden md:block">
             <button
               type="button"
-              onClick={pinControls.onLock}
-              className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+              onClick={() => setAccountOpen((v) => !v)}
+              aria-expanded={accountOpen}
+              aria-haspopup="menu"
+              title={userEmail}
+              className="flex h-10 max-w-[180px] items-center gap-2 rounded-md border border-cream/30 px-2.5 text-sm hover:bg-cream/10"
             >
-              {pinControls.label}
+              <span
+                aria-hidden
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-tan text-xs font-bold text-charcoal"
+              >
+                {displayName.charAt(0).toUpperCase()}
+              </span>
+              <span className="hidden truncate font-medium xl:inline">{displayName}</span>
+              <span aria-hidden>▾</span>
             </button>
-          ) : null}
+            {accountOpen ? (
+              <div
+                role="menu"
+                className="absolute right-0 top-full z-50 mt-1 w-60 rounded-md border border-cream/10 bg-charcoal p-3 shadow-lg"
+              >
+                <p className="truncate text-sm font-bold text-cream">{displayName}</p>
+                {roleLabel ? <p className="text-[11px] uppercase tracking-wide text-cream/50">{roleLabel}</p> : null}
+                {userEmail && userName ? <p className="truncate text-xs text-cream/50">{userEmail}</p> : null}
+                <div className="mt-3 lg:hidden">{storePill}</div>
+                <div className="mt-3 flex flex-col gap-2">
+                  {pinControls ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={pinControls.onLock}
+                      className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+                    >
+                      {pinControls.label}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={handleLogout}
+                    className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+                  >
+                    {logoutLabel}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {/* Phone hamburger (< md). */}
           <button
             type="button"
-            onClick={handleLogout}
-            className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-controls="staff-mobile-menu"
+            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-cream/30 text-cream md:hidden"
           >
-            {logoutLabel}
+            <span aria-hidden className="text-xl leading-none">
+              {menuOpen ? '×' : '☰'}
+            </span>
           </button>
         </div>
-
-        {/* Phone hamburger — the tab row + account controls above don't fit a
-            360–414px header, so they collapse into the drawer below instead of
-            wrapping or overflowing. min 40px square tap target. */}
-        <button
-          type="button"
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-expanded={menuOpen}
-          aria-controls="staff-mobile-menu"
-          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-cream/30 text-cream md:hidden"
-        >
-          <span aria-hidden className="text-xl leading-none">
-            {menuOpen ? '×' : '☰'}
-          </span>
-        </button>
       </div>
 
-      {/* Phone drawer: tab list + store badge + account + logout, all stacked
-          so every tap target stays full-width and ≥40px tall. */}
+      {/* Phone drawer: every tab, then the controls, full-width tap targets. */}
       {menuOpen ? (
         <div id="staff-mobile-menu" className="border-t border-cream/10 px-4 pb-4 md:hidden">
-          <nav>
+          <nav aria-label="Staff">
             <ul className="flex flex-col gap-1 pt-3 text-sm">
-              {tabs.map((tab) => {
-                // Every other tab matches only its own exact path; the
-                // Settings tab (SET-1) matches any /staff/settings/** path,
-                // via the same helper the settings sidebar itself uses.
-                const isActive =
-                  tab.href === SETTINGS_ROOT
-                    ? isActiveSettingsSection(pathname, toHref(tab.href))
-                    : pathname === toHref(tab.href);
-                return (
-                  <li key={tab.href}>
-                    <Link
-                      href={tab.href}
-                      className={
-                        'block rounded-md px-3 py-2.5 font-bold transition-colors ' +
-                        (isActive
-                          ? 'bg-cream/10 text-tan'
-                          : 'text-cream/80 hover:bg-cream/5 hover:text-cream')
-                      }
-                    >
-                      {tabLabel(tab)}
-                    </Link>
-                  </li>
-                );
-              })}
+              {[...primary, ...more].map((tab) => (
+                <li key={tab.href}>
+                  <Link
+                    href={tab.href}
+                    aria-current={active(tab) ? 'page' : undefined}
+                    className={
+                      'flex items-center rounded-md px-3 py-2.5 font-bold transition-colors ' +
+                      (active(tab) ? 'bg-cream/10 text-tan' : 'text-cream/80 hover:bg-cream/5 hover:text-cream')
+                    }
+                  >
+                    {tabLabel(tab)}
+                  </Link>
+                </li>
+              ))}
             </ul>
           </nav>
 
           <div className="mt-3 flex flex-col gap-3 border-t border-cream/10 pt-3">
-            <div className="flex flex-wrap gap-2">
-              {soundButton}
-              {counterModeButton}
+            <div className="flex flex-wrap items-center gap-2">
+              {counterButton}
+              {storePill}
             </div>
-            {storeBadge}
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 leading-tight" title={userEmail}>
-                <div className="truncate text-xs font-medium text-cream">
-                  {userName || userEmail || 'Signed in'}
-                </div>
-                {roleLabel ? (
-                  <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div>
-                ) : null}
+                <div className="truncate text-xs font-medium text-cream">{displayName}</div>
+                {roleLabel ? <div className="text-[10px] uppercase tracking-wide text-cream/50">{roleLabel}</div> : null}
               </div>
               <div className="flex shrink-0 gap-2">
                 {pinControls ? (

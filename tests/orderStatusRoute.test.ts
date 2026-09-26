@@ -167,23 +167,36 @@ describe('PATCH /api/orders/[id]/status', () => {
     expect(sendBillNotification).not.toHaveBeenCalled();
   });
 
-  // Issue-3: most order types (takeaway/delivery) have no settlement guard on
-  // ready → completed, so an UNPAID one could complete without ever being
-  // billed at creation (issue-3 also stops that) or at settle. The completed
-  // transition must not paper over that with an unpaid bill either.
-  it('does NOT fire the settle bill completing an UNPAID non-dine-in order', async () => {
+  it('lets a manager comp an unpaid takeaway to completion', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'owner' };
+    const readyTakeaway = {
+      id: UUID, status: 'ready', version: 3, customer_phone: '+919000000000',
+      order_number: 1004, order_type: 'takeaway', payment_status: 'unpaid',
+    };
+    state.current = readyTakeaway;
+    state.updated = { ...readyTakeaway, payment_status: 'paid', status: 'completed', version: 4 };
+    const res = await PATCH(req({ status: 'completed', comp: { reason: 'Regular, on the house' } }), params);
+    expect(res.status).toBe(200);
+    expect(state.compPatch?.payment_status).toBe('paid');
+    expect(state.amendmentRow?.kind).toBe('comp');
+  });
+
+  // An UNPAID takeaway used to complete with the money never collected. Every
+  // order type must now be settled (or comped) before it completes.
+  it('409s completing an UNPAID takeaway order and sends no bill', async () => {
     state.current = {
       id: UUID, status: 'ready', version: 3, customer_phone: '+919000000000',
       order_number: 1003, order_type: 'takeaway', payment_status: 'unpaid',
     };
     state.updated = { ...state.current, status: 'completed', version: 4 };
     const res = await PATCH(req({ status: 'completed' }), params);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('Collect payment before completing this order');
     expect(sendBillNotification).not.toHaveBeenCalled();
   });
 
   // FND3-5: dine-in must be settled before it completes (guard → 409), unless a
-  // manager comps it. Takeaway (default fixture) is unaffected by these rules.
+  // manager comps it. (Takeaway now follows the same rule — tested above.)
   describe('dine-in settlement (FND3-5)', () => {
     const readyDineIn = (paymentStatus: string) => ({
       id: UUID,
