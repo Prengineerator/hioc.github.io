@@ -27,7 +27,7 @@ type RouteParams = { params: { id: string } };
 const OPEN_STATUSES: OrderStatus[] = ['accepted', 'preparing', 'ready'];
 
 // The subset of the loaded order + lines the recompute + preconditions need.
-type OrderLine = { id: string; voided: boolean; line_total_inr: number };
+type OrderLine = { id: string; voided: boolean; line_total_inr: number; gst_exempt?: boolean };
 type LoadedOrder = {
   id: string;
   status: OrderStatus;
@@ -103,7 +103,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   const { data, error: readError } = await admin
     .from('orders')
     .select(
-      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr)',
+      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr, gst_exempt)',
     )
     .eq('id', id)
     .maybeSingle();
@@ -251,7 +251,7 @@ async function addLines(
   const { data, error: readError } = await admin
     .from('orders')
     .select(
-      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr)',
+      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr, gst_exempt)',
     )
     .eq('id', id)
     .maybeSingle();
@@ -316,7 +316,7 @@ async function addLines(
   const settings = await getStoreSettings();
   const allLines = [
     ...existingItems,
-    ...resolved.lines.map((l) => ({ voided: false, line_total_inr: l.line_total_inr })),
+    ...resolved.lines.map((l) => ({ voided: false, line_total_inr: l.line_total_inr, gst_exempt: l.gst_exempt })),
   ];
   const bill = recomputeOrderTotals({
     items: allLines,

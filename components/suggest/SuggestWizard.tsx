@@ -282,6 +282,7 @@ export function SuggestWizard() {
         name: item.name,
         variantLabel: variant.label,
         unitPriceInr: variant.price_inr,
+        gstExempt: item.gst_exempt === true,
         addons: [],
         specialInstructions: '',
         suggestionSessionId: response.sessionId,

@@ -59,6 +59,7 @@ export function PosCustomizeModal({
         name: item.name,
         variantLabel: variant.label,
         unitPriceInr: unitPrice,
+        gstExempt: item.gst_exempt === true,
         addons: addonsFlat,
         specialInstructions: instructions.trim(),
       },

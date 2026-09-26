@@ -101,6 +101,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       | 'unavailable_until'
       | 'short_code'
       | 'in_store_only'
+      | 'gst_exempt'
     >
   > = {};
 
@@ -154,6 +155,13 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       return errorResponse(400, 'in_store_only must be a boolean');
     }
     updates.in_store_only = body.in_store_only;
+  }
+
+  if ('gst_exempt' in body) {
+    if (typeof body.gst_exempt !== 'boolean') {
+      return errorResponse(400, 'gst_exempt must be a boolean');
+    }
+    updates.gst_exempt = body.gst_exempt;
   }
 
   if ('sort_order' in body) {

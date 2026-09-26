@@ -93,6 +93,7 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
                   name: item.name,
                   variantLabel: onlyVariant.label,
                   unitPriceInr: onlyVariant.price_inr,
+                  gstExempt: item.gst_exempt === true,
                   addons: [],
                   specialInstructions: '',
                 })

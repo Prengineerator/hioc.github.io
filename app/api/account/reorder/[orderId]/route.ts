@@ -223,6 +223,7 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
       name: menuItem.name,
       variantLabel: variant.label,
       unitPriceInr,
+      gstExempt: menuItem.gst_exempt === true,
       addons: kept,
       specialInstructions: oi.special_instructions ?? '',
       qty: oi.quantity,

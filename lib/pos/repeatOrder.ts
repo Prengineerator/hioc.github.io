@@ -193,6 +193,7 @@ export function mapLegacyBillItemsToCartLines(
       name: menuItem.name,
       variantLabel: variant.label,
       unitPriceInr: variant.price_inr,
+      gstExempt: menuItem.gst_exempt === true,
       addons: [],
       specialInstructions: '',
       qty: 1,

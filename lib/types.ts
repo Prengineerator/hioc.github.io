@@ -125,6 +125,9 @@ export interface MenuItem {
   // row read before the migration still type-checks; use isInStoreOnly()
   // (lib/menu/inStore.ts), which also honours the in-store category.
   in_store_only?: boolean;
+  // No GST on this item (2026-09-gst-exempt migration). Optional so a row
+  // read before the migration still type-checks; absent = taxable.
+  gst_exempt?: boolean;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
@@ -198,6 +201,9 @@ export interface OrderItem {
   quantity: number;
   line_total_inr: number;
   special_instructions: string; // per-line note (CUS-021); snapshotted (migration §5)
+  // GST-exempt snapshot taken at sale time (2026-09-gst-exempt); absent on
+  // rows read before the migration = taxable.
+  gst_exempt?: boolean;
   addons: OrderItemAddon[];
   // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
   // is VOIDED, never deleted — kept for audit; excluded from totals server-side.

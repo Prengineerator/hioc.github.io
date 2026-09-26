@@ -254,5 +254,22 @@ describe('POST /api/orders — staff walk-in takeaway (FND3-3)', () => {
     expect(res.status).toBe(201);
     expect(state.orderInsert?.channel).toBe('staff_pos');
   });
+
+  it('bills no GST on a GST-exempt item', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+    state.menuRows = [{ ...state.menuRows[0], name: 'Water Bottle', gst_exempt: true }];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.subtotal_inr).toBe(200);
+    expect(state.orderInsert?.tax_inr).toBe(0);
+    expect(state.orderInsert?.total_inr).toBe(200);
+  });
+
+  it('still bills GST on a normal item', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.tax_inr).toBe(10);
+  });
 });
 

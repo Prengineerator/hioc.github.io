@@ -16,6 +16,8 @@ export interface MenuItemFormValues {
   is_available: boolean;
   /** Counter-only item (water bottles…) — see lib/menu/inStore.ts. */
   in_store_only: boolean;
+  /** No GST charged on this item (2026-09-gst-exempt). */
+  gst_exempt: boolean;
   sort_order: number;
   image_url: string;
   short_code: string | null; // optional POS quick-add shortform (UPPERCASE or null)
@@ -49,6 +51,7 @@ export function MenuItemFormModal({
   // so the switch is shown on and locked there rather than offering a choice
   // that wouldn't take effect.
   const categoryForcesInStore = isInStoreOnlyCategory(category);
+  const [gstExempt, setGstExempt] = useState(initial?.gst_exempt ?? false);
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [imageUrl, setImageUrl] = useState(initial?.image_url ?? '');
   const [shortCode, setShortCode] = useState(initial?.short_code ?? '');
@@ -171,6 +174,7 @@ export function MenuItemFormModal({
         is_veg: isVeg,
         is_available: isAvailable,
         in_store_only: inStoreOnly || categoryForcesInStore,
+        gst_exempt: gstExempt,
         sort_order: Number(sortOrder) || 0,
         image_url: imageUrl,
         short_code: trimmedCode || null,
@@ -428,6 +432,16 @@ export function MenuItemFormModal({
                 ) : (
                   <ToggleSwitch checked={inStoreOnly} onChange={setInStoreOnly} label="In-store only" />
                 )}
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-sm font-bold text-charcoal">No GST</span>
+                  <p className="text-xs text-muted">
+                    GST is not charged on this item. Orders already placed keep the GST they were billed with.
+                  </p>
+                </div>
+                <ToggleSwitch checked={gstExempt} onChange={setGstExempt} label="No GST" />
               </div>
 
               <div>

@@ -27,6 +27,8 @@ import type { OrderType, StoreSettings } from '@/lib/types';
 export interface RecomputeLine {
   voided: boolean;
   line_total_inr: number;
+  /** The line's GST-exempt snapshot (2026-09-gst-exempt); absent = taxable. */
+  gst_exempt?: boolean;
 }
 
 export interface RecomputeInput {
@@ -42,6 +44,7 @@ export interface RecomputeInput {
  * ({ subtotal_inr, tax_inr, packaging_inr, discount_inr, total_inr }).
  *
  * - subtotal = Σ `line_total_inr` over non-voided items
+ * - GST on the non-voided lines that aren't GST-exempt (their snapshot)
  * - discount = min(stored discount, new subtotal)  ← v1 clamp (D8)
  * - GST/packaging via computeBill; dine-in forces packaging 0 (decision D5)
  */
@@ -51,15 +54,19 @@ export function recomputeOrderTotals({
   orderType,
   discountInr,
 }: RecomputeInput): BillBreakdown {
-  const subtotalInr = items
-    .filter((item) => !item.voided)
+  const remaining = items.filter((item) => !item.voided);
+  const subtotalInr = remaining.reduce((sum, item) => sum + item.line_total_inr, 0);
+  // GST only on the lines that weren't GST-exempt when sold — the snapshot,
+  // never the menu's current setting, so a later change can't rewrite a bill.
+  const taxableSubtotalInr = remaining
+    .filter((item) => item.gst_exempt !== true)
     .reduce((sum, item) => sum + item.line_total_inr, 0);
 
   // Clamp the stored discount to the new subtotal so the total never goes
   // negative when lines are removed (v1: no coupon/points re-qualification, D8).
   const discount = Math.min(Math.max(0, discountInr), subtotalInr);
 
-  const bill = computeBill(subtotalInr, settings, discount);
+  const bill = computeBill(subtotalInr, settings, discount, taxableSubtotalInr);
 
   // Dine-in never carries a packaging charge (D5): drop it from the total and
   // zero the line, regardless of the store's packaging setting. Mirrors the

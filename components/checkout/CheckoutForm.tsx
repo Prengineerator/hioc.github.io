@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
-import { useCart } from '@/lib/cart/CartContext';
+import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
 import { postSuggestEvent } from '@/components/suggest/api';
 import { normalizeIndianMobile } from '@/lib/phone';
@@ -254,6 +254,7 @@ export function CheckoutForm({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subtotal_inr: totalPrice,
+          taxable_subtotal_inr: cartTaxableSubtotal(items),
           coupon_code: nextCoupon || undefined,
           redeem_points: nextPoints || undefined,
           item_ids: items.map((i) => i.menuItemId),
