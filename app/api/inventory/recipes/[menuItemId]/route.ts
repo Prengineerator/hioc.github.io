@@ -14,9 +14,10 @@ type RouteParams = { params: { menuItemId: string } };
 
 // PUT /api/inventory/recipes/[menuItemId] — replace one menu item's recipe
 // (INV-5). Same gate as editing the menu: 'menu_edit', on the POS.
-// Body: { lines: [{ variantId: string | null, itemId, qty }] } — what ONE
-// unit uses; variantId null is the base recipe, a size's own lines replace
-// it for that size. An empty list clears the recipe.
+// Body: { lines: [{ sizeLabel: '' | 'Large', itemId, qty }] } — what ONE
+// unit uses; sizeLabel '' is the base recipe, a size's own lines replace it
+// for that size. Sizes go by label: saving a menu item re-creates its size
+// rows, so an id would not survive a price edit. An empty list clears it.
 export async function PUT(request: Request, { params }: RouteParams) {
   const gate = await requireInventoryActor();
   if ('response' in gate) return gate.response;
@@ -33,22 +34,22 @@ export async function PUT(request: Request, { params }: RouteParams) {
   const admin = createAdminSupabaseClient();
   const { data: menuItem, error: readError } = await admin
     .from('menu_items')
-    .select('id, menu_item_variants(id)')
+    .select('id, menu_item_variants(label)')
     .eq('id', params.menuItemId)
     .maybeSingle();
   if (readError) return inventoryWriteFailure(readError, 'Loading the menu item');
   if (!menuItem) return notFound();
 
-  const variantIds = new Set(
-    ((menuItem as { menu_item_variants: { id: string }[] | null }).menu_item_variants ?? []).map((v) => v.id),
+  const sizeLabels = new Set(
+    ((menuItem as { menu_item_variants: { label: string }[] | null }).menu_item_variants ?? []).map((v) => v.label.trim()),
   );
-  const parsed = parseRecipeLines(body.lines, isUuid, variantIds);
+  const parsed = parseRecipeLines(body.lines, isUuid, sizeLabels);
   if (!parsed.ok) return errorResponse(400, parsed.message);
 
   const { data, error } = await admin.rpc('inventory_set_recipe', {
     p_menu_item_id: params.menuItemId,
     p_actor: gate.actor.user.id,
-    p_lines: parsed.lines.map((l) => ({ variant_id: l.variantId, item_id: l.itemId, qty: l.qty })),
+    p_lines: parsed.lines.map((l) => ({ size_label: l.sizeLabel, item_id: l.itemId, qty: l.qty })),
   });
   if (error) return inventoryWriteFailure(error, 'Saving the recipe');
   return NextResponse.json({ ok: true, lines: Number(data) || 0 });

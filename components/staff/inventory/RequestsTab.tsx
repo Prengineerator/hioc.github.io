@@ -68,6 +68,7 @@ export function RequestsTab({
   const [cancelling, setCancelling] = useState<StockRequestView | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [showClosed, setShowClosed] = useState(false);
 
   const actor: RequestActor = {
@@ -82,9 +83,16 @@ export function RequestsTab({
     if (!assigneeId) return;
     setError('');
     setBusyId(r.id);
-    const res = await api(`/api/inventory/requests/${r.id}`, 'PATCH', { action: 'assign', assigneeId });
+    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped' }>(`/api/inventory/requests/${r.id}`, 'PATCH', {
+      action: 'assign',
+      assigneeId,
+    });
     setBusyId(null);
+    const name = data.assignees.find((p) => p.id === assigneeId)?.name ?? 'them';
     if (!res.ok) setError(`#${r.number}: ${res.error}`);
+    else if (res.data.emailed === 'sent') setNotice(`#${r.number} assigned — ${name} has been emailed.`);
+    else if (assigneeId !== data.actorId) setNotice(`#${r.number} assigned. ${name} could not be emailed (no personal email on file?) — tell them.`);
+    else setNotice(`#${r.number} assigned to you.`);
     await reload();
   }
 
@@ -203,6 +211,7 @@ export function RequestsTab({
   return (
     <div>
       {error ? <p className="mb-3 text-sm text-red-700">{error}</p> : null}
+      {notice ? <p className="mb-3 text-sm text-green-700">{notice}</p> : null}
       {open.length === 0 ? (
         <p className="rounded-md border border-dashed border-[#ddd] bg-white p-6 text-center text-sm text-muted">
           No open requests. Use “Request stock” on the Stock tab when something runs low.

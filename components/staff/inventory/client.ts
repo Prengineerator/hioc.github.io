@@ -2,14 +2,15 @@
 // the JSON shapes the /api/inventory routes return, one fetch wrapper that
 // always yields { ok, data, error }, and the shared input styles.
 
-import type { InventoryItemView, PersonRef, StockRequestView } from '@/lib/inventory/server';
+import type { AutoHideState, InventoryItemView, PersonRef, StockRequestView } from '@/lib/inventory/server';
 import type { StaffSurface } from '@/lib/staff/surfaceRules';
 
-export type { InventoryItemView, PersonRef, StockRequestView };
+export type { AutoHideState, InventoryItemView, PersonRef, StockRequestView };
 
 export interface ItemsPayload {
   items: InventoryItemView[];
   today: string;
+  autoHide: AutoHideState;
   canManage: boolean;
 }
 
@@ -23,8 +24,11 @@ export interface RequestsPayload {
 
 export interface RecipesPayload {
   menu: { id: string; name: string; category: string; variants: { id: string; label: string }[] }[];
+  addons: { id: string; name: string; group: string }[];
   items: { id: string; name: string; unit: string; isActive: boolean }[];
-  lines: { menuItemId: string; variantId: string | null; itemId: string; qty: number }[];
+  /** sizeLabel '' = the base recipe. */
+  lines: { menuItemId: string; sizeLabel: string; itemId: string; qty: number }[];
+  addonLines: { optionId: string; itemId: string; qty: number }[];
   canEdit: boolean;
 }
 

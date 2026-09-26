@@ -7,6 +7,7 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { istBusinessDate } from '@/lib/cash/date';
 import { requireInventoryActor, inventoryWriteFailure } from '@/lib/inventory/api';
 import { loadAssignees } from '@/lib/inventory/server';
+import { sendStockAssignedEmail } from '@/lib/inventory/notify';
 import {
   canAssign,
   canCancel,
@@ -90,7 +91,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       .maybeSingle();
     if (error) return inventoryWriteFailure(error, 'Assigning the request');
     if (!updated) return errorResponse(409, 'This request moved on — refresh and try again.');
-    return NextResponse.json({ ok: true });
+
+    // Tell the picker (INV-9). Skipped when a manager assigns it to
+    // themselves — they already know. Never fails the assignment.
+    let emailed: 'sent' | 'failed' | 'skipped' = 'skipped';
+    if (assigneeId !== actor.userId) {
+      const assignedByName = team.find((p) => p.id === actor.userId)?.name ?? 'A manager';
+      emailed = (await sendStockAssignedEmail(admin, { requestId: params.id, assigneeId, assignedByName })).status;
+    }
+    return NextResponse.json({ ok: true, emailed });
   }
 
   if (action === 'pick') {

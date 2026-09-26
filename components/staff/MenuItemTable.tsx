@@ -23,6 +23,9 @@ function variantSummary(item: MenuItem): string {
 // "Available" immediately, with no cron needed to clear the stale column.
 function availabilityLabel(item: MenuItem): string {
   if (isMenuItemAvailable(item)) return 'Available';
+  // Hidden by inventory auto-hide (an ingredient ran out); comes back by
+  // itself when stock is received, or now via Re-enable.
+  if (!item.is_available && item.stock_out_auto) return 'Out of stock';
   if (!item.is_available) return 'Sold out';
   return `Sold out until ${formatIstTime(new Date(item.unavailable_until as string))}`;
 }

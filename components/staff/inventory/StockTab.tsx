@@ -99,6 +99,8 @@ export function StockTab({
         ) : null}
       </div>
 
+      <AutoHidePanel data={data} reload={reload} />
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <input
           value={query}
@@ -261,6 +263,49 @@ export function StockTab({
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+// ── Auto-hide ───────────────────────────────────────────────────────────────
+
+/** What auto-hide has taken off the menu, and (for a manager) its switch. */
+function AutoHidePanel({ data, reload }: { data: ItemsPayload; reload: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const { enabled, hidden } = data.autoHide;
+  if (!data.canManage && hidden.length === 0) return null;
+
+  async function toggle(next: boolean) {
+    setError('');
+    setBusy(true);
+    const res = await api('/api/inventory/settings', 'PATCH', { autoHide: next });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    await reload();
+  }
+
+  return (
+    <div className={`mt-4 rounded-md border p-3 text-sm ${hidden.length ? 'border-amber-200 bg-amber-50' : 'border-[#e5e5e5] bg-white'}`}>
+      {hidden.length ? (
+        <p className="text-amber-900">
+          <span className="font-semibold">Hidden from the menu — out of an ingredient:</span> {hidden.map((h) => h.name).join(', ')}.
+          They come back by themselves when the stock is received.
+        </p>
+      ) : null}
+      {data.canManage ? (
+        <label className={`flex items-center gap-2 ${hidden.length ? 'mt-2' : ''}`}>
+          <input
+            type="checkbox"
+            className="h-5 w-5"
+            checked={enabled}
+            disabled={busy}
+            onChange={(e) => void toggle(e.target.checked)}
+          />
+          <span className="text-charcoal">Hide a menu item when an ingredient in its recipe runs out</span>
+        </label>
+      ) : null}
+      {error ? <p className="mt-2 text-red-700">{error}</p> : null}
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   isIsoDate,
   lineHasDiscrepancy,
   orderUsage,
+  parseAddonRecipeLines,
   parsePickLines,
   parseQty,
   parseReceiveLines,
@@ -222,43 +223,49 @@ describe('receiving', () => {
 
 describe('recipes', () => {
   const lines = [
-    { menu_item_id: 'latte', variant_id: null, item_id: 'milk', qty: 0.2 },
-    { menu_item_id: 'latte', variant_id: null, item_id: 'beans', qty: 18 },
-    { menu_item_id: 'latte', variant_id: 'large', item_id: 'milk', qty: 0.3 },
-    { menu_item_id: 'latte', variant_id: 'large', item_id: 'beans', qty: 27 },
-    { menu_item_id: 'mocha', variant_id: null, item_id: 'milk', qty: 0.25 },
+    { menu_item_id: 'latte', size_label: '', item_id: 'milk', qty: 0.2 },
+    { menu_item_id: 'latte', size_label: '', item_id: 'beans', qty: 18 },
+    { menu_item_id: 'latte', size_label: 'Large', item_id: 'milk', qty: 0.3 },
+    { menu_item_id: 'latte', size_label: 'Large', item_id: 'beans', qty: 27 },
+    { menu_item_id: 'mocha', size_label: '', item_id: 'milk', qty: 0.25 },
+  ];
+  const addons = [
+    { addon_option_id: 'extra-shot', item_id: 'beans', qty: 9 },
+    { addon_option_id: 'oat', item_id: 'oat-milk', qty: 0.2 },
   ];
 
-  it('a size with its own recipe uses that instead of the base', () => {
-    expect(recipeFor(lines, 'latte', 'large').map((l) => l.qty)).toEqual([0.3, 27]);
-    expect(recipeFor(lines, 'latte', 'regular').map((l) => l.qty)).toEqual([0.2, 18]);
+  it('a size with its own recipe uses that instead of the base, matched by label', () => {
+    expect(recipeFor(lines, 'latte', 'Large').map((l) => l.qty)).toEqual([0.3, 27]);
+    expect(recipeFor(lines, 'latte', ' Large ').map((l) => l.qty)).toEqual([0.3, 27]);
+    expect(recipeFor(lines, 'latte', 'Regular').map((l) => l.qty)).toEqual([0.2, 18]);
     expect(recipeFor(lines, 'latte', null).map((l) => l.qty)).toEqual([0.2, 18]);
   });
 
-  it('sums an order’s usage per stock item', () => {
+  it('sums an order’s usage per stock item, add-ons included, × quantity', () => {
     const usage = orderUsage(
       [
-        { menu_item_id: 'latte', variant_id: null, quantity: 2 },
-        { menu_item_id: 'latte', variant_id: 'large', quantity: 1 },
-        { menu_item_id: 'mocha', variant_id: null, quantity: 1 },
-        { menu_item_id: null, variant_id: null, quantity: 3 }, // deleted menu item
-        { menu_item_id: 'cookie', variant_id: null, quantity: 1 }, // no recipe
+        { menu_item_id: 'latte', variant_label: 'Regular', quantity: 2, addon_option_ids: ['extra-shot'] },
+        { menu_item_id: 'latte', variant_label: 'Large', quantity: 1, addon_option_ids: ['oat', null] },
+        { menu_item_id: 'mocha', variant_label: 'Regular', quantity: 1 },
+        { menu_item_id: null, variant_label: null, quantity: 3 }, // deleted menu item
+        { menu_item_id: 'cookie', variant_label: 'Regular', quantity: 1 }, // no recipe
       ],
       lines,
+      addons,
     );
-    expect(Object.fromEntries(usage)).toEqual({ milk: 0.95, beans: 63 });
+    expect(Object.fromEntries(usage)).toEqual({ milk: 0.95, beans: 81, 'oat-milk': 0.2 });
   });
 
-  it('validates the editor’s lines', () => {
-    const sizes = new Set(['id-large']);
+  it('validates the editor’s lines against the item’s sizes', () => {
+    const sizes = new Set(['Regular', 'Large']);
     expect(parseRecipeLines([], isId, sizes)).toEqual({ ok: true, lines: [] });
-    expect(parseRecipeLines([{ variantId: 'id-small', itemId: 'id-milk', qty: 1 }], isId, sizes).ok).toBe(false);
-    expect(parseRecipeLines([{ variantId: null, itemId: 'id-milk', qty: 0 }], isId, sizes).ok).toBe(false);
+    expect(parseRecipeLines([{ sizeLabel: 'Small', itemId: 'id-milk', qty: 1 }], isId, sizes).ok).toBe(false);
+    expect(parseRecipeLines([{ sizeLabel: '', itemId: 'id-milk', qty: 0 }], isId, sizes).ok).toBe(false);
     expect(
       parseRecipeLines(
         [
-          { variantId: null, itemId: 'id-milk', qty: 1 },
-          { variantId: null, itemId: 'id-milk', qty: 2 },
+          { sizeLabel: '', itemId: 'id-milk', qty: 1 },
+          { itemId: 'id-milk', qty: 2 },
         ],
         isId,
         sizes,
@@ -267,13 +274,27 @@ describe('recipes', () => {
     expect(
       parseRecipeLines(
         [
-          { variantId: null, itemId: 'id-milk', qty: 0.2 },
-          { variantId: 'id-large', itemId: 'id-milk', qty: 0.3 },
+          { sizeLabel: '', itemId: 'id-milk', qty: 0.2 },
+          { sizeLabel: ' Large ', itemId: 'id-milk', qty: 0.3 },
         ],
         isId,
         sizes,
-      ).ok,
-    ).toBe(true);
+      ),
+    ).toEqual({
+      ok: true,
+      lines: [
+        { sizeLabel: '', itemId: 'id-milk', qty: 0.2 },
+        { sizeLabel: 'Large', itemId: 'id-milk', qty: 0.3 },
+      ],
+    });
+  });
+
+  it('validates an add-on’s lines', () => {
+    expect(parseAddonRecipeLines([], isId)).toEqual({ ok: true, lines: [] });
+    expect(parseAddonRecipeLines([{ itemId: 'id-beans', qty: 9 }], isId)).toEqual({ ok: true, lines: [{ itemId: 'id-beans', qty: 9 }] });
+    expect(parseAddonRecipeLines([{ itemId: 'id-beans', qty: 9 }, { itemId: 'id-beans', qty: 1 }], isId).ok).toBe(false);
+    expect(parseAddonRecipeLines([{ itemId: 'nope', qty: 9 }], isId).ok).toBe(false);
+    expect(parseAddonRecipeLines('x', isId).ok).toBe(false);
   });
 });
 

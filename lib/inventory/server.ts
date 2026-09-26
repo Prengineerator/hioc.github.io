@@ -14,8 +14,10 @@ import {
   orderUsage,
   OPEN_REQUEST_STATUSES,
   summarizeStock,
+  type AddonRecipeLineLike,
   type ExpiryState,
   type InventoryUnit,
+  type OrderLineLike,
   type RecipeLineLike,
   type StockRequestStatus,
   type StockSummary,
@@ -257,6 +259,23 @@ export async function loadStockRequests(admin: SupabaseClient): Promise<{ reques
   return { requests, error: false };
 }
 
+export interface AutoHideState {
+  /** store_settings.stock_auto_hide (on unless the owner switched it off). */
+  enabled: boolean;
+  /** Menu items currently hidden because an ingredient ran out. */
+  hidden: { id: string; name: string }[];
+}
+
+/** The auto-hide switch and what it has hidden right now. */
+export async function loadAutoHide(admin: SupabaseClient): Promise<AutoHideState> {
+  const [settingRes, hiddenRes] = await Promise.all([
+    admin.from('store_settings').select('stock_auto_hide').eq('is_singleton', true).maybeSingle(),
+    admin.from('menu_items').select('id, name').eq('stock_out_auto', true).order('name'),
+  ]);
+  const enabled = (settingRes.data as { stock_auto_hide?: boolean } | null)?.stock_auto_hide !== false;
+  return { enabled, hidden: hiddenRes.error ? [] : ((hiddenRes.data ?? []) as { id: string; name: string }[]) };
+}
+
 /** Active team members a request can be assigned to. */
 export async function loadAssignees(admin: SupabaseClient): Promise<PersonRef[]> {
   const { data, error } = await admin
@@ -286,27 +305,44 @@ export async function consumeStockForOrder(orderId: string, actorId: string | nu
     const admin = createAdminSupabaseClient();
     const { data: lines, error: linesError } = await admin
       .from('order_items')
-      .select('menu_item_id, variant_id, quantity')
+      .select('menu_item_id, variant_label_snapshot, quantity, order_item_addons(addon_option_id)')
       .eq('order_id', orderId);
     if (linesError) {
       console.error('consumeStockForOrder: order lines lookup failed', linesError);
       return;
     }
-    const orderLines = (lines ?? []) as { menu_item_id: string | null; variant_id: string | null; quantity: number }[];
+    type LineRow = {
+      menu_item_id: string | null;
+      variant_label_snapshot: string | null;
+      quantity: number;
+      order_item_addons: { addon_option_id: string | null }[] | null;
+    };
+    const orderLines: OrderLineLike[] = ((lines ?? []) as LineRow[]).map((l) => ({
+      menu_item_id: l.menu_item_id,
+      variant_label: l.variant_label_snapshot,
+      quantity: l.quantity,
+      addon_option_ids: (l.order_item_addons ?? []).map((a) => a.addon_option_id),
+    }));
     const menuIds = [...new Set(orderLines.map((l) => l.menu_item_id).filter((v): v is string => Boolean(v)))];
-    if (menuIds.length === 0) return;
+    const optionIds = [...new Set(orderLines.flatMap((l) => l.addon_option_ids ?? []).filter((v): v is string => Boolean(v)))];
+    if (menuIds.length === 0 && optionIds.length === 0) return;
 
-    const { data: recipe, error: recipeError } = await admin
-      .from('recipe_lines')
-      .select('menu_item_id, variant_id, item_id, qty')
-      .in('menu_item_id', menuIds);
-    if (recipeError) {
-      console.error(`consumeStockForOrder: recipe lookup failed — ${INVENTORY_MIGRATION_HINT}`, recipeError);
+    const [recipeRes, addonRes] = await Promise.all([
+      menuIds.length
+        ? admin.from('recipe_lines').select('menu_item_id, size_label, item_id, qty').in('menu_item_id', menuIds)
+        : Promise.resolve({ data: [], error: null }),
+      optionIds.length
+        ? admin.from('addon_recipe_lines').select('addon_option_id, item_id, qty').in('addon_option_id', optionIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (recipeRes.error || addonRes.error) {
+      console.error(`consumeStockForOrder: recipe lookup failed — ${INVENTORY_MIGRATION_HINT}`, recipeRes.error ?? addonRes.error);
       return;
     }
     const usage = orderUsage(
       orderLines,
-      ((recipe ?? []) as RecipeLineLike[]).map((r) => ({ ...r, qty: Number(r.qty) })),
+      ((recipeRes.data ?? []) as RecipeLineLike[]).map((r) => ({ ...r, qty: Number(r.qty) })),
+      ((addonRes.data ?? []) as AddonRecipeLineLike[]).map((r) => ({ ...r, qty: Number(r.qty) })),
     );
     if (usage.size === 0) return;
 

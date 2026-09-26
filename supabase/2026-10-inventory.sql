@@ -12,9 +12,11 @@
 --      arrived, line by line, entering the expiry date of each batch. Only
 --      this step adds stock. A received quantity that differs from the picked
 --      one marks the request as having a discrepancy for the owner.
---   5. Recipes (recipe_lines) say what one sale of a menu item uses. When an
---      order completes, its lines × recipes are taken out of stock, earliest
---      expiry first.
+--   5. Recipes (recipe_lines, addon_recipe_lines) say what one sale of a
+--      menu item — and of each add-on — uses. When an order completes, its
+--      lines × recipes are taken out of stock, earliest expiry first.
+--   6. A menu item that can't be made in any size is hidden from the menu,
+--      and comes back when stock does (store_settings.stock_auto_hide).
 --
 -- Stock on hand is NOT a column: it is the sum of inventory_batches.
 -- qty_remaining for the item, so it can never disagree with the batches the
@@ -134,27 +136,140 @@ create unique index if not exists inventory_movements_sale_once
   on inventory_movements (order_id, item_id) where kind = 'sale';
 
 -- ── Recipes ─────────────────────────────────────────────────────────────────
--- What ONE unit of a menu item uses. variant_id NULL = the item's base recipe;
--- a variant with lines of its own uses those INSTEAD of the base recipe
--- (lib/inventory/rules.ts recipeUsage).
+-- What ONE unit of a menu item uses. size_label '' = the item's base recipe;
+-- a size with lines of its own uses those INSTEAD of the base recipe
+-- (lib/inventory/rules.ts recipeFor).
+--
+-- Sizes are matched by LABEL ("Large"), not by menu_item_variants.id: saving
+-- a menu item replaces its variant rows (app/api/menu/[id] deletes and
+-- re-inserts them), so an id-keyed size recipe would vanish on every price
+-- edit. The label survives that, and every order line already carries it
+-- (order_items.variant_label_snapshot). Renaming a size drops back to the
+-- base recipe until the size's recipe is set again.
 create table if not exists recipe_lines (
   id           uuid primary key default gen_random_uuid(),
   menu_item_id uuid not null references menu_items(id) on delete cascade,
-  variant_id   uuid references menu_item_variants(id) on delete cascade,
+  size_label   text not null default '',
   item_id      uuid not null references inventory_items(id) on delete restrict,
   qty          numeric(12,3) not null check (qty > 0),
   updated_by   uuid references auth.users(id) on delete set null,
-  created_at   timestamptz not null default now()
+  created_at   timestamptz not null default now(),
+  constraint recipe_lines_size_trimmed check (size_label = trim(size_label))
 );
 create unique index if not exists recipe_lines_unique
-  on recipe_lines (menu_item_id, coalesce(variant_id, '00000000-0000-0000-0000-000000000000'::uuid), item_id);
+  on recipe_lines (menu_item_id, size_label, item_id);
 create index if not exists recipe_lines_item on recipe_lines (item_id);
+
+-- What one add-on (extra shot, oat-milk swap) uses, per serving it is added
+-- to. Add-ons are priced per unit (lib/orders/lines.ts), so usage is
+-- recipe × the order line's quantity, the same as the item itself.
+create table if not exists addon_recipe_lines (
+  id              uuid primary key default gen_random_uuid(),
+  addon_option_id uuid not null references addon_options(id) on delete cascade,
+  item_id         uuid not null references inventory_items(id) on delete restrict,
+  qty             numeric(12,3) not null check (qty > 0),
+  updated_by      uuid references auth.users(id) on delete set null,
+  created_at      timestamptz not null default now(),
+  unique (addon_option_id, item_id)
+);
+create index if not exists addon_recipe_lines_item on addon_recipe_lines (item_id);
+
+-- ── Auto-hide: a menu item no size of which can be made is taken off the menu
+-- (inventory_refresh_availability below). stock_out_auto marks an item hidden
+-- BY STOCK, so it is brought back when stock returns — and an item a person
+-- switched off by hand is never switched back on by this. A manual toggle
+-- clears the mark (app/api/menu/[id]).
+alter table menu_items
+  add column if not exists stock_out_auto boolean not null default false;
+-- The owner's switch (Stock screen, managers). Off also restores everything
+-- this hid.
+alter table store_settings
+  add column if not exists stock_auto_hide boolean not null default true;
+
+-- ── Assignment emails are logged with the other staff emails.
+alter table staff_emails drop constraint if exists staff_emails_kind_check;
+alter table staff_emails add constraint staff_emails_kind_check
+  check (kind in ('invite', 'password_reset', 'password_changed', 'payslip', 'stock_assigned'));
 
 -- ===========================================================================
 -- Functions. Errors meant for the person at the screen are raised with a
 -- message starting 'inventory: ' — the API strips the prefix and returns the
 -- rest as a 409.
 -- ===========================================================================
+
+-- Hides every menu item that cannot be made in ANY of its sizes (some
+-- recipe ingredient has less on hand than one serving needs), and brings back
+-- the ones it hid once they can be made again. Items without a recipe are
+-- never touched; neither is an item a person switched off. Called at the end
+-- of every function that changes stock or recipes. Returns what changed.
+create or replace function inventory_refresh_availability()
+returns jsonb
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_on boolean;
+  v_out uuid[];
+  v_hidden uuid[];
+  v_restored uuid[];
+begin
+  select coalesce((select stock_auto_hide from store_settings where is_singleton limit 1), true) into v_on;
+
+  with stock as (
+    select i.id, coalesce(sum(b.qty_remaining), 0) as on_hand
+      from inventory_items i
+      left join inventory_batches b on b.item_id = i.id
+     group by i.id
+  ),
+  sizes as (
+    select v.menu_item_id, trim(v.label) as size_label from menu_item_variants v
+    union
+    select m.id, '' from menu_items m
+     where not exists (select 1 from menu_item_variants v where v.menu_item_id = m.id)
+  ),
+  size_lines as (
+    select s.menu_item_id, s.size_label, rl.item_id, rl.qty
+      from sizes s
+      join recipe_lines rl
+        on rl.menu_item_id = s.menu_item_id
+       and (rl.size_label = s.size_label
+            or (rl.size_label = '' and not exists (
+                  select 1 from recipe_lines o
+                   where o.menu_item_id = s.menu_item_id and o.size_label = s.size_label)))
+  ),
+  short as (
+    select distinct sl.menu_item_id, sl.size_label
+      from size_lines sl
+      join stock st on st.id = sl.item_id
+     where st.on_hand < sl.qty
+  ),
+  out_items as (
+    select s.menu_item_id
+      from sizes s
+      left join short sh on sh.menu_item_id = s.menu_item_id and sh.size_label = s.size_label
+     group by s.menu_item_id
+    having bool_and(sh.menu_item_id is not null)
+  )
+  select coalesce(array_agg(menu_item_id), '{}') into v_out from out_items;
+
+  with h as (
+    update menu_items
+       set is_available = false, stock_out_auto = true
+     where v_on and id = any(v_out) and is_available and not stock_out_auto
+    returning id
+  )
+  select coalesce(array_agg(id), '{}') into v_hidden from h;
+
+  with r as (
+    update menu_items
+       set is_available = true, stock_out_auto = false
+     where stock_out_auto and (not v_on or not (id = any(v_out)))
+    returning id
+  )
+  select coalesce(array_agg(id), '{}') into v_restored from r;
+
+  return jsonb_build_object('hidden', to_jsonb(v_hidden), 'restored', to_jsonb(v_restored));
+end $$;
 
 -- Takes up to p_qty out of an item's batches, earliest expiry first (undated
 -- batches last), and returns how much it actually took. The caller must hold
@@ -346,6 +461,7 @@ begin
      where id = p_request_id;
   end if;
 
+  perform inventory_refresh_availability();
   return jsonb_build_object('batches', v_lines, 'has_discrepancy', v_discrepancy);
 end $$;
 
@@ -386,6 +502,9 @@ begin
     end if;
     v_applied := v_applied + 1;
   end loop;
+  if v_applied > 0 then
+    perform inventory_refresh_availability();
+  end if;
   return v_applied;
 end $$;
 
@@ -442,6 +561,7 @@ begin
     end if;
     insert into inventory_movements (item_id, kind, qty_delta, batch_id, reason, actor_id)
     values (p_item_id, 'waste', -p_qty, p_batch_id, coalesce(p_reason, ''), p_actor);
+    perform inventory_refresh_availability();
     return jsonb_build_object('on_hand', v_on_hand - p_qty);
   end if;
 
@@ -462,6 +582,7 @@ begin
     update inventory_items
        set shortfall_since_count = 0, last_counted_at = now(), updated_at = now()
      where id = p_item_id;
+    perform inventory_refresh_availability();
     return jsonb_build_object('on_hand', p_qty);
   end if;
 
@@ -469,7 +590,7 @@ begin
 end $$;
 
 -- Replace a menu item's whole recipe in one go.
--- p_lines: [{ "variant_id": uuid | null, "item_id": uuid, "qty": number }, ...]
+-- p_lines: [{ "size_label": "" | "Large", "item_id": uuid, "qty": number }, ...]
 create or replace function inventory_set_recipe(p_menu_item_id uuid, p_actor uuid, p_lines jsonb)
 returns integer
 language plpgsql
@@ -483,20 +604,44 @@ begin
     raise exception 'inventory: menu item not found';
   end if;
   delete from recipe_lines where menu_item_id = p_menu_item_id;
-  insert into recipe_lines (menu_item_id, variant_id, item_id, qty, updated_by)
-  select p_menu_item_id, nullif(e->>'variant_id', '')::uuid, (e->>'item_id')::uuid, (e->>'qty')::numeric, p_actor
+  insert into recipe_lines (menu_item_id, size_label, item_id, qty, updated_by)
+  select p_menu_item_id, trim(coalesce(e->>'size_label', '')), (e->>'item_id')::uuid, (e->>'qty')::numeric, p_actor
     from jsonb_array_elements(coalesce(p_lines, '[]'::jsonb)) e;
   get diagnostics v_count = row_count;
 
   if exists (
     select 1 from recipe_lines rl
-     where rl.menu_item_id = p_menu_item_id and rl.variant_id is not null
+     where rl.menu_item_id = p_menu_item_id and rl.size_label <> ''
        and not exists (
          select 1 from menu_item_variants v
-          where v.id = rl.variant_id and v.menu_item_id = p_menu_item_id))
+          where v.menu_item_id = p_menu_item_id and trim(v.label) = rl.size_label))
   then
     raise exception 'inventory: that size does not belong to this menu item';
   end if;
+  perform inventory_refresh_availability();
+  return v_count;
+end $$;
+
+-- Replace an add-on option's recipe (what one extra shot / oat-milk swap uses
+-- per serving it is added to).
+-- p_lines: [{ "item_id": uuid, "qty": number }, ...]
+create or replace function inventory_set_addon_recipe(p_option_id uuid, p_actor uuid, p_lines jsonb)
+returns integer
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_count int;
+begin
+  perform 1 from addon_options where id = p_option_id for update;
+  if not found then
+    raise exception 'inventory: add-on not found';
+  end if;
+  delete from addon_recipe_lines where addon_option_id = p_option_id;
+  insert into addon_recipe_lines (addon_option_id, item_id, qty, updated_by)
+  select p_option_id, (e->>'item_id')::uuid, (e->>'qty')::numeric, p_actor
+    from jsonb_array_elements(coalesce(p_lines, '[]'::jsonb)) e;
+  get diagnostics v_count = row_count;
   return v_count;
 end $$;
 
@@ -507,12 +652,14 @@ alter table stock_request_lines enable row level security;
 alter table inventory_batches   enable row level security;
 alter table inventory_movements enable row level security;
 alter table recipe_lines        enable row level security;
+alter table addon_recipe_lines  enable row level security;
 revoke all on inventory_items     from anon, authenticated;
 revoke all on stock_requests      from anon, authenticated;
 revoke all on stock_request_lines from anon, authenticated;
 revoke all on inventory_batches   from anon, authenticated;
 revoke all on inventory_movements from anon, authenticated;
 revoke all on recipe_lines        from anon, authenticated;
+revoke all on addon_recipe_lines  from anon, authenticated;
 
 revoke execute on function inventory_take_fefo(uuid, numeric) from public, anon, authenticated;
 revoke execute on function inventory_create_request(uuid, text, jsonb) from public, anon, authenticated;
@@ -521,6 +668,8 @@ revoke execute on function inventory_receive(uuid, uuid, uuid, jsonb) from publi
 revoke execute on function inventory_apply_sale(uuid, uuid, jsonb) from public, anon, authenticated;
 revoke execute on function inventory_adjust(uuid, uuid, text, numeric, uuid, text) from public, anon, authenticated;
 revoke execute on function inventory_set_recipe(uuid, uuid, jsonb) from public, anon, authenticated;
+revoke execute on function inventory_set_addon_recipe(uuid, uuid, jsonb) from public, anon, authenticated;
+revoke execute on function inventory_refresh_availability() from public, anon, authenticated;
 grant execute on function inventory_take_fefo(uuid, numeric) to service_role;
 grant execute on function inventory_create_request(uuid, text, jsonb) to service_role;
 grant execute on function inventory_pick(uuid, uuid, boolean, jsonb) to service_role;
@@ -528,11 +677,13 @@ grant execute on function inventory_receive(uuid, uuid, uuid, jsonb) to service_
 grant execute on function inventory_apply_sale(uuid, uuid, jsonb) to service_role;
 grant execute on function inventory_adjust(uuid, uuid, text, numeric, uuid, text) to service_role;
 grant execute on function inventory_set_recipe(uuid, uuid, jsonb) to service_role;
+grant execute on function inventory_set_addon_recipe(uuid, uuid, jsonb) to service_role;
+grant execute on function inventory_refresh_availability() to service_role;
 
 -- ---------------------------------------------------------------------------
 -- Verify:
 --   select count(*) from inventory_items;                          -- 0 on a fresh apply
---   select proname from pg_proc where proname like 'inventory_%';  -- 7 functions
+--   select proname from pg_proc where proname like 'inventory_%';  -- 9 functions
 --   -- anon must not see anything:
 --   set role anon; select * from inventory_items; reset role;     -- permission denied
 -- ---------------------------------------------------------------------------

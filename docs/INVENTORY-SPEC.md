@@ -1,6 +1,6 @@
 # Inventory: stock requests, verified receiving at the POS, expiry dates and recipes
 
-Status: **BUILT** (2026-09-26). Branch `claude/cool-bohr-13yrnx`. Dark behind
+Status: **BUILT** (2026-09-26; add-on recipes, auto-hide and assignment emails added the same day). Branch `claude/cool-bohr-13yrnx`. Dark behind
 `NEXT_PUBLIC_FLAG_INVENTORY` (default off) until the requirement sheet below is done.
 
 ## Why
@@ -22,8 +22,12 @@ the packets and nowhere else.
                                                                      → stock goes up
                                                                      → any line ≠ picked
                                                                        is flagged
- Order completes ──► recipe × quantity comes off stock, earliest expiry first
+ Order completes ──► recipe × quantity (+ add-on recipes) comes off stock, earliest expiry first
+                    ──► a menu item no size of which can now be made is hidden from the menu;
+                        it comes back by itself when stock is received
 ```
+
+The picker is emailed when a request is assigned to them.
 
 Status of a request: `requested → assigned → picked → received`. It can be
 `cancelled` before it is received.
@@ -42,11 +46,16 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | INV-D8 | Stock is used **earliest expiry first** (FEFO). Batches with no expiry date are used last. |
 | INV-D9 | Stock comes off when an order **completes**. That is the one path to "completed", and a rejected or cancelled order never used anything. A refund after completion does **not** return stock, because the food was made. |
 | INV-D10 | A sale is **never refused** for lack of stock. What the batches cannot cover is recorded as a shortfall, and the item shows **"Count needed"** until a manager counts it. Stock never goes negative. |
-| INV-D11 | A recipe is what **one serving** uses, in each ingredient's own unit. A size (variant) can have **its own recipe, which replaces** the base one for that size. It is not added on top. |
+| INV-D11 | A recipe is what **one serving** uses, in each ingredient's own unit. A size (variant) can have **its own recipe, which replaces** the base one for that size. It is not added on top. Sizes are matched by **label** ("Large"), because saving a menu item re-creates its size rows; an id-keyed recipe would vanish on the next price edit. Renaming a size falls back to the base recipe until its recipe is set again. |
 | INV-D12 | Recipes follow the menu's rule: the `menu_edit` permission, **on the POS only**. They are read-only on the staff website. |
 | INV-D13 | A manager or the owner can **count** an item (set on-hand to what is on the shelf; this clears "count needed") and **write off** waste (an expired batch or oldest stock first, with a reason). |
 | INV-D14 | A manager or the owner can **receive a delivery with no request** at the POS, with the same quantity and expiry-date rules. |
 | INV-D15 | An item's **unit is locked** once it has stock history or appears in a recipe. Every stored quantity is in that unit. To change the unit, retire the item and add a new one. |
+| INV-D16 | **Auto-hide:** a menu item is taken off the menu when **no size** of it can be made (some ingredient has less on hand than one serving needs). One sold-out size alone does not hide the item. Items with no recipe are never touched. |
+| INV-D17 | An auto-hidden item **comes back by itself** when stock makes it possible again. An item a person switched off is **never** switched back on by stock. A person toggling availability on the Menu page takes the item out of stock's hands (clears the auto-hide mark). |
+| INV-D18 | Auto-hide is **on by default** and a manager can switch it off on the Stock tab. Switching it off puts back everything it hid, at once. |
+| INV-D19 | **Add-ons** (extra shot, oat milk) have their own recipes: what one add-on uses per serving it is added to. An add-on on a line of 2 is used twice. Add-ons are not auto-hidden. |
+| INV-D20 | When a request is assigned, the **picker is emailed** at their personal email (staff accounts), with the items and a link to the Stock screen. No email when a manager assigns it to themselves. The manager sees whether it went. WhatsApp is not used, because a business-initiated WhatsApp message needs a Meta-approved template. |
 
 ## Data: `supabase/2026-10-inventory.sql`
 
@@ -57,13 +66,18 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | `stock_request_lines` | per item: `qty_requested`, `qty_picked`, `qty_received`, `expiry_date` |
 | `inventory_batches` | what is on the shelf: `qty_received`, `qty_remaining`, `expiry_date`, source (receive / count) |
 | `inventory_movements` | the ledger: receive / sale / waste / count, signed `qty_delta`, sale `shortfall`, who, why, which order/request/batch. One sale row per (order, item), enforced by a unique index. |
-| `recipe_lines` | (menu item, size or null, stock item, qty per serving) |
+| `recipe_lines` | (menu item, size label or '' for the base, stock item, qty per serving) |
+| `addon_recipe_lines` | (add-on option, stock item, qty per serving) |
+| `menu_items.stock_out_auto` | the item is hidden because of stock (not by a person) |
+| `store_settings.stock_auto_hide` | the auto-hide switch (default on) |
 
 **Stock on hand is not stored.** It is the sum of the item's batches, so it can
 never disagree with the expiry warnings. Every write that touches more than one
 row goes through a database function (`inventory_create_request`,
 `inventory_pick`, `inventory_receive`, `inventory_apply_sale`,
-`inventory_adjust`, `inventory_set_recipe`). Each function takes the row lock
+`inventory_adjust`, `inventory_set_recipe`, `inventory_set_addon_recipe`). Each
+function that changes stock or recipes ends by calling
+`inventory_refresh_availability`, which hides and restores menu items. Each function takes the row lock
 and re-checks status, so two phones racing the same request can't both win. All
 tables are service-role only: RLS is on, there are no policies, and there is an
 explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated.
@@ -80,7 +94,10 @@ explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated
 | INV-6 completion hook | `lib/inventory/server.ts` `consumeStockForOrder`, called from `app/api/orders/[id]/status` |
 | INV-7 Stock screen (Stock / Requests / Recipes tabs) | `app/staff/inventory`, `components/staff/inventory/*`; "Stock" tab in `lib/staff/staffNav.ts` (on the POS bar, and under More on the staff website) |
 | INV-8 flag + deploy probe | `lib/flags.ts` `inventory`, `.env.local.example`, `scripts/verify-db.mjs` `checkInventory` |
-| Tests | `tests/inventoryRules.test.ts`, `tests/inventoryRoutes.test.ts`, `tests/inventoryConsume.test.ts`, `tests/staffNav.test.ts`, `tests/orderStatusRoute.test.ts` |
+| INV-9 assignment email | `lib/inventory/notify.ts`, called from the assign action |
+| INV-10 auto-hide | `inventory_refresh_availability` (migration), `app/api/inventory/settings`, the Stock-tab panel, `app/api/menu/[id]` (manual toggle clears the mark), "Out of stock" label in `components/staff/MenuItemTable.tsx` |
+| INV-11 add-on recipes | `addon_recipe_lines`, `app/api/inventory/addon-recipes/[optionId]`, the Recipes tab's Add-ons list |
+| Tests | `tests/inventoryRules.test.ts`, `tests/inventoryRoutes.test.ts`, `tests/inventoryConsume.test.ts`, `tests/inventoryNotify.test.ts`, `tests/menuStockOutAuto.test.ts`, `tests/staffNav.test.ts`, `tests/orderStatusRoute.test.ts` |
 
 ## API
 
@@ -95,7 +112,9 @@ explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated
 | `PATCH /api/inventory/requests/[id]` | per INV-D2–D5 | `{action:'assign'\|'pick'\|'receive'\|'cancel', …}` |
 | `POST /api/inventory/receipts` | manager / owner, on the POS | delivery with no request |
 | `GET /api/inventory/recipes` | any counter actor | menu + sizes, stock items, recipe lines, `canEdit` |
-| `PUT /api/inventory/recipes/[menuItemId]` | `menu_edit`, on the POS | replace one menu item's recipe |
+| `PUT /api/inventory/recipes/[menuItemId]` | `menu_edit`, on the POS | replace one menu item's recipe: `{lines:[{sizeLabel, itemId, qty}]}` |
+| `PUT /api/inventory/addon-recipes/[optionId]` | `menu_edit`, on the POS | replace one add-on's recipe |
+| `PATCH /api/inventory/settings` | manager / owner | `{autoHide: boolean}` |
 
 Every route returns 404 while the flag is off. Errors raised by the database
 functions come back as 409s with a readable message.
@@ -120,6 +139,7 @@ code cannot guess them.
 | A6 | Team roles are right in the owner portal: who is **manager** (assigns, counts, writes off, direct deliveries) and who is **staff** | Owner | Owner → Staff | ☐ |
 | A7 | Deploy the code with the flag **off** (`NEXT_PUBLIC_FLAG_INVENTORY` unset). Nothing changes for anyone. | Dev | `/staff/inventory` says "Stock is not enabled" | ☐ |
 | A8 | Nothing new to install, and no new secrets. No new dependencies or environment variables other than the flag. | — | — | ✓ |
+| A9 | For assignment emails: email sending already configured (`RESEND_API_KEY`, `RESEND_FROM` / `RESEND_FROM_STAFF`, as for payslips), and each staffer's **personal email** filled in on Owner → Staff. Without it the assignment still works; the manager is told the email didn't go. | Owner + Dev | Owner → Staff shows a personal email per person | ☐ |
 
 ### B. Information the owner must supply
 
@@ -150,6 +170,10 @@ A menu item with no recipe simply uses no stock. You can start with the
 highest-volume items and add the rest later. The Recipes tab shows how many
 items still have no recipe.
 
+Size names must match the menu exactly ("Large", not "large"). Add-ons get
+their own short list, e.g. *Extra shot → Espresso beans 9 g*; *Oat milk →
+Oat milk 0.2 L*.
+
 **B3 — Opening stock.** On go-live day, a count of what is on the shelf, **with
 expiry dates** for perishables. It is entered as a delivery (Stock → Receive
 delivery, on the POS), one line per batch.
@@ -159,6 +183,7 @@ delivery, on the POS), one line per batch.
 - Whether a manager may verify their own pick [yes] (INV-D4)
 - The expiry warning window [3 days] (INV-D7; the constant `EXPIRY_WARN_DAYS` in `lib/inventory/rules.ts`)
 - When stock comes off [on order completion] (INV-D9)
+- Hide a menu item automatically when an ingredient runs out [on] (INV-D16–D18)
 
 ### C. Go-live steps
 
@@ -185,6 +210,9 @@ order records a shortfall and every item reads "Count needed".
 6. Ring up and complete an order containing an item with a recipe. On-hand drops by recipe × quantity, taken from the earliest-expiring batch.
 7. Complete an order that needs more than is left. The item shows **Count needed**. A manager's **Count** clears it.
 8. **Write off** an expired batch. It disappears from on-hand, and the movement records who did it and why.
+9. The picker from step 2 received an email naming the request and its items.
+10. Sell a recipe item until an ingredient runs short of one serving. The item disappears from the customer menu and shows "Out of stock" on the staff Menu page. Receive that ingredient: it comes back by itself.
+11. Order a latte with an extra shot and complete it: the add-on's beans come off too.
 
 ### E. Rollback
 
@@ -194,10 +222,11 @@ nothing is lost. Nothing else in the app reads them.
 
 ## Known limits
 
-- **Add-ons use no stock.** Recipes attach to menu items and sizes, not to add-on
-  options such as extra shot or oat milk. Add-on recipes would be a follow-up.
-- **No automatic "86".** Running out does not mark the menu item unavailable.
-  Staff still toggle that on the Menu page.
+- **Auto-hide is per item, not per size.** If only the Large can't be made, the
+  item stays on the menu and a Large order records a shortfall. Add-ons are
+  never auto-hidden.
+- **Auto-hide counts expired stock as on hand** until it is written off. Write
+  off expired batches promptly.
 - **Amending a completed order** does not re-take stock (the sale is recorded
   once per order and item).
 - **A count surplus has no expiry date.** It becomes an undated batch. Receive a
@@ -205,6 +234,5 @@ nothing is lost. Nothing else in the app reads them.
 - **No supplier or purchase-order records** and no cost/price tracking. Requests
   are internal (store-room → counter or an errand to buy). Costing would come
   next.
-- **No push notification** when a request is assigned to you. The Requests tab
-  shows a count badge of requests waiting on you and refreshes when the screen
-  regains focus.
+- **Assignment alerts are email only** (no WhatsApp: that needs a Meta-approved
+  template). The Requests tab also shows a badge of requests waiting on you.

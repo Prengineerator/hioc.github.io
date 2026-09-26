@@ -29,6 +29,7 @@ const state: {
   rpcCalls: { name: string; args: Row }[];
   rpcResult: { data: unknown; error: { message: string; code?: string } | null };
   updates: { table: string; patch: Row; filters: [string, string, unknown][] }[];
+  menuEdit: boolean;
 } = {
   flag: true,
   actor: null,
@@ -39,6 +40,7 @@ const state: {
   rpcCalls: [],
   rpcResult: { data: null, error: null },
   updates: [],
+  menuEdit: true,
 };
 
 vi.mock('@/lib/flags', () => ({
@@ -49,6 +51,13 @@ vi.mock('@/lib/api/device', () => ({ getEnrolledDevice: () => Promise.resolve(st
 vi.mock('@/lib/staff/surface', () => ({ getStaffSurface: () => Promise.resolve(state.device ? 'pos' : 'web') }));
 vi.mock('@/lib/staff/displayName', () => ({ getStaffDisplayNames: () => Promise.resolve(new Map()) }));
 vi.mock('@/lib/cash/date', () => ({ istBusinessDate: () => '2026-09-26' }));
+vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(state.menuEdit) }));
+const { sendStockAssignedEmail } = vi.hoisted(() => ({
+  sendStockAssignedEmail: vi.fn((_admin: unknown, _args: Record<string, unknown>) =>
+    Promise.resolve({ kind: 'stock_assigned', status: 'sent', detail: '' }),
+  ),
+}));
+vi.mock('@/lib/inventory/notify', () => ({ sendStockAssignedEmail }));
 
 function makeAdmin() {
   return {
@@ -96,7 +105,10 @@ function makeAdmin() {
           }
           return Promise.resolve({ data: hit, error: null });
         },
-        then: (resolve: (v: unknown) => void) => resolve({ data: matching(), error: null }),
+        then: (resolve: (v: unknown) => void) => {
+          if (patch) state.updates.push({ table, patch, filters: [...filters] });
+          resolve({ data: matching(), error: null });
+        },
       };
       return chain;
     },
@@ -107,6 +119,8 @@ vi.mock('@/lib/supabase-server', () => ({ createAdminSupabaseClient: () => makeA
 const requestsRoute = await import('@/app/api/inventory/requests/route');
 const requestRoute = await import('@/app/api/inventory/requests/[id]/route');
 const receiptsRoute = await import('@/app/api/inventory/receipts/route');
+const settingsRoute = await import('@/app/api/inventory/settings/route');
+const addonRoute = await import('@/app/api/inventory/addon-recipes/[optionId]/route');
 
 const as = (id: string, role = 'staff') => ({ user: { id }, role, via: 'session' });
 
@@ -144,6 +158,8 @@ beforeEach(() => {
   state.rpcCalls = [];
   state.rpcResult = { data: null, error: null };
   state.updates = [];
+  state.menuEdit = true;
+  sendStockAssignedEmail.mockClear();
 });
 
 describe('gate', () => {
@@ -200,6 +216,24 @@ describe('assign', () => {
     const u = state.updates[0];
     expect(u.patch).toMatchObject({ status: 'assigned', assigned_to: VIKRAM, assigned_by: MANAGER });
     expect(u.filters).toContainEqual(['in', 'status', ['requested', 'assigned']]);
+  });
+
+  it('emails the picker, and says so', async () => {
+    state.actor = as(MANAGER, 'manager');
+    const res = await patch({ action: 'assign', assigneeId: VIKRAM });
+    expect(await res.json()).toEqual({ ok: true, emailed: 'sent' });
+    expect(sendStockAssignedEmail).toHaveBeenCalledWith(expect.anything(), {
+      requestId: REQ,
+      assigneeId: VIKRAM,
+      assignedByName: 'Boss',
+    });
+  });
+
+  it('does not email a manager who assigns it to themselves', async () => {
+    state.actor = as(MANAGER, 'manager');
+    const res = await patch({ action: 'assign', assigneeId: MANAGER });
+    expect(await res.json()).toEqual({ ok: true, emailed: 'skipped' });
+    expect(sendStockAssignedEmail).not.toHaveBeenCalled();
   });
 
   it('refuses someone who is not on the active team', async () => {
@@ -335,6 +369,58 @@ describe('POST /api/inventory/receipts — a delivery with no request', () => {
     expect(state.rpcCalls[0]).toEqual({
       name: 'inventory_receive',
       args: { p_request_id: null, p_actor: MANAGER, p_device_id: DEVICE, p_lines: [{ item_id: MILK, qty: 5, expiry_date: '2026-10-01' }] },
+    });
+  });
+});
+
+describe('PATCH /api/inventory/settings — auto-hide switch', () => {
+  const body = (b: unknown) => json('/api/inventory/settings', 'PATCH', b);
+
+  it('is for a manager', async () => {
+    state.actor = as(ASHA);
+    expect((await settingsRoute.PATCH(body({ autoHide: false }))).status).toBe(403);
+  });
+
+  it('saves the switch and re-checks the menu at once', async () => {
+    state.actor = as(MANAGER, 'manager');
+    const res = await settingsRoute.PATCH(body({ autoHide: false }));
+    expect(res.status).toBe(200);
+    expect(state.updates[0]).toMatchObject({ table: 'store_settings', patch: { stock_auto_hide: false } });
+    expect(state.rpcCalls.map((c) => c.name)).toEqual(['inventory_refresh_availability']);
+  });
+
+  it('400s anything but a boolean', async () => {
+    state.actor = as(MANAGER, 'manager');
+    expect((await settingsRoute.PATCH(body({ autoHide: 'no' }))).status).toBe(400);
+  });
+});
+
+describe('PUT /api/inventory/addon-recipes/[optionId]', () => {
+  const OPTION = '00000000-0000-4000-8000-0000000000e1';
+  const put = (b: unknown) =>
+    addonRoute.PUT(json(`/api/inventory/addon-recipes/${OPTION}`, 'PUT', b), { params: { optionId: OPTION } });
+
+  it('needs the menu_edit permission', async () => {
+    state.actor = as(ASHA);
+    state.device = { id: DEVICE };
+    state.menuEdit = false;
+    expect((await put({ lines: [] })).status).toBe(403);
+  });
+
+  it('is edited on the POS only', async () => {
+    state.actor = as(ASHA);
+    expect((await put({ lines: [] })).status).toBe(403);
+  });
+
+  it('saves through inventory_set_addon_recipe', async () => {
+    state.actor = as(ASHA);
+    state.device = { id: DEVICE };
+    state.rpcResult = { data: 1, error: null };
+    const res = await put({ lines: [{ itemId: CUPS, qty: 1 }] });
+    expect(res.status).toBe(200);
+    expect(state.rpcCalls[0]).toEqual({
+      name: 'inventory_set_addon_recipe',
+      args: { p_option_id: OPTION, p_actor: ASHA, p_lines: [{ item_id: CUPS, qty: 1 }] },
     });
   });
 });

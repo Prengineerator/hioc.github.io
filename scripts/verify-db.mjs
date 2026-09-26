@@ -1306,7 +1306,7 @@ async function checkInventory() {
   heading('INV-1 · inventory tables, functions + lockdown', '2026-10-inventory.sql');
   const hint = 'apply supabase/2026-10-inventory.sql';
 
-  for (const table of ['inventory_items', 'stock_requests', 'stock_request_lines', 'inventory_batches', 'inventory_movements', 'recipe_lines']) {
+  for (const table of ['inventory_items', 'stock_requests', 'stock_request_lines', 'inventory_batches', 'inventory_movements', 'recipe_lines', 'addon_recipe_lines']) {
     const r = await rest(`/${table}?select=id&limit=1`);
     if (!r.ok) {
       const kind = errKind(r);
@@ -1323,6 +1323,13 @@ async function checkInventory() {
     const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
     if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
     else pass(`${table} is not readable by the anon key`);
+  }
+
+  // Auto-hide: the mark on menu items and the owner's switch.
+  for (const [table, col] of [['menu_items', 'stock_out_auto'], ['store_settings', 'stock_auto_hide']]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' ? hint : errText(r));
   }
 
   // An empty usage list writes nothing and returns 0 — proves the function

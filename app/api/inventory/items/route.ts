@@ -3,7 +3,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { istBusinessDate } from '@/lib/cash/date';
 import { requireInventoryActor, inventoryWriteFailure } from '@/lib/inventory/api';
-import { INVENTORY_MIGRATION_HINT, ITEM_COLUMNS, loadInventoryItems } from '@/lib/inventory/server';
+import { INVENTORY_MIGRATION_HINT, ITEM_COLUMNS, loadAutoHide, loadInventoryItems } from '@/lib/inventory/server';
 import { parseItemFields } from '@/lib/inventory/itemFields';
 
 export const dynamic = 'force-dynamic';
@@ -11,7 +11,8 @@ export const dynamic = 'force-dynamic';
 // Stock items (docs/INVENTORY-SPEC.md, INV-2).
 //
 // GET  — every counter actor: all items with stock on hand, batches and
-//        their expiry, low/expired/count-needed flags, and open requests.
+//        their expiry, low/expired/count-needed flags, open requests, and
+//        which menu items are hidden because an ingredient ran out.
 // POST — manager/owner: add a stock item.
 
 export async function GET() {
@@ -19,9 +20,10 @@ export async function GET() {
   if ('response' in gate) return gate.response;
 
   const today = istBusinessDate();
-  const { items, error } = await loadInventoryItems(createAdminSupabaseClient(), today);
+  const admin = createAdminSupabaseClient();
+  const [{ items, error }, autoHide] = await Promise.all([loadInventoryItems(admin, today), loadAutoHide(admin)]);
   if (error) return errorResponse(500, `Could not load stock — ${INVENTORY_MIGRATION_HINT}`);
-  return NextResponse.json({ items, today, canManage: gate.actor.isManager });
+  return NextResponse.json({ items, today, autoHide, canManage: gate.actor.isManager });
 }
 
 export async function POST(request: Request) {

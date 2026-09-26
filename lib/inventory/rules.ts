@@ -368,41 +368,63 @@ export function lineHasDiscrepancy(line: { qty_picked: number | null; qty_receiv
 
 export interface RecipeLineLike {
   menu_item_id: string;
-  variant_id: string | null;
+  /** '' = the base recipe; else a size's label ("Large"). Sizes are matched
+   * by label because saving a menu item re-creates its variant rows. */
+  size_label: string;
+  item_id: string;
+  qty: number;
+}
+
+export interface AddonRecipeLineLike {
+  addon_option_id: string;
   item_id: string;
   qty: number;
 }
 
 export interface OrderLineLike {
   menu_item_id: string | null;
-  variant_id: string | null;
+  /** order_items.variant_label_snapshot */
+  variant_label: string | null;
   quantity: number;
+  /** order_item_addons.addon_option_id for this line (null = deleted option). */
+  addon_option_ids?: (string | null)[];
 }
 
 /**
- * What one unit of (menu item, variant) uses. A variant with recipe lines of
- * its own uses those INSTEAD of the item's base recipe (variant_id null) —
- * a Large latte is its own recipe, not "a Regular plus something".
+ * What one unit of (menu item, size) uses. A size with recipe lines of its
+ * own uses those INSTEAD of the item's base recipe — a Large latte is its own
+ * recipe, not "a Regular plus something".
  */
-export function recipeFor(lines: RecipeLineLike[], menuItemId: string, variantId: string | null): RecipeLineLike[] {
+export function recipeFor(lines: RecipeLineLike[], menuItemId: string, sizeLabel: string | null): RecipeLineLike[] {
   const forItem = lines.filter((l) => l.menu_item_id === menuItemId);
-  if (variantId) {
-    const own = forItem.filter((l) => l.variant_id === variantId);
+  const label = (sizeLabel ?? '').trim();
+  if (label) {
+    const own = forItem.filter((l) => l.size_label === label);
     if (own.length > 0) return own;
   }
-  return forItem.filter((l) => l.variant_id === null);
+  return forItem.filter((l) => l.size_label === '');
 }
 
-/** Total ingredient usage for an order's lines, per stock item. Lines with no
- * menu item (deleted since) or no recipe use nothing. */
-export function orderUsage(orderLines: OrderLineLike[], recipeLines: RecipeLineLike[]): Map<string, number> {
+/** Total ingredient usage for an order's lines, per stock item: each line's
+ * recipe plus each of its add-ons' recipes, × the line quantity (add-ons are
+ * priced per unit, lib/orders/lines.ts). Lines with no menu item (deleted
+ * since) or no recipe use nothing. */
+export function orderUsage(
+  orderLines: OrderLineLike[],
+  recipeLines: RecipeLineLike[],
+  addonLines: AddonRecipeLineLike[] = [],
+): Map<string, number> {
   const usage = new Map<string, number>();
+  const add = (itemId: string, qty: number) => usage.set(itemId, roundQty((usage.get(itemId) ?? 0) + qty));
   for (const line of orderLines) {
-    if (!line.menu_item_id) continue;
     const units = Number(line.quantity) || 0;
     if (units <= 0) continue;
-    for (const r of recipeFor(recipeLines, line.menu_item_id, line.variant_id)) {
-      usage.set(r.item_id, roundQty((usage.get(r.item_id) ?? 0) + Number(r.qty) * units));
+    if (line.menu_item_id) {
+      for (const r of recipeFor(recipeLines, line.menu_item_id, line.variant_label)) add(r.item_id, Number(r.qty) * units);
+    }
+    for (const optionId of line.addon_option_ids ?? []) {
+      if (!optionId) continue;
+      for (const r of addonLines) if (r.addon_option_id === optionId) add(r.item_id, Number(r.qty) * units);
     }
   }
   for (const [id, q] of usage) if (q <= 0) usage.delete(id);
@@ -410,17 +432,18 @@ export function orderUsage(orderLines: OrderLineLike[], recipeLines: RecipeLineL
 }
 
 export interface RecipeLineInput {
-  variantId: string | null;
+  sizeLabel: string;
   itemId: string;
   qty: number;
 }
 
 /** A menu item's whole recipe as sent by the editor. Empty is allowed (it
- * clears the recipe). Each (size, ingredient) at most once. */
+ * clears the recipe). Each (size, ingredient) at most once; a size must be
+ * one of the item's current size labels. */
 export function parseRecipeLines(
   raw: unknown,
   isId: (v: unknown) => v is string,
-  variantIds: Set<string>,
+  sizeLabels: Set<string>,
 ): LinesResult<RecipeLineInput> {
   const arr = asArray(raw);
   if (!arr) return { ok: false, message: 'lines must be a list.' };
@@ -428,19 +451,42 @@ export function parseRecipeLines(
   const seen = new Set<string>();
   const lines: RecipeLineInput[] = [];
   for (const entry of arr) {
-    const rawVariant = field(entry, 'variantId', 'variant_id');
-    const variantId = rawVariant === null || rawVariant === undefined || rawVariant === '' ? null : rawVariant;
-    if (variantId !== null && (!isId(variantId) || !variantIds.has(variantId))) {
-      return { ok: false, message: 'That size does not belong to this menu item.' };
+    const rawSize = field(entry, 'sizeLabel', 'size_label');
+    if (rawSize !== undefined && rawSize !== null && typeof rawSize !== 'string') {
+      return { ok: false, message: 'sizeLabel must be text.' };
     }
+    const sizeLabel = typeof rawSize === 'string' ? rawSize.trim() : '';
+    if (sizeLabel && !sizeLabels.has(sizeLabel)) return { ok: false, message: 'That size does not belong to this menu item.' };
     const itemId = field(entry, 'itemId', 'item_id');
     if (!isId(itemId)) return { ok: false, message: 'Every recipe line needs a stock item.' };
-    const key = `${variantId ?? '*'}|${itemId}`;
+    const key = `${sizeLabel}|${itemId}`;
     if (seen.has(key)) return { ok: false, message: 'An ingredient appears twice for the same size.' };
     seen.add(key);
     const qty = parseQty(field(entry, 'qty'));
     if (qty === null) return { ok: false, message: 'Every recipe quantity must be more than 0.' };
-    lines.push({ variantId: variantId as string | null, itemId, qty });
+    lines.push({ sizeLabel, itemId, qty });
+  }
+  return { ok: true, lines };
+}
+
+/** An add-on's recipe: each ingredient once, qty > 0. Empty clears it. */
+export function parseAddonRecipeLines(
+  raw: unknown,
+  isId: (v: unknown) => v is string,
+): LinesResult<{ itemId: string; qty: number }> {
+  const arr = asArray(raw);
+  if (!arr) return { ok: false, message: 'lines must be a list.' };
+  if (arr.length > MAX_LINES) return { ok: false, message: `A recipe can have at most ${MAX_LINES} lines.` };
+  const seen = new Set<string>();
+  const lines: { itemId: string; qty: number }[] = [];
+  for (const entry of arr) {
+    const itemId = field(entry, 'itemId', 'item_id');
+    if (!isId(itemId)) return { ok: false, message: 'Every recipe line needs a stock item.' };
+    if (seen.has(itemId)) return { ok: false, message: 'An ingredient appears twice.' };
+    seen.add(itemId);
+    const qty = parseQty(field(entry, 'qty'));
+    if (qty === null) return { ok: false, message: 'Every recipe quantity must be more than 0.' };
+    lines.push({ itemId, qty });
   }
   return { ok: true, lines };
 }
