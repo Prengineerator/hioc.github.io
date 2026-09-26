@@ -202,6 +202,13 @@ alter table staff_emails add constraint staff_emails_kind_check
 -- the ones it hid once they can be made again. Items without a recipe are
 -- never touched; neither is an item a person switched off. Called at the end
 -- of every function that changes stock or recipes. Returns what changed.
+--
+-- Only sizes that are switched ON count: a size switched off by name on the
+-- POS (store_settings.hidden_variant_labels, 2026-09-menu-switches.sql,
+-- matched case-insensitively) is not on sale, so it can't keep an item on the
+-- menu. As on the menu itself, an item whose every size is switched off keeps
+-- them all. The column is read through to_jsonb so this still works on a
+-- database without that migration (no sizes switched off).
 create or replace function inventory_refresh_availability()
 returns jsonb
 language plpgsql
@@ -209,11 +216,18 @@ set search_path = public
 as $$
 declare
   v_on boolean;
+  v_off_labels text[];
   v_out uuid[];
   v_hidden uuid[];
   v_restored uuid[];
 begin
   select coalesce((select stock_auto_hide from store_settings where is_singleton limit 1), true) into v_on;
+  select coalesce(array(
+           select lower(trim(x))
+             from store_settings s,
+                  jsonb_array_elements_text(coalesce(to_jsonb(s) -> 'hidden_variant_labels', '[]'::jsonb)) x
+            where s.is_singleton), '{}')
+    into v_off_labels;
 
   with stock as (
     select i.id, coalesce(sum(b.qty_remaining), 0) as on_hand
@@ -221,8 +235,15 @@ begin
       left join inventory_batches b on b.item_id = i.id
      group by i.id
   ),
+  all_sizes as (
+    select v.menu_item_id, trim(v.label) as size_label,
+           lower(trim(v.label)) = any(v_off_labels) as switched_off
+      from menu_item_variants v
+  ),
   sizes as (
-    select v.menu_item_id, trim(v.label) as size_label from menu_item_variants v
+    select a.menu_item_id, a.size_label from all_sizes a
+     where not a.switched_off
+        or not exists (select 1 from all_sizes b where b.menu_item_id = a.menu_item_id and not b.switched_off)
     union
     select m.id, '' from menu_items m
      where not exists (select 1 from menu_item_variants v where v.menu_item_id = m.id)
