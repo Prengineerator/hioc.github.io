@@ -12,10 +12,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Spinner } from '@/components/ui/Spinner';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { MENU_CATEGORIES } from '@/lib/constants';
-import { isHiddenSize, sizeLabels } from '@/lib/menu/menuSwitches';
+import { isHiddenSize, isSizeOffEverywhere, sizeLabels, toggleSizeEntry } from '@/lib/menu/menuSwitches';
 import type { AddonGroup, MenuItem, StoreSettings } from '@/lib/types';
 
 const CARD = 'rounded-md border border-[#e5e5e5] bg-white p-4';
+
+const categoryLabel = (slug: string) => MENU_CATEGORIES.find((c) => c.slug === slug)?.label ?? slug;
 
 export function MenuSwitchesPanel({ items, canEdit }: { items: MenuItem[]; canEdit: boolean }) {
   const [settings, setSettings] = useState<StoreSettings | null>(null);
@@ -90,12 +92,17 @@ export function MenuSwitchesPanel({ items, canEdit }: { items: MenuItem[]; canEd
     void patchSettings(`cat:${slug}`, { hidden_categories: next }, `${label} is ${on ? 'on' : 'off'}.`);
   }
 
-  function toggleSize(label: string, on: boolean) {
+  // `category` null = the size everywhere; otherwise just that category
+  // (e.g. Extra Large off for cold drinks, still on for hot).
+  function toggleSize(label: string, category: string | null, on: boolean) {
     if (busyKey) return;
-    const next = on
-      ? hiddenSizes.filter((s) => !isHiddenSize(s, [label]))
-      : [...hiddenSizes.filter((s) => !isHiddenSize(s, [label])), label];
-    void patchSettings(`size:${label}`, { hidden_variant_labels: next }, `${label} is ${on ? 'on' : 'off'}.`);
+    const next = toggleSizeEntry(hiddenSizes, label, category, on);
+    const where = category ? ` in ${categoryLabel(category)}` : '';
+    void patchSettings(
+      `size:${label}:${category ?? '*'}`,
+      { hidden_variant_labels: next },
+      `${label}${where} is ${on ? 'on' : 'off'}.`,
+    );
   }
 
   async function toggleOption(groupId: string, optionId: string, name: string, on: boolean) {
@@ -183,19 +190,50 @@ export function MenuSwitchesPanel({ items, canEdit }: { items: MenuItem[]; canEd
           Sizes
         </h2>
         <p className="text-xs text-muted">
-          Manager or owner. A size that is an item&apos;s only size stays available on that item.
+          Manager or owner. Switch a size off everywhere, or open it to switch it off in some categories only
+          (e.g. Extra Large off for cold drinks, on for hot). A size that is an item&apos;s only size stays
+          available on that item.
         </p>
         <ul className="mt-2 divide-y divide-line">
-          {sizes.map((s) => (
-            <SwitchRow
-              key={s.label}
-              label={s.label}
-              detail={`${s.count} items`}
-              on={!isHiddenSize(s.label, hiddenSizes)}
-              disabled={!canEdit}
-              onChange={(next) => toggleSize(s.label, next)}
-            />
-          ))}
+          {sizes.map((s) => {
+            const offEverywhere = isSizeOffEverywhere(s.label, hiddenSizes);
+            const offIn = s.categories.filter((c) => isHiddenSize(s.label, hiddenSizes, c.slug));
+            const detail = offEverywhere
+              ? `${s.count} items · off everywhere`
+              : offIn.length > 0
+                ? `${s.count} items · off in ${offIn.length} of ${s.categories.length} categories`
+                : `${s.count} items`;
+            return (
+              <li key={s.label} className="py-1">
+                <ul>
+                  <SwitchRow
+                    label={s.label}
+                    detail={detail}
+                    on={!offEverywhere}
+                    disabled={!canEdit}
+                    onChange={(next) => toggleSize(s.label, null, next)}
+                  />
+                </ul>
+                {s.categories.length > 1 && !offEverywhere ? (
+                  <details className="ml-4" open={offIn.length > 0}>
+                    <summary className="cursor-pointer py-1 text-xs font-bold text-tan-dark">By category</summary>
+                    <ul className="divide-y divide-line">
+                      {s.categories.map((c) => (
+                        <SwitchRow
+                          key={c.slug}
+                          label={categoryLabel(c.slug)}
+                          detail={`${c.count} items`}
+                          on={!isHiddenSize(s.label, hiddenSizes, c.slug)}
+                          disabled={!canEdit}
+                          onChange={(next) => toggleSize(s.label, c.slug, next)}
+                        />
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       </section>
 

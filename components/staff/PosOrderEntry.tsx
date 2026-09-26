@@ -39,6 +39,8 @@ import { flags } from '@/lib/flags';
 import { createClient } from '@/lib/supabase';
 import { isSimpleItem, parseQuickAddInput, resolveQuickAdd } from '@/lib/pos/quickAdd';
 import { usePrintDock } from '@/components/staff/PrintDock';
+import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
+import type { CustomerSuggestion } from '@/lib/customers/phoneSearch';
 import { pushRecent, readRecents } from '@/lib/pos/recents';
 import { computeCartKey } from '@/lib/cart/cartKey';
 import { cartTaxableSubtotal, type CartItem } from '@/lib/cart/CartContext';
@@ -515,6 +517,19 @@ export function PosOrderEntry({
   const redeemPoints = useMemo(() => parsePointsInput(pointsInput), [pointsInput]);
   // Only a phone that could actually be someone is worth a lookup or a quote.
   const lookupPhone = useMemo(() => normalizeIndianMobile(custPhone) ?? '', [custPhone]);
+
+  // Customer suggestions while the number is being typed (4+ digits): pick one
+  // to fill the number — the lookup below then fills name, points, Last orders.
+  const [phoneSuggestOpen, setPhoneSuggestOpen] = useState(false);
+  const [suggestIndex, setSuggestIndex] = useState(-1);
+  const phoneSuggestions = useCustomerSuggestions(custPhone, !isAddMode);
+  const shownSuggestions = phoneSuggestOpen ? phoneSuggestions : [];
+  const pickSuggestion = useCallback((c: CustomerSuggestion) => {
+    setCustPhone(c.phone);
+    setPhoneSuggestOpen(false);
+    setSuggestIndex(-1);
+    custNameInputRef.current?.focus();
+  }, []);
 
   // --- VAL-2: who is at the counter ----------------------------------------
   // Runs off the phone alone, and the result is a name the staffer can check
@@ -1467,23 +1482,56 @@ export function PosOrderEntry({
                     else here (autofill, points, Last orders), so it's typed
                     first. Enter moves straight to Name, the field a cashier
                     would otherwise reach for next on a physical keyboard. */}
-                <input
-                  value={custPhone}
-                  onChange={(e) => {
-                    setCustPhone(e.target.value);
-                    if (contactError) setContactError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      custNameInputRef.current?.focus();
-                    }
-                  }}
-                  inputMode="numeric"
-                  // Also asked (and focused) in the Collect-payment step — BILL-2.
-                  placeholder="Phone (for the bill on WhatsApp)"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
-                />
+                <div className="relative">
+                  <input
+                    value={custPhone}
+                    onChange={(e) => {
+                      setCustPhone(e.target.value);
+                      setPhoneSuggestOpen(true);
+                      setSuggestIndex(-1);
+                      if (contactError) setContactError(null);
+                    }}
+                    onFocus={() => setPhoneSuggestOpen(true)}
+                    onBlur={() => setPhoneSuggestOpen(false)}
+                    onKeyDown={(e) => {
+                      // Suggestions: arrows move, Enter picks, Escape closes.
+                      if (shownSuggestions.length > 0) {
+                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          const step = e.key === 'ArrowDown' ? 1 : -1;
+                          setSuggestIndex((i) => (i + step + shownSuggestions.length) % shownSuggestions.length);
+                          return;
+                        }
+                        if (e.key === 'Escape') {
+                          setPhoneSuggestOpen(false);
+                          return;
+                        }
+                        if (e.key === 'Enter' && suggestIndex >= 0) {
+                          e.preventDefault();
+                          pickSuggestion(shownSuggestions[suggestIndex]);
+                          return;
+                        }
+                      }
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        custNameInputRef.current?.focus();
+                      }
+                    }}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    aria-autocomplete="list"
+                    aria-controls="pos-phone-suggestions"
+                    // Also asked (and focused) in the Collect-payment step — BILL-2.
+                    placeholder="Phone (for the bill on WhatsApp)"
+                    className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                  />
+                  <CustomerSuggestionList
+                    id="pos-phone-suggestions"
+                    matches={shownSuggestions}
+                    highlighted={suggestIndex}
+                    onPick={pickSuggestion}
+                  />
+                </div>
                 {/* POS-5: the "who is this" chip, shown the moment a lookup
                     resolves — ahead of the fuller account/points line below,
                     which only appears once Name/Email are visible too. */}
