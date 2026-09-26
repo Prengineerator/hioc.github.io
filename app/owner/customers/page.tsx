@@ -286,7 +286,7 @@ function LapsedRegularsTable({ rows }: { rows: PetpoojaCustomerForDisplay[] }) {
   return (
     <div>
       <p className="mb-3 text-xs text-muted">
-        <b>Win-back candidates:</b> These regulars haven't ordered in 60+ days, in Petpooja or in this app. Petpooja never collected marketing consent, so reach out through a channel that collects consent first.
+        <b>Win-back candidates:</b> These regulars haven&apos;t ordered in 60+ days, in Petpooja or in this app. Petpooja never collected marketing consent, so reach out through a channel that collects consent first.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[420px] text-sm">
