@@ -133,6 +133,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     );
   }
 
+  // Changing how a bill was paid (cash → UPI…) is a re-settle and allowed —
+  // but not once money has gone back: the refund was taken off a specific
+  // tender, and re-recording the tenders would detach it from what it refunded
+  // (and flip a refunded order back to 'paid').
+  if (['refunded', 'partially_refunded'].includes(existing.payment_status as string)) {
+    return errorResponse(409, 'This order has a refund, so how it was paid can no longer be changed.');
+  }
+
   // POS4-1: validate the split against the authoritative total before touching
   // anything. The parts must sum exactly — a gap would surface later as an
   // unexplained cash-drawer variance nobody can reconstruct.
@@ -165,6 +173,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // POS4-1: persist the parts. Written AFTER the order update so a failed
   // settle leaves no orphan parts. Replaces any prior parts for this order so a
   // re-settle (staff correcting how it was paid) doesn't double-count cash.
+  // A single-method re-settle clears them too: otherwise a bill first split
+  // cash + UPI and then changed to "all UPI" would keep its old cash part, and
+  // the drawer would still expect that cash.
+  if (!parts && paymentStatus === 'paid') {
+    await admin.from('order_payments').delete().eq('order_id', id);
+  }
   if (parts) {
     await admin.from('order_payments').delete().eq('order_id', id);
     const { error: partsError } = await admin.from('order_payments').insert(
@@ -227,5 +241,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   // `change_due_inr` lets the POS show "give ₹120 back" without recomputing it.
-  return NextResponse.json({ order: data as Order, change_due_inr: changeInr });
+  // The tenders as recorded, so the caller can show "Cash ₹300 + UPI ₹180"
+  // straight away (a single-method settle has none — payment_method says it).
+  const payments = (parts ?? []).map((p) => ({ method: p.method, amount_inr: p.amount_inr }));
+  return NextResponse.json({ order: { ...(data as Order), payments }, change_due_inr: changeInr });
 }

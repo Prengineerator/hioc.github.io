@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
 import { amountDueInr, isPaymentDue } from '@/lib/orders/staffPayment';
+import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
@@ -169,6 +170,9 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
                       {STATUS_LABELS[o.status] ?? o.status}
                     </span>
                     <PaymentBadge status={o.payment_status} />
+                    {o.payment_status === 'paid' && o.payment_method ? (
+                      <span className="text-xs text-muted">{describeOrderPayment(o)}</span>
+                    ) : null}
                     <span className={`font-mono font-bold tabular-nums ${due ? 'text-red-800' : 'text-charcoal'}`}>
                       {rupees(o.total_inr ?? o.subtotal_inr)}
                     </span>

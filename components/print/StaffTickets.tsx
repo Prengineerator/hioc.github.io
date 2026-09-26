@@ -12,12 +12,12 @@ import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import {
   ORDER_TYPE_LABEL,
   PAYMENT_BANNER_LABEL,
-  PAYMENT_METHOD_LABEL,
   formatIstDateTime,
   formatIstDateShort,
 } from '@/lib/print/labels';
 import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
 import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
+import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -237,6 +237,7 @@ function KotSlipView({
   return (
     <>
       <div className="text-center">
+        {order.kot_addition ? <p className="text-lg font-bold uppercase">** Added items **</p> : null}
         {slip.title !== null ? (
           <>
             <p className="text-lg font-bold uppercase">{slip.title}</p>
@@ -400,7 +401,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         </div>
         {order.payment_status === 'paid' && order.payment_method ? (
           <p className="text-center">
-            Paid via {PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}
+            Paid via {describeOrderPayment(order)}
           </p>
         ) : null}
       </div>

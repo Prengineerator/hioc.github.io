@@ -1,10 +1,11 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
-//   POS          Live orders · Orders · New order · Menu (· Stock) — what the
-//                counter does. Settings (printers live there) sits in the
-//                account menu. Stock is where deliveries are verified, so the
-//                counter needs it one tap away.
-//   staff site   Live orders · Orders, plus New order and Tables only when
+//   POS          Live orders · Orders · Settle · New order · Tables · Menu ·
+//                (Stock ·) Settings — what the counter does, every one a
+//                visible tab (Settings in the account menu was too easy to
+//                miss). Stock is where deliveries are verified, so the counter
+//                needs it one tap away.
+//   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
 //
@@ -33,12 +34,13 @@ export interface StaffNav {
   primary: StaffTab[];
   /** Under the "More" menu. Empty on the POS. */
   more: StaffTab[];
-  /** Extra links in the account menu (the POS's Settings). */
+  /** Extra links in the account menu. */
   account: StaffTab[];
 }
 
 const LIVE: StaffTab = { href: '/staff', label: 'Live orders' };
 const ORDERS: StaffTab = { href: '/staff/orders', label: 'Orders' };
+const SETTLE: StaffTab = { href: '/staff/settle', label: 'Settle' };
 const NEW_ORDER: StaffTab = { href: '/staff/orders/new', label: 'New order' };
 const TABLES: StaffTab = { href: '/staff/tables', label: 'Tables' };
 const MENU: StaffTab = { href: '/staff/menu', label: 'Menu' };
@@ -48,13 +50,21 @@ const STOCK: StaffTab = { href: '/staff/inventory', label: 'Stock' };
 export function staffNav(input: StaffNavInput): StaffNav {
   if (input.surface === 'pos') {
     return {
-      primary: [LIVE, ORDERS, ...(input.staffPos ? [NEW_ORDER] : []), MENU, ...(input.inventory ? [STOCK] : [])],
+      primary: [
+        LIVE,
+        ORDERS,
+        SETTLE,
+        ...(input.staffPos ? [NEW_ORDER, TABLES] : []),
+        MENU,
+        ...(input.inventory ? [STOCK] : []),
+        SETTINGS,
+      ],
       more: [],
-      account: [SETTINGS],
+      account: [],
     };
   }
   return {
-    primary: [LIVE, ORDERS, ...(input.staffPos && input.canTakeOrders ? [NEW_ORDER, TABLES] : [])],
+    primary: [LIVE, ORDERS, SETTLE, ...(input.staffPos && input.canTakeOrders ? [NEW_ORDER, TABLES] : [])],
     more: [
       // OPS-2: cash drawer day-open/close by denomination.
       ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),

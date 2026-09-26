@@ -264,3 +264,37 @@ describe('PATCH /api/orders/[id]/payment — split settlement (POS4-1)', () => {
     expect(state.orderPatch).toMatchObject({ payment_method: 'cash' });
   });
 });
+
+describe('PATCH /api/orders/[id]/payment — changing how a bill was paid', () => {
+  it('re-records a paid bill as a different method (cash → UPI)', async () => {
+    state.existing = { payment_method: 'cash', payment_status: 'paid', total_inr: 480, subtotal_inr: 450 };
+    state.updated = { id: ORDER_ID, payment_method: 'upi', payment_status: 'paid' };
+
+    const res = await call({ parts: [{ method: 'upi', amount_inr: 480 }] });
+
+    expect(res.status).toBe(200);
+    expect(state.orderPatch).toMatchObject({ payment_method: 'upi', payment_status: 'paid' });
+    // The old parts are replaced, so the drawer stops expecting the cash.
+    expect(state.deletedParts).toBe(true);
+    expect(state.insertedParts).toEqual([expect.objectContaining({ method: 'upi', amount_inr: 480 })]);
+  });
+
+  it('clears old split parts on a single-method change too', async () => {
+    state.existing = { payment_method: 'cash', payment_status: 'paid', total_inr: 480, subtotal_inr: 450 };
+
+    const res = await call({ payment_method: 'upi' });
+
+    expect(res.status).toBe(200);
+    expect(state.deletedParts).toBe(true);
+    expect(state.insertedParts).toEqual([]);
+  });
+
+  it('refuses once the bill has a refund', async () => {
+    state.existing = { payment_method: 'cash', payment_status: 'partially_refunded', total_inr: 480, subtotal_inr: 450 };
+
+    const res = await call({ parts: [{ method: 'upi', amount_inr: 480 }] });
+
+    expect(res.status).toBe(409);
+    expect(state.orderPatch).toBeUndefined();
+  });
+});

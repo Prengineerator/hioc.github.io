@@ -14,7 +14,7 @@
 // 2. Counter mode. It was a full-screen cover over the Orders page that hid
 //    the navigation, so the counter couldn't reach New order or Tables. It is
 //    now shell state: full screen + screen kept awake on every page, with the
-//    header trimmed to Orders / New order / Tables (StaffHeader).
+//    header trimmed to Orders / Settle / New order / Tables (StaffHeader).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';

@@ -20,10 +20,10 @@ import { BUSINESS } from '@/lib/legal';
 import {
   ORDER_TYPE_LABEL,
   PAYMENT_BANNER_LABEL,
-  PAYMENT_METHOD_LABEL,
   formatIstDateTime,
   formatIstDateShort,
 } from '@/lib/print/labels';
+import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 
 // Thermal code pages (the ones ESC/POS printers actually ship with) have no
 // ₹ glyph — it prints as a mangled box or a wrong currency sign depending on
@@ -185,6 +185,9 @@ function buildKotSlipBlocks(
 ): TicketBlock[] {
   const isDineIn = order.order_type === 'dine_in';
   const blocks: TicketBlock[] = [];
+  if (order.kot_addition) {
+    blocks.push({ kind: 'text', text: '** ADDED ITEMS **', align: 'center', bold: true, size: 'large' });
+  }
   if (slip.title !== null) {
     blocks.push({ kind: 'text', text: slip.title.toUpperCase(), align: 'center', bold: true, size: 'large' });
     blocks.push({ kind: 'text', text: `KOT ${index + 1} of ${total}`, align: 'center' });
@@ -336,7 +339,7 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   if (order.payment_status === 'paid' && order.payment_method) {
     blocks.push({
       kind: 'text',
-      text: `Paid via ${PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}`,
+      text: `Paid via ${describeOrderPayment(order)}`,
       align: 'center',
     });
   }

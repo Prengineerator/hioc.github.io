@@ -10,7 +10,7 @@ import { normalizeEmail } from '@/lib/email';
 import { flags } from '@/lib/flags';
 import { evaluatePhoneVerification } from '@/lib/orders/phoneVerification';
 import { sendBillNotification } from '@/lib/notifications/engine';
-import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
+import { ORDER_PAYMENTS_EMBED, toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import {
   MENU_ITEM_SELECT,
   parseItems,
@@ -914,9 +914,27 @@ export async function GET(request: Request) {
   const all = searchParams.get('all') === 'true';
 
   const admin = createAdminSupabaseClient();
+
+  // ?payment=unpaid — the Settle screen: every bill still owed, from ANY day
+  // (a bill left unpaid yesterday must not drop off the list at midnight),
+  // oldest first. Cancelled/rejected orders are never owed. Only 'unpaid':
+  // 'payment_pending' is an online order waiting on the gateway, and settling
+  // it at the counter could charge the customer twice.
+  if (searchParams.get('payment') === 'unpaid') {
+    const { data, error } = await admin
+      .from('orders')
+      .select('*, order_items(*, order_item_addons(*))')
+      .eq('payment_status', 'unpaid')
+      .not('status', 'in', '(cancelled,rejected)')
+      .order('created_at', { ascending: true })
+      .limit(MAX_ALL_ORDERS_ROWS);
+    if (error) return errorResponse(500, 'Failed to load unpaid orders');
+    return NextResponse.json({ orders: (data ?? []).map((row) => toOrderResponse(row as OrderRowWithItems)) });
+  }
+
   let query = admin
     .from('orders')
-    .select('*, order_items(*, order_item_addons(*))')
+    .select(`*, order_items(*, order_item_addons(*)), ${ORDER_PAYMENTS_EMBED}`)
     .order('created_at', { ascending: true });
 
   if (statusParam) {

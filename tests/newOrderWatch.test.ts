@@ -36,6 +36,6 @@ describe('readSoundPref', () => {
 
 describe('COUNTER_MODE_HREFS', () => {
   it('keeps Live orders, Orders, New order and Tables within reach', () => {
-    expect([...COUNTER_MODE_HREFS]).toEqual(['/staff', '/staff/orders', '/staff/orders/new', '/staff/tables']);
+    expect([...COUNTER_MODE_HREFS]).toEqual(['/staff', '/staff/orders', '/staff/settle', '/staff/orders/new', '/staff/tables']);
   });
 });

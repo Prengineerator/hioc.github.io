@@ -28,6 +28,9 @@ export type StaffPrintOrder = OrderWithCoupon & {
   // missing value just prints the single classic KOT.
   kot_categories?: Record<string, string>;
   kot_routing?: KotRouting;
+  // A KOT of only the lines added to a running order (lib/print/kotAddition):
+  // headed "ADDED ITEMS" so the kitchen doesn't read it as a new order.
+  kot_addition?: boolean;
 };
 
 // PRN-8: an order's 'earn' row (lib/loyalty/ledger.ts earnForOrder) is only

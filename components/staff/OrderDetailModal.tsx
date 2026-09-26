@@ -17,6 +17,8 @@ import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
+import { canChangePayment, describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
+import type { SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import {
   billStatusTone,
   parseResendResult,
@@ -49,6 +51,7 @@ export function OrderDetailModal({
   onRefund,
   onVoid,
   onComp,
+  onOpenPayment,
 }: {
   order: OrderWithItems;
   defaultPrepMin?: number;
@@ -80,6 +83,12 @@ export function OrderDetailModal({
   // Manager comp (₹0 settle + complete) for an unpaid dine-in at `ready`
   // (POS-2). The /status route is manager-gated server-side.
   onComp?: (o: OrderWithItems, reason: string) => Promise<void> | void;
+  /**
+   * The full payment step (cash + change, split) for this order: 'settle' an
+   * unpaid bill, or 'change' how a paid one was paid (cash → UPI). Omit to
+   * hide both buttons.
+   */
+  onOpenPayment?: (o: OrderWithItems, intent: SettleIntent) => void;
 }) {
   useModalDismiss(onClose);
   const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp'>('view');
@@ -782,7 +791,11 @@ export function OrderDetailModal({
                 every other open state. */}
             <div className="mt-2 border-t border-[#e5e5e5] pt-3">
               <p className="text-xs text-muted">
-                Payment: <span className="font-bold text-charcoal">{order.payment_status}{order.payment_method ? ` (${order.payment_method})` : ''}</span>
+                Payment:{' '}
+                <span className="font-bold text-charcoal">
+                  {order.payment_status}
+                  {order.payment_method ? ` (${describeOrderPayment(order)})` : ''}
+                </span>
               </p>
               {order.payment_status !== 'paid' && order.status !== 'ready' ? (
                 <div className="mt-2 flex gap-2">
@@ -792,6 +805,22 @@ export function OrderDetailModal({
                     </button>
                   ))}
                 </div>
+              ) : null}
+              {onOpenPayment && isSettleable(order) ? (
+                <button
+                  onClick={() => onOpenPayment(order, 'settle')}
+                  className="mt-2 w-full rounded-md border border-[#e5e5e5] py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+                >
+                  Split or cash with change…
+                </button>
+              ) : null}
+              {onOpenPayment && canChangePayment(order) ? (
+                <button
+                  onClick={() => onOpenPayment(order, 'change')}
+                  className="mt-2 w-full rounded-md border border-[#e5e5e5] py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+                >
+                  Change payment
+                </button>
               ) : null}
               {/* Refund (PAY-3/FND-2) — server route is manager/owner-gated
                   (FND-5); shown here whenever the order has a captured
