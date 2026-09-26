@@ -24,7 +24,7 @@ type TransitionActor = ActorRole;
 
 // Extra order facts a guard may consult to decide a transition (FND3-5). All
 // optional so pure state-machine callers (the UIs, most tests) can omit it —
-// only the settlement guard needs them, and only for dine-in.
+// only the settlement guard needs them.
 export interface TransitionContext {
   orderType?: OrderType;
   paymentStatus?: PaymentStatus;
@@ -71,16 +71,19 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     from: 'ready',
     to: 'completed',
     actors: ['staff'],
-    // FND3-5 / POS-2: a dine-in order must be settled before it can complete —
-    // payment_status 'paid', or an explicit manager comp (isComp). Takeaway and
-    // delivery (and any context-free UI call) are unaffected.
+    // FND3-5 / POS-2: an order must be settled before it can complete —
+    // payment_status 'paid', or an explicit manager comp (isComp). This used to
+    // cover dine-in only, so an unpaid takeaway or pay-at-counter web order
+    // could be completed with the money never collected. A context-free call
+    // (how the UIs ask "is this a legal move?") has no payment facts and is
+    // left to the server, which always passes them.
     guard: (ctx) =>
-      ctx.orderType !== 'dine_in' || ctx.paymentStatus === 'paid' || !!ctx.isComp
+      ctx.paymentStatus === undefined || ctx.paymentStatus === 'paid' || !!ctx.isComp
         ? { ok: true }
         : {
             ok: false,
             code: 'payment_required',
-            message: 'Dine-in order must be settled before it can be completed',
+            message: 'Collect payment before completing this order',
           },
   },
   // A ready order nobody collects can be cancelled by a manager (H4) rather

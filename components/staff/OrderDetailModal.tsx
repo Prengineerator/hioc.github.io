@@ -606,7 +606,7 @@ export function OrderDetailModal({
           <div className="mt-5 rounded-md border border-[#e5e5e5] p-4">
             <p className="text-sm font-bold text-charcoal">Comp order (manager)</p>
             <p className="mt-1 text-xs text-muted">
-              Completes this dine-in order at ₹0 without collecting payment. Manager-authorized and audited.
+              Completes this order at ₹0 without collecting payment. Manager-authorized and audited.
             </p>
             <label className="mt-3 block text-xs font-bold text-charcoal">Reason</label>
             <input
@@ -698,6 +698,42 @@ export function OrderDetailModal({
                     </>
                   )}
                 </div>
+              ) : !isPaid ? (
+                // Takeaway / delivery / web pay-at-counter: completing now
+                // requires payment too (the ready → completed guard), so the
+                // money is collected here BEFORE the pickup-code check.
+                <div className="rounded-md border border-red-200 bg-red-50/40 p-4">
+                  <p className="text-sm font-bold text-charcoal">Collect payment</p>
+                  <p className="text-xs text-muted">
+                    ₹{order.total_inr ?? order.subtotal_inr} due · the order can be handed over once it&apos;s paid.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    {PAYMENT_METHODS.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => settle(m)}
+                        className="flex-1 rounded-md border border-[#e5e5e5] bg-cream py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan"
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    disabled
+                    title="Collect payment first"
+                    className="mt-3 w-full cursor-not-allowed rounded-md bg-tan/40 py-2.5 font-bold text-cream"
+                  >
+                    Complete (collect payment first)
+                  </button>
+                  {onComp ? (
+                    <button
+                      onClick={() => { setCompReason(''); setMode('comp'); }}
+                      className="mt-2 w-full rounded-md border border-[#e5e5e5] py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                    >
+                      Comp (₹0, manager)
+                    </button>
+                  ) : null}
+                </div>
               ) : (
                 <div className="rounded-md border border-[#e5e5e5] p-4">
                   <p className="text-sm font-bold text-charcoal">Verify pickup code</p>
@@ -740,14 +776,15 @@ export function OrderDetailModal({
               </button>
             ) : null}
 
-            {/* Mark payment (S7). The dine-in settle section above already
-                surfaces the Cash/UPI/Card buttons at `ready`, so suppress the
-                duplicate set there; keep them for every other open state. */}
+            {/* Mark payment (S7). The settle / collect-payment section above
+                already surfaces the Cash/UPI/Card buttons at `ready` (every
+                order type), so suppress the duplicate set there; keep them for
+                every other open state. */}
             <div className="mt-2 border-t border-[#e5e5e5] pt-3">
               <p className="text-xs text-muted">
                 Payment: <span className="font-bold text-charcoal">{order.payment_status}{order.payment_method ? ` (${order.payment_method})` : ''}</span>
               </p>
-              {order.payment_status !== 'paid' && !(isDineIn && order.status === 'ready') ? (
+              {order.payment_status !== 'paid' && order.status !== 'ready' ? (
                 <div className="mt-2 flex gap-2">
                   {PAYMENT_METHODS.map((m) => (
                     <button key={m} onClick={() => settle(m)} className="flex-1 rounded-md border border-[#e5e5e5] py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan">

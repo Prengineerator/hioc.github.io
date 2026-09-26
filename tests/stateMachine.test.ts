@@ -109,14 +109,22 @@ describe('canTransition — dine-in settlement guard (FND3-5)', () => {
     ).toBe(true);
   });
 
-  it('leaves takeaway ready → completed unaffected by payment status', () => {
+  it('blocks takeaway and delivery ready → completed while unpaid too', () => {
+    for (const orderType of ['takeaway', 'delivery'] as const) {
+      const res = canTransition('ready', 'completed', 'staff', undefined, { orderType, paymentStatus: 'unpaid' });
+      expect(res.ok).toBe(false);
+      expect(res.code).toBe('payment_required');
+    }
+  });
+
+  it('allows takeaway ready → completed once paid, or on a comp', () => {
+    expect(canTransition('ready', 'completed', 'staff', undefined, { orderType: 'takeaway', paymentStatus: 'paid' }).ok).toBe(true);
     expect(
-      canTransition('ready', 'completed', 'staff', undefined, {
-        orderType: 'takeaway',
-        paymentStatus: 'unpaid',
-      }).ok,
+      canTransition('ready', 'completed', 'staff', undefined, { orderType: 'takeaway', paymentStatus: 'unpaid', isComp: true }).ok,
     ).toBe(true);
-    // …and a context-free call (how the UI invokes it) is likewise unaffected.
+  });
+
+  it('leaves a context-free call (how the UI asks) to the server', () => {
     expect(canTransition('ready', 'completed', 'staff').ok).toBe(true);
   });
 });
