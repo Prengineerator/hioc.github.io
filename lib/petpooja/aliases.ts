@@ -19,9 +19,8 @@
 // than none — see match.ts): discontinued lines with no successor on the
 // menu (Crepes, Fries, Sandwiches other than the two below, scoops, other
 // Shakes), non-menu lines ('Water Bottle', 'Corporate Coffee', 'Paper Bag',
-// 'Beans Sell'), 'Chocochip Creme' / 'Choco-chip Frappe' (still sold in
-// Petpooja but not on this app's menu), and names sold alongside several
-// current items ('Rose', 'Rose Frappe', 'Cheesecake', 'Truffle Slice').
+// 'Beans Sell'), and names sold alongside several current items ('Rose',
+// 'Rose Frappe', 'Cheesecake', 'Truffle Slice').
 export const ITEM_ALIASES: Record<string, string> = {
   // Same toasted-bread item; 'Garlic Bread' (946x) and 'Garlic Bread Toast'
   // (306x) never appear as two separate line items on the same bill.
@@ -104,6 +103,11 @@ export const ITEM_ALIASES: Record<string, string> = {
   'caramel chips frappe': 'Caramel Chip Creme',
   'cookie crumble frappe': 'Cookie Crumble Creme',
   'lotus biscoff frappe': 'Lotus Biscoff Creme',
+  // Petpooja's 'Chocochip Creme' is this app's 'Mocha Chip Creme' — same
+  // drink, confirmed by the owner. 'Chocochip Creme Coffee [N]' reaches this
+  // via match.ts's ' coffee' strip; 'Choco-chip Frappe' is its predecessor.
+  'chocochip creme': 'Mocha Chip Creme',
+  'choco chip frappe': 'Mocha Chip Creme',
   'oreo shake': 'Oreo Creme',
   'krazy kitkat shake': 'Krazy Kitkat Creme',
   'chocolate shakes': 'Signature Chocolate Creme',

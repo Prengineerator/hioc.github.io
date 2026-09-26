@@ -28,6 +28,7 @@ const menu: MenuSnapshotItem[] = [
   { id: 'm-hazelnut-creme', name: 'Hazelnut Creme', variants: [{ id: 'v-hc-large', label: 'Large' }] },
   { id: 'm-oreo-creme', name: 'Oreo Creme', variants: [{ id: 'v-oc-large', label: 'Large' }] },
   { id: 'm-sig-hot-choc', name: 'Signature Hot Chocolate', variants: [{ id: 'v-shc-large', label: 'Large' }] },
+  { id: 'm-mocha-chip', name: 'Mocha Chip Creme', variants: [{ id: 'v-mc-large', label: 'Large' }] },
 ];
 
 describe('matchMenuItem', () => {
@@ -111,6 +112,12 @@ describe('matchMenuItem', () => {
   it('maps a pre-relaunch name to its current successor', () => {
     expect(matchMenuItem('Hazelnut Frappe', 'Large', menu).matched_menu_name).toBe('Hazelnut Creme');
     expect(matchMenuItem('Hot Chocolate', 'Large', menu).matched_menu_name).toBe('Signature Hot Chocolate');
+  });
+
+  it("maps Petpooja's Chocochip Creme (and its older names) to Mocha Chip Creme", () => {
+    for (const name of ['Chocochip Creme', 'Chocochip Creme Coffee', 'Choco-chip Frappe', 'Choco-Chip Frappe']) {
+      expect(matchMenuItem(name, 'Large', menu).menu_item_id).toBe('m-mocha-chip');
+    }
   });
 
   it('does not strip a suffix when the rest still matches nothing', () => {
