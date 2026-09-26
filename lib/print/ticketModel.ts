@@ -13,6 +13,7 @@
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import type { PrintType } from '@/lib/staff/autoPrint';
 import type { TicketDoc, TicketBlock, TicketColumn } from '@/lib/print/ticketDoc';
+import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
@@ -162,10 +163,35 @@ const ITEM_COLUMN_INDENT = 4;
 // Mirrors components/print/StaffTickets.tsx `KotTicket`. Qty × name (variant)
 // + addons + notes; voided lines carry `strike: true` instead of being
 // dropped, so a reprint still shows the kitchen what was cancelled. NO money.
+//
+// With KOT counters configured (lib/print/kotRouting.ts) the ticket is one
+// slip per counter, each headed by the counter's name and separated by a
+// `cut` block; with none, it is the single ticket it always was.
 function buildKotBlocks(order: StaffPrintOrder): TicketBlock[] {
+  const slips = splitKotItems(order.items, order.kot_categories ?? {}, order.kot_routing ?? DEFAULT_KOT_ROUTING);
+  const blocks: TicketBlock[] = [];
+  slips.forEach((slip, index) => {
+    if (index > 0) blocks.push({ kind: 'cut' });
+    blocks.push(...buildKotSlipBlocks(order, slip, index, slips.length));
+  });
+  return blocks;
+}
+
+function buildKotSlipBlocks(
+  order: StaffPrintOrder,
+  slip: KotSlip<StaffPrintOrder['items'][number]>,
+  index: number,
+  total: number,
+): TicketBlock[] {
   const isDineIn = order.order_type === 'dine_in';
-  const blocks: TicketBlock[] = [
-    { kind: 'text', text: 'KITCHEN ORDER', align: 'center', bold: true },
+  const blocks: TicketBlock[] = [];
+  if (slip.title !== null) {
+    blocks.push({ kind: 'text', text: slip.title.toUpperCase(), align: 'center', bold: true, size: 'large' });
+    blocks.push({ kind: 'text', text: `KOT ${index + 1} of ${total}`, align: 'center' });
+  } else {
+    blocks.push({ kind: 'text', text: 'KITCHEN ORDER', align: 'center', bold: true });
+  }
+  blocks.push(
     { kind: 'text', text: formatOrderNumber(order.order_number), align: 'center', bold: true },
     { kind: 'divider' },
     isDineIn
@@ -174,9 +200,9 @@ function buildKotBlocks(order: StaffPrintOrder): TicketBlock[] {
     { kind: 'text', text: ORDER_TYPE_LABEL[order.order_type] ?? order.order_type, align: 'center' },
     { kind: 'text', text: formatIstDateTime(order.created_at), align: 'center' },
     { kind: 'divider' },
-  ];
+  );
 
-  for (const item of order.items) {
+  for (const item of slip.items) {
     blocks.push({ kind: 'text', text: itemLabel(item), bold: true, strike: item.voided });
     for (const line of addonsLines(item.addons, { withPrice: false })) {
       blocks.push({ kind: 'text', text: `  ${line}` });
@@ -186,6 +212,8 @@ function buildKotBlocks(order: StaffPrintOrder): TicketBlock[] {
     }
   }
 
+  // The order note goes on every slip: "no sugar in anything" or "pack
+  // separately" matters to each counter, not just the first.
   if (order.notes) {
     blocks.push({ kind: 'divider' });
     blocks.push({ kind: 'text', text: `Order note: ${order.notes}` });

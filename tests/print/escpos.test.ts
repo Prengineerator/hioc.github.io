@@ -550,3 +550,33 @@ describe('renderEscPos — brandHeader fallback', () => {
     expect(decodeLines(bytes)).toContain('HIOC.');
   });
 });
+
+describe('renderEscPos — mid-ticket cut block', () => {
+  it('emits the same trailer as the end of the ticket, in the printer cut mode', () => {
+    const blocks: TicketDoc['blocks'] = [{ kind: 'text', text: 'one' }, { kind: 'cut' }, { kind: 'text', text: 'two' }];
+    const standard = renderEscPos(doc(blocks), { paperWidthMm: 80, cut: true });
+    expect(findAll(standard, [0x1d, 0x56, 0x42, 0x00])).toHaveLength(2);
+
+    const partial = renderEscPos(doc(blocks), { paperWidthMm: 80, cut: true, cutMode: 'partial' });
+    expect(findAll(partial, [0x1b, 0x64, 0x04, 0x1d, 0x56, 0x01])).toHaveLength(2);
+  });
+
+  it('with no cutter, feeds to the tear bar between slips', () => {
+    const bytes = renderEscPos(doc([{ kind: 'text', text: 'one' }, { kind: 'cut' }, { kind: 'text', text: 'two' }]), {
+      paperWidthMm: 80,
+      cut: false,
+    });
+    expect(findAll(bytes, [0x1b, 0x64, 0x04])).toHaveLength(2);
+  });
+
+  it('resets bold and size before cutting, so the next slip starts clean', () => {
+    const bytes = renderEscPos(
+      doc([{ kind: 'text', text: 'BIG', bold: true, size: 'large' }, { kind: 'cut' }, { kind: 'text', text: 'x' }]),
+      { paperWidthMm: 80, cut: true },
+    );
+    const cutAt = findAll(bytes, [0x1d, 0x56, 0x42, 0x00])[0];
+    const beforeCut = Array.from(bytes.slice(0, cutAt));
+    expect(findAll(Uint8Array.from(beforeCut), [0x1b, 0x45, 0x00])).not.toHaveLength(0); // bold off
+    expect(findAll(Uint8Array.from(beforeCut), [0x1d, 0x21, 0x00])).not.toHaveLength(0); // normal size
+  });
+});

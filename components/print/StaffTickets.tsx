@@ -17,6 +17,7 @@ import {
   formatIstDateShort,
 } from '@/lib/print/labels';
 import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
+import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -195,12 +196,57 @@ function BrandHeader() {
 // --- KOT-1 — Kitchen Order Ticket -------------------------------------------
 // Qty × name (variant) + addons + notes. NO prices, NO totals. Voided lines
 // print struck-through so the kitchen sees the correction on a reprint.
+//
+// With KOT counters configured (lib/print/kotRouting.ts) this renders one
+// slip per counter, each on its own printed page — a thermal driver set to
+// cut after each page cuts them apart, mirroring the `cut` blocks the ESC/POS
+// path (lib/print/ticketModel.ts buildKotBlocks) sends.
 export function KotTicket({ order }: { order: StaffPrintOrder }) {
-  const isDineIn = order.order_type === 'dine_in';
+  const slips = splitKotItems(order.items, order.kot_categories ?? {}, order.kot_routing ?? DEFAULT_KOT_ROUTING);
   return (
     <div className="font-sans text-black">
+      {slips.map((slip, index) => (
+        <div
+          key={`${slip.kind}-${slip.title ?? 'kot'}`}
+          className={index < slips.length - 1 ? 'print:break-after-page' : undefined}
+        >
+          <KotSlipView order={order} slip={slip} index={index} total={slips.length} />
+          {index < slips.length - 1 ? (
+            <p className="my-4 border-t-2 border-dashed border-black pt-1 text-center text-[10px] uppercase tracking-widest print:hidden">
+              cut here
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function KotSlipView({
+  order,
+  slip,
+  index,
+  total,
+}: {
+  order: StaffPrintOrder;
+  slip: KotSlip<StaffPrintOrder['items'][number]>;
+  index: number;
+  total: number;
+}) {
+  const isDineIn = order.order_type === 'dine_in';
+  return (
+    <>
       <div className="text-center">
-        <p className="text-sm font-bold uppercase tracking-[0.2em]">Kitchen Order</p>
+        {slip.title !== null ? (
+          <>
+            <p className="text-lg font-bold uppercase">{slip.title}</p>
+            <p className="text-xs">
+              KOT {index + 1} of {total}
+            </p>
+          </>
+        ) : (
+          <p className="text-sm font-bold uppercase tracking-[0.2em]">Kitchen Order</p>
+        )}
         <p className="mt-1 text-lg font-bold">{formatOrderNumber(order.order_number)}</p>
       </div>
 
@@ -219,7 +265,7 @@ export function KotTicket({ order }: { order: StaffPrintOrder }) {
       <Divider />
 
       <ul className="flex flex-col gap-2 text-sm">
-        {order.items.map((item) => (
+        {slip.items.map((item) => (
           <li key={item.id} className={item.voided ? 'line-through' : ''}>
             <p className="font-bold">
               {item.quantity} × {item.name_snapshot}
@@ -244,7 +290,7 @@ export function KotTicket({ order }: { order: StaffPrintOrder }) {
           <p className="text-xs italic">Order note: {order.notes}</p>
         </>
       ) : null}
-    </div>
+    </>
   );
 }
 

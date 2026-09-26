@@ -11,10 +11,11 @@ import {
 // StaffHeader. These are the two pure pieces both places rely on.
 
 describe('SETTINGS_SECTIONS', () => {
-  it('lists overview, printers, store and counter, in that order', () => {
+  it('lists overview, printers, KOT counters, store and counter, in that order', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.href)).toEqual([
       '/staff/settings',
       '/staff/settings/printers',
+      '/staff/settings/kot-counters',
       '/staff/settings/store',
       '/staff/settings/counter',
     ]);

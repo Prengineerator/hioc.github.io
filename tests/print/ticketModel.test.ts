@@ -748,3 +748,61 @@ describe('buildTicketDoc — token', () => {
     expect(text).toContain('Please wait for your token to be called.');
   });
 });
+
+describe('buildTicketDoc — KOT split by counter', () => {
+  const coffee = item({ id: 'i-coffee', menu_item_id: 'm-coffee', name_snapshot: 'Latte' });
+  const waffle = item({ id: 'i-waffle', menu_item_id: 'm-waffle', name_snapshot: 'Nutella Waffle' });
+  const split = order({
+    items: [coffee, waffle],
+    notes: 'No sugar',
+    kot_categories: { 'm-coffee': 'Coffee', 'm-waffle': 'Stick Waffles' },
+    kot_routing: {
+      counters: [
+        { name: 'Coffee Bar', categories: ['Coffee'] },
+        { name: 'Waffle Counter', categories: ['Stick Waffles'] },
+      ],
+      full_copy: true,
+    },
+  });
+
+  it('prints one slip per counter plus the full slip, with a cut between each', () => {
+    const doc = buildTicketDoc(split, 'kot');
+    expect(doc.blocks.filter((b) => b.kind === 'cut')).toHaveLength(2);
+    const texts = textBlocks(doc).map((b) => b.text);
+    expect(texts).toContain('COFFEE BAR');
+    expect(texts).toContain('WAFFLE COUNTER');
+    expect(texts).toContain('FULL ORDER');
+    expect(texts).toContain('KOT 1 of 3');
+    expect(texts).toContain('KOT 3 of 3');
+  });
+
+  it("puts only that counter's items on each slip, and the order note on every slip", () => {
+    const doc = buildTicketDoc(split, 'kot');
+    const slips: string[][] = [[]];
+    for (const b of doc.blocks) {
+      if (b.kind === 'cut') slips.push([]);
+      else if (b.kind === 'text') slips[slips.length - 1].push(b.text);
+    }
+    expect(slips[0].some((t) => t.includes('Latte'))).toBe(true);
+    expect(slips[0].some((t) => t.includes('Nutella Waffle'))).toBe(false);
+    expect(slips[1].some((t) => t.includes('Nutella Waffle'))).toBe(true);
+    expect(slips[1].some((t) => t.includes('Latte'))).toBe(false);
+    expect(slips[2].filter((t) => t.includes('Latte') || t.includes('Nutella Waffle'))).toHaveLength(2);
+    for (const slip of slips) expect(slip).toContain('Order note: No sugar');
+  });
+
+  it('without counters, prints the single classic KOT with no cut', () => {
+    const doc = buildTicketDoc(order({ items: [coffee, waffle] }), 'kot');
+    expect(doc.blocks.some((b) => b.kind === 'cut')).toBe(false);
+    expect(textBlocks(doc)[0].text).toBe('KITCHEN ORDER');
+  });
+
+  it('renders each cut as a real paper cut in ESC/POS', () => {
+    const bytes = renderEscPos(buildTicketDoc(split, 'kot'), { paperWidthMm: 80, cut: true });
+    let cuts = 0;
+    for (let i = 0; i + 3 < bytes.length; i++) {
+      if (bytes[i] === 0x1d && bytes[i + 1] === 0x56 && bytes[i + 2] === 0x42 && bytes[i + 3] === 0x00) cuts++;
+    }
+    expect(cuts).toBe(3); // two between slips + the end-of-ticket cut
+  });
+});

@@ -438,6 +438,34 @@ export function renderEscPos(
     encodeLine(transliterate(BRAND_NAME_EN));
   };
 
+  // The trailer — feed and/or cut, see `CutMode` above. Emitted after the last
+  // block, and also for every `cut` block, so each slip of a split KOT leaves
+  // the printer exactly the way a whole ticket does.
+  const emitTrailer = () => {
+    setAlign('left');
+    setBold(false);
+    setSize('normal');
+    if (!opts.cut) {
+      bytes.push(ESC, 0x64, FEED_TO_CUTTER_LINES); // tear-off feed — no cutter, the tear bar needs it
+    } else {
+      const mode = opts.cutMode ?? 'standard';
+      if (mode === 'standard') {
+        // GS V 66 0 (function B) feeds to the cutting position itself — an
+        // extra feed first would double-feed and waste paper.
+        bytes.push(GS, 0x56, 0x42, 0x00);
+      } else {
+        bytes.push(ESC, 0x64, FEED_TO_CUTTER_LINES); // function A / legacy don't feed themselves
+        if (mode === 'partial') {
+          bytes.push(GS, 0x56, 0x01); // GS V 1 — function A partial cut
+        } else if (mode === 'full') {
+          bytes.push(GS, 0x56, 0x00); // GS V 0 — function A full cut
+        } else {
+          bytes.push(ESC, 0x69); // ESC i — legacy full cut
+        }
+      }
+    }
+  };
+
   bytes.push(ESC, 0x40); // ESC @ — initialize
 
   for (const block of doc.blocks) {
@@ -460,6 +488,9 @@ export function renderEscPos(
       case 'feed':
         bytes.push(ESC, 0x64, Math.max(0, Math.min(255, Math.floor(block.lines))));
         break;
+      case 'cut':
+        emitTrailer();
+        break;
       case 'qr':
         bytes.push(...qrCommandBytes(transliterate(block.data)));
         break;
@@ -474,33 +505,10 @@ export function renderEscPos(
     }
   }
 
-  // Leave the printer in its default state (no dangling bold/alignment/size)
-  // regardless of how the last block left it, then the trailer (feed and/or
-  // cut — see `CutMode` above; nothing else in this renderer emits a feed
-  // after this point).
-  setAlign('left');
-  setBold(false);
-  setSize('normal');
-
-  if (!opts.cut) {
-    bytes.push(ESC, 0x64, FEED_TO_CUTTER_LINES); // tear-off feed — no cutter, the tear bar needs it
-  } else {
-    const mode = opts.cutMode ?? 'standard';
-    if (mode === 'standard') {
-      // GS V 66 0 (function B) feeds to the cutting position itself — an
-      // extra feed first would double-feed and waste paper.
-      bytes.push(GS, 0x56, 0x42, 0x00);
-    } else {
-      bytes.push(ESC, 0x64, FEED_TO_CUTTER_LINES); // function A / legacy don't feed themselves
-      if (mode === 'partial') {
-        bytes.push(GS, 0x56, 0x01); // GS V 1 — function A partial cut
-      } else if (mode === 'full') {
-        bytes.push(GS, 0x56, 0x00); // GS V 0 — function A full cut
-      } else {
-        bytes.push(ESC, 0x69); // ESC i — legacy full cut
-      }
-    }
-  }
+  // The trailer first leaves the printer in its default state (no dangling
+  // bold/alignment/size) regardless of how the last block left it, then feeds
+  // and/or cuts — nothing else in this renderer emits a feed after this point.
+  emitTrailer();
 
   return new Uint8Array(bytes);
 }

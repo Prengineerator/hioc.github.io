@@ -51,6 +51,11 @@ export function SettingsOverview({ device }: { device: { name: string } | null }
         ? summarizePrinters(printers)
         : 'Open the HIOC POS app on this counter to configure printers.',
     },
+    {
+      href: '/staff/settings/kot-counters',
+      title: 'KOT counters',
+      summary: 'Split each kitchen ticket into one slip per counter, by menu category.',
+    },
     { href: '/staff/settings/store', title: 'Store', summary: summarizeStore(openState) },
     { href: '/staff/settings/counter', title: 'This counter', summary: summarizeDevice(device) },
   ];

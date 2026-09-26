@@ -80,6 +80,14 @@ export type TicketBlock =
   | { kind: 'columns'; columns: TicketColumn[]; bold?: boolean }
   | { kind: 'divider' }
   | { kind: 'feed'; lines: number }
+  /**
+   * Cut the paper here and keep printing — how a KOT split by counter (see
+   * lib/print/kotRouting.ts) becomes separate slips. Rendered exactly like
+   * the end-of-ticket trailer (the printer's own cut mode, or a tear-off feed
+   * on a printer with no cutter), so each slip leaves the printer the way a
+   * whole ticket would.
+   */
+  | { kind: 'cut' }
   | { kind: 'qr'; data: string }
   /**
    * A 1-bit raster image (logo, or the rasterized brand header), centered and

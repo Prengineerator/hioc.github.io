@@ -17,6 +17,7 @@ export const SETTINGS_ROOT = '/staff/settings';
 export const SETTINGS_SECTIONS: SettingsNavItem[] = [
   { href: SETTINGS_ROOT, label: 'Overview' },
   { href: '/staff/settings/printers', label: 'Printers & cash drawer' },
+  { href: '/staff/settings/kot-counters', label: 'KOT counters' },
   { href: '/staff/settings/store', label: 'Store' },
   { href: '/staff/settings/counter', label: 'This counter' },
 ];
