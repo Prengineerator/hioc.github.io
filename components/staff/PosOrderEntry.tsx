@@ -493,10 +493,22 @@ export function PosOrderEntry({
       : (MENU_CATEGORIES.find((c) => c.slug === category)?.label ?? category);
   const showQuickPicks = recentItems.length > 0;
 
-  // Quick picks emptied (e.g. its items were deleted): back to the menu.
+  // Categories with nothing to sell (e.g. switched off in Menu → On / off)
+  // get no tab.
+  const emptyCategories = useMemo(
+    () => MENU_CATEGORIES.filter((c) => !categoryCounts.get(c.slug)).map((c) => c.slug),
+    [categoryCounts],
+  );
+
+  // Never sit on an empty tab: Quick picks emptied (its items were deleted),
+  // or the selected category was switched off — go to the first one with items.
   useEffect(() => {
-    if (category === QUICK_PICKS && !showQuickPicks) setCategory(DEFAULT_CATEGORY);
-  }, [category, showQuickPicks]);
+    if (menuItems.length === 0) return;
+    const empty = category === QUICK_PICKS ? !showQuickPicks : !categoryCounts.get(category);
+    if (!empty) return;
+    const first = MENU_CATEGORIES.find((c) => categoryCounts.get(c.slug));
+    if (first) setCategory(first.slug);
+  }, [category, showQuickPicks, categoryCounts, menuItems.length]);
 
   // Points the staffer has asked to burn. Parsed, never trusted as money — the
   // rupee value comes back from the quote.
@@ -1182,6 +1194,7 @@ export function PosOrderEntry({
                 active={category}
                 onChange={setCategory}
                 includeInStore
+                hidden={emptyCategories}
                 leading={showQuickPicks ? [{ slug: QUICK_PICKS, label: 'Quick picks' }] : []}
               />
             </div>

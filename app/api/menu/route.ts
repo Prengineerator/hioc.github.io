@@ -8,6 +8,8 @@ import { isInStoreOnly, isInStoreOnlyCategory } from '@/lib/menu/inStore';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
+import { getStoreSettings } from '@/lib/store/settings';
+import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
 
 export const dynamic = 'force-dynamic';
 
@@ -74,7 +76,11 @@ export async function GET(request: Request) {
   // In-store-only items (water bottles…) are for the POS and the menu editor.
   // The flag alone is not enough — it must come from a signed-in counter, or
   // any customer could append it to the URL.
-  const includeInStore = searchParams.get('includeInStore') === 'true' && (await getCounterActor()) !== null;
+  const isCounter = (await getCounterActor()) !== null;
+  const includeInStore = searchParams.get('includeInStore') === 'true' && isCounter;
+  // The menu editor needs the whole menu, switched off or not (saving an item
+  // rewrites its sizes from the form — a size missing here would be deleted).
+  const allSizes = searchParams.get('allSizes') === 'true' && isCounter;
 
   // Public menu reads go through the anon-key client — RLS's
   // `*_public_read` select policies (using (true)) cover this.
@@ -93,14 +99,20 @@ export async function GET(request: Request) {
     query = query.eq('is_available', true);
   }
 
-  const { data, error } = await query;
+  // Settings only drive the on/off switches: if they can't be read, the menu
+  // still loads (and orders are still checked against them server-side).
+  const [{ data, error }, settings] = await Promise.all([query, getStoreSettings().catch(() => null)]);
 
   if (error) {
     return errorResponse(500, 'Failed to load menu');
   }
 
+  // Menu switches (lib/menu/menuSwitches.ts): off categories, sizes and
+  // add-ons are left out — except for the menu editor, which shows everything.
+  const switches = allSizes || !settings ? {} : switchesFromSettings(settings);
   const items = (data ?? [])
-    .map((row) => shapeMenuItem(row as unknown as MenuItemRow))
+    .map((row) => applyMenuSwitches(shapeMenuItem(row as unknown as MenuItemRow), switches))
+    .filter((item) => !isCategoryHidden(item.category, switches.hiddenCategories))
     .filter((item) => includeInStore || !isInStoreOnly(item));
 
   return NextResponse.json({ items });

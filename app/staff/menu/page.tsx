@@ -11,6 +11,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import type { MenuItem } from '@/lib/types';
 import { useStaffShell } from '@/components/staff/StaffShell';
 import { MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
+import { MenuSwitchesPanel } from '@/components/staff/MenuSwitchesPanel';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -36,9 +37,11 @@ export default function StaffMenuPage() {
   >(null);
   const [deleteTarget, setDeleteTarget] = useState<MenuItem | null>(null);
   const [query, setQuery] = useState('');
+  // Items list, or the on/off switches for categories, sizes and add-ons.
+  const [view, setView] = useState<'items' | 'switches'>('items');
 
   const fetchItems = useCallback(async () => {
-    const res = await fetch('/api/menu?includeUnavailable=true&includeInStore=true', {
+    const res = await fetch('/api/menu?includeUnavailable=true&includeInStore=true&allSizes=true', {
       cache: 'no-store',
     });
     const data = await res.json();
@@ -145,6 +148,37 @@ export default function StaffMenuPage() {
         </p>
       ) : null}
 
+      <div className="mb-4 flex gap-2" role="tablist" aria-label="Menu view">
+        {(
+          [
+            ['items', 'Items'],
+            ['switches', 'On / off'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={view === id}
+            onClick={() => setView(id)}
+            className={
+              'min-h-[40px] rounded-full border px-4 text-sm font-bold transition-colors ' +
+              (view === id ? 'border-charcoal bg-charcoal text-cream' : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === 'switches' ? (
+        loading ? (
+          <Spinner label="Loading menu items…" />
+        ) : (
+          <MenuSwitchesPanel items={items} canEdit={canEditMenu} />
+        )
+      ) : (
+      <>
       <input
         type="search"
         value={query}
@@ -168,6 +202,8 @@ export default function StaffMenuPage() {
           onDelete={(item) => setDeleteTarget(item)}
           readOnly={!canEditMenu}
         />
+      )}
+      </>
       )}
 
       {modal ? (

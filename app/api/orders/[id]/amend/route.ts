@@ -13,6 +13,7 @@ import {
   type MenuItemRow,
 } from '@/lib/orders/lines';
 import { getStoreSettings } from '@/lib/store/settings';
+import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import type { OrderStatus, OrderType, UserRole } from '@/lib/types';
@@ -291,7 +292,7 @@ async function addLines(
   const menuById = new Map(
     (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
   );
-  const resolved = resolveOrderLines(parsed, menuById);
+  const resolved = resolveOrderLines(parsed, menuById, switchesFromSettings(storeSettings));
   if (!resolved.ok) return errorResponse(400, resolved.error);
 
   // Insert the lines, tracking ids so a lost version race can roll them back.

@@ -51,6 +51,10 @@ const WRITABLE_KEYS = [
   // Staff-website ordering (2026-09-staff-web-ordering.sql). The PATCH route
   // additionally limits this key to managers and the owner.
   'staff_web_ordering',
+  // Sizes not on sale (2026-09-hidden-sizes.sql) — manager/owner only, like
+  // staff_web_ordering.
+  'hidden_variant_labels',
+  'hidden_categories',
   'google_review_url',
 ] as const;
 

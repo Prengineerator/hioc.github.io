@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { CartProvider, useCart } from '@/lib/cart/CartContext';
 import { useStoreSettings } from '@/lib/cart/useStoreSettings';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
@@ -54,6 +54,14 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'menu' | 'checkout'>('menu');
+
+  // Categories switched off for now have no tab; never sit on one.
+  const hiddenCategories = useMemo(() => settings?.hidden_categories ?? [], [settings]);
+  useEffect(() => {
+    if (!hiddenCategories.includes(category)) return;
+    const firstOn = CUSTOMER_MENU_CATEGORIES.find((c) => !hiddenCategories.includes(c.slug));
+    if (firstOn) setCategory(firstOn.slug);
+  }, [hiddenCategories, category]);
 
   const fetchItems = useCallback(() => {
     let cancelled = false;
@@ -112,7 +120,7 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
 
         <StoreStatusBanner openState={openState} />
 
-        <MenuCategoryTabs active={category} onChange={setCategory} />
+        <MenuCategoryTabs active={category} onChange={setCategory} hidden={hiddenCategories} />
 
         <div className="mt-6">
           {loading ? (
