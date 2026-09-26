@@ -37,4 +37,10 @@ export function readSoundPref(stored: string | null | undefined): boolean {
 export const COUNTER_MODE_KEY = 'hioc:counter-mode';
 
 /** The pages counter mode keeps within reach — what the counter works from. */
-export const COUNTER_MODE_HREFS: readonly string[] = ['/staff', '/staff/orders', '/staff/orders/new', '/staff/tables'];
+export const COUNTER_MODE_HREFS: readonly string[] = [
+  '/staff',
+  '/staff/orders',
+  '/staff/settle',
+  '/staff/orders/new',
+  '/staff/tables',
+];

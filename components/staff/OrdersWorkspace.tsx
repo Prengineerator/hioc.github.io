@@ -16,6 +16,10 @@ import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { TodayOrdersList } from '@/components/staff/TodayOrdersList';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { usePrintDock } from '@/components/staff/PrintDock';
+import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
+import { describePaymentMethod } from '@/lib/orders/settleList';
+import { settlePrintPlan } from '@/lib/staff/autoPrint';
+import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
 import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
@@ -46,6 +50,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   // the failure chip have to outlive the modal: closing an order used to cancel
   // an in-flight print silently and wipe the shift's failure tally.
   const printDock = usePrintDock();
+  const { autoPrint } = useCounterDefaults();
+  // The full payment step for one order (split, cash change, change payment).
+  const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -361,6 +368,30 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           onRefund={(o, amountInr, reason, method, key) => handleRefund(o, amountInr, reason, method, key)}
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
           onComp={(o, reason) => handleComp(o, reason)}
+          onOpenPayment={(o, intent) => {
+            setSelected(null);
+            setPaying({ order: o, intent });
+          }}
+        />
+      ) : null}
+
+      {paying ? (
+        <SettlePaymentDialog
+          order={paying.order}
+          intent={paying.intent}
+          onClose={() => setPaying(null)}
+          onDone={(updated) => {
+            const { order, intent } = paying;
+            setPaying(null);
+            if (intent === 'settle') {
+              const jobs = settlePrintPlan(autoPrint).map((type) => ({ orderId: order.id, type }));
+              if (jobs.length > 0) printDock.enqueue(jobs);
+            }
+            showToast(
+              `#${formatOrderNumber(order.order_number)} ${intent === 'settle' ? 'settled' : 'changed to'} ${describePaymentMethod(updated.payment_method)}`,
+            );
+            void fetchOrders();
+          }}
         />
       ) : null}
 

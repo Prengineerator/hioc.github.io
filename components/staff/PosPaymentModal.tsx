@@ -68,6 +68,13 @@ interface PaymentStepProps {
   // null → create unpaid (collect later); otherwise settle with these parts.
   onSubmit: (parts: PaymentPart[] | null) => void;
   onClose: () => void;
+  /**
+   * 'place' (default): taking a new order — phone for the bill, and "Collect
+   * later". 'settle': recording payment on an order that already exists (the
+   * Settle screen, or changing how a bill was paid) — no phone (the order
+   * already has its customer) and no "collect later" (it already is unpaid).
+   */
+  mode?: 'place' | 'settle';
 }
 
 /** The pre-FLOW-1 takeover. Kept until POS_V2 is verified at Gate 6B (spec E10). */
@@ -98,8 +105,10 @@ export function PosPaymentPanel({
   onSubmit,
   onClose,
   docked = false,
+  mode = 'place',
 }: PaymentStepProps & { docked?: boolean }) {
   const isDineIn = orderType === 'dine_in';
+  const settling = mode === 'settle';
   const phoneRef = useRef<HTMLInputElement>(null);
   const total = bill?.total_inr ?? 0;
 
@@ -140,11 +149,21 @@ export function PosPaymentPanel({
     phoneRef.current?.focus();
   }, []);
 
+  // Settling an existing order: nothing to ask about a phone.
+  const submitParts = (parts: PaymentPart[] | null) => {
+    if (stale) return;
+    onSubmit(parts);
+  };
+
   // One funnel for every settle, so the phone rule can't differ per path.
   function attempt(parts: PaymentPart[] | null) {
     // The last line of defence for the stale-quote race: the buttons are already
     // disabled, but a tap can land in the same frame the cart changes in.
     if (stale) return;
+    if (settling) {
+      submitParts(parts);
+      return;
+    }
     const trimmed = phone.trim();
     if (trimmed) {
       if (normalizeIndianMobile(trimmed) === null) {
@@ -206,6 +225,7 @@ export function PosPaymentPanel({
           </div>
         )}
 
+        {settling ? null : (
         <div>
           <label htmlFor="pos-bill-phone" className="mb-1 block text-sm font-bold text-charcoal">
             Bill on WhatsApp
@@ -238,6 +258,7 @@ export function PosPaymentPanel({
             </p>
           ) : null}
         </div>
+        )}
 
         {docked ? null : (
           <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">
@@ -514,6 +535,7 @@ export function PosPaymentPanel({
               Split across two methods
             </button>
 
+            {settling ? null : (
             <button
               type="button"
               disabled={busy || !bill}
@@ -522,11 +544,14 @@ export function PosPaymentPanel({
             >
               Collect later — place unpaid
             </button>
+            )}
           </>
         )}
 
         {drawerNote ? <p className="text-center text-xs font-bold text-red-700">{drawerNote}</p> : null}
-        {submitting ? <p className="text-center text-sm text-muted">Placing order…</p> : null}
+        {submitting ? (
+          <p className="text-center text-sm text-muted">{settling ? 'Recording payment…' : 'Placing order…'}</p>
+        ) : null}
       </div>
   );
 }
