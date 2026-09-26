@@ -8,6 +8,7 @@ import { isMissingColumnError } from '@/lib/api/postgrest';
 import { ownsOrder, verifiedEmailOf } from '@/lib/account/history';
 import type { AddonGroup, MenuItem, OrderItem, OrderItemAddon } from '@/lib/types';
 import type { CartAddonSelection, CartItem } from '@/lib/cart/CartContext';
+import { isInStoreOnly } from '@/lib/menu/inStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -169,6 +170,12 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
     const menuItem = menuById.get(oi.menu_item_id);
     if (!menuItem || !isMenuItemAvailable(menuItem)) {
       skipped.push({ name: displayName, reason: 'Currently unavailable' });
+      continue;
+    }
+    // A counter order the customer is reordering online may include a water
+    // bottle; online checkout would refuse it, so leave it out up front.
+    if (isInStoreOnly(menuItem)) {
+      skipped.push({ name: displayName, reason: 'Available at the café counter only' });
       continue;
     }
     const variant = oi.variant_id

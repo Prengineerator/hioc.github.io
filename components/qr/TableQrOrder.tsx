@@ -8,13 +8,13 @@ import { MenuItemCard } from '@/components/menu/MenuItemCard';
 import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { MENU_CATEGORIES } from '@/lib/constants';
+import { CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import type { MenuItem } from '@/lib/types';
 import type { ResolvedQrTable } from '@/lib/tables/resolveTableByToken';
 import { QrCheckout } from '@/components/qr/QrCheckout';
 
-const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
+const DEFAULT_CATEGORY = CUSTOMER_MENU_CATEGORIES[0].slug;
 
 // Mirrors the /menu grid skeleton so the first paint doesn't jump.
 function MenuGridSkeleton() {

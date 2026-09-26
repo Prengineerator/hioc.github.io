@@ -34,7 +34,7 @@ export default function StaffMenuPage() {
   const [query, setQuery] = useState('');
 
   const fetchItems = useCallback(async () => {
-    const res = await fetch('/api/menu?includeUnavailable=true', {
+    const res = await fetch('/api/menu?includeUnavailable=true&includeInStore=true', {
       cache: 'no-store',
     });
     const data = await res.json();

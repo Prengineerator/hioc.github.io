@@ -374,7 +374,7 @@ export function PosOrderEntry({
 
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
-    fetch('/api/menu?includeUnavailable=true', { cache: 'no-store' })
+    fetch('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
       .then((res) => res.json())
       .then((data: { items?: MenuItem[] }) => setMenuItems(data.items ?? []))
       .catch(() => {})
@@ -1107,7 +1107,7 @@ export function PosOrderEntry({
                 </div>
               ) : null}
               <div className="mb-4">
-                <MenuCategoryTabs active={category} onChange={setCategory} />
+                <MenuCategoryTabs active={category} onChange={setCategory} includeInStore />
               </div>
             </>
           ) : null}

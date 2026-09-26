@@ -5,6 +5,7 @@ import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
+import { isInStoreOnly, isInStoreOnlyCategory } from '@/lib/menu/inStore';
 
 export interface MenuItemFormValues {
   name: string;
@@ -13,6 +14,8 @@ export interface MenuItemFormValues {
   parent_category: string;
   is_veg: boolean;
   is_available: boolean;
+  /** Counter-only item (water bottles…) — see lib/menu/inStore.ts. */
+  in_store_only: boolean;
   sort_order: number;
   image_url: string;
   short_code: string | null; // optional POS quick-add shortform (UPPERCASE or null)
@@ -39,6 +42,13 @@ export function MenuItemFormModal({
   const [category, setCategory] = useState(initial?.category ?? MENU_CATEGORIES[0].slug);
   const [isVeg, setIsVeg] = useState(initial?.is_veg ?? true);
   const [isAvailable, setIsAvailable] = useState(initial?.is_available ?? true);
+  const [inStoreOnly, setInStoreOnly] = useState(
+    initial ? isInStoreOnly(initial) : isInStoreOnlyCategory(MENU_CATEGORIES[0].slug),
+  );
+  // An in-store category makes every item in it in-store only (isInStoreOnly),
+  // so the switch is shown on and locked there rather than offering a choice
+  // that wouldn't take effect.
+  const categoryForcesInStore = isInStoreOnlyCategory(category);
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [imageUrl, setImageUrl] = useState(initial?.image_url ?? '');
   const [shortCode, setShortCode] = useState(initial?.short_code ?? '');
@@ -160,6 +170,7 @@ export function MenuItemFormModal({
         parent_category: parentCategory,
         is_veg: isVeg,
         is_available: isAvailable,
+        in_store_only: inStoreOnly || categoryForcesInStore,
         sort_order: Number(sortOrder) || 0,
         image_url: imageUrl,
         short_code: trimmedCode || null,
@@ -401,6 +412,22 @@ export function MenuItemFormModal({
               <div className="flex items-center justify-between">
                 <span className="text-sm font-bold text-charcoal">Available</span>
                 <ToggleSwitch checked={isAvailable} onChange={setIsAvailable} label="Available" />
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-sm font-bold text-charcoal">In-store only</span>
+                  <p className="text-xs text-muted">
+                    {categoryForcesInStore
+                      ? 'Everything in this category is sold at the counter only.'
+                      : 'Sold at the counter only: hidden from the website, table QR and suggestions.'}
+                  </p>
+                </div>
+                {categoryForcesInStore ? (
+                  <span className="text-sm font-bold text-charcoal">On</span>
+                ) : (
+                  <ToggleSwitch checked={inStoreOnly} onChange={setInStoreOnly} label="In-store only" />
+                )}
               </div>
 
               <div>

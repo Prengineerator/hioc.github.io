@@ -213,4 +213,20 @@ describe('POST /api/orders — table QR channel (QR-1 / D6)', () => {
     expect(res.status).toBe(400);
     expect(state.orderInsert).toBeUndefined();
   });
+
+  it('refuses an in-store-only item (water bottle) on a table QR order, writing nothing', async () => {
+    state.menuRows = [{ ...state.menuRows[0], name: 'Water Bottle', in_store_only: true }];
+    const res = await POST(req({ qr_token: QR_TOKEN, items: oneLatte }));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('Water Bottle is only available at the café counter');
+    expect(state.orderInsert).toBeUndefined();
+    expect(createPaymentIntent).not.toHaveBeenCalled();
+  });
+
+  it('also refuses an item in the In-store category even if its flag was never set', async () => {
+    state.menuRows = [{ ...state.menuRows[0], name: 'Water Bottle', category: 'In-store' }];
+    const res = await POST(req({ qr_token: QR_TOKEN, items: oneLatte }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
 });

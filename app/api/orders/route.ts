@@ -34,6 +34,7 @@ import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/g
 import { parseSuggestionSessionIds, writeOrderAttribution } from '@/lib/suggest/attribution';
 import { markProfileStale } from '@/lib/suggest/profileStore';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
+import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -384,6 +385,16 @@ export async function POST(request: Request) {
   const menuById = new Map(
     (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
   );
+
+  // In-store-only items (water bottles…) are sold at the counter only: a
+  // website or table-QR order carrying one is refused, whatever the client
+  // sent. Staff POS orders may include them.
+  if (!isStaff) {
+    const inStore = firstInStoreOnlyItem(items, menuById);
+    if (inStore) {
+      return errorResponse(400, `${inStore.name} is only available at the café counter`);
+    }
+  }
 
   // Validate every line and compute authoritative prices server-side —
   // never trust a client-submitted price. Shared with the TAB-1 add path.

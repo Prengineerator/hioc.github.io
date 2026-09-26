@@ -238,4 +238,21 @@ describe('POST /api/orders — staff walk-in takeaway (FND3-3)', () => {
     expect(state.orderInsert?.pickup_code).not.toBeNull(); // token slip
     expect(sendBillNotification).not.toHaveBeenCalled();
   });
+
+  it('refuses an in-store-only item on a website order', async () => {
+    state.sessionUser = { id: 'cust-1' };
+    state.menuRows = [{ ...state.menuRows[0], name: 'Water Bottle', in_store_only: true }];
+    const res = await POST(req({ customer_name: 'Asha', customer_phone: '9000000000', pickup_slot_label: 'ASAP', items: oneLatte }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('lets the POS sell an in-store-only item', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+    state.menuRows = [{ ...state.menuRows[0], name: 'Water Bottle', in_store_only: true }];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.channel).toBe('staff_pos');
+  });
 });
+

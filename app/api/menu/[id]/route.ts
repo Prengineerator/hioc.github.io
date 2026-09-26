@@ -100,6 +100,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       | 'image_url'
       | 'unavailable_until'
       | 'short_code'
+      | 'in_store_only'
     >
   > = {};
 
@@ -146,6 +147,13 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       return errorResponse(400, 'is_available must be a boolean');
     }
     updates.is_available = body.is_available;
+  }
+
+  if ('in_store_only' in body) {
+    if (typeof body.in_store_only !== 'boolean') {
+      return errorResponse(400, 'in_store_only must be a boolean');
+    }
+    updates.in_store_only = body.in_store_only;
   }
 
   if ('sort_order' in body) {

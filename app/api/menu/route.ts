@@ -4,6 +4,7 @@ import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, MENU_CATEGORIES } from '@/lib/api/constants';
+import { isInStoreOnly, isInStoreOnlyCategory } from '@/lib/menu/inStore';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,10 @@ export async function GET(request: Request) {
   }
 
   const includeUnavailable = searchParams.get('includeUnavailable') === 'true';
+  // In-store-only items (water bottles…) are for the POS and the menu editor.
+  // The flag alone is not enough — it must come from a signed-in counter, or
+  // any customer could append it to the URL.
+  const includeInStore = searchParams.get('includeInStore') === 'true' && (await getCounterActor()) !== null;
 
   // Public menu reads go through the anon-key client — RLS's
   // `*_public_read` select policies (using (true)) cover this.
@@ -92,7 +97,9 @@ export async function GET(request: Request) {
     return errorResponse(500, 'Failed to load menu');
   }
 
-  const items = (data ?? []).map((row) => shapeMenuItem(row as unknown as MenuItemRow));
+  const items = (data ?? [])
+    .map((row) => shapeMenuItem(row as unknown as MenuItemRow))
+    .filter((item) => includeInStore || !isInStoreOnly(item));
 
   return NextResponse.json({ items });
 }
@@ -136,6 +143,7 @@ export async function POST(request: Request) {
     image_url,
     unavailable_until,
     short_code,
+    in_store_only,
   } = body;
 
   if (typeof name !== 'string' || name.trim().length === 0) {
@@ -163,6 +171,10 @@ export async function POST(request: Request) {
 
   if (is_available !== undefined && typeof is_available !== 'boolean') {
     return errorResponse(400, 'is_available must be a boolean');
+  }
+
+  if (in_store_only !== undefined && typeof in_store_only !== 'boolean') {
+    return errorResponse(400, 'in_store_only must be a boolean');
   }
 
   if (
@@ -230,6 +242,9 @@ export async function POST(request: Request) {
       image_url: typeof image_url === 'string' ? image_url : '',
       unavailable_until: (unavailable_until as string | null | undefined) ?? null,
       short_code: shortCodeResult.code,
+      // An item created in an in-store category is in-store only unless the
+      // editor says otherwise explicitly.
+      in_store_only: in_store_only ?? isInStoreOnlyCategory(category as string),
     })
     .select()
     .single();
