@@ -16,12 +16,21 @@ const VARIANT_ID = '22222222-2222-4222-8222-222222222222';
 const ORDER_ID = '44444444-4444-4444-8444-444444444444';
 const CUSTOMER_ID = '55555555-5555-4555-8555-555555555555';
 const VICTIM_ID = '66666666-6666-4666-8666-666666666666';
+const NEW_ACCOUNT_ID = '77777777-7777-4777-8777-777777777777';
 
 interface ProfileRow {
   id: string;
   name: string;
   phone: string;
   phone_verified: boolean;
+  role?: string;
+}
+
+interface CreateUserArgs {
+  phone: string;
+  phone_confirm: boolean;
+  user_metadata: Record<string, unknown>;
+  app_metadata: Record<string, unknown>;
 }
 
 const state: {
@@ -37,6 +46,11 @@ const state: {
   rejectLinkedInsert: boolean;
   /** A web customer's own verified number (the VERIFY-1 profiles lookup). */
   webCustomerPhone?: string;
+  /** POS-ACC: Auth users by phone (GoTrue's bare-digit form). */
+  authUsers: { id: string; phone: string }[];
+  createUserCalls: CreateUserArgs[];
+  /** Simulates the Auth admin API being down. */
+  createUserFails: boolean;
 } = {
   actor: null,
   sessionUser: null,
@@ -46,13 +60,42 @@ const state: {
   pointsQuote: { ok: false },
   quotedFor: null,
   rejectLinkedInsert: false,
+  authUsers: [],
+  createUserCalls: [],
+  createUserFails: false,
 };
 
 vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient: () => ({}),
   createAdminSupabaseClient: () => ({
+    auth: {
+      admin: {
+        // Mirrors GoTrue: one user per phone, stored without the '+', and the
+        // on_auth_user_created trigger giving every new user a customer profile.
+        createUser: (args: CreateUserArgs) => {
+          state.createUserCalls.push(args);
+          if (state.createUserFails) {
+            return Promise.resolve({ data: { user: null }, error: { status: 500, message: 'boom' } });
+          }
+          const phone = args.phone.replace(/^\+/, '');
+          if (state.authUsers.some((u) => u.phone === phone)) {
+            return Promise.resolve({
+              data: { user: null },
+              error: { status: 422, code: 'phone_exists', message: 'Phone number already registered by another user' },
+            });
+          }
+          state.authUsers.push({ id: NEW_ACCOUNT_ID, phone });
+          state.profiles.push({ id: NEW_ACCOUNT_ID, name: '', phone: '', phone_verified: false, role: 'customer' });
+          return Promise.resolve({ data: { user: { id: NEW_ACCOUNT_ID } }, error: null });
+        },
+      },
+    },
     rpc: (name: string, args: Record<string, unknown>) => {
       state.rpcCalls.push({ name, args });
+      if (name === 'auth_user_id_for_phone') {
+        const phone = String(args.p_phone).replace(/^\+/, '');
+        return Promise.resolve({ data: state.authUsers.find((u) => u.phone === phone)?.id ?? null, error: null });
+      }
       return Promise.resolve({ data: true, error: null });
     },
     from: (table: string) => {
@@ -89,11 +132,29 @@ vi.mock('@/lib/supabase-server', () => ({
           }
           return Promise.resolve({ error: null });
         },
-        maybeSingle: () =>
-          table === 'profiles' && state.sessionUser && !state.actor
-            ? // A web customer's own verified number (VERIFY-1), matching the order.
-              Promise.resolve({ data: { phone: state.webCustomerPhone, phone_verified: true }, error: null })
-            : Promise.resolve({ data: null, error: null }),
+        update: (payload: Record<string, unknown>) => ({
+          eq: (column: string, value: unknown) => {
+            if (table === 'profiles') {
+              const row = state.profiles.find((p) => (p as unknown as Record<string, unknown>)[column] === value);
+              if (row) Object.assign(row, payload);
+            }
+            return Promise.resolve({ error: null });
+          },
+        }),
+        maybeSingle: () => {
+          if (table === 'profiles' && state.sessionUser && !state.actor) {
+            // A web customer's own verified number (VERIFY-1), matching the order.
+            return Promise.resolve({ data: { phone: state.webCustomerPhone, phone_verified: true }, error: null });
+          }
+          if (table === 'profiles' && typeof filters.id === 'string') {
+            const row = state.profiles.find((p) => p.id === filters.id);
+            return Promise.resolve({
+              data: row ? { role: row.role ?? 'customer', name: row.name, phone_verified: row.phone_verified } : null,
+              error: null,
+            });
+          }
+          return Promise.resolve({ data: null, error: null });
+        },
         single: () => {
           if (table === 'order_items') return Promise.resolve({ data: { id: 'oi-1' }, error: null });
           if (table === 'orders' && ctx.inserted) {
@@ -179,6 +240,9 @@ beforeEach(() => {
   state.quotedFor = null;
   state.pointsQuote = { ok: false };
   state.rejectLinkedInsert = false;
+  state.authUsers = [{ id: CUSTOMER_ID, phone: `91${REGULAR}` }];
+  state.createUserCalls = [];
+  state.createUserFails = false;
   state.profiles = [
     { id: CUSTOMER_ID, name: 'Asha', phone: `+91${REGULAR}`, phone_verified: true },
   ];
@@ -206,27 +270,24 @@ describe('VAL-2 — linking a counter order to an account', () => {
     expect(state.orderInsert?.channel).toBe('staff_pos');
   });
 
-  it('does NOT link an UNVERIFIED match — anyone can type a stranger’s number', async () => {
+  it('does NOT link to an account that merely TYPED the number — it opens the number’s own account', async () => {
+    // An email login with this number saved, unverified, on its profile. That
+    // is no proof it's theirs; the number gets its own account instead.
+    state.authUsers = [];
     state.profiles = [
       { id: CUSTOMER_ID, name: 'Asha', phone: `+91${REGULAR}`, phone_verified: false },
     ];
     const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: REGULAR }));
     expect(res.status).toBe(201);
-    expect(state.orderInsert?.customer_user_id).toBeUndefined();
+    expect(state.orderInsert?.customer_user_id).toBe(NEW_ACCOUNT_ID);
+    expect(state.profiles.find((p) => p.id === CUSTOMER_ID)?.phone_verified).toBe(false);
   });
 
-  it('proceeds unlinked when no account holds the number, creating nothing', async () => {
-    state.profiles = [];
-    const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: REGULAR }));
-    expect(res.status).toBe(201);
-    expect(state.orderInsert?.customer_user_id).toBeUndefined();
-    expect(state.orderInsert?.customer_phone).toBe(`+91${REGULAR}`);
-  });
-
-  it('leaves an anonymous staff order unlinked', async () => {
+  it('leaves an anonymous staff order unlinked, opening no account', async () => {
     const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP' }));
     expect(res.status).toBe(201);
     expect(state.orderInsert?.customer_user_id).toBeUndefined();
+    expect(state.createUserCalls).toHaveLength(0);
   });
 
   it('IGNORES a customer_user_id in the request body', async () => {
@@ -256,6 +317,13 @@ describe('VAL-2 — linking a counter order to an account', () => {
     expect(state.orderInsert?.customer_phone).toBe(`+91${REGULAR}`);
   });
 
+  it('opens no account for a number that already has a verified one', async () => {
+    const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: REGULAR }));
+    expect(res.status).toBe(201);
+    expect(state.createUserCalls).toHaveLength(0);
+    expect(((await res.json()) as Record<string, unknown>).customer_account_created).toBeUndefined();
+  });
+
   it('never links a NON-staff order by phone', async () => {
     // A web guest typing a regular's number would otherwise inherit their
     // account — the counter's linkage is safe only because a staffer is
@@ -273,6 +341,109 @@ describe('VAL-2 — linking a counter order to an account', () => {
     expect(state.orderInsert?.channel).toBe('customer_web');
     expect(state.orderInsert?.customer_user_id).toBeUndefined();
     expect(state.orderInsert?.user_id).toBe('web-customer');
+    expect(state.createUserCalls).toHaveLength(0);
+  });
+});
+
+describe('POS-ACC — a counter order opens the customer’s account', () => {
+  const NEW_NUMBER = '9123456780';
+
+  it('creates an account for a new number and links the order to it', async () => {
+    const res = await POST(
+      req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER, customer_name: 'Meera' }),
+    );
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as Record<string, unknown>).customer_account_created).toBe(true);
+
+    // The Auth user: keyed on the phone, confirmed so a later WhatsApp-code
+    // sign-in lands on it, and marked as opened at the counter by this staffer.
+    expect(state.createUserCalls).toEqual([
+      {
+        phone: `+91${NEW_NUMBER}`,
+        phone_confirm: true,
+        user_metadata: { name: 'Meera' },
+        app_metadata: { created_via: 'staff_pos', created_by: 'staff-1' },
+      },
+    ]);
+    // The profile the trigger made now holds the verified number and the name.
+    expect(state.profiles.find((p) => p.id === NEW_ACCOUNT_ID)).toMatchObject({
+      name: 'Meera',
+      phone: `+91${NEW_NUMBER}`,
+      phone_verified: true,
+    });
+    // ...and the order belongs to it, so it earns on completion. D4-3 holds.
+    expect(state.orderInsert?.customer_user_id).toBe(NEW_ACCOUNT_ID);
+    expect(state.orderInsert?.user_id).toBeNull();
+    expect(state.orderInsert?.channel).toBe('staff_pos');
+  });
+
+  it('opens an account even when the staffer took no name', async () => {
+    const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER }));
+    expect(res.status).toBe(201);
+    expect(state.createUserCalls[0]?.user_metadata).toEqual({});
+    expect(state.orderInsert?.customer_user_id).toBe(NEW_ACCOUNT_ID);
+  });
+
+  it('adopts the login a customer started but never verified, instead of failing', async () => {
+    // signInWithOtp creates the Auth user when the code is REQUESTED; someone
+    // who never typed it in leaves an unverified user holding the number.
+    const ABANDONED_ID = '88888888-8888-4888-8888-888888888888';
+    state.authUsers.push({ id: ABANDONED_ID, phone: `91${NEW_NUMBER}` });
+    state.profiles.push({ id: ABANDONED_ID, name: '', phone: '', phone_verified: false, role: 'customer' });
+
+    const res = await POST(
+      req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER, customer_name: 'Meera' }),
+    );
+    expect(res.status).toBe(201);
+    expect(state.rpcCalls.find((c) => c.name === 'auth_user_id_for_phone')?.args.p_phone).toBe(`+91${NEW_NUMBER}`);
+    expect(state.orderInsert?.customer_user_id).toBe(ABANDONED_ID);
+    expect(state.profiles.find((p) => p.id === ABANDONED_ID)).toMatchObject({
+      name: 'Meera',
+      phone: `+91${NEW_NUMBER}`,
+      phone_verified: true,
+    });
+    // Not a NEW account, so the counter isn't told it opened one.
+    expect(((await res.json()) as Record<string, unknown>).customer_account_created).toBeUndefined();
+  });
+
+  it('keeps a name the account already has', async () => {
+    const ABANDONED_ID = '88888888-8888-4888-8888-888888888888';
+    state.authUsers.push({ id: ABANDONED_ID, phone: `91${NEW_NUMBER}` });
+    state.profiles.push({ id: ABANDONED_ID, name: 'Meera K', phone: '', phone_verified: false, role: 'customer' });
+
+    await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER, customer_name: 'M' }));
+    expect(state.profiles.find((p) => p.id === ABANDONED_ID)?.name).toBe('Meera K');
+  });
+
+  it('never adopts a staff login that holds the number', async () => {
+    const STAFF_ID = '99999999-9999-4999-8999-999999999999';
+    state.authUsers.push({ id: STAFF_ID, phone: `91${NEW_NUMBER}` });
+    state.profiles.push({ id: STAFF_ID, name: 'Barista', phone: '', phone_verified: false, role: 'staff' });
+
+    const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.customer_user_id).toBeUndefined();
+    expect(state.profiles.find((p) => p.id === STAFF_ID)?.phone_verified).toBe(false);
+  });
+
+  it('still takes the order, unlinked, if the account cannot be opened', async () => {
+    state.createUserFails = true;
+    const res = await POST(req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.customer_user_id).toBeUndefined();
+    expect(state.orderInsert?.customer_phone).toBe(`+91${NEW_NUMBER}`);
+    expect(((await res.json()) as Record<string, unknown>).customer_account_created).toBeUndefined();
+  });
+
+  it('opens nothing when the order itself is refused', async () => {
+    // Points asked for on a number with no account: a 400, and no account is
+    // left behind by an order that never happened.
+    const res = await POST(
+      req({ items: oneLatte, pickup_slot_label: 'ASAP', customer_phone: NEW_NUMBER, redeem_points: 100 }),
+    );
+    expect(res.status).toBe(400);
+    expect(state.createUserCalls).toHaveLength(0);
+    expect(state.orderInsert).toBeUndefined();
   });
 });
 
