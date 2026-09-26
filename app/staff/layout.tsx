@@ -6,6 +6,7 @@ import { getEnrolledDevice } from '@/lib/api/device';
 import { operatorFeatureConfigured } from '@/lib/api/operator';
 import { flags } from '@/lib/flags';
 import { StaffHeader } from '@/components/staff/StaffHeader';
+import { StaffShell } from '@/components/staff/StaffShell';
 import { StaffPinOverlay } from '@/components/staff/pin/StaffPinOverlay';
 import { LockScreen } from '@/components/staff/pin/LockScreen';
 
@@ -87,24 +88,28 @@ export default async function StaffLayout({
 
   if (device) {
     return (
-      <div className="min-h-screen bg-cream">
-        <StaffPinOverlay
-          userEmail={user.email ?? ''}
-          userName={displayName}
-          role={role}
-          device={{ id: device.id, name: device.name }}
-          initialOperatorName={via === 'device' ? displayName || user.email || null : null}
-        >
-          {children}
-        </StaffPinOverlay>
-      </div>
+      <StaffShell>
+        <div className="min-h-screen bg-cream">
+          <StaffPinOverlay
+            userEmail={user.email ?? ''}
+            userName={displayName}
+            role={role}
+            device={{ id: device.id, name: device.name }}
+            initialOperatorName={via === 'device' ? displayName || user.email || null : null}
+          >
+            {children}
+          </StaffPinOverlay>
+        </div>
+      </StaffShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-cream">
-      <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
-      <main>{children}</main>
-    </div>
+    <StaffShell>
+      <div className="min-h-screen bg-cream">
+        <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
+        <main>{children}</main>
+      </div>
+    </StaffShell>
   );
 }

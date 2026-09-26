@@ -2,8 +2,9 @@
 
 // Live staff order cockpit (S1–S3, S5, S7). Realtime board (< 2s via
 // useStaffOrdersRealtime, poll fallback), persistent new-order alert, order
-// detail with accept/reject/ETA/advance/cancel/payment, search, and a
-// full-screen counter mode with a screen wake-lock.
+// detail with accept/reject/ETA/advance/cancel/payment, and search. The
+// order-alert sound and counter mode live in the staff shell
+// (components/staff/StaffShell.tsx) so they survive switching tabs.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
@@ -16,7 +17,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
 import { PRIMARY_NEXT } from '@/lib/orders/stateMachine';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
-import { unlockChime, playChime } from '@/lib/staff/chime';
+import { useStaffShell } from '@/components/staff/StaffShell';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -27,10 +28,10 @@ export default function StaffOrdersPage() {
   const [selected, setSelected] = useState<OrderWithItems | null>(null);
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
-  const [counterMode, setCounterMode] = useState(false);
   const [prepMin, setPrepMin] = useState(15);
   const [toast, setToast] = useState('');
-  const [soundEnabled, setSoundEnabled] = useState(false);
+  const shell = useStaffShell();
+  const { refreshNewOrders } = shell;
   const prevReceivedRef = useRef<Set<string> | null>(null);
 
   // PRT-1/PRT-3 — mounted HERE, not inside the order modal. The print iframe and
@@ -87,14 +88,6 @@ export default function StaffOrdersPage() {
     setTimeout(() => setToast(''), 3500);
   };
 
-  // One-time audio unlock (browsers block sound until a user gesture, S2). Plays
-  // a test chime so staff confirm it works.
-  const enableSound = useCallback(async () => {
-    const ok = await unlockChime();
-    setSoundEnabled(ok);
-    if (ok) playChime();
-  }, []);
-
   const patchStatus = useCallback(
     async (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => {
       // Optimistic move.
@@ -117,9 +110,11 @@ export default function StaffOrdersPage() {
         }
       } finally {
         fetchOrders();
+        // Stop the shell's alarm right away once an order is accepted/rejected.
+        refreshNewOrders();
       }
     },
-    [fetchOrders],
+    [fetchOrders, refreshNewOrders],
   );
 
   const handlePrimary = useCallback(
@@ -266,17 +261,6 @@ export default function StaffOrdersPage() {
     setSelected(null);
   };
 
-  // Counter mode: full-screen + keep the screen awake (S1/S13).
-  useEffect(() => {
-    if (!counterMode) return;
-    let lock: { release: () => Promise<void> } | null = null;
-    const nav = navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } };
-    nav.wakeLock?.request('screen').then((l) => (lock = l)).catch(() => {});
-    return () => {
-      lock?.release().catch(() => {});
-    };
-  }, [counterMode]);
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return orders;
@@ -299,34 +283,16 @@ export default function StaffOrdersPage() {
   );
 
   return (
-    <div className={counterMode ? 'fixed inset-0 z-40 overflow-auto bg-cream' : 'mx-auto max-w-7xl px-4 py-8'}>
-      <div className={counterMode ? 'px-4 py-4' : ''}>
+    <div className={shell.counterMode ? 'mx-auto max-w-7xl px-4 py-4' : 'mx-auto max-w-7xl px-4 py-8'}>
+      <div>
         {/* ATT-3. Hidden in counter mode — that is a full-screen kitchen view
             and a nudge there is noise, not help. */}
-        {counterMode ? null : <NotClockedInBanner />}
-        {counterMode ? null : <LeaveReminderBanner />}
+        {shell.counterMode ? null : <NotClockedInBanner />}
+        {shell.counterMode ? null : <LeaveReminderBanner />}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold text-charcoal">Today&apos;s Orders</h1>
           <div className="flex items-center gap-3">
             <ConnectionBadge connection={connection} />
-            <button
-              type="button"
-              onClick={enableSound}
-              className={
-                'rounded-md border px-3 py-1.5 text-xs font-bold ' +
-                (soundEnabled
-                  ? 'border-[#e5e5e5] text-charcoal hover:border-tan'
-                  : 'border-amber-400 bg-amber-50 text-amber-700')
-              }
-            >
-              {soundEnabled ? '🔔 Sound on' : '🔔 Enable sound'}
-            </button>
-            <button
-              onClick={() => setCounterMode((v) => !v)}
-              className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
-            >
-              {counterMode ? 'Exit counter mode' : 'Counter mode'}
-            </button>
           </div>
         </div>
 
@@ -337,7 +303,7 @@ export default function StaffOrdersPage() {
           className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm sm:max-w-sm"
         />
 
-        <NewOrderAlert count={newOrderIds.size} soundEnabled={soundEnabled} />
+        <NewOrderAlert count={newOrderIds.size} soundReady={shell.soundOn && shell.soundReady} />
 
         {refundNeeded.length > 0 ? (
           <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm">
