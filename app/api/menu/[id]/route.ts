@@ -7,6 +7,8 @@ import { isMenuCategory, isUuid, MENU_CATEGORIES } from '@/lib/api/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
+import { flags } from '@/lib/flags';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 
 export const dynamic = 'force-dynamic';
 
@@ -110,6 +112,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       | 'short_code'
       | 'in_store_only'
       | 'gst_exempt'
+      | 'stock_out_auto'
     >
   > = {};
 
@@ -156,6 +159,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       return errorResponse(400, 'is_available must be a boolean');
     }
     updates.is_available = body.is_available;
+    // Inventory auto-hide (docs/INVENTORY-SPEC.md): a person setting
+    // availability by hand takes the item out of stock's hands — it is no
+    // longer "hidden by stock", so stock returning won't flip it back on.
+    if (flags.inventory) updates.stock_out_auto = false;
   }
 
   if ('in_store_only' in body) {
@@ -238,12 +245,23 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const admin = createAdminSupabaseClient();
 
   if (Object.keys(updates).length > 0) {
-    const { error: updateError, data: updated } = await admin
+    let { error: updateError, data: updated } = await admin
       .from('menu_items')
       .update(updates)
       .eq('id', id)
       .select('id')
       .maybeSingle();
+    // The inventory flag can be on before supabase/2026-10-inventory.sql is
+    // applied; the menu must keep saving either way.
+    if (updateError && 'stock_out_auto' in updates && isMissingColumnError(updateError)) {
+      delete updates.stock_out_auto;
+      ({ error: updateError, data: updated } = await admin
+        .from('menu_items')
+        .update(updates)
+        .eq('id', id)
+        .select('id')
+        .maybeSingle());
+    }
     if (updateError) {
       if (updateError.code === '23505') {
         return errorResponse(409, 'Code already in use');

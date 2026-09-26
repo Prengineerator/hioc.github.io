@@ -79,6 +79,12 @@ vi.mock('@/lib/loyalty/ledger', () => ({
   earnForOrder: () => Promise.resolve(),
   reverseForOrder: () => Promise.resolve(),
 }));
+// Inventory: a completed order's recipe usage comes off stock
+// (docs/INVENTORY-SPEC.md). Spied so the tests can see when it fires.
+const { consumeStockForOrder } = vi.hoisted(() => ({
+  consumeStockForOrder: vi.fn((_orderId: string, _actorId: string | null) => Promise.resolve()),
+}));
+vi.mock('@/lib/inventory/server', () => ({ consumeStockForOrder }));
 
 // Imported after mocks are registered (vi.mock is hoisted).
 const { PATCH } = await import('@/app/api/orders/[id]/status/route');
@@ -102,6 +108,7 @@ beforeEach(() => {
   state.compPatch = undefined;
   state.amendmentRow = undefined;
   sendBillNotification.mockClear();
+  consumeStockForOrder.mockClear();
 });
 
 describe('PATCH /api/orders/[id]/status', () => {
@@ -158,6 +165,8 @@ describe('PATCH /api/orders/[id]/status', () => {
     const res = await PATCH(req({ status: 'completed' }), params);
     expect(res.status).toBe(200);
     expect(sendBillNotification).toHaveBeenCalledTimes(1);
+    // …and takes the order's recipe usage off stock, attributed to the actor.
+    expect(consumeStockForOrder).toHaveBeenCalledWith(UUID, 'staff-1');
   });
 
   it('does NOT fire the settle bill on a non-completing transition', async () => {
@@ -165,6 +174,7 @@ describe('PATCH /api/orders/[id]/status', () => {
     const res = await PATCH(req({ status: 'accepted' }), params);
     expect(res.status).toBe(200);
     expect(sendBillNotification).not.toHaveBeenCalled();
+    expect(consumeStockForOrder).not.toHaveBeenCalled();
   });
 
   it('lets a manager comp an unpaid takeaway to completion', async () => {

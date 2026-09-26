@@ -28,6 +28,12 @@ describe('staffNav — POS', () => {
     const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: false, attendance: true });
     expect(labels(off.primary)).toEqual(['Live orders', 'Orders', 'Settle']);
   });
+
+  it('puts Stock under More on the counter when inventory is on', () => {
+    const withStock = staffNav({ surface: 'pos', canTakeOrders: true, ...flags, inventory: true });
+    expect(labels(withStock.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables']);
+    expect(labels(withStock.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Stock', 'Menu', 'Settings']);
+  });
 });
 
 describe('staffNav — staff website', () => {
@@ -45,6 +51,11 @@ describe('staffNav — staff website', () => {
     const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags });
     expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Menu', 'Settings']);
     expect(nav.account).toEqual([]);
+  });
+
+  it('adds Stock under More when inventory is on', () => {
+    const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags, inventory: true });
+    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Stock', 'Menu', 'Settings']);
   });
 
   it('drops flagged-off pages', () => {

@@ -183,6 +183,9 @@ they sit next to the Supabase database in `ap-northeast-2`.
   a one-off guest order.
 - **No inventory/stock-out automation.** "Available"/"unavailable" on a menu
   item is a manual toggle in `/staff/menu` — nothing auto-disables an item.
+  (Stock tracking — requests, POS-verified receiving with expiry dates,
+  recipes, and auto-hiding an item whose ingredient runs out — now exists
+  behind a flag: see `docs/INVENTORY-SPEC.md`.)
 - **No analytics/reporting dashboard.** `/staff` shows only today's live queue
   (or `?all=true` via the API) — no sales totals, best-sellers, or exports.
 - **No multi-location support.** The app assumes a single cafe/pickup location
