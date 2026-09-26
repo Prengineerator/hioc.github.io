@@ -36,6 +36,10 @@ export interface CartItem {
   // and never set by the existing /menu flow, so old stored carts (which have
   // no such field) keep working unchanged.
   suggestionSessionId?: string;
+  // GST-exempt item (2026-09-gst-exempt), for the bill PREVIEW only — the
+  // server re-derives it from the menu when the order is placed. Absent on
+  // carts saved before this existed, which just previews GST on everything.
+  gstExempt?: boolean;
 }
 
 interface CartState {
@@ -241,4 +245,10 @@ export function useCart(): CartContextValue {
     throw new Error('useCart must be used within a CartProvider');
   }
   return ctx;
+}
+
+/** The part of a cart's subtotal GST applies to — every line except
+ * GST-exempt items. For bill previews; the server recomputes it. */
+export function cartTaxableSubtotal(items: Pick<CartItem, 'qty' | 'unitPriceInr' | 'gstExempt'>[]): number {
+  return items.filter((i) => !i.gstExempt).reduce((sum, i) => sum + i.qty * i.unitPriceInr, 0);
 }

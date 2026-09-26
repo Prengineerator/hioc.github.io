@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCart } from '@/lib/cart/CartContext';
+import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { computeBill } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 
@@ -23,7 +23,7 @@ export function CartDrawer({
   if (!open) return null;
 
   const isEmpty = items.length === 0;
-  const bill = settings ? computeBill(totalPrice, settings) : null;
+  const bill = settings ? computeBill(totalPrice, settings, 0, cartTaxableSubtotal(items)) : null;
   const checkoutDisabled = isEmpty || !!checkoutDisabledReason;
 
   return (

@@ -507,7 +507,8 @@ export async function POST(request: Request) {
   const discount_inr = Math.min(couponDiscountInr + pointsDiscountInr, subtotal_inr);
 
   // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand total.
-  const bill = computeBill(subtotal_inr, settings, discount_inr);
+  // GST applies only to the non-exempt lines (2026-09-gst-exempt).
+  const bill = computeBill(subtotal_inr, settings, discount_inr, resolved.taxableSubtotalInr);
 
   // Dine-in has no packaging charge (D5): force packaging to 0 and drop it from
   // the total, regardless of the store's packaging setting. GST/discount unchanged.

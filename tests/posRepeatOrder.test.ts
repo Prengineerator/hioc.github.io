@@ -191,6 +191,7 @@ describe('mapLegacyBillItemsToCartLines', () => {
         name: 'Latte',
         variantLabel: 'Regular',
         unitPriceInr: 100, // the variant's CURRENT price — no old snapshot to trust
+        gstExempt: false,
         addons: [],
         specialInstructions: '',
         qty: 1,
@@ -230,6 +231,7 @@ describe('mapLegacyBillItemsToCartLines', () => {
         name: 'Latte',
         variantLabel: 'Regular',
         unitPriceInr: 100,
+        gstExempt: false,
         addons: [],
         specialInstructions: '',
         qty: 1,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useCart } from '@/lib/cart/CartContext';
+import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { flags } from '@/lib/flags';
 import { createClient } from '@/lib/supabase';
@@ -107,6 +107,7 @@ export function QrCheckout({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         subtotal_inr: totalPrice,
+        taxable_subtotal_inr: cartTaxableSubtotal(items),
         order_type: 'dine_in',
         item_ids: items.map((i) => i.menuItemId),
       }),

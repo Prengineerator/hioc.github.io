@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCart } from '@/lib/cart/CartContext';
+import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { computeBill } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 
@@ -9,7 +9,7 @@ import type { StoreSettings } from '@/lib/types';
 // checkout page's store-settings fetch is in flight (C5).
 export function CartSummary({ settings }: { settings?: StoreSettings | null }) {
   const { items, totalPrice } = useCart();
-  const bill = settings ? computeBill(totalPrice, settings) : null;
+  const bill = settings ? computeBill(totalPrice, settings, 0, cartTaxableSubtotal(items)) : null;
 
   return (
     <div className="rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">

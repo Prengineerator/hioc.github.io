@@ -144,6 +144,7 @@ export async function POST(request: Request) {
     unavailable_until,
     short_code,
     in_store_only,
+    gst_exempt,
   } = body;
 
   if (typeof name !== 'string' || name.trim().length === 0) {
@@ -175,6 +176,10 @@ export async function POST(request: Request) {
 
   if (in_store_only !== undefined && typeof in_store_only !== 'boolean') {
     return errorResponse(400, 'in_store_only must be a boolean');
+  }
+
+  if (gst_exempt !== undefined && typeof gst_exempt !== 'boolean') {
+    return errorResponse(400, 'gst_exempt must be a boolean');
   }
 
   if (
@@ -245,6 +250,7 @@ export async function POST(request: Request) {
       // An item created in an in-store category is in-store only unless the
       // editor says otherwise explicitly.
       in_store_only: in_store_only ?? isInStoreOnlyCategory(category as string),
+      gst_exempt: gst_exempt ?? false,
     })
     .select()
     .single();

@@ -171,13 +171,18 @@ export function computeBill(
   subtotalInr: number,
   settings: StoreSettings,
   discountInr = 0,
+  /** The part of the subtotal GST applies to: every line except GST-exempt
+   * items (2026-09-gst-exempt migration). Defaults to the whole subtotal;
+   * clamped to it so a bad value can never tax more than was sold. */
+  taxableSubtotalInr: number = subtotalInr,
 ): BillBreakdown {
   const rate = settings.gst_percent / 100;
   const packaging = settings.packaging_charge_inr;
+  const taxable = Math.min(Math.max(0, taxableSubtotalInr), subtotalInr);
 
   if (settings.gst_inclusive) {
-    const base = subtotalInr / (1 + rate);
-    const tax = Math.round(subtotalInr - base);
+    const base = taxable / (1 + rate);
+    const tax = Math.round(taxable - base);
     return {
       subtotal_inr: subtotalInr,
       tax_inr: tax,
@@ -187,7 +192,7 @@ export function computeBill(
     };
   }
 
-  const tax = Math.round(subtotalInr * rate);
+  const tax = Math.round(taxable * rate);
   return {
     subtotal_inr: subtotalInr,
     tax_inr: tax,

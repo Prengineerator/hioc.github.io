@@ -68,6 +68,8 @@ export type ResolvedLine = {
   quantity: number;
   line_total_inr: number;
   special_instructions: string;
+  /** Snapshot of menu_items.gst_exempt at sale time (2026-09-gst-exempt). */
+  gst_exempt: boolean;
   addons: {
     addon_option_id: string;
     group_name_snapshot: string;
@@ -129,7 +131,7 @@ export function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
 }
 
 export type ResolveResult =
-  | { ok: true; lines: ResolvedLine[]; subtotalInr: number }
+  | { ok: true; lines: ResolvedLine[]; subtotalInr: number; taxableSubtotalInr: number }
   | { ok: false; error: string };
 
 /**
@@ -146,6 +148,7 @@ export function resolveOrderLines(
 ): ResolveResult {
   const lines: ResolvedLine[] = [];
   let subtotalInr = 0;
+  let taxableSubtotalInr = 0;
 
   for (const item of items) {
     const menuItem = menuById.get(item.menu_item_id);
@@ -209,6 +212,8 @@ export function resolveOrderLines(
     const unitPrice = variant.price_inr + addonsTotal;
     const line_total_inr = unitPrice * item.quantity;
     subtotalInr += line_total_inr;
+    const gst_exempt = menuItem.gst_exempt === true;
+    if (!gst_exempt) taxableSubtotalInr += line_total_inr;
 
     lines.push({
       menu_item_id: menuItem.id,
@@ -219,9 +224,10 @@ export function resolveOrderLines(
       quantity: item.quantity,
       line_total_inr,
       special_instructions: item.special_instructions,
+      gst_exempt,
       addons: addonsFlat,
     });
   }
 
-  return { ok: true, lines, subtotalInr };
+  return { ok: true, lines, subtotalInr, taxableSubtotalInr };
 }

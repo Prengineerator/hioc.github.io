@@ -96,6 +96,11 @@ export function MenuItemTable({
                             In-store
                           </span>
                         ) : null}
+                        {item.gst_exempt ? (
+                          <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+                            No GST
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-tan">{variantSummary(item)}</td>
                       <td className="max-w-[220px] truncate px-4 py-3 text-muted">

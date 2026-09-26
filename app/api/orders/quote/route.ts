@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
-  const { subtotal_inr, coupon_code, redeem_points, item_ids, categories, order_type, customer_phone } =
+  const { subtotal_inr, taxable_subtotal_inr, coupon_code, redeem_points, item_ids, categories, order_type, customer_phone } =
     body;
 
   // Dine-in has no packaging charge (D5). The quote is a preview only, so we
@@ -111,7 +111,15 @@ export async function POST(request: Request) {
   }
 
   const discount_inr = Math.min(couponDiscountInr + pointsDiscountInr, subtotal_inr);
-  const bill = computeBill(subtotal_inr, settings, discount_inr);
+  // GST-exempt lines (2026-09-gst-exempt): the client says how much of the
+  // subtotal is taxable. This is a preview only — the order route recomputes
+  // it from the menu — so an absent or odd value just falls back to taxing
+  // the whole subtotal (computeBill also clamps it to the subtotal).
+  const taxable =
+    typeof taxable_subtotal_inr === 'number' && Number.isFinite(taxable_subtotal_inr)
+      ? taxable_subtotal_inr
+      : subtotal_inr;
+  const bill = computeBill(subtotal_inr, settings, discount_inr, taxable);
 
   // Mirror the create path: dine-in drops packaging from the previewed total.
   if (isDineIn && bill.packaging_inr !== 0) {

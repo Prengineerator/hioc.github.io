@@ -41,7 +41,7 @@ import { isSimpleItem, parseQuickAddInput, resolveQuickAdd } from '@/lib/pos/qui
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { pushRecent, readRecents } from '@/lib/pos/recents';
 import { computeCartKey } from '@/lib/cart/cartKey';
-import type { CartItem } from '@/lib/cart/CartContext';
+import { cartTaxableSubtotal, type CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { normalizeIndianMobile } from '@/lib/phone';
@@ -624,6 +624,7 @@ export function PosOrderEntry({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           subtotal_inr: subtotal,
+          taxable_subtotal_inr: cartTaxableSubtotal(cartRef.current),
           order_type: orderType,
           item_ids: cartRef.current.map((i) => i.menuItemId),
           ...(couponCode ? { coupon_code: couponCode } : {}),
@@ -715,6 +716,7 @@ export function PosOrderEntry({
           name: item.name,
           variantLabel: onlyVariant.label,
           unitPriceInr: onlyVariant.price_inr,
+          gstExempt: item.gst_exempt === true,
           addons: [],
           specialInstructions: '',
         },
