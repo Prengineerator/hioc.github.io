@@ -203,12 +203,15 @@ alter table staff_emails add constraint staff_emails_kind_check
 -- never touched; neither is an item a person switched off. Called at the end
 -- of every function that changes stock or recipes. Returns what changed.
 --
--- Only sizes that are switched ON count: a size switched off by name on the
--- POS (store_settings.hidden_variant_labels, 2026-09-menu-switches.sql,
--- matched case-insensitively) is not on sale, so it can't keep an item on the
--- menu. As on the menu itself, an item whose every size is switched off keeps
--- them all. The column is read through to_jsonb so this still works on a
--- database without that migration (no sizes switched off).
+-- Only sizes that are switched ON count: a size switched off on the POS is not
+-- on sale, so it can't keep an item on the menu. Switches live in
+-- store_settings.hidden_variant_labels (2026-09-menu-switches.sql) as
+-- "Extra Large" (off everywhere) or "Extra Large|Iced Coffee" (off in that
+-- category only) — the same parsing as lib/menu/menuSwitches.ts: the name is
+-- matched case-insensitively, the category exactly. As on the menu itself, an
+-- item whose every size is switched off keeps them all. The column is read
+-- through to_jsonb so this still works on a database without that migration
+-- (no sizes switched off).
 create or replace function inventory_refresh_availability()
 returns jsonb
 language plpgsql
@@ -216,18 +219,18 @@ set search_path = public
 as $$
 declare
   v_on boolean;
-  v_off_labels text[];
+  v_off_entries text[];
   v_out uuid[];
   v_hidden uuid[];
   v_restored uuid[];
 begin
   select coalesce((select stock_auto_hide from store_settings where is_singleton limit 1), true) into v_on;
   select coalesce(array(
-           select lower(trim(x))
+           select x
              from store_settings s,
                   jsonb_array_elements_text(coalesce(to_jsonb(s) -> 'hidden_variant_labels', '[]'::jsonb)) x
             where s.is_singleton), '{}')
-    into v_off_labels;
+    into v_off_entries;
 
   with stock as (
     select i.id, coalesce(sum(b.qty_remaining), 0) as on_hand
@@ -237,8 +240,14 @@ begin
   ),
   all_sizes as (
     select v.menu_item_id, trim(v.label) as size_label,
-           lower(trim(v.label)) = any(v_off_labels) as switched_off
+           exists (
+             select 1 from unnest(v_off_entries) x
+              where lower(trim(split_part(x, '|', 1))) = lower(trim(v.label))
+                and (position('|' in x) = 0
+                     or trim(substr(x, position('|' in x) + 1)) in ('', m.category))
+           ) as switched_off
       from menu_item_variants v
+      join menu_items m on m.id = v.menu_item_id
   ),
   sizes as (
     select a.menu_item_id, a.size_label from all_sizes a
