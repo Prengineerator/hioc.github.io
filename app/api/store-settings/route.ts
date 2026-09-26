@@ -7,6 +7,10 @@ import {
   updateStoreSettings,
 } from '@/lib/store/settings';
 import { computeStoreOpenState } from '@/lib/store/hours';
+import { parseHiddenCategories, parseHiddenSizes } from '@/lib/menu/menuSwitches';
+import { MENU_CATEGORIES } from '@/lib/api/constants';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +54,28 @@ export async function PATCH(request: Request) {
     }
     if (actor.role !== 'manager' && actor.role !== 'owner') {
       return errorResponse(403, 'Only a manager or the owner can change where orders can be taken');
+    }
+  }
+
+  // Menu switches (2026-09-menu-switches.sql): which categories and sizes are
+  // on sale changes the menu for every customer — an owner/manager decision,
+  // and a menu change, so POS only like every other menu edit.
+  if ('hidden_variant_labels' in patch || 'hidden_categories' in patch) {
+    if ('hidden_variant_labels' in patch) {
+      const parsed = parseHiddenSizes(patch.hidden_variant_labels);
+      if (!parsed) return errorResponse(400, 'hidden_variant_labels must be a list of size names');
+      patch.hidden_variant_labels = parsed;
+    }
+    if ('hidden_categories' in patch) {
+      const parsed = parseHiddenCategories(patch.hidden_categories, MENU_CATEGORIES);
+      if (!parsed) return errorResponse(400, 'hidden_categories must be a list of menu categories');
+      patch.hidden_categories = parsed;
+    }
+    if (actor.role !== 'manager' && actor.role !== 'owner') {
+      return errorResponse(403, 'Only a manager or the owner can switch categories or sizes on or off');
+    }
+    if (!canEditMenu(await getStaffSurface())) {
+      return errorResponse(403, MENU_POS_ONLY_MESSAGE);
     }
   }
 

@@ -7,6 +7,7 @@ export function MenuCategoryTabs({
   onChange,
   includeInStore = false,
   leading = [],
+  hidden = [],
 }: {
   active: string;
   onChange: (category: string) => void;
@@ -14,8 +15,13 @@ export function MenuCategoryTabs({
   includeInStore?: boolean;
   /** Extra tabs before the menu categories (the POS's "Quick picks"). */
   leading?: { slug: string; label: string }[];
+  /** Categories switched off for now (store_settings.hidden_categories). */
+  hidden?: readonly string[];
 }) {
-  const categories = [...leading, ...(includeInStore ? MENU_CATEGORIES : CUSTOMER_MENU_CATEGORIES)];
+  const categories = [
+    ...leading,
+    ...(includeInStore ? MENU_CATEGORIES : CUSTOMER_MENU_CATEGORIES).filter((c) => !hidden.includes(c.slug)),
+  ];
   return (
     <div
       className="flex gap-2 overflow-x-auto pb-1"

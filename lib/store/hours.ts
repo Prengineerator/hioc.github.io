@@ -234,5 +234,7 @@ export const FALLBACK_STORE_SETTINGS: StoreSettings = {
   feedback_delay_min: 30,
   google_review_url: GOOGLE_REVIEW_URL_DEFAULT,
   staff_web_ordering: false,
+  hidden_variant_labels: [],
+  hidden_categories: [],
   updated_at: new Date(0).toISOString(),
 };

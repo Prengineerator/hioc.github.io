@@ -4,7 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // QR) call this route; only the POS and the menu editor may see water bottles,
 // and asking for them in the URL is not enough without a counter sign-in.
 
-const state: { actor: { user: { id: string }; role: string; via: string } | null } = { actor: null };
+const state: {
+  actor: { user: { id: string }; role: string; via: string } | null;
+  settings: { hidden_categories: string[]; hidden_variant_labels: string[] };
+} = { actor: null, settings: { hidden_categories: [], hidden_variant_labels: [] } };
 
 const rows = [
   {
@@ -13,7 +16,10 @@ const rows = [
     category: 'Coffee',
     is_available: true,
     in_store_only: false,
-    menu_item_variants: [],
+    menu_item_variants: [
+      { id: 'l', menu_item_id: 'latte', label: 'Large', price_inr: 200, sort_order: 0 },
+      { id: 'xl', menu_item_id: 'latte', label: 'Extra Large', price_inr: 240, sort_order: 1 },
+    ],
     menu_item_addon_groups: [],
   },
   {
@@ -29,6 +35,7 @@ const rows = [
 
 vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
 vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(true) }));
+vi.mock('@/lib/store/settings', () => ({ getStoreSettings: () => Promise.resolve(state.settings) }));
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({}),
   createServerSupabaseClient: () => ({
@@ -55,6 +62,7 @@ async function names(query: string): Promise<string[]> {
 
 beforeEach(() => {
   state.actor = null;
+  state.settings = { hidden_categories: [], hidden_variant_labels: [] };
 });
 
 describe('GET /api/menu — in-store-only items', () => {
@@ -74,5 +82,34 @@ describe('GET /api/menu — in-store-only items', () => {
   it('a signed-in counter browsing the customer menu (no flag) sees the customer view', async () => {
     state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
     expect(await names('?includeUnavailable=true')).toEqual(['Latte']);
+  });
+});
+
+describe('GET /api/menu — on/off switches', () => {
+  async function items(query: string) {
+    const res = await GET(new Request(`http://t/api/menu${query}`));
+    return ((await res.json()) as { items: { name: string; variants: { label: string }[] }[] }).items;
+  }
+
+  it('leaves out a switched-off size and category', async () => {
+    state.settings = { hidden_categories: ['In-store'], hidden_variant_labels: ['Extra Large'] };
+    state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'device' };
+    const menu = await items('?includeUnavailable=true&includeInStore=true');
+    expect(menu.map((i) => i.name)).toEqual(['Latte']);
+    expect(menu[0].variants.map((v) => v.label)).toEqual(['Large']);
+  });
+
+  it('gives the menu editor everything, switched off or not', async () => {
+    state.settings = { hidden_categories: ['In-store'], hidden_variant_labels: ['Extra Large'] };
+    state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'device' };
+    const menu = await items('?includeUnavailable=true&includeInStore=true&allSizes=true');
+    expect(menu.map((i) => i.name)).toEqual(['Latte', 'Water Bottle']);
+    expect(menu[0].variants.map((v) => v.label)).toEqual(['Large', 'Extra Large']);
+  });
+
+  it('ignores allSizes from a customer', async () => {
+    state.settings = { hidden_categories: [], hidden_variant_labels: ['Extra Large'] };
+    const menu = await items('?allSizes=true');
+    expect(menu[0].variants.map((v) => v.label)).toEqual(['Large']);
   });
 });

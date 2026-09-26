@@ -4,6 +4,8 @@ import { getAuthUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
+import { getStoreSettings } from '@/lib/store/settings';
+import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,6 +61,7 @@ export async function GET() {
     return errorResponse(500, 'Failed to load favorites');
   }
 
+  const switches = switchesFromSettings(await getStoreSettings());
   const favorites = (data ?? []).map((row) => {
     const r = row as unknown as {
       menu_item_id: string;
@@ -68,7 +71,14 @@ export async function GET() {
     return {
       menu_item_id: r.menu_item_id,
       created_at: r.created_at,
-      item: r.menu_items ? shapeMenuItem(r.menu_items) : null,
+      // Switched-off sizes and add-ons aren't offered (lib/menu/menuSwitches.ts);
+      // an item in a switched-off category shows as unavailable.
+      item: r.menu_items
+        ? (() => {
+            const item = applyMenuSwitches(shapeMenuItem(r.menu_items), switches);
+            return isCategoryHidden(item.category, switches.hiddenCategories) ? { ...item, is_available: false } : item;
+          })()
+        : null,
     };
   });
 

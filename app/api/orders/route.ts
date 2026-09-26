@@ -25,6 +25,7 @@ import {
   releaseIdempotencyKey,
 } from '@/lib/orders/idempotency';
 import { getStoreSettings } from '@/lib/store/settings';
+import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { runAfterResponse } from '@/lib/api/background';
 import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
@@ -407,7 +408,7 @@ export async function POST(request: Request) {
 
   // Validate every line and compute authoritative prices server-side —
   // never trust a client-submitted price. Shared with the TAB-1 add path.
-  const resolved = resolveOrderLines(items, menuById);
+  const resolved = resolveOrderLines(items, menuById, switchesFromSettings(settings));
   if (!resolved.ok) {
     return errorResponse(400, resolved.error);
   }

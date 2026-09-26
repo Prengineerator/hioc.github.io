@@ -91,6 +91,9 @@ export interface AddonOption {
   name: string;
   price_inr: number;
   sort_order: number;
+  // Switched off for now, e.g. out of oat milk (2026-09-menu-switches.sql).
+  // Optional: a row read before the migration is on.
+  is_available?: boolean;
 }
 
 export interface AddonGroup {
@@ -310,6 +313,12 @@ export interface StoreSettings {
   // only the POS takes orders (2026-09-staff-web-ordering.sql). Optional: a
   // row read before the migration has no such column and reads as off.
   staff_web_ordering?: boolean;
+  // Size names not on sale right now, e.g. ['Extra Large']
+  // (2026-09-hidden-sizes.sql, lib/menu/menuSwitches.ts). Optional: a row read
+  // before the migration hides nothing.
+  hidden_variant_labels?: string[];
+  // Menu categories switched off for now (2026-09-menu-switches.sql).
+  hidden_categories?: string[];
   updated_at: string;
 }
 
