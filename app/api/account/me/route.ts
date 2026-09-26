@@ -6,6 +6,7 @@ import { isOrderType } from '@/lib/api/constants';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { verifiedEmailOf } from '@/lib/account/history';
 import { checkoutPrefill } from '@/lib/account/prefill';
+import { parseIsoDate } from '@/lib/legacy/account';
 import type { OrderType } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -24,6 +25,8 @@ interface ProfileRow {
   phone_verified: boolean;
   marketing_consent: boolean;
   prefs: AccountPrefs | null;
+  date_of_birth: string | null;
+  date_of_anniversary: string | null;
 }
 
 // Response contract consumed by BOTH app/account/profile (full prefill) and
@@ -36,6 +39,8 @@ function shapeMe(profile: ProfileRow) {
     phone_verified: profile.phone_verified,
     marketing_consent: profile.marketing_consent,
     prefs: profile.prefs ?? {},
+    date_of_birth: profile.date_of_birth,
+    date_of_anniversary: profile.date_of_anniversary,
   };
 }
 
@@ -45,6 +50,8 @@ const EMPTY_PROFILE: ProfileRow = {
   phone_verified: false,
   marketing_consent: false,
   prefs: {},
+  date_of_birth: null,
+  date_of_anniversary: null,
 };
 
 // GET /api/account/me — the caller's own profile. 401 if not logged in.
@@ -60,7 +67,7 @@ export async function GET() {
   const admin = createAdminSupabaseClient();
   const { data: profile, error } = await admin
     .from('profiles')
-    .select('name, phone, phone_verified, marketing_consent, prefs')
+    .select('name, phone, phone_verified, marketing_consent, prefs, date_of_birth, date_of_anniversary')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -148,6 +155,30 @@ export async function PATCH(request: Request) {
     updates.phone_verified = true;
   }
 
+  if (body.date_of_birth !== undefined) {
+    if (body.date_of_birth !== null && typeof body.date_of_birth !== 'string') {
+      return errorResponse(400, 'date_of_birth must be a YYYY-MM-DD date string or null');
+    }
+    try {
+      const validated = parseIsoDate(body.date_of_birth ?? '', true);
+      updates.date_of_birth = validated;
+    } catch (err) {
+      return errorResponse(400, `date_of_birth: ${(err as Error).message}`);
+    }
+  }
+
+  if (body.date_of_anniversary !== undefined) {
+    if (body.date_of_anniversary !== null && typeof body.date_of_anniversary !== 'string') {
+      return errorResponse(400, 'date_of_anniversary must be a YYYY-MM-DD date string or null');
+    }
+    try {
+      const validated = parseIsoDate(body.date_of_anniversary ?? '', false);
+      updates.date_of_anniversary = validated;
+    } catch (err) {
+      return errorResponse(400, `date_of_anniversary: ${(err as Error).message}`);
+    }
+  }
+
   const admin = createAdminSupabaseClient();
 
   if (body.default_order_type !== undefined || body.veg_only !== undefined) {
@@ -182,7 +213,7 @@ export async function PATCH(request: Request) {
     .from('profiles')
     .update(updates)
     .eq('id', user.id)
-    .select('name, phone, phone_verified, marketing_consent, prefs')
+    .select('name, phone, phone_verified, marketing_consent, prefs, date_of_birth, date_of_anniversary')
     .single();
 
   if (error || !updated) {

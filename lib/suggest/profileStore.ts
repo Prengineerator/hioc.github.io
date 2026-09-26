@@ -13,6 +13,14 @@ import { isMissingColumnError } from '@/lib/api/postgrest';
 import { buildTasteProfile, type TasteProfileOrder } from './profile';
 import { SUGGEST_LIMITS } from './types';
 import type { CustomerTasteProfileRow, Daypart, MenuItemTraits, TasteProfile } from './types';
+import type { OrderStatus } from '@/lib/types';
+import {
+  filterOrdersInWindow,
+  legacyOrdersForProfile,
+  mergeProfileOrders,
+  newestLegacyOrderAt,
+  type ProfileRawOrder,
+} from './legacyOrders';
 
 export interface ProfileResult {
   profile: TasteProfile | null;
@@ -117,14 +125,44 @@ export async function getOrBuildProfile(userId: string, now: Date = new Date()):
     return { profile: null, optedOut: true };
   }
 
+  // Look up the customer's verified phone (profiles.phone is free text; only
+  // phone_verified = true can safely link to Petpooja bills — an unverified
+  // phone is just "someone claims this number", which says nothing about
+  // whether it's really them; see lib/loyalty/customerLink.ts).
+  let verifiedPhone: string | null = null;
+  const { data: profileData, error: profileError } = await admin
+    .from('profiles')
+    .select('phone, phone_verified')
+    .eq('id', userId)
+    .maybeSingle();
+  if (profileError) {
+    console.error('getOrBuildProfile: profiles lookup failed', profileError);
+  } else if (profileData) {
+    const p = profileData as { phone: string | null; phone_verified: boolean | null };
+    if (p.phone_verified && p.phone) {
+      verifiedPhone = p.phone;
+    }
+  }
+
   // Cheap staleness probe — just the newest qualifying order's timestamp,
-  // not the full order+line join the rebuild below needs.
+  // not the full order+line join the rebuild below needs. Include both app
+  // orders and Petpooja bills (if phone is verified) to capture all of a
+  // customer's activity.
   const latest = await selectOrdersForCustomer(admin, userId, 'created_at', 1);
   if (latest.error) {
     console.error('getOrBuildProfile: latest-order probe failed', latest.error);
     return { profile: (row?.profile as TasteProfile | undefined) ?? null, optedOut: false };
   }
-  const newestOrderAt = ((latest.data ?? [])[0] as unknown as { created_at: string } | undefined)?.created_at ?? null;
+  let newestOrderAt = ((latest.data ?? [])[0] as unknown as { created_at: string } | undefined)?.created_at ?? null;
+
+  // Also check the newest Petpooja bill (if verified phone links this customer)
+  // and use whichever is more recent.
+  if (verifiedPhone) {
+    const newestLegacy = await newestLegacyOrderAt(admin, verifiedPhone);
+    if (newestLegacy && (!newestOrderAt || new Date(newestLegacy).getTime() > new Date(newestOrderAt).getTime())) {
+      newestOrderAt = newestLegacy;
+    }
+  }
 
   if (row && !isStale(row, newestOrderAt, now)) {
     return { profile: row.profile as TasteProfile, optedOut: false };
@@ -132,8 +170,9 @@ export async function getOrBuildProfile(userId: string, now: Date = new Date()):
 
   // Rebuild: full orders (+ lines) and favorites, bounded to the window/count
   // buildTasteProfile itself also enforces (belt and braces — keeps the query
-  // bounded even before the pure function gets a look).
-  const [ordersResult, favoritesResult] = await Promise.all([
+  // bounded even before the pure function gets a look). Fetch app orders and
+  // Petpooja bills (if verified phone) in parallel, then window and merge both.
+  const [ordersResult, favoritesResult, legacyOrdersResult] = await Promise.all([
     selectOrdersForCustomer(
       admin,
       userId,
@@ -141,6 +180,7 @@ export async function getOrBuildProfile(userId: string, now: Date = new Date()):
       SUGGEST_LIMITS.profileMaxOrders,
     ),
     admin.from('favorites').select('menu_item_id').eq('user_id', userId),
+    verifiedPhone ? legacyOrdersForProfile(admin, verifiedPhone, SUGGEST_LIMITS.profileMaxOrders) : Promise.resolve([]),
   ]);
 
   if (ordersResult.error) {
@@ -151,17 +191,29 @@ export async function getOrBuildProfile(userId: string, now: Date = new Date()):
     console.error('getOrBuildProfile: favorites load failed', favoritesResult.error);
   }
 
-  type RawOrderRow = {
+  const windowStart = new Date(windowStartIso(now)).getTime();
+  // Map app orders to ProfileRawOrder shape (status is cast to OrderStatus since
+  // app orders always have valid status by the time they reach here, matching
+  // the DB constraint that legacy_orders.status is 'completed' | 'cancelled').
+  const appRawOrders: ProfileRawOrder[] = ((ordersResult.data ?? []) as unknown as Array<{
     status: string;
     created_at: string;
     total_inr: number | null;
     subtotal_inr: number;
     order_items: { menu_item_id: string | null; quantity: number; voided: boolean }[] | null;
-  };
-  const windowStart = new Date(windowStartIso(now)).getTime();
-  const rawOrders = ((ordersResult.data ?? []) as unknown as RawOrderRow[]).filter(
-    (o) => new Date(o.created_at).getTime() >= windowStart,
-  );
+  }>).map((o) => ({
+    status: o.status as OrderStatus,
+    created_at: o.created_at,
+    total_inr: o.total_inr,
+    subtotal_inr: o.subtotal_inr,
+    order_items: o.order_items,
+  }));
+
+  // Window and merge: apply the time filter to both sources separately (to avoid
+  // dropping a newer in-window order from one side to a cap limit), then cap the merged list.
+  const windowedAppOrders = filterOrdersInWindow(appRawOrders, windowStart);
+  const windowedLegacyOrders = filterOrdersInWindow(legacyOrdersResult, windowStart);
+  const rawOrders = mergeProfileOrders(windowedAppOrders, windowedLegacyOrders, SUGGEST_LIMITS.profileMaxOrders);
   const favorites = (favoritesResult.data ?? []).map((f) => f.menu_item_id as string);
 
   const itemIds = [
@@ -194,7 +246,7 @@ export async function getOrBuildProfile(userId: string, now: Date = new Date()):
       quantity: l.quantity,
       voided: l.voided,
     })),
-  }));
+  })) as TasteProfileOrder[];
 
   const profile = buildTasteProfile({ orders, favorites, traitsById, now });
 
