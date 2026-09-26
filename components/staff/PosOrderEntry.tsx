@@ -250,8 +250,17 @@ export function PosOrderEntry({
   // no ticket. The dock owns the queue, the ordering, the 10s watchdog, the
   // failure chip and the retry.
   const printDock = usePrintDock();
+  // TAB-2: set after items are added to a running order; the screen returns
+  // to Tables once its KOT has printed (or straight away when none prints). A
+  // failed print keeps the staffer here, where the Retry button is.
+  const [leaveAfterAdd, setLeaveAfterAdd] = useState(false);
 
   const router = useRouter();
+  useEffect(() => {
+    if (!leaveAfterAdd || printDock.busy || printDock.hasFailed) return undefined;
+    const t = setTimeout(() => router.push('/staff/tables'), 600);
+    return () => clearTimeout(t);
+  }, [leaveAfterAdd, printDock.busy, printDock.hasFailed, router]);
   const inFlight = useRef(false);
   // POS4-2 — identifies THIS order attempt across retries. Rotated only once an
   // order is actually placed, so a retry after a network failure replays rather
@@ -1017,14 +1026,22 @@ export function PosOrderEntry({
         return;
       }
 
+      const data = (await res.json().catch(() => ({}))) as { added_item_ids?: string[] };
       const label = formatOrderNumber(addToOrder.orderNumber);
       setCart([]);
       setBill(null);
       setSearch('');
       setMobileCartOpen(false);
-      showToast(`Added to order #${label}.`);
-      // Back to the board so the running total is visible in context.
-      setTimeout(() => router.push('/staff/tables'), 600);
+      // The kitchen gets a KOT of ONLY the new lines (headed "ADDED ITEMS"),
+      // on the same auto-print rule as a new order's KOT.
+      const addedIds = data.added_item_ids ?? [];
+      const printsKot = autoPrint.kot && addedIds.length > 0;
+      if (printsKot) printDock.enqueue([{ orderId: addToOrder.id, type: 'kot', itemIds: addedIds }]);
+      showToast(`Added to order #${label}${printsKot ? ' · KOT printing' : ''}.`);
+      // Back to the board so the running total is visible in context — once the
+      // KOT has gone: the print dock lives on this page, and leaving mid-print
+      // would cancel the kitchen's ticket.
+      setLeaveAfterAdd(true);
     } catch {
       setSubmitError('Network error — please check the connection and try again.');
     } finally {

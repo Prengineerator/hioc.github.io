@@ -241,5 +241,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   // `change_due_inr` lets the POS show "give ₹120 back" without recomputing it.
-  return NextResponse.json({ order: data as Order, change_due_inr: changeInr });
+  // The tenders as recorded, so the caller can show "Cash ₹300 + UPI ₹180"
+  // straight away (a single-method settle has none — payment_method says it).
+  const payments = (parts ?? []).map((p) => ({ method: p.method, amount_inr: p.amount_inr }));
+  return NextResponse.json({ order: { ...(data as Order), payments }, change_due_inr: changeInr });
 }

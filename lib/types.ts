@@ -138,6 +138,11 @@ export interface MenuItem {
 // Orders
 // ---------------------------------------------------------------------------
 
+export interface OrderPaymentPart {
+  method: PaymentMethod;
+  amount_inr: number;
+}
+
 export interface Order {
   id: string;
   order_number: number;
@@ -162,6 +167,10 @@ export interface Order {
   total_inr: number | null; // subtotal + tax + packaging - discount
   payment_status: PaymentStatus;
   payment_method: PaymentMethod | null; // null until collected (STF-041)
+  // POS4-1 split settlement: each tender, in the order taken. Only on
+  // responses whose query embeds order_payments; empty/absent for a
+  // single-method payment, where payment_method says it all.
+  payments?: OrderPaymentPart[];
   reject_reason: string; // populated on rejected/cancelled (STF-003)
   version: number; // optimistic-concurrency guard (F1)
   // Phase-2 addition (migration §2): links an order to a customer account

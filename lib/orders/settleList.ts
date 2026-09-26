@@ -1,20 +1,11 @@
 // The Settle screen (/staff/settle) and "Change payment" — the pure rules, so
 // every screen agrees on what can be settled or re-recorded.
 
-import type { Order, PaymentMethod } from '@/lib/types';
+import type { Order } from '@/lib/types';
+
+export { describeOrderPayment, describePaymentMethod } from '@/lib/orders/paymentLabel';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-
-const METHOD_LABEL: Record<PaymentMethod, string> = {
-  cash: 'Cash',
-  upi: 'UPI',
-  card: 'Card',
-  online: 'Online',
-};
-
-export function describePaymentMethod(method: PaymentMethod | null | undefined): string {
-  return method ? (METHOD_LABEL[method] ?? method) : 'not recorded';
-}
 
 /** The IST calendar date (YYYY-MM-DD) of an instant. */
 export function istDateKey(iso: string | Date): string {

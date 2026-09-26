@@ -19,7 +19,7 @@
 // "if the coupon no longer qualifies, drop it") is a deferred follow-up.
 
 import { computeBill, type BillBreakdown } from '@/lib/store/hours';
-import type { OrderType, StoreSettings } from '@/lib/types';
+import type { OrderStatus, OrderType, StoreSettings } from '@/lib/types';
 
 // Only the fields the recompute needs from an order line — keeps this callable
 // with plain fixtures (no full OrderItem required) and makes the money math the
@@ -77,4 +77,14 @@ export function recomputeOrderTotals({
   }
 
   return bill;
+}
+
+/**
+ * Where an order goes when items are added to it (TAB-1): the new items have
+ * to be made, so an order the kitchen had marked Ready is back to Preparing —
+ * it can't be handed over or completed without them. Accepted/Preparing
+ * orders are already with the kitchen and stay as they are.
+ */
+export function statusAfterAdd(status: OrderStatus): OrderStatus {
+  return status === 'ready' ? 'preparing' : status;
 }

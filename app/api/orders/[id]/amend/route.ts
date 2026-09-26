@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getCounterActor } from '@/lib/api/auth';
+import { actorRoleFor, getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
-import { recomputeOrderTotals } from '@/lib/orders/amend';
+import { recomputeOrderTotals, statusAfterAdd } from '@/lib/orders/amend';
 import {
   MENU_ITEM_SELECT,
   parseItems,
@@ -335,6 +335,11 @@ async function addLines(
     discountInr: order.discount_inr,
   });
 
+  // New items have to be made: an order the kitchen had marked Ready goes back
+  // to Preparing, so it can't be handed over (or completed) without them.
+  // Accepted/Preparing orders are already with the kitchen and stay as they are.
+  const nextStatus = statusAfterAdd(order.status);
+
   const { data: guarded, error: updateError } = await admin
     .from('orders')
     .update({
@@ -344,6 +349,7 @@ async function addLines(
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       version: order.version + 1,
+      ...(nextStatus !== order.status ? { status: nextStatus } : {}),
     })
     .eq('id', id)
     .eq('version', order.version)
@@ -394,7 +400,20 @@ async function addLines(
     );
   }
 
-  await broadcastOrderEvent(id, order.status);
+  if (nextStatus !== order.status) {
+    // Same attributed lifecycle event the status route writes (SLA metrics).
+    const { error: eventError } = await admin.from('order_status_events').insert({
+      order_id: id,
+      from_status: order.status,
+      to_status: nextStatus,
+      actor_id: user.id,
+      actor_role: actorRoleFor(roleHint),
+      reason: 'Items added',
+    });
+    if (eventError) console.error('order_status_events insert failed (add items)', eventError);
+  }
+
+  await broadcastOrderEvent(id, nextStatus);
 
   const { data: full, error: reloadError } = await admin
     .from('orders')

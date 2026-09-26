@@ -1,6 +1,6 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { toOrderResponse, type OrderRowWithItems, type OrderResponse } from '@/lib/api/orders';
+import { ORDER_PAYMENTS_EMBED, toOrderResponse, type OrderRowWithItems, type OrderResponse } from '@/lib/api/orders';
 
 // An order shaped for the customer receipt/status surfaces: the full order row
 // (+ items + addons) plus the applied coupon *code* (not stored on the row, so
@@ -19,7 +19,7 @@ export async function getOrderWithCoupon(id: string): Promise<OrderWithCoupon | 
   const admin = createAdminSupabaseClient();
   const { data, error } = await admin
     .from('orders')
-    .select('*, order_items(*, order_item_addons(*))')
+    .select(`*, order_items(*, order_item_addons(*)), ${ORDER_PAYMENTS_EMBED}`)
     .eq('id', id)
     .maybeSingle();
 

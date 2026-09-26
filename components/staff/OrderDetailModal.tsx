@@ -17,7 +17,7 @@ import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
-import { canChangePayment, isSettleable } from '@/lib/orders/settleList';
+import { canChangePayment, describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
 import type { SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import {
   billStatusTone,
@@ -791,7 +791,11 @@ export function OrderDetailModal({
                 every other open state. */}
             <div className="mt-2 border-t border-[#e5e5e5] pt-3">
               <p className="text-xs text-muted">
-                Payment: <span className="font-bold text-charcoal">{order.payment_status}{order.payment_method ? ` (${order.payment_method})` : ''}</span>
+                Payment:{' '}
+                <span className="font-bold text-charcoal">
+                  {order.payment_status}
+                  {order.payment_method ? ` (${describeOrderPayment(order)})` : ''}
+                </span>
               </p>
               {order.payment_status !== 'paid' && order.status !== 'ready' ? (
                 <div className="mt-2 flex gap-2">

@@ -10,7 +10,7 @@ import { normalizeEmail } from '@/lib/email';
 import { flags } from '@/lib/flags';
 import { evaluatePhoneVerification } from '@/lib/orders/phoneVerification';
 import { sendBillNotification } from '@/lib/notifications/engine';
-import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
+import { ORDER_PAYMENTS_EMBED, toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import {
   MENU_ITEM_SELECT,
   parseItems,
@@ -934,7 +934,7 @@ export async function GET(request: Request) {
 
   let query = admin
     .from('orders')
-    .select('*, order_items(*, order_item_addons(*))')
+    .select(`*, order_items(*, order_item_addons(*)), ${ORDER_PAYMENTS_EMBED}`)
     .order('created_at', { ascending: true });
 
   if (statusParam) {

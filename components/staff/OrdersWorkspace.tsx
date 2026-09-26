@@ -17,7 +17,7 @@ import { TodayOrdersList } from '@/components/staff/TodayOrdersList';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
-import { describePaymentMethod } from '@/lib/orders/settleList';
+import { describeOrderPayment } from '@/lib/orders/settleList';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
@@ -388,7 +388,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
               if (jobs.length > 0) printDock.enqueue(jobs);
             }
             showToast(
-              `#${formatOrderNumber(order.order_number)} ${intent === 'settle' ? 'settled' : 'changed to'} ${describePaymentMethod(updated.payment_method)}`,
+              `#${formatOrderNumber(order.order_number)} ${intent === 'settle' ? 'settled' : 'changed to'} ${describeOrderPayment(updated)}`,
             );
             void fetchOrders();
           }}
