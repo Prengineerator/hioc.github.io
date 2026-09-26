@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Staff surface (lib/staff/surface.ts): these requests come from the POS unless
+// a test sets globalThis.__staffSurface = 'web'.
+vi.mock('@/lib/staff/surface', () => ({
+  getStaffSurface: () =>
+    Promise.resolve((globalThis as { __staffSurface?: 'pos' | 'web' }).__staffSurface ?? 'pos'),
+}));
+
 
 // Handler-level integration test for POST /api/orders — the FND3-2/3 staff
 // order-creation path — exercised end-to-end against a mocked Supabase admin
@@ -96,7 +104,13 @@ vi.mock('@/lib/store/hours', async (importOriginal) => {
 });
 vi.mock('@/lib/store/settings', () => ({
   getStoreSettings: () =>
-    Promise.resolve({ gst_percent: 5, gst_inclusive: false, packaging_charge_inr: 20, pickup_slot_capacity: 0 }),
+    Promise.resolve({
+      gst_percent: 5,
+      gst_inclusive: false,
+      packaging_charge_inr: 20,
+      pickup_slot_capacity: 0,
+      staff_web_ordering: (globalThis as { __staffWebOrdering?: boolean }).__staffWebOrdering,
+    }),
 }));
 
 vi.mock('@/lib/notifications/engine', () => ({ sendBillNotification: vi.fn(() => Promise.resolve()) }));
@@ -270,6 +284,40 @@ describe('POST /api/orders — staff walk-in takeaway (FND3-3)', () => {
     const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
     expect(res.status).toBe(201);
     expect(state.orderInsert?.tax_inr).toBe(10);
+  });
+
+  describe('staff website vs POS', () => {
+    const web = globalThis as { __staffSurface?: 'pos' | 'web'; __staffWebOrdering?: boolean };
+    afterEach(() => {
+      web.__staffSurface = undefined;
+      web.__staffWebOrdering = undefined;
+    });
+
+    it('refuses a staff order from the staff website while web ordering is off (the default)', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+      web.__staffSurface = 'web';
+      const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toMatch(/switched off on the staff website/);
+      expect(state.orderInsert).toBeUndefined();
+    });
+
+    it('takes it once the owner has switched web ordering on', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+      web.__staffSurface = 'web';
+      web.__staffWebOrdering = true;
+      const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+      expect(res.status).toBe(201);
+    });
+
+    it('never gates a customer website order', async () => {
+      web.__staffSurface = 'web';
+      state.sessionUser = { id: 'cust-1' };
+      const res = await POST(
+        req({ customer_name: 'Asha', customer_phone: '9000000000', pickup_slot_label: 'ASAP', items: oneLatte }),
+      );
+      expect(res.status).toBe(201);
+    });
   });
 });
 

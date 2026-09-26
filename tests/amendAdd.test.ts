@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Staff surface (lib/staff/surface.ts): these requests come from the POS unless
+// a test sets globalThis.__staffSurface = 'web'.
+vi.mock('@/lib/staff/surface', () => ({
+  getStaffSurface: () =>
+    Promise.resolve((globalThis as { __staffSurface?: 'pos' | 'web' }).__staffSurface ?? 'pos'),
+}));
+
+
 // TAB-1 — POST /api/orders/[id]/amend with { op: 'add' }.
 //
 // The gap this closes: the corrections engine could only VOID, so "two more
@@ -158,6 +166,18 @@ describe('POST /api/orders/[id]/amend { op: add } — TAB-1', () => {
   it('401s without a staff session or operator', async () => {
     state.actor = null;
     expect((await POST(req(addBody()), params)).status).toBe(401);
+  });
+
+  it('refuses adding items from the staff website while web ordering is off', async () => {
+    const g = globalThis as { __staffSurface?: 'pos' | 'web' };
+    g.__staffSurface = 'web';
+    try {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      expect((await POST(req(addBody()), params)).status).toBe(403);
+      expect(state.amendmentRow).toBeUndefined();
+    } finally {
+      g.__staffSurface = undefined;
+    }
   });
 
   it('PIN-3: an enrolled-device operator (no classic session) can still add lines', async () => {

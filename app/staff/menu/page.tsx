@@ -9,6 +9,8 @@ import {
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import type { MenuItem } from '@/lib/types';
+import { useStaffShell } from '@/components/staff/StaffShell';
+import { MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -25,6 +27,8 @@ function endOfDayIstIso(now: Date): string {
 }
 
 export default function StaffMenuPage() {
+  // Menu changes happen on the POS only (lib/staff/surfaceRules.ts).
+  const { canEditMenu } = useStaffShell();
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<
@@ -124,14 +128,22 @@ export default function StaffMenuPage() {
     <div className="mx-auto max-w-6xl px-4 py-8">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-charcoal">Menu Items</h1>
-        <button
-          type="button"
-          onClick={() => setModal({ mode: 'create' })}
-          className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
-        >
-          Add Item
-        </button>
+        {canEditMenu ? (
+          <button
+            type="button"
+            onClick={() => setModal({ mode: 'create' })}
+            className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+          >
+            Add Item
+          </button>
+        ) : null}
       </div>
+
+      {!canEditMenu ? (
+        <p className="mb-4 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
+          {MENU_POS_ONLY_MESSAGE} This list is read-only here.
+        </p>
+      ) : null}
 
       <input
         type="search"
@@ -154,6 +166,7 @@ export default function StaffMenuPage() {
           onReenable={handleReenable}
           onEdit={(item) => setModal({ mode: 'edit', item })}
           onDelete={(item) => setDeleteTarget(item)}
+          readOnly={!canEditMenu}
         />
       )}
 

@@ -65,6 +65,14 @@ describe('PATCH /api/store-settings', () => {
     const res = await patchStoreSettings(req({ accepting_orders: false }));
     expect(res.status).toBe(200);
   });
+
+  it('only a manager or the owner can allow ordering on the staff website', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    expect((await patchStoreSettings(req({ staff_web_ordering: true }))).status).toBe(403);
+    state.actor = { user: { id: 'mgr' }, role: 'manager', via: 'session' };
+    expect((await patchStoreSettings(req({ staff_web_ordering: true }))).status).toBe(200);
+    expect((await patchStoreSettings(req({ staff_web_ordering: 'yes' }))).status).toBe(400);
+  });
 });
 
 describe('GET /api/reviews (moderation list, no order_id)', () => {

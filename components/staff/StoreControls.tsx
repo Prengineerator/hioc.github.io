@@ -7,6 +7,7 @@
 // fast day-to-day panel staff reach for during a shift.
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
 import { Spinner } from '@/components/ui/Spinner';
 import type { StoreOpenState } from '@/lib/store/hours';
@@ -22,7 +23,8 @@ const OVERRIDE_OPTIONS: { value: StoreOpenOverride; label: string }[] = [
   { value: 'force_closed', label: 'Force closed' },
 ];
 
-export function StoreControls() {
+export function StoreControls({ canManageOrdering = false }: { canManageOrdering?: boolean }) {
+  const router = useRouter();
   const [settings, setSettings] = useState<StoreSettings | null>(null);
   const [openState, setOpenState] = useState<StoreOpenState | null>(null);
   const [saving, setSaving] = useState(false);
@@ -56,6 +58,9 @@ export function StoreControls() {
         // Tell the header badge (and any other listener) to refresh immediately,
         // so "Store: Accepting/Paused/Closed" reflects this change without a reload.
         window.dispatchEvent(new Event('hioc:store-changed'));
+        // Where orders can be taken shapes the staff layout (nav, New order,
+        // Tables), which the router keeps across navigations — re-render it.
+        if ('staff_web_ordering' in body) router.refresh();
       } else {
         setSettings(prevSettings);
         setOpenState(prevOpenState);
@@ -146,6 +151,26 @@ export function StoreControls() {
               label="Busy mode"
             />
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 py-3 last:pb-0">
+          <div>
+            <p className="text-sm font-bold text-charcoal">Take orders on the staff website</p>
+            <p className="text-xs text-muted">
+              Off: only the POS takes orders; the staff website shows orders and the live board. On: phones and
+              laptops signed in to the staff website can take orders too.
+              {canManageOrdering ? '' : ' A manager or the owner can change this.'}
+            </p>
+          </div>
+          {canManageOrdering ? (
+            <ToggleSwitch
+              checked={settings.staff_web_ordering === true}
+              onChange={(next) => patch({ staff_web_ordering: next })}
+              label="Take orders on the staff website"
+            />
+          ) : (
+            <span className="text-sm font-bold text-charcoal">{settings.staff_web_ordering ? 'On' : 'Off'}</span>
+          )}
         </div>
       </div>
 

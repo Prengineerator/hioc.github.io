@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Staff surface (lib/staff/surface.ts): these requests come from the POS unless
+// a test sets globalThis.__staffSurface = 'web'.
+vi.mock('@/lib/staff/surface', () => ({
+  getStaffSurface: () =>
+    Promise.resolve((globalThis as { __staffSurface?: 'pos' | 'web' }).__staffSurface ?? 'pos'),
+}));
+
+
 // VERIFY-1 — POST /api/orders must ENFORCE the verified-number rule, not merely
 // display it. Before this, the only gate was CheckoutForm's disabled button:
 // this route never asked, and the table-QR checkout did not even have a button.

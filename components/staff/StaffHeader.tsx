@@ -19,13 +19,10 @@ import type { StoreOpenState } from '@/lib/store/hours';
 import { flags } from '@/lib/flags';
 import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
 import { COUNTER_MODE_HREFS } from '@/lib/staff/newOrderWatch';
-import { isActiveTab, moreTabs, primaryTabs, type StaffTab } from '@/lib/staff/staffNav';
+import { isActiveTab, staffNav, type StaffTab } from '@/lib/staff/staffNav';
 import { SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 import { useStaffShell } from '@/components/staff/StaffShell';
 
-const NAV_FLAGS = { staffPos: flags.staffPos, attendance: flags.attendance };
-const PRIMARY_TABS = primaryTabs(NAV_FLAGS);
-const MORE_TABS = moreTabs(NAV_FLAGS);
 
 export interface StaffPinControls {
   /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
@@ -89,8 +86,16 @@ export function StaffHeader({
   const accountRef = useDismiss(accountOpen, closeAccount);
 
   // Counter mode keeps only what the counter works from, and no More menu.
-  const primary = shell.counterMode ? PRIMARY_TABS.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : PRIMARY_TABS;
-  const more = shell.counterMode ? [] : MORE_TABS;
+  // POS vs staff website (lib/staff/staffNav.ts); counter mode then keeps only
+  // what the counter works from, and no More menu.
+  const nav = staffNav({
+    surface: shell.surface,
+    canTakeOrders: shell.canTakeOrders,
+    staffPos: flags.staffPos,
+    attendance: flags.attendance,
+  });
+  const primary = shell.counterMode ? nav.primary.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : nav.primary;
+  const more = shell.counterMode ? [] : nav.more;
   const active = (tab: StaffTab) => isActiveTab(pathname, toHref(tab.href), toHref(SETTINGS_ROOT));
   const moreActive = more.find(active);
 
@@ -326,6 +331,24 @@ export function StaffHeader({
                 {roleLabel ? <p className="text-[11px] uppercase tracking-wide text-cream/50">{roleLabel}</p> : null}
                 {userEmail && userName ? <p className="truncate text-xs text-cream/50">{userEmail}</p> : null}
                 <div className="mt-3 lg:hidden">{storePill}</div>
+                {nav.account.length > 0 ? (
+                  <ul className="mt-3 border-t border-cream/10 pt-2">
+                    {nav.account.map((tab) => (
+                      <li key={tab.href}>
+                        <Link
+                          href={tab.href}
+                          role="menuitem"
+                          className={
+                            'block rounded-md px-2 py-2 text-sm font-bold ' +
+                            (active(tab) ? 'text-tan' : 'text-cream/85 hover:bg-cream/5 hover:text-cream')
+                          }
+                        >
+                          {tab.label}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <div className="mt-3 flex flex-col gap-2">
                   {pinControls ? (
                     <button
@@ -371,7 +394,7 @@ export function StaffHeader({
         <div id="staff-mobile-menu" className="border-t border-cream/10 px-4 pb-4 md:hidden">
           <nav aria-label="Staff">
             <ul className="flex flex-col gap-1 pt-3 text-sm">
-              {[...primary, ...more].map((tab) => (
+              {[...primary, ...more, ...nav.account].map((tab) => (
                 <li key={tab.href}>
                   <Link
                     href={tab.href}

@@ -1,28 +1,46 @@
 import { describe, expect, it } from 'vitest';
-import { isActiveTab, moreTabs, primaryTabs } from '@/lib/staff/staffNav';
+import { isActiveTab, staffNav } from '@/lib/staff/staffNav';
 
-// The staff header split: the counter's everyday pages up front, back-office
-// pages under "More" — so the bar no longer overflows on a tablet.
+// What each surface's header offers. The POS is the counter's order-taking
+// and menu screen; the staff website takes orders only when switched on.
 
-const allOn = { staffPos: true, attendance: true };
+const flags = { staffPos: true, attendance: true };
+const labels = (tabs: { label: string }[]) => tabs.map((t) => t.label);
 
-describe('primaryTabs', () => {
-  it('puts Live orders, Orders, New order and Tables up front', () => {
-    expect(primaryTabs(allOn).map((t) => t.label)).toEqual(['Live orders', 'Orders', 'New order', 'Tables']);
+describe('staffNav — POS', () => {
+  const nav = staffNav({ surface: 'pos', canTakeOrders: true, ...flags });
+
+  it('shows only Live orders, Orders, New order and Menu', () => {
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'New order', 'Menu']);
+    expect(nav.more).toEqual([]);
   });
 
-  it('keeps Live orders and Orders when the POS flag is off', () => {
-    expect(primaryTabs({ staffPos: false, attendance: true }).map((t) => t.href)).toEqual(['/staff', '/staff/orders']);
+  it('keeps Settings (printers) reachable from the account menu', () => {
+    expect(labels(nav.account)).toEqual(['Settings']);
   });
 });
 
-describe('moreTabs', () => {
-  it('holds the back-office pages, Settings last', () => {
-    expect(moreTabs(allOn).map((t) => t.label)).toEqual(['Cash', 'Attendance', 'Leave', 'Menu', 'Settings']);
+describe('staffNav — staff website', () => {
+  it('hides New order and Tables while web ordering is off (the default)', () => {
+    const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags });
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders']);
+  });
+
+  it('shows them once the owner switches web ordering on', () => {
+    const nav = staffNav({ surface: 'web', canTakeOrders: true, ...flags });
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'New order', 'Tables']);
+  });
+
+  it('keeps the back-office pages under More, Settings last', () => {
+    const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags });
+    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Menu', 'Settings']);
+    expect(nav.account).toEqual([]);
   });
 
   it('drops flagged-off pages', () => {
-    expect(moreTabs({ staffPos: false, attendance: false }).map((t) => t.label)).toEqual(['Menu', 'Settings']);
+    const nav = staffNav({ surface: 'web', canTakeOrders: true, staffPos: false, attendance: false });
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders']);
+    expect(labels(nav.more)).toEqual(['Menu', 'Settings']);
   });
 });
 

@@ -48,6 +48,9 @@ const WRITABLE_KEYS = [
   // Post-order feedback (2026-10-order-feedback.sql).
   'feedback_enabled',
   'feedback_delay_min',
+  // Staff-website ordering (2026-09-staff-web-ordering.sql). The PATCH route
+  // additionally limits this key to managers and the owner.
+  'staff_web_ordering',
   'google_review_url',
 ] as const;
 

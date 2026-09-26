@@ -7,6 +7,8 @@ import { operatorFeatureConfigured } from '@/lib/api/operator';
 import { flags } from '@/lib/flags';
 import { StaffHeader } from '@/components/staff/StaffHeader';
 import { StaffShell } from '@/components/staff/StaffShell';
+import { getStaffSurface } from '@/lib/staff/surface';
+import { getStoreSettings } from '@/lib/store/settings';
 import { StaffPinOverlay } from '@/components/staff/pin/StaffPinOverlay';
 import { LockScreen } from '@/components/staff/pin/LockScreen';
 
@@ -75,6 +77,12 @@ export default async function StaffLayout({
   }
 
   const { user, role, via } = actor;
+
+  // POS (an enrolled counter device) or the staff website — decides the
+  // navigation, whether this screen may take orders, and whether it may edit
+  // the menu (lib/staff/surfaceRules.ts). The API routes re-check both.
+  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
+  const staffWebOrdering = storeSettings.staff_web_ordering === true;
   const displayName =
     (user.user_metadata?.full_name as string | undefined) ??
     (user.user_metadata?.name as string | undefined) ??
@@ -88,7 +96,7 @@ export default async function StaffLayout({
 
   if (device) {
     return (
-      <StaffShell>
+      <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
         <div className="min-h-screen bg-cream">
           <StaffPinOverlay
             userEmail={user.email ?? ''}
@@ -105,7 +113,7 @@ export default async function StaffLayout({
   }
 
   return (
-    <StaffShell>
+    <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
       <div className="min-h-screen bg-cream">
         <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
         <main>{children}</main>

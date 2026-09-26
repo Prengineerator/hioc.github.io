@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Staff surface (lib/staff/surface.ts): these requests come from the POS unless
+// a test sets globalThis.__staffSurface = 'web'.
+vi.mock('@/lib/staff/surface', () => ({
+  getStaffSurface: () =>
+    Promise.resolve((globalThis as { __staffSurface?: 'pos' | 'web' }).__staffSurface ?? 'pos'),
+}));
+
+
 // Handler-level test for VAL-1/VAL-2 in POST /api/orders: a counter order linked
 // to a customer's loyalty account by phone.
 //

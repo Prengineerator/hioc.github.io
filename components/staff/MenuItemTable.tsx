@@ -33,12 +33,16 @@ export function MenuItemTable({
   onDelete,
   onSnooze,
   onReenable,
+  readOnly = false,
 }: {
   items: MenuItem[];
   onEdit: (item: MenuItem) => void;
   onDelete: (item: MenuItem) => void;
   onSnooze: (item: MenuItem, duration: SnoozeDuration) => void;
   onReenable: (item: MenuItem) => void;
+  /** Staff website: the menu is changed on the POS only, so no edit,
+   * delete or sold-out controls here (the API refuses them anyway). */
+  readOnly?: boolean;
 }) {
   // id of the row whose "86 this item" duration menu is open (one at a time).
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
@@ -115,7 +119,7 @@ export function MenuItemTable({
                           >
                             {availabilityLabel(item)}
                           </span>
-                          {available ? (
+                          {readOnly ? null : available ? (
                             menuOpenFor === item.id ? (
                               // Inline duration buttons (not an absolute dropdown) so they can
                               // never be clipped by the table's overflow-x-auto scroll container.
@@ -181,6 +185,9 @@ export function MenuItemTable({
                         </div>
                       </td>
                       <td className="px-4 py-3">
+                        {readOnly ? (
+                          <span className="text-xs text-muted">On the POS</span>
+                        ) : (
                         <div className="flex gap-3">
                           <button
                             type="button"
@@ -197,6 +204,7 @@ export function MenuItemTable({
                             Delete
                           </button>
                         </div>
+                        )}
                       </td>
                     </tr>
                   );

@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Staff surface (lib/staff/surface.ts): these requests come from the POS unless
+// a test sets globalThis.__staffSurface = 'web'.
+vi.mock('@/lib/staff/surface', () => ({
+  getStaffSurface: () =>
+    Promise.resolve((globalThis as { __staffSurface?: 'pos' | 'web' }).__staffSurface ?? 'pos'),
+}));
+
+
 // PIN-3 — POST /api/menu, PATCH+DELETE /api/menu/[id], POST /api/menu/upload,
 // all migrated to getCounterActor(). Focus: the auth + permission gate on
 // each (menu_edit, hasPermission with roleHint) for both a classic session
@@ -83,6 +91,19 @@ describe('POST /api/menu (create)', () => {
     state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
     expect((await POST(req(body))).status).toBe(201);
     expect(hasPermissionCalls[0]).toEqual([{ id: 'ravi' }, 'menu_edit', 'staff']);
+  });
+
+  it('refuses menu changes from the staff website, even for the owner', async () => {
+    const g = globalThis as { __staffSurface?: 'pos' | 'web' };
+    g.__staffSurface = 'web';
+    try {
+      state.actor = { user: { id: 'owner-1' }, role: 'owner', via: 'session' };
+      const res = await POST(req(body));
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toBe('Menu changes can only be made on the POS.');
+    } finally {
+      g.__staffSurface = undefined;
+    }
   });
 });
 

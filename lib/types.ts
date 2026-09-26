@@ -297,6 +297,10 @@ export interface StoreSettings {
   feedback_enabled: boolean;
   feedback_delay_min: number;
   google_review_url: string;
+  // Take orders on the staff website (not an enrolled POS). Off by default —
+  // only the POS takes orders (2026-09-staff-web-ordering.sql). Optional: a
+  // row read before the migration has no such column and reads as off.
+  staff_web_ordering?: boolean;
   updated_at: string;
 }
 

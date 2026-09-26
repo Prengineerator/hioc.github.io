@@ -20,6 +20,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
+import { canEditMenu, canTakeOrders, type StaffSurface } from '@/lib/staff/surfaceRules';
 
 const CHIME_INTERVAL_MS = 5000;
 
@@ -37,6 +38,12 @@ export interface StaffShellValue {
   /** Re-check at once (e.g. right after accepting an order) instead of
    * waiting for the next realtime event, so the alarm stops immediately. */
   refreshNewOrders: () => void;
+  /** 'pos' on an enrolled counter device, else 'web' (lib/staff/surfaceRules). */
+  surface: StaffSurface;
+  /** This screen may take orders (POS, or the staff website when allowed). */
+  canTakeOrders: boolean;
+  /** This screen may change the menu (POS only). */
+  canEditMenu: boolean;
 }
 
 const NOOP_SHELL: StaffShellValue = {
@@ -47,6 +54,9 @@ const NOOP_SHELL: StaffShellValue = {
   setCounterMode: () => {},
   newOrderCount: 0,
   refreshNewOrders: () => {},
+  surface: 'web',
+  canTakeOrders: false,
+  canEditMenu: false,
 };
 
 const StaffShellContext = createContext<StaffShellValue | null>(null);
@@ -77,7 +87,16 @@ function writeStorage(storage: 'local' | 'session', key: string, value: string |
 type WakeLockSentinel = { release: () => Promise<void> };
 type WakeLockNavigator = Navigator & { wakeLock?: { request: (t: 'screen') => Promise<WakeLockSentinel> } };
 
-export function StaffShell({ children }: { children: React.ReactNode }) {
+export function StaffShell({
+  children,
+  surface,
+  staffWebOrdering,
+}: {
+  children: React.ReactNode;
+  /** Resolved on the server by app/staff/layout.tsx (lib/staff/surface.ts). */
+  surface: StaffSurface;
+  staffWebOrdering: boolean;
+}) {
   const [soundOn, setSoundOn] = useState(true);
   const [soundReady, setSoundReady] = useState(false);
   const [counterMode, setCounterModeState] = useState(false);
@@ -195,8 +214,19 @@ export function StaffShell({ children }: { children: React.ReactNode }) {
 
   const refreshNewOrders = useCallback(() => void fetchReceived(), [fetchReceived]);
   const value = useMemo<StaffShellValue>(
-    () => ({ soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders }),
-    [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders],
+    () => ({
+      soundOn,
+      soundReady,
+      toggleSound,
+      counterMode,
+      setCounterMode,
+      newOrderCount,
+      refreshNewOrders,
+      surface,
+      canTakeOrders: canTakeOrders(surface, staffWebOrdering),
+      canEditMenu: canEditMenu(surface),
+    }),
+    [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders, surface, staffWebOrdering],
   );
 
   return <StaffShellContext.Provider value={value}>{children}</StaffShellContext.Provider>;
