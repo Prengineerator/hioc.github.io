@@ -87,6 +87,16 @@ export function OrderCard({
             #{formatOrderNumber(order.order_number)}
           </span>
           <span className="flex flex-wrap items-center gap-1.5">
+            {/* No lanes on the board, so the card itself says where it is; New
+                gets the tan tone so fresh orders stand out. */}
+            <span
+              className={
+                'rounded-full px-2 py-0.5 text-[11px] font-bold ' +
+                (order.status === 'received' ? 'bg-tan text-cream' : 'bg-charcoal/10 text-charcoal')
+              }
+            >
+              {STATUS_LABELS[order.status]}
+            </span>
             <PaymentBadge status={order.payment_status} />
             <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
               {TYPE_LABEL[order.order_type]}
@@ -163,7 +173,7 @@ export function OrderCard({
           <ElapsedTime since={order.created_at} warnAfterMin={10} dangerAfterMin={20} /> total
         </span>
         <span>
-          {STATUS_LABELS[order.status]} · <ElapsedTime since={order.updated_at} />
+          in stage <ElapsedTime since={order.updated_at} />
         </span>
       </div>
 

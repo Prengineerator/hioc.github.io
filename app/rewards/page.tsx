@@ -77,11 +77,16 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
       </p>
     );
   }
+  // points_per_inr × 100 is both the % back and the points per ₹100; rounded to
+  // dodge float noise (0.07 × 100 = 7.000000000000001).
+  const earnPct = Number((Number(config.points_per_inr) * 100).toFixed(2));
   return (
     <div className="mt-6 rounded-md border border-line bg-cream p-6 shadow-sm">
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-charcoal">How points work</h2>
       <ul className="flex flex-col gap-1 text-sm text-charcoal">
-        <li>• Earn {Number(config.points_per_inr)} point(s) for every ₹1 spent on a completed, paid order.</li>
+        <li>
+          • Earn {earnPct}% of every completed, paid order back as points (₹100 = {earnPct} points).
+        </li>
         <li>• Redeem points for ₹{Number(config.inr_per_point)} each at checkout.</li>
         <li>• Minimum {config.min_redeem_points} points to redeem.</li>
         <li>• Redemption is capped at {config.max_redeem_pct}% of your bill.</li>
