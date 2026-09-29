@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 // live items have no description (waffle crepes, chips, cupcakes,
 // cheesecakes…), so an item with none borrows the description of another item
 // that shares a DISTINCTIVE name token — and the borrowed text names the item it
-// came from, so Jev knows it describes a different one. Pure.
+// came from, so Jev knows it describes a different one. An item whose name has
+// no distinctive token at all ("Choco-Chip Crepes") borrows from the item whose
+// whole name it contains ("Choco-Chips") instead. Pure.
 
 import { buildJevTraitState, withRelatedDescriptions, type MenuItemForTagging } from '@/lib/suggest/traitsPrompt';
 
@@ -177,8 +179,10 @@ describe('withRelatedDescriptions — what counts as related', () => {
     expect(r['Rose Crepes']).toBeUndefined();
   });
 
-  it('an item with no distinctive token at all is left alone', () => {
-    const [out] = withRelatedDescriptions([item('Signature Iced Latte'), item('Iced Latte', 'A latte.')]);
+  // (One that DOES contain a source's whole name is another matter — see "an item
+  // with no distinctive word borrows from a name it contains" below.)
+  it('an item with no distinctive token, and no source whose whole name it contains, is left alone', () => {
+    const [out] = withRelatedDescriptions([item('Signature Iced Latte'), item('Hot Latte', 'A latte.')]);
     expect(out).not.toHaveProperty('related_description');
   });
 
@@ -267,6 +271,173 @@ describe('withRelatedDescriptions — which related item wins', () => {
   });
 });
 
+// An item whose name is ONLY generic words ("Choco-Chip Crepes": choco, chip,
+// crepes) has no distinctive token to be related on, so it takes a second route:
+// a source whose WHOLE name — two words or more, normalised like every other
+// token — is contained in its own. The longest such source wins, then the one
+// that reads as a phrase inside the item's name, then name order. An item with
+// even one distinctive word never takes this route.
+describe('withRelatedDescriptions — an item with no distinctive word borrows from a name it contains', () => {
+  const CHOCO_CHIPS = "Choco-Chips Waffle is a chocolate lover's dream with a rich chocolate waffle base.";
+  const chocoChips = () => item('Choco-Chips', CHOCO_CHIPS);
+
+  it.each(['Choco-Chip Crepes', 'Choco-Chip Chips', 'Choco-Chip Stuffed', 'Choco Chip Cupcake'])('"%s" ← "Choco-Chips"', (name) => {
+    expect(related([item(name), chocoChips()])[name]).toBe(from('Choco-Chips', CHOCO_CHIPS));
+  });
+
+  it('"Signature Iced Latte" ← "Iced Latte": the whole of a two-word name, inside a longer one', () => {
+    const r = related([item('Signature Iced Latte'), item('Iced Latte', 'A latte over ice.')]);
+    expect(r['Signature Iced Latte']).toBe(from('Iced Latte', 'A latte over ice.'));
+  });
+
+  it('borrows the same text, and reaches Jev the same way, as the ranking route', () => {
+    const [filled] = withRelatedDescriptions([item('Choco-Chip Crepes'), chocoChips()]);
+    const state = buildJevTraitState(filled) as { item: Record<string, unknown> };
+    expect(state.item.description).toBe('');
+    expect(state.item.related_description).toBe(`From the related menu item "Choco-Chips": ${CHOCO_CHIPS}`);
+  });
+
+  it.each(['CHOCO-CHIP CREPES', 'choco chip crepes', 'Choco2Chip Crepes', 'Choco-Chips Crepe', 'Chöco Chip Crépes'])(
+    'normalises like every other token — case, accents, hyphens, digits, plurals: "%s"',
+    (name) => {
+      expect(related([item(name), chocoChips()])[name]).toBe(from('Choco-Chips', CHOCO_CHIPS));
+    },
+  );
+
+  it('…on the source side too: "CRÈME-LATTES" is inside "Signature Creme Latte"', () => {
+    const r = related([item('Signature Creme Latte'), item('CRÈME-LATTES', 'A creme latte.')]);
+    expect(r['Signature Creme Latte']).toBe(from('CRÈME-LATTES', 'A creme latte.'));
+  });
+
+  it('needs a source of at least two words: one shared generic word is not a name', () => {
+    // ("Latte Latte" is one word once a repeat is folded, and "Chips" is "chip" — still not two)
+    const r = related([item('Signature Iced Latte'), item('Latte', 'A latte.'), item('Iced', 'Iced.'), item('Latte Latte', 'Twice.')]);
+    expect(r['Signature Iced Latte']).toBeUndefined();
+    expect(related([item('Choco-Chip Crepes'), item('Chips', 'Chips.')])['Choco-Chip Crepes']).toBeUndefined();
+  });
+
+  it("the source's WHOLE name must be inside the item's: sharing part of it is not enough", () => {
+    const r = related([
+      item('Choco-Chip Crepes'),
+      item('Choco-Chips Sundae', 'A sundae.'), // "sundae" is not in the item's name
+      item('Choco Latte', 'A latte.'), // neither is "latte"
+      item('Chip Waffle Stack', 'Stacked.'), // nor "waffle" and "stack"
+    ]);
+    expect(r['Choco-Chip Crepes']).toBeUndefined();
+  });
+
+  it('the source must have a description of its own', () => {
+    const r = related([item('Choco-Chip Crepes'), item('Choco-Chips'), item('Choco Chip', '  \n ')]);
+    expect(r['Choco-Chip Crepes']).toBeUndefined();
+    expect(r['Choco-Chips']).toBeUndefined(); // and it, having none either, stays empty
+  });
+
+  it('an item that has its own description is left alone', () => {
+    const own = item('Choco-Chip Crepes', 'Its own description.');
+    const [out] = withRelatedDescriptions([own, chocoChips()]);
+    expect(out).toBe(own);
+  });
+
+  describe('which source wins', () => {
+    /** Every menu order worth trying: as given, reversed, and rotated. */
+    const orders = <T>(list: T[]): T[][] => [list, [...list].reverse(), [...list.slice(1), list[0]], [list[list.length - 1], ...list.slice(0, -1)]];
+
+    it('the longest whole name, in any menu order', () => {
+      const target = item('Iced Choco Chip Crepes');
+      const sources = [item('Choco-Chips', 'Two words.'), item('Iced Choco Chip', 'Three words.'), item('Iced Choco', 'Two more.')];
+      for (const menu of orders([target, ...sources])) {
+        expect(related(menu)['Iced Choco Chip Crepes']).toBe(from('Iced Choco Chip', 'Three words.'));
+      }
+    });
+
+    it('longest comes first: a longer name beats a shorter one that reads more like a phrase', () => {
+      // "Iced Chip Crepes" has three words, none of them adjacent to "iced" in the item's name;
+      // "Choco Chip" has two, and is a phrase inside it
+      const target = item('Iced Choco Chip Crepes');
+      const sources = [item('Choco Chip', 'Two words, a phrase.'), item('Iced Chip Crepes', 'Three words, scattered.')];
+      for (const menu of orders([target, ...sources])) {
+        expect(related(menu)['Iced Choco Chip Crepes']).toBe(from('Iced Chip Crepes', 'Three words, scattered.'));
+      }
+    });
+
+    it('then the closest: the one whose words read as a phrase inside the name — not merely the one that sorts first', () => {
+      // "Chip Cupcake" sorts before "Choco Cupcake", but in "Chip Choco Cupcake" it is
+      // "choco cupcake" that sits together
+      const target = item('Chip Choco Cupcake');
+      const sources = [item('Chip Cupcake', 'Scattered.'), item('Choco Cupcake', 'Together.')];
+      for (const menu of orders([target, ...sources])) {
+        expect(related(menu)['Chip Choco Cupcake']).toBe(from('Choco Cupcake', 'Together.'));
+      }
+    });
+
+    it('and only then by name, whatever order the menu loaded in', () => {
+      // both are two words and both sit together inside "Choco Chip Cupcake"
+      const target = item('Choco Chip Cupcake');
+      const sources = [item('Choco Chip', 'Choco Chip.'), item('Chip Cupcake', 'Chip Cupcake.')];
+      for (const menu of orders([target, ...sources])) {
+        expect(related(menu)['Choco Chip Cupcake']).toBe(from('Chip Cupcake', 'Chip Cupcake.'));
+      }
+      // name order ignores case: by raw character codes "CHOCO CHIP" would come first
+      expect(related([target, item('CHOCO CHIP', 'Upper.'), item('chip cupcake', 'Lower.')])['Choco Chip Cupcake']).toBe(from('chip cupcake', 'Lower.'));
+    });
+  });
+
+  describe('it never runs for an item that has a distinctive word', () => {
+    // "Kiwi" is distinctive, so these are ranked on distinctive words alone — and
+    // nothing shares "kiwi" with them, though "Choco-Chips" is wholly inside each name.
+    it.each(['Choco-Chip Kiwi Crepes', 'Kiwi Choco Chip Cupcake', 'Choco Chip Cupcake Kiwi', 'Kiwi Choco-Chip Stuffed'])(
+      '"%s" gets nothing from "Choco-Chips"',
+      (name) => {
+        expect(related([item(name), chocoChips()])[name]).toBeUndefined();
+        const [out] = withRelatedDescriptions([item(name), chocoChips()]);
+        expect(out).not.toHaveProperty('related_description');
+      },
+    );
+
+    it('and when something does share the distinctive word, that is what it gets — whatever names it contains', () => {
+      const r = related([item('Choco-Chip Kiwi Crepes'), chocoChips(), item('Kiwi Tea', 'A kiwi tea.')]);
+      expect(r['Choco-Chip Kiwi Crepes']).toBe(from('Kiwi Tea', 'A kiwi tea.'));
+    });
+
+    it('not even a longer contained name outranks it', () => {
+      const r = related([
+        item('Iced Choco-Chip Kiwi Crepes'),
+        item('Iced Choco Chip', 'Three words, all inside.'),
+        item('Kiwi', 'A kiwi.'),
+      ]);
+      expect(r['Iced Choco-Chip Kiwi Crepes']).toBe(from('Kiwi', 'A kiwi.'));
+    });
+
+    it('a single distinctive word is enough to keep it out', () => {
+      // the same words as "Choco-Chip Crepes", plus one distinctive one
+      expect(related([item('Choco-Chip Crepes'), chocoChips()])['Choco-Chip Crepes']).toBe(from('Choco-Chips', CHOCO_CHIPS));
+      expect(related([item('Choco-Chip Crepes Deluxe'), chocoChips()])['Choco-Chip Crepes Deluxe']).toBeUndefined();
+    });
+  });
+
+  it('a name with no usable words is not a source — an empty name would be "contained" in every other', () => {
+    const r = related([item('Choco-Chip Crepes'), item('Ab Cd', 'Two-letter words.'), item('---', 'Symbols.'), item('12', 'Digits.')]);
+    expect(r['Choco-Chip Crepes']).toBeUndefined();
+  });
+
+  it('…and one with none gets nothing itself, and breaks nothing', () => {
+    const r = related([item('---'), item('12'), item(''), item('Ab Cd'), chocoChips()]);
+    for (const name of ['---', '12', '', 'Ab Cd']) expect(r[name], name).toBeUndefined();
+  });
+
+  it('does not mutate its input, returns what it could not fill as it was, and is idempotent', () => {
+    const crepes = item('Choco-Chip Crepes');
+    const chips = chocoChips();
+    const lonely = item('Signature Iced Latte');
+    const out = withRelatedDescriptions([crepes, chips, lonely]);
+    expect(crepes).not.toHaveProperty('related_description');
+    expect(out[0]).toEqual({ ...crepes, related_description: from('Choco-Chips', CHOCO_CHIPS) });
+    expect(out[1]).toBe(chips);
+    expect(out[2]).toBe(lonely);
+    expect(withRelatedDescriptions(out)).toEqual(out);
+  });
+});
+
 // The real menu, abbreviated: the families that showed what the first version of
 // the lookup got wrong. Descriptions are shortened; names are the live ones.
 describe('withRelatedDescriptions — regressions from running it over the real menu', () => {
@@ -304,21 +475,23 @@ describe('withRelatedDescriptions — regressions from running it over the real 
 
   /** Empty-description items → the item each should borrow from (null: none). */
   const EMPTY: [string, string | null][] = [
-    // the weak matches this change removed
+    // the weak matches this change removed (the first three are all-generic names, so
+    // they take the containment route too — and no whole name is inside any of them)
     ['White Truffle Slice', null], // was "Flat White", on "white"
     ['Choco Berry Iced', null], // was "Choco-Chips", on "choco"
     ['Choco Truffle Slice', null], // was "Choco-Chips", on "choco"
     ['Ginger Orange Honey Tea', null], // was "Almond Honey", on "honey"
     ['Death By Chocolate Brownie', null], // was a chocolate drink, on "chocolate"
     // families that were only ever related through words that are generic now
-    ['Choco-Chip Crepes', null],
-    ['Choco-Chip Chips', null],
-    ['Choco-Chip Stuffed', null],
-    ['Choco Chip Cupcake', null],
-    ['Dark Chip Crepes', null],
+    ['Dark Chip Crepes', null], // all generic; "Choco-Chips" is not inside it ("choco")
     ['Signature Cream Stuffed', null],
     ["90's Sundae", null],
     ["Hioc's Signature Tiramisu", null],
+    // all-generic names that contain a whole name: the containment route
+    ['Choco-Chip Crepes', 'Choco-Chips'],
+    ['Choco-Chip Chips', 'Choco-Chips'],
+    ['Choco-Chip Stuffed', 'Choco-Chips'],
+    ['Choco Chip Cupcake', 'Choco-Chips'],
     // the relations that are right, and stay
     ['Tripple Choco Crepes', 'Tripple Choco'],
     ['Tripple Choco Chips', 'Tripple Choco'],
@@ -352,6 +525,13 @@ describe('withRelatedDescriptions — regressions from running it over the real 
   it('"Choco Berry Iced" no longer borrows from "Choco-Chips"', () => {
     expect(result['Choco Berry Iced']).toBeUndefined();
     expect(related([item('Choco Berry Iced'), item('Choco-Chips', 'A waffle.')])['Choco Berry Iced']).toBeUndefined();
+  });
+
+  it('the four "Choco-Chip" items borrow "Choco-Chips" again, whole-name containment being the only thing they have', () => {
+    const description = DESCRIBED.find(([name]) => name === 'Choco-Chips')![1];
+    for (const name of ['Choco-Chip Crepes', 'Choco-Chip Chips', 'Choco-Chip Stuffed', 'Choco Chip Cupcake']) {
+      expect(result[name], name).toBe(from('Choco-Chips', description));
+    }
   });
 
   it('none of the described items borrows anything', () => {

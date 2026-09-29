@@ -138,7 +138,9 @@ async function runPool<T>(count: number, concurrency: number, run: (index: numbe
 // Related descriptions (COFFEY-SPEC §3.2): 49 of 117 items have no description
 // (waffle crepes, chips, cupcakes, cheesecakes…), so the tagger would have only
 // the name to go on. "Oreo Heaven Cupcake" borrows the description of the
-// "Oreo-Heaven" waffle.
+// "Oreo-Heaven" waffle. An item whose name is nothing BUT generic words
+// ("Choco-Chip Crepes") has no distinctive word to match on, so it takes a
+// second route: a source whose whole name appears inside its own.
 // ---------------------------------------------------------------------------
 
 /** Words that are never distinctive: they name a kind of item — or an
@@ -157,6 +159,10 @@ const GENERIC_NAME_TOKENS = [
 /** Tokens shorter than this are noise: the stray "s" of "Hioc's" or "Devil's"
  * would otherwise relate every possessive on the menu to every other. */
 const MIN_TOKEN_LETTERS = 3;
+
+/** The second route (see phraseSource) only accepts a source whose whole name is
+ * at least this many words — one shared generic word ("Latte") is not a name. */
+const MIN_PHRASE_WORDS = 2;
 
 /** A plural "s" is stripped from tokens of 5 or more letters
  * ("waffles" → "waffle", "brownies" → "brownie"). */
@@ -182,15 +188,24 @@ function nameTokens(name: string): string[] {
 const GENERIC_TOKEN_SET = new Set(GENERIC_NAME_TOKENS.map(singularToken));
 
 /** A name split into the words that identify a flavour or a dish
- * (`distinctive`) and the words that only name a kind of item (`generic`). */
-function classifiedTokens(name: string): { distinctive: Set<string>; generic: Set<string> } {
+ * (`distinctive`) and the words that only name a kind of item (`generic`), plus
+ * all of them in the order the name says them (`ordered`). */
+interface NameTokens {
+  distinctive: Set<string>;
+  generic: Set<string>;
+  ordered: string[];
+}
+
+function classifiedTokens(name: string): NameTokens {
   const distinctive = new Set<string>();
   const generic = new Set<string>();
+  const ordered: string[] = [];
   for (const token of nameTokens(name)) {
     if (token.length < MIN_TOKEN_LETTERS) continue;
     (GENERIC_TOKEN_SET.has(token) ? generic : distinctive).add(token);
+    ordered.push(token);
   }
-  return { distinctive, generic };
+  return { distinctive, generic, ordered };
 }
 
 function hasDescription(item: { description: string }): boolean {
@@ -244,13 +259,65 @@ function borrowedDescription(source: MenuItemForTagging): string {
   return `From the related menu item "${source.name.replace(/"/g, "'")}": ${source.description.trim()}`;
 }
 
+interface PhraseCandidate<T> {
+  item: T;
+  /** Words in the source's whole name — longer is better. */
+  words: number;
+  /** Its words appear in the item's name as one unbroken run, in the same order. */
+  asPhrase: boolean;
+}
+
+/** True when `words` appear in `inName` as one unbroken run, in order. */
+function appearsAsPhrase(words: string[], inName: string[]): boolean {
+  for (let start = 0; start + words.length <= inName.length; start++) {
+    if (words.every((word, k) => inName[start + k] === word)) return true;
+  }
+  return false;
+}
+
+/** True when `a` is the better source: the LONGEST whole name; then the CLOSEST —
+ * the one that reads as a phrase within the item's name; then name order. */
+function isBetterPhrase<T extends MenuItemForTagging>(a: PhraseCandidate<T>, b: PhraseCandidate<T>): boolean {
+  if (a.words !== b.words) return a.words > b.words;
+  if (a.asPhrase !== b.asPhrase) return a.asPhrase;
+  return byName(a.item, b.item) < 0;
+}
+
+/**
+ * The second route, for an item whose name has NO distinctive word — "Choco-Chip
+ * Crepes" is choco, chip and crepes, all generic, so there is nothing to rank
+ * on. It borrows from a source whose WHOLE name (at least two words, after the
+ * same normalisation as everything else) is contained in the item's own: the
+ * "Choco-Chips" waffle for "Choco-Chip Crepes", "Choco-Chip Chips", "Choco-Chip
+ * Stuffed" and "Choco Chip Cupcake" — the same dish served another way. The
+ * longest such source wins, then the one that reads as a phrase inside the
+ * item's name, then name order. Returns null when there is none.
+ *
+ * Only ever called for such an item: a name with even one distinctive word goes
+ * through the ranking above instead, and is never handed a source by this route.
+ */
+function phraseSource<T extends MenuItemForTagging>(item: T, mine: NameTokens, described: { item: T; tokens: NameTokens }[]): T | null {
+  const inName = new Set(mine.ordered);
+  let best: PhraseCandidate<T> | null = null;
+  for (const cand of described) {
+    if (cand.item.id === item.id) continue;
+    const words = cand.tokens.ordered;
+    if (words.length < MIN_PHRASE_WORDS || !words.every((word) => inName.has(word))) continue;
+    const candidate: PhraseCandidate<T> = { item: cand.item, words: words.length, asPhrase: appearsAsPhrase(words, mine.ordered) };
+    if (!best || isBetterPhrase(candidate, best)) best = candidate;
+  }
+  return best ? best.item : null;
+}
+
 /**
  * For every item with an EMPTY description, finds another item that has one
  * and shares a distinctive name token, and puts that item's name and
  * description (see borrowedDescription) into `related_description`. The related
  * item is the one sharing the MOST distinctive tokens; ties go to the closest
- * name, then break by name (see isBetterSource). Pure: returns new objects for
- * items it fills, leaves every other item as it was, keeps the input order.
+ * name, then break by name (see isBetterSource). An item whose name has no
+ * distinctive token at all is matched the other way round, by a source whose
+ * whole name it contains (see phraseSource). Pure: returns new objects for items
+ * it fills, leaves every other item as it was, keeps the input order.
  *
  * Pass the WHOLE menu, not just the items being tagged — the description an
  * item borrows usually belongs to one that is not being re-tagged.
@@ -260,7 +327,10 @@ export function withRelatedDescriptions<T extends MenuItemForTagging>(items: T[]
   return items.map((item) => {
     if (hasDescription(item)) return item;
     const mine = classifiedTokens(item.name);
-    if (mine.distinctive.size === 0) return item;
+    if (mine.distinctive.size === 0) {
+      const source = phraseSource(item, mine, described);
+      return source ? { ...item, related_description: borrowedDescription(source) } : item;
+    }
 
     let best: RelatedCandidate<T> | null = null;
     for (const cand of described) {
