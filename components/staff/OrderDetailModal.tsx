@@ -428,7 +428,7 @@ export function OrderDetailModal({
                   <button
                     type="button"
                     onClick={() => startVoid(item.id)}
-                    className="mt-0.5 shrink-0 rounded-md border border-red-200 px-2 py-0.5 text-[11px] font-bold text-red-700 hover:bg-red-50"
+                    className="-my-1 min-h-[36px] shrink-0 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700 hover:bg-red-50"
                   >
                     Void
                   </button>

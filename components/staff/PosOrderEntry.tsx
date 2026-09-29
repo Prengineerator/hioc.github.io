@@ -1319,6 +1319,8 @@ export function PosOrderEntry({
                       <input
                         value={tableFilter}
                         onChange={(e) => setTableFilter(e.target.value)}
+                        type="search"
+                        aria-label="Filter tables"
                         placeholder="Filter tables…"
                         className="mb-2 w-full rounded-md border border-line px-3 py-1.5 text-sm outline-none focus:border-tan"
                       />
@@ -1390,25 +1392,25 @@ export function PosOrderEntry({
                       <div className="flex shrink-0 items-center gap-1.5">
                         <button
                           type="button"
-                          aria-label="Decrease quantity"
+                          aria-label={`Decrease ${line.name} quantity`}
                           onClick={() => decrement(line.key)}
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-charcoal text-cream"
+                          className="flex h-10 w-10 items-center justify-center rounded-full bg-charcoal text-lg text-cream active:scale-95"
                         >
                           &minus;
                         </button>
-                        <span className="min-w-[1.25rem] text-center text-sm font-bold text-charcoal">
+                        <span className="min-w-[1.25rem] text-center font-mono text-sm font-bold tabular-nums text-charcoal">
                           {line.qty}
                         </span>
                         <button
                           type="button"
-                          aria-label="Increase quantity"
+                          aria-label={`Increase ${line.name} quantity`}
                           onClick={() => increment(line.key)}
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-tan text-cream"
+                          className="flex h-10 w-10 items-center justify-center rounded-full bg-tan text-lg text-cream active:scale-95"
                         >
                           +
                         </button>
                       </div>
-                      <div className="w-14 shrink-0 text-right text-sm font-bold text-charcoal">
+                      <div className="w-14 shrink-0 text-right font-mono text-sm font-bold tabular-nums text-charcoal">
                         ₹{line.unitPriceInr * line.qty}
                       </div>
                       <button
@@ -1522,6 +1524,8 @@ export function PosOrderEntry({
                     aria-autocomplete="list"
                     aria-controls="pos-phone-suggestions"
                     // Also asked (and focused) in the Collect-payment step — BILL-2.
+                    aria-label="Customer phone"
+                    type="tel"
                     placeholder="Phone (for the bill on WhatsApp)"
                     className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                   />
@@ -1543,6 +1547,8 @@ export function PosOrderEntry({
                     custNameUserEdited.current = true;
                     setCustName(e.target.value);
                   }}
+                  aria-label="Customer name"
+                  autoComplete="off"
                   placeholder="Name"
                   className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                 />
@@ -1585,6 +1591,9 @@ export function PosOrderEntry({
                     if (contactError) setContactError(null);
                   }}
                   inputMode="email"
+                  aria-label="Customer email (optional)"
+                  type="email"
+                  autoComplete="off"
                   placeholder="Email (optional)"
                   className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                 />
@@ -1620,6 +1629,9 @@ export function PosOrderEntry({
                       }
                     }}
                     disabled={couponCode.length > 0}
+                    aria-label="Coupon code"
+                    autoComplete="off"
+                    spellCheck={false}
                     placeholder="Coupon code"
                     className="min-w-0 flex-1 rounded-md border border-line px-3 py-2 text-sm uppercase outline-none focus:border-tan disabled:opacity-60"
                   />
@@ -1647,6 +1659,7 @@ export function PosOrderEntry({
                       value={pointsInput}
                       onChange={(e) => setPointsInput(e.target.value.replace(/[^0-9]/g, ''))}
                       inputMode="numeric"
+                      aria-label="Points to redeem"
                       placeholder="Points to redeem"
                       className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                     />

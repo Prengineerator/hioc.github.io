@@ -27,14 +27,18 @@ export function OrderQueueBoard({
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       {ACTIVE_LANES.map((lane) => {
+        // Oldest first — a kitchen queue is FIFO. Newest-first pushed the
+        // longest-waiting order (the one whose timer is already amber/red) to
+        // the bottom of the lane, often below the fold on the tablet.
         const laneOrders = orders
           .filter((o) => o.status === lane)
-          .sort((a, b) => b.created_at.localeCompare(a.created_at));
+          .sort((a, b) => a.created_at.localeCompare(b.created_at));
         return (
           <section key={lane} className="flex flex-col gap-3">
-            <h2 className="flex items-center justify-between border-b border-line pb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
+            {/* Pinned under the 60px StaffHeader while a long lane scrolls. */}
+            <h2 className="sticky top-[60px] z-10 flex items-center justify-between border-b border-line bg-cream/95 pb-2 pt-1 text-sm font-bold uppercase tracking-wide text-charcoal backdrop-blur">
               {STATUS_LABELS[lane]}
-              <span className="rounded-full bg-charcoal px-2 py-0.5 text-[11px] text-cream">
+              <span className="rounded-full bg-charcoal px-2 py-0.5 font-mono text-xs tabular-nums text-cream">
                 {laneOrders.length}
               </span>
             </h2>

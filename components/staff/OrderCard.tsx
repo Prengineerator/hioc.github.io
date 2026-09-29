@@ -81,7 +81,11 @@ export function OrderCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</span>
+          {/* Read at arm's length off a counter tablet — the number is what
+              staff call out and customers match, so it's the biggest thing. */}
+          <span className="font-mono text-xl font-bold leading-none tabular-nums text-charcoal">
+            #{formatOrderNumber(order.order_number)}
+          </span>
           <span className="flex flex-wrap items-center gap-1.5">
             <PaymentBadge status={order.payment_status} />
             <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
@@ -118,7 +122,8 @@ export function OrderCard({
       <div className="text-sm text-charcoal">
         <p className="font-bold">{order.customer_name}</p>
         <p className="text-xs text-muted">
-          {itemCount} item{itemCount === 1 ? '' : 's'} · ₹{order.total_inr ?? order.subtotal_inr} · {whereLabel}
+          {itemCount} item{itemCount === 1 ? '' : 's'} ·{' '}
+          <span className="font-mono tabular-nums">₹{order.total_inr ?? order.subtotal_inr}</span> · {whereLabel}
           {hasVoid ? <span className="ml-1 font-bold text-red-600">· voided</span> : null}
         </p>
       </div>
@@ -137,7 +142,9 @@ export function OrderCard({
                 </span>
               ) : null}
               {item.special_instructions ? (
-                <span className="block pl-4 text-xs italic text-tan">Note: {item.special_instructions}</span>
+                // A prep instruction is the line a barista must not miss: tan-dark
+                // + semibold (the old italic tan was ~3.4:1, below AA at 12px).
+                <span className="block pl-4 text-xs font-semibold text-tan-dark">Note: {item.special_instructions}</span>
               ) : null}
             </li>
           ))}

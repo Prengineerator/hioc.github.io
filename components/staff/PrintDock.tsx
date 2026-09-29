@@ -196,7 +196,7 @@ export function usePrintDock(): PrintDock {
             <button
               type="button"
               onClick={() => status.handedOff.forEach((job) => queue.current?.reportNotPrinted(job.id))}
-              className="shrink-0 rounded-md border border-[#d8d2c7] px-2 py-1 text-[11px] font-bold text-charcoal hover:border-red-400 hover:text-red-700"
+              className="min-h-[36px] shrink-0 rounded-md border border-[#d8d2c7] px-3 text-xs font-bold text-charcoal hover:border-red-400 hover:text-red-700"
             >
               Didn&rsquo;t print
             </button>

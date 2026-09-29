@@ -182,7 +182,7 @@ export function MenuItemTable({
                           onSnooze(item, '2h');
                           setMenuOpenFor(null);
                         }}
-                        className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                        className="min-h-[40px] rounded-md border border-line px-3 text-xs font-bold text-charcoal hover:border-tan"
                       >
                         2 hrs
                       </button>
@@ -192,7 +192,7 @@ export function MenuItemTable({
                           onSnooze(item, 'eod');
                           setMenuOpenFor(null);
                         }}
-                        className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                        className="min-h-[40px] rounded-md border border-line px-3 text-xs font-bold text-charcoal hover:border-tan"
                       >
                         Today
                       </button>
@@ -202,14 +202,14 @@ export function MenuItemTable({
                           onSnooze(item, 'indefinite');
                           setMenuOpenFor(null);
                         }}
-                        className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                        className="min-h-[40px] rounded-md border border-line px-3 text-xs font-bold text-charcoal hover:border-tan"
                       >
                         Indefinitely
                       </button>
                       <button
                         type="button"
                         onClick={() => setMenuOpenFor(null)}
-                        className="px-1 text-xs text-muted hover:text-charcoal"
+                        className="flex h-10 w-10 items-center justify-center text-sm text-muted hover:text-charcoal"
                         aria-label="Cancel"
                       >
                         ✕
@@ -219,7 +219,7 @@ export function MenuItemTable({
                     <button
                       type="button"
                       onClick={() => setMenuOpenFor(item.id)}
-                      className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                      className="min-h-[40px] rounded-md border border-line px-3 text-xs font-bold text-charcoal hover:border-tan"
                     >
                       Mark sold out
                     </button>
@@ -228,7 +228,7 @@ export function MenuItemTable({
                   <button
                     type="button"
                     onClick={() => onReenable(item)}
-                    className="rounded-md border border-tan px-2 py-1 text-xs font-bold text-tan hover:bg-surface"
+                    className="min-h-[40px] rounded-md border border-tan px-3 text-xs font-bold text-tan-dark hover:bg-surface"
                   >
                     Mark available
                   </button>

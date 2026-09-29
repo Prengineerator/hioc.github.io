@@ -13,7 +13,8 @@
 // Nothing here computes or trusts a total beyond what it displays; the server
 // is the only authority on money (denomsTotalInr is a live mirror only).
 
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
 import { createPortal } from 'react-dom';
 import { CashDayDenomGrid } from '@/components/staff/CashDayDenomGrid';
 import { denomsTotalInr } from '@/lib/cash/denoms';
@@ -56,19 +57,12 @@ export function CashCountSheet({
     }
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape' && !busy) onClose();
-    }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open, busy, onClose]);
+  // Escape / scroll lock / focus trap + restore, shared with Modal. Escape is
+  // ignored mid-save, same as the close buttons.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogBehavior(open, () => {
+    if (!busy) onClose();
+  }, panelRef);
 
   const total = useMemo(() => denomsTotalInr(denoms), [denoms]);
 
@@ -85,10 +79,12 @@ export function CashCountSheet({
         className="fixed inset-0 bg-charcoal/50"
       />
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-cream shadow-elevated sm:max-w-md sm:rounded-md"
+        tabIndex={-1}
+        className="relative flex max-h-[90dvh] outline-none w-full flex-col overflow-hidden rounded-t-2xl bg-cream shadow-elevated sm:max-w-md sm:rounded-md"
       >
         <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div>
@@ -100,6 +96,7 @@ export function CashCountSheet({
           <button
             type="button"
             aria-label="Close"
+            data-dialog-close
             disabled={busy}
             onClick={onClose}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-white disabled:opacity-40"

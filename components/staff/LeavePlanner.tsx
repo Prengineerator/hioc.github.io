@@ -294,7 +294,7 @@ function TeamPanel({ team, onChanged }: { team: TeamResponse; onChanged: () => v
                     type="button"
                     disabled={busyId === r.id}
                     onClick={() => decide(r.id, 'approve')}
-                    className="rounded-md bg-tan px-2.5 py-1 text-xs font-bold text-cream disabled:opacity-50"
+                    className="min-h-[40px] rounded-md bg-tan px-3 text-xs font-bold text-cream disabled:opacity-50"
                   >
                     Approve
                   </button>
@@ -304,7 +304,7 @@ function TeamPanel({ team, onChanged }: { team: TeamResponse; onChanged: () => v
                     type="button"
                     disabled={busyId === r.id}
                     onClick={() => decide(r.id, 'decline')}
-                    className="rounded-md border border-[#ddd] px-2.5 py-1 text-xs disabled:opacity-50"
+                    className="min-h-[40px] rounded-md border border-line px-3 text-xs font-bold text-charcoal disabled:opacity-50"
                   >
                     Decline
                   </button>
