@@ -3,7 +3,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { requireCashManager } from '@/lib/cash/gate';
 import { cashReasonProblem } from '@/lib/cash/day';
-import { CASH_DAY_COLUMNS, MIGRATION_HINT, getLatestDay, isMissingColumn } from '@/lib/cash/dayServer';
+import { CASH_DAY_COLUMNS, MIGRATION_HINT, getLatestDay, isMissingColumn, writeDayAppTotals } from '@/lib/cash/dayServer';
 import type { CashDay, CashDayReopenEntry } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -97,6 +97,8 @@ export async function POST(request: Request) {
     return errorResponse(500, isMissingColumn(error) ? MIGRATION_HINT : error.message);
   }
   if (!data) return errorResponse(409, 'This cash day is no longer closed');
+  // Cleared with the other close-time figures; the next close writes them again.
+  await writeDayAppTotals(admin, latest.id, null);
 
   return NextResponse.json({ cash_day: data as CashDay });
 }

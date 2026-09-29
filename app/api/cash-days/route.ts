@@ -16,6 +16,7 @@ import {
   getOpenDay,
   isMissingColumn,
   unpaidOrdersSince,
+  writeDayAppTotals,
 } from '@/lib/cash/dayServer';
 import type { CashDay } from '@/lib/types';
 
@@ -337,6 +338,10 @@ export async function PATCH(request: Request) {
     return errorResponse(409, 'This cash day has already been closed');
   }
   const closedDay = closed as CashDay;
+
+  // Dining-app takings sit next to UPI/card in the day's record. Best-effort
+  // and separate — see writeDayAppTotals.
+  await writeDayAppTotals(admin, closedDay.id, activity);
 
   // CC-2: same continuity as day-open — the FULL counted drawer (before the
   // handover) is a checkpoint on the chain. Additive/best-effort.

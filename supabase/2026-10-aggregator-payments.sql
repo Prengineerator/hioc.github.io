@@ -40,6 +40,14 @@ create index if not exists idx_order_payments_reference
   on order_payments (method, reference)
   where reference is not null;
 
+-- Each app's takings for a cash day, frozen at close next to upi_inr/card_inr
+-- (2026-09-cash-day-handover.sql). Information only, never in the drawer math.
+-- Null on a day closed before this migration. The code writes these in a
+-- separate, best-effort update, so closing a day never depends on them.
+alter table cash_days
+  add column if not exists swiggy_dineout_inr  integer,
+  add column if not exists zomato_district_inr integer;
+
 -- ---------------------------------------------------------------------------
 -- Verify:
 --   select unnest(enum_range(null::payment_method));

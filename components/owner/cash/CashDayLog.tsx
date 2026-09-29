@@ -99,6 +99,11 @@ function DayCard({ day }: { day: OwnerCashDayRow }) {
         <Row label="UPI / card (not in drawer)">
           {money(day.upi_inr)} / {money(day.card_inr)}
         </Row>
+        {day.swiggy_dineout_inr || day.zomato_district_inr ? (
+          <Row label="Swiggy Dineout / Zomato District (not in drawer)">
+            {money(day.swiggy_dineout_inr)} / {money(day.zomato_district_inr)}
+          </Row>
+        ) : null}
         <Row label="Expected">{money(day.expected_cash_inr)}</Row>
         {!isOpen ? (
           <>

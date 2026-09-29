@@ -26,6 +26,53 @@ export function isMissingColumn(error: { code?: string; message?: string } | nul
 
 export const MIGRATION_HINT = 'Apply supabase/2026-09-cash-day-handover.sql to use the cash day.';
 
+export interface DayAppTotals {
+  swiggy_dineout_inr: number | null;
+  zomato_district_inr: number | null;
+}
+
+/**
+ * Freezes each dining app's takings onto a cash day (null clears them, for a
+ * reopen). A separate, best-effort update on purpose: these columns come from
+ * 2026-10-aggregator-payments.sql, and a database without it must still be
+ * able to close and reopen a day. Always written — zeros included — so a day
+ * reopened and closed again never keeps the first close's figures.
+ */
+export async function writeDayAppTotals(
+  admin: Admin,
+  dayId: string,
+  totals: { swiggyDineoutInr: number; zomatoDistrictInr: number } | null,
+): Promise<void> {
+  const { error } = await admin
+    .from('cash_days')
+    .update({
+      swiggy_dineout_inr: totals ? totals.swiggyDineoutInr : null,
+      zomato_district_inr: totals ? totals.zomatoDistrictInr : null,
+    })
+    .eq('id', dayId);
+  if (error && !isMissingColumn(error)) {
+    console.error('cash-days: could not record the dining-app totals', error);
+  }
+}
+
+/** The frozen dining-app totals for these days; empty when the columns don't exist yet. */
+export async function dayAppTotalsFor(admin: Admin, dayIds: string[]): Promise<Map<string, DayAppTotals>> {
+  const out = new Map<string, DayAppTotals>();
+  if (dayIds.length === 0) return out;
+  const { data, error } = await admin
+    .from('cash_days')
+    .select('id, swiggy_dineout_inr, zomato_district_inr')
+    .in('id', dayIds);
+  if (error) {
+    if (!isMissingColumn(error)) console.error('cash-days: could not read the dining-app totals', error);
+    return out;
+  }
+  for (const r of (data ?? []) as ({ id: string } & DayAppTotals)[]) {
+    out.set(r.id, { swiggy_dineout_inr: r.swiggy_dineout_inr, zomato_district_inr: r.zomato_district_inr });
+  }
+  return out;
+}
+
 /** The currently OPEN cash day, or null. */
 export async function getOpenDay(admin: Admin): Promise<{ day: CashDay | null; error: { code?: string; message: string } | null }> {
   const { data, error } = await admin.from('cash_days').select(CASH_DAY_COLUMNS).eq('status', 'open').maybeSingle();
