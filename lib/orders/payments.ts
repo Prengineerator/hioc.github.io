@@ -6,13 +6,81 @@
 // these return. As everywhere else in this codebase, the client never decides
 // an amount — it only displays one.
 
+import { isPaymentMethod, PAYMENT_METHODS } from '@/lib/api/constants';
 import type { PaymentMethod } from '@/lib/types';
+
+/**
+ * The tenders the counter offers, in button order. 'online' is absent: that is
+ * the website's gateway payment, never something a staffer collects.
+ */
+export const COUNTER_PAYMENT_METHODS: readonly PaymentMethod[] = [
+  'cash',
+  'upi',
+  'card',
+  'swiggy_dineout',
+  'zomato_district',
+];
+
+/**
+ * Paid inside a dining app (Swiggy Dineout, Zomato District): the platform took
+ * the money and settles it to the café later, so it is reversed in that app's
+ * partner dashboard — never on the card terminal, never from the drawer.
+ */
+export const APP_PAYMENT_METHODS: readonly PaymentMethod[] = ['swiggy_dineout', 'zomato_district'];
+
+export function isAppPaymentMethod(method: string | null | undefined): boolean {
+  return (APP_PAYMENT_METHODS as readonly (string | null | undefined)[]).includes(method);
+}
+
+/** What the counter is asked for on a dining-app tender. */
+export const PAYMENT_REFERENCE_LABEL = 'Booking / transaction ID';
+
+// The label mid-sentence: "booking / transaction ID", not "…id".
+const REFERENCE_IN_SENTENCE = 'booking / transaction ID';
+const REFERENCE_MIN_LENGTH = 4;
+const REFERENCE_MAX_LENGTH = 40;
+
+export type ReferenceParse = { ok: true; reference: string } | { ok: false; error: string };
+
+/**
+ * The platform's booking / transaction ID for a dining-app tender, normalised
+ * so the same booking always reads the same: spaces dropped (they come from
+ * reading it off a phone in groups), upper-cased (the platforms' IDs are not
+ * case-sensitive). 4–40 letters, digits, `-`, `_` or `/`.
+ *
+ * Required: without it the owner can't match the platform's payout, and the
+ * same booking could be settled on two bills without anyone noticing. The
+ * route also refuses an ID already used on another live order — that check
+ * needs the database, so it isn't here.
+ */
+export function parsePaymentReference(raw: unknown): ReferenceParse {
+  const text = typeof raw === 'string' ? raw.replace(/\s+/g, '').toUpperCase() : '';
+  if (!text) return { ok: false, error: `Enter the ${REFERENCE_IN_SENTENCE} from the app.` };
+  if (text.length < REFERENCE_MIN_LENGTH || text.length > REFERENCE_MAX_LENGTH) {
+    return {
+      ok: false,
+      error: `The ${REFERENCE_IN_SENTENCE} should be ${REFERENCE_MIN_LENGTH}–${REFERENCE_MAX_LENGTH} characters.`,
+    };
+  }
+  if (!/^[A-Z0-9][A-Z0-9_\-/]*$/.test(text)) {
+    return {
+      ok: false,
+      error: `The ${REFERENCE_IN_SENTENCE} can only have letters, digits, - _ or /.`,
+    };
+  }
+  return { ok: true, reference: text };
+}
 
 export interface PaymentPart {
   method: PaymentMethod;
   amount_inr: number;
   /** Cash only: what the customer handed over. Ignored for other methods. */
   tendered_inr?: number | null;
+  /**
+   * Dining apps only (and required there): the platform's booking /
+   * transaction ID. Dropped for every other method.
+   */
+  reference?: string | null;
 }
 
 /**
@@ -136,6 +204,8 @@ export function parseSettleAdjustment(raw: unknown, totalInr: number): Adjustmen
  *    actually entered the till, so a shortfall is excluded and a tip included
  *  - cash tendered, when given, must cover its own part
  *  - `tendered_inr` is meaningless off cash and is dropped rather than stored
+ *  - a dining-app part must carry its booking / transaction ID
+ *    (parsePaymentReference); off the apps, `reference` is dropped
  */
 export function validateParts(
   rawParts: unknown,
@@ -158,10 +228,10 @@ export function validateParts(
     if (typeof raw !== 'object' || raw === null) {
       return { ok: false, error: `parts[${i}] must be an object` };
     }
-    const { method, amount_inr, tendered_inr } = raw as Record<string, unknown>;
+    const { method, amount_inr, tendered_inr, reference } = raw as Record<string, unknown>;
 
-    if (method !== 'cash' && method !== 'upi' && method !== 'card' && method !== 'online') {
-      return { ok: false, error: `parts[${i}].method must be one of: cash, upi, card, online` };
+    if (!isPaymentMethod(method)) {
+      return { ok: false, error: `parts[${i}].method must be one of: ${PAYMENT_METHODS.join(', ')}` };
     }
     if (typeof amount_inr !== 'number' || !Number.isInteger(amount_inr) || amount_inr <= 0) {
       return { ok: false, error: `parts[${i}].amount_inr must be a positive whole number of rupees` };
@@ -179,8 +249,15 @@ export function validateParts(
       changeInr += changeDueInr(tendered_inr, amount_inr);
     }
 
+    let ref: string | null = null;
+    if (isAppPaymentMethod(method)) {
+      const parsed = parsePaymentReference(reference);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      ref = parsed.reference;
+    }
+
     sum += amount_inr;
-    parts.push({ method, amount_inr, tendered_inr: tendered });
+    parts.push(ref ? { method, amount_inr, tendered_inr: tendered, reference: ref } : { method, amount_inr, tendered_inr: tendered });
   }
 
   const expected = expectedReceivedInr(totalInr, adjustment);

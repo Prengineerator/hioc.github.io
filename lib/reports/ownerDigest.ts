@@ -266,7 +266,14 @@ export function periodLabel(p: ReportPeriod): string {
 
 const KIND_TITLE: Record<ReportKind, string> = { daily: 'Daily report', weekly: 'Weekly report', monthly: 'Monthly report' };
 const VS_LABEL: Record<ReportKind, string> = { daily: 'the day before', weekly: 'the week before', monthly: 'the month before' };
-const METHOD_LABEL = { cash: 'Cash', upi: 'UPI', card: 'Card', online: 'Online' } as const;
+const METHOD_LABEL = {
+  cash: 'Cash',
+  upi: 'UPI',
+  card: 'Card',
+  online: 'Online',
+  swiggy_dineout: 'Swiggy Dineout',
+  zomato_district: 'Zomato District',
+} as const;
 
 /** % change from `prev` to `cur`, or null with no baseline. */
 export function pctChange(cur: number, prev: number): number | null {

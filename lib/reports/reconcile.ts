@@ -17,7 +17,14 @@
 
 import type { PaymentMethod } from '@/lib/types';
 
-export const REPORT_METHODS: readonly PaymentMethod[] = ['cash', 'upi', 'card', 'online'];
+export const REPORT_METHODS: readonly PaymentMethod[] = [
+  'cash',
+  'upi',
+  'card',
+  'online',
+  'swiggy_dineout',
+  'zomato_district',
+];
 
 /** Longest range one report covers (keeps the queries and the table sane). */
 export const MAX_REPORT_DAYS = 93;
@@ -189,9 +196,10 @@ export interface Report {
   };
 }
 
-const zeroMethods = (): MethodAmounts => ({ cash: 0, upi: 0, card: 0, online: 0 });
+const zeroMethods = (): MethodAmounts =>
+  Object.fromEntries(REPORT_METHODS.map((m) => [m, 0])) as MethodAmounts;
 const isMethod = (m: string | null | undefined): m is PaymentMethod =>
-  m === 'cash' || m === 'upi' || m === 'card' || m === 'online';
+  (REPORT_METHODS as readonly (string | null | undefined)[]).includes(m);
 const DEAD = new Set(['cancelled', 'rejected']);
 
 function emptyDay(date: string): ReportDay {
@@ -342,6 +350,8 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['UPI received (INR)', (d) => d.received.upi],
   ['Card received (INR)', (d) => d.received.card],
   ['Online received (INR)', (d) => d.received.online],
+  ['Swiggy Dineout received (INR)', (d) => d.received.swiggy_dineout],
+  ['Zomato District received (INR)', (d) => d.received.zomato_district],
   ['Total received (INR)', (d) => d.receivedTotalInr],
   ['Refunds (INR)', (d) => d.refundsTotalInr],
   ['Net received (INR)', (d) => d.netReceivedInr],

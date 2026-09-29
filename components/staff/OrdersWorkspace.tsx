@@ -30,6 +30,8 @@ import { transitionExtra, type QuickAction } from '@/lib/orders/quickActions';
 import { PICKUP_REMINDER_COOLDOWN_SEC, formatCountdown } from '@/lib/notifications/pickupReminder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { useStaffShell } from '@/components/staff/StaffShell';
+import { isAppPaymentMethod } from '@/lib/orders/payments';
+import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -230,13 +232,18 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   }, []);
 
   const handlePayment = useCallback(
-    async (o: OrderWithItems, method: PaymentMethod) => {
+    async (o: OrderWithItems, method: PaymentMethod, reference?: string) => {
       try {
         const res = await fetch(`/api/orders/${o.id}/payment`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ payment_method: method }),
+          body: JSON.stringify(reference ? { payment_method: method, reference } : { payment_method: method }),
         });
+        if (!res.ok) {
+          // e.g. a booking ID already on another bill — say which, not just "failed".
+          const d = await res.json().catch(() => ({}));
+          showToast(d?.error ?? 'Payment not recorded — try again.');
+        }
         return res.ok;
       } catch {
         return false;
@@ -271,14 +278,17 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         } else {
           const d = await res.json().catch(() => ({}));
           const r = d?.refunded as { method?: string; amount_inr?: number } | undefined;
-          // Say what the staffer must physically do: cash leaves the drawer,
+          // Say what the staffer must physically do: cash leaves the drawer, a
+          // dining-app payment is reversed in that app's partner dashboard,
           // anything else is reversed on the terminal.
           showToast(
             r?.method === 'cash'
               ? `Refunded ₹${r.amount_inr} — give it back from the drawer.`
-              : r?.method
-                ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
-                : 'Refund issued.',
+              : r?.method && isAppPaymentMethod(r.method)
+                ? `Refunded ₹${r.amount_inr} on ${PAYMENT_METHOD_LABEL[r.method] ?? r.method} — reverse it in the partner app.`
+                : r?.method
+                  ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
+                  : 'Refund issued.',
           );
         }
       } catch {
@@ -486,7 +496,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           onClose={closeDetail}
           onRemind={handleRemind}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
-          onPayment={(o, m) => handlePayment(o, m)}
+          onPayment={(o, m, ref) => handlePayment(o, m, ref)}
           onPrint={(orderId, type) => printDock.enqueue([{ orderId, type }])}
           onRefund={(o, amountInr, reason, method, key) => handleRefund(o, amountInr, reason, method, key)}
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}

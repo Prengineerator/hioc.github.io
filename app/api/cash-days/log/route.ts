@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { requireCashManager } from '@/lib/cash/gate';
-import { CASH_DAY_COLUMNS, MIGRATION_HINT, dayActivity, isMissingColumn } from '@/lib/cash/dayServer';
+import { CASH_DAY_COLUMNS, MIGRATION_HINT, dayActivity, dayAppTotalsFor, isMissingColumn } from '@/lib/cash/dayServer';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { CashDay } from '@/lib/types';
 
@@ -46,6 +46,11 @@ export async function GET(request: Request) {
   const names = await getStaffDisplayNames(admin, ids);
   const nameOf = (id: string | null) => (id ? (names.get(id) ?? 'Unknown staff') : null);
 
+  const appTotals = await dayAppTotalsFor(
+    admin,
+    rows.filter((d) => d.status === 'closed').map((d) => d.id),
+  );
+
   const days = await Promise.all(
     rows.map(async (d) => {
       let live: {
@@ -56,6 +61,8 @@ export async function GET(request: Request) {
         cash_out_inr: number;
         upi_inr: number;
         card_inr: number;
+        swiggy_dineout_inr: number;
+        zomato_district_inr: number;
         expected_cash_inr: number;
       } | null = null;
       if (d.status === 'open') {
@@ -69,6 +76,8 @@ export async function GET(request: Request) {
             cash_out_inr: a.flows.cashOutInr,
             upi_inr: a.upiInr,
             card_inr: a.cardInr,
+            swiggy_dineout_inr: a.swiggyDineoutInr,
+            zomato_district_inr: a.zomatoDistrictInr,
             expected_cash_inr: a.expectedInr,
           };
         } catch (err) {
@@ -77,6 +86,7 @@ export async function GET(request: Request) {
       }
       return {
         ...d,
+        ...(appTotals.get(d.id) ?? {}),
         ...(live ?? {}),
         live: live !== null,
         opened_by_name: nameOf(d.opened_by),

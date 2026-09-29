@@ -46,6 +46,10 @@ function paymentLabel(method: PaymentMethod | null): string {
       return 'Card';
     case 'online':
       return 'Online';
+    case 'swiggy_dineout':
+      return 'Swiggy Dineout';
+    case 'zomato_district':
+      return 'Zomato District';
     default:
       return 'counter';
   }

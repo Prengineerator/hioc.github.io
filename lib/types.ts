@@ -33,7 +33,15 @@ export type PaymentStatus =
   | 'refunded'
   | 'partially_refunded';
 
-export type PaymentMethod = 'cash' | 'upi' | 'card' | 'online';
+// 'swiggy_dineout' / 'zomato_district': the diner paid inside that dining app,
+// which settles to the café later (2026-10-aggregator-payments.sql).
+export type PaymentMethod =
+  | 'cash'
+  | 'upi'
+  | 'card'
+  | 'online'
+  | 'swiggy_dineout'
+  | 'zomato_district';
 
 // Who performed a lifecycle transition (order_status_events.actor_role).
 export type ActorRole = 'customer' | 'staff' | 'owner' | 'system';
@@ -148,6 +156,9 @@ export interface MenuItem {
 export interface OrderPaymentPart {
   method: PaymentMethod;
   amount_inr: number;
+  // Dining-app tenders only: the platform's booking / transaction ID
+  // (order_payments.reference, 2026-10-aggregator-payments.sql).
+  reference?: string | null;
 }
 
 export interface Order {
@@ -692,6 +703,11 @@ export interface CashDay {
   cash_out_inr: number | null;
   upi_inr: number | null; // information only, never in the drawer math
   card_inr: number | null;
+  // Dining-app takings frozen at close (2026-10-aggregator-payments.sql).
+  // Optional: read separately from the other columns (appTotalsFor), so a
+  // database without them still serves the cash day.
+  swiggy_dineout_inr?: number | null;
+  zomato_district_inr?: number | null;
   handover_inr: number | null; // cash taken out at close = counted - float left
   float_left_denoms: CashDenoms | null;
   float_left_total_inr: number | null;

@@ -464,6 +464,21 @@ describe('PATCH /api/cash-days — close + handover', () => {
     expect(body.handover_warning).toBeNull();
   });
 
+  it('freezes each dining app’s takings on the day, never as drawer cash', async () => {
+    tables.orders.push(
+      order({ id: 'o2', order_number: 1002, payment_method: 'swiggy_dineout', total_inr: 900, paid_at: '2026-09-01T13:00:00.000Z' }),
+    );
+    const res = await PATCH(jsonReq('PATCH', closeBody()));
+    expect(res.status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({
+      status: 'closed',
+      cash_sales_inr: 3000, // the Swiggy Dineout ₹900 is not drawer cash
+      expected_cash_inr: 4500,
+      swiggy_dineout_inr: 900,
+      zomato_district_inr: 0, // written as 0, not left over from an earlier close
+    });
+  });
+
   it('requires the float left by denomination (never defaults to "take everything")', async () => {
     const res = await PATCH(jsonReq('PATCH', { closing_denoms: { '500': 9 } }));
     expect(res.status).toBe(400);
@@ -678,6 +693,13 @@ describe('POST /api/cash-days/reopen', () => {
     expect(log[0]).toMatchObject({ by: 'mgr-1', reason: 'closed with ₹0 by mistake', prev_closed_at: '2026-09-01T18:00:00.000Z' });
   });
 
+  it('clears the frozen dining-app totals with the rest of the close', async () => {
+    auth.role = 'manager';
+    tables.cash_days.push(closed({ swiggy_dineout_inr: 900, zomato_district_inr: 450 }));
+    expect((await REOPEN(jsonReq('POST', { reason: 'closed by mistake' }))).status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({ status: 'open', swiggy_dineout_inr: null, zomato_district_inr: null });
+  });
+
   it('needs a real reason', async () => {
     auth.role = 'manager';
     tables.cash_days.push(closed());
@@ -728,11 +750,16 @@ describe('GET /api/cash-days/log (owner page)', () => {
         counted_total_inr: 5000,
         handover_inr: 3500,
         float_left_total_inr: 1500,
+        swiggy_dineout_inr: 900,
+        zomato_district_inr: 0,
         reopen_log: [{ at: '2026-08-31T18:30:00.000Z', by: 'mgr-1', reason: 'mistake', prev_closed_at: null, prev_counted_inr: 0, prev_handover_inr: 0 }],
       }),
       dayRow({ id: 'cd-open' }),
     );
-    tables.orders.push(order({ id: 'o1', order_number: 1, total_inr: 400, paid_at: '2026-09-01T12:00:00.000Z' }));
+    tables.orders.push(
+      order({ id: 'o1', order_number: 1, total_inr: 400, paid_at: '2026-09-01T12:00:00.000Z' }),
+      order({ id: 'o2', order_number: 2, payment_method: 'zomato_district', total_inr: 650, paid_at: '2026-09-01T13:00:00.000Z' }),
+    );
 
     const res = await LOG(new Request('http://t/api/cash-days/log'));
     expect(res.status).toBe(200);
@@ -740,8 +767,48 @@ describe('GET /api/cash-days/log (owner page)', () => {
     expect(days.map((d: { id: string }) => d.id)).toEqual(['cd-open', 'cd-old']); // newest first
 
     const [open, old] = days;
-    expect(open).toMatchObject({ live: true, opened_by_name: 'Priya', cash_sales_inr: 400, expected_cash_inr: 1900 });
-    expect(old).toMatchObject({ live: false, closed_by_name: 'Meera', handover_inr: 3500, float_left_total_inr: 1500 });
+    expect(open).toMatchObject({
+      live: true,
+      opened_by_name: 'Priya',
+      cash_sales_inr: 400,
+      expected_cash_inr: 1900,
+      swiggy_dineout_inr: 0,
+      zomato_district_inr: 650,
+    });
+    expect(old).toMatchObject({
+      live: false,
+      closed_by_name: 'Meera',
+      handover_inr: 3500,
+      float_left_total_inr: 1500,
+      swiggy_dineout_inr: 900,
+      zomato_district_inr: 0,
+    });
     expect(old.reopen_log[0]).toMatchObject({ by_name: 'Meera', reason: 'mistake' });
+  });
+});
+
+describe('dining-app day totals before the migration', () => {
+  // A database without 2026-10-aggregator-payments.sql has no such columns.
+  // Closing, reopening and reading the log must not depend on them.
+  const missingColumn = { code: '42703', message: 'column cash_days.swiggy_dineout_inr does not exist' };
+  const erroring = () => {
+    const chain: Record<string, unknown> = {};
+    Object.assign(chain, {
+      update: () => chain,
+      select: () => chain,
+      eq: () => chain,
+      in: () => chain,
+      then: (resolve: (v: unknown) => void) => resolve({ data: null, error: missingColumn }),
+    });
+    return { from: () => chain } as unknown as SupabaseClient;
+  };
+
+  it('writing is a silent no-op and reading comes back empty', async () => {
+    const { writeDayAppTotals, dayAppTotalsFor } = await import('@/lib/cash/dayServer');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(writeDayAppTotals(erroring(), 'cd-1', { swiggyDineoutInr: 1, zomatoDistrictInr: 2 })).resolves.toBeUndefined();
+    await expect(dayAppTotalsFor(erroring(), ['cd-1'])).resolves.toEqual(new Map());
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

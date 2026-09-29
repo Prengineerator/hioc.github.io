@@ -30,13 +30,14 @@ export const PAYMENT_BANNER_LABEL: Record<string, string> = {
   partially_refunded: 'PARTIALLY REFUNDED',
 };
 
-/** `orders.payment_method` ('cash' | 'upi' | 'card' | 'online') → the
- * receipt's "Paid via <label>" wording. */
+/** `orders.payment_method` → the receipt's "Paid via <label>" wording. */
 export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   cash: 'Cash',
   upi: 'UPI',
   card: 'Card',
   online: 'Online',
+  swiggy_dineout: 'Swiggy Dineout',
+  zomato_district: 'Zomato District',
 };
 
 export function formatIstDateTime(iso: string): string {
