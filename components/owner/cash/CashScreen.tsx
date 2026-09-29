@@ -13,6 +13,7 @@ import { ShortageDecisionModal, type ShortageAction } from './ShortageDecisionMo
 import { ShortageCard } from './ShortageCard';
 import { CountLog } from './CountLog';
 import { DrawerLog } from './DrawerLog';
+import { CashDayLog } from './CashDayLog';
 import type { ActiveStaffOption, OwnerCashCountRow, OwnerCashMovementRow, OwnerShortageRow } from './types';
 import { rupees } from './types';
 
@@ -130,10 +131,14 @@ export function CashScreen() {
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-bold text-charcoal">Cash</h1>
-        <p className="text-sm text-muted">Shortages the drawer counts have revealed, and the count log behind them.</p>
+        <p className="text-sm text-muted">
+          Each cash day from open to handover, the shortages the drawer counts have revealed, and the count log behind them.
+        </p>
       </div>
 
       {error ? <p className="text-sm font-bold text-red-700">{error}</p> : null}
+
+      <CashDayLog />
 
       <Card>
         <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Pending shortages</h2>
