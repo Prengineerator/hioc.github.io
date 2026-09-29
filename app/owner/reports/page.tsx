@@ -13,7 +13,14 @@ import { loadReport } from '@/lib/reports/reconcileServer';
 
 export const dynamic = 'force-dynamic';
 
-const METHOD_LABEL = { cash: 'Cash', upi: 'UPI', card: 'Card', online: 'Online (website)' } as const;
+const METHOD_LABEL = {
+  cash: 'Cash',
+  upi: 'UPI',
+  card: 'Card',
+  online: 'Online (website)',
+  swiggy_dineout: 'Swiggy Dineout',
+  zomato_district: 'Zomato District',
+} as const;
 
 function shortDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
@@ -206,6 +213,8 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
                 <th className="py-1.5 pr-3 text-right">UPI</th>
                 <th className="py-1.5 pr-3 text-right">Card</th>
                 <th className="py-1.5 pr-3 text-right">Online</th>
+                <th className="py-1.5 pr-3 text-right">Dineout</th>
+                <th className="py-1.5 pr-3 text-right">District</th>
                 <th className="py-1.5 pr-3 text-right">Refunds</th>
                 <th className="py-1.5 pr-3 text-right">Net received</th>
                 <th className="py-1.5 pr-3 text-right">Unpaid</th>
@@ -243,6 +252,8 @@ function DayRow({ d }: { d: ReportDay }) {
       <td className={cell}>{inr(d.received.upi)}</td>
       <td className={cell}>{inr(d.received.card)}</td>
       <td className={cell}>{inr(d.received.online)}</td>
+      <td className={cell}>{inr(d.received.swiggy_dineout)}</td>
+      <td className={cell}>{inr(d.received.zomato_district)}</td>
       <td className={`${cell} ${d.refundsTotalInr ? 'text-red-700' : ''}`}>{d.refundsTotalInr ? `−${inr(d.refundsTotalInr)}` : '—'}</td>
       <td className={`${cell} font-semibold`}>{inr(d.netReceivedInr)}</td>
       <td className={`${cell} ${d.unpaidOrders ? 'text-amber-800' : ''}`}>{d.unpaidOrders ? `${d.unpaidOrders} · ${inr(d.unpaidInr)}` : '—'}</td>

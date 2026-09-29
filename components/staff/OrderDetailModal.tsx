@@ -20,6 +20,8 @@ import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { canChangePayment, describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
+import { COUNTER_PAYMENT_METHODS } from '@/lib/orders/payments';
+import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import type { SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import {
   billStatusTone,
@@ -34,7 +36,9 @@ type OrderWithItems = Order & { items: OrderItem[] };
 const REJECT_REASONS = ['Out of stock', 'Too busy', 'Closing soon', 'Other'];
 // Common void reasons (POS-4), mirroring REJECT_REASONS. 'Other' → free text.
 const VOID_REASONS = ['Wrong item', 'Customer changed mind', 'Kitchen error', 'Other'];
-const PAYMENT_METHODS: PaymentMethod[] = ['cash', 'upi', 'card'];
+// Every tender the counter takes — the dining apps (Swiggy Dineout, Zomato
+// District) included, since a table that booked through one settles here.
+const PAYMENT_METHODS = COUNTER_PAYMENT_METHODS;
 const DEFAULT_PREP_MIN = 15;
 // A paid order can still be refunded (in full or partially) even after it's
 // gone terminal — a manager might refund a completed order over a complaint.
@@ -546,7 +550,7 @@ export function OrderDetailModal({
                           : 'border-line text-charcoal hover:border-tan')
                       }
                     >
-                      {t.method.toUpperCase()} · ₹{t.amount_inr}
+                      {PAYMENT_METHOD_LABEL[t.method] ?? t.method} · ₹{t.amount_inr}
                     </button>
                   ))}
                 </div>
@@ -691,14 +695,14 @@ export function OrderDetailModal({
                   ) : (
                     <>
                       <p className="mt-2 text-xs text-muted">Collect payment to settle, then complete.</p>
-                      <div className="mt-2 flex gap-2">
+                      <div className="mt-2 grid grid-cols-3 gap-2">
                         {PAYMENT_METHODS.map((m) => (
                           <button
                             key={m}
                             onClick={() => settle(m)}
-                            className="flex-1 rounded-md border border-line py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
+                            className="rounded-md border border-line px-1 py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
                           >
-                            {m}
+                            {PAYMENT_METHOD_LABEL[m] ?? m}
                           </button>
                         ))}
                       </div>
@@ -729,14 +733,14 @@ export function OrderDetailModal({
                   <p className="text-xs text-muted">
                     ₹{order.total_inr ?? order.subtotal_inr} due · the order can be handed over once it&apos;s paid.
                   </p>
-                  <div className="mt-2 flex gap-2">
+                  <div className="mt-2 grid grid-cols-3 gap-2">
                     {PAYMENT_METHODS.map((m) => (
                       <button
                         key={m}
                         onClick={() => settle(m)}
-                        className="flex-1 rounded-md border border-line bg-cream py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
+                        className="rounded-md border border-line bg-cream px-1 py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
                       >
-                        {m}
+                        {PAYMENT_METHOD_LABEL[m] ?? m}
                       </button>
                     ))}
                   </div>
@@ -817,10 +821,10 @@ export function OrderDetailModal({
                 </span>
               </p>
               {order.payment_status !== 'paid' && order.status !== 'ready' ? (
-                <div className="mt-2 flex gap-2">
+                <div className="mt-2 grid grid-cols-3 gap-2">
                   {PAYMENT_METHODS.map((m) => (
-                    <button key={m} onClick={() => settle(m)} className="flex-1 rounded-md border border-line py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark">
-                      {m}
+                    <button key={m} onClick={() => settle(m)} className="rounded-md border border-line px-1 py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark">
+                      {PAYMENT_METHOD_LABEL[m] ?? m}
                     </button>
                   ))}
                 </div>

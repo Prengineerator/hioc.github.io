@@ -40,6 +40,9 @@ interface OpenSummary {
   upi_inr: number;
   card_inr: number;
   online_inr: number;
+  // Optional: absent from a server that predates the dining-app tenders.
+  swiggy_dineout_inr?: number;
+  zomato_district_inr?: number;
   expected_cash_inr: number;
   as_of: string;
 }
@@ -526,6 +529,8 @@ function DaySummary({ openDay, summary, sales }: { openDay: CashDay; summary: Op
       <p className="mt-3 text-xs text-muted">
         Received this shift, not in the drawer: UPI {inr(summary.upi_inr)} · Card {inr(summary.card_inr)}
         {summary.online_inr > 0 ? ` · Online ${inr(summary.online_inr)}` : ''}
+        {summary.swiggy_dineout_inr ? ` · Swiggy Dineout ${inr(summary.swiggy_dineout_inr)}` : ''}
+        {summary.zomato_district_inr ? ` · Zomato District ${inr(summary.zomato_district_inr)}` : ''}
       </p>
     </div>
   );

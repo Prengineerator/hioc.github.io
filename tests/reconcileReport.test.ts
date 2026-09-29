@@ -82,8 +82,8 @@ describe('buildReport', () => {
         ordersWithParts: new Set(['s']),
       }),
     );
-    expect(r.days[0].received).toEqual({ cash: 100, upi: 200, card: 0, online: 0 });
-    expect(r.days[1].received).toEqual({ cash: 0, upi: 0, card: 250, online: 0 });
+    expect(r.days[0].received).toEqual({ cash: 100, upi: 200, card: 0, online: 0, swiggy_dineout: 0, zomato_district: 0 });
+    expect(r.days[1].received).toEqual({ cash: 0, upi: 0, card: 250, online: 0, swiggy_dineout: 0, zomato_district: 0 });
     expect(r.days[1].tipsInr).toBe(20);
     expect(r.totals.receivedTotalInr).toBe(550);
   });

@@ -60,6 +60,8 @@ export interface DayActivity {
   upiInr: number;
   cardInr: number;
   onlineInr: number;
+  swiggyDineoutInr: number;
+  zomatoDistrictInr: number;
   expectedInr: number;
 }
 
@@ -89,6 +91,8 @@ export async function dayActivity(
     upiInr: activity.upiInr,
     cardInr: activity.cardInr,
     onlineInr: activity.onlineInr,
+    swiggyDineoutInr: activity.swiggyDineoutInr,
+    zomatoDistrictInr: activity.zomatoDistrictInr,
     expectedInr: expectedCashInr(
       openingTotalInr,
       flows.cashSalesInr,

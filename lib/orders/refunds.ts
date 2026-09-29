@@ -9,6 +9,7 @@
 // you cannot return more cash than the customer actually paid in cash — so the
 // staffer names the tender and the balance is enforced per tender.
 
+import { isPaymentMethod, PAYMENT_METHODS } from '@/lib/api/constants';
 import type { PaymentMethod } from '@/lib/types';
 
 export interface TenderPart {
@@ -106,13 +107,8 @@ export function validateCounterRefund(
     }
     method = withBalance[0].method;
   } else {
-    if (
-      requestedMethod !== 'cash' &&
-      requestedMethod !== 'upi' &&
-      requestedMethod !== 'card' &&
-      requestedMethod !== 'online'
-    ) {
-      return { ok: false, error: 'method must be one of: cash, upi, card, online' };
+    if (!isPaymentMethod(requestedMethod)) {
+      return { ok: false, error: `method must be one of: ${PAYMENT_METHODS.join(', ')}` };
     }
     method = requestedMethod;
   }

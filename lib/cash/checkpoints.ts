@@ -120,6 +120,9 @@ export interface CashActivity {
   upiInr: number;
   cardInr: number;
   onlineInr: number;
+  /** Paid inside the dining apps — the platform owes it to the café, not the drawer. */
+  swiggyDineoutInr: number;
+  zomatoDistrictInr: number;
 }
 
 /**
@@ -161,10 +164,14 @@ export async function cashActivityBetween(
   let upiInr = 0;
   let cardInr = 0;
   let onlineInr = 0;
+  let swiggyDineoutInr = 0;
+  let zomatoDistrictInr = 0;
   const addNonCash = (method: string | null | undefined, amountInr: number) => {
     if (method === 'upi') upiInr += amountInr;
     else if (method === 'card') cardInr += amountInr;
     else if (method === 'online') onlineInr += amountInr;
+    else if (method === 'swiggy_dineout') swiggyDineoutInr += amountInr;
+    else if (method === 'zomato_district') zomatoDistrictInr += amountInr;
   };
 
   // 1. POS4-1 split parts (any tender), by their OWN timestamp — the precise case.
@@ -288,6 +295,8 @@ export async function cashActivityBetween(
     upiInr,
     cardInr,
     onlineInr,
+    swiggyDineoutInr,
+    zomatoDistrictInr,
   };
 }
 

@@ -10,7 +10,14 @@
 
 import type { Order, PaymentMethod } from '@/lib/types';
 
-export const PAYMENT_METHODS: readonly PaymentMethod[] = ['cash', 'upi', 'card', 'online'];
+export const PAYMENT_METHODS: readonly PaymentMethod[] = [
+  'cash',
+  'upi',
+  'card',
+  'online',
+  'swiggy_dineout',
+  'zomato_district',
+];
 
 export interface MethodReceived {
   amount_inr: number;

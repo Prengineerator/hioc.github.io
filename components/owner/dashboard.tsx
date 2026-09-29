@@ -1,7 +1,7 @@
 // Presentational owner-dashboard pieces (O1–O4). Pure (no hooks) so they render
 // inside the async server page. All charts are dependency-free inline SVG/CSS.
 
-import type { DailySalesRow, HourlyOrdersRow, ItemSalesRow, RejectReasonRow } from '@/lib/types';
+import type { DailySalesRow, HourlyOrdersRow, ItemSalesRow, PaymentMethod, RejectReasonRow } from '@/lib/types';
 import type { GlanceMetric, TodayAtAGlance } from '@/lib/analytics/queries';
 
 /** ₹ with Indian digit grouping (₹1,23,456) — raw 6-digit sums were hard to read at a glance. */
@@ -163,7 +163,8 @@ function Empty({ label }: { label: string }) {
   return <p className="py-6 text-center text-sm text-muted">{label}</p>;
 }
 
-// How the money came in — cash / UPI / card / online (website), with refunds
+// How the money came in — cash / UPI / card / online (website) / the dining
+// apps (Swiggy Dineout, Zomato District), with refunds
 // and the still-unpaid amount. Fed by the reconciliation report
 // (lib/reports/reconcile.ts), so it counts counter payments and split bills,
 // not only website payments. Shared by the Overview and Payments pages.
@@ -172,6 +173,8 @@ const PAY_METHODS = [
   ['upi', 'UPI'],
   ['card', 'Card'],
   ['online', 'Online (website)'],
+  ['swiggy_dineout', 'Swiggy Dineout'],
+  ['zomato_district', 'Zomato District'],
 ] as const;
 
 export function PaymentsByMethod({
@@ -181,8 +184,8 @@ export function PaymentsByMethod({
   unpaidOrders,
   reportHref,
 }: {
-  received: Record<'cash' | 'upi' | 'card' | 'online', number>;
-  refunds: Record<'cash' | 'upi' | 'card' | 'online', number>;
+  received: Record<PaymentMethod, number>;
+  refunds: Record<PaymentMethod, number>;
   unpaidInr: number;
   unpaidOrders: number;
   reportHref?: string;
@@ -191,7 +194,7 @@ export function PaymentsByMethod({
   const refunded = PAY_METHODS.reduce((s, [m]) => s + refunds[m], 0);
   return (
     <div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {PAY_METHODS.map(([m, label]) => {
           const pct = total > 0 ? Math.round((received[m] / total) * 100) : 0;
           return (

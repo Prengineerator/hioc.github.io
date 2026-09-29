@@ -3,7 +3,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
-import { changeDueInr, shortNeedsManager, STAFF_SETTLE_SHORT_LIMIT_INR, type PaymentPart } from '@/lib/orders/payments';
+import {
+  changeDueInr,
+  COUNTER_PAYMENT_METHODS,
+  isAppPaymentMethod,
+  shortNeedsManager,
+  STAFF_SETTLE_SHORT_LIMIT_INR,
+  type PaymentPart,
+} from '@/lib/orders/payments';
+import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
 import type { Feedback } from '@/lib/pos/loyalty';
@@ -28,11 +36,18 @@ import type { OrderType, PaymentMethod } from '@/lib/types';
 // on purpose: the split-tender rules below decide what the counter hands over,
 // and a forked copy of them is how two screens start disagreeing about money.
 
-const COLLECT_METHODS: { value: PaymentMethod; label: string }[] = [
-  { value: 'cash', label: 'Cash' },
-  { value: 'upi', label: 'UPI' },
-  { value: 'card', label: 'Card' },
-];
+const COLLECT_METHODS: { value: PaymentMethod; label: string }[] = COUNTER_PAYMENT_METHODS.map((m) => ({
+  value: m,
+  label: PAYMENT_METHOD_LABEL[m] ?? m,
+}));
+
+// The "Collect now" step shows the money the counter takes itself first, and
+// the dining apps (Swiggy Dineout, Zomato District — the diner already paid in
+// the app) as their own row, so a staffer can't mistake one for UPI.
+const IN_HAND_METHODS = COLLECT_METHODS.filter((m) => !isAppPaymentMethod(m.value));
+const APP_METHODS = COLLECT_METHODS.filter((m) => isAppPaymentMethod(m.value));
+
+const methodLabel = (m: PaymentMethod): string => PAYMENT_METHOD_LABEL[m] ?? m;
 
 // Notes an Indian counter actually sees. "Exact" fills the bill total.
 const TENDER_CHIPS = [100, 200, 500, 2000];
@@ -593,7 +608,7 @@ export function PosPaymentPanel({
               className="mt-4 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
               {customAmountValid
-                ? `Take ₹${customNum} ${customMethod.toUpperCase()}` +
+                ? `Take ₹${customNum} ${methodLabel(customMethod)}` +
                   (customShort > 0 ? ` (₹${customShort} short)` : customTip > 0 ? ` (₹${customTip} tip)` : '')
                 : 'Enter the amount received'}
             </button>
@@ -691,7 +706,7 @@ export function PosPaymentPanel({
               className="mt-4 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
               {firstValid
-                ? `Take ₹${firstNum} ${firstMethod.toUpperCase()} + ₹${remainder} ${secondMethod.toUpperCase()}`
+                ? `Take ₹${firstNum} ${methodLabel(firstMethod)} + ₹${remainder} ${methodLabel(secondMethod)}`
                 : 'Enter the first amount'}
             </button>
           </div>
@@ -701,7 +716,7 @@ export function PosPaymentPanel({
             <div>
               <p className="mb-2 text-sm font-bold text-charcoal">Collect now</p>
               <div className="grid grid-cols-3 gap-2">
-                {COLLECT_METHODS.map((m) => (
+                {IN_HAND_METHODS.map((m) => (
                   <button
                     key={m.value}
                     type="button"
@@ -718,6 +733,24 @@ export function PosPaymentPanel({
                       }
                     }}
                     className="rounded-md bg-tan-dark px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-2 text-sm font-bold text-charcoal">Paid on a dining app</p>
+              <div className="grid grid-cols-2 gap-2">
+                {APP_METHODS.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    disabled={busy || !bill}
+                    // Exact, like UPI/card: the app took the whole bill.
+                    onClick={() => attempt([{ method: m.value, amount_inr: total, tendered_inr: null }])}
+                    className="rounded-md border-2 border-tan-dark px-3 py-3 text-sm font-bold text-tan-dark transition-colors hover:bg-tan-dark hover:text-cream disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {m.label}
                   </button>

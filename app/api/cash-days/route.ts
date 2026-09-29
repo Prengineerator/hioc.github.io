@@ -77,6 +77,8 @@ export async function GET() {
         upi_inr: activity.upiInr,
         card_inr: activity.cardInr,
         online_inr: activity.onlineInr,
+        swiggy_dineout_inr: activity.swiggyDineoutInr,
+        zomato_district_inr: activity.zomatoDistrictInr,
         expected_cash_inr: activity.expectedInr,
         as_of: nowIso,
       };

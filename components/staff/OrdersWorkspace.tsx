@@ -30,6 +30,8 @@ import { transitionExtra, type QuickAction } from '@/lib/orders/quickActions';
 import { PICKUP_REMINDER_COOLDOWN_SEC, formatCountdown } from '@/lib/notifications/pickupReminder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { useStaffShell } from '@/components/staff/StaffShell';
+import { isAppPaymentMethod } from '@/lib/orders/payments';
+import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -271,14 +273,17 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         } else {
           const d = await res.json().catch(() => ({}));
           const r = d?.refunded as { method?: string; amount_inr?: number } | undefined;
-          // Say what the staffer must physically do: cash leaves the drawer,
+          // Say what the staffer must physically do: cash leaves the drawer, a
+          // dining-app payment is reversed in that app's partner dashboard,
           // anything else is reversed on the terminal.
           showToast(
             r?.method === 'cash'
               ? `Refunded ₹${r.amount_inr} — give it back from the drawer.`
-              : r?.method
-                ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
-                : 'Refund issued.',
+              : r?.method && isAppPaymentMethod(r.method)
+                ? `Refunded ₹${r.amount_inr} on ${PAYMENT_METHOD_LABEL[r.method] ?? r.method} — reverse it in the partner app.`
+                : r?.method
+                  ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
+                  : 'Refund issued.',
           );
         }
       } catch {

@@ -6,7 +6,31 @@
 // these return. As everywhere else in this codebase, the client never decides
 // an amount — it only displays one.
 
+import { isPaymentMethod, PAYMENT_METHODS } from '@/lib/api/constants';
 import type { PaymentMethod } from '@/lib/types';
+
+/**
+ * The tenders the counter offers, in button order. 'online' is absent: that is
+ * the website's gateway payment, never something a staffer collects.
+ */
+export const COUNTER_PAYMENT_METHODS: readonly PaymentMethod[] = [
+  'cash',
+  'upi',
+  'card',
+  'swiggy_dineout',
+  'zomato_district',
+];
+
+/**
+ * Paid inside a dining app (Swiggy Dineout, Zomato District): the platform took
+ * the money and settles it to the café later, so it is reversed in that app's
+ * partner dashboard — never on the card terminal, never from the drawer.
+ */
+export const APP_PAYMENT_METHODS: readonly PaymentMethod[] = ['swiggy_dineout', 'zomato_district'];
+
+export function isAppPaymentMethod(method: string | null | undefined): boolean {
+  return (APP_PAYMENT_METHODS as readonly (string | null | undefined)[]).includes(method);
+}
 
 export interface PaymentPart {
   method: PaymentMethod;
@@ -160,8 +184,8 @@ export function validateParts(
     }
     const { method, amount_inr, tendered_inr } = raw as Record<string, unknown>;
 
-    if (method !== 'cash' && method !== 'upi' && method !== 'card' && method !== 'online') {
-      return { ok: false, error: `parts[${i}].method must be one of: cash, upi, card, online` };
+    if (!isPaymentMethod(method)) {
+      return { ok: false, error: `parts[${i}].method must be one of: ${PAYMENT_METHODS.join(', ')}` };
     }
     if (typeof amount_inr !== 'number' || !Number.isInteger(amount_inr) || amount_inr <= 0) {
       return { ok: false, error: `parts[${i}].amount_inr must be a positive whole number of rupees` };

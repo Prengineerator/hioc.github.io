@@ -38,6 +38,8 @@ export const PAYMENT_METHODS: readonly PaymentMethod[] = [
   'upi',
   'card',
   'online',
+  'swiggy_dineout',
+  'zomato_district',
 ];
 
 // Standard (RFC 4122-ish) UUID, case-insensitive — good enough to short-circuit

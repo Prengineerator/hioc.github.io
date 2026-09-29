@@ -8,6 +8,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
 import { hasBill } from '@/lib/orders/paymentStatusUI';
+import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -175,7 +176,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
             <span className="font-bold">
               {PAYMENT_LABEL[order.payment_status] ?? order.payment_status}
               {order.payment_status === 'paid' && order.payment_method
-                ? ` · ${order.payment_method}`
+                ? ` · ${PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}`
                 : ''}
             </span>
           </div>

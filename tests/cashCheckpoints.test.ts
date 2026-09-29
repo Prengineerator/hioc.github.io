@@ -195,6 +195,7 @@ beforeEach(() => {
 });
 
 const {
+  cashActivityBetween,
   cashFlowsBetween,
   lastRealCount,
   recordCount,
@@ -215,6 +216,27 @@ describe('cashFlowsBetween', () => {
     return cashFlowsBetween(admin, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z').then((flows) => {
       expect(flows.cashSettledInr).toBe(200);
     });
+  });
+
+  it('keeps dining-app tenders (Swiggy Dineout, Zomato District) out of the drawer, reported on their own', async () => {
+    tables.order_payments.push(
+      { order_id: 'd1', method: 'cash', amount_inr: 100, created_at: '2026-09-01T05:00:00.000Z' },
+      { order_id: 'd1', method: 'swiggy_dineout', amount_inr: 400, created_at: '2026-09-01T05:00:00.000Z' },
+    );
+    tables.orders.push({
+      id: 'd2',
+      order_number: 12,
+      payment_status: 'paid',
+      payment_method: 'zomato_district',
+      total_inr: 650,
+      subtotal_inr: 650,
+      paid_at: '2026-09-01T05:30:00.000Z',
+    });
+    const a = await cashActivityBetween(admin, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z');
+    expect(a.flows.cashSettledInr).toBe(100);
+    expect(a.swiggyDineoutInr).toBe(400);
+    expect(a.zomatoDistrictInr).toBe(650);
+    expect(a.upiInr + a.cardInr + a.onlineInr).toBe(0);
   });
 
   it('windows a single-tender settle by orders.paid_at', async () => {
