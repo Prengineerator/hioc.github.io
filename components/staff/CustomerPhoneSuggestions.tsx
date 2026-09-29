@@ -1,12 +1,12 @@
 'use client';
 
-// Customer suggestions under a POS phone field: type 4+ digits and the
-// matching customers (GET /api/customers/search) drop down — name, number,
-// last visit. Picking one fills the number; the exact lookup then does the
-// rest (name, points, Last orders).
+// Customer suggestions under the POS phone and name fields: type 4+ digits, or
+// 2+ letters of a name, and the matching customers (GET /api/customers/search)
+// drop down — name, number, last visit. Picking one fills the number; the exact
+// lookup then does the rest (name, points, Last orders).
 
 import { useEffect, useState } from 'react';
-import { phoneSearchPrefix, type CustomerSuggestion } from '@/lib/customers/phoneSearch';
+import { nameSearchTerm, phoneSearchPrefix, type CustomerSuggestion } from '@/lib/customers/phoneSearch';
 
 const DEBOUNCE_MS = 250;
 
@@ -38,6 +38,34 @@ export function useCustomerSuggestions(raw: string, enabled = true): CustomerSug
   return prefix ? matches : [];
 }
 
+/** Matches for what's in the name field; [] when there's nothing to suggest. */
+export function useCustomerNameSuggestions(raw: string, enabled = true): CustomerSuggestion[] {
+  const [matches, setMatches] = useState<CustomerSuggestion[]>([]);
+  const term = enabled ? nameSearchTerm(raw) : null;
+
+  useEffect(() => {
+    if (!term) {
+      setMatches([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      fetch(`/api/customers/search?name=${encodeURIComponent(term)}`, { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { customers?: CustomerSuggestion[] } | null) => {
+          if (!cancelled) setMatches(data?.customers ?? []);
+        })
+        .catch(() => {});
+    }, DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [term]);
+
+  return term ? matches : [];
+}
+
 function lastVisit(iso: string | null): string {
   if (!iso) return '';
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit', timeZone: 'Asia/Kolkata' });
@@ -66,7 +94,7 @@ export function CustomerSuggestionList({
         <li key={c.phone} role="option" aria-selected={i === highlighted}>
           <button
             type="button"
-            // mousedown, not click: the phone field's blur would otherwise
+            // mousedown, not click: the input's blur would otherwise
             // close the list before the tap lands.
             onMouseDown={(e) => {
               e.preventDefault();

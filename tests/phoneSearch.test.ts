@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeCustomerSuggestions, phoneSearchPrefix } from '@/lib/customers/phoneSearch';
+import { mergeCustomerSuggestions, nameSearchTerm, phoneSearchPrefix } from '@/lib/customers/phoneSearch';
 
 describe('phoneSearchPrefix', () => {
   it('searches from 4 digits up to 9', () => {
@@ -15,6 +15,29 @@ describe('phoneSearchPrefix', () => {
 
   it('ignores numbers that cannot be Indian mobiles', () => {
     expect(phoneSearchPrefix('1234')).toBeNull();
+  });
+});
+
+describe('nameSearchTerm', () => {
+  it('needs at least 2 characters after trimming', () => {
+    expect(nameSearchTerm('')).toBeNull();
+    expect(nameSearchTerm('  a ')).toBeNull();
+    expect(nameSearchTerm(' as ')).toBe('as');
+  });
+
+  it('collapses whitespace', () => {
+    expect(nameSearchTerm('  Asha \t  Patel ')).toBe('Asha Patel');
+  });
+
+  it('strips characters that would widen an ilike pattern or break a filter', () => {
+    expect(nameSearchTerm('%%')).toBeNull();
+    expect(nameSearchTerm('a_')).toBeNull();
+    expect(nameSearchTerm('as%ha')).toBe('as ha');
+    expect(nameSearchTerm('a\\b,(c)*d')).toBe('a b c d');
+  });
+
+  it('caps the length', () => {
+    expect(nameSearchTerm('x'.repeat(100))).toBe('x'.repeat(40));
   });
 });
 
