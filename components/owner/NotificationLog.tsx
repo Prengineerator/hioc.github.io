@@ -205,7 +205,7 @@ export function NotificationLog() {
           <button
             type="submit"
             disabled={testing || testPhone.trim().length === 0}
-            className="rounded-md border border-tan bg-tan px-3 py-2 text-sm font-bold text-cream transition-opacity disabled:opacity-50"
+            className="rounded-md border border-tan bg-tan-dark px-3 py-2 text-sm font-bold text-cream transition-opacity disabled:opacity-50"
           >
             {testing ? 'Sending…' : 'Send test bill'}
           </button>
@@ -240,7 +240,7 @@ export function NotificationLog() {
             className={
               'rounded-md border px-3 py-2.5 text-sm font-bold transition-colors ' +
               (filter === f.key
-                ? 'border-tan bg-tan text-cream'
+                ? 'border-tan bg-tan-dark text-cream'
                 : 'border-line text-charcoal hover:border-tan')
             }
           >
@@ -313,7 +313,7 @@ export function NotificationLog() {
                     type="button"
                     onClick={() => resend(row)}
                     disabled={resendingId === row.id}
-                    className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
+                    className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
                   >
                     {resendingId === row.id ? '…' : 'Resend'}
                   </button>

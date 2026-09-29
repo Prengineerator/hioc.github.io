@@ -87,7 +87,7 @@ export function Modal({
             aria-label="Close"
             data-dialog-close
             onClick={onClose}
-            className="-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+            className="-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
           >
             &times;
           </button>

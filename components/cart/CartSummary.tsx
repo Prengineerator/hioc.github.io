@@ -15,7 +15,7 @@ export function CartSummary({ settings }: { settings?: StoreSettings | null }) {
     <div className="rounded-md border border-line bg-cream p-6 shadow-sm">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-lg font-semibold text-charcoal">Your Order</h2>
-        <Link href="/menu" className="text-sm font-semibold text-tan hover:underline">
+        <Link href="/menu" className="text-sm font-semibold text-tan-dark hover:underline">
           Edit cart
         </Link>
       </div>
@@ -71,7 +71,7 @@ export function CartSummary({ settings }: { settings?: StoreSettings | null }) {
             ) : null}
             <div className="flex items-center justify-between border-t border-line pt-1.5 font-bold text-charcoal">
               <span>Total</span>
-              <span className="font-mono tabular-nums text-tan">₹{bill.total_inr}</span>
+              <span className="font-mono tabular-nums text-tan-dark">₹{bill.total_inr}</span>
             </div>
           </>
         ) : null}

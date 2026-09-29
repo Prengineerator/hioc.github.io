@@ -4,7 +4,7 @@ export type BadgeVariant = 'neutral' | 'tan' | 'success' | 'danger' | 'outline';
 
 const VARIANT_CLASSES: Record<BadgeVariant, string> = {
   neutral: 'bg-surface text-charcoal',
-  tan: 'bg-tan text-cream',
+  tan: 'bg-tan-dark text-cream',
   success: 'bg-green-700 text-cream',
   danger: 'bg-red-700 text-cream',
   outline: 'border border-line text-charcoal',

@@ -267,7 +267,7 @@ function MenuPageContent() {
                   <button
                     type="button"
                     onClick={() => fetchAllItems()}
-                    className="inline-flex min-h-[44px] items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+                    className="inline-flex min-h-[44px] items-center rounded-md bg-tan-dark px-4 text-sm font-semibold text-cream hover:bg-tan-darker"
                   >
                     Try again
                   </button>
@@ -305,7 +305,7 @@ function MenuPageContent() {
                     setLoading(true);
                     fetchItems();
                   }}
-                  className="inline-flex min-h-[44px] items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+                  className="inline-flex min-h-[44px] items-center rounded-md bg-tan-dark px-4 text-sm font-semibold text-cream hover:bg-tan-darker"
                 >
                   Try again
                 </button>

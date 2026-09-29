@@ -180,7 +180,7 @@ export function CouponManager() {
           <button
             type="button"
             onClick={startCreate}
-            className="rounded-md bg-tan px-4 py-2.5 text-sm font-bold text-cream hover:bg-tan-dark"
+            className="rounded-md bg-tan-dark px-4 py-2.5 text-sm font-bold text-cream hover:bg-tan-darker"
           >
             New coupon
           </button>
@@ -268,7 +268,7 @@ export function CouponManager() {
               filter: 'none',
               value: () => null,
               render: (c) => (
-                <button type="button" onClick={() => startEdit(c)} className="text-tan hover:underline">
+                <button type="button" onClick={() => startEdit(c)} className="text-tan-dark hover:underline">
                   Edit
                 </button>
               ),
@@ -365,7 +365,7 @@ function CouponForm({
       </div>
       {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
       <div className="mt-4 flex items-center gap-3">
-        <button type="button" onClick={onSubmit} disabled={saving} className="rounded-md bg-tan px-5 py-2 text-sm font-bold text-cream hover:bg-tan-dark disabled:opacity-50">
+        <button type="button" onClick={onSubmit} disabled={saving} className="rounded-md bg-tan-dark px-5 py-2 text-sm font-bold text-cream hover:bg-tan-darker disabled:opacity-50">
           {saving ? 'Saving…' : isCreate ? 'Create coupon' : 'Save changes'}
         </button>
         <button type="button" onClick={onCancel} className="text-sm font-bold text-muted hover:text-charcoal">

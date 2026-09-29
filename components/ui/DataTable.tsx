@@ -162,7 +162,7 @@ export function DataTable<T>({
           Showing {shown.length} of {rows.length}
         </span>
         {nActive > 0 ? (
-          <button type="button" onClick={clear} className="font-bold text-tan hover:underline">
+          <button type="button" onClick={clear} className="font-bold text-tan-dark hover:underline">
             Clear filters
           </button>
         ) : null}
@@ -193,7 +193,7 @@ export function DataTable<T>({
                         }`}
                       >
                         <span>{c.header}</span>
-                        <span aria-hidden className={active ? 'text-tan' : 'text-transparent'}>
+                        <span aria-hidden className={active ? 'text-tan-dark' : 'text-transparent'}>
                           {active === 'desc' ? '▼' : '▲'}
                         </span>
                       </button>
@@ -241,7 +241,7 @@ export function DataTable<T>({
               <tr>
                 <td colSpan={columns.length} className="py-6 text-center text-sm text-muted">
                   No rows match these filters.{' '}
-                  <button type="button" onClick={clear} className="font-bold text-tan hover:underline">
+                  <button type="button" onClick={clear} className="font-bold text-tan-dark hover:underline">
                     Clear filters
                   </button>
                 </td>

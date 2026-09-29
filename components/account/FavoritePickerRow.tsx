@@ -59,7 +59,7 @@ export function FavoritePickerRow({
         onClick={handleAdd}
         disabled={saving}
         aria-label={`Save ${item.name} to favorites`}
-        className="text-lg text-tan transition-colors hover:text-tan-dark disabled:opacity-60"
+        className="text-lg text-tan-dark transition-colors hover:text-tan-dark disabled:opacity-60"
       >
         ♡
       </button>

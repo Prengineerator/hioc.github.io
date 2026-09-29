@@ -271,7 +271,7 @@ export function MenuItemFormModal({
                       <button
                         type="button"
                         onClick={() => setImageUrl('')}
-                        className="text-xs font-bold text-charcoal hover:text-tan"
+                        className="text-xs font-bold text-charcoal hover:text-tan-dark"
                       >
                         Remove photo
                       </button>
@@ -331,7 +331,7 @@ export function MenuItemFormModal({
                   <button
                     type="button"
                     onClick={addVariantRow}
-                    className="text-sm font-bold text-tan hover:underline"
+                    className="text-sm font-bold text-tan-dark hover:underline"
                   >
                     + Add size
                   </button>
@@ -367,7 +367,7 @@ export function MenuItemFormModal({
                         aria-label={`Remove size ${row.label || i + 1}`}
                         onClick={() => removeVariantRow(i)}
                         disabled={variantRows.length === 1}
-                        className="shrink-0 text-sm font-bold text-charcoal hover:text-tan disabled:cursor-not-allowed disabled:opacity-40"
+                        className="shrink-0 text-sm font-bold text-charcoal hover:text-tan-dark disabled:cursor-not-allowed disabled:opacity-40"
                       >
                         Remove
                       </button>
@@ -471,7 +471,7 @@ export function MenuItemFormModal({
             <button
               type="submit"
               disabled={submitting || uploadingPhoto}
-              className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
             >
               {mode === 'create' ? 'Save Item' : 'Save Changes'}
             </button>

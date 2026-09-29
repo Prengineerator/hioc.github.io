@@ -183,7 +183,7 @@ export default function OwnerSettingsPage() {
       </div>
 
       <div className="mt-6 flex items-center gap-3">
-        <button onClick={save} disabled={saving} className="rounded-md bg-tan px-6 py-2.5 font-bold text-cream hover:bg-tan-dark disabled:opacity-50">
+        <button onClick={save} disabled={saving} className="rounded-md bg-tan-dark px-6 py-2.5 font-bold text-cream hover:bg-tan-darker disabled:opacity-50">
           {saving ? 'Saving…' : 'Save settings'}
         </button>
         {msg ? <span className="text-sm text-muted">{msg}</span> : null}
@@ -201,7 +201,7 @@ export default function OwnerSettingsPage() {
         <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Post-order feedback</h2>
         <p className="mb-3 text-sm text-muted">
           A WhatsApp message asking how the order went, sent a while after it&apos;s marked completed. Replies land in{' '}
-          <a href="/owner/feedback" className="font-bold text-tan hover:underline">
+          <a href="/owner/feedback" className="font-bold text-tan-dark hover:underline">
             the feedback inbox
           </a>
           .

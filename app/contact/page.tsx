@@ -27,7 +27,7 @@ function InfoBlock({
 }) {
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan">
+      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">
         {label}
       </p>
       <div className="mt-1 text-charcoal">{children}</div>
@@ -56,12 +56,12 @@ export default function ContactPage() {
             <p>{CAFE_HOURS}</p>
           </InfoBlock>
           <InfoBlock label="Phone">
-            <a href={CAFE_PHONE_HREF} className="text-tan hover:underline">
+            <a href={CAFE_PHONE_HREF} className="text-tan-dark hover:underline">
               {CAFE_PHONE_DISPLAY}
             </a>
           </InfoBlock>
           <InfoBlock label="Email">
-            <a href={BUSINESS.emailHref} className="text-tan hover:underline">
+            <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">
               {BUSINESS.email}
             </a>
           </InfoBlock>
@@ -70,7 +70,7 @@ export default function ContactPage() {
               href={CAFE_INSTAGRAM_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-tan hover:underline"
+              className="text-tan-dark hover:underline"
             >
               {CAFE_INSTAGRAM_HANDLE}
             </a>

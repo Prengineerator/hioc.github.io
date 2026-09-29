@@ -119,7 +119,7 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
     <>
       <div className="mx-auto max-w-3xl px-4 py-8 pb-28">
         <div className="mb-6 flex flex-col items-center text-center">
-          <span className="mb-2 inline-flex items-center gap-2 rounded-full bg-tan px-4 py-1.5 text-sm font-semibold text-cream">
+          <span className="mb-2 inline-flex items-center gap-2 rounded-full bg-tan-dark px-4 py-1.5 text-sm font-semibold text-cream">
             <span aria-hidden>🍽️</span>
             Table {table.label}
           </span>
@@ -151,7 +151,7 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
                     setLoading(true);
                     fetchItems();
                   }}
-                  className="inline-flex min-h-[44px] items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+                  className="inline-flex min-h-[44px] items-center rounded-md bg-tan-dark px-4 text-sm font-semibold text-cream hover:bg-tan-darker"
                 >
                   Try again
                 </button>

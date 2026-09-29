@@ -78,7 +78,7 @@ export function AccountHeader() {
           type="button"
           onClick={handleLogout}
           disabled={loggingOut}
-          className="inline-flex min-h-[40px] shrink-0 items-center text-sm font-semibold text-muted hover:text-tan disabled:opacity-60"
+          className="inline-flex min-h-[40px] shrink-0 items-center text-sm font-semibold text-muted hover:text-tan-dark disabled:opacity-60"
         >
           {loggingOut ? 'Logging out…' : 'Log out'}
         </button>

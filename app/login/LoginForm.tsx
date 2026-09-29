@@ -178,7 +178,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             type="button"
             onClick={() => switchMode('phone')}
             className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-semibold transition-colors ${
-              mode === 'phone' ? 'bg-tan text-cream' : 'text-charcoal'
+              mode === 'phone' ? 'bg-tan-dark text-cream' : 'text-charcoal'
             }`}
           >
             WhatsApp
@@ -187,7 +187,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             type="button"
             onClick={() => switchMode('otp')}
             className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-semibold transition-colors ${
-              mode === 'otp' ? 'bg-tan text-cream' : 'text-charcoal'
+              mode === 'otp' ? 'bg-tan-dark text-cream' : 'text-charcoal'
             }`}
           >
             Email
@@ -227,7 +227,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Sending…' : 'Send Code'}
             </button>
@@ -256,7 +256,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Verifying…' : 'Verify & Log In'}
             </button>
@@ -266,7 +266,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 setOtpStep('email');
                 resetMessages();
               }}
-              className="text-sm text-tan hover:underline"
+              className="text-sm text-tan-dark hover:underline"
             >
               Use a different email
             </button>
@@ -296,7 +296,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Sending…' : 'Send WhatsApp Code'}
             </button>
@@ -325,7 +325,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             <button
               type="submit"
               disabled={submitting}
-              className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Verifying…' : 'Verify & Log In'}
             </button>
@@ -335,7 +335,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 setPhoneStep('phone');
                 resetMessages();
               }}
-              className="text-sm text-tan hover:underline"
+              className="text-sm text-tan-dark hover:underline"
             >
               Use a different number
             </button>
@@ -343,7 +343,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
         ) : null}
 
         <p className="mt-6 text-center text-sm text-muted">
-          <Link href="/" className="hover:text-tan hover:underline">
+          <Link href="/" className="hover:text-tan-dark hover:underline">
             Back to menu
           </Link>
         </p>

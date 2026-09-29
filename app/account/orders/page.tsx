@@ -203,7 +203,7 @@ function AccountOrdersContent() {
       {phoneVerified ? null : (
         <div className="rounded-md border border-line bg-surface px-4 py-3 text-sm text-charcoal">
           Placed an order at the counter?{' '}
-          <Link href="/account/profile" className="font-semibold text-tan hover:underline">
+          <Link href="/account/profile" className="font-semibold text-tan-dark hover:underline">
             Verify your WhatsApp number
           </Link>{' '}
           to see it here.
@@ -222,7 +222,7 @@ function AccountOrdersContent() {
           onClick={() => switchTab('active')}
           className={
             'flex min-h-[40px] flex-1 items-center justify-center rounded px-3 font-semibold transition-colors ' +
-            (tab === 'active' ? 'bg-tan text-cream' : 'text-charcoal')
+            (tab === 'active' ? 'bg-tan-dark text-cream' : 'text-charcoal')
           }
         >
           Active
@@ -232,7 +232,7 @@ function AccountOrdersContent() {
           onClick={() => switchTab('past')}
           className={
             'flex min-h-[40px] flex-1 items-center justify-center rounded px-3 font-semibold transition-colors ' +
-            (tab === 'past' ? 'bg-tan text-cream' : 'text-charcoal')
+            (tab === 'past' ? 'bg-tan-dark text-cream' : 'text-charcoal')
           }
         >
           Past
@@ -248,7 +248,7 @@ function AccountOrdersContent() {
           <p className="text-muted">{tab === 'active' ? 'No active orders.' : 'No past orders yet.'}</p>
           <Link
             href="/menu"
-            className="mt-4 inline-block rounded-md bg-tan px-5 py-2 text-sm font-semibold text-cream hover:bg-tan-dark"
+            className="mt-4 inline-block rounded-md bg-tan-dark px-5 py-2 text-sm font-semibold text-cream hover:bg-tan-darker"
           >
             Browse the menu
           </Link>
@@ -295,14 +295,14 @@ function AccountOrdersContent() {
 
                 <div className="mt-3 flex flex-wrap items-center gap-3">
                   {active ? (
-                    <Link href={`/order/${order.id}`} className="text-sm font-semibold text-tan hover:underline">
+                    <Link href={`/order/${order.id}`} className="text-sm font-semibold text-tan-dark hover:underline">
                       Track
                     </Link>
                   ) : null}
                   {hasBill(order) ? (
                     <Link
                       href={`/order/${order.id}/receipt`}
-                      className="text-sm font-semibold text-tan hover:underline"
+                      className="text-sm font-semibold text-tan-dark hover:underline"
                     >
                       View bill
                     </Link>
@@ -311,7 +311,7 @@ function AccountOrdersContent() {
                     type="button"
                     onClick={() => handleReorder(order.id)}
                     disabled={reorderingId === order.id}
-                    className="rounded-md border border-line px-3 py-1.5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan disabled:opacity-60"
+                    className="rounded-md border border-line px-3 py-1.5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan-dark disabled:opacity-60"
                   >
                     {reorderingId === order.id ? 'Adding to cart…' : 'Order again'}
                   </button>

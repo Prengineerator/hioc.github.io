@@ -149,7 +149,7 @@ export function CashCountSheet({
                 type="button"
                 onClick={() => setStep('confirm')}
                 disabled={busy}
-                className="min-h-[44px] flex-1 rounded-md bg-tan px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
+                className="min-h-[44px] flex-1 rounded-md bg-tan-dark px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
               >
                 Review total — ₹{total}
               </button>

@@ -22,7 +22,7 @@ export default function RefundPage() {
           <li>
             <strong>After the order is accepted / preparation has begun:</strong> the order cannot
             be cancelled from the app, as we may have already started making it. Please contact the
-            counter at <a href={BUSINESS.phoneHref} className="text-tan hover:underline">{BUSINESS.phoneDisplay}</a>;
+            counter at <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>;
             any refund in this case is at our discretion based on how far preparation has progressed.
           </li>
         </ul>
@@ -58,8 +58,8 @@ export default function RefundPage() {
         <p>
           If something is wrong with your order, please tell us at the counter at pickup or contact
           us the same day at{' '}
-          <a href={BUSINESS.phoneHref} className="text-tan hover:underline">{BUSINESS.phoneDisplay}</a>{' '}
-          or <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a>.
+          <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>{' '}
+          or <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a>.
           We will replace the item or issue a refund where appropriate.
         </p>
       </PolicySection>
@@ -75,8 +75,8 @@ export default function RefundPage() {
       <PolicySection heading="6. How to request a refund">
         <p>
           Contact us with your order number (shown on your confirmation, e.g. HIOC-00XXXX) at{' '}
-          <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a> or{' '}
-          <a href={BUSINESS.phoneHref} className="text-tan hover:underline">{BUSINESS.phoneDisplay}</a>.
+          <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a> or{' '}
+          <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>.
           We aim to respond within 2 business days.
         </p>
       </PolicySection>

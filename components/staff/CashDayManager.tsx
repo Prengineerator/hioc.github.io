@@ -448,7 +448,7 @@ function OpenForm({
                 }
               }}
               disabled={busy}
-              className="min-h-[44px] flex-1 rounded-md bg-tan px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
+              className="min-h-[44px] flex-1 rounded-md bg-tan-dark px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
             >
               {busy ? 'Opening…' : 'Yes, open the day'}
             </button>
@@ -459,7 +459,7 @@ function OpenForm({
           type="button"
           onClick={() => setConfirmAt(new Date())}
           disabled={busy || Boolean(evaluation.problem)}
-          className="mt-3 min-h-[44px] w-full rounded-md bg-tan px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-3 min-h-[44px] w-full rounded-md bg-tan-dark px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
         >
           {evaluation.problem ? 'Add a reason to continue' : `Open the day with ${inr(counted)}`}
         </button>

@@ -32,7 +32,7 @@ const TABS = [
 
 function RatingChip({ rating }: { rating: number | null }) {
   if (rating === null) return <span className="text-xs text-muted">No rating yet</span>;
-  const color = rating <= 2 ? 'bg-red-700 text-cream' : rating === 3 ? 'bg-tan text-cream' : 'bg-charcoal text-cream';
+  const color = rating <= 2 ? 'bg-red-700 text-cream' : rating === 3 ? 'bg-tan-dark text-cream' : 'bg-charcoal text-cream';
   return <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${color}`}>{rating}★</span>;
 }
 
