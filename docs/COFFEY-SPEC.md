@@ -37,19 +37,22 @@ Entry points (all behind `flags.suggest`, unchanged):
 `/suggest` (title "Ask Coffey") is a 3-step wizard with Coffey on every step: the mascot plus a speech bubble.
 
 ### Step 1 — "How are you feeling?" (pick one or two)
-Seven cards, **multi-select capped at 2**. At least one is required to continue. With two picked, the rest are disabled and a hint says "Pick up to two — tap one to swap." The first one tapped is the *primary* mood.
+Eight cards in a 2×4 grid, **multi-select capped at 2**. At least one is required to continue. With two picked, the rest are disabled and a hint says "Pick up to two — tap one to swap." The first one tapped is the *primary* mood.
 
 | key | card | icon | the need it covers |
 |---|---|---|---|
-| `boost` | Tired — need a boost | ⚡ | low energy; wants caffeine |
-| `focus` | Focused — working or studying | 🎯 | steady alertness, not too sweet or heavy (**new**) |
-| `cosy` | Calm & cosy | ☕ | low-arousal, positive |
-| `comfort` | Low — need some comfort | 🤗 | negative valence; soothing, familiar |
-| `celebrate` | Celebrating | 🎉 | high-arousal, positive; indulgence |
+| `boost` | Tired — need a boost | ⚡ | low arousal; wants energy and caffeine |
+| `focus` | Focused — working or studying | 🎯 | a goal state; steady alertness, not too sweet or heavy (**new**) |
+| `unwind` | Stressed — need to unwind | 🧘 | high arousal, negative; soothing, easy on caffeine (**new**) |
+| `cosy` | Calm & cosy | ☕ | low arousal, positive |
+| `comfort` | Low — need some comfort | 🤗 | low arousal, negative; familiar, creamy, sweet-leaning |
+| `celebrate` | Celebrating or treating myself | 🎉 | high arousal, positive; hedonic licence, indulgence |
 | `cool` | Hot — cool me down | 🧊 | thermal need; cold and refreshing |
 | `surprise` | Curious — surprise me | ✨ | novelty-seeking |
 
-Why two: mixed states are common, and a feeling often co-occurs with a physical need ("tired **and** hot" = a strong iced coffee). The cap of 2 keeps a clear primary signal.
+**Why two:** mixed states happen, and a feeling often comes with a physical need ("tired **and** hot" = a strong iced coffee). The research found no test of an "up to N" cap. Two is a judgement call that keeps a clear primary signal, and most people will pick one.
+
+**Why `unwind` was added:** the v1 set had no high-arousal negative state, and the research brief shows that stress changes what people eat and drink. See `docs/research/COFFEY-PSYCHOLOGY-RESEARCH.md`.
 
 ### Step 2 — "What sounds good?"
 All groups are optional and preselected to their neutral default, except "What would you like", which defaults to **A drink**.
@@ -58,13 +61,14 @@ All groups are optional and preselected to their neutral default, except "What w
 |---|---|---|---|
 | **What would you like?** | multi, ≥1 (the last one can't be un-ticked) | ☕ A drink → `drink` · 🧇 Something sweet to eat → `dessert` · 🥪 Something savoury → `food` | Replaces "Something to eat", "Filling" and the implicit v1 composition rule. Picking two gives a pairing (§4.4). |
 | **Hot or iced?** | single | Hot · Iced · Either | Shown only while "A drink" is ticked (desserts and food are never filtered by temperature). |
-| **Coffee?** | single | Strong coffee → `base:coffee, strength:strong` · Smooth & milky → `base:coffee, strength:mild` · No coffee → `base:no_coffee` · Caffeine-free → `base:no_coffee, needs:[no_caffeine]` · Either → `base:either, strength:any` | Shown only while "A drink" is ticked. Strength is a *soft* preference; coffee / no coffee / caffeine-free are hard. |
-| **How sweet?** | single, **fully labelled 5-point scale** + Any | No sugar → `none` · Lightly sweet → `light` · Medium → `medium` · Sweet → `sweet` · Very sweet → `very` · Any → `any` | Rendered as a connected scale, not loose chips. Helper text: "Coffee drinks can be made with or without sugar — Coffey sets it for you." |
-| **Flavours you love** | multi, soft | 🍫 Chocolatey · 🍯 Caramel & toffee · 🌰 Nutty · 🍪 Cookies & biscuit · 🍓 Fruity · 🌿 Warm spice · 🌸 Floral & tea · 🧀 Savoury | "Pick any that tempt you." An item matches if it has **any** picked family. |
-| **Fine-tune** (collapsed; the summary shows the current values) | — | **Texture** (single): Light & refreshing → `light` · Rich & creamy → `rich` · Any. **Budget** (single, unchanged): Under ₹150 · ₹150–₹300 · Treat myself · Any | Progressive disclosure. The disclosure opens automatically if a non-default value is set. |
+| **Coffee?** | single | Strong coffee → `base:coffee, strength:strong` · Smooth & milky coffee → `base:coffee, strength:mild` · No coffee (tea's fine) → `base:no_coffee` · No caffeine at all → `base:no_coffee, needs:[no_caffeine]` · Either → `base:either, strength:any` | Shown only while "A drink" is ticked. The options are worded to be mutually exclusive. Hint: "Strong = bold and espresso-forward. Smooth = milky and mellow." Strength is a *soft* preference; coffee / no coffee / no caffeine are hard. |
+| **How sweet?** | single, **fully labelled 5-point unipolar scale** + Any | Not sweet → `none` · Lightly sweet → `light` · Medium → `medium` · Sweet → `sweet` · Very sweet → `very` · Any → `any` | Rendered as a connected scale, not loose chips. The labels are taste levels, not ingredients. Helper text: "Coffee drinks can be made with or without sugar — Coffey sets it for you." |
+| **Flavours you love** | multi, soft | 🍫 Chocolatey · 🍯 Caramel & toffee · 🌰 Nutty · 🍪 Cookies & biscuit · 🍓 Fruity · 🌿 Warm spice · 🌸 Floral & tea | "Pick any that tempt you." An item matches if it has **any** picked family. There's no "Savoury" chip, because "Something savoury" already asks that. |
+| **Budget** | single, price **ceiling** on the cheapest size, visible | Up to ₹100 → `under_100` · Up to ₹150 → `under_150` · Up to ₹200 → `under_200` · Any → `any` | On the live menu these cover 29% / 50% / 89% / 100% of items. v1's "₹150–₹300" band hid everything under ₹150, and "Treat myself" filtered like Any; treating yourself is now part of the `celebrate` card. |
+| **Fine-tune** (collapsed; the summary shows the current value) | — | **Texture** (single): Light & refreshing → `light` · Rich & filling → `rich` · Any | Progressive disclosure for the one rarely-needed control. It opens automatically when a non-default value is set. "Filling" keeps a hunger cue now that v1's "Filling" chip is gone. |
 | **Tell Coffey anything** | free text, ≤140 chars | e.g. "studying late", "sharing with a friend" | Read by the decider (as a preference, never an instruction) and by a deterministic keyword-affinity term (§4.2). |
 
-**Context defaults** (visible, editable, applied **once** when leaving step 1, and only to groups the customer hasn't touched): `celebrate` ticks "Something sweet to eat"; `cool` selects Iced.
+**Context defaults** (visible, editable, applied **once** when leaving step 1, and only to groups the customer hasn't touched): `celebrate` ticks "Something sweet to eat"; `cool` selects Iced. Defaults are powerful (meta-analytic d ≈ 0.68), and the dessert default nudges toward sugar the customer didn't ask for. So it must stay visible and one tap to undo. **Follow-up:** log how often it is un-ticked, and retire it if many customers override it.
 
 Primary button: **Ask Coffey**.
 
@@ -109,6 +113,7 @@ interface SuggestInputs {
 | `mood: celebrate` | `kinds` += `dessert` (the v1 composition rule) |
 | `extras: chocolatey` / `fruity` | `flavours` += `chocolatey` / `fruity` |
 | `needs: less_sugar` | `sweetness: 'light'` (wins over `extras: sweet`); removed from `needs` |
+| `budget: under_150` / `150_300` / `treat` / `any` | `under_150` / `any` / `any` / `any` |
 | — | `strength: 'any'`; `sweetness: 'any'` and `body: 'any'` unless set above |
 
 This is a lossless mapping of v1 *behaviour*, which is how the v1 eval fixtures stay meaningful.
@@ -131,12 +136,12 @@ New nullable columns on `menu_item_traits`. `null` means "not yet tagged at v2",
 | `mood_fit` | jsonb object, keys ⊆ `MOODS`, values 0–3 (1 decimal) | graded fit per feeling |
 | `traits_version` | smallint not null default 1 | `2` = tagged with this spec (`CURRENT_TRAITS_VERSION`) |
 
-The migration also widens the `moods` check to include `focus`. It backfills `sweetness_level` from the legacy 0–3 `sweetness` where null (0→0, 1→3, 2→6, 3→9), so the new scale works before the regenerate runs. The legacy `sweetness` column stays and is **derived** on every v2 write (`legacySweetnessFromLevel`: ≤1→0, ≤4→1, ≤7→2, else 3), so the taste profile and older code paths keep working.
+The migration also widens the `moods` check to include `focus` and `unwind`. It backfills `sweetness_level` from the legacy 0–3 `sweetness` where null (0→0, 1→3, 2→6, 3→9), so the new scale works before the regenerate runs. The legacy `sweetness` column stays and is **derived** on every v2 write (`legacySweetnessFromLevel`: ≤1→0, ≤4→1, ≤7→2, else 3), so the taste profile and older code paths keep working.
 
 ### 3.2 Tagging with Jev (`lib/suggest/traitsPrompt.ts`)
 One `systemOne` call per item, same pool/budget model as v1. The `state` carries name, category, parent, description, **sizes with prices**, **customisation groups with options**, and a `related_description`. The related description is used when the item's own description is empty: it is the description of another menu item sharing a distinctive name token (e.g. "Oreo Heaven Cupcake" ← "Oreo-Heaven" waffle). Generic words (waffle, creme, crepes, chips, cupcake, slice, iced, latte, signature, hioc's, stuffed, cheesecake, cold, brew, hot) never count as distinctive.
 
-Questions (`TRAIT_QUESTION_COUNT` ≈ 70, derived from the vocabularies in `lib/suggest/traitVocabulary.ts`):
+Questions (`TRAIT_QUESTION_COUNT` = 69, derived from the vocabularies in `lib/suggest/traitVocabulary.ts`):
 
 | field | Jev question | stored as |
 |---|---|---|
@@ -144,7 +149,7 @@ Questions (`TRAIT_QUESTION_COUNT` ≈ 70, derived from the vocabularies in `lib/
 | is_coffee | `noul` with true/false criteria | P ≥ 0.5 |
 | sweetness_level | `score`, 6 anchors 0–5 with menu examples, asked "as the kitchen makes it, not counting optional table sugar" | `clamp(round(score × 2), 0, 10)` |
 | intensity, refreshment, indulgence, novelty | `score`, 4 anchors each | `clamp(round(score), 0, 3)` |
-| mood fit ×7 | `score` 0–3: not a fit / could work / good fit / ideal, with the §1 need descriptions | `mood_fit[m] = round(score, 1)`; `moods` = fit ≥ 2 (max 3, fit desc, ties in `MOODS` order), else the single best |
+| mood fit ×8 | `score` 0–3: not a fit / could work / good fit / ideal, with the §1 need descriptions | `mood_fit[m] = round(score, 1)`; `moods` = fit ≥ 2 (max 3, fit desc, ties in `MOODS` order), else the single best |
 | dayparts ×4 | `noul`, with hour ranges (morning 6–12, afternoon 12–5, evening 5–9, late after 9) and examples | P ≥ 0.6, max 3, else the single best |
 | textures ×12 | `noul` per word | P ≥ 0.6, max 3, by P desc |
 | flavours ×35 | `noul` per note of `FLAVOR_VOCABULARY` | P ≥ 0.6, max 5, by P desc → `flavor_notes` |
@@ -176,7 +181,7 @@ Questions (`TRAIT_QUESTION_COUNT` ≈ 70, derived from the vocabularies in `lib/
 3. Temperature: drinks only (unchanged).
 4. Base / caffeine (unchanged).
 5. **Sweetness ceiling.** If `sweetness ≠ any`, exclude when `baseLevel > target + SWEETNESS_SCALE.tolerance` (3). Here `baseLevel = sweetnessLevel(traits)`: inherent sweetness, which optional sugar can raise but never lower. Targets: none 0, light 3, medium 5, sweet 7, very 10. Legacy rows map 0→0, 1→3, 2→6, 3→9, which reproduces v1's "less sugar excludes sweetness 3" exactly.
-6. Budget (unchanged).
+6. **Budget:** the cheapest size must be ≤ `BUDGET_CAPS[budget]`, with no cap for `any`. These are ceilings, not bands.
 
 Relax hints: order `budget, temperature, sweetness, base, needs`. For `sweetness` the message is "Nothing quite that light on sugar fits right now — want to see a little sweeter options?" and the relax sets it to `any`. `kinds` is **never** offered: silently adding food is the v1 bug.
 
@@ -192,6 +197,7 @@ Relax hints: order `budget, temperature, sweetness, base, needs`. For `sweetness
   | cosy | hot → rich 1 / medium 0.7 / light 0.4; otherwise 0 |
   | comfort | `max(rich 1 / medium 0.5 / light 0, level / 10)` |
   | celebrate | dessert → 1; otherwise `level / 10` |
+  | unwind | `{none: 1, low: 0.7, medium: 0.3, high: 0}[caffeine] × (hot ? 1 : 0.8)` |
   | cool | iced → light 1 / medium 0.7 / rich 0.3; otherwise 0 |
   | surprise | 1 if the item is not in the profile's top items (always 1 for a guest) |
 
@@ -201,7 +207,9 @@ Relax hints: order `budget, temperature, sweetness, base, needs`. For `sweetness
   - body (≠ any): light → light 1 / medium 0.5 / rich 0. With `refreshment` present, the light fit is averaged with `refreshment / 3`. Rich → rich 1 / medium 0.5 / light 0.
   - strength (≠ any, **coffee drinks only**): intensity = `traits.intensity ?? {high:3, medium:2, low:1, none:0}[caffeine]`. strong → `intensity / 3`; mild → `1 − intensity / 3`; balanced → `1 − |intensity − 1.5| / 1.5`.
   - flavours (non-empty): 1 if `flavourFamiliesOf(name, flavor_notes)` shares any family with `inputs.flavours`, else 0.
-- **daypart**: 1 if the current daypart is in `dayparts`. Late at night, a medium/high-caffeine item scores 0 here unless a mood is `boost` or `focus` (a quiet nudge only, never in copy).
+- **daypart**: 1 if the current daypart is in `dayparts`. For a medium- or high-caffeine item, the term is ×0.5 in the `evening` (17:00–20:59) and 0 `late` (21:00+). Caffeine taken within about six hours of bedtime disrupts sleep, even when people don't notice it (Drake et al. 2013).
+  - The nudge is waived only for an explicit ask: a mood of `boost`, `base: coffee`, or a `strength` other than `any`. `focus` is **not** exempt, because studying late is exactly when the sleep cost bites.
+  - This is a quiet ranking nudge only. It never appears in copy (tone guide: no health claims).
 - **profile / popularity**: unchanged.
 - **note**: 1 when a meaningful note token (≥3 letters, not a stop-word) matches a token of the item's name, a flavour note, a texture or a family label. Otherwise 0.
 - `Candidate` gains `sugarAdjustable: boolean` (the item has a sugar group, §4.7).
@@ -235,17 +243,17 @@ This replaces v1's `pickWithVarietyTieBreak`.
     - refreshment ≥2: crisp and refreshing
     - the first texture
   - Flavour phrase: the customer's requested family if it matched (chocolatey → "rich chocolate notes", caramel → "buttery caramel notes", nutty → "toasty nutty notes", biscuit → "cookie-crumb notes", fruity → "a bright, fruity flavour", spiced → "warm spice", floral → "delicate floral notes", savoury → "cheesy, savoury comfort"). Otherwise the top two flavour notes.
-  - Mood clause: the v1 set plus `focus` → "easy to sip while you focus".
+  - Mood clause: `MOOD_INFO[m].clause` (the v1 wording, plus `focus` → "easy to sip while you focus" and `unwind` → "soothing and gentle, easy to unwind with").
   - Without v2 traits the reason falls back to the exact v1 shapes.
 - **Headers:** "Coffey's picks for a little lift ⚡", "…to help you focus ☕", "…for a cosy moment ☕", "…for some comfort ☕", "…to celebrate 🎉", "…to cool you down 🧊", "…to surprise you ✨".
 - **Match tags** (`matchTagsFor`, ≤3, fixed vocabulary, in priority order):
-  1. mood (fit ≥ 2 or membership): A proper lift / Good for focus / Cosy / Comforting / A treat / Refreshing / Something new
+  1. mood (fit ≥ 2 or membership): `MOOD_INFO[m].tag`, i.e. A proper lift / Good for focus / Calming / Cosy / Comforting / A treat / Refreshing / Something new
   2. the matched requested flavour family label
   3. sweetness pref label when achievable within ±2 (No sugar / Lightly sweet / Medium sweet / Sweet / Very sweet)
   4. Strong / Smooth & milky, when requested and matched
   5. Iced / Hot, when requested
-  6. Light & refreshing / Rich & creamy, when requested and matched
-  7. the budget chip label
+  6. Light & refreshing / Rich & filling, when requested and matched
+  7. the budget label (Up to ₹100 / Up to ₹150 / Up to ₹200)
   8. Caffeine-free, when requested
 
 ### 4.7 Sugar presets (`lib/suggest/sugar.ts`, pure)
@@ -291,3 +299,18 @@ Numbers on the page come from code constants, so they stay true: `MOODS.length`,
 3. Owner → Suggestions → Traits → **Regenerate with Jev**, pressed again until "0 remaining". Owner-edited rows keep their edits.
 4. Review the "needs review" items, then Confirm all visible.
 5. `npm run eval:suggest` (fallback), plus `--llm` when `TYPESAFE_API_KEY` is set.
+
+---
+
+## 8. What the research changed (2026-09-29)
+`docs/research/COFFEY-PSYCHOLOGY-RESEARCH.md` reviewed the first draft of §1. It found no page-level verification of DOIs (the resolvers were blocked where it ran), and it flags each unverified reference. Adopted:
+- the `unwind` mood, completing the valence × arousal circumplex
+- budget as visible **ceilings**
+- no Savoury flavour chip, since it duplicated "Something savoury"
+- mutually exclusive coffee options with a strength hint
+- taste-level sweetness labels ("Not sweet", not "No sugar")
+- "Rich & filling", which keeps a hunger cue
+- a caffeine ramp from 17:00, with `focus` no longer exempt
+
+Kept as judgement calls, with no direct evidence either way: the two-mood cap, and the 0/3/5/7/10 mapping of the five sweetness labels onto the item scale.
+

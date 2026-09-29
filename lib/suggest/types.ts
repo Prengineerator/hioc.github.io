@@ -11,9 +11,12 @@
 // Vocabulary
 // ---------------------------------------------------------------------------
 
-// Coffey v2 (docs/COFFEY-SPEC.md §1): 'focus' is new. The order here is the
-// order of the step-1 cards and the tie-break order wherever moods are ranked.
-export const MOODS = ['boost', 'focus', 'cosy', 'comfort', 'celebrate', 'cool', 'surprise'] as const;
+// Coffey v2 (docs/COFFEY-SPEC.md §1): 'focus' and 'unwind' are new — 'unwind'
+// fills the stressed / high-arousal-negative corner of the circumplex the v1
+// set missed (docs/research/COFFEY-PSYCHOLOGY-RESEARCH.md). The order here is
+// the order of the step-1 cards (a 2×4 grid) and the tie-break order wherever
+// moods are ranked.
+export const MOODS = ['boost', 'focus', 'unwind', 'cosy', 'comfort', 'celebrate', 'cool', 'surprise'] as const;
 export type Mood = (typeof MOODS)[number];
 /** Step 1 is multi-select, capped at two feelings (COFFEY-SPEC §1). */
 export const MAX_MOODS = 2;
@@ -42,12 +45,19 @@ export const BODY_PREFS = ['light', 'rich', 'any'] as const;
 export type BodyPref = (typeof BODY_PREFS)[number];
 /** Soft flavour preference, OR semantics. Labels and matching live in
  * lib/suggest/traitVocabulary.ts. */
-export const FLAVOUR_FAMILIES = ['chocolatey', 'caramel', 'nutty', 'biscuit', 'fruity', 'spiced', 'floral', 'savoury'] as const;
+// No 'savoury' family: "Something savoury" (kinds) already asks that, and a
+// second savoury chip was the kind of duplicate the redesign removes.
+export const FLAVOUR_FAMILIES = ['chocolatey', 'caramel', 'nutty', 'biscuit', 'fruity', 'spiced', 'floral'] as const;
 export type FlavourFamily = (typeof FLAVOUR_FAMILIES)[number];
 export const NEEDS = ['no_caffeine'] as const;
 export type Need = (typeof NEEDS)[number];
-export const BUDGETS = ['under_150', '150_300', 'treat', 'any'] as const;
+// Price CEILINGS on the cheapest size (COFFEY-SPEC §1, §4.1). v1's
+// "₹150–₹300" was a band that hid every item under ₹150 (half the live menu),
+// and "Treat myself" filtered exactly like "Any" (nothing's cheapest size is
+// above ₹280) — treating yourself now lives on the 'celebrate' mood card.
+export const BUDGETS = ['under_100', 'under_150', 'under_200', 'any'] as const;
 export type Budget = (typeof BUDGETS)[number];
+export const BUDGET_CAPS: Record<Budget, number | null> = { under_100: 100, under_150: 150, under_200: 200, any: null };
 
 // The v1 step-1 vocabulary. Still accepted by validateSuggestInputs() (old
 // browser bundles, stored sessions, the eval fixtures) and upgraded to v2 by
@@ -56,6 +66,9 @@ export const LEGACY_EXTRAS = ['sweet', 'eat', 'light', 'filling', 'chocolatey', 
 export type LegacyExtra = (typeof LEGACY_EXTRAS)[number];
 export const LEGACY_NEEDS = ['no_caffeine', 'less_sugar'] as const;
 export type LegacyNeed = (typeof LEGACY_NEEDS)[number];
+/** v1 budgets. Upgraded: under_150 → under_150; 150_300 and treat → any. */
+export const LEGACY_BUDGETS = ['under_150', '150_300', 'treat', 'any'] as const;
+export type LegacyBudget = (typeof LEGACY_BUDGETS)[number];
 
 /**
  * The 0–10 sweetness scale (COFFEY-SPEC §3.1, §4.1, §4.2, §4.7).
@@ -247,8 +260,8 @@ export interface LegacySuggestInputs {
   base: BasePref;
   extras: LegacyExtra[];
   needs: LegacyNeed[];
-  budget: Budget;
-  mood: Exclude<Mood, 'focus'>;
+  budget: LegacyBudget;
+  mood: Exclude<Mood, 'focus' | 'unwind'>;
   note: string;
 }
 

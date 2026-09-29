@@ -44,6 +44,14 @@ export const MOOD_INFO: Record<Mood, MoodInfo> = {
     header: "Coffey's picks to help you focus ☕",
     need: 'is working or studying and wants steady alertness — moderate caffeine, not too sweet or heavy, easy to sip over a while',
   },
+  unwind: {
+    card: 'Stressed — need to unwind',
+    icon: '🧘',
+    tag: 'Calming',
+    clause: 'soothing and gentle, easy to unwind with',
+    header: "Coffey's picks to help you unwind 🧘",
+    need: 'is stressed or tense and wants to unwind — something soothing and gentle, easy on the caffeine',
+  },
   cosy: {
     card: 'Calm & cosy',
     icon: '☕',
@@ -61,12 +69,12 @@ export const MOOD_INFO: Record<Mood, MoodInfo> = {
     need: 'is feeling low or stressed and wants something familiar, soft, creamy or sweet that feels like a hug',
   },
   celebrate: {
-    card: 'Celebrating',
+    card: 'Celebrating or treating myself',
     icon: '🎉',
     tag: 'A treat',
     clause: 'a little indulgence, lovely for celebrating',
     header: "Coffey's picks to celebrate 🎉",
-    need: 'is in a happy, celebratory mood and wants something indulgent, special and fun',
+    need: 'is celebrating or treating themselves and wants something indulgent, special and fun',
   },
   cool: {
     card: 'Hot — cool me down',
@@ -154,14 +162,6 @@ export const FLAVOUR_FAMILY_INFO: Record<FlavourFamily, FlavourFamilyInfo> = {
     phrase: 'delicate floral notes',
     pattern: /\brose\b|floral|lavender|hibiscus|jasmine|matcha|green tea|\btea\b/i,
   },
-  savoury: {
-    label: 'Savoury',
-    emoji: '🧀',
-    tag: 'Savoury',
-    phrase: 'cheesy, savoury comfort',
-    // "cheese" but never cheesecake or a cheesecake's "cream cheese" note.
-    pattern: /\bcheesy\b|(?<!cream\s)\bcheese\b(?!\s*cake)|garlic|savou?ry|nacho|sandwich|mushroom|paneer|cottage|peri[\s-]?peri|tandoori|spicy/i,
-  },
 };
 
 // ---------------------------------------------------------------------------
@@ -234,9 +234,9 @@ export const FLAVOR_VOCABULARY: readonly FlavorNote[] = [
   { note: 'espresso', family: null, hint: 'coffee-forward — the taste of espresso comes through clearly' },
   { note: 'cream cheese', family: null, hint: 'cream cheese or cheesecake' },
   { note: 'buttery', family: null },
-  { note: 'cheesy', family: 'savoury', hint: 'melted or baked cheese' },
-  { note: 'garlic', family: 'savoury' },
-  { note: 'spicy', family: 'savoury', hint: 'chilli heat, e.g. peri peri' },
+  { note: 'cheesy', family: null, hint: 'melted or baked cheese' },
+  { note: 'garlic', family: null },
+  { note: 'spicy', family: null, hint: 'chilli heat, e.g. peri peri' },
 ];
 
 // ---------------------------------------------------------------------------
