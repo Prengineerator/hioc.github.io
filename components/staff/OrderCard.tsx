@@ -1,7 +1,9 @@
 'use client';
 
-// A single order card on the staff queue board (S1). Tap to open the detail
-// view; the primary button advances one step along the happy path.
+// A single order card on the staff queue board (S1). Tap the card to open the
+// detail view; the button in the top-right corner does the next step in one tap
+// (Accept → Start → Ready → Complete, or Settle when a Ready order is unpaid),
+// and the "⋯" beside it holds the other legal moves (Reject/Cancel…).
 //
 // BRD-1: the card lists what was ordered, so the board can be reviewed and
 // prepped from at a glance — on the staff website and in the POS app, which
@@ -9,17 +11,20 @@
 // correction is never silent; the detail view keeps the prices and the
 // prep/handover checklist.
 
+import { useEffect, useRef, useState } from 'react';
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
+import { PickupReminderButton } from '@/components/staff/PickupReminderButton';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
-import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
-import type { Order, OrderItem, OrderStatus } from '@/lib/types';
+import { STATUS_LABELS } from '@/lib/orders/stateMachine';
+import { canRemind, quickActionsFor, type QuickAction } from '@/lib/orders/quickActions';
+import type { Order, OrderItem } from '@/lib/types';
 
-const PRIMARY_LABEL: Partial<Record<OrderStatus, string>> = {
-  received: 'Accept',
-  accepted: 'Start',
-  preparing: 'Ready',
-  ready: 'Complete',
+const CORNER_TONE: Record<QuickAction['tone'], string> = {
+  primary: 'bg-tan text-cream hover:bg-tan-dark',
+  complete: 'bg-green-600 text-cream hover:bg-green-700',
+  neutral: 'bg-charcoal text-cream hover:opacity-90',
+  danger: 'bg-red-600 text-cream hover:bg-red-700',
 };
 
 const TYPE_LABEL: Record<Order['order_type'], string> = {
@@ -30,14 +35,20 @@ const TYPE_LABEL: Record<Order['order_type'], string> = {
 
 export function OrderCard({
   order,
+  busy = false,
   onOpen,
-  onPrimary,
+  onAction,
+  onRemind,
 }: {
   order: Order & { items: OrderItem[] };
+  // A status request for this order is in flight: the buttons stay disabled so
+  // a double tap can't send the same move twice (or a stale version).
+  busy?: boolean;
   onOpen: (order: Order & { items: OrderItem[] }) => void;
-  onPrimary: (order: Order & { items: OrderItem[] }) => void;
+  onAction: (order: Order & { items: OrderItem[] }, action: QuickAction) => void;
+  onRemind: (order: Order & { items: OrderItem[] }) => Promise<void>;
 }) {
-  const next = PRIMARY_NEXT[order.status];
+  const { corner, menu } = quickActionsFor(order);
   const itemCount = order.items.reduce((n, i) => n + i.quantity, 0);
   const isReady = order.status === 'ready';
   const isDineIn = order.order_type === 'dine_in';
@@ -55,6 +66,9 @@ export function OrderCard({
       tabIndex={0}
       onClick={() => onOpen(order)}
       onKeyDown={(e) => {
+        // Keys pressed on the corner button / menu bubble up here too — only the
+        // card itself (not a button inside it) should open the detail.
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onOpen(order);
@@ -65,14 +79,40 @@ export function OrderCard({
         (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >
-      <div className="flex items-center justify-between">
-        <span className="font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</span>
-        <span className="flex items-center gap-1.5">
-          <PaymentBadge status={order.payment_status} />
-          <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
-            {TYPE_LABEL[order.order_type]}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</span>
+          <span className="flex flex-wrap items-center gap-1.5">
+            <PaymentBadge status={order.payment_status} />
+            <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
+              {TYPE_LABEL[order.order_type]}
+            </span>
           </span>
-        </span>
+        </div>
+
+        {/* Corner: the next step, then the other moves. Neither opens the detail. */}
+        <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          {corner ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onAction(order, corner)}
+              className={
+                'min-h-[44px] min-w-[84px] rounded-md px-4 text-sm font-bold transition-colors disabled:cursor-wait disabled:opacity-60 ' +
+                CORNER_TONE[corner.tone]
+              }
+            >
+              {corner.label}
+            </button>
+          ) : null}
+          {menu.length > 0 ? (
+            <CardMenu
+              actions={menu}
+              disabled={busy}
+              onPick={(a) => onAction(order, a)}
+            />
+          ) : null}
+        </div>
       </div>
 
       <div className="text-sm text-charcoal">
@@ -120,17 +160,85 @@ export function OrderCard({
         </span>
       </div>
 
-      {next && PRIMARY_LABEL[order.status] ? (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPrimary(order);
-          }}
-          className="mt-1 rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+      {canRemind(order) ? (
+        <PickupReminderButton
+          remindedAt={order.pickup_reminded_at}
+          onRemind={() => onRemind(order)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// The "⋯" menu. A plain popover (no library): closes on an outside tap or Escape
+// so it never lingers over the next card.
+function CardMenu({
+  actions,
+  disabled,
+  onPick,
+}: {
+  actions: QuickAction[];
+  disabled: boolean;
+  onPick: (a: QuickAction) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('touchstart', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('touchstart', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-11 w-11 items-center justify-center rounded-md border border-[#e5e5e5] bg-cream text-lg font-bold leading-none text-charcoal transition-colors hover:border-tan disabled:cursor-wait disabled:opacity-60"
+      >
+        ⋯
+      </button>
+      {open ? (
+        <ul
+          role="menu"
+          className="absolute right-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-[#e5e5e5] bg-cream py-1 shadow-lg"
         >
-          {PRIMARY_LABEL[order.status]}
-        </button>
+          {actions.map((a) => (
+            <li key={a.key} role="none">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onPick(a);
+                }}
+                className={
+                  'block min-h-[44px] w-full px-3 text-left text-sm font-bold hover:bg-[#f2efe9] ' +
+                  (a.tone === 'danger' ? 'text-red-700' : 'text-charcoal')
+                }
+              >
+                {a.label}
+              </button>
+            </li>
+          ))}
+        </ul>
       ) : null}
     </div>
   );

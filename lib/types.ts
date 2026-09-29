@@ -198,6 +198,9 @@ export interface Order {
   settle_discount_inr?: number;
   tip_inr?: number;
   settle_reason?: string;
+  // 2026-09-pickup-reminder.sql: when staff last resent the "order ready"
+  // WhatsApp. Optional — absent until the migration is applied.
+  pickup_reminded_at?: string | null;
 }
 
 export interface OrderItemAddon {
