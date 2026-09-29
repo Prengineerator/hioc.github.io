@@ -73,6 +73,35 @@ export async function dayAppTotalsFor(admin: Admin, dayIds: string[]): Promise<M
   return out;
 }
 
+/**
+ * Freezes the day's expense total (categorised cash-outs, already inside
+ * cash_out_inr) onto a cash day; null clears it, for a reopen. Separate and
+ * best-effort like writeDayAppTotals: cash_days.expenses_inr comes from
+ * 2026-10-cash-expenses.sql, and a database without it must still close and
+ * reopen a day. Zero is written too, so a re-close never keeps the first one.
+ */
+export async function writeDayExpenses(admin: Admin, dayId: string, expensesInr: number | null): Promise<void> {
+  const { error } = await admin.from('cash_days').update({ expenses_inr: expensesInr }).eq('id', dayId);
+  if (error && !isMissingColumn(error)) {
+    console.error('cash-days: could not record the day’s expenses', error);
+  }
+}
+
+/** The frozen expense totals for these days (null = not recorded); empty when the column doesn't exist yet. */
+export async function dayExpensesFor(admin: Admin, dayIds: string[]): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  if (dayIds.length === 0) return out;
+  const { data, error } = await admin.from('cash_days').select('id, expenses_inr').in('id', dayIds);
+  if (error) {
+    if (!isMissingColumn(error)) console.error('cash-days: could not read the day expenses', error);
+    return out;
+  }
+  for (const r of (data ?? []) as { id: string; expenses_inr: number | null }[]) {
+    out.set(r.id, r.expenses_inr ?? null);
+  }
+  return out;
+}
+
 /** The currently OPEN cash day, or null. */
 export async function getOpenDay(admin: Admin): Promise<{ day: CashDay | null; error: { code?: string; message: string } | null }> {
   const { data, error } = await admin.from('cash_days').select(CASH_DAY_COLUMNS).eq('status', 'open').maybeSingle();
@@ -109,6 +138,8 @@ export interface DayActivity {
   onlineInr: number;
   swiggyDineoutInr: number;
   zomatoDistrictInr: number;
+  /** Categorised expenses in the window — already inside flows.cashOutInr. */
+  expensesInr: number;
   expectedInr: number;
 }
 
@@ -140,6 +171,7 @@ export async function dayActivity(
     onlineInr: activity.onlineInr,
     swiggyDineoutInr: activity.swiggyDineoutInr,
     zomatoDistrictInr: activity.zomatoDistrictInr,
+    expensesInr: activity.expensesInr,
     expectedInr: expectedCashInr(
       openingTotalInr,
       flows.cashSalesInr,

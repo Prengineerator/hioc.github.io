@@ -1294,6 +1294,29 @@ async function checkCashCounts() {
     if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
     else pass(`${table} is not readable by the anon key`);
   }
+
+  // Expenses from the drawer (2026-10-cash-expenses.sql): the category on a
+  // cash-out, the day's frozen expense total, and the staff-level permission.
+  // The routes tolerate the columns missing (reads degrade), but nothing can be
+  // recorded as an expense without them — so a database missing them is a fail.
+  const category = await rest('/cash_movements?select=category&limit=1');
+  if (category.ok) pass('cash_movements.category exists');
+  else fail('cash_movements.category exists', errKind(category) === 'no_column' ? 'apply supabase/2026-10-cash-expenses.sql' : errText(category));
+
+  const expensesInr = await rest('/cash_days?select=expenses_inr&limit=1');
+  if (expensesInr.ok) pass('cash_days.expenses_inr exists');
+  else fail('cash_days.expenses_inr exists', errKind(expensesInr) === 'no_column' ? 'apply supabase/2026-10-cash-expenses.sql' : errText(expensesInr));
+
+  // hasPermission() fails CLOSED to manager for a missing key, so an unseeded
+  // cash_expense would silently stop staff from recording an expense.
+  const expensePerm = await rest('/role_permissions?select=permission_key,min_role&permission_key=eq.cash_expense');
+  if (expensePerm.ok && Array.isArray(expensePerm.body) && expensePerm.body.length > 0) {
+    pass('cash_expense permission is seeded', `min role: ${expensePerm.body[0].min_role}`);
+  } else if (expensePerm.ok) {
+    fail('cash_expense permission is seeded', 'apply supabase/2026-10-cash-expenses.sql — an unseeded key fails CLOSED to manager, so staff could not record expenses');
+  } else {
+    fail('cash_expense permission is seeded', errText(expensePerm));
+  }
 }
 
 // ---------------------------------------------------------------------------

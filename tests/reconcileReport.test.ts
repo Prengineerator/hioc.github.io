@@ -122,6 +122,23 @@ describe('buildReport', () => {
     expect(r.totals).toMatchObject({ cashInInr: 500, cashOutInr: 2000, cashDaysClosed: 1, overShortInr: -50 });
   });
 
+  it('counts expensesInr only for categorised cash-outs, as a subset of cashOutInr', () => {
+    const r = buildReport(
+      base({
+        movements: [
+          { direction: 'out', amount_inr: 2000, created_at: '2026-09-27T12:00:00Z' }, // plain manager cash out
+          { direction: 'out', amount_inr: 80, created_at: '2026-09-27T13:00:00Z', category: 'ice' },
+          { direction: 'out', amount_inr: 120, created_at: '2026-09-27T14:00:00Z', category: 'milk_dairy' },
+          { direction: 'out', amount_inr: 40, created_at: '2026-09-28T04:00:00Z', category: null },
+          { direction: 'in', amount_inr: 500, created_at: '2026-09-28T03:00:00Z', category: 'ice' }, // never a real row (check constraint), still not an expense
+        ],
+      }),
+    );
+    expect(r.days[0]).toMatchObject({ cashOutInr: 2200, expensesInr: 200, cashInInr: 0 });
+    expect(r.days[1]).toMatchObject({ cashOutInr: 40, expensesInr: 0, cashInInr: 500 });
+    expect(r.totals).toMatchObject({ cashOutInr: 2240, expensesInr: 200, cashInInr: 500 });
+  });
+
   it('writes a CSV with a row per day and a total row', () => {
     const r = buildReport(
       base({
@@ -134,5 +151,21 @@ describe('buildReport', () => {
     expect(lines[0].startsWith('Date,Orders,')).toBe(true);
     expect(lines[1].startsWith('2026-09-27,1,0,300,')).toBe(true);
     expect(lines[3].startsWith('TOTAL,1,0,300,')).toBe(true);
+  });
+
+  it('puts the Expenses column right after Cash out, with totals', () => {
+    const r = buildReport(
+      base({
+        movements: [
+          { direction: 'out', amount_inr: 500, created_at: '2026-09-27T12:00:00Z' },
+          { direction: 'out', amount_inr: 90, created_at: '2026-09-27T13:00:00Z', category: 'water' },
+        ],
+      }),
+    );
+    const [header, day1, , total] = reportCsv(r).trim().split('\n').map((l) => l.split(','));
+    const at = header.indexOf('Cash out (INR)');
+    expect(header[at + 1]).toBe('Expenses (INR)');
+    expect(day1.slice(at, at + 2)).toEqual(['590', '90']);
+    expect(total.slice(at, at + 2)).toEqual(['590', '90']);
   });
 });

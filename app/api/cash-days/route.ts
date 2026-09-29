@@ -17,6 +17,7 @@ import {
   isMissingColumn,
   unpaidOrdersSince,
   writeDayAppTotals,
+  writeDayExpenses,
 } from '@/lib/cash/dayServer';
 import type { CashDay } from '@/lib/types';
 
@@ -75,6 +76,8 @@ export async function GET() {
         cash_refunds_inr: activity.flows.cashRefundsInr,
         cash_in_inr: activity.flows.cashInInr,
         cash_out_inr: activity.flows.cashOutInr,
+        // Of cash_out_inr, what staff punched as categorised expenses.
+        expenses_inr: activity.expensesInr,
         upi_inr: activity.upiInr,
         card_inr: activity.cardInr,
         online_inr: activity.onlineInr,
@@ -342,6 +345,8 @@ export async function PATCH(request: Request) {
   // Dining-app takings sit next to UPI/card in the day's record. Best-effort
   // and separate — see writeDayAppTotals.
   await writeDayAppTotals(admin, closedDay.id, activity);
+  // Same for the expense total (cash_days.expenses_inr, 2026-10-cash-expenses.sql).
+  await writeDayExpenses(admin, closedDay.id, activity.expensesInr);
 
   // CC-2: same continuity as day-open — the FULL counted drawer (before the
   // handover) is a checkpoint on the chain. Additive/best-effort.
@@ -390,6 +395,7 @@ export async function PATCH(request: Request) {
       cash_refunds_inr: activity.flows.cashRefundsInr,
       cash_in_inr: activity.flows.cashInInr,
       cash_out_inr: activity.flows.cashOutInr,
+      expenses_inr: activity.expensesInr,
       expected_cash_inr: evaluation.expectedInr,
       counted_total_inr: evaluation.countedInr,
       over_short_inr: evaluation.varianceInr,

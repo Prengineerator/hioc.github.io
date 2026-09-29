@@ -96,6 +96,9 @@ function DayCard({ day }: { day: OwnerCashDayRow }) {
         <Row label="Cash in / out">
           {money(day.cash_in_inr)} / {money(day.cash_out_inr)}
         </Row>
+        {day.expenses_inr !== null && day.expenses_inr !== undefined ? (
+          <Row label="Expenses">{money(day.expenses_inr)}</Row>
+        ) : null}
         <Row label="UPI / card (not in drawer)">
           {money(day.upi_inr)} / {money(day.card_inr)}
         </Row>

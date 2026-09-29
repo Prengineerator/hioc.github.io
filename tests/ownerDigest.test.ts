@@ -254,6 +254,28 @@ describe('renderOwnerDigest', () => {
     expect(email.text).toContain('UPI: ₹600');
   });
 
+  it('shows expenses from the drawer only when there were any', () => {
+    const send = (movements: ReportInput['movements']) =>
+      renderOwnerDigest({
+        period: { kind: 'weekly', from: '2026-09-22', to: '2026-09-28' },
+        report: report('2026-09-22', '2026-09-28', { orders, movements }),
+        previous: null,
+        items: [],
+        reportUrl: 'https://x',
+      });
+    const plain = send([{ direction: 'out', amount_inr: 300, created_at: '2026-09-27T05:00:00Z' }]);
+    expect(plain.html).toContain('Cash in / out');
+    expect(plain.html).not.toContain('Expenses from the drawer');
+
+    const withExpense = send([
+      { direction: 'out', amount_inr: 300, created_at: '2026-09-27T05:00:00Z' },
+      { direction: 'out', amount_inr: 80, created_at: '2026-09-27T06:00:00Z', category: 'ice' },
+    ]);
+    expect(withExpense.html).toContain('Expenses from the drawer');
+    expect(withExpense.html).toContain('−₹80');
+    expect(withExpense.html).toContain('−₹380'); // cash out still includes the expense
+  });
+
   it('lists every day on a weekly report and best/slowest on a monthly one', () => {
     const weekly = renderOwnerDigest({
       period: { kind: 'weekly', from: '2026-09-22', to: '2026-09-28' },

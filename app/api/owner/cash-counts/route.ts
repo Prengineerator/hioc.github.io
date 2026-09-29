@@ -4,6 +4,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { CashCountKind } from '@/lib/cash/counts';
+import { expenseCategoryLabel } from '@/lib/cash/expenses';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,11 +49,13 @@ interface MovementRow {
   reason: string;
   recorded_by: string;
   created_at: string;
+  /** Set on an expense paid from the drawer; absent before supabase/2026-10-cash-expenses.sql. */
+  category?: string | null;
 }
 
 // GET /api/owner/cash-counts?limit= — read-only log for the owner: recent
 // checkpoints (kind, who, counted, expected, variance, override reason) and
-// cash movements (in/out, amount, reason, who) — docs/PHASE-5-CASH-COUNTS.md.
+// cash movements (in/out, amount, reason, who, and the category of an expense) — docs/PHASE-5-CASH-COUNTS.md.
 // No writes happen through this route; counts and movements are produced by
 // the punch flow and the manager/owner override + cash-movement endpoints
 // elsewhere (app/api/cash-counts/**, app/api/cash-movements/**).
@@ -78,17 +81,30 @@ export async function GET(request: Request) {
   }
   if (countError) return errorResponse(500, countError.message);
 
-  const { data: movementData, error: movementError } = await admin
+  const movementColumns = 'id, direction, amount_inr, reason, recorded_by, created_at';
+  const withCategory = await admin
     .from('cash_movements')
-    .select('id, direction, amount_inr, reason, recorded_by, created_at')
+    .select(`${movementColumns}, category`)
     .order('created_at', { ascending: false })
     .limit(limit);
+  let movementData: MovementRow[] | null = withCategory.data as MovementRow[] | null;
+  let movementError = withCategory.error;
+  if (movementError && isMissingTable(movementError)) {
+    // The cash-expenses migration hasn't added `category` yet — read without it.
+    const plain = await admin
+      .from('cash_movements')
+      .select(movementColumns)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    movementData = plain.data as MovementRow[] | null;
+    movementError = plain.error;
+  }
   if (movementError && !isMissingTable(movementError)) {
     return errorResponse(500, movementError.message);
   }
 
   const counts = (countData ?? []) as CountRow[];
-  const movements = (movementData ?? []) as MovementRow[];
+  const movements = movementData ?? [];
 
   const ids = new Set<string>();
   for (const c of counts) {
@@ -117,6 +133,8 @@ export async function GET(request: Request) {
       direction: m.direction,
       amountInr: m.amount_inr,
       reason: m.reason,
+      category: m.category ?? null,
+      categoryLabel: expenseCategoryLabel(m.category),
       recordedByName: names.get(m.recorded_by) ?? 'Unknown staff',
       createdAt: m.created_at,
     })),

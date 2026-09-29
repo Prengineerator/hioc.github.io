@@ -19,7 +19,7 @@
 // same lib/cash/day.ts rules the route enforces); POST/PATCH recompute every
 // stored figure server-side.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { CashCountSheet } from '@/components/staff/CashCountSheet';
 import { CashDayDenomGrid } from '@/components/staff/CashDayDenomGrid';
@@ -37,6 +37,9 @@ interface OpenSummary {
   cash_refunds_inr: number;
   cash_in_inr: number;
   cash_out_inr: number;
+  // Optional: absent before supabase/2026-10-cash-expenses.sql. Already INSIDE
+  // cash_out_inr — shown as an "of which" line, never subtracted again.
+  expenses_inr?: number;
   upi_inr: number;
   card_inr: number;
   online_inr: number;
@@ -482,6 +485,7 @@ function DaySummary({ openDay, summary, sales }: { openDay: CashDay; summary: Op
     ['Cash in', `+ ${inr(summary.cash_in_inr)}`],
     ['Cash out', `− ${inr(summary.cash_out_inr)}`],
   ];
+  const expensesInr = summary.expenses_inr ?? 0;
   return (
     <div className="rounded-md border border-tan bg-surface p-4">
       <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
@@ -489,10 +493,18 @@ function DaySummary({ openDay, summary, sales }: { openDay: CashDay; summary: Op
       </h2>
       <dl className="flex flex-col gap-1">
         {rows.map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between text-sm">
-            <dt className="text-muted">{label}</dt>
-            <dd className="font-bold tabular-nums text-charcoal">{value}</dd>
-          </div>
+          <Fragment key={label}>
+            <div className="flex items-center justify-between text-sm">
+              <dt className="text-muted">{label}</dt>
+              <dd className="font-bold tabular-nums text-charcoal">{value}</dd>
+            </div>
+            {label === 'Cash out' && expensesInr > 0 ? (
+              <div className="flex items-center justify-between pl-4 text-xs">
+                <dt className="text-muted">of which expenses</dt>
+                <dd className="tabular-nums text-muted">{inr(expensesInr)}</dd>
+              </div>
+            ) : null}
+          </Fragment>
         ))}
         <div className="mt-1 flex items-center justify-between border-t border-tan/40 pt-2 text-base">
           <dt className="font-bold text-charcoal">Expected cash now</dt>

@@ -292,6 +292,21 @@ describe('GET /api/cash-days — the open day', () => {
     ]);
   });
 
+  it('splits categorised expenses out of cash out (still inside it, so expected cash is unchanged)', async () => {
+    tables.cash_days.push(dayRow());
+    tables.cash_movements.push(
+      { id: 'e1', direction: 'out', amount_inr: 120, reason: 'Ice cubes', category: 'ice', recorded_by: 'staff-1', created_at: '2026-09-01T11:00:00.000Z' },
+      { id: 'e2', direction: 'out', amount_inr: 500, reason: 'Bank deposit', category: null, recorded_by: 'mgr-1', created_at: '2026-09-01T12:00:00.000Z' },
+      { id: 'e3', direction: 'out', amount_inr: 9000, reason: 'yesterday', category: 'ice', recorded_by: 'staff-1', created_at: '2026-09-01T08:00:00.000Z' },
+    );
+    const { open_summary } = await (await GET()).json();
+    expect(open_summary).toMatchObject({
+      cash_out_inr: 620,
+      expenses_inr: 120,
+      expected_cash_inr: 1500 - 620,
+    });
+  });
+
   it('lists unpaid orders since opening; cancelled/rejected and older ones do not count', async () => {
     tables.cash_days.push(dayRow());
     tables.orders.push(
@@ -462,6 +477,25 @@ describe('PATCH /api/cash-days — close + handover', () => {
     const body = await res.json();
     expect(body.summary).toMatchObject({ handover_inr: 2700, float_left_total_inr: 1500, expected_cash_inr: 4200 });
     expect(body.handover_warning).toBeNull();
+  });
+
+  it('freezes the day’s expense total on the day and reports it in the summary', async () => {
+    tables.cash_movements.push(
+      { id: 'e1', direction: 'out', amount_inr: 300, reason: 'Ice cubes', category: 'ice', recorded_by: 'staff-1', created_at: '2026-09-01T14:00:00.000Z' },
+      { id: 'e2', direction: 'out', amount_inr: 200, reason: 'Bank deposit', category: null, recorded_by: 'mgr-1', created_at: '2026-09-01T14:30:00.000Z' },
+    );
+    // Counted 4000 = expected (1500 + 3000 − 300 − 200): expenses are already in cash out.
+    const res = await PATCH(
+      jsonReq('PATCH', { closing_denoms: { '500': 8 }, float_left_denoms: { '500': 3 } }),
+    );
+    expect(res.status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({ status: 'closed', cash_out_inr: 500, expenses_inr: 300, over_short_inr: 0 });
+    expect((await res.json()).summary).toMatchObject({ cash_out_inr: 500, expenses_inr: 300 });
+  });
+
+  it('freezes 0 when the day had no expenses', async () => {
+    expect((await PATCH(jsonReq('PATCH', closeBody()))).status).toBe(200);
+    expect(tables.cash_days[0].expenses_inr).toBe(0);
   });
 
   it('freezes each dining app’s takings on the day, never as drawer cash', async () => {
@@ -700,6 +734,13 @@ describe('POST /api/cash-days/reopen', () => {
     expect(tables.cash_days[0]).toMatchObject({ status: 'open', swiggy_dineout_inr: null, zomato_district_inr: null });
   });
 
+  it('clears the frozen expense total with the rest of the close', async () => {
+    auth.role = 'manager';
+    tables.cash_days.push(closed({ expenses_inr: 300 }));
+    expect((await REOPEN(jsonReq('POST', { reason: 'closed by mistake' }))).status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({ status: 'open', expenses_inr: null });
+  });
+
   it('needs a real reason', async () => {
     auth.role = 'manager';
     tables.cash_days.push(closed());
@@ -784,6 +825,51 @@ describe('GET /api/cash-days/log (owner page)', () => {
       zomato_district_inr: 0,
     });
     expect(old.reopen_log[0]).toMatchObject({ by_name: 'Meera', reason: 'mistake' });
+  });
+});
+
+describe('GET /api/cash-days/log — expenses', () => {
+  it('exposes the frozen expense total of a closed day (null when unknown) and the live one for the open day', async () => {
+    auth.role = 'owner';
+    tables.cash_days.push(
+      dayRow({ id: 'cd-a', status: 'closed', opened_at: '2026-08-30T09:30:00.000Z', closed_at: '2026-08-30T18:00:00.000Z', expenses_inr: 450 }),
+      dayRow({ id: 'cd-b', status: 'closed', opened_at: '2026-08-31T09:30:00.000Z', closed_at: '2026-08-31T18:00:00.000Z' }), // closed before the migration
+      dayRow({ id: 'cd-open' }),
+    );
+    tables.cash_movements.push(
+      { id: 'e1', direction: 'out', amount_inr: 80, reason: 'Water', category: 'water', recorded_by: 'staff-1', created_at: '2026-09-01T11:00:00.000Z' },
+      { id: 'e2', direction: 'out', amount_inr: 500, reason: 'Bank deposit', category: null, recorded_by: 'mgr-1', created_at: '2026-09-01T12:00:00.000Z' },
+    );
+    const { days } = await (await LOG(new Request('http://t/api/cash-days/log'))).json();
+    const byId = Object.fromEntries(days.map((d: { id: string }) => [d.id, d]));
+    expect(byId['cd-a'].expenses_inr).toBe(450);
+    expect(byId['cd-b'].expenses_inr).toBeNull();
+    expect(byId['cd-open']).toMatchObject({ live: true, cash_out_inr: 580, expenses_inr: 80 });
+  });
+});
+
+describe('expense day totals before the migration', () => {
+  // A database without 2026-10-cash-expenses.sql has no cash_days.expenses_inr.
+  const missingColumn = { code: '42703', message: 'column cash_days.expenses_inr does not exist' };
+  const erroring = () => {
+    const chain: Record<string, unknown> = {};
+    Object.assign(chain, {
+      update: () => chain,
+      select: () => chain,
+      eq: () => chain,
+      in: () => chain,
+      then: (resolve: (v: unknown) => void) => resolve({ data: null, error: missingColumn }),
+    });
+    return { from: () => chain } as unknown as SupabaseClient;
+  };
+
+  it('writing is a silent no-op and reading comes back empty', async () => {
+    const { writeDayExpenses, dayExpensesFor } = await import('@/lib/cash/dayServer');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(writeDayExpenses(erroring(), 'cd-1', 300)).resolves.toBeUndefined();
+    await expect(dayExpensesFor(erroring(), ['cd-1'])).resolves.toEqual(new Map());
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 

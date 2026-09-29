@@ -94,14 +94,17 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
         .order('processed_at')
         .range(a, b) as unknown as PromiseLike<PageResult<RefundRow>>,
     ),
-    fetchAll<CashMovementRow>((a, b) =>
-      admin
-        .from('cash_movements')
-        .select('direction, amount_inr, created_at')
-        .gte('created_at', startIso)
-        .lt('created_at', endIso)
-        .order('created_at')
-        .range(a, b) as unknown as PromiseLike<PageResult<CashMovementRow>>,
+    // `category` arrived with the cash-expenses migration; read without it before that.
+    withOptional<CashMovementRow>('direction, amount_inr, created_at', 'category', (cols) =>
+      fetchAll<CashMovementRow>((a, b) =>
+        admin
+          .from('cash_movements')
+          .select(cols)
+          .gte('created_at', startIso)
+          .lt('created_at', endIso)
+          .order('created_at')
+          .range(a, b) as unknown as PromiseLike<PageResult<CashMovementRow>>,
+      ),
     ).catch((err) => {
       if (isMissingRelation(err)) return [] as CashMovementRow[];
       throw err;

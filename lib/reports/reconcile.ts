@@ -125,6 +125,8 @@ export interface CashMovementRow {
   direction: string;
   amount_inr: number | null;
   created_at: string;
+  /** Set on an expense paid from the drawer (supabase/2026-10-cash-expenses.sql); absent before that migration. */
+  category?: string | null;
 }
 
 export interface CashDayRow {
@@ -182,6 +184,8 @@ export interface ReportDay {
   tipsInr: number;
   cashInInr: number;
   cashOutInr: number;
+  /** Of cashOutInr: expenses punched from the drawer (a categorised cash out). */
+  expensesInr: number;
   cashDay: CashDayRow | null;
 }
 
@@ -222,6 +226,7 @@ function emptyDay(date: string): ReportDay {
     tipsInr: 0,
     cashInInr: 0,
     cashOutInr: 0,
+    expensesInr: 0,
     cashDay: null,
   };
 }
@@ -281,7 +286,10 @@ export function buildReport(input: ReportInput): Report {
     const day = dayOf(m.created_at);
     if (!day) continue;
     if (m.direction === 'in') day.cashInInr += m.amount_inr ?? 0;
-    else if (m.direction === 'out') day.cashOutInr += m.amount_inr ?? 0;
+    else if (m.direction === 'out') {
+      day.cashOutInr += m.amount_inr ?? 0;
+      if (m.category) day.expensesInr += m.amount_inr ?? 0;
+    }
   }
 
   for (const c of input.cashDays) {
@@ -317,6 +325,7 @@ export function buildReport(input: ReportInput): Report {
     'tipsInr',
     'cashInInr',
     'cashOutInr',
+    'expensesInr',
   ] as const;
   for (const d of list) {
     for (const k of numericKeys) totals[k] += d[k];
@@ -358,6 +367,7 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['Tips (INR)', (d) => d.tipsInr],
   ['Cash in (INR)', (d) => d.cashInInr],
   ['Cash out (INR)', (d) => d.cashOutInr],
+  ['Expenses (INR)', (d) => d.expensesInr],
   ['Cash day', (d) => d.cashDay?.status ?? ''],
   ['Drawer expected (INR)', (d) => d.cashDay?.expected_cash_inr ?? ''],
   ['Drawer counted (INR)', (d) => (d.cashDay?.status === 'closed' ? d.cashDay.counted_total_inr ?? '' : '')],

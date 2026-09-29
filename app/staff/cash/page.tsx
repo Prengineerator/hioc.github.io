@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { flags } from '@/lib/flags';
 import { getCounterActor } from '@/lib/api/auth';
 import { CashDayManager } from '@/components/staff/CashDayManager';
+import { CashExpenseForm } from '@/components/staff/CashExpenseForm';
 import { CashMovementForm } from '@/components/staff/CashMovementForm';
 
 export const dynamic = 'force-dynamic';
@@ -19,6 +20,10 @@ export const dynamic = 'force-dynamic';
 // mounts at all; the API re-checks regardless. getCounterActor() already caps
 // a device-unlocked owner at 'manager' (lib/api/operator.ts), so this
 // role-string comparison stays correct for that path without change.
+//
+// Store expenses (ice, milk, water …) are mounted for EVERY counter actor —
+// CashExpenseForm sits between the day manager and the manager-only movement
+// form; POST /api/cash-expenses re-checks the 'cash_expense' permission.
 export default async function CashPage() {
   if (!flags.staffPos) {
     return (
@@ -43,6 +48,7 @@ export default async function CashPage() {
   return (
     <>
       <CashDayManager />
+      <CashExpenseForm />
       {canManageCash ? <CashMovementForm /> : null}
     </>
   );

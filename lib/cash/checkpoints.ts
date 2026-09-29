@@ -123,6 +123,12 @@ export interface CashActivity {
   /** Paid inside the dining apps — the platform owes it to the café, not the drawer. */
   swiggyDineoutInr: number;
   zomatoDistrictInr: number;
+  /**
+   * Of flows.cashOutInr, the part that was a categorised EXPENSE punched at the
+   * counter (supabase/2026-10-cash-expenses.sql). Information only — it is
+   * already inside cashOutInr, so the drawer math never adds it again.
+   */
+  expensesInr: number;
 }
 
 /**
@@ -268,21 +274,30 @@ export async function cashActivityBetween(
 
   // 4. Manual cash-in / cash-out entries. NEW table (this migration) — treat
   //    it not existing yet as "no movements" rather than failing the count.
+  //    Expenses are cash-outs that carry a category (2026-10-cash-expenses.sql):
+  //    the drawer math is unchanged, the category only splits out expensesInr.
+  //    A database without that column retries without it (expensesInr = 0) —
+  //    the drawer chain must never break on an old schema.
   let cashOutInr = 0;
   let cashInInr = 0;
-  const { data: moveRows, error: movesError } = await admin
-    .from('cash_movements')
-    .select('direction, amount_inr')
-    .gt('created_at', fromIso)
-    .lte('created_at', toIso);
+  let expensesInr = 0;
+  type MoveRow = { direction: string; amount_inr: number | null; category?: string | null };
+  const readMoves = (columns: string) =>
+    admin.from('cash_movements').select(columns).gt('created_at', fromIso).lte('created_at', toIso);
+  let { data: moveRows, error: movesError } = await readMoves('direction, amount_inr, category');
+  if (movesError && isMissingRelation(movesError)) {
+    ({ data: moveRows, error: movesError } = await readMoves('direction, amount_inr'));
+  }
   if (movesError) {
     if (!isMissingRelation(movesError)) {
       throw new Error(`cashFlowsBetween: cash_movements query failed: ${movesError.message}`);
     }
   } else {
-    for (const m of (moveRows ?? []) as { direction: string; amount_inr: number | null }[]) {
-      if (m.direction === 'out') cashOutInr += m.amount_inr ?? 0;
-      else if (m.direction === 'in') cashInInr += m.amount_inr ?? 0;
+    for (const m of (moveRows ?? []) as unknown as MoveRow[]) {
+      if (m.direction === 'out') {
+        cashOutInr += m.amount_inr ?? 0;
+        if (m.category) expensesInr += m.amount_inr ?? 0;
+      } else if (m.direction === 'in') cashInInr += m.amount_inr ?? 0;
     }
   }
 
@@ -297,6 +312,7 @@ export async function cashActivityBetween(
     onlineInr,
     swiggyDineoutInr,
     zomatoDistrictInr,
+    expensesInr,
   };
 }
 

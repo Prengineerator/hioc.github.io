@@ -192,6 +192,7 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
           <Row k="Cash refunds" v={`− ${inr(t.refunds.cash)}`} />
           <Row k="Cash in" v={inr(t.cashInInr)} />
           <Row k="Cash out" v={`− ${inr(t.cashOutInr)}`} />
+          {t.expensesInr > 0 ? <Row k="of which expenses" v={`− ${inr(t.expensesInr)}`} /> : null}
           <Row k="Net cash movement" v={inr(cashNet)} strong />
           <Row
             k={`Over / short (${t.cashDaysClosed} closed day${t.cashDaysClosed === 1 ? '' : 's'})`}
