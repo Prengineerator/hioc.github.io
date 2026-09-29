@@ -4,6 +4,7 @@
 // defines its own response types rather than importing server-side ones.
 
 import type { CashCountKind, ShortageStatus } from '@/lib/cash/counts';
+import type { CashDay, CashDayReopenEntry } from '@/lib/types';
 
 export interface OwnerShortageRow {
   id: string;
@@ -86,4 +87,15 @@ export function formatWhen(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+// One row of GET /api/cash-days/log: a cash_days row with staff names resolved.
+// Figures on a closed day are frozen at its close; the open day's are computed
+// live (`live: true`).
+export interface OwnerCashDayRow extends Omit<CashDay, 'reopen_log'> {
+  live: boolean;
+  opened_by_name: string | null;
+  closed_by_name: string | null;
+  reopened_by_name: string | null;
+  reopen_log: (CashDayReopenEntry & { by_name: string | null })[];
 }

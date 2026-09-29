@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getManagerUser } from '@/lib/api/auth';
-import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
+import { requireCashManager } from '@/lib/cash/gate';
+import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { OVERRIDE_TTL_MINUTES, overrideReasonProblem, type PunchType } from '@/lib/cash/counts';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
@@ -13,6 +13,11 @@ export const dynamic = 'force-dynamic';
 // clock-in or clock-out from the count requirement, with a mandatory reason;
 // the grant expires after OVERRIDE_TTL_MINUTES and is consumed by the next
 // matching punch (lib/cash/checkpoints.ts recordOverride).
+//
+// Gated by requireCashManager() (a session, else the enrolled device's PIN
+// operator) — the counter has no classic session, so the session-only
+// getManagerUser() gate locked the POS out of granting overrides.
+const MANAGER_ONLY = 'Only a manager or the owner can grant or view cash-count overrides.';
 
 function isPunchType(value: unknown): value is PunchType {
   return value === 'in' || value === 'out';
@@ -21,8 +26,9 @@ function isPunchType(value: unknown): value is PunchType {
 // POST /api/cash-counts/overrides — manager/owner only.
 // Body: { userId, punchType: 'in' | 'out', reason }.
 export async function POST(request: Request) {
-  const manager = await getManagerUser();
-  if (!manager) return unauthorized();
+  const gate = await requireCashManager(MANAGER_ONLY);
+  if (gate.denied) return gate.denied;
+  const manager = gate.manager.user;
 
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
@@ -84,8 +90,8 @@ export async function POST(request: Request) {
 // GET /api/cash-counts/overrides — manager/owner only. Currently usable
 // (unused, unexpired) overrides, with staffer + granter names resolved.
 export async function GET() {
-  const manager = await getManagerUser();
-  if (!manager) return unauthorized();
+  const gate = await requireCashManager(MANAGER_ONLY);
+  if (gate.denied) return gate.denied;
 
   const admin = createAdminSupabaseClient();
   const { data, error } = await admin

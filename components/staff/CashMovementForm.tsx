@@ -16,6 +16,7 @@ interface MovementRaw {
   amountInr?: number;
   amount_inr?: number;
   reason?: string;
+  recordedByName?: string;
   createdByName?: string;
   created_by_name?: string;
   createdAt?: string;
@@ -47,7 +48,7 @@ function normalize(m: MovementRaw, i: number): MovementView {
     direction: m.direction === 'in' ? 'in' : 'out',
     amountInr: Math.max(0, Math.floor(Number(m.amountInr ?? m.amount_inr) || 0)),
     reason: m.reason ?? '',
-    createdByName: m.createdByName ?? m.created_by_name ?? '',
+    createdByName: m.recordedByName ?? m.createdByName ?? m.created_by_name ?? '',
   };
 }
 

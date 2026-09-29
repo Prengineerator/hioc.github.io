@@ -675,6 +675,37 @@ export interface CashDay {
   expected_cash_inr: number; // opening + Σ cash settles − Σ cash refunds
   over_short_inr: number; // counted - expected (signed)
   notes: string;
+  // --- Open → Close → Handover (supabase/2026-09-cash-day-handover.sql). All
+  // null/empty on a day closed before that migration. ---
+  open_expected_total_inr: number | null; // float left at the previous close
+  open_variance_inr: number | null; // opening_total_inr - open_expected_total_inr
+  open_reason: string;
+  close_reason: string; // why the drawer was over/short
+  cash_sales_inr: number | null; // over [opened_at, closed_at], frozen at close
+  cash_sales_count: number | null;
+  cash_refunds_inr: number | null;
+  cash_in_inr: number | null;
+  cash_out_inr: number | null;
+  upi_inr: number | null; // information only, never in the drawer math
+  card_inr: number | null;
+  handover_inr: number | null; // cash taken out at close = counted - float left
+  float_left_denoms: CashDenoms | null;
+  float_left_total_inr: number | null;
+  unpaid_count_at_close: number | null;
+  unpaid_override_reason: string | null;
+  reopened_at: string | null;
+  reopened_by: string | null;
+  reopen_reason: string | null;
+  reopen_log: CashDayReopenEntry[];
+}
+
+export interface CashDayReopenEntry {
+  at: string;
+  by: string | null;
+  reason: string;
+  prev_closed_at: string | null; // the close this reopen undid
+  prev_counted_inr: number | null;
+  prev_handover_inr: number | null;
 }
 
 // --- Permission matrix (migration §7) --------------------------------------
