@@ -160,13 +160,13 @@ export function CashExpenseForm() {
   }
 
   return (
-    <section className="mx-auto max-w-md px-4 pb-6">
-      <h2 className="text-sm font-bold uppercase tracking-[0.15em] text-muted">Expenses</h2>
-      <p className="mt-1 text-xs text-muted">
+    <section className="mx-auto max-w-md px-4 py-8">
+      <h1 className="text-2xl font-bold text-charcoal">Expenses</h1>
+      <p className="text-sm text-muted">
         Paid for something from the drawer — ice, water, milk? Punch it here so the cash matches.
       </p>
 
-      <div className="mt-3 rounded-md border border-line bg-white p-4">
+      <div className="mt-5 rounded-md border border-line bg-white p-4">
         <div className="grid grid-cols-2 gap-2" role="group" aria-label="What was it for?">
           {EXPENSE_CATEGORIES.map((c) => (
             <button
