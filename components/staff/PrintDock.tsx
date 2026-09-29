@@ -187,7 +187,7 @@ export function usePrintDock(): PrintDock {
       {status.failed.length === 0 && status.handedOff.length > 0 ? (
         <div
           role="status"
-          className="fixed bottom-4 left-4 z-[55] w-[min(20rem,calc(100vw-2rem))] rounded-md border border-[#e5e5e5] bg-cream p-2.5 shadow-md"
+          className="fixed bottom-4 left-4 z-[55] w-[min(20rem,calc(100vw-2rem))] rounded-md border border-line bg-cream p-2.5 shadow-md"
         >
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-bold text-charcoal">

@@ -23,13 +23,13 @@ export function GlanceCards({ g }: { g: TodayAtAGlance }) {
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       {cards.map((c) => (
-        <div key={c.label} className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+        <div key={c.label} className="rounded-md border border-line bg-cream p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-muted">{c.label}</p>
           <p className="mt-1 text-2xl font-bold text-charcoal">{c.value}</p>
           <Delta m={c.m} />
         </div>
       ))}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
         <p className="text-xs uppercase tracking-wide text-muted">In progress</p>
         <p className="mt-1 text-2xl font-bold text-charcoal">{g.inProgress}</p>
         <span className="text-xs text-muted">live orders</span>
@@ -123,7 +123,7 @@ export function ReasonList({ rows }: { rows: RejectReasonRow[] }) {
 
 export function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+    <section className="rounded-md border border-line bg-cream p-5 shadow-sm">
       <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-charcoal">{title}</h2>
       {children}
     </section>

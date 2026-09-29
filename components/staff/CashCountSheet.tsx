@@ -90,7 +90,7 @@ export function CashCountSheet({
         aria-labelledby={titleId}
         className="relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-cream shadow-elevated sm:max-w-md sm:rounded-md"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-[#e5e5e5] px-5 py-4">
+        <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
           <div>
             <h2 id={titleId} className="text-lg font-bold text-charcoal">
               {title}
@@ -135,7 +135,7 @@ export function CashCountSheet({
         </div>
 
         <div
-          className="flex gap-3 border-t border-[#e5e5e5] px-5 py-4"
+          className="flex gap-3 border-t border-line px-5 py-4"
           style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom, 0px))' }}
         >
           {step === 'count' ? (

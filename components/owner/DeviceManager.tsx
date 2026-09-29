@@ -161,7 +161,7 @@ export function DeviceManager() {
   return (
     <div className="flex flex-col gap-5">
       {/* Enroll — always acts on the machine you are using right now. */}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">
           {current ? 'This machine' : 'Enroll this machine'}
         </h2>
@@ -203,7 +203,7 @@ export function DeviceManager() {
       </div>
 
       {/* Enrolled devices + their defaults */}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="mb-4 text-sm font-bold uppercase tracking-wide text-muted">Enrolled devices</h2>
         {loading ? (
           <p className="py-6 text-center text-sm text-muted">Loading…</p>
@@ -217,7 +217,7 @@ export function DeviceManager() {
               const isThis = d.id === currentDeviceId;
               const editing = editingId === d.id;
               return (
-                <li key={d.id} className="rounded-md border border-[#e5e5e5] bg-white p-4">
+                <li key={d.id} className="rounded-md border border-line bg-white p-4">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
                       {editing ? (

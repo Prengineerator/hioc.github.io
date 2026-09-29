@@ -42,7 +42,7 @@ export function CashDrawerSection({
         <select
           value={current?.id ?? ''}
           onChange={(e) => selectDrawer(e.target.value)}
-          className="mt-1 min-h-[44px] w-full max-w-xs rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+          className="mt-1 min-h-[44px] w-full max-w-xs rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
         >
           <option value="">No drawer configured</option>
           {printers.map((p) => (
@@ -57,7 +57,7 @@ export function CashDrawerSection({
         type="button"
         disabled={!current || testing}
         onClick={() => current && onTest(current)}
-        className="mt-3 min-h-[44px] rounded-md border border-[#e5e5e5] px-4 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
+        className="mt-3 min-h-[44px] rounded-md border border-line px-4 text-sm font-bold text-charcoal hover:border-tan disabled:opacity-50"
       >
         {testing ? 'Opening…' : 'Test open drawer'}
       </button>

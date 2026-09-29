@@ -314,7 +314,7 @@ export function AttendancePunch() {
       <h1 className="text-2xl font-bold text-charcoal">Attendance</h1>
 
       {showConsent ? (
-        <div className="mt-4 rounded-md border border-[#e5e5e5] bg-white p-4 text-sm text-charcoal">
+        <div className="mt-4 rounded-md border border-line bg-white p-4 text-sm text-charcoal">
           <p className="font-bold">Before you start</p>
           <p className="mt-2 text-muted">
             When you tap Clock in or Clock out, we read your location <strong>at that
@@ -346,7 +346,7 @@ export function AttendancePunch() {
         </div>
       ) : null}
 
-      <div className="mt-6 rounded-md border border-[#e5e5e5] bg-white p-6 text-center">
+      <div className="mt-6 rounded-md border border-line bg-white p-6 text-center">
         {open ? (
           <>
             <p className="text-xs uppercase tracking-[0.2em] text-muted">On shift</p>
@@ -431,7 +431,7 @@ export function AttendancePunch() {
           {state.days.length === 0 ? (
             <p className="mt-3 text-sm text-muted">No attendance recorded yet.</p>
           ) : (
-            <ul className="mt-3 divide-y divide-[#eee] rounded-md border border-[#e5e5e5] bg-white">
+            <ul className="mt-3 divide-y divide-[#eee] rounded-md border border-line bg-white">
               {state.days.slice(0, 14).map((d) => (
                 <li key={d.date} className="flex items-center justify-between px-4 py-3 text-sm">
                   <span className="text-charcoal">{formatIstDate(d.date)}</span>
@@ -458,7 +458,7 @@ export function AttendancePunch() {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-white px-2 py-3">
+    <div className="rounded-md border border-line bg-white px-2 py-3">
       <p className="text-[11px] uppercase tracking-[0.15em] text-muted">{label}</p>
       <p className="mt-1 text-lg font-bold text-charcoal">{value}</p>
     </div>
@@ -475,7 +475,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 function CashCountSummary({ result }: { result: CashCountResult }) {
   const variance = result.varianceInr;
   return (
-    <div className="mt-4 rounded-md border border-[#e5e5e5] bg-white p-4 text-sm">
+    <div className="mt-4 rounded-md border border-line bg-white p-4 text-sm">
       <p className="font-bold text-charcoal">Cash count</p>
       <dl className="mt-2 space-y-1">
         <SummaryRow label="Counted" value={result.countedTotalInr !== null ? `₹${result.countedTotalInr}` : '—'} />
@@ -484,7 +484,7 @@ function CashCountSummary({ result }: { result: CashCountResult }) {
         ) : null}
       </dl>
       {result.shortageInr > 0 ? (
-        <p className="mt-3 rounded-md border border-[#e5e5e5] bg-[#f6efe9] p-3 text-charcoal">
+        <p className="mt-3 rounded-md border border-line bg-surface p-3 text-charcoal">
           Short by ₹{result.shortageInr} — this has been sent to the owner.
         </p>
       ) : variance !== null && variance > 0 ? (

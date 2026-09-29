@@ -159,7 +159,7 @@ export function StaffHeader({
       title="Store status: tap to change"
       className={
         'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold transition-opacity hover:opacity-80 ' +
-        (openState.acceptingOrders ? 'bg-[#e8f3ea] text-[#2f6b38]' : 'bg-[#f6efe9] text-tan-dark')
+        (openState.acceptingOrders ? 'bg-[#e8f3ea] text-[#2f6b38]' : 'bg-surface text-tan-dark')
       }
     >
       <span

@@ -292,7 +292,7 @@ export function PayrollScreen() {
       ) : null}
 
       {finalized ? (
-        <div className="mt-6 rounded-md border border-[#e5e5e5] bg-white p-4">
+        <div className="mt-6 rounded-md border border-line bg-white p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-bold text-charcoal">Payslips</h2>
             <button
@@ -356,7 +356,7 @@ export function PayrollScreen() {
 
           <DataTable
             className="mt-6"
-            scrollClassName="rounded-md border border-[#e5e5e5] bg-white"
+            scrollClassName="rounded-md border border-line bg-white"
             rows={draft.lines}
             rowKey={(l) => l.user_id}
             cellPadding="px-3 py-2"
@@ -596,7 +596,7 @@ function PayslipStatusText({ p }: { p: PayslipStatus }) {
 
 function Stat({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-white px-3 py-3">
+    <div className="rounded-md border border-line bg-white px-3 py-3">
       <p className="text-[11px] uppercase tracking-[0.15em] text-muted">{label}</p>
       <p className={`mt-1 ${strong ? 'text-xl font-bold' : 'text-lg'} text-charcoal`}>{value}</p>
     </div>

@@ -55,7 +55,7 @@ export function ChannelHealthSummary() {
   }, []);
 
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+    <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Bill delivery channels</h2>
         <Link href="/owner/notifications" className="text-sm font-bold text-charcoal hover:underline">

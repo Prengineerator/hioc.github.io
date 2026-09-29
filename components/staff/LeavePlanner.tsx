@@ -130,7 +130,7 @@ export function LeavePlanner({ canApprove }: { canApprove: boolean }) {
         Week of {mine.week.requestableDates[0]} · {deadlineText(mine.week)}
       </p>
 
-      <section className="mt-6 rounded-md border border-[#e5e5e5] bg-white p-5">
+      <section className="mt-6 rounded-md border border-line bg-white p-5">
         <h2 className="text-sm font-bold uppercase tracking-[0.15em] text-muted">My days off</h2>
         <p className="mt-2 text-sm text-muted">
           Pick the day you&apos;d like off. Your manager approves it before the week starts.
@@ -224,7 +224,7 @@ function TeamPanel({ team, onChanged }: { team: TeamResponse; onChanged: () => v
   }
 
   return (
-    <section className="mt-8 rounded-md border border-[#e5e5e5] bg-white p-5">
+    <section className="mt-8 rounded-md border border-line bg-white p-5">
       <h2 className="text-sm font-bold uppercase tracking-[0.15em] text-muted">The team</h2>
 
       {team.pending > 0 || team.notPlanned > 0 ? (

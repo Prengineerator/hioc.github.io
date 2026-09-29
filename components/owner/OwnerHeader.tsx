@@ -54,7 +54,7 @@ export function OwnerHeader() {
   }, [pathname]);
 
   return (
-    <header className="border-b border-[#e5e5e5] bg-cream">
+    <header className="border-b border-line bg-cream">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
         <span className="font-bold text-charcoal">HIOC · Owner</span>
         <nav

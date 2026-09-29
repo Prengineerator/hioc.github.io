@@ -368,7 +368,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search order #, name, phone, or pickup code…"
-          className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm sm:max-w-sm"
+          className="mb-4 w-full rounded-md border border-line px-3 py-2 text-sm sm:max-w-sm"
         />
 
         <NewOrderAlert count={newOrderIds.size} soundReady={shell.soundOn && shell.soundReady} />

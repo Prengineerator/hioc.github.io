@@ -12,19 +12,28 @@ import { useState } from 'react';
 import { Skeleton } from '@/components/ui/Skeleton';
 import type { MenuItem } from '@/lib/types';
 
-export function MenuItemImage({ item }: { item: Pick<MenuItem, 'name' | 'image_url'> }) {
+export function MenuItemImage({
+  item,
+  className = 'mb-3 aspect-[4/3] w-full',
+}: {
+  item: Pick<MenuItem, 'name' | 'image_url'>;
+  className?: string;
+}) {
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   return (
-    <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-md bg-surface">
-      {item.image_url ? (
+    <div className={`relative overflow-hidden rounded-md bg-surface ${className}`}>
+      {item.image_url && !failed ? (
         <>
           {!loaded ? <Skeleton className="absolute inset-0 rounded-none" /> : null}
           <img
             src={item.image_url}
             alt={item.name}
             loading="lazy"
+            decoding="async"
             onLoad={() => setLoaded(true)}
+            onError={() => setFailed(true)}
             className={
               'h-full w-full object-cover transition-opacity duration-200 ' +
               (loaded ? 'opacity-100' : 'opacity-0')

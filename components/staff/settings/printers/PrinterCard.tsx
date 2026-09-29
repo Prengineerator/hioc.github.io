@@ -35,14 +35,14 @@ export function PrinterCard({
   const health: PrinterHealth = status?.health ?? 'unknown';
 
   return (
-    <li className="rounded-md border border-[#e5e5e5] bg-white p-4">
+    <li className="rounded-md border border-line bg-white p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full ${HEALTH_DOT[health]}`} />
             <span className="text-sm font-bold text-charcoal">{printer.name}</span>
             {printer.drawer ? (
-              <span className="rounded-md bg-[#f6efe9] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-tan-dark">
+              <span className="rounded-md bg-surface px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-tan-dark">
                 Drawer
               </span>
             ) : null}
@@ -59,14 +59,14 @@ export function PrinterCard({
             <button
               type="button"
               onClick={onEdit}
-              className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+              className="min-h-[36px] rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
             >
               Edit
             </button>
             <button
               type="button"
               onClick={onStartDelete}
-              className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-red-700 hover:border-red-400"
+              className="min-h-[36px] rounded-md border border-line px-3 py-1.5 text-xs font-bold text-red-700 hover:border-red-400"
             >
               Delete
             </button>
@@ -85,7 +85,7 @@ export function PrinterCard({
             <button
               type="button"
               onClick={onCancelDelete}
-              className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+              className="min-h-[36px] rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
             >
               Cancel
             </button>
@@ -97,7 +97,7 @@ export function PrinterCard({
         <button
           type="button"
           onClick={onTestPrint}
-          className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+          className="min-h-[36px] rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
         >
           Test print
         </button>
@@ -105,7 +105,7 @@ export function PrinterCard({
           <button
             type="button"
             onClick={onTestCut}
-            className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+            className="min-h-[36px] rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
           >
             Test cut
           </button>

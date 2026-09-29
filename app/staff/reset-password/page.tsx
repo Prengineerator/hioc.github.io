@@ -83,7 +83,7 @@ function StaffResetPasswordForm() {
 
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#faf7f4] px-4">
-      <div className="mt-24 w-full max-w-sm rounded-md border border-[#e5e5e5] bg-cream p-8 shadow-sm">
+      <div className="mt-24 w-full max-w-sm rounded-md border border-line bg-cream p-8 shadow-sm">
         <div className="mb-6 text-center">
           <Image
             src="/images/logo-black.png"
@@ -98,7 +98,7 @@ function StaffResetPasswordForm() {
         </div>
 
         {!tokenHash ? (
-          <div role="alert" className="rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+          <div role="alert" className="rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal">
             This link is missing information. Open it from the email you were sent, or ask the owner for a new one.
           </div>
         ) : (
@@ -106,7 +106,7 @@ function StaffResetPasswordForm() {
             {error ? (
               <div
                 role="alert"
-                className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+                className="mb-4 rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
               >
                 {error}
               </div>
@@ -127,7 +127,7 @@ function StaffResetPasswordForm() {
                     autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                    className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                   />
                   <p className="mt-1 text-xs text-muted">
                     {hint ?? 'At least 8 characters.'}
@@ -144,7 +144,7 @@ function StaffResetPasswordForm() {
                     autoComplete="new-password"
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
-                    className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                    className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                   />
                 </div>
 

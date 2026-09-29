@@ -118,7 +118,7 @@ export function TableManager() {
   return (
     <div className="flex flex-col gap-5">
       {/* Add form */}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Add a table</h2>
         <p className="mb-4 text-sm text-muted">
           Give each table a short label (e.g. <span className="font-medium">T1</span>). Zone and seats are
@@ -168,7 +168,7 @@ export function TableManager() {
       </div>
 
       {/* Tables list */}
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Your tables</h2>
           {/* QR-2: print A6 scan-to-order cards (owner-only; qr_token fetched from

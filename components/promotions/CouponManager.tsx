@@ -256,7 +256,7 @@ export function CouponManager() {
                 <button
                   type="button"
                   onClick={() => toggleActive(c)}
-                  className={'rounded-md px-2 py-1 text-xs font-bold ' + (c.active ? 'bg-green-100 text-green-700' : 'bg-[#e5e5e5] text-muted')}
+                  className={'rounded-md px-2 py-1 text-xs font-bold ' + (c.active ? 'bg-green-100 text-green-700' : 'bg-line text-muted')}
                 >
                   {c.active ? 'Active' : 'Inactive'}
                 </button>
@@ -299,58 +299,58 @@ function CouponForm({
 }) {
   const set = (patch: Partial<FormState>) => setForm({ ...form, ...patch });
   return (
-    <div className="mb-4 rounded-md border border-[#e5e5e5] bg-[#faf7f4] p-4">
+    <div className="mb-4 rounded-md border border-line bg-[#faf7f4] p-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
           <span className="text-charcoal">Code</span>
-          <input value={form.code} onChange={(e) => set({ code: e.target.value })} disabled={!isCreate} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2 disabled:bg-[#f2efe9]" />
+          <input value={form.code} onChange={(e) => set({ code: e.target.value })} disabled={!isCreate} className="mt-1 w-full rounded-md border border-line p-2 disabled:bg-[#f2efe9]" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Description</span>
-          <input value={form.description} onChange={(e) => set({ description: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input value={form.description} onChange={(e) => set({ description: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Type</span>
-          <select value={form.discount_type} onChange={(e) => set({ discount_type: e.target.value as CouponDiscountType })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2">
+          <select value={form.discount_type} onChange={(e) => set({ discount_type: e.target.value as CouponDiscountType })} className="mt-1 w-full rounded-md border border-line p-2">
             <option value="percent">Percent</option>
             <option value="flat">Flat ₹</option>
           </select>
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Value</span>
-          <input type="number" value={form.discount_value} onChange={(e) => set({ discount_value: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="number" value={form.discount_value} onChange={(e) => set({ discount_value: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Min order (₹)</span>
-          <input type="number" value={form.min_order_inr} onChange={(e) => set({ min_order_inr: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="number" value={form.min_order_inr} onChange={(e) => set({ min_order_inr: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Max discount (₹, 0 = no cap)</span>
-          <input type="number" value={form.max_discount_inr} onChange={(e) => set({ max_discount_inr: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="number" value={form.max_discount_inr} onChange={(e) => set({ max_discount_inr: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Usage limit (0 = unlimited)</span>
-          <input type="number" value={form.usage_limit} onChange={(e) => set({ usage_limit: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="number" value={form.usage_limit} onChange={(e) => set({ usage_limit: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Per-user limit (0 = unlimited)</span>
-          <input type="number" value={form.per_user_limit} onChange={(e) => set({ per_user_limit: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="number" value={form.per_user_limit} onChange={(e) => set({ per_user_limit: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Valid from</span>
-          <input type="datetime-local" value={form.valid_from} onChange={(e) => set({ valid_from: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="datetime-local" value={form.valid_from} onChange={(e) => set({ valid_from: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm">
           <span className="text-charcoal">Valid to</span>
-          <input type="datetime-local" value={form.valid_to} onChange={(e) => set({ valid_to: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input type="datetime-local" value={form.valid_to} onChange={(e) => set({ valid_to: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm sm:col-span-2">
           <span className="text-charcoal">Scope: item ids (comma-separated, blank = whole menu)</span>
-          <input value={form.item_ids} onChange={(e) => set({ item_ids: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input value={form.item_ids} onChange={(e) => set({ item_ids: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
         <label className="text-sm sm:col-span-2">
           <span className="text-charcoal">Scope: categories (comma-separated, blank = whole menu)</span>
-          <input value={form.category} onChange={(e) => set({ category: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+          <input value={form.category} onChange={(e) => set({ category: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
       </div>
       <div className="mt-3 flex flex-wrap gap-4">

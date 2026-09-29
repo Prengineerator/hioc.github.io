@@ -1161,7 +1161,7 @@ export function PosOrderEntry({
         <aside className="hidden lg:block">
           <nav
             aria-label="Menu categories"
-            className="sticky top-20 flex max-h-[calc(100dvh-6rem)] flex-col gap-1 overflow-y-auto rounded-md border border-[#e5e5e5] bg-cream p-2"
+            className="sticky top-20 flex max-h-[calc(100dvh-6rem)] flex-col gap-1 overflow-y-auto rounded-md border border-line bg-cream p-2"
           >
             {[
               ...(showQuickPicks ? [{ slug: QUICK_PICKS, label: 'Quick picks', count: recentItems.length }] : []),
@@ -1253,7 +1253,7 @@ export function PosOrderEntry({
         <div>
           <div
             className={
-              'fixed inset-x-0 bottom-0 z-40 flex max-h-[85dvh] flex-col gap-4 overflow-y-auto rounded-t-xl border border-[#e5e5e5] bg-cream p-4 shadow-elevated transition-transform duration-200 ease-out ' +
+              'fixed inset-x-0 bottom-0 z-40 flex max-h-[85dvh] flex-col gap-4 overflow-y-auto rounded-t-xl border border-line bg-cream p-4 shadow-elevated transition-transform duration-200 ease-out ' +
               (mobileCartOpen ? 'translate-y-0' : 'translate-y-full pointer-events-none') +
               ' pb-[calc(1rem+env(safe-area-inset-bottom))]' +
               ' lg:sticky lg:top-20 lg:inset-x-auto lg:bottom-auto lg:z-auto lg:max-h-none lg:translate-y-0 lg:pointer-events-auto lg:overflow-visible lg:rounded-md lg:pb-4 lg:shadow-sm lg:transition-none'
@@ -1292,8 +1292,8 @@ export function PosOrderEntry({
                   className={
                     'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
                     (orderType === t
-                      ? 'border-tan bg-[#f6efe9] text-tan-dark'
-                      : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                      ? 'border-tan bg-surface text-tan-dark'
+                      : 'border-line text-charcoal hover:border-tan')
                   }
                 >
                   {t === 'dine_in' ? 'Dine-in' : 'Takeaway'}
@@ -1320,7 +1320,7 @@ export function PosOrderEntry({
                         value={tableFilter}
                         onChange={(e) => setTableFilter(e.target.value)}
                         placeholder="Filter tables…"
-                        className="mb-2 w-full rounded-md border border-[#e5e5e5] px-3 py-1.5 text-sm outline-none focus:border-tan"
+                        className="mb-2 w-full rounded-md border border-line px-3 py-1.5 text-sm outline-none focus:border-tan"
                       />
                     ) : null}
                     <div className="flex flex-col gap-2">
@@ -1344,7 +1344,7 @@ export function PosOrderEntry({
                                     'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
                                     (tableId === t.id
                                       ? 'border-tan bg-tan text-cream'
-                                      : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                                      : 'border-line text-charcoal hover:border-tan')
                                   }
                                 >
                                   {t.label}
@@ -1430,7 +1430,7 @@ export function PosOrderEntry({
                 new total is recomputed server-side by the amend engine, so we
                 label it honestly rather than implying it's the bill. */}
             {cart.length > 0 ? (
-              <div className="rounded-md border border-[#e5e5e5] px-3 py-2 text-sm text-charcoal">
+              <div className="rounded-md border border-line px-3 py-2 text-sm text-charcoal">
                 <BillRow label="Subtotal" value={displaySubtotal} />
                 {bill && bill.tax_inr > 0 ? <BillRow label="GST" value={bill.tax_inr} /> : null}
                 {bill && bill.packaging_inr > 0 ? (
@@ -1441,7 +1441,7 @@ export function PosOrderEntry({
                 {bill && bill.discount_inr > 0 ? (
                   <BillRow label="Discount" value={-bill.discount_inr} />
                 ) : null}
-                <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-1">
+                <div className="mt-1 flex items-center justify-between border-t border-line pt-1">
                   <span className="font-bold">{isAddMode ? 'Adding' : 'Total'}</span>
                   <span className="font-bold text-tan">
                     {bill ? `₹${bill.total_inr}` : 'Calculating…'}
@@ -1523,7 +1523,7 @@ export function PosOrderEntry({
                     aria-controls="pos-phone-suggestions"
                     // Also asked (and focused) in the Collect-payment step — BILL-2.
                     placeholder="Phone (for the bill on WhatsApp)"
-                    className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                    className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                   />
                   <CustomerSuggestionList
                     id="pos-phone-suggestions"
@@ -1544,7 +1544,7 @@ export function PosOrderEntry({
                     setCustName(e.target.value);
                   }}
                   placeholder="Name"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                 />
                 {/* VAL-2: the matched name, so a mistyped digit is caught by a
                     human before it spends someone else's points. POS-5 adds
@@ -1586,7 +1586,7 @@ export function PosOrderEntry({
                   }}
                   inputMode="email"
                   placeholder="Email (optional)"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                 />
                 {contactError ? <p className="text-xs text-red-700">{contactError}</p> : null}
               </div>
@@ -1604,7 +1604,7 @@ export function PosOrderEntry({
                 web. Every rupee they're worth comes back from the quote; this
                 panel only decides what to ASK for. */}
             {!isAddMode && cart.length > 0 ? (
-              <div className="flex flex-col gap-2 rounded-md border border-[#e5e5e5] px-3 py-2">
+              <div className="flex flex-col gap-2 rounded-md border border-line px-3 py-2">
                 <p className="text-xs font-bold uppercase tracking-wide text-muted">
                   Coupon &amp; points
                 </p>
@@ -1621,13 +1621,13 @@ export function PosOrderEntry({
                     }}
                     disabled={couponCode.length > 0}
                     placeholder="Coupon code"
-                    className="min-w-0 flex-1 rounded-md border border-[#e5e5e5] px-3 py-2 text-sm uppercase outline-none focus:border-tan disabled:opacity-60"
+                    className="min-w-0 flex-1 rounded-md border border-line px-3 py-2 text-sm uppercase outline-none focus:border-tan disabled:opacity-60"
                   />
                   <button
                     type="button"
                     onClick={couponCode ? clearCoupon : applyCoupon}
                     disabled={!couponCode && couponInput.trim().length === 0}
-                    className="shrink-0 rounded-md border border-[#e5e5e5] px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                    className="shrink-0 rounded-md border border-line px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {couponCode ? 'Clear' : 'Apply'}
                   </button>
@@ -1648,7 +1648,7 @@ export function PosOrderEntry({
                       onChange={(e) => setPointsInput(e.target.value.replace(/[^0-9]/g, ''))}
                       inputMode="numeric"
                       placeholder="Points to redeem"
-                      className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan"
+                      className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                     />
                     {pointsNote ? (
                       <p className={'text-xs ' + (pointsNote.ok ? 'font-bold text-green-700' : 'text-red-700')}>
@@ -1767,7 +1767,7 @@ export function PosOrderEntry({
           into the order below lg. Hidden once the sheet is open (it would
           just sit underneath it) and while there's nothing to view yet. */}
       {!mobileCartOpen && totalItems > 0 ? (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-[#e5e5e5] bg-cream px-4 pt-3 shadow-[0_-2px_10px_rgba(0,0,0,0.08)] lg:hidden pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-cream px-4 pt-3 shadow-[0_-2px_10px_rgba(0,0,0,0.08)] lg:hidden pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
           <button
             type="button"
             onClick={() => setMobileCartOpen(true)}
@@ -1897,7 +1897,7 @@ function PosPlacementConfirmation({
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-xl"
+      className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-[60] w-[min(22rem,calc(100vw-2rem))] rounded-md border border-line bg-cream p-4 shadow-xl"
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -1918,7 +1918,7 @@ function PosPlacementConfirmation({
 
       {/* The one number the counter must act on before anything else. */}
       {changeDueInr > 0 ? (
-        <p className="mt-2 rounded-md bg-[#f6efe9] px-3 py-2 text-sm font-bold text-tan-dark">
+        <p className="mt-2 rounded-md bg-surface px-3 py-2 text-sm font-bold text-tan-dark">
           Change due <span className="text-lg">₹{changeDueInr}</span>
         </p>
       ) : null}
@@ -1984,7 +1984,7 @@ function ConfirmAction({
         'rounded-md px-3 py-2 text-xs font-bold transition-colors disabled:opacity-50 ' +
         (primary
           ? 'bg-tan text-cream hover:bg-tan-dark'
-          : 'border border-[#e5e5e5] text-charcoal hover:border-tan hover:text-tan')
+          : 'border border-line text-charcoal hover:border-tan hover:text-tan')
       }
     >
       {label}
@@ -2016,7 +2016,7 @@ function PosMenuTile({ item, onTap }: { item: MenuItem; onTap: () => void }) {
       disabled={!available}
       aria-label={available ? `Add ${item.name}` : `${item.name} unavailable`}
       className={
-        'flex min-h-[84px] flex-col items-start justify-between rounded-md border border-[#e5e5e5] bg-cream p-3 text-left transition-colors ' +
+        'flex min-h-[84px] flex-col items-start justify-between rounded-md border border-line bg-cream p-3 text-left transition-colors ' +
         (available
           ? 'hover:border-tan focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan'
           : 'cursor-not-allowed opacity-40')
@@ -2038,7 +2038,7 @@ function PosMenuTile({ item, onTap }: { item: MenuItem; onTap: () => void }) {
         <span className="text-xs font-bold text-tan">{priceLabel}</span>
         <span className="flex items-center gap-1">
           {item.short_code ? (
-            <span className="rounded border border-[#e5e5e5] px-1 font-mono text-[10px] font-bold uppercase text-muted">
+            <span className="rounded border border-line px-1 font-mono text-[10px] font-bold uppercase text-muted">
               {item.short_code}
             </span>
           ) : null}

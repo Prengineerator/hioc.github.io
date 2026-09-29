@@ -75,7 +75,7 @@ export function StoreControls({ canManageOrdering = false }: { canManageOrdering
 
   if (!settings || !openState) {
     return (
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
         <Spinner label="Loading store controls…" />
       </div>
     );
@@ -84,7 +84,7 @@ export function StoreControls({ canManageOrdering = false }: { canManageOrdering
   const busy = settings.busy_buffer_min > 0;
 
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+    <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-bold text-charcoal">Store</h2>
         <span
@@ -92,7 +92,7 @@ export function StoreControls({ canManageOrdering = false }: { canManageOrdering
             'rounded-md px-2 py-1 text-xs font-bold ' +
             (openState.acceptingOrders
               ? 'bg-[#e8f3ea] text-[#2f6b38]'
-              : 'bg-[#f6efe9] text-tan-dark')
+              : 'bg-surface text-tan-dark')
           }
         >
           {openState.acceptingOrders
@@ -101,7 +101,7 @@ export function StoreControls({ canManageOrdering = false }: { canManageOrdering
         </span>
       </div>
 
-      <div className="flex flex-col divide-y divide-[#e5e5e5]">
+      <div className="flex flex-col divide-y divide-line">
         <div className="flex items-center justify-between gap-4 py-3 first:pt-0">
           <div>
             <p className="text-sm font-bold text-charcoal">Pause new orders</p>
@@ -122,7 +122,7 @@ export function StoreControls({ canManageOrdering = false }: { canManageOrdering
           <select
             value={settings.store_open_override}
             onChange={(e) => patch({ store_open_override: e.target.value as StoreOpenOverride })}
-            className="rounded-md border border-[#e5e5e5] px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
+            className="rounded-md border border-line px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
           >
             {OVERRIDE_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -141,7 +141,7 @@ export function StoreControls({ canManageOrdering = false }: { canManageOrdering
           </div>
           <div className="flex items-center gap-2">
             {busy ? (
-              <span className="rounded-md bg-[#f6efe9] px-2 py-1 text-xs font-bold text-tan-dark">
+              <span className="rounded-md bg-surface px-2 py-1 text-xs font-bold text-tan-dark">
                 Busy
               </span>
             ) : null}

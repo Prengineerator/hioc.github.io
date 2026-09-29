@@ -71,7 +71,7 @@ export function MenuItemTable({
       minWidth={900}
       cellPadding="px-4 py-3"
       headerTextClassName="text-charcoal"
-      scrollClassName="rounded-md border border-[#e5e5e5] bg-cream shadow-sm"
+      scrollClassName="rounded-md border border-line bg-cream shadow-sm"
       // Category banner rows, while the table is in its default (unsorted) order.
       groupHeader={(item, prev) =>
         prev && prev.category === item.category ? null : (
@@ -101,10 +101,10 @@ export function MenuItemTable({
               <img
                 src={item.image_url}
                 alt=""
-                className="h-10 w-10 rounded-md border border-[#e5e5e5] object-cover"
+                className="h-10 w-10 rounded-md border border-line object-cover"
               />
             ) : (
-              <span className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-[#e5e5e5] text-xs text-muted">
+              <span className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-line text-xs text-muted">
                 —
               </span>
             ),
@@ -182,7 +182,7 @@ export function MenuItemTable({
                           onSnooze(item, '2h');
                           setMenuOpenFor(null);
                         }}
-                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                        className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                       >
                         2 hrs
                       </button>
@@ -192,7 +192,7 @@ export function MenuItemTable({
                           onSnooze(item, 'eod');
                           setMenuOpenFor(null);
                         }}
-                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                        className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                       >
                         Today
                       </button>
@@ -202,7 +202,7 @@ export function MenuItemTable({
                           onSnooze(item, 'indefinite');
                           setMenuOpenFor(null);
                         }}
-                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                        className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                       >
                         Indefinitely
                       </button>
@@ -219,7 +219,7 @@ export function MenuItemTable({
                     <button
                       type="button"
                       onClick={() => setMenuOpenFor(item.id)}
-                      className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                      className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
                     >
                       Mark sold out
                     </button>
@@ -228,7 +228,7 @@ export function MenuItemTable({
                   <button
                     type="button"
                     onClick={() => onReenable(item)}
-                    className="rounded-md border border-tan px-2 py-1 text-xs font-bold text-tan hover:bg-[#f6efe9]"
+                    className="rounded-md border border-tan px-2 py-1 text-xs font-bold text-tan hover:bg-surface"
                   >
                     Mark available
                   </button>

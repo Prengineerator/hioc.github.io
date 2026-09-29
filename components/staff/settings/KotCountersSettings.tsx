@@ -22,9 +22,9 @@ interface LoadResponse {
   canEdit: boolean;
 }
 
-const CARD = 'rounded-md border border-[#e5e5e5] bg-white p-4';
+const CARD = 'rounded-md border border-line bg-white p-4';
 const INPUT =
-  'min-h-[44px] rounded-md border border-[#e5e5e5] px-3 text-sm text-charcoal focus:border-tan focus:outline-none disabled:bg-surface';
+  'min-h-[44px] rounded-md border border-line px-3 text-sm text-charcoal focus:border-tan focus:outline-none disabled:bg-surface';
 
 export function KotCountersSettings() {
   const [form, setForm] = useState<KotCountersForm | null>(null);
@@ -86,7 +86,7 @@ export function KotCountersSettings() {
     return (
       <div className={CARD}>
         <p className="text-sm text-red-700">{loadError}</p>
-        <button type="button" onClick={() => void load()} className="mt-3 min-h-[44px] rounded-md border border-[#e5e5e5] px-4 text-sm font-bold text-charcoal">
+        <button type="button" onClick={() => void load()} className="mt-3 min-h-[44px] rounded-md border border-line px-4 text-sm font-bold text-charcoal">
           Try again
         </button>
       </div>
@@ -152,7 +152,7 @@ export function KotCountersSettings() {
                         ),
                       }))
                     }
-                    className="min-h-[44px] rounded-md border border-[#e5e5e5] px-3 text-sm font-bold text-charcoal hover:border-red-400 disabled:opacity-50"
+                    className="min-h-[44px] rounded-md border border-line px-3 text-sm font-bold text-charcoal hover:border-red-400 disabled:opacity-50"
                     aria-label={`Remove ${counter.name || `counter ${i + 1}`}`}
                   >
                     Remove

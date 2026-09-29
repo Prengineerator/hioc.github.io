@@ -75,7 +75,7 @@ export function OrderCard({
         }
       }}
       className={
-        'flex cursor-pointer flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
+        'flex cursor-pointer flex-col gap-2 rounded-md border border-line bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
         (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >
@@ -124,7 +124,7 @@ export function OrderCard({
       </div>
 
       {order.items.length > 0 ? (
-        <ul className="flex flex-col gap-1 border-t border-[#e5e5e5] pt-2 text-sm text-charcoal">
+        <ul className="flex flex-col gap-1 border-t border-line pt-2 text-sm text-charcoal">
           {order.items.map((item) => (
             <li key={item.id} className={item.voided ? 'text-muted line-through' : ''}>
               <span className="font-bold">{item.quantity}×</span> {item.name_snapshot}
@@ -145,7 +145,7 @@ export function OrderCard({
       ) : null}
 
       {order.notes ? (
-        <p className="rounded bg-[#f6efe9] px-2 py-1 text-xs text-charcoal">
+        <p className="rounded bg-surface px-2 py-1 text-xs text-charcoal">
           <span className="font-bold">Order note:</span> {order.notes}
         </p>
       ) : null}
@@ -211,14 +211,14 @@ function CardMenu({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="flex h-11 w-11 items-center justify-center rounded-md border border-[#e5e5e5] bg-cream text-lg font-bold leading-none text-charcoal transition-colors hover:border-tan disabled:cursor-wait disabled:opacity-60"
+        className="flex h-11 w-11 items-center justify-center rounded-md border border-line bg-cream text-lg font-bold leading-none text-charcoal transition-colors hover:border-tan disabled:cursor-wait disabled:opacity-60"
       >
         ⋯
       </button>
       {open ? (
         <ul
           role="menu"
-          className="absolute right-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-[#e5e5e5] bg-cream py-1 shadow-lg"
+          className="absolute right-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-line bg-cream py-1 shadow-lg"
         >
           {actions.map((a) => (
             <li key={a.key} role="none">

@@ -32,7 +32,7 @@ export function OrderQueueBoard({
           .sort((a, b) => b.created_at.localeCompare(a.created_at));
         return (
           <section key={lane} className="flex flex-col gap-3">
-            <h2 className="flex items-center justify-between border-b border-[#e5e5e5] pb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
+            <h2 className="flex items-center justify-between border-b border-line pb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
               {STATUS_LABELS[lane]}
               <span className="rounded-full bg-charcoal px-2 py-0.5 text-[11px] text-cream">
                 {laneOrders.length}

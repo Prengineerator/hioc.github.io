@@ -122,7 +122,7 @@ export default function OwnerSettingsPage() {
               type="number"
               value={settings[f.key]}
               onChange={(e) => set({ [f.key]: Number(e.target.value) } as Partial<StoreSettings>)}
-              className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2"
+              className="mt-1 w-full rounded-md border border-line p-2"
             />
           </label>
         ))}
@@ -139,7 +139,7 @@ export default function OwnerSettingsPage() {
         </label>
         <label className="flex items-center gap-2 text-sm text-charcoal">
           Store state
-          <select value={settings.store_open_override} onChange={(e) => set({ store_open_override: e.target.value as StoreSettings['store_open_override'] })} className="rounded-md border border-[#e5e5e5] p-1">
+          <select value={settings.store_open_override} onChange={(e) => set({ store_open_override: e.target.value as StoreSettings['store_open_override'] })} className="rounded-md border border-line p-1">
             <option value="auto">Auto (by hours)</option>
             <option value="force_open">Force open</option>
             <option value="force_closed">Force closed</option>
@@ -149,18 +149,18 @@ export default function OwnerSettingsPage() {
 
       <label className="mt-4 block text-sm">
         <span className="text-charcoal">Opening hours (JSON: {'{'} &quot;mon&quot;: [{'{'}&quot;open&quot;:&quot;10:00&quot;,&quot;close&quot;:&quot;24:00&quot;{'}'}] {'}'})</span>
-        <textarea value={hoursJson} onChange={(e) => setHoursJson(e.target.value)} rows={9} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2 font-mono text-xs" />
+        <textarea value={hoursJson} onChange={(e) => setHoursJson(e.target.value)} rows={9} className="mt-1 w-full rounded-md border border-line p-2 font-mono text-xs" />
       </label>
 
       <label className="mt-4 block text-sm">
         <span className="text-charcoal">Holidays (comma-separated ISO dates)</span>
-        <input value={holidays} onChange={(e) => setHolidays(e.target.value)} placeholder="2026-08-15, 2026-10-02" className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+        <input value={holidays} onChange={(e) => setHolidays(e.target.value)} placeholder="2026-08-15, 2026-10-02" className="mt-1 w-full rounded-md border border-line p-2" />
       </label>
 
       {/* Counter printing (POS4-3). Read through readAutoPrintSettings so a row
           written before the auto-print migration shows the same defaults the
           POS is actually using, rather than an unchecked box that lies. */}
-      <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="mt-6 rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Counter printing</h2>
         <p className="mb-2 text-sm text-muted">
           What the counter prints on its own, so nobody has to remember a second click.
@@ -191,13 +191,13 @@ export default function OwnerSettingsPage() {
 
       {/* Below the Save button on purpose: everything above is written by it,
           this is read-only status the owner can't change from a browser. */}
-      <div className="mt-8 border-t border-[#e5e5e5] pt-8">
+      <div className="mt-8 border-t border-line pt-8">
         <ChannelHealthSummary />
       </div>
 
       {/* Post-order feedback (2026-10-order-feedback.sql). Same Save button as
           everything else above — no separate save round trip needed. */}
-      <div className="mt-8 rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="mt-8 rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Post-order feedback</h2>
         <p className="mb-3 text-sm text-muted">
           A WhatsApp message asking how the order went, sent a while after it&apos;s marked completed. Replies land in{' '}
@@ -225,7 +225,7 @@ export default function OwnerSettingsPage() {
             max={1440}
             value={settings.feedback_delay_min}
             onChange={(e) => set({ feedback_delay_min: Number(e.target.value) })}
-            className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2"
+            className="mt-1 w-full rounded-md border border-line p-2"
           />
         </label>
         <label className="mt-3 block text-sm">
@@ -235,7 +235,7 @@ export default function OwnerSettingsPage() {
             value={settings.google_review_url}
             onChange={(e) => set({ google_review_url: e.target.value })}
             placeholder="https://g.page/r/…/review"
-            className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2"
+            className="mt-1 w-full rounded-md border border-line p-2"
           />
           <span className="mt-1 block text-xs text-muted">
             Offered to a customer who taps &quot;Loved it&quot;. A GOOGLE_REVIEW_URL environment variable, if set,
@@ -248,7 +248,7 @@ export default function OwnerSettingsPage() {
           above — the geofence is tuned by trial on site, and a round trip
           through a form-wide save would make that slower than it needs to be. */}
       {flags.attendance ? (
-        <div className="mt-8 border-t border-[#e5e5e5] pt-8">
+        <div className="mt-8 border-t border-line pt-8">
           <AttendanceSettingsPanel />
         </div>
       ) : null}

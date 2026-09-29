@@ -106,7 +106,7 @@ export function TablesBoard() {
         <div className="flex flex-col gap-8">
           {zones.map((zone) => (
             <section key={zone.zone || '__unzoned__'} className="flex flex-col gap-3">
-              <h2 className="border-b border-[#e5e5e5] pb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
+              <h2 className="border-b border-line pb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
                 {zone.zone || 'No zone'}
                 <span className="ml-2 font-normal text-muted">{zone.tables.length}</span>
               </h2>
@@ -151,7 +151,7 @@ function TableTile({
       <button
         type="button"
         onClick={onStartOrder}
-        className="flex min-h-[104px] flex-col justify-between rounded-md border border-[#e5e5e5] bg-cream p-3 text-left shadow-sm transition hover:border-tan hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+        className="flex min-h-[104px] flex-col justify-between rounded-md border border-line bg-cream p-3 text-left shadow-sm transition hover:border-tan hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
       >
         <div className="flex items-center justify-between">
           <span className="text-base font-bold text-charcoal">{table.label}</span>
@@ -167,7 +167,7 @@ function TableTile({
   }
 
   return (
-    <div className="flex min-h-[104px] flex-col rounded-md border border-tan bg-[#f6efe9] p-3 shadow-sm">
+    <div className="flex min-h-[104px] flex-col rounded-md border border-tan bg-surface p-3 shadow-sm">
       <button
         type="button"
         onClick={onToggle}
@@ -204,7 +204,7 @@ function TableTile({
       {expanded ? (
         <div className="mt-3 flex flex-col gap-2 border-t border-tan/40 pt-3">
           {occ.orders.map((order) => (
-            <div key={order.id} className="rounded-md border border-[#e5e5e5] bg-cream p-2 text-xs">
+            <div key={order.id} className="rounded-md border border-line bg-cream p-2 text-xs">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-charcoal">
                   #{formatOrderNumber(order.order_number)}
@@ -223,7 +223,7 @@ function TableTile({
                     </li>
                   ))}
               </ul>
-              <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-1">
+              <div className="mt-1 flex items-center justify-between border-t border-line pt-1">
                 <span className="text-muted">
                   <ElapsedTime since={order.created_at} /> · {orderItemCount(order)} item
                   {orderItemCount(order) === 1 ? '' : 's'}
@@ -243,7 +243,7 @@ function TableTile({
           ))}
           <Link
             href="/staff"
-            className="rounded-md border border-[#e5e5e5] px-3 py-2 text-center text-xs font-bold text-charcoal transition-colors hover:border-tan"
+            className="rounded-md border border-line px-3 py-2 text-center text-xs font-bold text-charcoal transition-colors hover:border-tan"
           >
             Settle or correct in Orders →
           </Link>

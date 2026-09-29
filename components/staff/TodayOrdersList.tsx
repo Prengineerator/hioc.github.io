@@ -96,16 +96,16 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
       ? 'border-charcoal bg-charcoal text-cream'
       : alert
         ? 'border-red-300 text-red-800 hover:bg-red-50'
-        : 'border-[#e5e5e5] text-charcoal hover:border-tan');
+        : 'border-line text-charcoal hover:border-tan');
   const field =
-    'min-h-[40px] rounded-md border border-[#e5e5e5] bg-white px-3 text-sm text-charcoal outline-none focus:border-tan';
+    'min-h-[40px] rounded-md border border-line bg-white px-3 text-sm text-charcoal outline-none focus:border-tan';
 
   return (
     <div className="flex flex-col gap-4">
       {/* Payment received — what came in today, by method. A method tile
           filters the list to the orders it was taken on. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <div className="rounded-md border border-[#e5e5e5] bg-white p-3">
+        <div className="rounded-md border border-line bg-white p-3">
           <p className="text-xs text-muted">Orders today</p>
           <p className="text-xl font-bold text-charcoal">{orders.length}</p>
         </div>
@@ -117,7 +117,7 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
             aria-pressed={pay === m}
             className={
               'rounded-md border p-3 text-left transition-colors ' +
-              (pay === m ? 'border-charcoal bg-surface' : 'border-[#e5e5e5] bg-white hover:border-tan')
+              (pay === m ? 'border-charcoal bg-surface' : 'border-line bg-white hover:border-tan')
             }
           >
             <p className="text-xs text-muted">{PAYMENT_METHOD_LABEL[m]}</p>
@@ -127,14 +127,14 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
             </p>
           </button>
         ))}
-        <div className="rounded-md border border-[#e5e5e5] bg-white p-3">
+        <div className="rounded-md border border-line bg-white p-3">
           <p className="text-xs text-muted">Total received</p>
           <p className="text-xl font-bold text-charcoal">{rupees(totalReceived(received))}</p>
         </div>
         <button
           type="button"
           onClick={() => setPay('unpaid')}
-          className={'rounded-md border p-3 text-left ' + (due > 0 ? 'border-red-300 bg-red-50' : 'border-[#e5e5e5] bg-white')}
+          className={'rounded-md border p-3 text-left ' + (due > 0 ? 'border-red-300 bg-red-50' : 'border-line bg-white')}
         >
           <p className={`text-xs ${due > 0 ? 'font-bold text-red-800' : 'text-muted'}`}>Still to collect</p>
           <p className={`text-xl font-bold ${due > 0 ? 'text-red-800' : 'text-charcoal'}`}>{rupees(due)}</p>
@@ -255,8 +255,8 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
                     (due
                       ? 'border-red-200 border-l-4 border-l-red-500 bg-red-50/60'
                       : closedUnsold
-                        ? 'border-[#e5e5e5] bg-surface text-muted'
-                        : 'border-[#e5e5e5] bg-white')
+                        ? 'border-line bg-surface text-muted'
+                        : 'border-line bg-white')
                   }
                 >
                   <span className="flex min-w-0 items-center gap-3">
