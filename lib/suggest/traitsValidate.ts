@@ -1,4 +1,4 @@
-// Phase 7 · SUG-2 — trait-row validation, shared by the Opus tagger
+// Phase 7 · SUG-2 — trait-row validation, shared by the Jev tagger
 // (lib/suggest/traitsPrompt.ts) and the owner PATCH route
 // (app/api/owner/suggest/traits/route.ts). Every allowed value here MUST
 // mirror the CHECK constraints in supabase/2026-09-suggestion-engine.sql
@@ -18,7 +18,7 @@ const DAYPART_SET = new Set<string>(DAYPARTS);
 const MAX_FLAVOR_NOTES = 5;
 const MAX_FLAVOR_NOTE_CHARS = 24;
 
-/** The trait fields an owner or Opus can set — everything except the row's
+/** The trait fields an owner or the model can set — everything except the row's
  * identity (`menu_item_id`) and provenance (`source`, `confirmed`, `updated_at`),
  * which the route itself decides. */
 export type TraitContent = Pick<
@@ -83,7 +83,7 @@ export function validateTraitPatch(input: Record<string, unknown>): { patch: Par
   return { patch, error: null };
 }
 
-/** Validates a FULL trait row (every field required) — used for Opus output,
+/** Validates a FULL trait row (every field required) — used for model output,
  * where a partial row is as useless as a wrong one. Returns null on any
  * missing or invalid field. */
 export function validateTraitContent(input: unknown): TraitContent | null {
@@ -95,12 +95,12 @@ export function validateTraitContent(input: unknown): TraitContent | null {
 }
 
 /**
- * Validates a batch of Opus-generated rows against the ids that were actually
+ * Validates a batch of model-generated rows against the ids that were actually
  * sent in that batch. An id the model invents, or copies from a different
  * batch, is dropped rather than trusted (SUG-2's "never trust ids not in the
  * batch"); a duplicate id keeps its first valid occurrence.
  */
-export function validateOpusTraitRows(rows: unknown, allowedIds: ReadonlySet<string> | readonly string[]): ValidatedTraitRow[] {
+export function validateModelTraitRows(rows: unknown, allowedIds: ReadonlySet<string> | readonly string[]): ValidatedTraitRow[] {
   const allowed = allowedIds instanceof Set ? allowedIds : new Set(allowedIds);
   if (!Array.isArray(rows)) return [];
 

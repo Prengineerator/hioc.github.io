@@ -4,7 +4,7 @@
 //
 //   1. filter    lib/suggest/filter.ts    filterCandidates / relaxHintFor
 //   2. score     lib/suggest/score.ts     scoreCandidates / buildShortlist
-//   3. decide    an injected `Decider` (lib/suggest/llm.ts's opusDecider in
+//   3. decide    an injected `Decider` (lib/suggest/jevDecider.ts's jevDecider in
 //                production; a fake in tests), guarded by a HARD timeout this
 //                file itself enforces — a decider that never resolves cannot
 //                blow the response's latency budget, regardless of whether it

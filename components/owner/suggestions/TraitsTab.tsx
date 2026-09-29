@@ -1,8 +1,7 @@
 'use client';
 
 // Phase 7 · SUG-2 — the owner's review table for AI-tagged menu traits
-// (Opus, or Gemini Flash on the free tier — lib/suggest/models.ts's
-// llmProvider()). Mirrors components/owner/TableManager.tsx's fetch/edit/save
+// (Jev — lib/suggest/traitsPrompt.ts). Mirrors components/owner/TableManager.tsx's fetch/edit/save
 // pattern: GET the list, PATCH one row inline, PATCH { confirmIds } in bulk,
 // POST the generator. Every write ends by refetching rather than trusting the
 // client's optimistic guess.
@@ -217,8 +216,8 @@ export function TraitsTab() {
       const res = await fetch('/api/owner/suggest/traits/generate', { method: 'POST' });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Generation failed');
-      // Surface WHY something went wrong (e.g. a wrong Gemini model id, a 429
-      // quota error, a Jev item that never started) whenever it's present —
+      // Surface WHY something went wrong (e.g. a bad key, a 429 rate limit,
+      // a Jev item that never started) whenever it's present —
       // even alongside a partial-success notice below, not only when nothing
       // got tagged at all.
       if (json.error) setError(json.error);

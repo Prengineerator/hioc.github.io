@@ -52,7 +52,7 @@ function items(n: number): MenuItemForTagging[] {
   }));
 }
 
-const ENV_KEYS = ['SUGGEST_LLM', 'SUGGEST_LLM_PROVIDER', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'TYPESAFE_API_KEY'] as const;
+const ENV_KEYS = ['SUGGEST_LLM', 'TYPESAFE_API_KEY'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {

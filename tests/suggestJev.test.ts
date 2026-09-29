@@ -43,7 +43,7 @@ function buildShortlist(): Candidate[] {
   return scoreCandidates({ candidates: filtered, inputs: BASE_INPUTS, profile: null, daypart: 'afternoon', popularity: new Map(), recentItemIds: [] });
 }
 
-const ENV_KEYS = ['SUGGEST_LLM', 'SUGGEST_LLM_PROVIDER', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'TYPESAFE_API_KEY'] as const;
+const ENV_KEYS = ['SUGGEST_LLM', 'TYPESAFE_API_KEY'] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {

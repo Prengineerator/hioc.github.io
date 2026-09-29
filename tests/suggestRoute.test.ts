@@ -47,36 +47,20 @@ vi.mock('@/lib/suggest/spend', () => ({
   todaySpendMicros: () => Promise.resolve(state.spentMicros),
 }));
 
-const opusDeciderMock = vi.fn(async (_args: unknown) => ({
+const jevDeciderMock = vi.fn(async (_args: unknown) => ({
   picks: [{ menuItemId: 'espresso', reason: 'A bold lift for your afternoon', reasonCode: 'boost' as const }],
-  header: 'Here is a lovely pick for you',
-  model: 'claude-opus-5',
+  header: null,
+  model: 'jev:jev-latest',
   inputTokens: 100,
   cacheReadTokens: 0,
-  outputTokens: 20,
-  costUsdMicros: 500,
+  outputTokens: 0,
+  costUsdMicros: 4,
 }));
-const geminiDeciderMock = vi.fn(async (_args: unknown) => ({
-  picks: [{ menuItemId: 'espresso', reason: 'A bold lift for your afternoon', reasonCode: 'boost' as const }],
-  header: 'Here is a lovely pick for you',
-  model: 'gemini:gemini-3-flash-preview',
-  inputTokens: 100,
-  cacheReadTokens: 0,
-  outputTokens: 20,
-  costUsdMicros: 0,
-}));
-// Mirrors lib/suggest/llm.ts's real activeDecider(): Anthropic wins when both
-// keys are set, matching lib/suggest/models.ts's auto-selection precedence —
-// route.ts calls activeDecider() instead of opusDecider directly (SUG-4 +
-// Gemini support), so the route-level test only needs to know THAT it calls
-// whichever decider is active, not re-implement llmProvider()'s full matrix
-// (that's tests/suggestProvider.test.ts's job).
+// Mirrors lib/suggest/llm.ts's real activeDecider(): Jev when TYPESAFE_API_KEY
+// is set, else null. The route-level test only needs to know THAT it calls
+// the active decider — provider selection is tests/suggestProvider.test.ts's job.
 vi.mock('@/lib/suggest/llm', () => ({
-  activeDecider: () => {
-    if (process.env.ANTHROPIC_API_KEY) return (args: unknown) => opusDeciderMock(args);
-    if (process.env.GEMINI_API_KEY) return (args: unknown) => geminiDeciderMock(args);
-    return null;
-  },
+  activeDecider: () => (process.env.TYPESAFE_API_KEY ? (args: unknown) => jevDeciderMock(args) : null),
 }));
 
 function chainFor(table: string) {
@@ -205,11 +189,8 @@ beforeEach(() => {
   state.sessionUser = null;
   state.spentMicros = 0;
   delete process.env.SUGGEST_LLM;
-  delete process.env.SUGGEST_LLM_PROVIDER;
   delete process.env.SUGGEST_DAILY_BUDGET_USD;
-  delete process.env.GEMINI_API_KEY;
-  delete process.env.GEMINI_MODEL;
-  process.env.ANTHROPIC_API_KEY = 'test-key';
+  process.env.TYPESAFE_API_KEY = 'test-key';
 });
 
 describe('POST /api/suggest', () => {
@@ -231,7 +212,7 @@ describe('POST /api/suggest', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.source).toBe('llm');
-    expect(opusDeciderMock).toHaveBeenCalledTimes(1);
+    expect(jevDeciderMock).toHaveBeenCalledTimes(1);
     expect(data.sessionId).toBe(state.insertedSessionId);
   });
 
@@ -241,30 +222,23 @@ describe('POST /api/suggest', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.source).toBe('fallback');
-    expect(opusDeciderMock).not.toHaveBeenCalled();
+    expect(jevDeciderMock).not.toHaveBeenCalled();
     expect((state.sessionInsert as Record<string, unknown>)?.fallback_reason).toBe('disabled');
   });
 
-  it('no ANTHROPIC_API_KEY (and no GEMINI_API_KEY) — fallback reason "no_key", no decider call', async () => {
-    delete process.env.ANTHROPIC_API_KEY;
+  it('no TYPESAFE_API_KEY — fallback reason "no_key", no decider call', async () => {
+    delete process.env.TYPESAFE_API_KEY;
     const res = await post(requestBody());
     expect(res.status).toBe(200);
-    expect(opusDeciderMock).not.toHaveBeenCalled();
-    expect(geminiDeciderMock).not.toHaveBeenCalled();
+    expect(jevDeciderMock).not.toHaveBeenCalled();
     expect((state.sessionInsert as Record<string, unknown>)?.fallback_reason).toBe('no_key');
   });
 
-  it('Gemini-only env (no ANTHROPIC_API_KEY, GEMINI_API_KEY set) uses the gemini decider', async () => {
-    delete process.env.ANTHROPIC_API_KEY;
-    process.env.GEMINI_API_KEY = 'gemini-test-key';
+  it('records the Jev model label and cost on the session row', async () => {
     const res = await post(requestBody());
     expect(res.status).toBe(200);
-    const data = await res.json();
-    expect(data.source).toBe('llm');
-    expect(geminiDeciderMock).toHaveBeenCalledTimes(1);
-    expect(opusDeciderMock).not.toHaveBeenCalled();
-    expect((state.sessionInsert as Record<string, unknown>)?.model).toBe('gemini:gemini-3-flash-preview');
-    expect((state.sessionInsert as Record<string, unknown>)?.cost_usd_micros).toBe(0);
+    expect((state.sessionInsert as Record<string, unknown>)?.model).toBe('jev:jev-latest');
+    expect((state.sessionInsert as Record<string, unknown>)?.cost_usd_micros).toBe(4);
   });
 
   it('over the daily budget — fallback reason "budget", no decider call', async () => {
@@ -273,7 +247,7 @@ describe('POST /api/suggest', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.source).toBe('fallback');
-    expect(opusDeciderMock).not.toHaveBeenCalled();
+    expect(jevDeciderMock).not.toHaveBeenCalled();
     expect((state.sessionInsert as Record<string, unknown>)?.fallback_reason).toBe('budget');
   });
 
@@ -283,7 +257,7 @@ describe('POST /api/suggest', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.source).toBe('fallback');
-    expect(opusDeciderMock).not.toHaveBeenCalled();
+    expect(jevDeciderMock).not.toHaveBeenCalled();
     expect((state.sessionInsert as Record<string, unknown>)?.fallback_reason).toBe('rate_limited');
   });
 

@@ -178,7 +178,7 @@ export function DigestCard({ digest }: { digest: SuggestionDigestRow | null }) {
       ) : (
         <div>
           <p className="mb-1 text-xs uppercase text-muted">
-            Week of {digest.week_start} · {digest.source === 'llm' ? 'Sonnet' : 'template'}
+            Week of {digest.week_start} · {digest.source === 'llm' ? 'AI-written' : 'template'}
           </p>
           <p className="whitespace-pre-line text-sm text-charcoal">{digest.summary}</p>
         </div>

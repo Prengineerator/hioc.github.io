@@ -1,8 +1,8 @@
 // Phase 7 · SUG-3 — deterministic, house-tone copy (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md
 // §4 tone guide, §5.4 "Validation" fallback, §3.2 step-3 header). Every
 // string this file produces is deterministic (same inputs ⇒ same text,
-// unlike the Opus decider) and is the thing shown whenever the LLM is
-// skipped, times out, or writes something lintReason() rejects.
+// and is every reason Jev's picks carry (Jev can't write text), plus the
+// whole response whenever the model is skipped or times out.
 //
 // Pure: no Supabase, no 'server-only'.
 
@@ -141,8 +141,8 @@ function pickWithVarietyTieBreak(sorted: Candidate[], count: number): Candidate[
 
 /**
  * The deterministic ranking's own top picks (§5.4 "Validation" — what tops
- * up a short Opus response, and what the whole response is when the LLM is
- * skipped). `reasonCode` is the chosen mood when the item is tagged for it;
+ * up a short decider response, and what the whole response is when the
+ * model is skipped). `reasonCode` is the chosen mood when the item is tagged for it;
  * 'popular' needs a popularity signal this function isn't given (that's the
  * scorer's job upstream), so the catch-all here is 'trait'. Variety across
  * the picks is only a TIE-BREAK (§5.3) — the top-scored items still win

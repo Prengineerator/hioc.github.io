@@ -7,14 +7,14 @@ import { validateTraitPatch } from '@/lib/suggest/traitsValidate';
 
 export const dynamic = 'force-dynamic';
 
-// Phase 7 · SUG-2 — owner review of Opus-tagged menu traits.
+// Phase 7 · SUG-2 — owner review of Jev-tagged menu traits.
 // GET  — every menu item with its traits row (or null) plus the "N
 //        unconfirmed / M missing" banner counts (Traits tab).
 // PATCH { id, ...fields } — edits one item's traits. Any content field
 //        present makes this an edit: source becomes 'owner' and the row is
 //        marked confirmed, per SUG-2's AC ("owner edits caffeine to none →
 //        source='owner' and confirmed=true"). With no content field and
-//        `confirm: true`, it just confirms the row as Opus tagged it.
+//        `confirm: true`, it just confirms the row as Jev tagged it.
 // PATCH { confirmIds: string[] } — "Confirm all visible": marks existing rows
 //        confirmed without touching their content or source.
 
