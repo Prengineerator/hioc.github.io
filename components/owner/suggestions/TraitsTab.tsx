@@ -8,6 +8,7 @@
 // client's optimistic guess.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { DataTable } from '@/components/ui/DataTable';
 import { DAYPARTS, MOODS, type Daypart, type Mood, type MenuItemTraits } from '@/lib/suggest/types';
 
 interface TraitsOverviewRow {
@@ -290,224 +291,319 @@ export function TraitsTab() {
       ) : visibleRows.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted">Nothing here.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[960px] text-sm">
-            <thead>
-              <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-                <th className="py-1 pr-2 font-bold">Item</th>
-                <th className="py-1 pr-2 font-bold">Temp</th>
-                <th className="py-1 pr-2 font-bold">Caffeine</th>
-                <th className="py-1 pr-2 font-bold">Coffee</th>
-                <th className="py-1 pr-2 font-bold">Sweet</th>
-                <th className="py-1 pr-2 font-bold">Body</th>
-                <th className="py-1 pr-2 font-bold">Kind</th>
-                <th className="py-1 pr-2 font-bold">Moods</th>
-                <th className="py-1 pr-2 font-bold">Dayparts</th>
-                <th className="py-1 pr-2 font-bold">Flavor notes</th>
-                <th className="py-1 pr-2 font-bold">Status</th>
-                <th className="py-1 text-right font-bold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((row) => {
-                const editing = editingId === row.menuItemId;
+        <DataTable
+          rows={visibleRows}
+          rowKey={(row) => row.menuItemId}
+          minWidth={960}
+          cellPadding="py-2 pr-2"
+          headerTextClassName="text-xs font-bold uppercase text-muted"
+          rowClassName={() => 'align-top'}
+          columns={[
+            {
+              key: 'item',
+              header: 'Item',
+              filter: 'text',
+              value: (row) => `${row.name} ${row.category}`,
+              cellClassName: 'text-charcoal',
+              render: (row) => (
+                <>
+                  <span className="font-medium">{row.name}</span>
+                  <br />
+                  <span className="text-xs text-muted">{row.category}</span>
+                </>
+              ),
+            },
+            {
+              key: 'temperature',
+              header: 'Temp',
+              filter: 'select',
+              value: (row) => row.traits?.temperature ?? null,
+              // An item with no traits shows one message across all nine trait columns.
+              cellSpan: (row) => (row.traits ? 1 : 9),
+              cellClassName: (row) => (row.traits ? 'text-charcoal' : 'text-xs text-muted'),
+              render: (row) => {
+                const t = row.traits;
+                if (!t) return 'No traits yet — use “Generate missing traits with AI” above.';
+                if (editingId === row.menuItemId && edit) {
+                  return (
+                    <select
+                      value={edit.temperature}
+                      onChange={(e) => setEdit((s) => (s ? { ...s, temperature: e.target.value as EditState['temperature'] } : s))}
+                      className={selectClass}
+                    >
+                      {TEMPERATURES.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                }
+                return t.temperature;
+              },
+            },
+            {
+              key: 'caffeine',
+              header: 'Caffeine',
+              filter: 'select',
+              value: (row) => row.traits?.caffeine ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) => {
+                if (editingId === row.menuItemId && edit) {
+                  return (
+                    <select
+                      value={edit.caffeine}
+                      onChange={(e) => setEdit((s) => (s ? { ...s, caffeine: e.target.value as EditState['caffeine'] } : s))}
+                      className={selectClass}
+                    >
+                      {CAFFEINES.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                }
+                return row.traits?.caffeine;
+              },
+            },
+            {
+              key: 'coffee',
+              header: 'Coffee',
+              filter: 'select',
+              value: (row) => (row.traits ? (row.traits.is_coffee ? 'Yes' : 'No') : null),
+              cellClassName: 'text-charcoal',
+              render: (row) =>
+                editingId === row.menuItemId && edit ? (
+                  <input
+                    type="checkbox"
+                    checked={edit.is_coffee}
+                    onChange={(e) => setEdit((s) => (s ? { ...s, is_coffee: e.target.checked } : s))}
+                  />
+                ) : row.traits?.is_coffee ? (
+                  'Yes'
+                ) : (
+                  'No'
+                ),
+            },
+            {
+              key: 'sweetness',
+              header: 'Sweet',
+              filter: 'select',
+              value: (row) => row.traits?.sweetness ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) => {
+                if (editingId === row.menuItemId && edit) {
+                  return (
+                    <select
+                      value={edit.sweetness}
+                      onChange={(e) =>
+                        setEdit((s) => (s ? { ...s, sweetness: Number(e.target.value) as EditState['sweetness'] } : s))
+                      }
+                      className={selectClass}
+                    >
+                      {SWEETNESS_LEVELS.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                }
+                return row.traits?.sweetness;
+              },
+            },
+            {
+              key: 'body',
+              header: 'Body',
+              filter: 'select',
+              value: (row) => row.traits?.body ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) => {
+                if (editingId === row.menuItemId && edit) {
+                  return (
+                    <select
+                      value={edit.body}
+                      onChange={(e) => setEdit((s) => (s ? { ...s, body: e.target.value as EditState['body'] } : s))}
+                      className={selectClass}
+                    >
+                      {BODIES.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                }
+                return row.traits?.body;
+              },
+            },
+            {
+              key: 'kind',
+              header: 'Kind',
+              filter: 'select',
+              value: (row) => row.traits?.kind ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) => {
+                if (editingId === row.menuItemId && edit) {
+                  return (
+                    <select
+                      value={edit.kind}
+                      onChange={(e) => setEdit((s) => (s ? { ...s, kind: e.target.value as EditState['kind'] } : s))}
+                      className={selectClass}
+                    >
+                      {KINDS.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                }
+                return row.traits?.kind;
+              },
+            },
+            {
+              key: 'moods',
+              header: 'Moods',
+              filter: 'text',
+              value: (row) => row.traits?.moods.join(', ') ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) =>
+                editingId === row.menuItemId && edit ? (
+                  <div className="flex flex-wrap gap-1">
+                    {MOODS.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => toggleMood(m)}
+                        aria-pressed={edit.moods.includes(m)}
+                        className={chipClass(edit.moods.includes(m))}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  row.traits?.moods.join(', ') || '—'
+                ),
+            },
+            {
+              key: 'dayparts',
+              header: 'Dayparts',
+              filter: 'text',
+              value: (row) => row.traits?.dayparts.join(', ') ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) =>
+                editingId === row.menuItemId && edit ? (
+                  <div className="flex flex-wrap gap-1">
+                    {DAYPARTS.map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => toggleDaypart(d)}
+                        aria-pressed={edit.dayparts.includes(d)}
+                        className={chipClass(edit.dayparts.includes(d))}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  row.traits?.dayparts.join(', ') || '—'
+                ),
+            },
+            {
+              key: 'flavor',
+              header: 'Flavor notes',
+              filter: 'text',
+              value: (row) => row.traits?.flavor_notes.join(', ') ?? null,
+              cellClassName: 'text-charcoal',
+              render: (row) =>
+                editingId === row.menuItemId && edit ? (
+                  <input
+                    value={edit.flavor_notes}
+                    onChange={(e) => setEdit((s) => (s ? { ...s, flavor_notes: e.target.value } : s))}
+                    placeholder="chocolate, nutty"
+                    className="w-36 rounded border border-[#d8d2c7] bg-white px-1 py-1 text-xs"
+                  />
+                ) : (
+                  row.traits?.flavor_notes.join(', ') || '—'
+                ),
+            },
+            {
+              key: 'status',
+              header: 'Status',
+              filter: 'select',
+              value: (row) => {
+                const t = row.traits;
+                if (!t) return 'Missing';
+                return t.confirmed ? 'Confirmed' : `${t.source === 'opus' ? 'AI' : 'Owner'} · unconfirmed`;
+              },
+              render: (row) => {
+                const t = row.traits;
+                return t ? (
+                  <span
+                    className={
+                      'rounded-full px-2 py-0.5 text-xs font-bold ' +
+                      (t.confirmed ? 'bg-[#e3efe4] text-[#2f6b38]' : 'bg-[#f6e9c9] text-[#8a6412]')
+                    }
+                  >
+                    {t.confirmed ? 'Confirmed' : `${t.source === 'opus' ? 'AI' : 'Owner'} · unconfirmed`}
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-[#f6d9d9] px-2 py-0.5 text-xs font-bold text-red-800">Missing</span>
+                );
+              },
+            },
+            {
+              key: 'actions',
+              header: 'Actions',
+              filter: 'none',
+              align: 'right',
+              value: () => null,
+              render: (row) => {
                 const t = row.traits;
                 const busy = savingId === row.menuItemId;
+                if (!t) return null;
+                if (editingId === row.menuItemId) {
+                  return (
+                    <div className="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => saveEdit(row.menuItemId)}
+                        disabled={busy}
+                        className="text-sm font-bold text-charcoal hover:underline disabled:opacity-50"
+                      >
+                        {busy ? 'Saving…' : 'Save'}
+                      </button>
+                      <button type="button" onClick={cancelEdit} className="text-sm font-medium text-muted hover:underline">
+                        Cancel
+                      </button>
+                    </div>
+                  );
+                }
                 return (
-                  <tr key={row.menuItemId} className="border-b border-[#f2efe9] align-top">
-                    <td className="py-2 pr-2 text-charcoal">
-                      <span className="font-medium">{row.name}</span>
-                      <br />
-                      <span className="text-xs text-muted">{row.category}</span>
-                    </td>
-
-                    {!t ? (
-                      <td colSpan={9} className="py-2 text-xs text-muted">
-                        No traits yet — use “Generate missing traits with AI” above.
-                      </td>
-                    ) : editing && edit ? (
-                      <>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={edit.temperature}
-                            onChange={(e) => setEdit((s) => (s ? { ...s, temperature: e.target.value as EditState['temperature'] } : s))}
-                            className={selectClass}
-                          >
-                            {TEMPERATURES.map((v) => (
-                              <option key={v} value={v}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={edit.caffeine}
-                            onChange={(e) => setEdit((s) => (s ? { ...s, caffeine: e.target.value as EditState['caffeine'] } : s))}
-                            className={selectClass}
-                          >
-                            {CAFFEINES.map((v) => (
-                              <option key={v} value={v}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <input
-                            type="checkbox"
-                            checked={edit.is_coffee}
-                            onChange={(e) => setEdit((s) => (s ? { ...s, is_coffee: e.target.checked } : s))}
-                          />
-                        </td>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={edit.sweetness}
-                            onChange={(e) =>
-                              setEdit((s) => (s ? { ...s, sweetness: Number(e.target.value) as EditState['sweetness'] } : s))
-                            }
-                            className={selectClass}
-                          >
-                            {SWEETNESS_LEVELS.map((v) => (
-                              <option key={v} value={v}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={edit.body}
-                            onChange={(e) => setEdit((s) => (s ? { ...s, body: e.target.value as EditState['body'] } : s))}
-                            className={selectClass}
-                          >
-                            {BODIES.map((v) => (
-                              <option key={v} value={v}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <select
-                            value={edit.kind}
-                            onChange={(e) => setEdit((s) => (s ? { ...s, kind: e.target.value as EditState['kind'] } : s))}
-                            className={selectClass}
-                          >
-                            {KINDS.map((v) => (
-                              <option key={v} value={v}>
-                                {v}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <div className="flex flex-wrap gap-1">
-                            {MOODS.map((m) => (
-                              <button
-                                key={m}
-                                type="button"
-                                onClick={() => toggleMood(m)}
-                                aria-pressed={edit.moods.includes(m)}
-                                className={chipClass(edit.moods.includes(m))}
-                              >
-                                {m}
-                              </button>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <div className="flex flex-wrap gap-1">
-                            {DAYPARTS.map((d) => (
-                              <button
-                                key={d}
-                                type="button"
-                                onClick={() => toggleDaypart(d)}
-                                aria-pressed={edit.dayparts.includes(d)}
-                                className={chipClass(edit.dayparts.includes(d))}
-                              >
-                                {d}
-                              </button>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <input
-                            value={edit.flavor_notes}
-                            onChange={(e) => setEdit((s) => (s ? { ...s, flavor_notes: e.target.value } : s))}
-                            placeholder="chocolate, nutty"
-                            className="w-36 rounded border border-[#d8d2c7] bg-white px-1 py-1 text-xs"
-                          />
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td className="py-2 pr-2 text-charcoal">{t.temperature}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.caffeine}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.is_coffee ? 'Yes' : 'No'}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.sweetness}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.body}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.kind}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.moods.join(', ') || '—'}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.dayparts.join(', ') || '—'}</td>
-                        <td className="py-2 pr-2 text-charcoal">{t.flavor_notes.join(', ') || '—'}</td>
-                      </>
+                  <div className="flex justify-end gap-3">
+                    <button type="button" onClick={() => startEdit(row)} className="text-sm font-medium text-charcoal hover:underline">
+                      Edit
+                    </button>
+                    {!t.confirmed && (
+                      <button
+                        type="button"
+                        onClick={() => confirmRow(row.menuItemId)}
+                        disabled={busy}
+                        className="text-sm font-medium text-[#2f6b38] hover:underline disabled:opacity-50"
+                      >
+                        {busy ? '…' : 'Confirm'}
+                      </button>
                     )}
-
-                    <td className="py-2 pr-2">
-                      {t ? (
-                        <span
-                          className={
-                            'rounded-full px-2 py-0.5 text-xs font-bold ' +
-                            (t.confirmed ? 'bg-[#e3efe4] text-[#2f6b38]' : 'bg-[#f6e9c9] text-[#8a6412]')
-                          }
-                        >
-                          {t.confirmed ? 'Confirmed' : `${t.source === 'opus' ? 'AI' : 'Owner'} · unconfirmed`}
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-[#f6d9d9] px-2 py-0.5 text-xs font-bold text-red-800">Missing</span>
-                      )}
-                    </td>
-
-                    <td className="py-2 text-right">
-                      {!t ? null : editing ? (
-                        <div className="flex justify-end gap-3">
-                          <button
-                            type="button"
-                            onClick={() => saveEdit(row.menuItemId)}
-                            disabled={busy}
-                            className="text-sm font-bold text-charcoal hover:underline disabled:opacity-50"
-                          >
-                            {busy ? 'Saving…' : 'Save'}
-                          </button>
-                          <button type="button" onClick={cancelEdit} className="text-sm font-medium text-muted hover:underline">
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex justify-end gap-3">
-                          <button type="button" onClick={() => startEdit(row)} className="text-sm font-medium text-charcoal hover:underline">
-                            Edit
-                          </button>
-                          {!t.confirmed && (
-                            <button
-                              type="button"
-                              onClick={() => confirmRow(row.menuItemId)}
-                              disabled={busy}
-                              className="text-sm font-medium text-[#2f6b38] hover:underline disabled:opacity-50"
-                            >
-                              {busy ? '…' : 'Confirm'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
+                  </div>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
+              },
+            },
+          ]}
+        />
       )}
     </div>
   );

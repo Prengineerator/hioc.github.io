@@ -9,6 +9,7 @@
 // payslip and the evidence has already been overwritten.
 
 import { useCallback, useEffect, useState } from 'react';
+import { istDateIso } from '@/lib/api/date';
 import type { StaffEmployment } from '@/lib/types';
 import { staffDisplayName } from '@/lib/staff/displayName';
 
@@ -137,7 +138,7 @@ function EmploymentForm({
   const [start, setStart] = useState(current?.shift_start_time.slice(0, 5) ?? '10:00');
   const [end, setEnd] = useState(current?.shift_end_time.slice(0, 5) ?? '19:00');
   const [off, setOff] = useState(current?.weekly_off_dow === null || current === null ? '' : String(current.weekly_off_dow));
-  const [from, setFrom] = useState(() => new Date().toISOString().slice(0, 8) + '01');
+  const [from, setFrom] = useState(() => istDateIso().slice(0, 8) + '01');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 

@@ -6,6 +6,7 @@
 
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { Card } from '@/components/owner/dashboard';
+import { CouponPerformanceTable } from '@/components/owner/CouponPerformanceTable';
 import { CouponManager } from '@/components/promotions/CouponManager';
 import { AnnouncementManager } from '@/components/promotions/AnnouncementManager';
 import type { CouponPerformanceRow } from '@/lib/types';
@@ -43,30 +44,7 @@ export default async function OwnerPromotionsPage() {
             <span className="font-bold">₹{totalDiscount}</span> total discount given
           </span>
         </div>
-        {performance.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted">No coupon redemptions yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[420px] text-left text-sm">
-              <thead>
-                <tr className="border-b border-[#e5e5e5] text-xs uppercase text-muted">
-                  <th className="py-2 pr-3">Code</th>
-                  <th className="py-2 pr-3">Redemptions</th>
-                  <th className="py-2 pr-3">Discount given</th>
-                </tr>
-              </thead>
-              <tbody>
-                {performance.map((row) => (
-                  <tr key={row.code} className="border-b border-[#f2efe9]">
-                    <td className="py-2 pr-3 font-bold text-charcoal">{row.code}</td>
-                    <td className="py-2 pr-3 text-charcoal">{row.redemptions}</td>
-                    <td className="py-2 pr-3 text-charcoal">₹{row.discount_given_inr}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <CouponPerformanceTable rows={performance} />
       </Card>
 
       <Card title="Coupons">

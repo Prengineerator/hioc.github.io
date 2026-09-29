@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { QrCards } from '@/components/owner/QrCards';
+import { DataTable } from '@/components/ui/DataTable';
 
 interface TableRow {
   id: string;
@@ -180,130 +181,146 @@ export function TableManager() {
         ) : tables.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted">No tables yet. Add your first above.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead>
-                <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-                  <th className="py-1 font-bold">Label</th>
-                  <th className="py-1 font-bold">Zone</th>
-                  <th className="py-1 font-bold">Seats</th>
-                  <th className="py-1 font-bold">Status</th>
-                  <th className="py-1 text-right font-bold">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tables.map((t) => {
-                  const editing = editingId === t.id;
-                  return (
-                    <tr key={t.id} className="border-b border-[#f2efe9] align-middle">
-                      <td className="py-2 text-charcoal">
-                        {editing ? (
-                          <input
-                            value={edit.label}
-                            onChange={(e) => setEdit((s) => ({ ...s, label: e.target.value }))}
-                            className="w-24 rounded border border-[#d8d2c7] bg-white px-2 py-1"
-                          />
-                        ) : (
-                          <span className={t.is_active ? 'font-medium' : 'font-medium text-muted line-through'}>
-                            {t.label}
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 text-charcoal">
-                        {editing ? (
-                          <input
-                            value={edit.zone}
-                            onChange={(e) => setEdit((s) => ({ ...s, zone: e.target.value }))}
-                            className="w-28 rounded border border-[#d8d2c7] bg-white px-2 py-1"
-                          />
-                        ) : (
-                          t.zone || <span className="text-muted">—</span>
-                        )}
-                      </td>
-                      <td className="py-2 text-charcoal">
-                        {editing ? (
-                          <input
-                            type="number"
-                            min={0}
-                            value={edit.capacity}
-                            onChange={(e) => setEdit((s) => ({ ...s, capacity: e.target.value }))}
-                            className="w-16 rounded border border-[#d8d2c7] bg-white px-2 py-1"
-                          />
-                        ) : (
-                          t.capacity || <span className="text-muted">—</span>
-                        )}
-                      </td>
-                      <td className="py-2">
-                        <span
-                          className={
-                            'rounded-full px-2 py-0.5 text-xs font-bold ' +
-                            (t.is_active ? 'bg-[#e3efe4] text-[#2f6b38]' : 'bg-[#f2efe9] text-muted')
-                          }
-                        >
-                          {t.is_active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td className="py-2 text-right">
-                        {editing ? (
-                          <div className="flex justify-end gap-3">
-                            <button
-                              type="button"
-                              onClick={() => saveEdit(t.id)}
-                              className="text-sm font-bold text-charcoal hover:underline"
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingId('')}
-                              className="text-sm font-medium text-muted hover:underline"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex justify-end gap-3">
-                            <button
-                              type="button"
-                              onClick={() => startEdit(t)}
-                              className="text-sm font-medium text-charcoal hover:underline"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                patch(t.id, { regenerate_token: true }, `New QR code generated for ${t.label}.`)
-                              }
-                              className="text-sm font-medium text-charcoal hover:underline"
-                            >
-                              New QR
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                patch(
-                                  t.id,
-                                  { is_active: !t.is_active },
-                                  `${t.label} ${t.is_active ? 'deactivated' : 'reactivated'}.`,
-                                )
-                              }
-                              className={
-                                'text-sm font-medium hover:underline ' +
-                                (t.is_active ? 'text-red-700' : 'text-[#2f6b38]')
-                              }
-                            >
-                              {t.is_active ? 'Deactivate' : 'Reactivate'}
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            rows={tables}
+            rowKey={(t) => t.id}
+            minWidth={560}
+            cellPadding="py-2 pr-3"
+            columns={[
+              {
+                key: 'label',
+                header: 'Label',
+                filter: 'text',
+                value: (t) => t.label,
+                cellClassName: 'text-charcoal',
+                render: (t) =>
+                  editingId === t.id ? (
+                    <input
+                      value={edit.label}
+                      onChange={(e) => setEdit((s) => ({ ...s, label: e.target.value }))}
+                      className="w-24 rounded border border-[#d8d2c7] bg-white px-2 py-1"
+                    />
+                  ) : (
+                    <span className={t.is_active ? 'font-medium' : 'font-medium text-muted line-through'}>
+                      {t.label}
+                    </span>
+                  ),
+              },
+              {
+                key: 'zone',
+                header: 'Zone',
+                filter: 'select',
+                value: (t) => t.zone,
+                cellClassName: 'text-charcoal',
+                render: (t) =>
+                  editingId === t.id ? (
+                    <input
+                      value={edit.zone}
+                      onChange={(e) => setEdit((s) => ({ ...s, zone: e.target.value }))}
+                      className="w-28 rounded border border-[#d8d2c7] bg-white px-2 py-1"
+                    />
+                  ) : (
+                    t.zone || <span className="text-muted">—</span>
+                  ),
+              },
+              {
+                key: 'capacity',
+                header: 'Seats',
+                filter: 'number',
+                value: (t) => t.capacity,
+                cellClassName: 'text-charcoal',
+                render: (t) =>
+                  editingId === t.id ? (
+                    <input
+                      type="number"
+                      min={0}
+                      value={edit.capacity}
+                      onChange={(e) => setEdit((s) => ({ ...s, capacity: e.target.value }))}
+                      className="w-16 rounded border border-[#d8d2c7] bg-white px-2 py-1"
+                    />
+                  ) : (
+                    t.capacity || <span className="text-muted">—</span>
+                  ),
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                filter: 'select',
+                value: (t) => (t.is_active ? 'Active' : 'Inactive'),
+                render: (t) => (
+                  <span
+                    className={
+                      'rounded-full px-2 py-0.5 text-xs font-bold ' +
+                      (t.is_active ? 'bg-[#e3efe4] text-[#2f6b38]' : 'bg-[#f2efe9] text-muted')
+                    }
+                  >
+                    {t.is_active ? 'Active' : 'Inactive'}
+                  </span>
+                ),
+              },
+              {
+                key: 'actions',
+                header: 'Actions',
+                filter: 'none',
+                align: 'right',
+                value: () => null,
+                render: (t) =>
+                  editingId === t.id ? (
+                    <div className="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => saveEdit(t.id)}
+                        className="text-sm font-bold text-charcoal hover:underline"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingId('')}
+                        className="text-sm font-medium text-muted hover:underline"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => startEdit(t)}
+                        className="text-sm font-medium text-charcoal hover:underline"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patch(t.id, { regenerate_token: true }, `New QR code generated for ${t.label}.`)
+                        }
+                        className="text-sm font-medium text-charcoal hover:underline"
+                      >
+                        New QR
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patch(
+                            t.id,
+                            { is_active: !t.is_active },
+                            `${t.label} ${t.is_active ? 'deactivated' : 'reactivated'}.`,
+                          )
+                        }
+                        className={
+                          'text-sm font-medium hover:underline ' +
+                          (t.is_active ? 'text-red-700' : 'text-[#2f6b38]')
+                        }
+                      >
+                        {t.is_active ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                    </div>
+                  ),
+              },
+            ]}
+          />
         )}
       </div>
     </div>

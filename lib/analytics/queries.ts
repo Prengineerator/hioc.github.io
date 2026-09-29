@@ -8,7 +8,7 @@
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { startOfTodayIstIso } from '@/lib/api/date';
+import { istDateDaysAgo } from '@/lib/api/date';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import {
@@ -79,7 +79,8 @@ export async function getHourlyOrders(): Promise<HourlyOrdersRow[]> {
 /** Per-order stage durations for SLA/prep-time metrics (OWN-008). */
 export async function getOrderDurations(days = 30): Promise<OrderDurationRow[]> {
   const admin = createAdminSupabaseClient();
-  const since = new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
+  // IST date, to compare against IST-dated view columns.
+  const since = istDateDaysAgo(days);
   const { data, error } = await admin
     .from('v_order_durations')
     .select('*')
@@ -151,10 +152,10 @@ function metric(value: number, prior: number): GlanceMetric {
 export async function getTodayAtAGlance(): Promise<TodayAtAGlance> {
   const admin = createAdminSupabaseClient();
 
-  const todayIso = startOfTodayIstIso().slice(0, 10);
-  const lastWeekIso = new Date(Date.parse(startOfTodayIstIso()) - 7 * DAY_MS)
-    .toISOString()
-    .slice(0, 10);
+  // v_daily_sales.sale_date is the IST calendar date, so both comparison days
+  // must be IST dates too (a UTC slice of IST midnight would be yesterday).
+  const todayIso = istDateDaysAgo(0);
+  const lastWeekIso = istDateDaysAgo(7);
 
   const [{ data: sales }, { count: inProgress }] = await Promise.all([
     admin.from('v_daily_sales').select('*').in('sale_date', [todayIso, lastWeekIso]),
@@ -263,7 +264,8 @@ export async function getChannelMix(): Promise<ChannelMixRow[]> {
 /** Table turnover — settled orders per table per IST day (OPS-1), recent window. */
 export async function getTableTurnover(days = 30): Promise<TableTurnoverRow[]> {
   const admin = createAdminSupabaseClient();
-  const since = new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
+  // IST date, to compare against IST-dated view columns.
+  const since = istDateDaysAgo(days);
   const { data, error } = await admin
     .from('v_table_turnover')
     .select('*')
@@ -306,7 +308,8 @@ export async function getDineInPeakHours(days = 30): Promise<HourlyDineInRow[]> 
  */
 export async function getStaffLeaderboard(days = 30): Promise<StaffLeaderboardRow[]> {
   const admin = createAdminSupabaseClient();
-  const since = new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
+  // IST date, to compare against IST-dated view columns.
+  const since = istDateDaysAgo(days);
   const { data, error } = await admin
     .from('v_staff_entry_stats')
     .select('*')
@@ -506,7 +509,8 @@ export async function getCustomerSegmentation(days = 90, limit = 20000): Promise
  */
 export async function getNewVsReturning(days: number): Promise<NewVsReturningRow[]> {
   const admin = createAdminSupabaseClient();
-  const since = new Date(Date.now() - days * DAY_MS).toISOString().slice(0, 10);
+  // IST date, to compare against IST-dated view columns.
+  const since = istDateDaysAgo(days);
   const { data, error } = await admin
     .from('v_new_vs_returning')
     .select('*')
