@@ -43,6 +43,7 @@ export function SuggestionCard({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2">
           <span
+            role="img"
             aria-label={item.is_veg ? 'Vegetarian' : 'Non-vegetarian'}
             title={item.is_veg ? 'Vegetarian' : 'Non-vegetarian'}
             className={
@@ -54,11 +55,31 @@ export function SuggestionCard({
               className={'h-1.5 w-1.5 rounded-full ' + (item.is_veg ? 'bg-green-700' : 'bg-red-700')}
             />
           </span>
-          <h3 className="font-semibold text-charcoal">{item.name}</h3>
+          {/* h2: the wizard's step heading above is the h1, so a pick's name is
+              the next level down. */}
+          <h2 className="font-semibold text-charcoal">{item.name}</h2>
         </div>
         <span className="shrink-0 font-mono font-bold tabular-nums text-tan-dark">{priceLabel(item)}</span>
       </div>
       <p className="mt-1 text-sm text-muted">{pick.reason}</p>
+      {/* "Why it matches" (COFFEY-SPEC §4.6): up to three short labels from the
+          engine's fixed vocabulary. Charcoal on surface (well past AA), with a
+          tan dot as decoration — never white on tan. role="list" because
+          Tailwind's reset removes the bullets, and Safari then drops the list
+          semantics along with them. */}
+      {pick.matchTags && pick.matchTags.length > 0 ? (
+        <ul role="list" aria-label="Why it matches" className="mt-2 flex flex-wrap gap-1.5">
+          {pick.matchTags.map((tag) => (
+            <li
+              key={tag}
+              className="inline-flex items-center gap-1.5 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-charcoal"
+            >
+              <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-tan" />
+              {tag}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {!available ? (
         <p className="mt-2 text-sm font-medium text-muted">Currently unavailable</p>
       ) : null}

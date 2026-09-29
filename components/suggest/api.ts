@@ -1,13 +1,14 @@
 'use client';
 
 // Phase 7 (SUG-7/SUG-8/SUG-9) — client-side fetch + event helpers for the
-// "Help me choose" suggestion engine. Kept dependency-free from React so it
-// can be imported from both components/suggest/* and, for the one
+// suggestion engine ("Ask Coffey", COFFEY-SPEC). Kept dependency-free from React
+// so it can be imported from both components/suggest/* and, for the one
 // cross-cutting case (checkout_started), components/checkout/CheckoutForm.tsx.
 //
 // Contract: lib/suggest/types.ts. This file makes NO assumption about
-// /api/suggest or /api/suggest/events beyond that contract; see the final
-// report for the (server-side) assumptions this client was built against.
+// /api/suggest or /api/suggest/events beyond that contract, and it is generic
+// over it: the request/response types (v2 SuggestInputs, matchTags, sugarPreset)
+// come straight from the contract, so nothing here changes when they do.
 
 import type { ClientSuggestionEventType, SuggestRequest, SuggestResponse } from '@/lib/suggest/types';
 

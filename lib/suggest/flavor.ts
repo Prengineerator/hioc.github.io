@@ -1,27 +1,32 @@
-// Phase 7 — flavour-preference matching for the 'chocolatey' and 'fruity'
-// step-1 extras (owner addition). These are SOFT scoring preferences
-// (lib/suggest/score.ts's extras term), never hard filters
-// (lib/suggest/filter.ts's composition rule) — a chocolatey request with no
-// chocolate drink left over must still get good picks, just not a boosted
-// score for this term.
+// Coffey v2 — flavour-family matching (docs/COFFEY-SPEC.md §1 "Flavours you
+// love", §4.2 preference term, §4.4 similarity, §4.6 reasons and match tags).
+//
+// The step-2 chips are SOFT scoring preferences (lib/suggest/score.ts's
+// preference term), never hard filters (lib/suggest/filter.ts) — a chocolatey
+// request with no chocolate drink left over must still get good picks, just not
+// a boosted score for this term. The families, their labels and the pattern
+// each one matches live in lib/suggest/traitVocabulary.ts; this file only
+// applies them.
 //
 // Pure: no Supabase, no 'server-only'.
 
-const CHOCOLATEY_RE = /chocolate|cocoa|choco|nutella|oreo|kitkat|kit-kat|brownie|fudge|truffle/i;
-const FRUITY_RE =
-  /fruit|berry|berries|citrus|lemon|lime|orange|mango|strawberry|raspberry|blueberry|cranberry|peach|apple|passion|pineapple|kiwi|watermelon|litchi|lychee/i;
+import { FLAVOUR_FAMILIES, type FlavourFamily } from './types';
+import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 
-function matchesAny(re: RegExp, name: string, flavorNotes: readonly string[]): boolean {
-  if (re.test(name)) return true;
-  return flavorNotes.some((note) => re.test(note));
-}
-
-/** True when the item's name or any flavor note reads as chocolatey. */
-export function isChocolatey(name: string, flavorNotes: readonly string[]): boolean {
-  return matchesAny(CHOCOLATEY_RE, name, flavorNotes);
-}
-
-/** True when the item's name or any flavor note reads as fruity. */
-export function isFruity(name: string, flavorNotes: readonly string[]): boolean {
-  return matchesAny(FRUITY_RE, name, flavorNotes);
+/**
+ * Every flavour family the item belongs to, in FLAVOUR_FAMILIES order. A
+ * family matches when its pattern matches the item's NAME or any flavour note
+ * — the patterns are written to work on both the fixed v2 note vocabulary and
+ * the free-text notes older rows carry, so this is safe on either.
+ *
+ * An item can belong to several ("Oreo Creme" is chocolatey and biscuit), which
+ * is what makes the customer's OR semantics (§1: "an item matches if it has
+ * **any** picked family") work.
+ */
+export function flavourFamiliesOf(name: string, flavorNotes: readonly string[]): FlavourFamily[] {
+  const texts = [name, ...(flavorNotes ?? [])];
+  return FLAVOUR_FAMILIES.filter((family) => {
+    const { pattern } = FLAVOUR_FAMILY_INFO[family];
+    return texts.some((text) => pattern.test(text));
+  });
 }

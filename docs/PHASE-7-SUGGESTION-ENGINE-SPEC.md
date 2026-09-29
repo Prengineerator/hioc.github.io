@@ -1,5 +1,7 @@
 # HIOC Revamp — Phase 7 "Help Me Choose" — Coffee Suggestion Engine — Detailed Spec
 
+> **2026-09-29 — superseded in part by `docs/COFFEY-SPEC.md` (Ask Coffey, v2).** The engine is now fronted by the Coffey mascot. The wizard asks for up to two feelings (a new `focus` mood), explicit drink / sweet / savoury choices and a 5-point sweetness scale. Traits gain a 0–10 inherent sweetness plus strength, refreshment, indulgence, novelty, textures and a graded fit per mood, all tagged by Jev (`traits_version` 2). The Jev decision grades every shortlisted candidate and is blended with the deterministic ranking, and the three picks are made deliberately different. Where the two specs disagree, COFFEY-SPEC wins; this file stays the reference for everything it doesn't change (analytics, attribution, profiles, cost controls, security S-1…S-7).
+
 **Companion to:** `docs/REVAMP-REQUIREMENTS.md`, `docs/PHASE-2-SPEC.md` (accounts, favorites), `docs/PHASE-6-SPEC.md`, `docs/SECURITY-PLAYBOOK.md`
 **Version:** 0.1 (Draft for grooming)
 **Date:** 2026-09-24

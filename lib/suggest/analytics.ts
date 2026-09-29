@@ -58,8 +58,10 @@ export function computeSuggestionStats(args: ComputeSuggestionStatsArgs): Sugges
   const webTotal = webOrders.reduce((sum, o) => sum + (o.total_inr ?? o.subtotal_inr), 0);
   const webAovInr = webOrders.length > 0 ? Math.round(webTotal / webOrders.length) : null;
 
-  // Zero-filled across all six moods (like bucketDineInHours zero-fills 24
-  // hours) so the bar chart's axis never jumps around window to window.
+  // Zero-filled across every mood (like bucketDineInHours zero-fills 24 hours)
+  // so the bar chart's axis never jumps around window to window. `inputs.mood`
+  // is the PRIMARY feeling in both the v1 and the Coffey (v2) shape — the
+  // optional secondary feeling is not counted here.
   const moodMix = MOODS.map((mood) => {
     const moodSessions = sessions.filter((s) => s.inputs?.mood === mood);
     const ordered = moodSessions.filter((s) => orderedSet.has(s.id)).length;

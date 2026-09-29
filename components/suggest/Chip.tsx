@@ -1,11 +1,11 @@
 'use client';
 
-// A toggle-button chip (§3.2 step 1). Used for both single-select groups
-// (temperature/base/budget — the caller enforces "only one pressed" by
-// swapping the whole group's value) and multi-select groups (extras/needs —
-// the caller toggles membership in an array). Either way each chip is its
-// own real toggle button with aria-pressed, never a hidden radio/checkbox,
-// per the ticket's accessibility note.
+// A toggle-button chip (COFFEY-SPEC §1, step 2). Used for both single-select
+// groups (hot or iced, coffee, texture, budget — the caller enforces "only one
+// pressed" by swapping the whole group's value) and multi-select groups (what
+// you'd like, flavours — the caller toggles membership in an array). Either way
+// each chip is its own real toggle button with aria-pressed, never a hidden
+// radio/checkbox, per the ticket's accessibility note.
 
 export function Chip({
   label,

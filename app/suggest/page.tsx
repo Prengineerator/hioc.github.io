@@ -1,8 +1,9 @@
 'use client';
 
-// /suggest — the "Help me choose" wizard (SUG-7). Flag-gated: when
-// flags.suggest is off this renders only the coming-soon state below and
-// makes no API calls at all.
+// /suggest — "Ask Coffey", the suggestion wizard (SUG-7, COFFEY-SPEC §1).
+// Flag-gated: when flags.suggest is off this renders only the coming-soon state
+// below and makes no API calls at all. The page title lives in ./layout.tsx
+// (this is a client component, so it can't export metadata).
 
 import { useState } from 'react';
 import { CartProvider } from '@/lib/cart/CartContext';

@@ -16,13 +16,23 @@ import type { MenuItem } from '@/lib/types';
 export function MenuItemCustomizeModal({
   item,
   onClose,
+  initialSelection: presets,
+  hint,
 }: {
   item: MenuItem;
   onClose: () => void;
+  /** Options to open with already chosen (group id → option ids), e.g. the
+   * sugar level Coffey picked on /suggest. Vetted by lib/menu/customization
+   * initialSelection(): anything invalid for its group falls back to the
+   * usual default. Read once, on open. */
+  initialSelection?: Record<string, string[]>;
+  /** A short line shown above the options, e.g. "Coffey set sugar to “No
+   * Sugar” for you — change it anytime." */
+  hint?: string;
 }) {
   const { addItem } = useCart();
   const [variantId, setVariantId] = useState(item.variants[0]?.id ?? '');
-  const [selected, setSelected] = useState<Record<string, string[]>>(() => initialSelection(item));
+  const [selected, setSelected] = useState<Record<string, string[]>>(() => initialSelection(item, presets));
   const [qty, setQty] = useState(1);
   const [instructions, setInstructions] = useState('');
 
@@ -87,6 +97,11 @@ export function MenuItemCustomizeModal({
 
   return (
     <Modal open onClose={onClose} title={item.name} subtitle={item.description || undefined} footer={footer} dense>
+      {hint ? (
+        <p role="status" className="mb-3 text-sm text-muted">
+          {hint}
+        </p>
+      ) : null}
       <ItemCustomizer
         item={item}
         variantId={variantId}

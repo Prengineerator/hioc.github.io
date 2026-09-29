@@ -14,8 +14,12 @@ const WINDOW_OPTIONS: { key: WindowKey; label: string }[] = [
   { key: '30d', label: '30 days' },
 ];
 
+// One per Coffey feeling (MOODS in lib/suggest/types.ts, COFFEY-SPEC §1) — short
+// enough for the mood-mix bar's fixed-width label column.
 const MOOD_LABELS: Record<Mood, string> = {
   boost: 'Need a boost',
+  focus: 'Focused',
+  unwind: 'Need to unwind',
   cosy: 'Calm & cosy',
   celebrate: 'Celebrating',
   comfort: 'Need comfort',

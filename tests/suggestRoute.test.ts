@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Phase 7 · SUG-4/SUG-6 — POST /api/suggest.
 
@@ -152,6 +152,36 @@ function traitsRow(menu_item_id: string, extra: Record<string, unknown> = {}) {
   };
 }
 
+/** The live "Choice of Sugar" group, as the nested select hands it back. */
+function sugarGroupRow(prefix: string, over: { normalOff?: boolean } = {}) {
+  const option = (key: string, name: string, price_inr: number, sort_order: number, extra: Record<string, unknown> = {}) => ({
+    id: `${prefix}-${key}`,
+    addon_group_id: `${prefix}-group`,
+    name,
+    price_inr,
+    sort_order,
+    ...extra,
+  });
+  return {
+    addon_groups: {
+      id: `${prefix}-group`,
+      name: 'Sugar',
+      display_name: 'Choice of Sugar',
+      selection_type: 'single',
+      min_select: 1,
+      max_select: 1,
+      sort_order: 20,
+      options: [
+        option('stevia', 'Stevia (sugarfree)', 10, 0),
+        option('brown', 'Brown Sugar', 0, 10),
+        option('none', 'No Sugar', 0, 20),
+        option('normal', 'Normal', 0, 30, over.normalOff ? { is_available: false } : {}),
+      ],
+    },
+  };
+}
+
+// The pre-Coffey body an old browser bundle still sends.
 function requestBody(overrides: Record<string, unknown> = {}) {
   return {
     inputs: {
@@ -167,6 +197,28 @@ function requestBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// The Coffey (v2) body the new wizard sends.
+function v2Inputs(overrides: Record<string, unknown> = {}) {
+  return {
+    mood: 'boost',
+    secondaryMood: null,
+    kinds: ['drink'],
+    temperature: 'either',
+    base: 'either',
+    strength: 'any',
+    sweetness: 'any',
+    body: 'any',
+    flavours: [],
+    needs: [],
+    budget: 'any',
+    note: '',
+    ...overrides,
+  };
+}
+function v2Body(overrides: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) {
+  return { inputs: v2Inputs(overrides), ...extra };
+}
+
 function post(body: unknown) {
   return POST(
     new Request('http://t/api/suggest', {
@@ -176,6 +228,20 @@ function post(body: unknown) {
     }),
   );
 }
+
+// The route keeps the menu, traits and popularity in a 60 s per-instance cache
+// (app/api/suggest/route.ts). A test that changes the menu rows would otherwise
+// be served the PREVIOUS test's menu, so each test starts two minutes after the
+// last on a fake clock (only Date is faked — timers and promises stay real).
+let clock = Date.now();
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  clock += 120_000;
+  vi.setSystemTime(clock);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -276,5 +342,175 @@ describe('POST /api/suggest', () => {
     expect(typeof data.sessionId).toBe('string');
     expect(data.sessionId).not.toBe(state.insertedSessionId);
     expect(state.insertedEvents).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Coffey v2 (docs/COFFEY-SPEC.md): v2 bodies, the v1 upgrade, and the sugar flow
+// ---------------------------------------------------------------------------
+
+describe('POST /api/suggest — Coffey (v2) inputs', () => {
+  it('accepts a v2 body and answers 200', async () => {
+    const res = await post(v2Body());
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.picks.length).toBeGreaterThan(0);
+  });
+
+  it('persists v2 inputs on the session — for a v2 body as sent…', async () => {
+    const inputs = v2Inputs({ mood: 'focus', secondaryMood: 'unwind', kinds: ['drink', 'dessert'], sweetness: 'light', flavours: ['nutty'], note: 'studying late' });
+    const res = await post({ inputs });
+    expect(res.status).toBe(200);
+    expect((state.sessionInsert as Record<string, unknown>).inputs).toEqual(inputs);
+  });
+
+  it('…and for an old v1 body, upgraded (§2) before it is stored', async () => {
+    const res = await post(
+      requestBody({
+        inputs: { temperature: 'iced', base: 'coffee', extras: ['sweet'], needs: ['less_sugar', 'no_caffeine'], budget: 'treat', mood: 'celebrate', note: 'hi' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((state.sessionInsert as Record<string, unknown>).inputs).toEqual({
+      mood: 'celebrate',
+      secondaryMood: null,
+      kinds: ['drink', 'dessert'],
+      temperature: 'iced',
+      base: 'coffee',
+      strength: 'any',
+      sweetness: 'light', // less_sugar wins over sweet
+      body: 'any',
+      flavours: [],
+      needs: ['no_caffeine'],
+      budget: 'any', // "treat" never filtered anything
+      note: 'hi',
+    });
+  });
+
+  it('400s on a malformed v2 body, with the reason', async () => {
+    for (const [override, message] of [
+      [{ kinds: [] }, 'invalid kinds'],
+      [{ kinds: ['drink', 'drink'] }, 'duplicate kinds'],
+      [{ secondaryMood: 'boost' }, 'secondaryMood must differ from mood'],
+      [{ sweetness: 'syrupy' }, 'invalid sweetness'],
+      [{ flavours: ['savoury'] }, 'invalid flavours'],
+      [{ budget: 'treat' }, 'invalid budget'],
+      [{ needs: ['less_sugar'] }, 'invalid needs'],
+    ] as const) {
+      const res = await post(v2Body(override));
+      expect(res.status, message).toBe(400);
+      expect((await res.json()).error).toBe(message);
+    }
+  });
+
+  it("answers with Coffey's own header for the primary feeling when Jev writes none", async () => {
+    const res = await post(v2Body({ mood: 'focus' }));
+    const data = await res.json();
+    expect(data.header).toBe("Coffey's picks to help you focus ☕");
+  });
+
+  it('applies the v2 rules: a "not sweet" ask drops a sweet item from the picks', async () => {
+    state.traitsRows = [traitsRow('espresso'), traitsRow('latte', { caffeine: 'medium', moods: ['cosy'], sweetness: 3 })];
+    const res = await post(v2Body({ sweetness: 'none' }));
+    const data = await res.json();
+    expect(data.picks.map((p: { menuItemId: string }) => p.menuItemId)).toEqual(['espresso']);
+    expect((state.sessionInsert as Record<string, unknown>).candidate_ids).toEqual(['espresso']);
+  });
+
+  it('only shows the kinds asked for: a dessert is never a pick for a drink request', async () => {
+    state.menuRows = [...state.menuRows, menuRow('cheesecake', 'Cheesecake', 250, { category: 'Cheesecakes', parent_category: '' })];
+    state.traitsRows = [
+      ...state.traitsRows,
+      traitsRow('cheesecake', { kind: 'dessert', temperature: 'ambient', caffeine: 'none', is_coffee: false, sweetness: 3, moods: ['celebrate'] }),
+    ];
+    const drinksOnly = await (await post(v2Body({ kinds: ['drink'] }))).json();
+    expect(drinksOnly.picks.map((p: { menuItemId: string }) => p.menuItemId)).not.toContain('cheesecake');
+    const withDessert = await (await post(v2Body({ kinds: ['drink', 'dessert'], mood: 'celebrate' }))).json();
+    expect(withDessert.picks.map((p: { menuItemId: string }) => p.menuItemId)).toContain('cheesecake');
+  });
+
+  it('never suggests an in-store-only item (that filter is kept)', async () => {
+    state.menuRows = [...state.menuRows, menuRow('water', 'Water Bottle', 20, { in_store_only: true })];
+    state.traitsRows = [...state.traitsRows, traitsRow('water', { caffeine: 'none', is_coffee: false, sweetness: 0 })];
+    const data = await (await post(v2Body())).json();
+    expect(data.picks.map((p: { menuItemId: string }) => p.menuItemId)).not.toContain('water');
+    expect((state.sessionInsert as Record<string, unknown>).candidate_ids).not.toContain('water');
+  });
+});
+
+describe('POST /api/suggest — sugar presets read the menu\'s own add-on groups (COFFEY-SPEC §4.7)', () => {
+  beforeEach(() => {
+    // Espresso can be made with or without sugar (the live group); the latte cannot.
+    state.menuRows = [
+      menuRow('espresso', 'Espresso', 80, { menu_item_addon_groups: [sugarGroupRow('esp')] }),
+      menuRow('latte', 'Latte', 140),
+    ];
+    state.traitsRows = [traitsRow('espresso'), traitsRow('latte', { caffeine: 'medium', moods: ['cosy'] })];
+  });
+
+  it('the pick opens with the sugar option chosen for the customer, and its tags say why', async () => {
+    const res = await post(v2Body({ sweetness: 'light' }));
+    const data = await res.json();
+    const espresso = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso');
+    // Inherent 0; "Normal" reaches 3 — exactly the "lightly sweet" asked for — while "No Sugar" stays 0.
+    expect(espresso.sugarPreset).toEqual({ groupId: 'esp-group', optionId: 'esp-normal', label: 'Normal' });
+    expect(espresso.matchTags).toEqual(['A proper lift', 'Lightly sweet']);
+  });
+
+  it('claims a sweetness only when the pick lands in the band they chose: a preset that falls short earns no tag', async () => {
+    const data = await (await post(v2Body({ sweetness: 'medium' }))).json();
+    const espresso = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso');
+    // "Normal" still gets closest (0 → 3 of the 5 asked for), but 3 is the lightly-sweet band, not medium.
+    expect(espresso.sugarPreset?.label).toBe('Normal');
+    expect(espresso.matchTags).toEqual(['A proper lift']);
+  });
+
+  it('the picks come back as plain JSON: null where there is nothing to preselect, tags always an array', async () => {
+    const data = await (await post(v2Body({ sweetness: 'medium' }))).json();
+    const latte = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'latte');
+    expect(latte.sugarPreset).toBeNull();
+    for (const pick of data.picks) {
+      expect(Array.isArray(pick.matchTags)).toBe(true);
+      expect(pick.matchTags.length).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it('sends the add-on groups with their options in `items`, so the modal can show the preset', async () => {
+    const data = await (await post(v2Body({ sweetness: 'medium' }))).json();
+    const row = data.items.find((i: { id: string }) => i.id === 'espresso');
+    expect(row.addon_groups).toHaveLength(1);
+    expect(row.addon_groups[0].options.map((o: { name: string }) => o.name)).toEqual(['Stevia (sugarfree)', 'Brown Sugar', 'No Sugar', 'Normal']);
+    const preset = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso').sugarPreset;
+    expect(row.addon_groups[0].options.map((o: { id: string }) => o.id)).toContain(preset.optionId);
+  });
+
+  it('sets no preset when the customer chose no sweetness', async () => {
+    const data = await (await post(v2Body({ sweetness: 'any' }))).json();
+    for (const pick of data.picks) expect(pick.sugarPreset).toBeNull();
+  });
+
+  it('presets No Sugar when that is what they asked for', async () => {
+    const data = await (await post(v2Body({ sweetness: 'none' }))).json();
+    const espresso = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso');
+    expect(espresso.sugarPreset).toEqual({ groupId: 'esp-group', optionId: 'esp-none', label: 'No Sugar' });
+    expect(espresso.matchTags).toContain('Not sweet');
+  });
+
+  it('never presets an option the kitchen has switched off: with Normal out, there is nothing to steer between', async () => {
+    state.menuRows = [menuRow('espresso', 'Espresso', 80, { menu_item_addon_groups: [sugarGroupRow('esp', { normalOff: true })] }), menuRow('latte', 'Latte', 140)];
+    const data = await (await post(v2Body({ sweetness: 'medium' }))).json();
+    const espresso = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso');
+    expect(espresso.sugarPreset).toBeNull();
+    // …and the switched-off option is not even offered on the row.
+    const row = data.items.find((i: { id: string }) => i.id === 'espresso');
+    expect(JSON.stringify(row.addon_groups)).not.toContain('esp-normal');
+  });
+
+  it('works the same on the fallback path (no decider)', async () => {
+    delete process.env.TYPESAFE_API_KEY;
+    const data = await (await post(v2Body({ sweetness: 'medium' }))).json();
+    expect(data.source).toBe('fallback');
+    const espresso = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso');
+    expect(espresso.sugarPreset?.label).toBe('Normal');
   });
 });

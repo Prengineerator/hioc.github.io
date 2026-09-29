@@ -1475,6 +1475,91 @@ async function checkSuggestionEngine() {
   expectKind("suggestion_events.event CHECK rejects 'bogus'", bogusEvent, 'check', 'constraint is present, not merely dropped');
 }
 
+// ---------------------------------------------------------------------------
+// Coffey v2 — traits v2 (docs/COFFEY-SPEC.md §3.1, supabase/2026-10-coffey-traits-v2.sql).
+//
+// READ-ONLY. Every request below is a GET: nothing is written, planted or
+// deleted, so this can run against production at any time. That is also why the
+// widened `moods` CHECK ('focus' is now legal) and the named v2 CHECKs are NOT
+// probed here — proving a CHECK from outside means attempting an insert that is
+// meant to fail. Check them from the SQL editor with the migration's own
+// Verify block.
+//
+// What it can prove:
+//   * the eight new columns are selectable (the migration was applied AND
+//     PostgREST's schema cache has seen it — the generate route's 409 probe
+//     reads the very same column);
+//   * every row carries a traits_version of at least 1 (NOT NULL DEFAULT 1 plus
+//     a CHECK, so anything else means the constraint is missing).
+// And two informational lines that never fail the run: how many rows the
+// owner's "Regenerate with Jev" has still to reach, and whether the
+// sweetness_level backfill ran. Both are data, not schema.
+// ---------------------------------------------------------------------------
+const TRAITS_V2_COLUMNS = ['sweetness_level', 'intensity', 'refreshment', 'indulgence', 'novelty', 'textures', 'mood_fit', 'traits_version'];
+// Mirrors CURRENT_TRAITS_VERSION in lib/suggest/types.ts (this script is plain
+// JS and cannot import the TypeScript constant).
+const CURRENT_TRAITS_VERSION = 2;
+
+async function checkCoffeyTraitsV2() {
+  heading('COFFEY · traits v2 taste-profile columns', '2026-10-coffey-traits-v2.sql');
+  const hint = 'apply supabase/2026-10-coffey-traits-v2.sql';
+
+  const cols = await rest(`/menu_item_traits?select=menu_item_id,${TRAITS_V2_COLUMNS.join(',')}&limit=1`);
+  if (!cols.ok) {
+    const kind = errKind(cols);
+    if (kind === 'no_table') {
+      // checkSuggestionEngine already fails loudly for a missing table.
+      skip('menu_item_traits has the v2 columns', 'menu_item_traits is missing — apply supabase/2026-09-suggestion-engine.sql first');
+    } else if (kind === 'no_column') {
+      fail('menu_item_traits has the v2 columns', `${hint} — ${errText(cols)}`);
+    } else {
+      fail('menu_item_traits has the v2 columns', `${kind}: ${errText(cols)}`);
+    }
+    skip('traits_version is >= 1 on every row', 'the v2 columns are not readable');
+    return;
+  }
+  pass('menu_item_traits has the v2 columns', TRAITS_V2_COLUMNS.join(', '));
+
+  const all = await rest('/menu_item_traits?select=menu_item_id,traits_version,sweetness_level&limit=5000');
+  const rows = Array.isArray(all.body) ? all.body : null;
+  if (!all.ok || !rows) {
+    skip('traits_version is >= 1 on every row', `could not list the rows (${errText(all)})`);
+    return;
+  }
+  if (rows.length === 0) {
+    skip('traits_version is >= 1 on every row', 'no traits rows yet — nothing to check');
+    return;
+  }
+
+  const badVersion = rows.filter((r) => !Number.isInteger(r.traits_version) || r.traits_version < 1);
+  if (badVersion.length === 0) {
+    pass('traits_version is >= 1 on every row', `${rows.length} row(s)`);
+  } else {
+    fail(
+      'traits_version is >= 1 on every row',
+      `${badVersion.length} of ${rows.length} row(s) have none or a version below 1 — the column is NOT NULL DEFAULT 1 with a CHECK; re-${hint}`,
+    );
+  }
+
+  // Informational: progress of the owner's Regenerate (never a failure — it is
+  // an owner action after the deploy, not part of the deploy).
+  const behind = rows.filter((r) => Number.isInteger(r.traits_version) && r.traits_version < CURRENT_TRAITS_VERSION).length;
+  pass(
+    'Regenerate status (informational)',
+    behind === 0
+      ? `all ${rows.length} row(s) are at v${CURRENT_TRAITS_VERSION}`
+      : `${behind} of ${rows.length} row(s) are still below v${CURRENT_TRAITS_VERSION} — Owner → Suggestions → Traits → "Regenerate with Jev" until it reports 0 remaining`,
+  );
+
+  const unlevelled = rows.filter((r) => r.sweetness_level === null || r.sweetness_level === undefined).length;
+  pass(
+    'sweetness_level backfill (informational)',
+    unlevelled === 0
+      ? 'every row has a 0–10 level'
+      : `${unlevelled} row(s) have no sweetness_level — the engine falls back to the legacy 0–3 column for them; re-running the migration backfills exactly those`,
+  );
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -1498,6 +1583,7 @@ async function main() {
   await checkStaffAccounts();
   await checkCashCounts();
   await checkSuggestionEngine();
+  await checkCoffeyTraitsV2();
   await checkInventory();
   await checkCleanup();
 

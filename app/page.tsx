@@ -6,6 +6,7 @@ import { CAFE_ADDRESS, CAFE_HOURS_HOME, CUSTOMER_MENU_CATEGORIES } from '@/lib/c
 import { buttonVariants } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { flags } from '@/lib/flags';
+import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
 // Owned by the promotions engineer (components/promotions/**); imported
 // here (not built here) since it's already self-contained (fetches its own
 // data, handles empty/error states, per-session dismiss) — mounting it is
@@ -23,6 +24,7 @@ export default function HomePage() {
     <CartProvider>
       <AnnouncementBanner />
       <HeroSection />
+      <MeetCoffey />
       <CategoryTeaser />
       <VisitStrip />
       <AboutTeaser />
@@ -58,19 +60,74 @@ function HeroSection() {
             Coffee and Waffles, brewed and baked fresh in the heart of Kamla
             Nagar.
           </p>
-          <div className="flex flex-col items-center gap-3 sm:flex-row md:items-start">
+          {/* flex-wrap from sm up: at tablet width the hero's text column is
+              narrower than these three side by side, and without wrapping the
+              row pushed the whole page wider than the screen. */}
+          <div className="flex flex-col items-center gap-3 sm:flex-row sm:flex-wrap md:items-start">
             <Link href="/menu" className={buttonVariants({ size: 'lg' })}>
               Order Now
             </Link>
             {flags.suggest ? (
               <Link href="/suggest" className={buttonVariants({ size: 'lg', variant: 'secondary' })}>
-                Not sure? Help me choose ☕
+                <CoffeyMascot size={22} />
+                Ask Coffey
               </Link>
             ) : null}
             <span className="text-sm text-muted">{CAFE_HOURS_HOME}</span>
           </div>
         </div>
       </div>
+    </section>
+  );
+}
+
+// Coffey's introduction (COFFEY-SPEC §1): between the hero and the menu, only
+// while the suggestion engine is on. One secondary button (the hero already has
+// the page's primary, "Order Now") and a plain link to the article.
+const COFFEY_PITCH = [
+  "Tell me how you feel — I'll match it to the menu.",
+  "Pick how sweet — I'll set the sugar for you.",
+  'Three different picks, each with a reason.',
+];
+
+function MeetCoffey() {
+  if (!flags.suggest) return null;
+  return (
+    <section aria-labelledby="meet-coffey-heading" className="mx-auto max-w-6xl px-4 pb-4">
+      <Card
+        padding="lg"
+        className="flex flex-col items-center gap-4 text-center md:flex-row md:gap-10 md:text-left"
+      >
+        <CoffeyMascot size={96} expression="wink" />
+        {/* The text column takes all the room the card has (w-full on a phone,
+            flex-1 beside the mascot), so the lines wrap where the card ends and
+            not before. */}
+        <div className="flex w-full min-w-0 flex-col items-center md:flex-1 md:items-start">
+          <h2 id="meet-coffey-heading" className="text-xl font-bold text-charcoal md:text-2xl">
+            Meet Coffey, your pick-helper
+          </h2>
+          {/* Short lines read best left-aligned even when the card is centred. */}
+          <ul role="list" className="mt-3 w-full space-y-1.5 text-left text-muted">
+            {COFFEY_PITCH.map((line) => (
+              <li key={line} className="flex gap-2">
+                <span aria-hidden="true" className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-tan" />
+                <span>{line}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-5 flex flex-col items-center gap-2 sm:flex-row sm:gap-5">
+            <Link href="/suggest" className={buttonVariants({ variant: 'secondary' })}>
+              Ask Coffey
+            </Link>
+            <Link
+              href="/coffey"
+              className="inline-flex min-h-[44px] items-center font-semibold text-tan-dark hover:underline"
+            >
+              How Coffey works →
+            </Link>
+          </div>
+        </div>
+      </Card>
     </section>
   );
 }

@@ -11,6 +11,7 @@ import {
   summarizeProfile,
   type TasteProfileOrder,
 } from '@/lib/suggest/profile';
+import { withInputDefaults } from '@/lib/suggest/inputs';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import type { SuggestInputs } from '@/lib/suggest/types';
 import { buildFixtureMenu, buildFixtureTraitsById } from './fixtures/suggestMenu';
@@ -37,16 +38,7 @@ function daysAgo(n: number): string {
 }
 
 function makeInputs(over: Partial<SuggestInputs> = {}): SuggestInputs {
-  return {
-    temperature: 'either',
-    base: 'either',
-    extras: [],
-    needs: [],
-    budget: 'any',
-    mood: 'boost',
-    note: '',
-    ...over,
-  };
+  return withInputDefaults({ mood: 'boost', ...over });
 }
 
 describe('buildTasteProfile', () => {
@@ -335,5 +327,64 @@ describe('pickUsual', () => {
     const orders = [order({ items: [line('eighty-sixed', 'Coffee', { quantity: 5 })] })];
     const profile = buildTasteProfile({ orders, favorites: [], traitsById, now: NOW });
     expect(pickUsual(profile, items, traitsById, makeInputs())).toBeNull();
+  });
+
+  // Coffey v2 (docs/COFFEY-SPEC.md §4.1): the usual is held to the SAME hard
+  // constraints as today's picks, because pickUsual is passesHardConstraints.
+  describe('is held to the v2 hard constraints', () => {
+    const profileOf = (...ids: [string, string][]) =>
+      buildTasteProfile({
+        orders: [order({ items: ids.map(([id, category], i) => line(id, category, { quantity: 10 - i })) })],
+        favorites: [],
+        traitsById,
+        now: NOW,
+      });
+
+    it('only a kind the customer asked for: a favourite dessert is not the usual for a "drink" request', () => {
+      const profile = profileOf(['fudge-brownie', 'Brownies'], ['espresso', 'Coffee']);
+      expect(pickUsual(profile, items, traitsById, makeInputs({ kinds: ['drink'] }))).toBe('espresso');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ kinds: ['drink', 'dessert'] }))).toBe('fudge-brownie');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ kinds: ['dessert'] }))).toBe('fudge-brownie');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ kinds: ['food'] }))).toBeNull();
+    });
+
+    it('a savoury favourite comes through when "something savoury" was asked for, whatever the drink chips say', () => {
+      const profile = profileOf(['baked-cheese-nachos', 'Savouries']);
+      // Iced drink asked for, savoury too: a hot snack is never excluded by the temperature chip.
+      expect(pickUsual(profile, items, traitsById, makeInputs({ kinds: ['drink', 'food'], temperature: 'iced' }))).toBe('baked-cheese-nachos');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ kinds: ['drink'], temperature: 'iced' }))).toBeNull();
+    });
+
+    it('the sweetness ceiling: a usual over "not sweet" falls through to the next', () => {
+      const profile = profileOf(['nutella-shake', 'Shakes'], ['hot-chocolate', 'Hot Non-Coffee'], ['espresso', 'Coffee']);
+      // shake = level 9, hot chocolate = legacy 3 → 9, espresso = 0.
+      expect(pickUsual(profile, items, traitsById, makeInputs({ sweetness: 'none' }))).toBe('espresso');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ sweetness: 'light' }))).toBe('espresso'); // ceiling 6
+      expect(pickUsual(profile, items, traitsById, makeInputs({ sweetness: 'medium' }))).toBe('espresso'); // ceiling 8
+      expect(pickUsual(profile, items, traitsById, makeInputs({ sweetness: 'sweet' }))).toBe('nutella-shake');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ sweetness: 'any' }))).toBe('nutella-shake');
+    });
+
+    it('a sugar-adjustable coffee is not ruled out by "not sweet" — sweetness is inherent plus optional sugar', () => {
+      const profile = profileOf(['signature-iced-brew', 'Cold Brew']);
+      expect(pickUsual(profile, items, traitsById, makeInputs({ sweetness: 'none' }))).toBe('signature-iced-brew');
+    });
+
+    it('the budget is a ceiling on the cheapest size', () => {
+      const profile = profileOf(['nutella-shake', 'Shakes'], ['cafe-latte', 'Coffee'], ['espresso', 'Coffee']);
+      // ₹210, ₹140, ₹70.
+      expect(pickUsual(profile, items, traitsById, makeInputs({ budget: 'any' }))).toBe('nutella-shake');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ budget: 'under_200' }))).toBe('cafe-latte');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ budget: 'under_150' }))).toBe('cafe-latte');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ budget: 'under_100' }))).toBe('espresso');
+    });
+
+    it('never a usual that breaks the caffeine, base or temperature asks', () => {
+      const profile = profileOf(['espresso', 'Coffee'], ['hot-chocolate', 'Hot Non-Coffee']);
+      expect(pickUsual(profile, items, traitsById, makeInputs({ needs: ['no_caffeine'] }))).toBe('hot-chocolate');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ base: 'no_coffee' }))).toBe('hot-chocolate');
+      expect(pickUsual(profile, items, traitsById, makeInputs({ temperature: 'iced' }))).toBeNull();
+      expect(pickUsual(profile, items, traitsById, makeInputs({ temperature: 'hot', base: 'coffee' }))).toBe('espresso');
+    });
   });
 });

@@ -1,27 +1,44 @@
-// Phase 7 · SUG-3 — deterministic scorer (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §5.3).
+// Phase 7 · SUG-3 — deterministic scorer (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §5.3,
+// as rewritten by docs/COFFEY-SPEC.md §4.2).
 //
-// score = 0.35·mood + 0.20·extras + 0.15·daypart + 0.20·profile + 0.10·popularity,
-// each term clamped to [0,1], then a flat −0.1 "seen it last 3 visits"
-// explore nudge, then clamped to [0,1] again. Weights are exported constants,
-// not env — a change here is a reviewed diff + eval re-run (spec, end of §5.3).
+// score = 0.30·mood + 0.25·preference + 0.10·daypart + 0.20·profile
+//       + 0.10·popularity + 0.05·note,
+// each term clamped to [0,1], then a flat −0.1 "seen it last 3 visits" explore
+// nudge, then clamped to [0,1] again. Weights are exported constants, not env —
+// a change here is a reviewed diff + eval re-run (spec, end of §5.3).
 //
 // Pure: no Supabase, no 'server-only'. Runs in <20ms per spec §1 so it's a
 // safe fallback path when the LLM is slow/down/over budget.
 
-import { isChocolatey, isFruity } from './flavor';
+import { flavourFamiliesOf } from './flavor';
 import type { FilteredCandidate } from './filter';
-import type { Candidate, Daypart, Extra, Mood, MenuItemTraits, SuggestInputs, TasteProfile } from './types';
-import { SUGGEST_LIMITS } from './types';
+import { moodsOf } from './inputs';
+import { achievableSweetness, isSugarAdjustable } from './sugar';
+import { sweetnessLevel, sweetnessTarget } from './sweetness';
+import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
+import type {
+  Candidate,
+  Daypart,
+  MenuItemTraits,
+  Mood,
+  SuggestInputs,
+  TasteProfile,
+  TraitBody,
+  TraitCaffeine,
+  TraitKind,
+} from './types';
+import { KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 
 // ---------------------------------------------------------------------------
-// Weights (§5.3) — the exact numbers from the spec.
+// Weights (COFFEY-SPEC §4.2) — the exact numbers from the spec.
 // ---------------------------------------------------------------------------
 
-export const MOOD_WEIGHT = 0.35;
-export const EXTRAS_WEIGHT = 0.2;
-export const DAYPART_WEIGHT = 0.15;
+export const MOOD_WEIGHT = 0.3;
+export const PREFERENCE_WEIGHT = 0.25;
+export const DAYPART_WEIGHT = 0.1;
 export const PROFILE_WEIGHT = 0.2;
 export const POPULARITY_WEIGHT = 0.1;
+export const NOTE_WEIGHT = 0.05;
 
 /** §5.3 — items ordered in the last 3 visits get this flat penalty so the
  * picks explore while the "usual" card covers habit. */
@@ -32,88 +49,279 @@ function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
 }
 
+function isFiniteNumber(n: unknown): n is number {
+  return typeof n === 'number' && Number.isFinite(n);
+}
+
+/** What the customer-facing terms need to know about one item. A Candidate
+ * satisfies it structurally, and so does a usual built from a menu row. */
+export interface ScoredSubject {
+  name: string;
+  traits: MenuItemTraits;
+  /** The item offers a sugar choice (lib/suggest/sugar.ts findSugarGroup). */
+  sugarAdjustable: boolean;
+}
+
 // ---------------------------------------------------------------------------
-// mood term (§5.3): "1 if the mood key ∈ moods; plus a mood-specific trait
-// bonus". Membership alone already saturates the term at 1, so the bonus
-// only matters when an item ISN'T tagged with the mood but still fits it by
-// trait (e.g. a high-caffeine drink the tagger didn't mark 'boost') — it's
-// how such an item earns partial credit instead of a flat 0. Split as
-// 0.7 membership / 0.3 trait-bonus (both are ours to choose; the spec fixes
-// only the top-level 0.35 weight) so the two additive terms clamp cleanly.
+// mood term (§4.2): the MEAN over [mood, secondaryMood] of moodFit().
+//
+// moodFit is `mood_fit[m] / 3` when Jev's graded fit is on the row. Rows tagged
+// before Coffey have no mood_fit, and v1's rule for them ("1 if the mood key ∈
+// moods, plus an all-or-nothing trait bonus") scored a thick Oreo shake exactly
+// like an iced americano for "cool me down" — the 2026-09-29 baseline eval hit
+// 0% on cool and celebrate, and popularity decided every tie. So the legacy fit
+// is GRADED: 0.5·[m ∈ moods] + 0.5·g(m), where g(m) is how well the item's own
+// traits serve that feeling, on a 0–1 scale.
 // ---------------------------------------------------------------------------
 
-const MOOD_MATCH_SHARE = 0.7;
-const MOOD_TRAIT_BONUS_SHARE = 0.3;
+const BOOST_BY_CAFFEINE: Record<TraitCaffeine, number> = { high: 1, medium: 0.6, low: 0.3, none: 0 };
+const FOCUS_CAFFEINE: Record<TraitCaffeine, number> = { high: 1, medium: 1, low: 0.5, none: 0 };
+/** Easy on the caffeine: a decaf is the best fit, a strong coffee the worst. */
+const UNWIND_BY_CAFFEINE: Record<TraitCaffeine, number> = { none: 1, low: 0.7, medium: 0.3, high: 0 };
+/** Something warm is more soothing than something cold, but cold is not far off. */
+const UNWIND_COLD_FACTOR = 0.8;
+const COSY_BY_BODY: Record<TraitBody, number> = { rich: 1, medium: 0.7, light: 0.4 };
+const COMFORT_BY_BODY: Record<TraitBody, number> = { rich: 1, medium: 0.5, light: 0 };
+const COOL_BY_BODY: Record<TraitBody, number> = { light: 1, medium: 0.7, rich: 0.3 };
 
-function moodTraitBonusApplies(mood: Mood, traits: MenuItemTraits, profile: TasteProfile | null): boolean {
+/** g(m) — §4.2's table. `level` is sweetnessLevel(traits), so a legacy 0–3 row
+ * and a v2 0–10 row are graded on the same scale. */
+function traitGrade(mood: Mood, traits: MenuItemTraits, profile: TasteProfile | null): number {
+  const level = sweetnessLevel(traits);
   switch (mood) {
     case 'boost':
-      return traits.caffeine === 'high' || traits.caffeine === 'medium';
-    case 'cosy':
-      return traits.temperature === 'hot' && traits.body === 'rich';
-    case 'celebrate':
-      return traits.kind === 'dessert' || traits.sweetness >= 2;
-    case 'comfort':
-      return traits.body === 'rich' || traits.sweetness >= 2;
-    case 'cool':
-      return traits.temperature === 'iced';
-    case 'surprise': {
-      // Novelty: not one of the customer's own top items. With no profile
-      // (guest) everything is equally novel, so the bonus applies.
-      if (!profile) return true;
-      return !profile.topItems.some((t) => t.menu_item_id === traits.menu_item_id);
+      return BOOST_BY_CAFFEINE[traits.caffeine] ?? 0;
+    case 'focus': {
+      // Steady alertness: caffeine, not too sweet, not heavy.
+      const caff = FOCUS_CAFFEINE[traits.caffeine] ?? 0;
+      const sweet = level <= 3 ? 1 : level <= 6 ? 0.6 : 0.2;
+      const bodyF = traits.body === 'rich' ? 0.5 : 1;
+      return caff * sweet * bodyF;
     }
+    case 'unwind':
+      // Stressed: something soothing and gentle on the nerves — little or no
+      // caffeine, and warmer is better.
+      return (UNWIND_BY_CAFFEINE[traits.caffeine] ?? 0) * (traits.temperature === 'hot' ? 1 : UNWIND_COLD_FACTOR);
+    case 'cosy':
+      return traits.temperature === 'hot' ? (COSY_BY_BODY[traits.body] ?? 0) : 0;
+    case 'comfort':
+      return Math.max(COMFORT_BY_BODY[traits.body] ?? 0, level / SWEETNESS_SCALE.max);
+    case 'celebrate':
+      return traits.kind === 'dessert' ? 1 : level / SWEETNESS_SCALE.max;
+    case 'cool':
+      return traits.temperature === 'iced' ? (COOL_BY_BODY[traits.body] ?? 0) : 0;
+    case 'surprise':
+      // Novelty: not one of the customer's own top items. With no profile
+      // (guest) everything is equally novel.
+      return profile && profile.topItems.some((t) => t.menu_item_id === traits.menu_item_id) ? 0 : 1;
   }
+}
+
+/** How well the item fits ONE feeling, in [0,1] (§4.2). */
+export function moodFit(traits: MenuItemTraits, mood: Mood, profile: TasteProfile | null = null): number {
+  const graded = traits.mood_fit?.[mood];
+  if (isFiniteNumber(graded)) return clamp01(graded / 3);
+  const member = traits.moods.includes(mood) ? 1 : 0;
+  return clamp01(0.5 * member + 0.5 * traitGrade(mood, traits, profile));
 }
 
 function moodScore(inputs: SuggestInputs, traits: MenuItemTraits, profile: TasteProfile | null): number {
-  let s = 0;
-  if (traits.moods.includes(inputs.mood)) s += MOOD_MATCH_SHARE;
-  if (moodTraitBonusApplies(inputs.mood, traits, profile)) s += MOOD_TRAIT_BONUS_SHARE;
-  return clamp01(s);
+  const moods = moodsOf(inputs);
+  return clamp01(moods.reduce((sum, m) => sum + moodFit(traits, m, profile), 0) / moods.length);
 }
 
 // ---------------------------------------------------------------------------
-// extras term (§5.3): fraction of chosen extras satisfied. No extras chosen
-// is treated as fully satisfied (1) — there's nothing to fall short of, and
-// scoring it 0 would wrongly punish every candidate whenever the customer
-// left this step blank (all-optional per §3.2).
+// preference term (§4.2): the mean of the sub-fits that APPLY — sweetness, body,
+// strength, flavours — each in [0,1]. A sub-fit applies only when the customer
+// expressed a view ('any' / no flavours = no view), so leaving the whole step
+// blank scores 1 (nothing to fall short of; scoring it 0 would wrongly punish
+// every candidate whenever the customer skipped it). All four are SOFT — the
+// hard limits live in filter.ts.
 //
-// 'chocolatey'/'fruity' (owner addition) are SOFT preferences, scored here
-// like any other extra — never a hard filter (lib/suggest/filter.ts's
-// composition rule deliberately leaves them out), so a chocolatey request
-// with no chocolate drink left still gets a good, if unmatched, pick.
+// preferenceFits() is exported so match tags (templates.ts matchTagsFor) can ask
+// "did this item actually match?" from the SAME numbers the ranking used.
 // ---------------------------------------------------------------------------
 
-function extraSatisfied(extra: Extra, traits: MenuItemTraits, name: string): boolean {
-  switch (extra) {
-    case 'sweet':
-      return traits.sweetness >= 2;
-    case 'eat':
-      return traits.kind === 'food' || traits.kind === 'dessert';
-    case 'light':
-      return traits.body === 'light';
-    case 'filling':
-      return traits.body === 'rich';
-    case 'chocolatey':
-      return isChocolatey(name, traits.flavor_notes);
-    case 'fruity':
-      return isFruity(name, traits.flavor_notes);
+/** A sub-fit, or null when the customer expressed no view on it. */
+export interface PreferenceFits {
+  sweetness: number | null;
+  body: number | null;
+  strength: number | null;
+  flavours: number | null;
+}
+
+const LIGHT_BODY_FIT: Record<TraitBody, number> = { light: 1, medium: 0.5, rich: 0 };
+const RICH_BODY_FIT: Record<TraitBody, number> = { rich: 1, medium: 0.5, light: 0 };
+/** intensity (0 gentle → 3 bold) for a row with no v2 intensity: derived from caffeine. */
+const INTENSITY_FROM_CAFFEINE: Record<TraitCaffeine, number> = { high: 3, medium: 2, low: 1, none: 0 };
+
+export function preferenceFits(inputs: SuggestInputs, subject: ScoredSubject): PreferenceFits {
+  const { traits } = subject;
+  const fits: PreferenceFits = { sweetness: null, body: null, strength: null, flavours: null };
+
+  // Sweetness: how close can the customer get? The item's inherent level, lifted
+  // by optional table sugar where the item has a sugar choice — never lowered.
+  const target = sweetnessTarget(inputs.sweetness);
+  if (target !== null) {
+    const achievable = achievableSweetness(sweetnessLevel(traits), subject.sugarAdjustable, target);
+    fits.sweetness = clamp01(1 - Math.abs(achievable - target) / SWEETNESS_SCALE.max);
   }
+
+  // Body. "Light" is also about refreshment, so when Jev has graded it the light
+  // fit is averaged with refreshment / 3.
+  if (inputs.body === 'light') {
+    let fit = LIGHT_BODY_FIT[traits.body] ?? 0;
+    if (isFiniteNumber(traits.refreshment)) fit = (fit + clamp01(traits.refreshment / 3)) / 2;
+    fits.body = clamp01(fit);
+  } else if (inputs.body === 'rich') {
+    fits.body = RICH_BODY_FIT[traits.body] ?? 0;
+  }
+
+  // Strength is about COFFEE: a hot chocolate has no "strength" to be strong or
+  // mild about, so for anything but a coffee drink this sub-fit doesn't apply.
+  if (inputs.strength !== 'any' && traits.kind === 'drink' && traits.is_coffee) {
+    const intensity = isFiniteNumber(traits.intensity) ? traits.intensity : (INTENSITY_FROM_CAFFEINE[traits.caffeine] ?? 0);
+    if (inputs.strength === 'strong') fits.strength = clamp01(intensity / 3);
+    else if (inputs.strength === 'mild') fits.strength = clamp01(1 - intensity / 3);
+    else fits.strength = clamp01(1 - Math.abs(intensity - 1.5) / 1.5); // balanced
+  }
+
+  // Flavours: OR semantics — any one picked family is enough.
+  if (inputs.flavours.length > 0) {
+    const families = flavourFamiliesOf(subject.name, traits.flavor_notes);
+    fits.flavours = inputs.flavours.some((f) => families.includes(f)) ? 1 : 0;
+  }
+
+  return fits;
 }
 
-function extrasScore(inputs: SuggestInputs, traits: MenuItemTraits, name: string): number {
-  if (inputs.extras.length === 0) return 1;
-  const satisfied = inputs.extras.filter((e) => extraSatisfied(e, traits, name)).length;
-  return clamp01(satisfied / inputs.extras.length);
+function preferenceScore(inputs: SuggestInputs, subject: ScoredSubject): number {
+  const applicable = Object.values(preferenceFits(inputs, subject)).filter((v): v is number => v !== null);
+  if (applicable.length === 0) return 1;
+  return clamp01(applicable.reduce((a, b) => a + b, 0) / applicable.length);
 }
 
 // ---------------------------------------------------------------------------
-// daypart term (§5.3): 1 if the current IST daypart is one this item suits.
+// daypart term (§4.2): 1 if the current IST daypart is one this item suits.
+//
+// A quiet nudge, never in copy (the tone guide bans health claims): caffeine
+// taken within about six hours of bedtime disrupts sleep even when people don't
+// notice it, so for a medium- or high-caffeine item the term is halved in the
+// evening (17:00–20:59) and is 0 late (21:00+) — however the item is tagged.
+//
+// The nudge is waived only for an EXPLICIT ask for caffeine: a feeling of boost
+// (primary or secondary), coffee as the base, or a strength preference. 'focus'
+// is deliberately NOT exempt — studying late is exactly when the sleep cost bites.
 // ---------------------------------------------------------------------------
 
-function daypartScore(daypart: Daypart, traits: MenuItemTraits): number {
-  return traits.dayparts.includes(daypart) ? 1 : 0;
+/** The customer asked for caffeine in so many words. */
+function askedForCaffeine(inputs: SuggestInputs): boolean {
+  return moodsOf(inputs).includes('boost') || inputs.base === 'coffee' || inputs.strength !== 'any';
+}
+
+/** What a caffeinated item's daypart term is multiplied by in the evening. */
+const EVENING_CAFFEINE_FACTOR = 0.5;
+
+export function daypartScore(daypart: Daypart, traits: MenuItemTraits, inputs: SuggestInputs): number {
+  if (!traits.dayparts.includes(daypart)) return 0;
+  const caffeinated = traits.caffeine === 'medium' || traits.caffeine === 'high';
+  if (!caffeinated || askedForCaffeine(inputs)) return 1;
+  if (daypart === 'late') return 0;
+  if (daypart === 'evening') return EVENING_CAFFEINE_FACTOR;
+  return 1;
+}
+
+// ---------------------------------------------------------------------------
+// note term (§4.2): the customer's free text ("studying late", "sharing with a
+// friend") as a keyword-affinity, on top of what the decider reads. 1 when a
+// MEANINGFUL note token matches a token of the item's name, a flavour note, a
+// texture or a family label; otherwise 0.
+//
+// The note is UNTRUSTED customer text (playbook S-2): this only ever compares
+// words, so it can steer a score by at most NOTE_WEIGHT and can't do anything
+// else. No regex is built from it.
+// ---------------------------------------------------------------------------
+
+/** Words ignored as note tokens: function words and generic request filler that
+ * would otherwise "match" menu words ("the" in "On The Rocks"). Deliberately
+ * small — menu words like "coffee", "iced" or "cake" are real preferences. */
+const NOTE_STOP_WORDS: ReadonlySet<string> = new Set([
+  'the', 'and', 'for', 'with', 'from', 'that', 'this', 'these', 'those', 'have', 'has', 'had', 'was', 'were', 'are',
+  'you', 'your', 'our', 'but', 'too', 'all', 'any', 'one', 'out', 'its', 'can', 'could', 'would', 'should', 'will',
+  'get', 'got', 'give', 'want', 'need', 'like', 'love', 'some', 'something', 'anything', 'please', 'really', 'very',
+  'just', 'also', 'more', 'most', 'much', 'than', 'then', 'them', 'they', 'what', 'when', 'where', 'who', 'how', 'why',
+  'feel', 'feeling', 'bit', 'lot', 'lots', 'little', 'today', 'tonight', 'now', 'about', 'into', 'maybe', 'thing',
+  'things', 'okay',
+]);
+
+/** A negator turns the next NEGATION_WINDOW words into things the customer does
+ * NOT want ("no strawberry", "without nuts", "don't like mint"). */
+const NOTE_NEGATORS: ReadonlySet<string> = new Set(['no', 'not', 'without', 'less', 'avoid', 'hate', 'dont']);
+const NEGATION_WINDOW = 2;
+const MIN_TOKEN_LETTERS = 3;
+/** Two different words match when they share at least this many leading letters
+ * — enough for "strawberries" ~ "strawberry" and "chocolatey" ~ "chocolate". */
+const MIN_SHARED_PREFIX = 5;
+
+/** Lowercase a–z words: accents folded ("café" → "cafe"), apostrophes dropped
+ * ("don't" → "dont"), everything else a separator. */
+function wordsOf(text: string): string[] {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['’`]/g, '')
+    .split(/[^a-z]+/)
+    .filter((w) => w.length > 0);
+}
+
+/** The words of the note that state something wanted: ≥3 letters, not a
+ * stop-word, and not within NEGATION_WINDOW words after a negator. Punctuation
+ * ends a negation ("no sugar, strawberry please" still wants strawberry). */
+function meaningfulNoteTokens(note: string): string[] {
+  const tokens: string[] = [];
+  for (const clause of note.split(/[.,;:!?()\r\n]+/)) {
+    let negatedThrough = -1;
+    wordsOf(clause).forEach((word, i) => {
+      if (NOTE_NEGATORS.has(word)) {
+        negatedThrough = i + NEGATION_WINDOW;
+        return;
+      }
+      if (i <= negatedThrough) return;
+      if (word.length >= MIN_TOKEN_LETTERS && !NOTE_STOP_WORDS.has(word)) tokens.push(word);
+    });
+  }
+  return tokens;
+}
+
+function tokensMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  const limit = Math.min(a.length, b.length);
+  let shared = 0;
+  while (shared < limit && a[shared] === b[shared]) shared++;
+  return shared >= MIN_SHARED_PREFIX;
+}
+
+/** Everything an item can be matched on: its name, flavour notes, textures and
+ * the labels of the flavour families it belongs to. */
+function itemTokens(item: Pick<ScoredSubject, 'name' | 'traits'>): string[] {
+  const { traits } = item;
+  const families = flavourFamiliesOf(item.name, traits.flavor_notes).map((f) => FLAVOUR_FAMILY_INFO[f].label);
+  const texts = [item.name, ...(traits.flavor_notes ?? []), ...(traits.textures ?? []), ...families];
+  return texts.flatMap(wordsOf).filter((w) => w.length >= MIN_TOKEN_LETTERS);
+}
+
+/**
+ * §4.2 — 1 when a meaningful token of the customer's note matches a token of
+ * the item (an equal word, or a shared prefix of ≥5 letters), else 0. Negated
+ * words never count: "no strawberry" must not pull in the strawberry creme.
+ */
+export function noteAffinity(note: string, item: Pick<ScoredSubject, 'name' | 'traits'>): number {
+  if (typeof note !== 'string' || note.trim().length === 0) return 0;
+  const wanted = meaningfulNoteTokens(note);
+  if (wanted.length === 0) return 0;
+  const have = itemTokens(item);
+  return wanted.some((w) => have.some((h) => tokensMatch(w, h))) ? 1 : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +339,10 @@ function daypartScore(daypart: Daypart, traits: MenuItemTraits): number {
 // the mood term above); the spec fixes only what feeds in and what the
 // price-comfort rule must do at the edges (budget customers lean to ≤p75,
 // premium gets no penalty).
+//
+// UNCHANGED by Coffey (§4.2): it deliberately keeps reading the legacy 0–3
+// `sweetness` column, because the taste profile's meanSweetness is built from
+// that same column (and every v2 write keeps it derived).
 // ---------------------------------------------------------------------------
 
 const ORDERING_MOOD_BONUS = 0.15;
@@ -213,12 +425,14 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
   const scored: Candidate[] = candidates.map((c) => {
     const minPrice = Math.min(...c.item.variants.map((v) => v.price_inr));
     const maxPrice = Math.max(...c.item.variants.map((v) => v.price_inr));
+    const subject: ScoredSubject = { name: c.item.name, traits: c.traits, sugarAdjustable: isSugarAdjustable(c.item) };
     const weighted =
       MOOD_WEIGHT * moodScore(inputs, c.traits, profile) +
-      EXTRAS_WEIGHT * extrasScore(inputs, c.traits, c.item.name) +
-      DAYPART_WEIGHT * daypartScore(daypart, c.traits) +
+      PREFERENCE_WEIGHT * preferenceScore(inputs, subject) +
+      DAYPART_WEIGHT * daypartScore(daypart, c.traits, inputs) +
       PROFILE_WEIGHT * profileScore(c, minPrice, profile) +
-      POPULARITY_WEIGHT * popularityFor(c.item.id);
+      POPULARITY_WEIGHT * popularityFor(c.item.id) +
+      NOTE_WEIGHT * noteAffinity(inputs.note, subject);
 
     const penalised = recent.has(c.item.id) ? weighted - RECENT_ITEM_PENALTY : weighted;
 
@@ -231,51 +445,81 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       category: c.item.category,
       description: c.item.description,
       traits: c.traits,
+      sugarAdjustable: subject.sugarAdjustable,
     };
   });
 
-  return scored.sort((a, b) => b.score - a.score || a.menuItemId.localeCompare(b.menuItemId));
+  return scored.sort(byScoreThenId);
+}
+
+function byScoreThenId(a: Candidate, b: Candidate): number {
+  return b.score - a.score || a.menuItemId.localeCompare(b.menuItemId);
+}
+
+/** The index of the weakest shortlist entry that can be dropped without leaving
+ * a requested kind unrepresented, or -1. Lowest score wins; among equals the
+ * later entry goes first (the list is best-first). */
+function weakestEvictable(list: Candidate[], requested: readonly TraitKind[]): number {
+  const held = new Map<TraitKind, number>();
+  for (const c of list) held.set(c.traits.kind, (held.get(c.traits.kind) ?? 0) + 1);
+
+  let weakest = -1;
+  list.forEach((c, i) => {
+    const soleHolderOfRequestedKind = requested.includes(c.traits.kind) && held.get(c.traits.kind) === 1;
+    if (soleHolderOfRequestedKind) return;
+    if (weakest === -1 || c.score <= list[weakest].score) weakest = i;
+  });
+  return weakest;
 }
 
 /**
- * §5.3 diversity rules: at most `maxPerCategoryInShortlist` per category —
- * deliberately generous (8, not a tight 2) so the decider actually sees the
- * menu's full spread of, say, hot coffees rather than only its top 2 — and
- * (when "Something to eat" was chosen) at least one food/dessert item
- * guaranteed somewhere in the top-`shortlist` list.
+ * §5.3 diversity rules, plus COFFEY-SPEC §4.3 kind coverage: at most
+ * `maxPerCategoryInShortlist` per category — deliberately generous (8, not a
+ * tight 2) so the decider actually sees the menu's full spread of, say, hot
+ * coffees rather than only its top 2 — out of `shortlist` entries in total; and,
+ * when the customer asked for more than one kind ("a drink and something
+ * sweet"), the best-scoring candidate of EACH requested kind is guaranteed to be
+ * in the list. That generalises v1's "one food/dessert when they chose to eat".
+ * The guarantee is what lets the picks pair a drink with a dessert even when a
+ * wide-open drink pool would otherwise fill all the slots.
  */
 export function buildShortlist(scored: Candidate[], inputs: SuggestInputs): Candidate[] {
   const perCategory = new Map<string, number>();
   const shortlist: Candidate[] = [];
+  const add = (c: Candidate) => {
+    shortlist.push(c);
+    perCategory.set(c.category, (perCategory.get(c.category) ?? 0) + 1);
+  };
 
   for (const c of scored) {
     if (shortlist.length >= SUGGEST_LIMITS.shortlist) break;
-    const count = perCategory.get(c.category) ?? 0;
-    if (count >= SUGGEST_LIMITS.maxPerCategoryInShortlist) continue;
-    shortlist.push(c);
-    perCategory.set(c.category, count + 1);
+    if ((perCategory.get(c.category) ?? 0) >= SUGGEST_LIMITS.maxPerCategoryInShortlist) continue;
+    add(c);
   }
 
-  const wantsToEat = inputs.extras.includes('eat');
-  const hasFoodOrDessert = shortlist.some((c) => c.traits.kind === 'food' || c.traits.kind === 'dessert');
-  if (wantsToEat && !hasFoodOrDessert) {
-    const inShortlist = new Set(shortlist.map((c) => c.menuItemId));
-    const bestFood = scored.find(
-      (c) => (c.traits.kind === 'food' || c.traits.kind === 'dessert') && !inShortlist.has(c.menuItemId),
-    );
-    if (bestFood) {
+  if (inputs.kinds.length > 1) {
+    const requested = KINDS.filter((k) => inputs.kinds.includes(k));
+    let changed = false;
+    for (const kind of requested) {
+      const best = scored.find((c) => c.traits.kind === kind);
+      if (!best || shortlist.some((c) => c.menuItemId === best.menuItemId)) continue;
+
       if (shortlist.length < SUGGEST_LIMITS.shortlist) {
-        shortlist.push(bestFood);
+        add(best);
       } else {
-        // Replace the lowest-scored pick (list is already sorted desc from
-        // `scored`, so the last slot is the weakest) to make room without
-        // growing past the limit.
-        const worst = shortlist[shortlist.length - 1];
-        perCategory.set(worst.category, (perCategory.get(worst.category) ?? 1) - 1);
-        shortlist[shortlist.length - 1] = bestFood;
+        // Make room without growing past the limit: drop the weakest entry that
+        // isn't the only one holding a requested kind, and keep the category
+        // counts consistent with what is actually in the list.
+        const evict = weakestEvictable(shortlist, requested);
+        if (evict === -1) continue;
+        const [dropped] = shortlist.splice(evict, 1);
+        perCategory.set(dropped.category, (perCategory.get(dropped.category) ?? 1) - 1);
+        add(best);
       }
-      perCategory.set(bestFood.category, (perCategory.get(bestFood.category) ?? 0) + 1);
+      changed = true;
     }
+    // Forced entries went in at the end: restore the best-first order.
+    if (changed) shortlist.sort(byScoreThenId);
   }
 
   return shortlist;

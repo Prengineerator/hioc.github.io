@@ -1,8 +1,9 @@
 // Phase 7 · SUG-10 — the owner Suggestions dashboard
-// (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §7). Server component: window
-// selector (Today/7 days/30 days via ?window=) plus a Traits tab (?tab=traits)
-// — the Traits tab is always reachable, flag or no flag, because the owner
-// has to tag the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on (Gate 7A).
+// (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §7) for "Ask Coffey", the customer
+// name since docs/COFFEY-SPEC.md. Server component: window selector
+// (Today/7 days/30 days via ?window=) plus a Traits tab (?tab=traits) — the
+// Traits tab is always reachable, flag or no flag, because the owner has to tag
+// the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on (Gate 7A).
 
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card } from '@/components/owner/dashboard';
@@ -90,8 +91,8 @@ export default async function OwnerSuggestionsPage({
       {!flags.suggest && (
         <Card title="Dark-launched">
           <p className="text-sm text-muted">
-            &ldquo;Help me choose&rdquo; isn&apos;t live for customers yet (NEXT_PUBLIC_FLAG_SUGGEST is off). Tag every
-            item on the Traits tab first — the flag can go on once Gate 7A and 7B pass.
+            &ldquo;Ask Coffey&rdquo; isn&apos;t live for customers yet (NEXT_PUBLIC_FLAG_SUGGEST is off). Give every
+            item Coffey&apos;s taste profile on the Traits tab first — the flag can go on once Gate 7A and 7B pass.
           </p>
         </Card>
       )}

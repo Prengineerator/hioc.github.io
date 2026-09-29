@@ -1,5 +1,5 @@
 {
-  "note": "DRAFT for owner review — goodFit lists are the eval author's best guess at a barista-approved match, not yet confirmed by the owner. Item names are taken from supabase/seed.sql. Re-label/adjust freely; the harness only cares about the shape.",
+  "note": "DRAFT for owner review — goodFit lists are the eval author's best guess at a barista-approved match, not yet confirmed by the owner. Item names are taken from supabase/seed.sql. Re-label/adjust freely; the harness only cares about the shape. The v2-* scenarios use the Coffey v2 inputs (docs/COFFEY-SPEC.md section 2); their goodFit names come from the live menu (2026-09-29) and every item was checked against that scenario's hard rules (section 4.1), but they are DRAFT in the same way. The s* scenarios are the original v1 ones and upgrade automatically.",
   "scenarios": [
     {
       "id": "s01",
@@ -1224,6 +1224,395 @@
         "Toffee Nut Cold Brew",
         "Vanilla Creme Cold Brew"
       ]
+    },
+    {
+      "id": "v2-01-focus-hot-not-sweet",
+      "inputs": {
+        "mood": "focus",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "none",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Americano",
+        "Long Black",
+        "Flat White",
+        "Matcha Latte"
+      ],
+      "scenarioNote": "Focused + hot + \"Not sweet\" (sweetness none). Long, sippable, steady coffees; nothing sugary. Espresso and Macchiato are left out on purpose: two sips is not a working drink."
+    },
+    {
+      "id": "v2-02-unwind-no-caffeine",
+      "inputs": {
+        "mood": "unwind",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "either",
+        "base": "no_coffee",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [
+          "no_caffeine"
+        ],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Hot Chocolate",
+        "Pistachio Latte",
+        "Cinnamon Hot Chocolate",
+        "Hazelnut Hot Chocolate"
+      ],
+      "scenarioNote": "Stressed + \"No caffeine at all\" (base no_coffee + needs no_caffeine, as the wizard sends it). Warm, soothing, creamy cups; iced cremes fit the rules but are not soothing."
+    },
+    {
+      "id": "v2-03-boost-cool-iced-strong",
+      "inputs": {
+        "mood": "boost",
+        "secondaryMood": "cool",
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "iced",
+        "base": "coffee",
+        "strength": "strong",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "On The Rocks",
+        "Americano Iced",
+        "Long Black Iced",
+        "Signature Iced Brew"
+      ],
+      "scenarioNote": "Two feelings: tired AND hot. Iced + strong coffee. This is the production failure from COFFEY-SPEC section 0 (On The Rocks, Americano Iced and Signature Iced Brew were skipped for creamy iced lattes)."
+    },
+    {
+      "id": "v2-04-unwind-hot-lightly-sweet",
+      "inputs": {
+        "mood": "unwind",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "light",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Ginger Orange Honey Tea",
+        "Chai Latte",
+        "Pistachio Latte",
+        "Signature Hot Chocolate",
+        "Matcha Latte"
+      ],
+      "scenarioNote": "Stressed + hot + \"Lightly sweet\" (sweetness light). Caffeine is allowed but gentle is better: herbal, chai, matcha, nutty milk drinks."
+    },
+    {
+      "id": "v2-05-celebrate-very-sweet",
+      "inputs": {
+        "mood": "celebrate",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "either",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "very",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Brookie Creme",
+        "Lotus Biscoff Creme",
+        "Nutella Mocha",
+        "White Mocha",
+        "Krazy Kitkat Creme",
+        "Lotus Biscoff Latte"
+      ],
+      "scenarioNote": "Celebrating + \"Very sweet\" (sweetness very), drink only (the customer un-ticked the dessert default). The flagship indulgent drinks."
+    },
+    {
+      "id": "v2-06-cosy-pair-drink-dessert",
+      "inputs": {
+        "mood": "cosy",
+        "secondaryMood": null,
+        "kinds": [
+          "drink",
+          "dessert"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Chai Latte",
+        "Latte",
+        "Flat White",
+        "Signature Mocha",
+        "Cinnamon Roll",
+        "Choco Chunk Soft Cookie"
+      ],
+      "scenarioNote": "Calm and cosy, hot, kinds drink + dessert (a pairing, COFFEY-SPEC 4.4). A warm cup plus something soft and baked."
+    },
+    {
+      "id": "v2-07-comfort-savoury-only",
+      "inputs": {
+        "mood": "comfort",
+        "secondaryMood": null,
+        "kinds": [
+          "food"
+        ],
+        "temperature": "either",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Baked Cheese Nachos",
+        "Cheesy Mushroom Sandwich",
+        "Garlic Bread Toast",
+        "Indo-Cottage Sandwich",
+        "Butter Croissant"
+      ],
+      "scenarioNote": "Low + kinds food only (\"Something savoury\", no drink). Savoury comfort food. The sweet waffle chips are tagged kind food on the live menu, but they are not what someone asking for savoury wants, so they are left out."
+    },
+    {
+      "id": "v2-08-comfort-hot-nutty",
+      "inputs": {
+        "mood": "comfort",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [
+          "nutty"
+        ],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Hazelnut Hot Chocolate",
+        "Nutella Mocha",
+        "Pistachio Latte"
+      ],
+      "scenarioNote": "Low + hot + flavour Nutty. Exactly the three hot nutty drinks on the menu."
+    },
+    {
+      "id": "v2-09-celebrate-sweet-bite-biscuit",
+      "inputs": {
+        "mood": "celebrate",
+        "secondaryMood": null,
+        "kinds": [
+          "dessert"
+        ],
+        "temperature": "either",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [
+          "biscuit"
+        ],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Biscoff Cheesecake",
+        "Oreo Cheesecake",
+        "Lotus Biscoff Waffle",
+        "Biscoff Stuffed",
+        "Oreo-Heaven",
+        "Krazy Kit-kat"
+      ],
+      "scenarioNote": "Celebrating + kinds dessert only + flavour Cookies & biscuit. Biscoff, Oreo and cookie desserts."
+    },
+    {
+      "id": "v2-10-cosy-hot-spiced",
+      "inputs": {
+        "mood": "cosy",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [
+          "spiced"
+        ],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Chai Latte",
+        "Honey Cinnamon",
+        "Cinnamon Hot Chocolate",
+        "Ginger Orange Honey Tea"
+      ],
+      "scenarioNote": "Calm and cosy + hot + flavour Warm spice. Chai, cinnamon and ginger cups. Lotus Biscoff Latte matches the spiced pattern on the code side, but a barista would call it caramel and biscuit, not warm spice."
+    },
+    {
+      "id": "v2-11-surprise-floral",
+      "inputs": {
+        "mood": "surprise",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "either",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [
+          "floral"
+        ],
+        "needs": [],
+        "budget": "any",
+        "note": ""
+      },
+      "goodFit": [
+        "Rose Latte",
+        "Rose Creme",
+        "Matcha Latte",
+        "Matcha Creme",
+        "Mango Iced Matcha"
+      ],
+      "scenarioNote": "Curious + flavour Floral & tea. Rose and matcha drinks, hot or iced."
+    },
+    {
+      "id": "v2-12-comfort-pair-under-100",
+      "inputs": {
+        "mood": "comfort",
+        "secondaryMood": null,
+        "kinds": [
+          "drink",
+          "dessert"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "under_100",
+        "note": ""
+      },
+      "goodFit": [
+        "Ginger Orange Honey Tea",
+        "Cinnamon Roll",
+        "Choco Chunk Soft Cookie",
+        "Nutella Almond Croissant",
+        "Oreo Heaven Cupcake",
+        "Choco Chip Cupcake"
+      ],
+      "scenarioNote": "Low + kinds drink + dessert + hot + budget up to 100. Only four drinks cost 100 or less (Espresso, Americano, Long Black, Ginger Orange Honey Tea), so the comforting drink is the tea; desserts are plentiful."
+    },
+    {
+      "id": "v2-13-cosy-hot-under-150",
+      "inputs": {
+        "mood": "cosy",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "hot",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "under_150",
+        "note": ""
+      },
+      "goodFit": [
+        "Latte",
+        "Cappucino",
+        "Chai Latte",
+        "Signature Mocha",
+        "Nutella Mocha"
+      ],
+      "scenarioNote": "Calm and cosy + hot + budget up to 150. Coffee-house classics that fit the ceiling."
+    },
+    {
+      "id": "v2-14-celebrate-iced-under-200",
+      "inputs": {
+        "mood": "celebrate",
+        "secondaryMood": null,
+        "kinds": [
+          "drink"
+        ],
+        "temperature": "iced",
+        "base": "either",
+        "strength": "any",
+        "sweetness": "any",
+        "body": "any",
+        "flavours": [],
+        "needs": [],
+        "budget": "under_200",
+        "note": ""
+      },
+      "goodFit": [
+        "Signature Mocha Iced",
+        "Raspberry Cream Iced",
+        "Krazy Kitkat Creme",
+        "Oreo Creme",
+        "Toffee Nut Cold Brew",
+        "Signature Chocolate Creme"
+      ],
+      "scenarioNote": "Celebrating + iced + budget up to 200. The ceiling rules out the pricey cremes (Brookie, Lotus Biscoff, Mocha Chip, Nutella Iced Mocha), so the treat has to come from the cheaper end."
     }
   ]
 }
