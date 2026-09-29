@@ -108,6 +108,18 @@ export default async function OwnerOverviewPage() {
       <h1 className="text-2xl font-bold text-charcoal">Today at a glance</h1>
       <GlanceCards g={glance} />
 
+      {/* Live ops + the revenue trend straight under the glance cards: they
+          answer "how is today going?" — the rest is deeper analysis. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Live operations">
+          <LiveOps />
+        </Card>
+        <Card title="Revenue · last 30 days">
+          <RevenueBars rows={daily} />
+        </Card>
+      </div>
+
+
       <Card title="Orders by customer type">
         <CustomerTypeSplit
           windows={[
@@ -132,27 +144,18 @@ export default async function OwnerOverviewPage() {
           />
           <FeedbackStat label="Needs attention" value={String(feedback.needsAttention)} />
         </div>
-        <Link href="/owner/feedback" className="mt-4 inline-block text-sm font-bold text-tan hover:underline">
+        <Link href="/owner/feedback" className="mt-4 inline-flex min-h-[44px] items-center text-sm font-bold text-tan-dark hover:underline">
           Open the feedback inbox →
         </Link>
       </Card>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Live operations">
-          <LiveOps />
-        </Card>
-        <Card title="Revenue · last 30 days">
-          <RevenueBars rows={daily} />
-        </Card>
-      </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Orders · last 30 days">
           <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
             {['received', 'accepted', 'preparing', 'ready', 'completed', 'rejected', 'cancelled'].map((s) => (
               <div key={s} className="rounded-md bg-[#f2efe9] p-2 text-center">
-                <p className="text-lg font-bold text-charcoal">{counts[s] ?? 0}</p>
-                <p className="text-[10px] uppercase text-muted">{s}</p>
+                <p className="font-mono text-lg font-bold tabular-nums text-charcoal">{counts[s] ?? 0}</p>
+                <p className="text-xs uppercase text-muted">{s}</p>
               </div>
             ))}
           </div>
@@ -197,9 +200,9 @@ export default async function OwnerOverviewPage() {
 function FeedbackStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-md bg-[#f2efe9] p-3 text-center">
-      <p className="text-lg font-bold text-charcoal">{value}</p>
-      <p className="text-[10px] uppercase text-muted">{label}</p>
-      {hint ? <p className="text-[10px] text-muted">{hint}</p> : null}
+      <p className="font-mono text-lg font-bold tabular-nums text-charcoal">{value}</p>
+      <p className="text-xs uppercase text-muted">{label}</p>
+      {hint ? <p className="text-xs text-muted">{hint}</p> : null}
     </div>
   );
 }
@@ -208,7 +211,7 @@ function SlaStat({ label, median, p90 }: { label: string; median: number | null;
   return (
     <div>
       <p className="text-xs uppercase text-muted">{label}</p>
-      <p className="mt-1 text-xl font-bold text-charcoal">{median === null ? '—' : `${median}m`}</p>
+      <p className="mt-1 font-mono text-xl font-bold tabular-nums text-charcoal">{median === null ? '—' : `${median}m`}</p>
       <p className="text-xs text-muted">p90 {p90 === null ? '—' : `${p90}m`}</p>
     </div>
   );

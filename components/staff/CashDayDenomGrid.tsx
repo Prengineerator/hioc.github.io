@@ -98,10 +98,10 @@ export function CashDayDenomGrid({
   };
 
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream">
+    <div className="rounded-md border border-line bg-cream">
       <div
         className={
-          'hidden items-center gap-2 border-b border-[#e5e5e5] px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-muted sm:grid ' +
+          'hidden items-center gap-2 border-b border-line px-3 py-2 text-[11px] font-bold uppercase tracking-wide text-muted sm:grid ' +
           (expected ? 'sm:grid-cols-[3.5rem_1fr_4.5rem_7rem]' : 'sm:grid-cols-[3.5rem_1fr_4.5rem]')
         }
       >
@@ -115,7 +115,7 @@ export function CashDayDenomGrid({
       <DenomGroup label="Coins" rows={coins} {...rowProps} />
 
       {legacyCoinsInr > 0 ? (
-        <div className="flex items-center justify-between border-t border-[#f0ece6] bg-[#f6efe9] px-3 py-2.5">
+        <div className="flex items-center justify-between border-t border-[#f0ece6] bg-surface px-3 py-2.5">
           <span className="text-sm text-muted">Coins (old lump sum)</span>
           <span className="text-sm font-bold tabular-nums text-muted">₹{legacyCoinsInr}</span>
         </div>
@@ -123,7 +123,7 @@ export function CashDayDenomGrid({
 
       {/* Sticky so the running total stays in view while a long grid scrolls on a
           small screen (inside a sheet it sticks to the sheet's scroll area). */}
-      <div className="sticky bottom-0 z-10 rounded-b-md border-t border-[#e5e5e5] bg-cream/95 px-3 py-2 backdrop-blur">
+      <div className="sticky bottom-0 z-10 rounded-b-md border-t border-line bg-cream/95 px-3 py-2 backdrop-blur">
         <div className="flex items-center justify-between gap-3">
           <div>
             <span className="text-sm font-bold text-charcoal">{totalLabel}</span>
@@ -184,7 +184,7 @@ function DenomGroup({
   if (rows.length === 0) return null;
   return (
     <div>
-      <div className="border-b border-[#e5e5e5] bg-[#f6efe9] px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+      <div className="border-b border-line bg-surface px-3 py-1.5 text-[11px] font-bold uppercase tracking-wide text-muted">
         {label}
       </div>
       <ul>
@@ -211,7 +211,7 @@ function DenomGroup({
                   disabled={disabled || count <= 0}
                   onClick={() => onSet(d.key, count - 1)}
                   aria-label={`One fewer ${d.label}`}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[#ddd] bg-white text-xl font-bold leading-none text-charcoal transition-colors active:bg-[#f6efe9] disabled:opacity-35"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[#ddd] bg-white text-xl font-bold leading-none text-charcoal transition-colors active:bg-surface disabled:opacity-35"
                 >
                   −
                 </button>
@@ -233,7 +233,7 @@ function DenomGroup({
                     }
                   }}
                   placeholder="0"
-                  className="h-11 w-16 rounded-md border border-[#e5e5e5] bg-white px-1 text-center text-base font-bold tabular-nums focus:border-tan focus:outline-none disabled:bg-[#f6efe9] disabled:text-muted"
+                  className="h-11 w-16 rounded-md border border-line bg-white px-1 text-center text-base font-bold tabular-nums focus:border-tan focus:outline-none disabled:bg-surface disabled:text-muted"
                   aria-label={`${d.label} count`}
                 />
                 <button
@@ -242,7 +242,7 @@ function DenomGroup({
                   disabled={disabled || count >= cap}
                   onClick={() => onSet(d.key, count + 1)}
                   aria-label={`One more ${d.label}`}
-                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[#ddd] bg-white text-xl font-bold leading-none text-charcoal transition-colors active:bg-[#f6efe9] disabled:opacity-35"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[#ddd] bg-white text-xl font-bold leading-none text-charcoal transition-colors active:bg-surface disabled:opacity-35"
                 >
                   +
                 </button>

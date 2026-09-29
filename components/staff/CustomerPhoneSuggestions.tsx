@@ -60,7 +60,7 @@ export function CustomerSuggestionList({
       id={id}
       role="listbox"
       aria-label="Matching customers"
-      className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-[#e5e5e5] bg-white py-1 shadow-lg"
+      className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-md border border-line bg-white py-1 shadow-lg"
     >
       {matches.map((c, i) => (
         <li key={c.phone} role="option" aria-selected={i === highlighted}>

@@ -74,7 +74,7 @@ export function PermissionMatrix() {
   }
 
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+    <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
       <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-muted">Permissions</h2>
       <p className="mb-4 text-sm text-muted">
         Choose who may perform each sensitive action. Changes take effect immediately. Owners always

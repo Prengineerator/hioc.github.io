@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import { CUSTOMER_MENU_CATEGORIES, MENU_CATEGORIES } from '@/lib/constants';
 
 export function MenuCategoryTabs({
@@ -22,8 +23,26 @@ export function MenuCategoryTabs({
     ...leading,
     ...(includeInStore ? MENU_CATEGORIES : CUSTOMER_MENU_CATEGORIES).filter((c) => !hidden.includes(c.slug)),
   ];
+
+  // Keep the active pill visible in the horizontally-scrolling strip — on a
+  // phone, landing on /menu?category=desserts (or picking a later tab) used to
+  // leave the highlighted pill scrolled off to the right. Scrolls only the
+  // strip itself, never the page.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    const pill = strip?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!strip || !pill) return;
+    const s = strip.getBoundingClientRect();
+    const p = pill.getBoundingClientRect();
+    if (p.left < s.left || p.right > s.right) {
+      strip.scrollBy({ left: p.left - s.left - (s.width - p.width) / 2, behavior: 'smooth' });
+    }
+  }, [active]);
+
   return (
     <div
+      ref={stripRef}
       className="flex gap-2 overflow-x-auto pb-1"
       style={{ scrollbarWidth: 'none' }}
     >

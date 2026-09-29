@@ -41,6 +41,8 @@ function SuggestPageContent() {
       </div>
 
       <SuggestWizard />
+      {/* Room for the floating cart bar so it never covers the last pick. */}
+      <div aria-hidden="true" className="h-20" />
 
       <FloatingCartBar onOpen={() => setDrawerOpen(true)} />
       <CartDrawer

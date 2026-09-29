@@ -187,7 +187,7 @@ export function usePrintDock(): PrintDock {
       {status.failed.length === 0 && status.handedOff.length > 0 ? (
         <div
           role="status"
-          className="fixed bottom-4 left-4 z-[55] w-[min(20rem,calc(100vw-2rem))] rounded-md border border-[#e5e5e5] bg-cream p-2.5 shadow-md"
+          className="fixed bottom-4 left-4 z-[55] w-[min(20rem,calc(100vw-2rem))] rounded-md border border-line bg-cream p-2.5 shadow-md"
         >
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-bold text-charcoal">
@@ -196,7 +196,7 @@ export function usePrintDock(): PrintDock {
             <button
               type="button"
               onClick={() => status.handedOff.forEach((job) => queue.current?.reportNotPrinted(job.id))}
-              className="shrink-0 rounded-md border border-[#d8d2c7] px-2 py-1 text-[11px] font-bold text-charcoal hover:border-red-400 hover:text-red-700"
+              className="min-h-[36px] shrink-0 rounded-md border border-[#d8d2c7] px-3 text-xs font-bold text-charcoal hover:border-red-400 hover:text-red-700"
             >
               Didn&rsquo;t print
             </button>

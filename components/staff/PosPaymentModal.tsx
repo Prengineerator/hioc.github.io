@@ -283,7 +283,7 @@ export function PosPaymentPanel({
             autoComplete="off"
             placeholder="10-digit mobile number"
             disabled={submitting}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-3 text-base outline-none focus:border-tan disabled:opacity-50"
+            className="w-full rounded-md border border-line px-3 py-3 text-base outline-none focus:border-tan disabled:opacity-50"
           />
           {/* Customer suggestions while the number is typed (4+ digits). */}
           <CustomerSuggestionList
@@ -349,7 +349,7 @@ export function PosPaymentPanel({
         ) : null}
 
         {pending ? (
-          <div className="rounded-md border border-[#e5e5e5] bg-surface px-4 py-3">
+          <div className="rounded-md border border-line bg-surface px-4 py-3">
             <p className="text-sm font-bold text-charcoal">No number — the customer gets no WhatsApp bill.</p>
             <p className="mt-0.5 text-xs text-muted">You can still print the bill from the order.</p>
             <div className="mt-3 grid grid-cols-2 gap-2">
@@ -373,7 +373,7 @@ export function PosPaymentPanel({
                   setPending(null);
                   onSubmit(parts);
                 }}
-                className="rounded-md border border-[#e5e5e5] px-3 py-3 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-50"
+                className="rounded-md border border-line px-3 py-3 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-50"
               >
                 Continue anyway
               </button>
@@ -381,7 +381,7 @@ export function PosPaymentPanel({
           </div>
         ) : step === 'cash' ? (
           /* ---- Cash: tendered → change ------------------------------------ */
-          <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
+          <div className="rounded-md border border-line px-4 py-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-bold text-charcoal">Cash — ₹{total}</p>
               <button
@@ -406,13 +406,13 @@ export function PosPaymentPanel({
               inputMode="numeric"
               placeholder={String(total)}
               autoFocus
-              className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-3 text-lg font-bold outline-none focus:border-tan"
+              className="mt-1 w-full rounded-md border border-line px-3 py-3 text-lg font-bold outline-none focus:border-tan"
             />
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => setTendered(String(total))}
-                className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
               >
                 Exact ₹{total}
               </button>
@@ -421,7 +421,7 @@ export function PosPaymentPanel({
                   key={c}
                   type="button"
                   onClick={() => setTendered(String(c))}
-                  className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                  className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
                 >
                   ₹{c}
                 </button>
@@ -434,7 +434,7 @@ export function PosPaymentPanel({
               </p>
             ) : null}
 
-            <div className="mt-3 flex items-center justify-between border-t border-[#e5e5e5] pt-3">
+            <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
               <span className="text-sm font-bold text-charcoal">Change due</span>
               <span className="text-2xl font-bold text-tan">₹{change}</span>
             </div>
@@ -452,7 +452,7 @@ export function PosPaymentPanel({
           </div>
         ) : step === 'custom' ? (
           /* ---- Different amount: short = discount, extra = tip ------------ */
-          <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
+          <div className="rounded-md border border-line px-4 py-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-bold text-charcoal">Different amount — bill ₹{total}</p>
               <button
@@ -494,7 +494,7 @@ export function PosPaymentPanel({
               inputMode="numeric"
               placeholder={String(total)}
               autoFocus
-              className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-3 text-lg font-bold outline-none focus:border-tan"
+              className="mt-1 w-full rounded-md border border-line px-3 py-3 text-lg font-bold outline-none focus:border-tan"
             />
 
             {customAmountValid ? (
@@ -523,7 +523,7 @@ export function PosPaymentPanel({
                   onChange={(e) => setCustomTendered(e.target.value.replace(/[^0-9]/g, ''))}
                   inputMode="numeric"
                   placeholder={`Cash handed over, if change is given (₹${customNum})`}
-                  className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+                  className="mt-2 w-full rounded-md border border-line px-3 py-2 text-base outline-none focus:border-tan"
                 />
                 {customCashShort ? (
                   <p role="alert" className="mt-1 text-xs text-red-700">
@@ -550,7 +550,7 @@ export function PosPaymentPanel({
                         'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors ' +
                         (customReason === chip
                           ? 'border-tan bg-tan text-cream'
-                          : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                          : 'border-line text-charcoal hover:border-tan')
                       }
                     >
                       {chip}
@@ -563,7 +563,7 @@ export function PosPaymentPanel({
                   maxLength={200}
                   placeholder="Reason"
                   aria-label="Reason for the difference"
-                  className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+                  className="mt-2 w-full rounded-md border border-line px-3 py-2 text-base outline-none focus:border-tan"
                 />
               </>
             ) : null}
@@ -600,7 +600,7 @@ export function PosPaymentPanel({
           </div>
         ) : step === 'split' ? (
           /* ---- Split across two methods ----------------------------------- */
-          <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
+          <div className="rounded-md border border-line px-4 py-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-bold text-charcoal">Split ₹{total}</p>
               <button
@@ -632,7 +632,7 @@ export function PosPaymentPanel({
               onChange={(e) => setFirstAmount(e.target.value.replace(/[^0-9]/g, ''))}
               inputMode="numeric"
               placeholder="Amount"
-              className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+              className="mt-2 w-full rounded-md border border-line px-3 py-2 text-base outline-none focus:border-tan"
             />
             {firstAmount.trim() && !firstValid ? (
               <p role="alert" className="mt-1 text-xs text-red-700">
@@ -647,7 +647,7 @@ export function PosPaymentPanel({
                   onChange={(e) => setSplitTendered(e.target.value.replace(/[^0-9]/g, ''))}
                   inputMode="numeric"
                   placeholder={`Cash received (₹${firstNum})`}
-                  className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+                  className="mt-2 w-full rounded-md border border-line px-3 py-2 text-base outline-none focus:border-tan"
                 />
                 {splitCashShort ? (
                   <p role="alert" className="mt-1 text-xs text-red-700">
@@ -782,7 +782,7 @@ function MethodChip({
       onClick={onClick}
       className={
         'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
-        (active ? 'border-tan bg-tan text-cream' : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+        (active ? 'border-tan bg-tan text-cream' : 'border-line text-charcoal hover:border-tan')
       }
     >
       {label}

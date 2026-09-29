@@ -197,7 +197,7 @@ export function MenuItemFormModal({
         className="fixed inset-0 bg-charcoal/50"
       />
       <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col rounded-md bg-cream shadow-sm">
-        <h2 className="border-b border-[#e5e5e5] px-6 py-4 text-lg font-bold text-charcoal">
+        <h2 className="border-b border-line px-6 py-4 text-lg font-bold text-charcoal">
           {mode === 'create' ? 'Add Item' : 'Edit Item'}
         </h2>
 
@@ -206,7 +206,7 @@ export function MenuItemFormModal({
             {error ? (
               <div
                 role="alert"
-                className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+                className="mb-4 rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
               >
                 {error}
               </div>
@@ -223,7 +223,7 @@ export function MenuItemFormModal({
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 />
               </div>
 
@@ -236,7 +236,7 @@ export function MenuItemFormModal({
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={2}
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 />
               </div>
 
@@ -249,15 +249,15 @@ export function MenuItemFormModal({
                     <img
                       src={imageUrl}
                       alt=""
-                      className="h-16 w-16 rounded-md border border-[#e5e5e5] object-cover"
+                      className="h-16 w-16 rounded-md border border-line object-cover"
                     />
                   ) : (
-                    <span className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-[#e5e5e5] text-xs text-muted">
+                    <span className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-line text-xs text-muted">
                       No photo
                     </span>
                   )}
                   <div className="flex flex-col items-start gap-1">
-                    <label className="cursor-pointer rounded-md border border-[#e5e5e5] px-3 py-2 text-sm font-bold text-charcoal hover:border-tan">
+                    <label className="cursor-pointer rounded-md border border-line px-3 py-2 text-sm font-bold text-charcoal hover:border-tan">
                       {uploadingPhoto ? 'Uploading…' : imageUrl ? 'Change photo' : 'Upload photo'}
                       <input
                         type="file"
@@ -290,7 +290,7 @@ export function MenuItemFormModal({
                   required
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 >
                   {MENU_CATEGORIES.map((c) => (
                     <option key={c.slug} value={c.slug}>
@@ -317,7 +317,7 @@ export function MenuItemFormModal({
                     )
                   }
                   placeholder="e.g. CAP"
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 font-mono uppercase text-charcoal outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 font-mono uppercase text-charcoal outline-none focus:border-tan"
                 />
                 <p className="mt-1 text-xs text-muted">
                   A quick-punch shortform for the POS order screen (1–8 letters/digits). Type it in
@@ -348,9 +348,9 @@ export function MenuItemFormModal({
                         placeholder="e.g. Large"
                         value={row.label}
                         onChange={(e) => updateVariant(i, 'label', e.target.value)}
-                        className="min-w-[7rem] flex-1 rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                        className="min-w-[7rem] flex-1 rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                       />
-                      <div className="flex min-w-[7rem] flex-1 items-center rounded-md border border-[#e5e5e5] focus-within:border-tan">
+                      <div className="flex min-w-[7rem] flex-1 items-center rounded-md border border-line focus-within:border-tan">
                         <span className="pl-3 text-muted">₹</span>
                         <input
                           type="number"
@@ -386,11 +386,11 @@ export function MenuItemFormModal({
                 {allAddonGroups.length === 0 ? (
                   <p className="text-sm text-muted">No addon groups defined yet.</p>
                 ) : (
-                  <div className="flex flex-col gap-1 rounded-md border border-[#e5e5e5] p-2">
+                  <div className="flex flex-col gap-1 rounded-md border border-line p-2">
                     {allAddonGroups.map((group) => (
                       <label
                         key={group.id}
-                        className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-charcoal hover:bg-[#f6efe9]"
+                        className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-charcoal hover:bg-surface"
                       >
                         <input
                           type="checkbox"
@@ -454,17 +454,17 @@ export function MenuItemFormModal({
                   step={1}
                   value={sortOrder}
                   onChange={(e) => setSortOrder(e.target.value)}
-                  className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 />
               </div>
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 border-t border-[#e5e5e5] px-6 py-4">
+          <div className="flex justify-end gap-3 border-t border-line px-6 py-4">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan"
+              className="rounded-md border border-line px-4 py-2 text-sm font-bold text-charcoal hover:border-tan"
             >
               Cancel
             </button>

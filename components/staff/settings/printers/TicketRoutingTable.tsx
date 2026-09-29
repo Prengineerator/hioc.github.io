@@ -80,7 +80,7 @@ export function TicketRoutingTable({
                         aria-pressed={on}
                         aria-label={`${ROLE_LABELS[role]} on ${p.name}`}
                         className={`min-h-[44px] min-w-[44px] rounded-md border px-3 text-xs font-bold transition-colors disabled:opacity-50 ${
-                          on ? 'border-charcoal bg-charcoal text-cream' : 'border-[#e5e5e5] text-charcoal'
+                          on ? 'border-charcoal bg-charcoal text-cream' : 'border-line text-charcoal'
                         }`}
                       >
                         {on ? 'On' : 'Off'}
@@ -94,7 +94,7 @@ export function TicketRoutingTable({
                             max={5}
                             value={p.copies[role] ?? 1}
                             onChange={(e) => setCopies(p.id, role, Number(e.target.value))}
-                            className="w-10 rounded border border-[#e5e5e5] px-1 py-0.5 text-center text-xs tabular-nums focus:border-tan focus:outline-none"
+                            className="w-10 rounded border border-line px-1 py-0.5 text-center text-xs tabular-nums focus:border-tan focus:outline-none"
                           />
                         </label>
                       ) : null}

@@ -85,7 +85,7 @@ const ALIGN: Record<NonNullable<DataTableColumn<unknown>['align']>, string> = {
 };
 
 const INPUT =
-  'h-7 w-full min-w-0 rounded border border-[#e5e5e5] bg-white px-1.5 text-xs font-normal normal-case tracking-normal text-charcoal outline-none focus:border-tan';
+  'h-7 w-full min-w-0 rounded border border-line bg-white px-1.5 text-xs font-normal normal-case tracking-normal text-charcoal outline-none focus:border-tan';
 
 function stickyClass(col: { sticky?: boolean }): string {
   return col.sticky ? 'sticky left-0 z-10 bg-white' : '';
@@ -171,7 +171,7 @@ export function DataTable<T>({
       <div className={`overflow-x-auto ${scrollClassName}`}>
         <table className="w-full border-collapse text-sm" style={minWidth ? { minWidth } : undefined}>
           <thead>
-            <tr className={`text-left ${headerTextClassName} ${hasFilters ? '' : 'border-b border-[#e5e5e5]'}`}>
+            <tr className={`text-left ${headerTextClassName} ${hasFilters ? '' : 'border-b border-line'}`}>
               {columns.map((c) => {
                 const sortable = c.sortable ?? c.filter !== 'none';
                 const active = sort?.key === c.key ? sort.dir : null;
@@ -205,7 +205,7 @@ export function DataTable<T>({
               })}
             </tr>
             {hasFilters ? (
-              <tr className="border-b border-[#e5e5e5]">
+              <tr className="border-b border-line">
                 {columns.map((c) => (
                   <th
                     key={c.key}

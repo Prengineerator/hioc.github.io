@@ -81,7 +81,7 @@ function FavoritesContent() {
         </div>
       )}
 
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
         <button
           type="button"
           onClick={() => setShowPicker((v) => !v)}

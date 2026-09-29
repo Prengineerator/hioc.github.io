@@ -66,7 +66,7 @@ export function AccountHeader() {
   const whoLabel = user?.name || formatIndianMobileDisplay(user?.phone) || user?.email || null;
 
   return (
-    <header className="border-b border-[#e5e5e5] bg-cream">
+    <header className="border-b border-line bg-cream">
       <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-4 py-3">
         <div className="min-w-0">
           <Link href="/" className="font-bold text-charcoal">

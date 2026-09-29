@@ -42,7 +42,7 @@ export function GetOtpButton({
       className={
         variant === 'primary'
           ? 'w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60'
-          : 'shrink-0 rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50'
+          : 'shrink-0 rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50'
       }
     >
       {otp.busy ? 'Sending…' : 'Get OTP'}
@@ -72,7 +72,7 @@ export function PhoneOtpPanel({
       ) : null}
 
       {otp.step === 'sent' && !otp.verified ? (
-        <div className="mt-3 flex flex-col gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
+        <div className="mt-3 flex flex-col gap-3 rounded-md border border-tan bg-surface px-4 py-3">
           <p className="text-sm text-charcoal">
             Enter the 6-digit code sent to your WhatsApp on{' '}
             <span className="font-bold">{otp.phone}</span> to confirm your number.
@@ -85,7 +85,7 @@ export function PhoneOtpPanel({
             value={otp.code}
             onChange={(e) => otp.setCode(e.target.value)}
             placeholder="6-digit code"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
           {otp.error ? <p className="text-sm text-red-700">{otp.error}</p> : null}
           <button
@@ -115,7 +115,7 @@ export function PhoneOtpPanel({
       {otp.verified ? (
         <div
           role="status"
-          className="mt-2 flex items-center gap-2 rounded-md border border-tan bg-[#f6efe9] px-3 py-2 text-sm text-charcoal"
+          className="mt-2 flex items-center gap-2 rounded-md border border-tan bg-surface px-3 py-2 text-sm text-charcoal"
         >
           <span aria-hidden className="text-base font-bold text-tan">
             ✓

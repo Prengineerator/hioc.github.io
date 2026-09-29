@@ -138,27 +138,27 @@ export function AnnouncementManager() {
       </div>
 
       {editingId !== null ? (
-        <div className="mb-4 rounded-md border border-[#e5e5e5] bg-[#faf7f4] p-4">
+        <div className="mb-4 rounded-md border border-line bg-[#faf7f4] p-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm sm:col-span-2">
               <span className="text-charcoal">Title</span>
-              <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+              <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
             </label>
             <label className="text-sm sm:col-span-2">
               <span className="text-charcoal">Body</span>
-              <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} rows={3} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+              <textarea value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} rows={3} className="mt-1 w-full rounded-md border border-line p-2" />
             </label>
             <label className="text-sm sm:col-span-2">
               <span className="text-charcoal">Image URL (optional)</span>
-              <input value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+              <input value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
             </label>
             <label className="text-sm">
               <span className="text-charcoal">Starts at (optional)</span>
-              <input type="datetime-local" value={form.starts_at} onChange={(e) => setForm({ ...form, starts_at: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+              <input type="datetime-local" value={form.starts_at} onChange={(e) => setForm({ ...form, starts_at: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
             </label>
             <label className="text-sm">
               <span className="text-charcoal">Ends at (optional)</span>
-              <input type="datetime-local" value={form.ends_at} onChange={(e) => setForm({ ...form, ends_at: e.target.value })} className="mt-1 w-full rounded-md border border-[#e5e5e5] p-2" />
+              <input type="datetime-local" value={form.ends_at} onChange={(e) => setForm({ ...form, ends_at: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
             </label>
           </div>
           <label className="mt-3 flex items-center gap-2 text-sm text-charcoal">
@@ -179,7 +179,7 @@ export function AnnouncementManager() {
 
       <ul className="flex flex-col gap-2">
         {items.map((a) => (
-          <li key={a.id} className="flex flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <li key={a.id} className="flex flex-col gap-2 rounded-md border border-line bg-cream px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <p className="truncate text-sm font-bold text-charcoal">{a.title}</p>
               <p className="text-xs text-muted">
@@ -192,7 +192,7 @@ export function AnnouncementManager() {
               <button
                 type="button"
                 onClick={() => toggleActive(a)}
-                className={'rounded-md px-2 py-1.5 text-xs font-bold ' + (a.active ? 'bg-green-100 text-green-700' : 'bg-[#e5e5e5] text-muted')}
+                className={'rounded-md px-2 py-1.5 text-xs font-bold ' + (a.active ? 'bg-green-100 text-green-700' : 'bg-line text-muted')}
               >
                 {a.active ? 'Active' : 'Inactive'}
               </button>

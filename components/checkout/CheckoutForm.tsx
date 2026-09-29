@@ -96,6 +96,15 @@ export function CheckoutForm({
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [unavailableNames, setUnavailableNames] = useState<string[]>([]);
+  // The error banner sits at the top of the form, but the button that
+  // produces the error is at the bottom — on a phone the customer never saw
+  // why "Place Order" did nothing. Bring the banner into view when it appears.
+  const errorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (serverError || unavailableNames.length > 0) {
+      errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [serverError, unavailableNames]);
 
   const [paymentMode, setPaymentMode] = useState<'online' | 'counter'>('counter');
   const [userId, setUserId] = useState<string | null>(null);
@@ -528,6 +537,7 @@ export function CheckoutForm({
 
   return (
     <div className="flex flex-col gap-4 md:gap-5">
+      <div ref={errorRef} className="flex flex-col gap-4 empty:hidden md:gap-5">
       {serverError ? (
         <div
           role="alert"
@@ -549,6 +559,7 @@ export function CheckoutForm({
           <p className="mt-1">Please remove {unavailableNames.length === 1 ? 'it' : 'them'} from your cart to continue.</p>
         </div>
       ) : null}
+      </div>
 
       {/* No single outer card any more (that's what made coupons and points
           read as just two more rows in one long list) — each concern below is
@@ -564,6 +575,8 @@ export function CheckoutForm({
               id="name"
               type="text"
               required
+              autoComplete="name"
+              autoCapitalize="words"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Ayush"
@@ -589,8 +602,12 @@ export function CheckoutForm({
                 <input
                   id="phone"
                   type="tel"
+                  inputMode="tel"
+                  autoComplete="tel-national"
                   required
                   maxLength={16}
+                  aria-invalid={phoneError ? true : undefined}
+                  aria-describedby={phoneError ? 'phone-error' : undefined}
                   value={phone}
                   onChange={(e) => onPhoneChange(e.target.value)}
                   onBlur={(e) => validatePhone(e.target.value)}
@@ -598,7 +615,7 @@ export function CheckoutForm({
                   className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 />
                 {phoneError ? (
-                  <p className="mt-1 text-sm text-charcoal">{phoneError}</p>
+                  <p id="phone-error" className="mt-1 text-sm text-red-700">{phoneError}</p>
                 ) : null}
                 {/* The actual "Get OTP" control (ACC-4) lives at the bottom of the
                     form now, as the last step before placing the order — see the
@@ -618,6 +635,10 @@ export function CheckoutForm({
                 <input
                   id="email"
                   type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  aria-invalid={emailError ? true : undefined}
+                  aria-describedby={emailError ? 'email-error' : undefined}
                   value={email}
                   onChange={(e) => {
                     setEmail(e.target.value);
@@ -626,7 +647,7 @@ export function CheckoutForm({
                   placeholder="you@example.com"
                   className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 />
-                {emailError ? <p className="mt-1 text-sm text-charcoal">{emailError}</p> : null}
+                {emailError ? <p id="email-error" className="mt-1 text-sm text-red-700">{emailError}</p> : null}
               </div>
             </>
           )}
@@ -645,7 +666,7 @@ export function CheckoutForm({
                   aria-pressed={orderType === opt.value}
                   onClick={() => setOrderType(opt.value)}
                   className={
-                    'rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
+                    'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                     (orderType === opt.value
                       ? 'border-tan bg-surface text-tan-dark'
                       : 'border-line text-charcoal hover:border-tan')
@@ -716,7 +737,7 @@ export function CheckoutForm({
                     <span className="font-mono font-bold uppercase tabular-nums">{couponApplied}</span> applied · You
                     save <span className="font-mono tabular-nums">₹{couponDiscountInr}</span>
                   </span>
-                  <button type="button" onClick={removeCoupon} className="shrink-0 text-sm font-semibold text-muted underline">
+                  <button type="button" onClick={removeCoupon} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
                     Remove
                   </button>
                 </div>
@@ -725,6 +746,10 @@ export function CheckoutForm({
                   <input
                     id="coupon"
                     type="text"
+                    autoComplete="off"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    enterKeyHint="done"
                     value={couponInput}
                     onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
                     placeholder="e.g. WELCOME10"
@@ -734,13 +759,13 @@ export function CheckoutForm({
                     type="button"
                     onClick={applyCoupon}
                     disabled={couponBusy || !couponInput.trim()}
-                    className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
+                    className="min-h-[44px] shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
                   >
                     {couponBusy ? '…' : 'Apply'}
                   </button>
                 </div>
               )}
-              {couponError ? <p className="mt-1 text-sm text-red-700">{couponError}</p> : null}
+              {couponError ? <p role="alert" className="mt-1 text-sm text-red-700">{couponError}</p> : null}
             </div>
 
             {/* Points redemption — logged-in customers only (coupons need no
@@ -768,7 +793,7 @@ export function CheckoutForm({
                         <span className="font-mono tabular-nums">{pointsApplied}</span> pts applied · You save{' '}
                         <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>
                       </span>
-                      <button type="button" onClick={removePoints} className="shrink-0 text-sm font-semibold text-muted underline">
+                      <button type="button" onClick={removePoints} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
                         Remove
                       </button>
                     </div>
@@ -788,13 +813,13 @@ export function CheckoutForm({
                         type="button"
                         onClick={applyPoints}
                         disabled={pointsBusy || !pointsInput.trim()}
-                        className="shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
+                        className="min-h-[44px] shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
                       >
                         {pointsBusy ? '…' : 'Apply'}
                       </button>
                     </div>
                   )}
-                  {pointsError ? <p className="mt-1 text-sm text-red-700">{pointsError}</p> : null}
+                  {pointsError ? <p role="alert" className="mt-1 text-sm text-red-700">{pointsError}</p> : null}
                 </div>
               </>
             ) : null}
@@ -861,9 +886,10 @@ export function CheckoutForm({
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
+                aria-pressed={paymentMode === 'online'}
                 onClick={() => setPaymentMode('online')}
                 className={
-                  'rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
+                  'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                   (paymentMode === 'online'
                     ? 'border-tan bg-surface text-tan-dark'
                     : 'border-line text-charcoal hover:border-tan')
@@ -873,9 +899,10 @@ export function CheckoutForm({
               </button>
               <button
                 type="button"
+                aria-pressed={paymentMode === 'counter'}
                 onClick={() => setPaymentMode('counter')}
                 className={
-                  'rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
+                  'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                   (paymentMode === 'counter'
                     ? 'border-tan bg-surface text-tan-dark'
                     : 'border-line text-charcoal hover:border-tan')
@@ -901,7 +928,7 @@ export function CheckoutForm({
               <button
                 type="button"
                 aria-pressed="true"
-                className="rounded-md border border-tan bg-surface px-3 py-2 text-sm font-semibold text-tan-dark"
+                className="min-h-[44px] rounded-md border border-tan bg-surface px-3 py-2 text-sm font-semibold text-tan-dark"
               >
                 Pay at counter
               </button>
@@ -941,11 +968,22 @@ export function CheckoutForm({
             <PhoneOtpPanel otp={otp} />
           </div>
         ) : (
+          // Sticky on phones: the form is long (details, offers, bill,
+          // payment) and the one action that matters shouldn't need a scroll
+          // hunt. From md up the two-column layout keeps it in view anyway.
+          <div className="sticky bottom-0 z-10 -mx-4 border-t border-line bg-cream/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur md:static md:mx-0 md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
           <button
             type="submit"
+            aria-busy={submitting || undefined}
             disabled={submitting || otp.busy || !canSubmit || guestCannotPay || !authChecked}
-            className="w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
           >
+            {submitting ? (
+              <span
+                aria-hidden="true"
+                className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+              />
+            ) : null}
             {submitting ? (
               'Placing Order…'
             ) : !storeAcceptingOrders ? (
@@ -955,9 +993,12 @@ export function CheckoutForm({
                 Pay <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span> & Place Order
               </>
             ) : (
-              'Place Order'
+              <>
+                Place Order · <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span>
+              </>
             )}
           </button>
+          </div>
         )}
       </form>
     </div>

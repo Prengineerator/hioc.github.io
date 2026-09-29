@@ -180,7 +180,7 @@ export function CashOverridePanel() {
         Lets one staffer skip counting for their next clock-in or clock-out. Logged and visible to the owner.
       </p>
 
-      <div className="mt-3 rounded-md border border-[#e5e5e5] bg-white p-4">
+      <div className="mt-3 rounded-md border border-line bg-white p-4">
         {staff.length > 0 && !staffUnavailable ? (
           <label className="block text-sm">
             <span className="text-charcoal">Staffer</span>
@@ -188,7 +188,7 @@ export function CashOverridePanel() {
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               disabled={busy}
-              className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+              className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
             >
               {staff.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -205,7 +205,7 @@ export function CashOverridePanel() {
               onChange={(e) => setUserId(e.target.value)}
               placeholder="Their login ID"
               disabled={busy}
-              className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+              className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
             />
           </label>
         )}
@@ -243,7 +243,7 @@ export function CashOverridePanel() {
             rows={2}
             disabled={busy}
             placeholder="e.g. drawer already counted at handover"
-            className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+            className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
           />
         </label>
 
@@ -261,7 +261,7 @@ export function CashOverridePanel() {
       </div>
 
       {activeOverrides.length > 0 ? (
-        <ul className="mt-4 divide-y divide-[#eee] rounded-md border border-[#e5e5e5] bg-white">
+        <ul className="mt-4 divide-y divide-[#eee] rounded-md border border-line bg-white">
           {activeOverrides.map((o) => (
             <li key={o.id} className="px-4 py-3 text-sm">
               <div className="flex items-center justify-between">

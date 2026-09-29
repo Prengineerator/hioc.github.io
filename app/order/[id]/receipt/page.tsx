@@ -82,7 +82,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
             ← Back to order
           </Link>
         </div>
-        <div className="rounded-md border border-[#e5e5e5] bg-white p-6 text-center shadow-sm">
+        <div className="rounded-md border border-line bg-white p-6 text-center shadow-sm">
           <p className="text-sm text-charcoal">{noBillNotice(order)}</p>
         </div>
       </div>
@@ -102,7 +102,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
         <PrintButton />
       </div>
 
-      <div className="rounded-md border border-[#e5e5e5] bg-white p-6 shadow-sm print:border-0 print:p-0 print:shadow-none">
+      <div className="rounded-md border border-line bg-white p-6 shadow-sm print:border-0 print:p-0 print:shadow-none">
         {/* Store header — the wordmark logo stands in for the text name. */}
         <div className="text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}

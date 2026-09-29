@@ -118,7 +118,7 @@ export function SettleWorkspace() {
         <div
           className={
             'rounded-md border px-4 py-2 text-right ' +
-            (owed > 0 ? 'border-red-300 bg-red-50' : 'border-[#e5e5e5] bg-white')
+            (owed > 0 ? 'border-red-300 bg-red-50' : 'border-line bg-white')
           }
         >
           <p className={`text-xs ${owed > 0 ? 'font-bold text-red-800' : 'text-muted'}`}>Still to collect</p>
@@ -139,7 +139,7 @@ export function SettleWorkspace() {
           </button>
         </div>
       ) : orders.length === 0 ? (
-        <p className="rounded-md border border-[#e5e5e5] bg-white py-10 text-center text-sm text-muted">
+        <p className="rounded-md border border-line bg-white py-10 text-center text-sm text-muted">
           Nothing to settle — every bill is paid.
         </p>
       ) : (
@@ -163,7 +163,7 @@ export function SettleWorkspace() {
             {justSettled.map((o) => (
               <li
                 key={o.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#e5e5e5] bg-white px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line bg-white px-4 py-3"
               >
                 <span className="flex min-w-0 items-center gap-3 text-sm">
                   <span className="font-mono font-bold tabular-nums text-charcoal">#{formatOrderNumber(o.order_number)}</span>
@@ -177,14 +177,14 @@ export function SettleWorkspace() {
                   <button
                     type="button"
                     onClick={() => printDock.enqueue([{ orderId: o.id, type: 'receipt' }])}
-                    className="min-h-[40px] rounded-md border border-[#e5e5e5] px-3 text-sm font-bold text-charcoal hover:border-tan"
+                    className="min-h-[40px] rounded-md border border-line px-3 text-sm font-bold text-charcoal hover:border-tan"
                   >
                     Print bill
                   </button>
                   <button
                     type="button"
                     onClick={() => setPaying({ order: o, intent: 'change' })}
-                    className="min-h-[40px] rounded-md border border-[#e5e5e5] px-3 text-sm font-bold text-charcoal hover:border-tan"
+                    className="min-h-[40px] rounded-md border border-line px-3 text-sm font-bold text-charcoal hover:border-tan"
                   >
                     Change payment
                   </button>

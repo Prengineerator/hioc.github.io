@@ -8,7 +8,7 @@ import Link from 'next/link';
 export function TableQrUnavailable() {
   return (
     <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center px-6 py-16 text-center">
-      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#f6efe9] text-3xl">
+      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-surface text-3xl">
         ☕
       </div>
       <h1 className="text-xl font-bold text-charcoal md:text-2xl">

@@ -164,13 +164,13 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
 
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#faf7f4] px-4">
-      <div className="mt-24 w-full max-w-sm rounded-md border border-[#e5e5e5] bg-cream p-8 shadow-sm">
+      <div className="mt-24 w-full max-w-sm rounded-md border border-line bg-cream p-8 shadow-sm">
         <div className="mb-6 text-center">
           <h1 className="text-xl font-bold text-charcoal">Log In</h1>
           <p className="mt-1 text-xs uppercase tracking-[0.2em] text-muted">HIOC.</p>
         </div>
 
-        <div className="mb-6 flex flex-wrap gap-1 rounded-md border border-[#e5e5e5] p-1 text-sm sm:flex-nowrap">
+        <div className="mb-6 flex flex-wrap gap-1 rounded-md border border-line p-1 text-sm sm:flex-nowrap">
           {/* WhatsApp first — the default tab (set above) and the one most
               customers already have a code path for, since it's the same
               channel guest checkout verifies (VERIFY-2). */}
@@ -197,13 +197,13 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
         {error ? (
           <div
             role="alert"
-            className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+            className="mb-4 rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
           >
             {error}
           </div>
         ) : null}
         {info ? (
-          <div className="mb-4 rounded-md border border-[#e5e5e5] bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+          <div className="mb-4 rounded-md border border-line bg-surface px-4 py-3 text-sm text-charcoal">
             {info}
           </div>
         ) : null}
@@ -221,7 +221,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
               />
             </div>
             <button
@@ -250,7 +250,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 placeholder="123456"
-                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
               />
             </div>
             <button
@@ -287,7 +287,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="98765 43210"
-                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
               />
               <p className="mt-1 text-sm text-muted">
                 We&apos;ll send a 6-digit code on WhatsApp to this number.
@@ -319,7 +319,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
                 value={phoneCode}
                 onChange={(e) => setPhoneCode(e.target.value)}
                 placeholder="123456"
-                className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
               />
             </div>
             <button
