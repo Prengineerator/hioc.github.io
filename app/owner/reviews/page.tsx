@@ -65,7 +65,7 @@ export default async function OwnerReviewsPage() {
             buttons, replies, the owner's chat-back) lives in its own inbox. */}
         <Link
           href="/owner/feedback"
-          className="rounded-md border-2 border-tan px-3 py-1.5 text-sm font-bold text-tan hover:bg-tan hover:text-cream"
+          className="rounded-md border-2 border-tan px-3 py-1.5 text-sm font-bold text-tan-dark hover:bg-tan-dark hover:text-cream"
         >
           Open WhatsApp feedback inbox →
         </Link>

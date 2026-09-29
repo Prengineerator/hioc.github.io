@@ -24,7 +24,7 @@ export default function GlobalError({
         <p style={{ color: '#6b6560' }}>Please refresh the page.</p>
         <button
           onClick={reset}
-          style={{ marginTop: '1.5rem', padding: '0.75rem 1.5rem', background: '#ad825e', color: '#fff', border: 0, borderRadius: 6, fontWeight: 700 }}
+          style={{ marginTop: '1.5rem', padding: '0.75rem 1.5rem', background: '#8a6446', color: '#fff', border: 0, borderRadius: 6, fontWeight: 700 }}
         >
           Try again
         </button>

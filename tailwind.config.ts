@@ -10,14 +10,26 @@ const config: Config = {
     extend: {
       colors: {
         // Brand palette — exact hex values reused from the legacy site's css/style.css,
-        // with one deliberate exception: `muted` was darkened from the legacy #828282
+        // with deliberate exceptions: `muted` was darkened from the legacy #828282
         // (~3.9:1 on white, fails WCAG AA for text) to #6b6560, a warm grey that keeps
-        // the brand's feel while passing AA (~5.7:1 on white). Do not invent other
-        // shades here; `tan-dark` is the other derived exception (a manually computed
-        // ~12% darkened tan) used only for hover states.
+        // the brand's feel while passing AA (~5.7:1 on white).
+        //
+        // Tan comes in three roles (code-revamp 2026-09, SHR-UX-3). The brand tan
+        // #ad825e is only ~3.4:1 against white (and ~3.0:1 on `surface`) — fine for
+        // decoration, below AA for text. So:
+        //   tan         — decoration only: bars, dots, borders, rings, progress
+        //                 fills, focus outlines. Never text, never a fill behind text.
+        //   tan-dark    — anything that carries text: tan-coloured text/links, and
+        //                 fills with white text (primary buttons, active pills,
+        //                 badges). 5.3:1 on white, 4.6:1 on `surface`.
+        //   tan-darker  — hover/pressed state of a `tan-dark` fill (6.9:1).
+        // Exception: on the charcoal chrome (StaffHeader, SiteFooter, LockScreen)
+        // keep plain `tan` text — it's 4.6:1 there, and the darker shades fail.
+        // Do not invent other shades here.
         charcoal: '#232325',
         tan: '#ad825e',
-        'tan-dark': '#96714f',
+        'tan-dark': '#8a6446',
+        'tan-darker': '#73533a',
         cream: '#ffffff',
         muted: '#6b6560',
         // Two small neutral extensions (design-system pass) that formalize

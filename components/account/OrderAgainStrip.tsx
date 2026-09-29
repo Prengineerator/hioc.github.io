@@ -70,13 +70,13 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
             <div>
               <p className="text-sm text-muted">{formatIstDate(order.created_at)}</p>
               <p className="mt-1 text-sm font-semibold text-charcoal">{itemsSummary(order)}</p>
-              <p className="mt-1 font-mono text-sm tabular-nums text-tan">₹{order.total_inr ?? order.subtotal_inr}</p>
+              <p className="mt-1 font-mono text-sm tabular-nums text-tan-dark">₹{order.total_inr ?? order.subtotal_inr}</p>
             </div>
             <button
               type="button"
               onClick={() => handleClick(order.id)}
               disabled={reorderingId !== null}
-              className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
+              className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
             >
               {reorderingId === order.id ? 'Adding…' : 'Add to cart'}
             </button>

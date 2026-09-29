@@ -16,7 +16,7 @@ Each finding has an Impact (H/M/L), an Effort (S/M/L) and a status: `fixed`, `pr
 |---|---|---|---|---|---|---|
 | SHR-UX-1 | `components/ui/Modal.tsx` | Dialogs never moved focus in, didn't trap Tab and didn't restore focus on close. Keyboard and screen-reader users ended up "behind" the overlay. Affects every modal on all three surfaces. | H | S | New `components/ui/useDialogBehavior.ts` (Escape, scroll lock, focus in / trap / restore; no keyboard pop-up on touch screens; never focuses a destructive button first). Close button is now 44px. | fixed |
 | SHR-UX-2 | ~380 class names | Hard-coded `border-[#e5e5e5]` / `bg-[#f6efe9]` everywhere, despite the named `line` / `surface` tokens existing | L | S | Replaced them with the tokens (same hex values, so nothing changes visually) | fixed |
-| SHR-UX-3 | `tailwind.config.ts` | `tan` (#ad825e) on white is about 3.4:1, which fails WCAG AA for normal-size text. That covers every primary button label (white on tan), prices and links. `tan-dark` is 4.4:1, just under. | H | S | Needs a brand decision: add a darker tan (≈#8a6446, ~5:1) for text and button fills, or darken `tan` itself | **proposed** |
+| SHR-UX-3 | `tailwind.config.ts` | `tan` (#ad825e) on white is about 3.4:1, which fails WCAG AA for normal-size text. That covers every primary button label (white on tan), prices and links. `tan-dark` is 4.4:1, just under. | H | S | Follow-up: tan now has three roles. `tan` #ad825e is for decoration only. `tan-dark` is #8a6446 (5.3:1 on white, 4.6:1 on surface) and is used for all tan text and every tan fill under white text. `tan-darker` #73533a is the hover shade. About 245 class swaps, plus the global-error button and the Razorpay theme colour. The charcoal chrome (StaffHeader, SiteFooter, LockScreen) keeps plain `tan` text, which is 4.6:1 there. The green "Complete" button moves to green-700. | fixed |
 | SHR-UX-4 | `app/owner/layout.tsx`, `app/staff/layout.tsx` | A second `<main>` nested inside the root layout's `<main>` | L | S | Changed the inner one to a `<div>` | fixed |
 
 ## Customer (phone-first)
@@ -55,7 +55,7 @@ Each finding has an Impact (H/M/L), an Effort (S/M/L) and a status: `fixed`, `pr
 | STF-UX-6 | `OrdersWorkspace` | Search had no label and was 36px; the toast wasn't announced to screen readers | L | S | Labelled 44px search box; `role=status` toast | fixed |
 | STF-UX-7 | `StaffHeader` | Nav links were about 36px | L | S | 40px (desktop), 44px (drawer) | fixed |
 | STF-UX-8 | `CashCountSheet` | Hand-built dialog without focus management | L | S | Uses the shared hook; Escape is still blocked while saving | fixed |
-| STF-UX-9 | `OrderQueueBoard` | At 1024–1279px the four lanes wrap into a 2×2 grid, so Ready sits below the fold | M | M | Horizontally scrolling lanes, or a Ready column that is always visible | proposed |
+| STF-UX-9 | `OrderQueueBoard` | At 1024–1279px the four lanes wrap into a 2×2 grid, so Ready sits below the fold | M | M | Follow-up: four lanes from `lg` (1024px) up. At `lg` the card actions drop under the order number at full width so the ~240px lanes aren't squeezed. Below `lg`, a row of lane-count buttons links to each lane, and Ready is highlighted when it has orders. | fixed |
 
 ## Owner (phone + desktop)
 

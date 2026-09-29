@@ -354,7 +354,7 @@ export function OrderDetailModal({
         <div className="mt-3 text-sm text-charcoal">
           <p className="font-bold">{order.customer_name || (isDineIn ? 'Walk-in' : 'Guest')}</p>
           {order.customer_phone ? (
-            <a href={`tel:${order.customer_phone}`} className="text-tan hover:underline">{order.customer_phone}</a>
+            <a href={`tel:${order.customer_phone}`} className="text-tan-dark hover:underline">{order.customer_phone}</a>
           ) : null}
           {isDineIn ? (
             order.table_label ? <p className="mt-1 text-xs text-muted">Table: {order.table_label}</p> : null
@@ -405,7 +405,7 @@ export function OrderDetailModal({
                   <p className="text-xs text-muted">+ {item.addons.map((a) => a.option_name_snapshot).join(', ')}</p>
                 ) : null}
                 {item.special_instructions ? (
-                  <p className="text-xs italic text-tan">Note: {item.special_instructions}</p>
+                  <p className="text-xs italic text-tan-dark">Note: {item.special_instructions}</p>
                 ) : null}
               </>
             );
@@ -440,7 +440,7 @@ export function OrderDetailModal({
 
         <div className="mt-3 flex justify-between border-t border-line pt-2 text-sm">
           <span className="font-bold text-charcoal">Total</span>
-          <span className="font-bold text-tan">₹{order.total_inr ?? order.subtotal_inr}</span>
+          <span className="font-bold text-tan-dark">₹{order.total_inr ?? order.subtotal_inr}</span>
         </div>
         {order.notes ? <p className="mt-2 text-sm italic text-muted">Order note: {order.notes}</p> : null}
 
@@ -451,14 +451,14 @@ export function OrderDetailModal({
           <button
             type="button"
             onClick={() => openPrint('kot')}
-            className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+            className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
           >
             Print KOT
           </button>
           <button
             type="button"
             onClick={() => openPrint('receipt')}
-            className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+            className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
           >
             Print receipt
           </button>
@@ -466,7 +466,7 @@ export function OrderDetailModal({
             <button
               type="button"
               onClick={() => openPrint('token')}
-              className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+              className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
             >
               Print token
             </button>
@@ -478,7 +478,7 @@ export function OrderDetailModal({
               type="button"
               onClick={doResendBill}
               disabled={resending}
-              className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
+              className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
             >
               {resending ? 'Sending…' : 'Resend bill'}
             </button>
@@ -512,7 +512,7 @@ export function OrderDetailModal({
             </div>
             <p className="mt-1 text-xs text-muted">~{formatIstTime(new Date(Date.now() + prepMin * 60_000))}</p>
             <div className="mt-3 flex gap-2">
-              <button onClick={doAccept} className="flex-1 rounded-md bg-tan py-2 font-bold text-cream hover:bg-tan-dark">Confirm Accept</button>
+              <button onClick={doAccept} className="flex-1 rounded-md bg-tan-dark py-2 font-bold text-cream hover:bg-tan-darker">Confirm Accept</button>
               <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
             </div>
           </div>
@@ -542,7 +542,7 @@ export function OrderDetailModal({
                       className={
                         'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors ' +
                         (refundMethod === t.method
-                          ? 'border-tan bg-tan text-cream'
+                          ? 'border-tan bg-tan-dark text-cream'
                           : 'border-line text-charcoal hover:border-tan')
                       }
                     >
@@ -666,7 +666,7 @@ export function OrderDetailModal({
           <div className="mt-5 flex flex-col gap-2">
             {isNew ? (
               <div className="flex gap-2">
-                <button onClick={() => setMode('accept')} className="flex-1 rounded-md bg-tan py-2.5 font-bold text-cream hover:bg-tan-dark">Accept</button>
+                <button onClick={() => setMode('accept')} className="flex-1 rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker">Accept</button>
                 <button onClick={() => setMode('reject')} className="flex-1 rounded-md border border-red-300 py-2.5 font-bold text-red-700 hover:bg-red-50">Reject</button>
               </div>
             ) : null}
@@ -696,7 +696,7 @@ export function OrderDetailModal({
                           <button
                             key={m}
                             onClick={() => settle(m)}
-                            className="flex-1 rounded-md border border-line py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan"
+                            className="flex-1 rounded-md border border-line py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
                           >
                             {m}
                           </button>
@@ -734,7 +734,7 @@ export function OrderDetailModal({
                       <button
                         key={m}
                         onClick={() => settle(m)}
-                        className="flex-1 rounded-md border border-line bg-cream py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan"
+                        className="flex-1 rounded-md border border-line bg-cream py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
                       >
                         {m}
                       </button>
@@ -775,7 +775,7 @@ export function OrderDetailModal({
                     disabled={codeMismatch}
                     className={
                       'mt-3 w-full rounded-md py-2.5 font-bold text-cream disabled:opacity-40 ' +
-                      (codeMatches ? 'bg-green-600 hover:bg-green-700' : 'bg-tan hover:bg-tan-dark')
+                      (codeMatches ? 'bg-green-600 hover:bg-green-700' : 'bg-tan-dark hover:bg-tan-darker')
                     }
                   >
                     {codeMatches ? 'Verify & complete pickup' : 'Complete pickup'}
@@ -788,7 +788,7 @@ export function OrderDetailModal({
                 </div>
               )
             ) : next && !isNew ? (
-              <button onClick={() => onTransition(order, next)} className="rounded-md bg-tan py-2.5 font-bold text-cream hover:bg-tan-dark">
+              <button onClick={() => onTransition(order, next)} className="rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker">
                 Mark {STATUS_LABELS[next]}
               </button>
             ) : null}
@@ -819,7 +819,7 @@ export function OrderDetailModal({
               {order.payment_status !== 'paid' && order.status !== 'ready' ? (
                 <div className="mt-2 flex gap-2">
                   {PAYMENT_METHODS.map((m) => (
-                    <button key={m} onClick={() => settle(m)} className="flex-1 rounded-md border border-line py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan">
+                    <button key={m} onClick={() => settle(m)} className="flex-1 rounded-md border border-line py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark">
                       {m}
                     </button>
                   ))}
@@ -828,7 +828,7 @@ export function OrderDetailModal({
               {onOpenPayment && isSettleable(order) ? (
                 <button
                   onClick={() => onOpenPayment(order, 'settle')}
-                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
                 >
                   Split or cash with change…
                 </button>
@@ -836,7 +836,7 @@ export function OrderDetailModal({
               {onOpenPayment && canChangePayment(order) ? (
                 <button
                   onClick={() => onOpenPayment(order, 'change')}
-                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan"
+                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
                 >
                   Change payment
                 </button>

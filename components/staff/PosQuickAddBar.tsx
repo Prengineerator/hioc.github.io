@@ -105,7 +105,7 @@ export function PosQuickAddBar({
           className="w-full bg-transparent py-2 text-sm text-charcoal outline-none"
         />
         {parsed.qty > 1 ? (
-          <span className="shrink-0 rounded-full bg-tan px-2 py-0.5 text-xs font-bold text-cream">
+          <span className="shrink-0 rounded-full bg-tan-dark px-2 py-0.5 text-xs font-bold text-cream">
             ×{parsed.qty}
           </span>
         ) : null}
@@ -191,7 +191,7 @@ function QuickAddRow({
       {!available ? (
         <span className="shrink-0 text-[10px] font-bold text-muted">86’d</span>
       ) : (
-        <span className="shrink-0 text-xs font-bold text-tan">{priceLabel(item)}</span>
+        <span className="shrink-0 text-xs font-bold text-tan-dark">{priceLabel(item)}</span>
       )}
     </li>
   );

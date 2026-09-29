@@ -191,7 +191,7 @@ export function TodayOrdersList({
           ))}
         </select>
         {filtersActive ? (
-          <button type="button" onClick={clearFilters} className="text-sm font-bold text-tan hover:underline">
+          <button type="button" onClick={clearFilters} className="text-sm font-bold text-tan-dark hover:underline">
             Clear filters
           </button>
         ) : null}

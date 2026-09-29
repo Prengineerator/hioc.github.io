@@ -82,7 +82,7 @@ export function ReviewModeration({ initialReviews }: { initialReviews: Review[] 
                 placeholder="Write a response…"
               />
               <div className="mt-2 flex gap-3">
-                <button type="button" onClick={() => submitResponse(r.id)} disabled={saving} className="rounded-md bg-tan px-3 py-2.5 text-xs font-bold text-cream hover:bg-tan-dark disabled:opacity-50">
+                <button type="button" onClick={() => submitResponse(r.id)} disabled={saving} className="rounded-md bg-tan-dark px-3 py-2.5 text-xs font-bold text-cream hover:bg-tan-darker disabled:opacity-50">
                   {saving ? 'Saving…' : 'Post reply'}
                 </button>
                 <button type="button" onClick={() => setRespondingId(null)} className="text-xs font-bold text-muted hover:text-charcoal">
@@ -92,7 +92,7 @@ export function ReviewModeration({ initialReviews }: { initialReviews: Review[] 
             </div>
           ) : (
             <div className="mt-3 flex gap-4 text-xs">
-              <button type="button" onClick={() => startRespond(r)} className="font-bold text-tan hover:underline">
+              <button type="button" onClick={() => startRespond(r)} className="font-bold text-tan-dark hover:underline">
                 {r.staff_response ? 'Edit reply' : 'Reply'}
               </button>
               <button type="button" onClick={() => toggleHidden(r)} className="font-bold text-red-700 hover:underline">

@@ -234,7 +234,7 @@ export function QrCheckout({
         <button
           type="button"
           onClick={onBackToMenu}
-          className="mt-5 rounded-md bg-tan px-5 py-2.5 text-sm font-semibold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-5 rounded-md bg-tan-dark px-5 py-2.5 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker"
         >
           Back to the menu
         </button>
@@ -248,7 +248,7 @@ export function QrCheckout({
         <button
           type="button"
           onClick={onBackToMenu}
-          className="text-sm font-semibold text-tan hover:underline"
+          className="text-sm font-semibold text-tan-dark hover:underline"
         >
           &larr; Add more
         </button>
@@ -311,7 +311,7 @@ export function QrCheckout({
                   type="button"
                   aria-label="Increase quantity"
                   onClick={() => increment(item.key)}
-                  className="flex h-5 w-5 items-center justify-center rounded-full bg-tan text-xs text-cream"
+                  className="flex h-5 w-5 items-center justify-center rounded-full bg-tan-dark text-xs text-cream"
                 >
                   +
                 </button>
@@ -416,7 +416,7 @@ export function QrCheckout({
         ) : null}
         <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
           <span className="font-bold text-charcoal">Total</span>
-          <span className="font-mono font-bold tabular-nums text-tan">₹{displayBill.total_inr}</span>
+          <span className="font-mono font-bold tabular-nums text-tan-dark">₹{displayBill.total_inr}</span>
         </div>
       </div>
 
@@ -434,7 +434,7 @@ export function QrCheckout({
         type="button"
         onClick={placeOrder}
         disabled={submitting || otp.busy || !storeAcceptingOrders || mustVerify}
-        className="w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+        className="w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
       >
         {submitting ? (
           'Placing order…'

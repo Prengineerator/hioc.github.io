@@ -146,7 +146,7 @@ export function MenuItemTable({
           header: 'Prices',
           filter: 'text',
           value: (item) => variantSummary(item),
-          cellClassName: 'text-tan',
+          cellClassName: 'text-tan-dark',
         },
         {
           key: 'addons',
@@ -253,7 +253,7 @@ export function MenuItemTable({
                 <button
                   type="button"
                   onClick={() => onEdit(item)}
-                  className="font-bold text-tan hover:underline"
+                  className="font-bold text-tan-dark hover:underline"
                 >
                   Edit
                 </button>

@@ -47,8 +47,8 @@ export default function ShippingDeliveryPage() {
       <PolicySection heading="5. Questions">
         <p>
           For anything about your order or pickup, contact us at{' '}
-          <a href={BUSINESS.phoneHref} className="text-tan hover:underline">{BUSINESS.phoneDisplay}</a>{' '}
-          or <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a>.
+          <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>{' '}
+          or <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a>.
         </p>
       </PolicySection>
     </PolicyLayout>

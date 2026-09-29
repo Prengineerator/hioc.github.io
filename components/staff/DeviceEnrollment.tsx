@@ -187,7 +187,7 @@ function AskOwnerPanel() {
         <button
           type="button"
           onClick={() => setShowOwnerSignIn(true)}
-          className="mt-4 text-sm font-bold text-tan underline decoration-tan/50 underline-offset-2 hover:text-tan-dark"
+          className="mt-4 text-sm font-bold text-tan-dark underline decoration-tan/50 underline-offset-2 hover:text-tan-dark"
         >
           Owner: sign in to enrol this counter
         </button>

@@ -85,7 +85,7 @@ export default function AccountHomePage() {
       {activeOrder ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-tan bg-surface px-4 py-3">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-tan">
+            <p className="text-xs font-semibold uppercase tracking-wide text-tan-dark">
               {ORDER_STATUS_LABEL[activeOrder.status]}
             </p>
             <p className="truncate text-sm font-bold text-charcoal">
@@ -95,7 +95,7 @@ export default function AccountHomePage() {
           </div>
           <Link
             href={`/order/${activeOrder.id}`}
-            className="inline-flex min-h-[40px] shrink-0 items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+            className="inline-flex min-h-[40px] shrink-0 items-center rounded-md bg-tan-dark px-4 text-sm font-semibold text-cream hover:bg-tan-darker"
           >
             Track
           </Link>
@@ -108,7 +108,7 @@ export default function AccountHomePage() {
         <div>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="font-semibold text-charcoal">Recent orders</h2>
-            <Link href="/account/orders" className="text-sm font-semibold text-tan hover:underline">
+            <Link href="/account/orders" className="text-sm font-semibold text-tan-dark hover:underline">
               View all
             </Link>
           </div>

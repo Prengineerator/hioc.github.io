@@ -180,7 +180,7 @@ export default function FeedbackPage() {
                       onClick={() => toggleThumb(item.menu_item_id as string, 'up')}
                       className={
                         'rounded-md px-2 py-1.5 text-lg ' +
-                        (thumbs[item.menu_item_id] === 'up' ? 'bg-tan text-cream' : 'bg-surface text-muted')
+                        (thumbs[item.menu_item_id] === 'up' ? 'bg-tan-dark text-cream' : 'bg-surface text-muted')
                       }
                     >
                       👍

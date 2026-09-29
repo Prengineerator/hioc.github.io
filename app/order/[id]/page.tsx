@@ -254,7 +254,7 @@ export default function OrderStatusPage() {
         </p>
         <Link
           href="/menu"
-          className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-6 inline-block rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
         >
           Back to Menu
         </Link>
@@ -308,7 +308,7 @@ export default function OrderStatusPage() {
               type="button"
               onClick={handleRetryPayment}
               disabled={paying}
-              className="min-h-[44px] rounded-md bg-tan px-5 py-2.5 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
+              className="min-h-[44px] rounded-md bg-tan-dark px-5 py-2.5 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
             >
               {paying ? 'Opening payment…' : 'Retry payment'}
             </button>
@@ -346,7 +346,7 @@ export default function OrderStatusPage() {
               aria-live="polite"
               className={
                 'mt-6 rounded-md px-4 py-3 text-center ' +
-                (order.status === 'ready' ? 'bg-tan text-cream' : 'bg-surface text-charcoal')
+                (order.status === 'ready' ? 'bg-tan-dark text-cream' : 'bg-surface text-charcoal')
               }
             >
               <p className="text-lg font-bold">{STATUS_HEADLINE[order.status].title}</p>
@@ -455,7 +455,7 @@ export default function OrderStatusPage() {
       <div className="mt-10 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
         <h3 className="font-semibold text-charcoal">Need help?</h3>
         <p className="mt-2 text-sm text-muted">{CAFE_ADDRESS}</p>
-        <a href={CAFE_PHONE_HREF} className="mt-1 inline-block text-sm text-tan hover:underline">
+        <a href={CAFE_PHONE_HREF} className="mt-1 inline-block text-sm text-tan-dark hover:underline">
           {CAFE_PHONE_DISPLAY}
         </a>
       </div>
@@ -499,7 +499,7 @@ function BillRows({ order }: { order: OrderWithItems }) {
       {order.discount_inr > 0 ? <Row label={discountLabel} value={-order.discount_inr} /> : null}
       <div className="mt-1 flex items-center justify-between border-t border-line pt-2">
         <span className="font-bold text-charcoal">Total</span>
-        <span className="font-mono font-bold tabular-nums text-tan">₹{total}</span>
+        <span className="font-mono font-bold tabular-nums text-tan-dark">₹{total}</span>
       </div>
     </div>
   );
@@ -535,7 +535,7 @@ function ProgressTrack({ status }: { status: OrderStatus }) {
               <div
                 className={
                   'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ' +
-                  (done ? 'bg-tan text-cream' : 'bg-line text-muted') +
+                  (done ? 'bg-tan-dark text-cream' : 'bg-line text-muted') +
                   (isCurrent ? ' ring-2 ring-tan ring-offset-2' : '')
                 }
               >

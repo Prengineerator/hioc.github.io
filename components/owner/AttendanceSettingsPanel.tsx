@@ -134,7 +134,7 @@ export function AttendanceSettingsPanel() {
           </span>{' '}
           ·{' '}
           <a
-            className="text-tan underline"
+            className="text-tan-dark underline"
             href={`https://www.google.com/maps?q=${settings.store_lat},${settings.store_lng}`}
             target="_blank"
             rel="noreferrer"
@@ -158,7 +158,7 @@ export function AttendanceSettingsPanel() {
             type="button"
             disabled={saving}
             onClick={() => save({ store_lat: measured.lat, store_lng: measured.lng })}
-            className="rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
+            className="rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
           >
             Set as cafe location
           </button>

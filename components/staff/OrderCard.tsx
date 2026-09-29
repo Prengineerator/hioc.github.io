@@ -21,8 +21,8 @@ import { canRemind, quickActionsFor, type QuickAction } from '@/lib/orders/quick
 import type { Order, OrderItem } from '@/lib/types';
 
 const CORNER_TONE: Record<QuickAction['tone'], string> = {
-  primary: 'bg-tan text-cream hover:bg-tan-dark',
-  complete: 'bg-green-600 text-cream hover:bg-green-700',
+  primary: 'bg-tan-dark text-cream hover:bg-tan-darker',
+  complete: 'bg-green-700 text-cream hover:bg-green-800', // 600 is 3.3:1 under white text
   neutral: 'bg-charcoal text-cream hover:opacity-90',
   danger: 'bg-red-600 text-cream hover:bg-red-700',
 };
@@ -75,11 +75,13 @@ export function OrderCard({
         }
       }}
       className={
-        'flex cursor-pointer flex-col gap-2 rounded-md border border-line bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
+        'flex cursor-pointer flex-col gap-2 rounded-md border border-line bg-cream p-4 shadow-sm lg:p-3 xl:p-4 transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
         (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >
-      <div className="flex items-start justify-between gap-2">
+      {/* lg only (four ~240px lanes on a 1024px tablet): the actions drop
+          under the number, full width, instead of squeezing it. */}
+      <div className="flex items-start justify-between gap-2 lg:flex-col lg:items-stretch xl:flex-row xl:items-start">
         <div className="flex min-w-0 flex-col gap-1">
           {/* Read at arm's length off a counter tablet — the number is what
               staff call out and customers match, so it's the biggest thing. */}
@@ -95,14 +97,14 @@ export function OrderCard({
         </div>
 
         {/* Corner: the next step, then the other moves. Neither opens the detail. */}
-        <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center gap-1 lg:w-full xl:w-auto" onClick={(e) => e.stopPropagation()}>
           {corner ? (
             <button
               type="button"
               disabled={busy}
               onClick={() => onAction(order, corner)}
               className={
-                'min-h-[44px] min-w-[84px] rounded-md px-4 text-sm font-bold transition-colors disabled:cursor-wait disabled:opacity-60 ' +
+                'min-h-[44px] min-w-[84px] rounded-md px-4 text-sm font-bold transition-colors disabled:cursor-wait disabled:opacity-60 lg:flex-1 xl:flex-none ' +
                 CORNER_TONE[corner.tone]
               }
             >

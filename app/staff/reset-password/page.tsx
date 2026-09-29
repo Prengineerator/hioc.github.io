@@ -161,7 +161,7 @@ function StaffResetPasswordForm() {
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+                  className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {submitting ? 'Setting password…' : 'Set password'}
                 </button>

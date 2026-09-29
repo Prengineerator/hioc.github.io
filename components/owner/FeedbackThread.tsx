@@ -207,7 +207,7 @@ export function FeedbackThread({ requestId }: { requestId: string }) {
                 <div
                   className={
                     'max-w-[80%] rounded-md px-3 py-2 text-sm ' +
-                    (m.direction === 'out' ? 'bg-tan text-cream' : 'bg-surface text-charcoal')
+                    (m.direction === 'out' ? 'bg-tan-dark text-cream' : 'bg-surface text-charcoal')
                   }
                 >
                   <p>{m.body || <span className="italic opacity-70">(no text)</span>}</p>

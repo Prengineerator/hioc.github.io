@@ -223,7 +223,7 @@ export function PrinterForm({
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="min-h-[44px] rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
+          className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
         >
           {saving ? 'Saving…' : 'Save printer'}
         </button>

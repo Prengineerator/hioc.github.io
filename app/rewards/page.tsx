@@ -20,7 +20,7 @@ export default async function RewardsPage() {
         <p className="mt-4 text-muted">Log in to see your points balance and history.</p>
         <Link
           href="/login?next=/rewards"
-          className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-6 inline-block rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
         >
           Log In
         </Link>
@@ -40,7 +40,7 @@ export default async function RewardsPage() {
 
       <div className="mt-6 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
         <p className="text-xs uppercase tracking-wide text-muted">Your balance</p>
-        <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-tan">{balance} pts</p>
+        <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-tan-dark">{balance} pts</p>
         {config ? (
           <p className="mt-2 text-sm text-muted">
             ≈ <span className="font-mono tabular-nums">₹{Math.floor(balance * config.inr_per_point)}</span> in

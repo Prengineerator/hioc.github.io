@@ -324,7 +324,7 @@ export function AttendancePunch() {
           </p>
           <p className="mt-2 text-muted">
             You can see your own record below at any time.{' '}
-            <Link href="/privacy" className="text-tan underline">
+            <Link href="/privacy" className="text-tan-dark underline">
               Full privacy policy
             </Link>
             .
@@ -369,7 +369,7 @@ export function AttendancePunch() {
           disabled={busy || (state ? !state.configured : false)}
           onClick={() => handleTap(open ? 'out' : 'in')}
           className={`mt-6 w-full rounded-md px-6 py-5 text-lg font-bold text-cream transition-colors disabled:opacity-50 ${
-            open ? 'bg-charcoal hover:bg-black' : 'bg-tan hover:bg-tan-dark'
+            open ? 'bg-charcoal hover:bg-black' : 'bg-tan-dark hover:bg-tan-darker'
           }`}
         >
           {busy ? 'Checking your location…' : open ? 'Clock out' : 'Clock in'}
