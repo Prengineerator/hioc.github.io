@@ -9,6 +9,8 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { computeSuggestionStats } from './analytics';
+import { isMissingColumnError } from './traitsValidate';
+import { CURRENT_TRAITS_VERSION } from './types';
 import type { MenuItemTraits, SuggestionDigestRow, SuggestionEventRow, SuggestionSessionRow, SuggestionStats } from './types';
 
 // True when `error` means "the relation/column doesn't exist" — the migration
@@ -136,6 +138,8 @@ export interface TraitsOverviewRow {
   parentCategory: string;
   isVeg: boolean;
   isAvailable: boolean;
+  /** The row as stored. Before supabase/2026-10-coffey-traits-v2.sql the v2
+   * fields (sweetness_level, intensity, … traits_version) are simply absent. */
   traits: MenuItemTraits | null;
 }
 
@@ -145,12 +149,40 @@ export interface TraitsOverview {
   unconfirmedCount: number;
   /** Items with NO traits row at all (never suggested — §5.1). */
   missingCount: number;
+  /** Items that need Coffey's new taste profile (COFFEY-SPEC §3.4): no traits
+   * row at all, plus rows tagged before CURRENT_TRAITS_VERSION. Before the
+   * migration that is every item. */
+  needsUpgrade: number;
+  /** False until supabase/2026-10-coffey-traits-v2.sql has been applied — the
+   * Traits tab disables "Regenerate with Jev" and says so. */
+  migrationApplied: boolean;
   missingTables: boolean;
+}
+
+function emptyOverview(missingTables: boolean): TraitsOverview {
+  return { rows: [], unconfirmedCount: 0, missingCount: 0, needsUpgrade: 0, migrationApplied: false, missingTables };
+}
+
+/** Has the v2 migration been applied? Inferred from the rows already fetched
+ * (`select *` returns `traits_version` only once the column exists) — and, with
+ * no rows to look at, from a one-row probe like the generate route's
+ * (COFFEY-SPEC §3.3). Never throws: this runs on every Traits-tab load,
+ * including before the migration. */
+async function traitsV2Applied(admin: ReturnType<typeof createAdminSupabaseClient>, traitRows: MenuItemTraits[]): Promise<boolean> {
+  if (traitRows.length > 0) return 'traits_version' in traitRows[0];
+  try {
+    const { error } = await admin.from('menu_item_traits').select('traits_version').limit(1);
+    return !isMissingColumnError(error);
+  } catch {
+    return false;
+  }
 }
 
 /** Every menu item joined with its traits row (Traits tab, SUG-2). An item
  * with no row shows `traits: null` — it stays on the menu but the engine
- * never suggests it until it's tagged. */
+ * never suggests it until it's tagged. Also carries how many items still need
+ * the v2 taste profile and whether the v2 migration is applied (COFFEY-SPEC
+ * §3.4); it degrades to "not applied" rather than throwing before it is. */
 export async function getTraitsOverview(): Promise<TraitsOverview> {
   const admin = createAdminSupabaseClient();
 
@@ -165,24 +197,30 @@ export async function getTraitsOverview(): Promise<TraitsOverview> {
 
   if (itemsResult.error) {
     console.error('getTraitsOverview: menu_items failed', itemsResult.error);
-    return { rows: [], unconfirmedCount: 0, missingCount: 0, missingTables: false };
+    return emptyOverview(false);
   }
   if (traitsResult.error) {
-    if (isMissingSuggestRelation(traitsResult.error)) {
-      return { rows: [], unconfirmedCount: 0, missingCount: 0, missingTables: true };
-    }
+    if (isMissingSuggestRelation(traitsResult.error)) return emptyOverview(true);
     console.error('getTraitsOverview: menu_item_traits failed', traitsResult.error);
-    return { rows: [], unconfirmedCount: 0, missingCount: 0, missingTables: false };
+    return emptyOverview(false);
   }
 
-  const traitsById = new Map(((traitsResult.data ?? []) as MenuItemTraits[]).map((t) => [t.menu_item_id, t]));
+  const traitRows = (traitsResult.data ?? []) as MenuItemTraits[];
+  const traitsById = new Map(traitRows.map((t) => [t.menu_item_id, t]));
 
   let unconfirmedCount = 0;
   let missingCount = 0;
+  let needsUpgrade = 0;
   const rows: TraitsOverviewRow[] = (itemsResult.data ?? []).map((i) => {
     const traits = traitsById.get(i.id as string) ?? null;
-    if (!traits) missingCount += 1;
-    else if (!traits.confirmed) unconfirmedCount += 1;
+    if (!traits) {
+      missingCount += 1;
+      needsUpgrade += 1;
+    } else {
+      if (!traits.confirmed) unconfirmedCount += 1;
+      // A row read before the migration has no traits_version: it is version 1.
+      if ((traits.traits_version ?? 1) < CURRENT_TRAITS_VERSION) needsUpgrade += 1;
+    }
     return {
       menuItemId: i.id as string,
       name: i.name as string,
@@ -194,5 +232,12 @@ export async function getTraitsOverview(): Promise<TraitsOverview> {
     };
   });
 
-  return { rows, unconfirmedCount, missingCount, missingTables: false };
+  return {
+    rows,
+    unconfirmedCount,
+    missingCount,
+    needsUpgrade,
+    migrationApplied: await traitsV2Applied(admin, traitRows),
+    missingTables: false,
+  };
 }
