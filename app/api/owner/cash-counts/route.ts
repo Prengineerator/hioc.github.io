@@ -4,6 +4,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { CashCountKind } from '@/lib/cash/counts';
+import { approveProblem, expenseCategoryLabel, expenseStatus } from '@/lib/cash/expenses';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,11 +49,18 @@ interface MovementRow {
   reason: string;
   recorded_by: string;
   created_at: string;
+  /** Set on an expense paid from the drawer; absent before supabase/2026-10-cash-expenses.sql. */
+  category?: string | null;
+  /** Approval / undo of an expense; absent before supabase/2026-10-cash-expenses.sql. */
+  approved_by?: string | null;
+  approved_at?: string | null;
+  voided_by?: string | null;
+  voided_at?: string | null;
 }
 
 // GET /api/owner/cash-counts?limit= — read-only log for the owner: recent
 // checkpoints (kind, who, counted, expected, variance, override reason) and
-// cash movements (in/out, amount, reason, who) — docs/PHASE-5-CASH-COUNTS.md.
+// cash movements (in/out, amount, reason, who, and the category of an expense) — docs/PHASE-5-CASH-COUNTS.md.
 // No writes happen through this route; counts and movements are produced by
 // the punch flow and the manager/owner override + cash-movement endpoints
 // elsewhere (app/api/cash-counts/**, app/api/cash-movements/**).
@@ -78,24 +86,40 @@ export async function GET(request: Request) {
   }
   if (countError) return errorResponse(500, countError.message);
 
-  const { data: movementData, error: movementError } = await admin
-    .from('cash_movements')
-    .select('id, direction, amount_inr, reason, recorded_by, created_at')
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  // Newest columns first; each missing-column error steps down one rung
+  // (approval columns, then category) so an old database still lists movements.
+  const movementColumns = 'id, direction, amount_inr, reason, recorded_by, created_at';
+  const readMovements = (extra: string) =>
+    admin
+      .from('cash_movements')
+      .select(extra ? `${movementColumns}, ${extra}` : movementColumns)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+  let movementData: MovementRow[] | null = null;
+  let movementError: PgError = null;
+  for (const extra of ['category, approved_by, approved_at, voided_by, voided_at', 'category', '']) {
+    const res = await readMovements(extra);
+    movementData = res.data as unknown as MovementRow[] | null;
+    movementError = res.error;
+    if (!movementError || !isMissingTable(movementError)) break;
+  }
   if (movementError && !isMissingTable(movementError)) {
-    return errorResponse(500, movementError.message);
+    return errorResponse(500, movementError.message ?? 'Could not load cash movements');
   }
 
   const counts = (countData ?? []) as CountRow[];
-  const movements = (movementData ?? []) as MovementRow[];
+  const movements = movementData ?? [];
 
   const ids = new Set<string>();
   for (const c of counts) {
     ids.add(c.user_id);
     if (c.override_by) ids.add(c.override_by);
   }
-  for (const m of movements) ids.add(m.recorded_by);
+  for (const m of movements) {
+    ids.add(m.recorded_by);
+    if (m.approved_by) ids.add(m.approved_by);
+    if (m.voided_by) ids.add(m.voided_by);
+  }
   const names = await getStaffDisplayNames(admin, [...ids]);
 
   return NextResponse.json({
@@ -112,13 +136,30 @@ export async function GET(request: Request) {
       overrideReason: c.override_reason,
       createdAt: c.created_at,
     })),
-    movements: movements.map((m) => ({
-      id: m.id,
-      direction: m.direction,
-      amountInr: m.amount_inr,
-      reason: m.reason,
-      recordedByName: names.get(m.recorded_by) ?? 'Unknown staff',
-      createdAt: m.created_at,
-    })),
+    movements: movements.map((m) => {
+      const isExpense = !!m.category;
+      const status = isExpense ? expenseStatus(m) : null;
+      return {
+        id: m.id,
+        direction: m.direction,
+        amountInr: m.amount_inr,
+        reason: m.reason,
+        category: m.category ?? null,
+        categoryLabel: expenseCategoryLabel(m.category),
+        recordedByName: names.get(m.recorded_by) ?? 'Unknown staff',
+        createdAt: m.created_at,
+        status,
+        approvedByName: status === 'approved' && m.approved_by ? (names.get(m.approved_by) ?? 'Unknown staff') : null,
+        undoneByName: status === 'undone' && m.voided_by ? (names.get(m.voided_by) ?? 'Unknown staff') : null,
+        // The owner may approve any pending expense, their own included.
+        canApprove:
+          status !== null &&
+          approveProblem({
+            status,
+            isOwnEntry: m.recorded_by === owner.id,
+            actorRole: 'owner',
+          }) === null,
+      };
+    }),
   });
 }

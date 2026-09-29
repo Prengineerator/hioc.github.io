@@ -24,6 +24,7 @@ export const KNOWN_PERMISSION_KEYS: PermissionKey[] = [
   'comp_order',
   'refund',
   'cash_day_close',
+  'cash_expense',
   'attendance_edit',
   'attendance_approve',
   'leave_approve',
@@ -40,6 +41,10 @@ export const DEFAULT_MIN_ROLE: Record<PermissionKey, PermissionMinRole> = {
   comp_order: 'manager',
   refund: 'manager',
   cash_day_close: 'manager',
+  // Punching a store expense (ice, water …) paid from the drawer. Staff by
+  // default: the person who paid the vendor is the one who must record it
+  // (lib/cash/expenses.ts). Seeded by supabase/2026-10-cash-expenses.sql.
+  cash_expense: 'staff',
   // Phase 5 (D5-8): a manager may correct and approve attendance; only the
   // owner sees money, so the payroll routes use getOwnerUser() and are
   // deliberately absent from this matrix.

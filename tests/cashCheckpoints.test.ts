@@ -324,6 +324,67 @@ describe('cashFlowsBetween', () => {
     expect(flows.cashInInr).toBe(200);
   });
 
+  it('reports categorised cash-outs as expensesInr without changing the drawer math', async () => {
+    tables.cash_movements.push(
+      { direction: 'out', amount_inr: 120, category: 'ice', created_at: '2026-09-01T05:00:00.000Z' },
+      { direction: 'out', amount_inr: 500, category: null, created_at: '2026-09-01T05:00:00.000Z' }, // manager cash out
+      { direction: 'in', amount_inr: 200, category: null, created_at: '2026-09-01T05:00:00.000Z' },
+      { direction: 'out', amount_inr: 999, category: 'water', created_at: '2026-09-01T09:00:00.000Z' }, // outside window
+    );
+    const activity = await cashActivityBetween(admin, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z');
+    expect(activity.expensesInr).toBe(120);
+    expect(activity.flows.cashOutInr).toBe(620); // the expense is inside cash out, not on top of it
+    expect(activity.flows.cashInInr).toBe(200);
+  });
+
+  it('skips voided (undone) expenses everywhere, while pending ones still count as money out', async () => {
+    tables.cash_movements.push(
+      { direction: 'out', amount_inr: 120, category: 'ice', voided_at: null, created_at: '2026-09-01T05:00:00.000Z' }, // pending
+      { direction: 'out', amount_inr: 80, category: 'water', approved_at: '2026-09-01T05:30:00.000Z', voided_at: null, created_at: '2026-09-01T05:00:00.000Z' },
+      { direction: 'out', amount_inr: 300, category: 'milk_dairy', voided_at: '2026-09-01T05:10:00.000Z', created_at: '2026-09-01T05:00:00.000Z' }, // undone
+      { direction: 'out', amount_inr: 500, category: null, voided_at: null, created_at: '2026-09-01T05:00:00.000Z' },
+    );
+    const activity = await cashActivityBetween(admin, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z');
+    expect(activity.flows.cashOutInr).toBe(700); // 120 + 80 + 500, not the undone 300
+    expect(activity.expensesInr).toBe(200);
+  });
+
+  it('retries without the category column on an old database: same flows, expensesInr 0', async () => {
+    tables.cash_movements.push(
+      { direction: 'out', amount_inr: 500, created_at: '2026-09-01T05:00:00.000Z' },
+      { direction: 'in', amount_inr: 200, created_at: '2026-09-01T05:00:00.000Z' },
+    );
+    const selects: string[] = [];
+    const oldDb = {
+      from(table: string) {
+        const real = admin.from(table);
+        if (table !== 'cash_movements') return real;
+        return {
+          ...real,
+          select: (cols: string) => {
+            selects.push(cols);
+            if (cols.includes('category')) {
+              const failing: Record<string, unknown> = {};
+              Object.assign(failing, {
+                gt: () => failing,
+                lte: () => failing,
+                then: (resolve: (v: unknown) => void) =>
+                  resolve({ data: null, error: { code: '42703', message: 'column cash_movements.category does not exist' } }),
+              });
+              return failing;
+            }
+            return real.select();
+          },
+        };
+      },
+    };
+    const activity = await cashActivityBetween(oldDb as never, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z');
+    expect(selects).toEqual(['direction, amount_inr, category, voided_at', 'direction, amount_inr']);
+    expect(activity.expensesInr).toBe(0);
+    expect(activity.flows.cashOutInr).toBe(500);
+    expect(activity.flows.cashInInr).toBe(200);
+  });
+
   it('treats a missing cash_movements table as "no movements" rather than failing', async () => {
     delete tables.cash_movements;
     const brokenAdmin = {

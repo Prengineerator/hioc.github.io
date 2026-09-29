@@ -12,6 +12,7 @@ import type { TeamMember } from '@/lib/staff/accounts';
 import { ShortageDecisionModal, type ShortageAction } from './ShortageDecisionModal';
 import { ShortageCard } from './ShortageCard';
 import { CountLog } from './CountLog';
+import { ExpenseBreakdown } from './ExpenseBreakdown';
 import { DrawerLog } from './DrawerLog';
 import { CashDayLog } from './CashDayLog';
 import type { ActiveStaffOption, OwnerCashCountRow, OwnerCashMovementRow, OwnerShortageRow } from './types';
@@ -184,7 +185,9 @@ export function CashScreen() {
         )}
       </Card>
 
-      <CountLog counts={counts} movements={movements} />
+      <ExpenseBreakdown movements={movements} onChanged={() => void load()} />
+
+      <CountLog counts={counts} movements={movements} onChanged={() => void load()} />
 
       <DrawerLog />
 

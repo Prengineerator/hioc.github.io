@@ -1,9 +1,11 @@
 'use client';
 
 // CC-3 — manager/owner entries for money that moves through the drawer
-// without being a sale: bank deposits, petty expenses, float top-ups
+// without being a sale: bank deposits and float top-ups
 // (docs/PHASE-5-CASH-COUNTS.md). Without these, a deposit or a top-up would
-// read as a shortage/overage at the next count. Rendered on the cash page
+// read as a shortage/overage at the next count. Store expenses (ice, milk …)
+// are NOT punched here — any staffer records them in CashExpenseForm, with a
+// category. Rendered on the cash page
 // only when the server has already decided the signed-in account is
 // manager/owner (see app/staff/cash/page.tsx).
 
@@ -116,7 +118,8 @@ export function CashMovementForm() {
     <section className="mx-auto max-w-md px-4 pb-10">
       <h2 className="text-sm font-bold uppercase tracking-[0.15em] text-muted">Cash out / cash in</h2>
       <p className="mt-1 text-xs text-muted">
-        For bank deposits, petty expenses and float top-ups — so a deposit or top-up never reads as a shortage.
+        For bank deposits and float top-ups — so they never read as a shortage. Store expenses (ice, milk,
+        water) go under Expenses above.
       </p>
 
       <div className="mt-3 rounded-md border border-line bg-white p-4">

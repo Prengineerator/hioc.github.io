@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { requireCashManager } from '@/lib/cash/gate';
-import { CASH_DAY_COLUMNS, MIGRATION_HINT, dayActivity, dayAppTotalsFor, isMissingColumn } from '@/lib/cash/dayServer';
+import { CASH_DAY_COLUMNS, MIGRATION_HINT, dayActivity, dayAppTotalsFor, dayExpensesFor, isMissingColumn } from '@/lib/cash/dayServer';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { CashDay } from '@/lib/types';
 
@@ -51,6 +51,12 @@ export async function GET(request: Request) {
     rows.filter((d) => d.status === 'closed').map((d) => d.id),
   );
 
+  // Frozen expense totals of the closed days (null when unknown / column missing).
+  const expenses = await dayExpensesFor(
+    admin,
+    rows.filter((d) => d.status === 'closed').map((d) => d.id),
+  );
+
   const days = await Promise.all(
     rows.map(async (d) => {
       let live: {
@@ -59,6 +65,7 @@ export async function GET(request: Request) {
         cash_refunds_inr: number;
         cash_in_inr: number;
         cash_out_inr: number;
+        expenses_inr: number;
         upi_inr: number;
         card_inr: number;
         swiggy_dineout_inr: number;
@@ -74,6 +81,7 @@ export async function GET(request: Request) {
             cash_refunds_inr: a.flows.cashRefundsInr,
             cash_in_inr: a.flows.cashInInr,
             cash_out_inr: a.flows.cashOutInr,
+            expenses_inr: a.expensesInr,
             upi_inr: a.upiInr,
             card_inr: a.cardInr,
             swiggy_dineout_inr: a.swiggyDineoutInr,
@@ -87,6 +95,7 @@ export async function GET(request: Request) {
       return {
         ...d,
         ...(appTotals.get(d.id) ?? {}),
+        expenses_inr: expenses.get(d.id) ?? null,
         ...(live ?? {}),
         live: live !== null,
         opened_by_name: nameOf(d.opened_by),

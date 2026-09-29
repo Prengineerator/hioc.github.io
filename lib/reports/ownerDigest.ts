@@ -362,21 +362,25 @@ export function renderOwnerDigest({ period, report, previous, items, reportUrl }
     : '';
 
   // The drawer: a single day shows how it closed; a range shows the sum.
+  // Expenses punched from the drawer (a part of cash out) — shown whenever there were any.
+  const expenseRow = t.expensesInr ? row('Expenses from the drawer', `−${rupees(t.expensesInr)}`) : '';
   const drawerRows = (() => {
     if (period.kind === 'daily') {
       const cd = report.days[0]?.cashDay;
-      if (!cd) return row('Cash day', 'not opened');
-      if (cd.status !== 'closed') return row('Cash day', 'still open — not closed');
+      if (!cd) return row('Cash day', 'not opened') + expenseRow;
+      if (cd.status !== 'closed') return row('Cash day', 'still open — not closed') + expenseRow;
       const os = cd.over_short_inr ?? 0;
       return (
         row('Expected in drawer', rupees(cd.expected_cash_inr ?? 0)) +
         row('Counted', rupees(cd.counted_total_inr ?? 0)) +
-        row('Over / short', `${os >= 0 ? '+' : '−'}${rupees(Math.abs(os))}`, os < 0 ? 'color:#b42318;font-weight:bold;' : 'font-weight:bold;')
+        row('Over / short', `${os >= 0 ? '+' : '−'}${rupees(Math.abs(os))}`, os < 0 ? 'color:#b42318;font-weight:bold;' : 'font-weight:bold;') +
+        expenseRow
       );
     }
     const os = t.overShortInr;
     return (
       (t.cashInInr || t.cashOutInr ? row('Cash in / out', `${rupees(t.cashInInr)} / −${rupees(t.cashOutInr)}`) : '') +
+      expenseRow +
       row('Days closed', `${t.cashDaysClosed} of ${report.days.length}`) +
       row('Over / short', t.cashDaysClosed ? `${os >= 0 ? '+' : '−'}${rupees(Math.abs(os))}` : '—', os < 0 ? 'color:#b42318;font-weight:bold;' : 'font-weight:bold;')
     );
