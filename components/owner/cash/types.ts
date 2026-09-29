@@ -57,8 +57,16 @@ export interface OwnerCashMovementRow {
   direction: 'out' | 'in';
   amountInr: number;
   reason: string;
+  /** Set on an expense paid from the drawer; null/absent on a plain cash out / in. */
+  category?: string | null;
+  categoryLabel?: string;
   recordedByName: string;
   createdAt: string;
+}
+
+/** The cash-out written at day close (app/api/cash-days) — money to the owner/bank, never an expense. */
+export function isHandoverMovement(m: { reason: string }): boolean {
+  return m.reason.trim().toLowerCase().startsWith('day close handover');
 }
 
 export interface ActiveStaffOption {
