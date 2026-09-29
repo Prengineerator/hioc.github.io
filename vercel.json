@@ -21,6 +21,10 @@
     {
       "path": "/api/cron/suggest-digest",
       "schedule": "30 22 * * 0"
+    },
+    {
+      "path": "/api/cron/expire-points",
+      "schedule": "0 20 * * *"
     }
   ]
 }

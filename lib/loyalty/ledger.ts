@@ -10,6 +10,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { isMissingColumnError } from '@/lib/api/postgrest';
+import { expiryCutoff, pointsToExpire, type ExpiryRow } from '@/lib/loyalty/expiry';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
 
 /**
@@ -381,4 +382,77 @@ export async function reverseForOrder(orderId: string): Promise<void> {
   }
 
   await syncAccountCache(admin, userId);
+}
+
+const LEDGER_PAGE_SIZE = 1000;
+const EXPIRE_INSERT_CHUNK = 500;
+
+/**
+ * Writes off points older than `points_expiry_days` as 'expire' ledger rows
+ * (FIFO rule in lib/loyalty/expiry.ts). Idempotent: a re-run finds the earlier
+ * expire rows already counted as spent and writes nothing.
+ */
+export async function expireLoyaltyPoints(now = new Date()): Promise<{ users: number; points: number }> {
+  const none = { users: 0, points: 0 };
+  const config = await getLoyaltyConfig();
+  if (!config) return none;
+  const cutoff = expiryCutoff(now, config.points_expiry_days);
+  if (!cutoff) return none;
+
+  const admin = createAdminSupabaseClient();
+
+  // Page explicitly: PostgREST silently caps a single response (default 1000
+  // rows). Order is total (created_at, id) so pages can't overlap or skip.
+  const byUser = new Map<string, ExpiryRow[]>();
+  for (let from = 0; ; from += LEDGER_PAGE_SIZE) {
+    const { data, error } = await admin
+      .from('loyalty_transactions')
+      .select('user_id, points, created_at')
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + LEDGER_PAGE_SIZE - 1);
+    if (error) {
+      // Abort rather than compute from a partial ledger: missing debits would
+      // make us expire points the customer already spent.
+      console.error('expireLoyaltyPoints: ledger lookup failed', error);
+      return none;
+    }
+    for (const row of data ?? []) {
+      const rows = byUser.get(row.user_id as string) ?? [];
+      rows.push({ points: row.points as number, created_at: row.created_at as string });
+      byUser.set(row.user_id as string, rows);
+    }
+    if (!data || data.length < LEDGER_PAGE_SIZE) break;
+  }
+
+  const inserts: { user_id: string; order_id: null; type: 'expire'; points: number; note: string }[] = [];
+  for (const [userId, rows] of byUser) {
+    const expiring = pointsToExpire(rows, cutoff);
+    if (expiring <= 0) continue;
+    inserts.push({
+      user_id: userId,
+      order_id: null,
+      type: 'expire',
+      points: -expiring,
+      note: `Expired — points older than ${config.points_expiry_days} days`,
+    });
+  }
+
+  let users = 0;
+  let points = 0;
+  for (let i = 0; i < inserts.length; i += EXPIRE_INSERT_CHUNK) {
+    const chunk = inserts.slice(i, i + EXPIRE_INSERT_CHUNK);
+    const { error } = await admin.from('loyalty_transactions').insert(chunk);
+    if (error) {
+      // Keep going: the next run recomputes from the ledger, so a failed chunk
+      // is retried automatically.
+      console.error('expireLoyaltyPoints: insert failed', error);
+      continue;
+    }
+    users += chunk.length;
+    points += chunk.reduce((sum, row) => sum - row.points, 0);
+    for (const row of chunk) await syncAccountCache(admin, row.user_id);
+  }
+
+  return { users, points };
 }
