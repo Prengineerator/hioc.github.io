@@ -23,7 +23,7 @@
 -- STEP 2 — apply (the UPDATE at the bottom of this file).
 
 create or replace function cash_expense_category_guess(reason text) returns text
-language sql immutable as $$
+language sql immutable set search_path = pg_catalog as $$
   select case
     when r is null or r = '' then null
     -- Never an expense: handover, owner/bank, float/change, staff pay.
@@ -44,9 +44,14 @@ language sql immutable as $$
   end
   from (select lower(trim(reason)) as r) s
 $$;
+-- Maintenance helper only: not an API for the app's clients.
+revoke execute on function cash_expense_category_guess(text) from public, anon, authenticated;
 
+-- A manager already recorded these, before approval existed: file them as
+-- approved (approved_by NULL = approved by this backfill), not pending.
 update cash_movements
-   set category = cash_expense_category_guess(reason)
+   set category = cash_expense_category_guess(reason),
+       approved_at = coalesce(approved_at, now())
  where direction = 'out'
    and category is null
    and cash_expense_category_guess(reason) is not null;
@@ -60,6 +65,7 @@ update cash_days d
            from cash_movements m
           where m.direction = 'out'
             and m.category is not null
+            and m.voided_at is null
             and m.created_at > d.opened_at
             and m.created_at <= d.closed_at
        )

@@ -33,6 +33,35 @@ begin
   end if;
 end $$;
 
+-- Approval + undo (owner request, 2026-09-29). A staffer's expense is PENDING
+-- until a manager or the owner approves it; while pending, the person who
+-- punched it (or a manager) can UNDO it, e.g. a wrong amount. Undo never
+-- deletes: the row is voided (kept for the owner's audit trail) and every
+-- reader of cash_movements skips voided rows, so it leaves the drawer math.
+-- An approved expense cannot be undone. Undo is also refused once the drawer
+-- has been counted or the day closed after the punch (that count already
+-- reflected the money out) — lib/cash/expenses.ts undoProblem.
+-- Pending expenses still count as money out: the cash really left the drawer.
+alter table cash_movements
+  add column if not exists approved_by uuid references auth.users(id) on delete set null,
+  add column if not exists approved_at timestamptz,
+  add column if not exists voided_by   uuid references auth.users(id) on delete set null,
+  add column if not exists voided_at   timestamptz;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'cash_movements_expense_review_shape'
+  ) then
+    alter table cash_movements
+      add constraint cash_movements_expense_review_shape
+      check (
+        (approved_at is null or voided_at is null)            -- never both
+        and ((approved_at is null and voided_at is null) or category is not null)  -- expenses only
+      );
+  end if;
+end $$;
+
 create index if not exists cash_movements_expense_created
   on cash_movements (created_at desc) where category is not null;
 
@@ -48,8 +77,9 @@ on conflict (permission_key) do nothing;
 -- ---------------------------------------------------------------------------
 -- Verify:
 --   select column_name from information_schema.columns
---    where (table_name = 'cash_movements' and column_name = 'category')
---       or (table_name = 'cash_days' and column_name = 'expenses_inr');   -- 2 rows
+--    where (table_name = 'cash_movements'
+--           and column_name in ('category', 'approved_by', 'approved_at', 'voided_by', 'voided_at'))
+--       or (table_name = 'cash_days' and column_name = 'expenses_inr');   -- 6 rows
 --   select permission_key, min_role from role_permissions where permission_key = 'cash_expense';
 --
 --   -- this must FAIL (an expense is always money out):
@@ -58,7 +88,7 @@ on conflict (permission_key) do nothing;
 --
 --   -- where the petty cash went, last 30 days:
 --   select category, count(*), sum(amount_inr) from cash_movements
---    where category is not null and created_at > now() - interval '30 days'
+--    where category is not null and voided_at is null and created_at > now() - interval '30 days'
 --    group by category order by 3 desc;
 --
 -- Then run `npm run verify:db`.
