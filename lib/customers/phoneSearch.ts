@@ -1,9 +1,11 @@
-// POS customer suggestions while a phone number is being typed (New order →
-// Customer). The pure half: what counts as a searchable prefix, and how
-// matches from app accounts, app orders and the Petpooja history merge into
-// one short list. GET /api/customers/search runs the queries.
+// POS customer suggestions while a phone number or a name is being typed (New
+// order → Customer). The pure half: what counts as a searchable prefix or name
+// fragment, and how matches from app accounts, app orders and the Petpooja
+// history merge into one short list. GET /api/customers/search runs the queries.
 
 export const MIN_SEARCH_DIGITS = 4;
+export const MIN_SEARCH_NAME_CHARS = 2;
+const MAX_SEARCH_NAME_CHARS = 40;
 export const MAX_SUGGESTIONS = 6;
 
 /**
@@ -18,6 +20,22 @@ export function phoneSearchPrefix(raw: string): string | null {
   if (digits.length < MIN_SEARCH_DIGITS || digits.length >= 10) return null;
   if (!/^[6-9]/.test(digits)) return null; // Indian mobiles start 6–9
   return `+91${digits}`;
+}
+
+/**
+ * The text to match inside a name, or null. Needs 2+ characters (one letter
+ * would list everyone). The characters that mean something in an ilike pattern
+ * or a PostgREST filter (% _ \ , ( ) *) become spaces, so typed input can't
+ * widen the match or break out of it.
+ */
+export function nameSearchTerm(raw: string): string | null {
+  const term = raw
+    .replace(/[%_\\,()*]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_SEARCH_NAME_CHARS)
+    .trim();
+  return term.length >= MIN_SEARCH_NAME_CHARS ? term : null;
 }
 
 export interface CustomerSuggestion {

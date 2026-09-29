@@ -56,6 +56,9 @@ update profiles set role = 'manager' where id = '<auth-user-uuid>';
 - Tune earn/redeem rates in the seeded `loyalty_config` row (or via the owner UI):
   `points_per_inr`, `inr_per_point`, `min_redeem_points`, `max_redeem_pct`,
   `points_expiry_days`.
+- Expiry is enforced by the `/api/cron/expire-points` Vercel Cron (daily, 20:00
+  UTC / 01:30 IST; needs `CRON_SECRET`). It writes `expire` ledger rows for
+  points older than `points_expiry_days`; `0` disables it.
 - Create coupons + announcements from **/owner/promotions**; moderate reviews at
   **/owner/reviews**.
 

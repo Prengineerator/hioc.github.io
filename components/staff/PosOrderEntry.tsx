@@ -39,7 +39,7 @@ import { flags } from '@/lib/flags';
 import { createClient } from '@/lib/supabase';
 import { isSimpleItem, parseQuickAddInput, resolveQuickAdd } from '@/lib/pos/quickAdd';
 import { usePrintDock } from '@/components/staff/PrintDock';
-import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
+import { CustomerSuggestionList, useCustomerNameSuggestions, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
 import type { CustomerSuggestion } from '@/lib/customers/phoneSearch';
 import { pushRecent, readRecents } from '@/lib/pos/recents';
 import { computeCartKey } from '@/lib/cart/cartKey';
@@ -529,6 +529,23 @@ export function PosOrderEntry({
     setPhoneSuggestOpen(false);
     setSuggestIndex(-1);
     custNameInputRef.current?.focus();
+  }, []);
+
+  // Same for the Name field. A number already in the phone field means the
+  // customer is identified, so only an empty/partial number suggests by name.
+  const [nameSuggestOpen, setNameSuggestOpen] = useState(false);
+  const [nameSuggestIndex, setNameSuggestIndex] = useState(-1);
+  const nameSuggestions = useCustomerNameSuggestions(custName, !isAddMode && !lookupPhone);
+  const shownNameSuggestions = nameSuggestOpen ? nameSuggestions : [];
+  const pickNameSuggestion = useCallback((c: CustomerSuggestion) => {
+    setCustPhone(c.phone);
+    setCustName(c.name);
+    // Not hand-typed: the lookup this phone triggers may refine it to the
+    // account's name (POS-5 autofill).
+    custNameUserEdited.current = false;
+    setNameSuggestOpen(false);
+    setNameSuggestIndex(-1);
+    setContactError(null);
   }, []);
 
   // --- VAL-2: who is at the counter ----------------------------------------
@@ -1540,18 +1557,47 @@ export function PosOrderEntry({
                     resolves — ahead of the fuller account/points line below,
                     which only appears once Name/Email are visible too. */}
                 {chipText ? <p className="-mt-1 text-xs font-bold text-tan-dark">{chipText}</p> : null}
-                <input
-                  ref={custNameInputRef}
-                  value={custName}
-                  onChange={(e) => {
-                    custNameUserEdited.current = true;
-                    setCustName(e.target.value);
-                  }}
-                  aria-label="Customer name"
-                  autoComplete="off"
-                  placeholder="Name"
-                  className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
-                />
+                <div className="relative">
+                  <input
+                    ref={custNameInputRef}
+                    value={custName}
+                    onChange={(e) => {
+                      custNameUserEdited.current = true;
+                      setCustName(e.target.value);
+                      setNameSuggestOpen(true);
+                      setNameSuggestIndex(-1);
+                    }}
+                    onFocus={() => setNameSuggestOpen(true)}
+                    onBlur={() => setNameSuggestOpen(false)}
+                    onKeyDown={(e) => {
+                      // Same keys as the phone field; Enter with nothing
+                      // highlighted keeps its default (a new name).
+                      if (shownNameSuggestions.length === 0) return;
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const step = e.key === 'ArrowDown' ? 1 : -1;
+                        setNameSuggestIndex((i) => (i + step + shownNameSuggestions.length) % shownNameSuggestions.length);
+                      } else if (e.key === 'Escape') {
+                        setNameSuggestOpen(false);
+                      } else if (e.key === 'Enter' && nameSuggestIndex >= 0) {
+                        e.preventDefault();
+                        pickNameSuggestion(shownNameSuggestions[nameSuggestIndex]);
+                      }
+                    }}
+                    aria-label="Customer name"
+                    aria-autocomplete="list"
+                    aria-controls="pos-name-suggestions"
+                    autoComplete="off"
+                    placeholder="Name (type to search)"
+                    className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
+                  />
+                  <CustomerSuggestionList
+                    id="pos-name-suggestions"
+                    matches={shownNameSuggestions}
+                    highlighted={nameSuggestIndex}
+                    onPick={pickNameSuggestion}
+                  />
+                </div>
                 {/* VAL-2: the matched name, so a mistyped digit is caught by a
                     human before it spends someone else's points. POS-5 adds
                     "Last orders" right beside it — "a button in front of

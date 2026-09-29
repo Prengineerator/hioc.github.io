@@ -75,13 +75,11 @@ export function OrderCard({
         }
       }}
       className={
-        'flex cursor-pointer flex-col gap-2 rounded-md border border-line bg-cream p-4 shadow-sm lg:p-3 xl:p-4 transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
+        'flex cursor-pointer flex-col gap-2 rounded-md border border-line bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
         (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >
-      {/* lg only (four ~240px lanes on a 1024px tablet): the actions drop
-          under the number, full width, instead of squeezing it. */}
-      <div className="flex items-start justify-between gap-2 lg:flex-col lg:items-stretch xl:flex-row xl:items-start">
+      <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-1">
           {/* Read at arm's length off a counter tablet — the number is what
               staff call out and customers match, so it's the biggest thing. */}
@@ -89,6 +87,16 @@ export function OrderCard({
             #{formatOrderNumber(order.order_number)}
           </span>
           <span className="flex flex-wrap items-center gap-1.5">
+            {/* No lanes on the board, so the card itself says where it is; New
+                gets the tan tone so fresh orders stand out. */}
+            <span
+              className={
+                'rounded-full px-2 py-0.5 text-[11px] font-bold ' +
+                (order.status === 'received' ? 'bg-tan-dark text-cream' : 'bg-charcoal/10 text-charcoal')
+              }
+            >
+              {STATUS_LABELS[order.status]}
+            </span>
             <PaymentBadge status={order.payment_status} />
             <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
               {TYPE_LABEL[order.order_type]}
@@ -97,14 +105,14 @@ export function OrderCard({
         </div>
 
         {/* Corner: the next step, then the other moves. Neither opens the detail. */}
-        <div className="flex shrink-0 items-center gap-1 lg:w-full xl:w-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
           {corner ? (
             <button
               type="button"
               disabled={busy}
               onClick={() => onAction(order, corner)}
               className={
-                'min-h-[44px] min-w-[84px] rounded-md px-4 text-sm font-bold transition-colors disabled:cursor-wait disabled:opacity-60 lg:flex-1 xl:flex-none ' +
+                'min-h-[44px] min-w-[84px] rounded-md px-4 text-sm font-bold transition-colors disabled:cursor-wait disabled:opacity-60 ' +
                 CORNER_TONE[corner.tone]
               }
             >
@@ -165,7 +173,7 @@ export function OrderCard({
           <ElapsedTime since={order.created_at} warnAfterMin={10} dangerAfterMin={20} /> total
         </span>
         <span>
-          {STATUS_LABELS[order.status]} · <ElapsedTime since={order.updated_at} />
+          in stage <ElapsedTime since={order.updated_at} />
         </span>
       </div>
 
