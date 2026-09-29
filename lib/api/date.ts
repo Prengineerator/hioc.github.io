@@ -21,16 +21,21 @@ export function startOfTodayIstIso(): string {
 }
 
 /**
- * The Asia/Kolkata calendar date as 'YYYY-MM-DD', `daysAgo` days back — the
- * key the IST-dated analytics views (v_daily_sales.sale_date) use.
- *
- * Not `startOfTodayIstIso().slice(0, 10)`: IST midnight is 18:30 UTC on the
- * PREVIOUS day, so that slice is always yesterday's date.
+ * YYYY-MM-DD of the Asia/Kolkata calendar day containing `date`. This is the
+ * value to compare against SQL `(created_at AT TIME ZONE 'Asia/Kolkata')::date`
+ * columns (v_daily_sales.sale_date, business_date, order_date). Do NOT derive
+ * it from startOfTodayIstIso().slice(0, 10): IST midnight is 18:30 UTC of the
+ * PREVIOUS day, so that slice is yesterday's date.
  */
-export function istDateString(daysAgo = 0, nowMs: number = Date.now()): string {
-  const ist = new Date(nowMs + IST_OFFSET_MS - daysAgo * 24 * 60 * 60 * 1000);
-  const y = ist.getUTCFullYear();
-  const m = String(ist.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(ist.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+export function istDateIso(date: Date = new Date()): string {
+  return new Date(date.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * IST calendar date `n` days before the IST day of `now` (n = 0 is today).
+ * Steps whole calendar days on the IST wall clock, so it is DST-free and
+ * independent of the time of day.
+ */
+export function istDateDaysAgo(n: number, now: Date = new Date()): string {
+  return istDateIso(new Date(now.getTime() - n * 24 * 60 * 60 * 1000));
 }

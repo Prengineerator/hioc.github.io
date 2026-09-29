@@ -76,17 +76,20 @@ export function sanitizeDenoms(denoms: unknown): CashDenoms {
 }
 
 /**
- * Expected cash in the drawer at close:
- *   opening float + Σ cash settles − Σ cash refunds
+ * Expected cash in the drawer:
+ *   opening float + Σ cash settles − Σ cash refunds + cash put in − cash taken out
  * (online/UPI-gateway money never touches the drawer — OPS-2). Kept pure so it
- * is trivially unit-tested; the route feeds it the three DB-derived figures.
+ * is trivially unit-tested; the route feeds it the DB-derived figures. The
+ * cash in/out terms default to 0 so pre-handover callers keep working.
  */
 export function expectedCashInr(
   openingTotalInr: number,
   cashSettlesInr: number,
   cashRefundsInr: number,
+  cashInInr = 0,
+  cashOutInr = 0,
 ): number {
-  return openingTotalInr + cashSettlesInr - cashRefundsInr;
+  return openingTotalInr + cashSettlesInr - cashRefundsInr + cashInInr - cashOutInr;
 }
 
 // Signed variance: positive = drawer over, negative = drawer short.

@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
-import { PosPaymentPanel } from '@/components/staff/PosPaymentModal';
+import { PosPaymentPanel, type SettleAdjustmentInput } from '@/components/staff/PosPaymentModal';
 import { describeOrderPayment } from '@/lib/orders/settleList';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { PaymentPart } from '@/lib/orders/payments';
@@ -48,7 +48,7 @@ export function SettlePaymentDialog({
   };
   const itemCount = order.items.filter((i) => !i.voided).reduce((n, i) => n + i.quantity, 0);
 
-  async function submit(parts: PaymentPart[] | null) {
+  async function submit(parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) {
     if (!parts || submitting) return;
     setSubmitting(true);
     setError(null);
@@ -56,7 +56,10 @@ export function SettlePaymentDialog({
       const res = await fetch(`/api/orders/${order.id}/payment`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parts }),
+        // The adjustment (short = settlement discount, extra = tip) rides along
+        // with the amounts actually received; the server re-validates all of it
+        // and enforces the manager rule for a big shortfall (403 shown below).
+        body: JSON.stringify(adjustment ? { parts, adjustment } : { parts }),
       });
       const data = (await res.json().catch(() => null)) as { order?: Order; error?: string } | null;
       if (!res.ok) {
@@ -94,7 +97,7 @@ export function SettlePaymentDialog({
         onPhoneChange={() => {}}
         submitting={submitting}
         error={error}
-        onSubmit={(parts) => void submit(parts)}
+        onSubmit={(parts, adjustment) => void submit(parts, adjustment)}
         onClose={onClose}
       />
     </Modal>

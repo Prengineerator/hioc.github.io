@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import type { Coupon, CouponDiscountType } from '@/lib/types';
 import { Spinner } from '@/components/ui/Spinner';
+import { DataTable } from '@/components/ui/DataTable';
 
 type FormState = {
   code: string;
@@ -198,57 +199,82 @@ export function CouponManager() {
         />
       ) : null}
 
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[640px] text-left text-sm">
-          <thead>
-            <tr className="border-b border-[#e5e5e5] text-xs uppercase text-muted">
-              <th className="py-2 pr-3">Code</th>
-              <th className="py-2 pr-3">Discount</th>
-              <th className="py-2 pr-3">Min order</th>
-              <th className="py-2 pr-3">Window</th>
-              <th className="py-2 pr-3">Active</th>
-              <th className="py-2 pr-3" />
-            </tr>
-          </thead>
-          <tbody>
-            {coupons.map((c) => (
-              <tr key={c.id} className="border-b border-[#f2efe9]">
-                <td className="py-2 pr-3 font-bold text-charcoal">{c.code}</td>
-                <td className="py-2 pr-3 text-charcoal">
-                  {c.discount_type === 'percent' ? `${c.discount_value}%` : `₹${c.discount_value}`}
-                  {c.max_discount_inr > 0 ? ` (cap ₹${c.max_discount_inr})` : ''}
-                </td>
-                <td className="py-2 pr-3 text-muted">{c.min_order_inr > 0 ? `₹${c.min_order_inr}` : '—'}</td>
-                <td className="py-2 pr-3 text-muted">
+      <div className="mt-4">
+        <DataTable
+          rows={coupons}
+          rowKey={(c) => c.id}
+          emptyMessage="No coupons yet."
+          minWidth={640}
+          cellPadding="py-2 pr-3"
+          headerTextClassName="text-xs uppercase text-muted"
+          columns={[
+            {
+              key: 'code',
+              header: 'Code',
+              filter: 'text',
+              value: (c) => c.code,
+              cellClassName: 'font-bold text-charcoal',
+            },
+            {
+              key: 'discount',
+              header: 'Discount',
+              filter: 'text',
+              value: (c) =>
+                (c.discount_type === 'percent' ? `${c.discount_value}%` : `₹${c.discount_value}`) +
+                (c.max_discount_inr > 0 ? ` (cap ₹${c.max_discount_inr})` : ''),
+              cellClassName: 'text-charcoal',
+            },
+            {
+              key: 'min_order',
+              header: 'Min order',
+              filter: 'number',
+              value: (c) => c.min_order_inr,
+              cellClassName: 'text-muted',
+              render: (c) => (c.min_order_inr > 0 ? `₹${c.min_order_inr}` : '—'),
+            },
+            {
+              // Filters and sorts on the window's start date.
+              key: 'window',
+              header: 'Window',
+              filter: 'date',
+              value: (c) => c.valid_from,
+              cellClassName: 'text-muted',
+              render: (c) => (
+                <>
                   {c.valid_from ? new Date(c.valid_from).toLocaleDateString('en-IN') : '—'}
                   {' → '}
                   {c.valid_to ? new Date(c.valid_to).toLocaleDateString('en-IN') : '—'}
-                </td>
-                <td className="py-2 pr-3">
-                  <button
-                    type="button"
-                    onClick={() => toggleActive(c)}
-                    className={'rounded-md px-2 py-1 text-xs font-bold ' + (c.active ? 'bg-green-100 text-green-700' : 'bg-[#e5e5e5] text-muted')}
-                  >
-                    {c.active ? 'Active' : 'Inactive'}
-                  </button>
-                </td>
-                <td className="py-2 pr-3">
-                  <button type="button" onClick={() => startEdit(c)} className="text-tan hover:underline">
-                    Edit
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {coupons.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="py-6 text-center text-muted">
-                  No coupons yet.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
+                </>
+              ),
+            },
+            {
+              key: 'active',
+              header: 'Active',
+              filter: 'select',
+              value: (c) => (c.active ? 'Active' : 'Inactive'),
+              render: (c) => (
+                <button
+                  type="button"
+                  onClick={() => toggleActive(c)}
+                  className={'rounded-md px-2 py-1 text-xs font-bold ' + (c.active ? 'bg-green-100 text-green-700' : 'bg-[#e5e5e5] text-muted')}
+                >
+                  {c.active ? 'Active' : 'Inactive'}
+                </button>
+              ),
+            },
+            {
+              key: 'edit',
+              header: 'Edit',
+              filter: 'none',
+              value: () => null,
+              render: (c) => (
+                <button type="button" onClick={() => startEdit(c)} className="text-tan hover:underline">
+                  Edit
+                </button>
+              ),
+            },
+          ]}
+        />
       </div>
     </div>
   );

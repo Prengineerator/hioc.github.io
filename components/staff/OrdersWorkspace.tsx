@@ -25,7 +25,8 @@ import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
 import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
-import { PRIMARY_NEXT } from '@/lib/orders/stateMachine';
+import { transitionExtra, type QuickAction } from '@/lib/orders/quickActions';
+import { PICKUP_REMINDER_COOLDOWN_SEC, formatCountdown } from '@/lib/notifications/pickupReminder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { useStaffShell } from '@/components/staff/StaffShell';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
@@ -38,6 +39,11 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<OrderWithItems | null>(null);
+  // Which panel the detail view opens on (a card's "Reject…" goes straight to
+  // the reason step). Cleared whenever the detail closes or another opens.
+  const [selectedMode, setSelectedMode] = useState<'reject' | undefined>(undefined);
+  // Orders with a status request in flight; their card buttons are disabled.
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
   const [prepMin, setPrepMin] = useState(15);
@@ -103,8 +109,18 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
     setTimeout(() => setToast(''), 3500);
   };
 
+  const openDetail = useCallback((o: OrderWithItems, mode?: 'reject') => {
+    setSelectedMode(mode);
+    setSelected(o);
+  }, []);
+  const closeDetail = useCallback(() => {
+    setSelectedMode(undefined);
+    setSelected(null);
+  }, []);
+
   const patchStatus = useCallback(
     async (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => {
+      setBusyIds((prev) => new Set(prev).add(o.id));
       // Optimistic move.
       setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, status: to } : x)));
       setNewOrderIds((prev) => {
@@ -123,29 +139,66 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           const d = await res.json().catch(() => ({}));
           showToast(d.error ?? 'Could not update order');
         }
+      } catch {
+        showToast('Could not update order — check the connection');
       } finally {
-        fetchOrders();
         // Stop the shell's alarm right away once an order is accepted/rejected.
         refreshNewOrders();
+        // Re-enable the card only after the refetch: the next tap must carry the
+        // order's NEW version, or the server answers 409 to a perfectly valid move.
+        await fetchOrders();
+        setBusyIds((prev) => {
+          const s = new Set(prev);
+          s.delete(o.id);
+          return s;
+        });
       }
     },
     [fetchOrders, refreshNewOrders],
   );
 
-  const handlePrimary = useCallback(
-    (o: OrderWithItems) => {
-      const next = PRIMARY_NEXT[o.status];
-      // 'received' → Accept needs an ETA, and 'ready' → Complete needs pickup-
-      // code verification — both open the detail view instead of transitioning
-      // blindly. 'accepted'/'preparing' advance in one tap.
-      if (o.status === 'received' || o.status === 'ready') {
-        setSelected(o);
+  // The corner button and "⋯" menu on a card. A one-tap move goes straight to
+  // patchStatus (optimistic); anything that needs more input opens the dialog
+  // it needs instead.
+  const handleAction = useCallback(
+    (o: OrderWithItems, action: QuickAction) => {
+      if (action.kind === 'settle') {
+        setPaying({ order: o, intent: 'settle' });
         return;
       }
-      if (next) patchStatus(o, next);
+      if (action.kind === 'open_detail') {
+        openDetail(o, action.detail);
+        return;
+      }
+      if (!action.to) return;
+      if (action.confirm && !window.confirm(action.confirm)) return;
+      patchStatus(o, action.to, transitionExtra(action, prepMin, Date.now()));
     },
-    [patchStatus],
+    [patchStatus, openDetail, prepMin],
   );
+
+  // Resend the "order ready" WhatsApp. The server owns the 5-minute cooldown;
+  // the local stamp just keeps the card's countdown in step until the refetch.
+  const handleRemind = useCallback(async (o: OrderWithItems) => {
+    const stamp = (iso: string) =>
+      setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, pickup_reminded_at: iso } : x)));
+    try {
+      const res = await fetch(`/api/orders/${o.id}/remind`, { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok) {
+        stamp(d.reminded_at ?? new Date().toISOString());
+        showToast(`Pickup reminder sent to ${o.customer_name || 'the customer'}`);
+      } else if (res.status === 429) {
+        const wait = Number(d.retry_after_seconds) || PICKUP_REMINDER_COOLDOWN_SEC;
+        stamp(new Date(Date.now() - (PICKUP_REMINDER_COOLDOWN_SEC - wait) * 1000).toISOString());
+        showToast(`Already reminded — try again in ${formatCountdown(wait)}`);
+      } else {
+        showToast(d.error ?? 'Could not send the reminder');
+      }
+    } catch {
+      showToast('Could not send the reminder — check the connection');
+    }
+  }, []);
 
   const handlePayment = useCallback(
     async (o: OrderWithItems, method: PaymentMethod) => {
@@ -273,7 +326,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
 
   const closeModalAfter = (fn: () => void) => {
     fn();
-    setSelected(null);
+    closeDetail();
   };
 
   const filtered = useMemo(() => {
@@ -330,7 +383,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
                 <button
                   key={o.id}
                   type="button"
-                  onClick={() => setSelected(o)}
+                  onClick={() => openDetail(o)}
                   className="rounded-md border border-red-300 bg-cream px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-100"
                 >
                   #{formatOrderNumber(o.order_number)} · ₹{o.total_inr ?? o.subtotal_inr}
@@ -344,9 +397,15 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           <Spinner label="Loading orders…" />
         ) : (
           view === 'live' ? (
-            <OrderQueueBoard orders={filtered} onOpen={setSelected} onPrimary={handlePrimary} />
+            <OrderQueueBoard
+              orders={filtered}
+              busyIds={busyIds}
+              onOpen={openDetail}
+              onAction={handleAction}
+              onRemind={handleRemind}
+            />
           ) : (
-            <TodayOrdersList orders={filtered} onOpen={setSelected} />
+            <TodayOrdersList orders={filtered} onOpen={openDetail} />
           )
         )}
       </div>
@@ -361,7 +420,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         <OrderDetailModal
           order={selected}
           defaultPrepMin={prepMin}
-          onClose={() => setSelected(null)}
+          initialMode={selectedMode}
+          onClose={closeDetail}
+          onRemind={handleRemind}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
           onPayment={(o, m) => handlePayment(o, m)}
           onPrint={(orderId, type) => printDock.enqueue([{ orderId, type }])}
@@ -369,7 +430,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}
           onComp={(o, reason) => handleComp(o, reason)}
           onOpenPayment={(o, intent) => {
-            setSelected(null);
+            closeDetail();
             setPaying({ order: o, intent });
           }}
         />

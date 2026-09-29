@@ -5,7 +5,14 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isPaymentMethod, isUuid, PAYMENT_METHODS } from '@/lib/api/constants';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { sendBillNotification } from '@/lib/notifications/engine';
-import { dominantMethod, validateParts, type PaymentPart } from '@/lib/orders/payments';
+import {
+  dominantMethod,
+  parseSettleAdjustment,
+  shortNeedsManager,
+  STAFF_SETTLE_SHORT_LIMIT_INR,
+  validateParts,
+  type PaymentPart,
+} from '@/lib/orders/payments';
 import { runAfterResponse } from '@/lib/api/background';
 import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
 
@@ -69,7 +76,11 @@ export async function GET(_request: Request, { params }: RouteParams) {
 // (STF-041). Two accepted shapes:
 //
 //   { payment_method, payment_status? }   single method for the whole bill
-//   { parts: [{ method, amount_inr, tendered_inr? }] }   POS4-1 split settlement
+//   { parts: [{ method, amount_inr, tendered_inr? }], adjustment? }   POS4-1 split
+//        settlement; `adjustment: { short_inr?, tip_inr?, reason }` settles for
+//        LESS than the bill (a settlement discount) or MORE (a tip). The parts
+//        are then what actually entered the till: total - short + tip. A short
+//        above ₹50 needs a manager or the owner.
 //
 // Fulfillment status is untouched — payment tracking is deliberately independent
 // of the order_status lifecycle. Since BILL-1, a settle to 'paid' also delivers
@@ -117,9 +128,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // refund flow. Guard against overwriting an online paid/refunded record.
   // `total_inr` comes along because a split must be validated against the
   // SERVER's total, never a total the client tells us.
+  // select('*') rather than a column list: the settle-adjustment columns
+  // (2026-09-settle-adjustments.sql) must not make a plain settle fail on a
+  // database that hasn't had that migration applied yet.
   const { data: existing } = await admin
     .from('orders')
-    .select('payment_method, payment_status, total_inr, subtotal_inr')
+    .select('*')
     .eq('id', id)
     .maybeSingle();
   if (!existing) return notFound();
@@ -146,9 +160,29 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // unexplained cash-drawer variance nobody can reconstruct.
   let parts: PaymentPart[] | null = null;
   let changeInr = 0;
+  const orderTotal = (existing.total_inr as number | null) ?? (existing.subtotal_inr as number);
+
+  // Short = settlement discount, extra = tip. Both are only meaningful with
+  // parts: a single-method settle is the whole bill, so there is no amount to
+  // differ from. The reason is mandatory (parseSettleAdjustment) so a write-off
+  // is never silent.
+  const adjustment = parseSettleAdjustment(body.adjustment, orderTotal);
+  if (!adjustment.ok) return errorResponse(400, adjustment.error);
+  const adjusted = adjustment.shortInr > 0 || adjustment.tipInr > 0;
+  if (adjusted && !isSplit) {
+    return errorResponse(400, 'A short or tip settlement must send the amounts received as `parts`.');
+  }
+  // A big shortfall is a discount decision, not a counter one. Enforced on the
+  // server: hiding the option in the UI is not a control.
+  if (shortNeedsManager(adjustment.shortInr) && actor.role !== 'manager' && actor.role !== 'owner') {
+    return errorResponse(
+      403,
+      `A shortfall above ₹${STAFF_SETTLE_SHORT_LIMIT_INR} needs a manager or the owner to approve it.`,
+    );
+  }
+
   if (isSplit) {
-    const orderTotal = (existing.total_inr as number | null) ?? (existing.subtotal_inr as number);
-    const validated = validateParts(body.parts, orderTotal);
+    const validated = validateParts(body.parts, orderTotal, adjustment);
     if (!validated.ok) return errorResponse(400, validated.error);
     parts = validated.parts;
     changeInr = validated.changeInr;
@@ -156,9 +190,25 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
   const methodToStore = parts ? dominantMethod(parts) : (body.payment_method as PaymentMethod);
 
+  // A re-settle without an adjustment resets any earlier one — but only writes
+  // the columns when there is something to write or clear, so plain settles
+  // keep working before the migration is applied.
+  const hadAdjustment =
+    ((existing.settle_discount_inr as number | undefined) ?? 0) > 0 ||
+    ((existing.tip_inr as number | undefined) ?? 0) > 0 ||
+    ((existing.settle_reason as string | undefined) ?? '') !== '';
+  const adjustmentColumns =
+    adjusted || hadAdjustment
+      ? {
+          settle_discount_inr: adjustment.shortInr,
+          tip_inr: adjustment.tipInr,
+          settle_reason: adjustment.reason,
+        }
+      : {};
+
   const { data, error } = await admin
     .from('orders')
-    .update({ payment_method: methodToStore, payment_status: paymentStatus })
+    .update({ payment_method: methodToStore, payment_status: paymentStatus, ...adjustmentColumns })
     .eq('id', id)
     .select('*')
     .maybeSingle();
@@ -244,5 +294,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // The tenders as recorded, so the caller can show "Cash ₹300 + UPI ₹180"
   // straight away (a single-method settle has none — payment_method says it).
   const payments = (parts ?? []).map((p) => ({ method: p.method, amount_inr: p.amount_inr }));
-  return NextResponse.json({ order: { ...(data as Order), payments }, change_due_inr: changeInr });
+  return NextResponse.json({
+    order: {
+      ...(data as Order),
+      settle_discount_inr: adjustment.shortInr,
+      tip_inr: adjustment.tipInr,
+      settle_reason: adjustment.reason,
+      payments,
+    },
+    change_due_inr: changeInr,
+  });
 }

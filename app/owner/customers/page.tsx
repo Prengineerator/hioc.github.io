@@ -29,12 +29,16 @@ import {
 } from '@/lib/analytics/queries';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { Card } from '@/components/owner/dashboard';
-import type { IdentifiedCustomerAgg } from '@/lib/analytics/customerSegments';
+import {
+  LapsedRegularsTable,
+  TopCustomerTable,
+  TopPetpoojaTable,
+  type TopCustomerRow,
+} from '@/components/owner/CustomerTables';
 import type { NewVsReturningRow } from '@/lib/types';
 import {
   getPetpoojaCustomerOverview,
 } from '@/lib/legacy/ownerStats';
-import type { PetpoojaCustomerForDisplay } from '@/lib/legacy/ownerStats';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,18 +69,6 @@ function formatRupees(amount: number): string {
   return Math.round(amount).toLocaleString('en-IN');
 }
 
-/**
- * Format a date in IST (Asia/Kolkata timezone) as "D MMM YYYY", e.g. "25 Sep 2026".
- */
-function formatDateIST(isoString: string): string {
-  return new Date(isoString).toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'Asia/Kolkata',
-  });
-}
-
 export default async function OwnerCustomersPage() {
   const admin = createAdminSupabaseClient();
   const [segmentation, nvr, petpoojaOverview] = await Promise.all([
@@ -100,6 +92,20 @@ export default async function OwnerCustomersPage() {
 
   const topBySpend = stats.slice(0, TOP_N);
   const names = await getNames(topBySpend.map((s) => s.key));
+  // Flat, serialisable rows for the client table. Fall back to the order's own
+  // customer_name/phone (typed at the counter) when the profile has neither —
+  // see sample_name/phone on segmentCustomers.
+  const topRows: TopCustomerRow[] = topBySpend.map((r) => {
+    const n = names.get(r.key);
+    return {
+      key: r.key,
+      name: n?.name || r.sample_name || 'Customer',
+      phone: n?.phone || r.sample_phone || '—',
+      orders: r.orders,
+      revenue_inr: r.revenue_inr,
+      aov_inr: r.aov_inr,
+    };
+  });
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
@@ -135,7 +141,7 @@ export default async function OwnerCustomersPage() {
           <NewVsReturningBars rows={nvr} />
         </Card>
         <Card title="Top customers by spend">
-          <TopCustomerTable rows={topBySpend} names={names} />
+          <TopCustomerTable rows={topRows} />
         </Card>
       </div>
 
@@ -199,122 +205,6 @@ function NewVsReturningBars({ rows }: { rows: NewVsReturningRow[] }) {
           />
         </div>
       ))}
-    </div>
-  );
-}
-
-function TopCustomerTable({ rows, names }: { rows: IdentifiedCustomerAgg[]; names: Map<string, NameRow> }) {
-  if (rows.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted">No customers yet</p>;
-  }
-  return (
-    <div className="overflow-x-auto">
-    <table className="w-full min-w-[420px] text-sm">
-      <thead>
-        <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-          <th className="py-1 font-bold">Customer</th>
-          <th className="py-1 text-right font-bold">Orders</th>
-          <th className="py-1 text-right font-bold">Spend</th>
-          <th className="py-1 text-right font-bold">AOV</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => {
-          const n = names.get(r.key);
-          // Fall back to the order's own customer_name/phone (typed at the
-          // counter) when the profile has neither — see sample_name/phone on
-          // segmentCustomers.
-          const displayName = n?.name || r.sample_name || 'Customer';
-          const displayPhone = n?.phone || r.sample_phone || '—';
-          return (
-            <tr key={r.key} className="border-b border-[#f2efe9]">
-              <td className="py-1.5 text-charcoal">
-                {displayName}
-                <span className="block text-xs text-muted">{displayPhone}</span>
-              </td>
-              <td className="py-1.5 text-right text-charcoal">{r.orders}</td>
-              <td className="py-1.5 text-right font-bold text-tan">₹{r.revenue_inr}</td>
-              <td className="py-1.5 text-right text-muted">₹{r.aov_inr}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-    </div>
-  );
-}
-
-function TopPetpoojaTable({ rows }: { rows: PetpoojaCustomerForDisplay[] }) {
-  if (rows.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted">No Petpooja customers yet</p>;
-  }
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[420px] text-sm">
-        <thead>
-          <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-            <th className="py-1 font-bold">Customer</th>
-            <th className="py-1 text-right font-bold">Bills</th>
-            <th className="py-1 text-right font-bold">Spend</th>
-            <th className="py-1 text-right font-bold">Last bill</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, idx) => (
-            <tr key={r.key} className="border-b border-[#f2efe9]">
-              <td className="py-1.5 text-charcoal">
-                {r.name}
-                <span className="block text-xs text-muted">{r.maskedPhone}</span>
-              </td>
-              <td className="py-1.5 text-right text-charcoal">{r.orderCount}</td>
-              <td className="py-1.5 text-right font-bold text-tan">₹{formatRupees(r.totalSpendInr)}</td>
-              <td className="py-1.5 text-right text-muted text-xs">
-                {r.lastOrderAt ? formatDateIST(r.lastOrderAt) : '—'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function LapsedRegularsTable({ rows }: { rows: PetpoojaCustomerForDisplay[] }) {
-  if (rows.length === 0) {
-    return <p className="py-6 text-center text-sm text-muted">No lapsed regulars yet</p>;
-  }
-  return (
-    <div>
-      <p className="mb-3 text-xs text-muted">
-        <b>Win-back candidates:</b> These regulars haven&apos;t ordered in 60+ days, in Petpooja or in this app. Petpooja never collected marketing consent, so reach out through a channel that collects consent first.
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[420px] text-sm">
-          <thead>
-            <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-              <th className="py-1 font-bold">Customer</th>
-              <th className="py-1 text-right font-bold">Bills</th>
-              <th className="py-1 text-right font-bold">Spend</th>
-              <th className="py-1 text-right font-bold">Last bill</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, idx) => (
-              <tr key={r.key} className="border-b border-[#f2efe9]">
-                <td className="py-1.5 text-charcoal">
-                  {r.name}
-                  <span className="block text-xs text-muted">{r.maskedPhone}</span>
-                </td>
-                <td className="py-1.5 text-right text-charcoal">{r.orderCount}</td>
-                <td className="py-1.5 text-right font-bold text-tan">₹{formatRupees(r.totalSpendInr)}</td>
-                <td className="py-1.5 text-right text-muted text-xs">
-                  {r.lastOrderAt ? formatDateIST(r.lastOrderAt) : '—'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

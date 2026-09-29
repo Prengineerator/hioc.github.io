@@ -8,6 +8,8 @@
 // that stand out. Hours are secondary; exceptions are the point.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { istDateIso } from '@/lib/api/date';
+import { DataTable } from '@/components/ui/DataTable';
 import type { AttendanceSession } from '@/lib/types';
 import type { DayRollup } from '@/lib/attendance/day';
 
@@ -44,7 +46,7 @@ function hm(minutes: number): string {
 }
 
 function currentMonth(): string {
-  return new Date().toISOString().slice(0, 7);
+  return istDateIso().slice(0, 7);
 }
 
 /** One glyph per day state — the whole grid is readable without a legend lookup. */
@@ -143,62 +145,86 @@ export function AttendanceSheet() {
       {loading ? <p className="mt-6 text-sm text-muted">Loading…</p> : null}
 
       {data && !loading ? (
-        <div className="mt-6 overflow-x-auto rounded-md border border-[#e5e5e5] bg-white">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-[#e5e5e5]">
-                <th className="sticky left-0 z-10 bg-white px-3 py-2 text-left font-bold text-charcoal">
-                  Staff
-                </th>
-                {data.dates.map((d) => (
-                  <th key={d} className="px-1 py-2 text-center text-[11px] font-normal text-muted">
-                    {Number(d.slice(-2))}
-                  </th>
-                ))}
-                <th className="px-3 py-2 text-right font-bold text-charcoal">Hours</th>
-                <th className="px-3 py-2 text-right font-bold text-charcoal">OT</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.user_id} className="border-b border-[#f0f0f0]">
-                  <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-3 py-2">
-                    <span className="font-bold text-charcoal">{row.name}</span>
-                    {!row.configured ? (
-                      <span
-                        className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700"
-                        title="No salary or shift on record — payroll cannot compute for this person"
-                      >
-                        not set up
-                      </span>
-                    ) : null}
-                  </td>
-                  {row.days.map((d) => {
-                    const g = cellGlyph(d);
-                    return (
-                      <td key={d.date} className="px-0.5 py-1 text-center">
-                        <button
-                          type="button"
-                          title={g.title}
-                          onClick={() => setSelected({ row, day: d })}
-                          className={`h-7 w-7 rounded text-[11px] ${g.className} hover:ring-1 hover:ring-tan`}
-                        >
-                          {g.text}
-                        </button>
-                      </td>
-                    );
-                  })}
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-charcoal">
-                    {hm(row.totals.workedMinutes)}
-                  </td>
-                  <td className="whitespace-nowrap px-3 py-2 text-right text-muted">
-                    {row.totals.otMinutes ? hm(row.totals.otMinutes) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          className="mt-6"
+          scrollClassName="rounded-md border border-[#e5e5e5] bg-white"
+          rows={rows}
+          rowKey={(row) => row.user_id}
+          emptyMessage="No staff to show."
+          cellPadding="px-3 py-2"
+          headerTextClassName="text-sm"
+          columns={[
+            {
+              key: 'staff',
+              header: 'Staff',
+              filter: 'text',
+              sticky: true,
+              value: (row) => row.name,
+              headerClassName: 'font-bold text-charcoal',
+              cellClassName: 'whitespace-nowrap',
+              render: (row) => (
+                <>
+                  <span className="font-bold text-charcoal">{row.name}</span>
+                  {!row.configured ? (
+                    <span
+                      className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700"
+                      title="No salary or shift on record — payroll cannot compute for this person"
+                    >
+                      not set up
+                    </span>
+                  ) : null}
+                </>
+              ),
+            },
+            // One narrow column per day of the month; the glyph button opens the
+            // correction panel. Not filterable (a glyph grid is read at a glance).
+            ...data.dates.map((date) => ({
+              key: date,
+              header: String(Number(date.slice(-2))),
+              filter: 'none' as const,
+              align: 'center' as const,
+              padding: 'px-0.5 py-1',
+              value: (row: Row) => row.days.find((x) => x.date === date)?.workedMinutes ?? null,
+              headerClassName: 'text-[11px] font-normal text-muted',
+              render: (row: Row) => {
+                const d = row.days.find((x) => x.date === date);
+                if (!d) return null;
+                const g = cellGlyph(d);
+                return (
+                  <button
+                    type="button"
+                    title={g.title}
+                    onClick={() => setSelected({ row, day: d })}
+                    className={`h-7 w-7 rounded text-[11px] ${g.className} hover:ring-1 hover:ring-tan`}
+                  >
+                    {g.text}
+                  </button>
+                );
+              },
+            })),
+            {
+              // Filters in hours (decimal) — minutes are unreadable in a filter box.
+              key: 'hours',
+              header: 'Hours',
+              filter: 'number',
+              align: 'right',
+              value: (row) => Math.round(row.totals.workedMinutes / 6) / 10,
+              headerClassName: 'font-bold text-charcoal',
+              cellClassName: 'whitespace-nowrap text-charcoal',
+              render: (row) => hm(row.totals.workedMinutes),
+            },
+            {
+              key: 'ot',
+              header: 'OT',
+              filter: 'number',
+              align: 'right',
+              value: (row) => Math.round(row.totals.otMinutes / 6) / 10,
+              headerClassName: 'font-bold text-charcoal',
+              cellClassName: 'whitespace-nowrap text-muted',
+              render: (row) => (row.totals.otMinutes ? hm(row.totals.otMinutes) : '—'),
+            },
+          ]}
+        />
       ) : null}
 
       <p className="mt-3 text-xs text-muted">

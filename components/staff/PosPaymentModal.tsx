@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
-import { changeDueInr, type PaymentPart } from '@/lib/orders/payments';
+import { changeDueInr, shortNeedsManager, STAFF_SETTLE_SHORT_LIMIT_INR, type PaymentPart } from '@/lib/orders/payments';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
 import type { Feedback } from '@/lib/pos/loyalty';
@@ -37,7 +37,19 @@ const COLLECT_METHODS: { value: PaymentMethod; label: string }[] = [
 // Notes an Indian counter actually sees. "Exact" fills the bill total.
 const TENDER_CHIPS = [100, 200, 500, 2000];
 
-type Step = 'choose' | 'cash' | 'split';
+// Settle mode only: recording a bill as paid for less (settlement discount) or
+// more (tip) than its total. Quick reasons a counter actually gives; "Other"
+// clears the field so the staffer types their own.
+const SETTLE_REASON_CHIPS = ['Rounded off', 'No change', 'Customer short', 'Tip', 'Other'];
+
+/** The `adjustment` body the settle route takes — see PATCH /api/orders/[id]/payment. */
+export interface SettleAdjustmentInput {
+  short_inr?: number;
+  tip_inr?: number;
+  reason: string;
+}
+
+type Step = 'choose' | 'cash' | 'split' | 'custom';
 
 interface PaymentStepProps {
   bill: BillBreakdown | null;
@@ -67,7 +79,9 @@ interface PaymentStepProps {
    */
   stale?: boolean;
   // null → create unpaid (collect later); otherwise settle with these parts.
-  onSubmit: (parts: PaymentPart[] | null) => void;
+  // `adjustment` is only ever passed in settle mode ("Different amount…"); the
+  // place-mode caller can keep ignoring the second argument.
+  onSubmit: (parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) => void;
   onClose: () => void;
   /**
    * 'place' (default): taking a new order — phone for the bill, and "Collect
@@ -148,23 +162,41 @@ export function PosPaymentPanel({
   const firstValid = Number.isFinite(firstNum) && firstNum > 0 && firstNum < total;
   const remainder = firstValid ? total - firstNum : 0;
 
+  // Custom step (settle only) — the amount actually received, which may differ
+  // from the bill: short → settlement discount, extra → tip.
+  const [customMethod, setCustomMethod] = useState<PaymentMethod>('cash');
+  const [customAmount, setCustomAmount] = useState('');
+  const [customTendered, setCustomTendered] = useState('');
+  const [customReason, setCustomReason] = useState('');
+  const customNum = Number.parseInt(customAmount, 10);
+  const customAmountValid = Number.isFinite(customNum) && customNum > 0;
+  const customDiff = customAmountValid ? customNum - total : 0;
+  const customShort = customDiff < 0 ? -customDiff : 0;
+  const customTip = customDiff > 0 ? customDiff : 0;
+  const customReasonValid = customDiff === 0 || customReason.trim().length >= 3;
+  const customTenderedNum = Number.parseInt(customTendered, 10);
+  const customCashShort =
+    customMethod === 'cash' &&
+    customTendered.trim().length > 0 &&
+    (!Number.isFinite(customTenderedNum) || customTenderedNum < customNum);
+
   useEffect(() => {
     phoneRef.current?.focus();
   }, []);
 
   // Settling an existing order: nothing to ask about a phone.
-  const submitParts = (parts: PaymentPart[] | null) => {
+  const submitParts = (parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) => {
     if (stale) return;
-    onSubmit(parts);
+    onSubmit(parts, adjustment);
   };
 
   // One funnel for every settle, so the phone rule can't differ per path.
-  function attempt(parts: PaymentPart[] | null) {
+  function attempt(parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) {
     // The last line of defence for the stale-quote race: the buttons are already
     // disabled, but a tap can land in the same frame the cart changes in.
     if (stale) return;
     if (settling) {
-      submitParts(parts);
+      submitParts(parts, adjustment);
       return;
     }
     const trimmed = phone.trim();
@@ -418,6 +450,154 @@ export function PosPaymentPanel({
               Take ₹{total} cash
             </button>
           </div>
+        ) : step === 'custom' ? (
+          /* ---- Different amount: short = discount, extra = tip ------------ */
+          <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-charcoal">Different amount — bill ₹{total}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep('choose');
+                  setCustomAmount('');
+                  setCustomTendered('');
+                  setCustomReason('');
+                }}
+                className="text-xs font-bold text-muted underline"
+              >
+                Back
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs font-bold uppercase tracking-wide text-muted">Paid by</p>
+            <div className="mt-1 grid grid-cols-3 gap-2">
+              {COLLECT_METHODS.map((m) => (
+                <MethodChip
+                  key={m.value}
+                  label={m.label}
+                  active={customMethod === m.value}
+                  onClick={() => {
+                    setCustomMethod(m.value);
+                    setCustomTendered('');
+                  }}
+                />
+              ))}
+            </div>
+
+            <label htmlFor="pos-custom-amount" className="mt-3 block text-xs font-bold uppercase tracking-wide text-muted">
+              Amount received
+            </label>
+            <input
+              id="pos-custom-amount"
+              value={customAmount}
+              onChange={(e) => setCustomAmount(e.target.value.replace(/[^0-9]/g, ''))}
+              inputMode="numeric"
+              placeholder={String(total)}
+              autoFocus
+              className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-3 text-lg font-bold outline-none focus:border-tan"
+            />
+
+            {customAmountValid ? (
+              customShort > 0 ? (
+                <div className="mt-2 rounded-md bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
+                  Short ₹{customShort} — settlement discount
+                  {shortNeedsManager(customShort) ? (
+                    <p className="mt-0.5 text-xs font-normal">
+                      Above ₹{STAFF_SETTLE_SHORT_LIMIT_INR} — needs a manager or the owner to approve.
+                    </p>
+                  ) : null}
+                </div>
+              ) : customTip > 0 ? (
+                <div className="mt-2 rounded-md bg-green-50 px-3 py-2 text-sm font-bold text-green-800">
+                  Extra ₹{customTip} — tip
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-muted">Matches the bill — no adjustment.</p>
+              )
+            ) : null}
+
+            {customMethod === 'cash' && customAmountValid ? (
+              <>
+                <input
+                  value={customTendered}
+                  onChange={(e) => setCustomTendered(e.target.value.replace(/[^0-9]/g, ''))}
+                  inputMode="numeric"
+                  placeholder={`Cash handed over, if change is given (₹${customNum})`}
+                  className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+                />
+                {customCashShort ? (
+                  <p role="alert" className="mt-1 text-xs text-red-700">
+                    Less than the ₹{customNum} received.
+                  </p>
+                ) : customTendered.trim() ? (
+                  <p className="mt-1 text-xs text-muted">
+                    Change due ₹{changeDueInr(customTenderedNum, customNum)}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+
+            {customDiff !== 0 ? (
+              <>
+                <p className="mt-3 text-xs font-bold uppercase tracking-wide text-muted">Reason (required)</p>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {SETTLE_REASON_CHIPS.map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      onClick={() => setCustomReason(chip === 'Other' ? '' : chip)}
+                      className={
+                        'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors ' +
+                        (customReason === chip
+                          ? 'border-tan bg-tan text-cream'
+                          : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                      }
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  value={customReason}
+                  onChange={(e) => setCustomReason(e.target.value)}
+                  maxLength={200}
+                  placeholder="Reason"
+                  aria-label="Reason for the difference"
+                  className="mt-2 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-base outline-none focus:border-tan"
+                />
+              </>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={busy || !customAmountValid || !customReasonValid || customCashShort}
+              onClick={() => {
+                if (!customAmountValid || stale) return;
+                const part: PaymentPart = {
+                  method: customMethod,
+                  amount_inr: customNum,
+                  tendered_inr:
+                    customMethod === 'cash' && customTendered.trim() ? customTenderedNum : null,
+                };
+                if (customMethod === 'cash') openDrawerFor([part]);
+                attempt(
+                  [part],
+                  customDiff === 0
+                    ? undefined
+                    : {
+                        ...(customShort > 0 ? { short_inr: customShort } : { tip_inr: customTip }),
+                        reason: customReason.trim(),
+                      },
+                );
+              }}
+              className="mt-4 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {customAmountValid
+                ? `Take ₹${customNum} ${customMethod.toUpperCase()}` +
+                  (customShort > 0 ? ` (₹${customShort} short)` : customTip > 0 ? ` (₹${customTip} tip)` : '')
+                : 'Enter the amount received'}
+            </button>
+          </div>
         ) : step === 'split' ? (
           /* ---- Split across two methods ----------------------------------- */
           <div className="rounded-md border border-[#e5e5e5] px-4 py-3">
@@ -553,6 +733,18 @@ export function PosPaymentPanel({
             >
               Split across two methods
             </button>
+
+            {settling ? (
+              // Short = settlement discount, extra = tip — always with a reason.
+              <button
+                type="button"
+                disabled={busy || !bill}
+                onClick={() => setStep('custom')}
+                className="rounded-md border border-line px-4 py-2.5 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Different amount…
+              </button>
+            ) : null}
 
             {settling ? null : (
             <button

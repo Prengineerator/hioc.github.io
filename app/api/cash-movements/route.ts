@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { getManagerUser } from '@/lib/api/auth';
-import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
+import { requireCashManager } from '@/lib/cash/gate';
+import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 
 export const dynamic = 'force-dynamic';
@@ -10,6 +10,12 @@ export const dynamic = 'force-dynamic';
 // owner only: bank deposits, petty expenses, owner top-ups. Without these the
 // next checkpoint would read a deposit as a shortage and charge it to whoever
 // counted next (lib/cash/checkpoints.ts cashFlowsBetween reads this table).
+//
+// Gated by requireCashManager() (getCounterManager: a session, else the
+// enrolled device's PIN operator) — NOT getManagerUser(). The POS runs on PIN
+// operators with no Supabase session, so the old session-only gate 401'd every
+// cash-in/out entered at the counter and none was ever recorded.
+const MANAGER_ONLY = 'Only a manager or the owner can record cash in or cash out.';
 
 const MIN_REASON_LEN = 5;
 const MAX_AMOUNT_INR = 1_000_000;
@@ -22,11 +28,12 @@ function amountProblem(value: unknown): string | null {
   return null;
 }
 
-// POST /api/cash-movements — manager/owner only.
+// POST /api/cash-movements — manager/owner only (session or PIN operator).
 // Body: { direction: 'out' | 'in', amountInr, reason }.
 export async function POST(request: Request) {
-  const manager = await getManagerUser();
-  if (!manager) return unauthorized();
+  const gate = await requireCashManager(MANAGER_ONLY);
+  if (gate.denied) return gate.denied;
+  const manager = gate.manager.user;
 
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
@@ -65,8 +72,8 @@ export async function POST(request: Request) {
 // GET /api/cash-movements?limit= — manager/owner only. Recent entries, newest
 // first, with the recording staffer's name resolved.
 export async function GET(request: Request) {
-  const manager = await getManagerUser();
-  if (!manager) return unauthorized();
+  const gate = await requireCashManager(MANAGER_ONLY);
+  if (gate.denied) return gate.denied;
 
   const url = new URL(request.url);
   const requested = Number(url.searchParams.get('limit'));

@@ -336,6 +336,20 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   }
   blocks.push({ kind: 'row', left: 'Grand Total', right: formatMoney(total), bold: true, size: 'large' });
 
+  // Settled for less/more than the total: what the customer actually handed
+  // over is total - short + tip. Same rows in ReceiptTicket (HTML).
+  const settleDiscount = order.settle_discount_inr ?? 0;
+  const tip = order.tip_inr ?? 0;
+  if (settleDiscount > 0) {
+    blocks.push({ kind: 'row', left: 'Settlement discount', right: `(${formatMoney(settleDiscount)})` });
+  }
+  if (tip > 0) {
+    blocks.push({ kind: 'row', left: 'Tip', right: formatMoney(tip) });
+  }
+  if (settleDiscount > 0 || tip > 0) {
+    blocks.push({ kind: 'row', left: 'Received', right: formatMoney(total - settleDiscount + tip), bold: true });
+  }
+
   if (order.payment_status === 'paid' && order.payment_method) {
     blocks.push({
       kind: 'text',
