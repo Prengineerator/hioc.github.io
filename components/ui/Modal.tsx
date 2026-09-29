@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useId, type ReactNode } from 'react';
+import { useId, useRef, type ReactNode } from 'react';
+import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
 import { createPortal } from 'react-dom';
 
 export interface ModalProps {
@@ -30,7 +31,8 @@ const SIZE_CLASSES: Record<NonNullable<ModalProps['size']>, string> = {
  * The shared dialog shell — overlay, centered panel, header with a close
  * button, scrollable body, optional pinned footer. Handles the a11y/UX
  * plumbing every hand-rolled modal on this site needs (Escape to close,
- * background scroll lock, `role="dialog"`/`aria-modal`) so feature code only
+ * background scroll lock, focus moved in / trapped / restored — see
+ * useDialogBehavior — and `role="dialog"`/`aria-modal`) so feature code only
  * has to supply `title` + content. Renders nothing when `open` is false —
  * callers control mount/unmount, so no exit animation is attempted.
  */
@@ -46,19 +48,8 @@ export function Modal({
 }: ModalProps) {
   const titleId = useId();
 
-  useEffect(() => {
-    if (!open) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose();
-    }
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open, onClose]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogBehavior(open, onClose, panelRef);
 
   if (!open || typeof document === 'undefined') return null;
 
@@ -75,10 +66,12 @@ export function Modal({
         className="fixed inset-0 animate-fade-in bg-charcoal/50"
       />
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`relative flex max-h-[85vh] w-full animate-scale-in flex-col rounded-md bg-cream shadow-elevated ${SIZE_CLASSES[size]}`}
+        tabIndex={-1}
+        className={`relative flex max-h-[85vh] w-full outline-none animate-scale-in flex-col rounded-md bg-cream shadow-elevated ${SIZE_CLASSES[size]}`}
       >
         <div
           className={`flex items-start justify-between gap-3 border-b border-line ${dense ? 'px-4 py-3' : 'px-6 py-4'}`}
@@ -92,8 +85,9 @@ export function Modal({
           <button
             type="button"
             aria-label="Close"
+            data-dialog-close
             onClick={onClose}
-            className="shrink-0 rounded-full p-1 text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+            className="-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
           >
             &times;
           </button>
