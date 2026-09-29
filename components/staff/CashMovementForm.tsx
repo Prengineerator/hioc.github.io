@@ -5,9 +5,9 @@
 // (docs/PHASE-5-CASH-COUNTS.md). Without these, a deposit or a top-up would
 // read as a shortage/overage at the next count. Store expenses (ice, milk …)
 // are NOT punched here — any staffer records them in CashExpenseForm, with a
-// category. Rendered on the cash page
-// only when the server has already decided the signed-in account is
-// manager/owner (see app/staff/cash/page.tsx).
+// category. Its own page, /staff/cash-movements, which renders it only when
+// the server has already decided the signed-in account is manager/owner
+// (see app/staff/cash-movements/page.tsx).
 
 import { useCallback, useEffect, useState } from 'react';
 import type { CashMovementBody } from '@/lib/cash/counts';
@@ -115,14 +115,14 @@ export function CashMovementForm() {
   }
 
   return (
-    <section className="mx-auto max-w-md px-4 pb-10">
-      <h2 className="text-sm font-bold uppercase tracking-[0.15em] text-muted">Cash out / cash in</h2>
-      <p className="mt-1 text-xs text-muted">
+    <section className="mx-auto max-w-md px-4 py-8">
+      <h1 className="text-2xl font-bold text-charcoal">Cash in / out</h1>
+      <p className="text-sm text-muted">
         For bank deposits and float top-ups — so they never read as a shortage. Store expenses (ice, milk,
-        water) go under Expenses above.
+        water) go under Expenses.
       </p>
 
-      <div className="mt-3 rounded-md border border-line bg-white p-4">
+      <div className="mt-5 rounded-md border border-line bg-white p-4">
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"

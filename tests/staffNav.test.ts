@@ -15,13 +15,22 @@ describe('staffNav — POS', () => {
     expect(nav.account).toEqual([]);
   });
 
-  it('keeps Cash, Attendance, Leave, Menu and Settings under More', () => {
-    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Menu', 'Settings']);
+  it('keeps Cash, Expenses, Attendance, Leave, Menu and Settings under More', () => {
+    expect(labels(nav.more)).toEqual(['Cash', 'Expenses', 'Attendance', 'Leave', 'Menu', 'Settings']);
+  });
+
+  it('adds Cash in / out after Expenses for a manager or owner only', () => {
+    const manager = staffNav({ surface: 'pos', canTakeOrders: true, ...flags, canManageCash: true });
+    expect(labels(manager.more)).toEqual(['Cash', 'Expenses', 'Cash in / out', 'Attendance', 'Leave', 'Menu', 'Settings']);
+    expect(manager.more.find((t) => t.label === 'Expenses')?.href).toBe('/staff/expenses');
+    expect(manager.more.find((t) => t.label === 'Cash in / out')?.href).toBe('/staff/cash-movements');
+    const staff = staffNav({ surface: 'pos', canTakeOrders: true, ...flags, canManageCash: false });
+    expect(labels(staff.more)).not.toContain('Cash in / out');
   });
 
   it('drops flagged-off back-office pages from More', () => {
     const off = staffNav({ surface: 'pos', canTakeOrders: true, staffPos: true, attendance: false });
-    expect(labels(off.more)).toEqual(['Cash', 'Menu', 'Settings']);
+    expect(labels(off.more)).toEqual(['Cash', 'Expenses', 'Menu', 'Settings']);
   });
 
   it('drops New order and Tables when the POS flag is off', () => {
@@ -32,7 +41,7 @@ describe('staffNav — POS', () => {
   it('puts Stock under More on the counter when inventory is on', () => {
     const withStock = staffNav({ surface: 'pos', canTakeOrders: true, ...flags, inventory: true });
     expect(labels(withStock.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables']);
-    expect(labels(withStock.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Stock', 'Menu', 'Settings']);
+    expect(labels(withStock.more)).toEqual(['Cash', 'Expenses', 'Attendance', 'Leave', 'Stock', 'Menu', 'Settings']);
   });
 });
 
@@ -49,17 +58,17 @@ describe('staffNav — staff website', () => {
 
   it('keeps the back-office pages under More, Settings last', () => {
     const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags });
-    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Menu', 'Settings']);
+    expect(labels(nav.more)).toEqual(['Cash', 'Expenses', 'Attendance', 'Leave', 'Menu', 'Settings']);
     expect(nav.account).toEqual([]);
   });
 
   it('adds Stock under More when inventory is on', () => {
     const nav = staffNav({ surface: 'web', canTakeOrders: false, ...flags, inventory: true });
-    expect(labels(nav.more)).toEqual(['Cash', 'Attendance', 'Leave', 'Stock', 'Menu', 'Settings']);
+    expect(labels(nav.more)).toEqual(['Cash', 'Expenses', 'Attendance', 'Leave', 'Stock', 'Menu', 'Settings']);
   });
 
   it('drops flagged-off pages', () => {
-    const nav = staffNav({ surface: 'web', canTakeOrders: true, staffPos: false, attendance: false });
+    const nav = staffNav({ surface: 'web', canTakeOrders: true, staffPos: false, attendance: false, canManageCash: true });
     expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle']);
     expect(labels(nav.more)).toEqual(['Menu', 'Settings']);
   });
