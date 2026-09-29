@@ -31,16 +31,24 @@ export function useDialogBehavior(
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
-    // Initial focus: the first real control inside the panel that isn't the
-    // header's close button (landing on "×" is the least useful place to
-    // start), falling back to the close button, then the panel itself.
-    // A child that already took focus during commit (an `autoFocus` PIN or
-    // amount field) wins — it knows better than "first control".
+    // Initial focus: the first form field (a PIN, an amount, a reason), else
+    // the close button, else the panel. Never "the first button" — in the
+    // cart and most staff dialogs that's a Remove/Void/Reject, and a stray
+    // Enter would fire it.
+    // On a touch screen, focusing a text field pops the on-screen keyboard
+    // over half the dialog, so there it's the panel itself (screen readers
+    // still land inside the dialog). A child that already took focus during
+    // commit (an `autoFocus` PIN or amount field) wins either way.
     const panel = panelRef.current;
     if (panel && !panel.contains(document.activeElement)) {
-      const focusables = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
-      const target =
-        focusables.find((el) => !el.hasAttribute('data-dialog-close')) ?? focusables[0] ?? panel;
+      const finePointer = window.matchMedia?.('(pointer: fine)').matches ?? true;
+      const field = finePointer
+        ? panel.querySelector<HTMLElement>(
+            'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])',
+          )
+        : null;
+      const close = panel.querySelector<HTMLElement>('[data-dialog-close]:not([disabled])');
+      const target = field ?? (finePointer ? close : null) ?? panel;
       target.focus({ preventScroll: true });
     }
 
