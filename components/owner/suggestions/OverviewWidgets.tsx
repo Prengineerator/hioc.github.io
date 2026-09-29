@@ -111,54 +111,8 @@ export function MoodMixCard({ stats }: { stats: SuggestionStats }) {
   );
 }
 
-export function TopPicksTable({ stats }: { stats: SuggestionStats }) {
-  if (stats.topItems.length === 0) {
-    return (
-      <Card title="Top picks">
-        <p className="py-6 text-center text-sm text-muted">No suggestions shown yet.</p>
-      </Card>
-    );
-  }
-  return (
-    <Card title="Top picks">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-sm">
-          <thead>
-            <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase text-muted">
-              <th className="py-1 font-bold">Item</th>
-              <th className="py-1 text-right font-bold">Suggested</th>
-              <th className="py-1 text-right font-bold">Added</th>
-              <th className="py-1 text-right font-bold">Ordered</th>
-              <th className="py-1 text-right font-bold">Hit rate</th>
-              <th className="py-1 text-right font-bold">👍</th>
-              <th className="py-1 text-right font-bold">👎</th>
-            </tr>
-          </thead>
-          <tbody>
-            {stats.topItems.map((i) => (
-              <tr key={i.menuItemId} className="border-b border-[#f2efe9]">
-                <td className="py-1.5 text-charcoal">
-                  {i.name}
-                  {i.suggested > 0 && i.added === 0 && (
-                    <span className="ml-2 rounded-full bg-[#f6d9d9] px-2 py-0.5 text-[10px] font-bold text-red-800">
-                      never added
-                    </span>
-                  )}
-                </td>
-                <td className="py-1.5 text-right text-muted">{i.suggested}</td>
-                <td className="py-1.5 text-right text-muted">{i.added}</td>
-                <td className="py-1.5 text-right text-muted">{i.ordered}</td>
-                <td className="py-1.5 text-right text-muted">{pct(i.added, i.suggested)}</td>
-                <td className="py-1.5 text-right text-muted">{i.up}</td>
-                <td className="py-1.5 text-right text-muted">{i.down}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-}
+// A client module (sortable/filterable table); re-exported so the page import stays put.
+export { TopPicksTable } from '@/components/owner/suggestions/TopPicksTable';
 
 export function PersonalisedCard({ stats }: { stats: SuggestionStats }) {
   return (

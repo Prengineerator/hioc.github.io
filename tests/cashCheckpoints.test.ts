@@ -549,18 +549,28 @@ describe('lastRealCount', () => {
 vi.mock('@/lib/api/auth', () => ({
   getStaffUser: () => Promise.resolve(routeState.staffUser),
   getManagerUser: () => Promise.resolve(routeState.managerUser),
-  // PIN-3: /api/cash-counts (unlike overrides/movements, unmigrated here) now
-  // resolves via getCounterActor()/getCounterManager() — mirrored 1:1 off the
-  // same routeState so every existing case above keeps meaning what it did.
+  // PIN-3: the cash routes resolve via getCounterActor()/getCounterManager() —
+  // a session first, an enrolled device's PIN operator otherwise (`via`).
+  // Mirrored off the same routeState: a manager is an actor too, and a plain
+  // staffer is an actor who is NOT a manager (the 403 case).
   getCounterActor: () =>
-    Promise.resolve(routeState.staffUser ? { user: routeState.staffUser, role: 'staff', via: 'session' } : null),
+    Promise.resolve(
+      routeState.managerUser
+        ? { user: routeState.managerUser, role: 'manager', via: routeState.via }
+        : routeState.staffUser
+          ? { user: routeState.staffUser, role: 'staff', via: routeState.via }
+          : null,
+    ),
   getCounterManager: () =>
-    Promise.resolve(routeState.managerUser ? { user: routeState.managerUser, role: 'manager', via: 'session' } : null),
+    Promise.resolve(
+      routeState.managerUser ? { user: routeState.managerUser, role: 'manager', via: routeState.via } : null,
+    ),
 }));
 
-const routeState: { staffUser: Row | null; managerUser: Row | null } = {
+const routeState: { staffUser: Row | null; managerUser: Row | null; via: 'session' | 'device' } = {
   staffUser: null,
   managerUser: null,
+  via: 'session',
 };
 
 function jsonReq(url: string, method: string, body?: unknown) {
@@ -581,6 +591,7 @@ describe('POST/GET /api/cash-counts', () => {
   beforeEach(() => {
     routeState.staffUser = { id: 'staff-1' };
     routeState.managerUser = null;
+    routeState.via = 'session';
   });
 
   it('401s a manual count without a staff session', async () => {
@@ -627,20 +638,27 @@ describe('POST/GET /api/cash-counts/overrides', () => {
   beforeEach(() => {
     routeState.staffUser = null;
     routeState.managerUser = { id: MGR_ID };
+    routeState.via = 'session';
     tables.staff_accounts.push({ user_id: STAFF2_ID, status: 'active', handles_cash: true });
     tables.profiles.push({ id: MGR_ID, name: 'Manager Meera' }, { id: STAFF2_ID, name: 'Rohan' });
   });
 
-  it('401s without a manager/owner session (getManagerUser gate)', async () => {
+  const overrideBody = { userId: STAFF2_ID, punchType: 'in', reason: 'Till jammed, verified by eye' };
+
+  it('401s with no actor; 403s a plain staffer', async () => {
     routeState.managerUser = null;
-    const res = await POST(
-      jsonReq('http://t/api/cash-counts/overrides', 'POST', {
-        userId: STAFF2_ID,
-        punchType: 'in',
-        reason: 'Till jammed, verified by eye',
-      }),
-    );
-    expect(res.status).toBe(401);
+    expect((await POST(jsonReq('http://t/api/cash-counts/overrides', 'POST', overrideBody))).status).toBe(401);
+    routeState.staffUser = { id: 'staff-1' };
+    expect((await POST(jsonReq('http://t/api/cash-counts/overrides', 'POST', overrideBody))).status).toBe(403);
+    expect((await GET()).status).toBe(403);
+    expect(tables.cash_count_overrides).toHaveLength(0);
+  });
+
+  it('a PIN-operator manager on an enrolled device can grant one', async () => {
+    routeState.via = 'device';
+    const res = await POST(jsonReq('http://t/api/cash-counts/overrides', 'POST', overrideBody));
+    expect(res.status).toBe(200);
+    expect(tables.cash_count_overrides[0].granted_by).toBe(MGR_ID);
   });
 
   it('grants an override to an active staff account', async () => {
@@ -708,14 +726,48 @@ describe('POST/GET /api/cash-movements', () => {
   beforeEach(() => {
     routeState.staffUser = null;
     routeState.managerUser = { id: 'mgr-1' };
+    routeState.via = 'session';
   });
 
-  it('401s without a manager/owner session (getManagerUser gate)', async () => {
+  const movementBody = { direction: 'out', amountInr: 500, reason: 'Bank deposit' };
+
+  // The POS runs on PIN operators of an enrolled device — no classic Supabase
+  // session — so these gates must resolve the counter actor, not getManagerUser().
+  it('401s with no actor at all (nobody signed in / device locked)', async () => {
     routeState.managerUser = null;
-    const res = await POST(
-      jsonReq('http://t/api/cash-movements', 'POST', { direction: 'out', amountInr: 500, reason: 'Bank deposit' }),
-    );
-    expect(res.status).toBe(401);
+    routeState.staffUser = null;
+    expect((await POST(jsonReq('http://t/api/cash-movements', 'POST', movementBody))).status).toBe(401);
+    expect((await GET(jsonReq('http://t/api/cash-movements', 'GET'))).status).toBe(401);
+    expect(tables.cash_movements).toHaveLength(0);
+  });
+
+  it('403s a plain staffer with a message the form can show', async () => {
+    routeState.managerUser = null;
+    routeState.staffUser = { id: 'staff-1' };
+    const res = await POST(jsonReq('http://t/api/cash-movements', 'POST', movementBody));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe('Only a manager or the owner can record cash in or cash out.');
+    expect((await GET(jsonReq('http://t/api/cash-movements', 'GET'))).status).toBe(403);
+    expect(tables.cash_movements).toHaveLength(0);
+  });
+
+  it('a PIN-operator manager on an enrolled device (no session) can record cash out and list it', async () => {
+    routeState.via = 'device';
+    const res = await POST(jsonReq('http://t/api/cash-movements', 'POST', movementBody));
+    expect(res.status).toBe(200);
+    expect(tables.cash_movements).toHaveLength(1);
+    expect(tables.cash_movements[0]).toMatchObject({ direction: 'out', amount_inr: 500, recorded_by: 'mgr-1' });
+    const list = await GET(jsonReq('http://t/api/cash-movements', 'GET'));
+    expect(list.status).toBe(200);
+    expect((await list.json()).movements).toHaveLength(1);
+  });
+
+  it('a PIN-operator plain staffer on an enrolled device gets the 403, not a 401', async () => {
+    routeState.via = 'device';
+    routeState.managerUser = null;
+    routeState.staffUser = { id: 'staff-1' };
+    const res = await POST(jsonReq('http://t/api/cash-movements', 'POST', movementBody));
+    expect(res.status).toBe(403);
   });
 
   it('records a cash-out movement', async () => {

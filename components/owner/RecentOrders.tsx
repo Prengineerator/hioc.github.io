@@ -1,9 +1,12 @@
+'use client';
+
 // Owner-feedback fix: "Customer is not segregated in Owner app, and staff name
 // is not displayed on the owner's dashboard — orders all show as 'customer'".
-// Presentational (no hooks), matching the dashboard.tsx / ChannelAnalytics.tsx
-// idiom. Badge/label text comes from the pure classifier in
+// Presentational, matching the dashboard.tsx / ChannelAnalytics.tsx idiom (a
+// client module so the sortable/filterable table's column functions can live here). Badge/label text comes from the pure classifier in
 // lib/analytics/customerSegments.ts so the rule lives in one tested place.
 
+import { DataTable } from '@/components/ui/DataTable';
 import { customerBadgeLabel, enteredByLabel, type CustomerSegment } from '@/lib/analytics/customerSegments';
 import type { RecentOrderRow } from '@/lib/analytics/queries';
 
@@ -39,52 +42,77 @@ function BadgeChip({ label }: { label: string }) {
  * Last-N orders (any status) with a clear customer-type badge and, for
  * staff-entered orders, who entered it. `staffNames` maps created_by → the
  * resolved staff display name (lib/staff/displayName.ts) — passed in so this
- * component stays pure/presentational.
+ * component stays presentational. A plain record, not a Map, so it can cross
+ * from the server page.
  */
 export function RecentOrdersCard({
   rows,
   staffNames,
 }: {
   rows: RecentOrderRow[];
-  staffNames: Map<string, string>;
+  staffNames: Record<string, string>;
 }) {
   if (rows.length === 0) {
     return <p className="py-6 text-center text-sm text-muted">No orders yet</p>;
   }
+  const badgeOf = (r: RecentOrderRow) => customerBadgeLabel(r);
+  const enteredByOf = (r: RecentOrderRow) =>
+    enteredByLabel(r.channel, r.created_by ? staffNames[r.created_by] : null);
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[560px] text-sm">
-        <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wide text-muted">
-            <th className="pb-2 font-semibold">Order</th>
-            <th className="pb-2 font-semibold">Customer</th>
-            <th className="pb-2 font-semibold">Entered by</th>
-            <th className="pb-2 text-right font-semibold">Total</th>
-            <th className="pb-2 text-right font-semibold">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const badge = customerBadgeLabel(r);
-            const enteredBy = enteredByLabel(r.channel, r.created_by ? staffNames.get(r.created_by) : null);
-            return (
-              <tr key={r.id} className="border-t border-[#f2efe9] align-top">
-                <td className="py-1.5 text-charcoal">
-                  #{r.order_number}
-                  <span className="block text-xs text-muted">{fmtTime(r.created_at)}</span>
-                </td>
-                <td className="py-1.5">
-                  <BadgeChip label={badge} />
-                </td>
-                <td className="py-1.5 text-xs text-muted">{enteredBy ?? '—'}</td>
-                <td className="py-1.5 text-right font-bold text-tan">{inr(r.total_inr)}</td>
-                <td className="py-1.5 text-right text-xs uppercase text-muted">{r.status}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      rows={rows}
+      rowKey={(r) => r.id}
+      minWidth={560}
+      cellPadding="py-1.5 pr-3"
+      columns={[
+        {
+          key: 'order',
+          header: 'Order',
+          filter: 'text',
+          value: (r) => `#${r.order_number}`,
+          cellClassName: 'align-top text-charcoal',
+          render: (r) => (
+            <>
+              #{r.order_number}
+              <span className="block text-xs text-muted">{fmtTime(r.created_at)}</span>
+            </>
+          ),
+        },
+        {
+          key: 'customer',
+          header: 'Customer',
+          filter: 'select',
+          value: badgeOf,
+          cellClassName: 'align-top',
+          render: (r) => <BadgeChip label={badgeOf(r)} />,
+        },
+        {
+          key: 'entered_by',
+          header: 'Entered by',
+          filter: 'select',
+          value: (r) => enteredByOf(r),
+          cellClassName: 'align-top text-xs text-muted',
+          render: (r) => enteredByOf(r) ?? '—',
+        },
+        {
+          key: 'total',
+          header: 'Total',
+          filter: 'number',
+          align: 'right',
+          value: (r) => r.total_inr ?? 0,
+          cellClassName: 'align-top font-bold text-tan',
+          render: (r) => inr(r.total_inr),
+        },
+        {
+          key: 'status',
+          header: 'Status',
+          filter: 'select',
+          align: 'right',
+          value: (r) => r.status,
+          cellClassName: 'align-top text-xs uppercase text-muted',
+        },
+      ]}
+    />
   );
 }
 

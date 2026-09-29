@@ -68,6 +68,17 @@ export function whatsappBillHealth(): ChannelHealth {
   };
 }
 
+/**
+ * The pickup reminder goes straight to the WhatsApp adapter (never the log
+ * stub, which would report a send that reached nobody), so it needs the Cloud
+ * API credentials — but not NOTIFY_PROVIDER or a bill template. The 'ready'
+ * template name has a built-in default (order_ready_1).
+ */
+export function whatsappReminderHealth(): { configured: boolean; missing: string[] } {
+  const missing = missingFrom(['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_ID']);
+  return { configured: missing.length === 0, missing };
+}
+
 /** Email bill channel (Resend). */
 export function emailBillHealth(): ChannelHealth {
   const missing = missingFrom(['RESEND_API_KEY', 'RESEND_FROM']);

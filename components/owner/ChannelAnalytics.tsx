@@ -1,9 +1,13 @@
-// Presentational pieces for the OPS-1 "Channel mix & dine-in" section. Pure (no
-// hooks) so they render inside the async owner server page, matching the
-// dashboard.tsx idiom: dependency-free inline SVG/CSS, cream/charcoal/tan/muted
+'use client';
+
+// Presentational pieces for the OPS-1 "Channel mix & dine-in" section. No state
+// of their own, but a client module: the two tables are sortable/filterable
+// DataTables whose column definitions are functions, which can't cross from the
+// async owner server page as props. Matching the dashboard.tsx idiom: dependency-free inline SVG/CSS, cream/charcoal/tan/muted
 // palette. All numbers arrive server-computed; here we only format them
 // (₹ integers grouped en-IN, IST business dates).
 
+import { DataTable } from '@/components/ui/DataTable';
 import type { ChannelMixRow, OrderChannel, OrderType, TableTurnoverRow } from '@/lib/types';
 import type {
   ChannelSummaryRow,
@@ -42,30 +46,46 @@ function Empty({ label }: { label: string }) {
 export function ChannelMixTable({ rows }: { rows: ChannelMixRow[] }) {
   if (rows.length === 0) return <Empty label="No orders yet" />;
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[420px] text-sm">
-        <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wide text-muted">
-            <th className="pb-2 font-semibold">Channel</th>
-            <th className="pb-2 font-semibold">Type</th>
-            <th className="pb-2 text-right font-semibold">Orders</th>
-            <th className="pb-2 text-right font-semibold">Revenue</th>
-            <th className="pb-2 text-right font-semibold">Avg ticket</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={`${r.channel}-${r.order_type}`} className="border-t border-[#f2efe9]">
-              <td className="py-1.5 text-charcoal">{CHANNEL_LABEL[r.channel] ?? r.channel}</td>
-              <td className="py-1.5 text-muted">{TYPE_LABEL[r.order_type] ?? r.order_type}</td>
-              <td className="py-1.5 text-right text-charcoal">{r.orders}</td>
-              <td className="py-1.5 text-right text-charcoal">{inr(r.revenue_inr)}</td>
-              <td className="py-1.5 text-right text-muted">{inr(r.avg_ticket_inr)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      rows={rows}
+      rowKey={(r) => `${r.channel}-${r.order_type}`}
+      minWidth={420}
+      columns={[
+        {
+          key: 'channel',
+          header: 'Channel',
+          filter: 'select',
+          value: (r) => CHANNEL_LABEL[r.channel] ?? r.channel,
+          cellClassName: 'text-charcoal',
+        },
+        {
+          key: 'type',
+          header: 'Type',
+          filter: 'select',
+          value: (r) => TYPE_LABEL[r.order_type] ?? r.order_type,
+          cellClassName: 'text-muted',
+        },
+        { key: 'orders', header: 'Orders', filter: 'number', align: 'right', value: (r) => r.orders, cellClassName: 'text-charcoal' },
+        {
+          key: 'revenue',
+          header: 'Revenue',
+          filter: 'number',
+          align: 'right',
+          value: (r) => r.revenue_inr,
+          cellClassName: 'text-charcoal',
+          render: (r) => inr(r.revenue_inr),
+        },
+        {
+          key: 'avg',
+          header: 'Avg ticket',
+          filter: 'number',
+          align: 'right',
+          value: (r) => r.avg_ticket_inr,
+          cellClassName: 'text-muted',
+          render: (r) => inr(r.avg_ticket_inr),
+        },
+      ]}
+    />
   );
 }
 
@@ -118,28 +138,32 @@ export function DineInPeakBars({ rows }: { rows: HourlyDineInRow[] }) {
 export function TableTurnoverList({ rows }: { rows: TableTurnoverRow[] }) {
   if (rows.length === 0) return <Empty label="No settled dine-in orders yet" />;
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[360px] text-sm">
-        <thead>
-          <tr className="text-left text-[10px] uppercase tracking-wide text-muted">
-            <th className="pb-2 font-semibold">Table</th>
-            <th className="pb-2 font-semibold">Date</th>
-            <th className="pb-2 text-right font-semibold">Settles</th>
-            <th className="pb-2 text-right font-semibold">Revenue</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={`${r.table_id ?? r.table_label}-${r.business_date}`} className="border-t border-[#f2efe9]">
-              <td className="py-1.5 text-charcoal">{r.table_label}</td>
-              <td className="py-1.5 text-muted">{fmtIstDate(r.business_date)}</td>
-              <td className="py-1.5 text-right text-charcoal">{r.settled_orders}</td>
-              <td className="py-1.5 text-right text-muted">{inr(r.revenue_inr)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable
+      rows={rows}
+      rowKey={(r) => `${r.table_id ?? r.table_label}-${r.business_date}`}
+      minWidth={360}
+      columns={[
+        { key: 'table', header: 'Table', filter: 'select', value: (r) => r.table_label, cellClassName: 'text-charcoal' },
+        {
+          key: 'date',
+          header: 'Date',
+          filter: 'date',
+          value: (r) => r.business_date,
+          cellClassName: 'text-muted',
+          render: (r) => fmtIstDate(r.business_date),
+        },
+        { key: 'settles', header: 'Settles', filter: 'number', align: 'right', value: (r) => r.settled_orders, cellClassName: 'text-charcoal' },
+        {
+          key: 'revenue',
+          header: 'Revenue',
+          filter: 'number',
+          align: 'right',
+          value: (r) => r.revenue_inr,
+          cellClassName: 'text-muted',
+          render: (r) => inr(r.revenue_inr),
+        },
+      ]}
+    />
   );
 }
 

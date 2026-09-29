@@ -103,6 +103,25 @@ async function getCashCountSettings(admin: Admin): Promise<CashCountSettings> {
   }
 }
 
+/** One order's cash taken in the window (what the sales list on the cash day shows). */
+export interface CashSaleEntry {
+  orderId: string;
+  orderNumber: number | null;
+  /** When the cash arrived: the latest cash part's created_at, or orders.paid_at. */
+  at: string;
+  amountInr: number;
+}
+
+export interface CashActivity {
+  flows: CashFlowsInWindow;
+  /** Cash sales in the window, oldest first — the same rows that make up flows.cashSettledInr. */
+  cashSales: CashSaleEntry[];
+  /** Non-cash tenders received in the window. Information only: never drawer cash. */
+  upiInr: number;
+  cardInr: number;
+  onlineInr: number;
+}
+
 /**
  * Cash settled/refunded/moved in the window (from, to] — see the module doc
  * comment above for how "settled" is windowed. Throws on a genuine query
@@ -115,30 +134,72 @@ export async function cashFlowsBetween(
   fromIso: string,
   toIso: string,
 ): Promise<CashFlowsInWindow> {
-  // 1. POS4-1 split cash parts, by their OWN timestamp — the precise case.
+  return (await cashActivityBetween(admin, fromIso, toIso)).flows;
+}
+
+/**
+ * cashFlowsBetween plus the detail behind it: the individual cash sales and
+ * the non-cash tenders. ONE implementation feeds both the checkpoint chain and
+ * the cash day (expected cash, sales list), so "cash sales since open" and
+ * "cash settled since the last count" can never disagree about the same sale.
+ */
+export async function cashActivityBetween(
+  admin: Admin,
+  fromIso: string,
+  toIso: string,
+): Promise<CashActivity> {
+  const cashByOrder = new Map<string, CashSaleEntry>();
+  const addCash = (orderId: string, orderNumber: number | null, at: string, amountInr: number) => {
+    const existing = cashByOrder.get(orderId);
+    if (!existing) {
+      cashByOrder.set(orderId, { orderId, orderNumber, at, amountInr });
+      return;
+    }
+    existing.amountInr += amountInr;
+    if (at > existing.at) existing.at = at;
+  };
+  let upiInr = 0;
+  let cardInr = 0;
+  let onlineInr = 0;
+  const addNonCash = (method: string | null | undefined, amountInr: number) => {
+    if (method === 'upi') upiInr += amountInr;
+    else if (method === 'card') cardInr += amountInr;
+    else if (method === 'online') onlineInr += amountInr;
+  };
+
+  // 1. POS4-1 split parts (any tender), by their OWN timestamp — the precise case.
   const { data: partRows, error: partsError } = await admin
     .from('order_payments')
-    .select('amount_inr')
-    .eq('method', 'cash')
+    .select('order_id, method, amount_inr, created_at')
     .gt('created_at', fromIso)
     .lte('created_at', toIso);
   if (partsError) {
     throw new Error(`cashFlowsBetween: order_payments query failed: ${partsError.message}`);
   }
-  const splitCashInr = ((partRows ?? []) as { amount_inr: number | null }[]).reduce(
-    (sum, p) => sum + (p.amount_inr ?? 0),
-    0,
-  );
+  const cashPartOrderIds = new Set<string>();
+  for (const p of (partRows ?? []) as {
+    order_id: string;
+    method: string;
+    amount_inr: number | null;
+    created_at: string;
+  }[]) {
+    const amount = p.amount_inr ?? 0;
+    if (p.method === 'cash') {
+      addCash(p.order_id, null, p.created_at, amount);
+      cashPartOrderIds.add(p.order_id);
+    } else {
+      addNonCash(p.method, amount);
+    }
+  }
 
-  // 2. Single-tender cash settles, by when they were paid (orders.paid_at —
-  //    see the module doc comment). A later refund moves payment_status on to
+  // 2. Single-tender settles, by when they were paid (orders.paid_at — see the
+  //    module doc comment). A later refund moves payment_status on to
   //    partially_refunded/refunded; the cash still came in at paid_at, and the
   //    refund leaves the drawer separately in step 3.
   const { data: candidateOrders, error: ordersError } = await admin
     .from('orders')
-    .select('id, total_inr, subtotal_inr')
+    .select('id, order_number, total_inr, subtotal_inr, payment_method, paid_at')
     .in('payment_status', ['paid', 'partially_refunded', 'refunded'])
-    .eq('payment_method', 'cash')
     .gt('paid_at', fromIso)
     .lte('paid_at', toIso);
   if (ordersError) {
@@ -146,11 +207,13 @@ export async function cashFlowsBetween(
   }
   const candidates = (candidateOrders ?? []) as {
     id: string;
+    order_number: number | null;
     total_inr: number | null;
     subtotal_inr: number | null;
+    payment_method: string | null;
+    paid_at: string;
   }[];
 
-  let legacyCashInr = 0;
   if (candidates.length > 0) {
     const { data: anyParts, error: anyPartsError } = await admin
       .from('order_payments')
@@ -165,7 +228,19 @@ export async function cashFlowsBetween(
     const hasParts = new Set(((anyParts ?? []) as { order_id: string }[]).map((p) => p.order_id));
     for (const o of candidates) {
       if (hasParts.has(o.id)) continue; // already counted via its own parts, step 1
-      legacyCashInr += o.total_inr ?? o.subtotal_inr ?? 0;
+      const amount = o.total_inr ?? o.subtotal_inr ?? 0;
+      if (o.payment_method === 'cash') addCash(o.id, o.order_number, o.paid_at, amount);
+      else addNonCash(o.payment_method, amount);
+    }
+  }
+
+  // Order numbers for the cash parts found in step 1 (display only).
+  const needNumbers = [...cashPartOrderIds].filter((id) => cashByOrder.get(id)?.orderNumber == null);
+  if (needNumbers.length > 0) {
+    const { data: numberRows } = await admin.from('orders').select('id, order_number').in('id', needNumbers);
+    for (const r of (numberRows ?? []) as { id: string; order_number: number | null }[]) {
+      const entry = cashByOrder.get(r.id);
+      if (entry) entry.orderNumber = r.order_number ?? null;
     }
   }
 
@@ -204,11 +279,15 @@ export async function cashFlowsBetween(
     }
   }
 
+  const cashSales = [...cashByOrder.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const cashSettledInr = cashSales.reduce((sum, s) => sum + s.amountInr, 0);
+
   return {
-    cashSettledInr: splitCashInr + legacyCashInr,
-    cashRefundedInr,
-    cashOutInr,
-    cashInInr,
+    flows: { cashSettledInr, cashRefundedInr, cashOutInr, cashInInr },
+    cashSales,
+    upiInr,
+    cardInr,
+    onlineInr,
   };
 }
 

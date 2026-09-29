@@ -27,6 +27,8 @@ export function CashCountSheet({
   subtitle,
   busy = false,
   error = '',
+  expected,
+  expectedLabel,
   onClose,
   onConfirm,
 }: {
@@ -35,6 +37,9 @@ export function CashCountSheet({
   subtitle?: string;
   busy?: boolean;
   error?: string;
+  /** Optional per-denomination counts to match against (adds the grid's Match column). */
+  expected?: CashDenoms;
+  expectedLabel?: string;
   onClose: () => void;
   onConfirm: (denoms: CashDenoms) => void;
 }) {
@@ -108,7 +113,13 @@ export function CashCountSheet({
             <>
               <p className="text-sm text-muted">Count every note and coin in the drawer right now.</p>
               <div className="mt-3">
-                <CashDayDenomGrid denoms={denoms} onChange={setDenoms} disabled={busy} />
+                <CashDayDenomGrid
+                  denoms={denoms}
+                  onChange={setDenoms}
+                  disabled={busy}
+                  expected={expected}
+                  expectedLabel={expectedLabel}
+                />
               </div>
             </>
           ) : (

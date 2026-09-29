@@ -298,3 +298,168 @@ describe('PATCH /api/orders/[id]/payment — changing how a bill was paid', () =
     expect(state.orderPatch).toBeUndefined();
   });
 });
+
+// Settle short (settlement discount) or with extra (tip), always with a reason.
+describe('PATCH /api/orders/[id]/payment — settle adjustments', () => {
+  beforeEach(() => {
+    state.existing = { payment_method: null, payment_status: 'unpaid', total_inr: 500, subtotal_inr: 476 };
+  });
+
+  it('records a shortfall within ₹50 as a settlement discount, for counter staff', async () => {
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 480, tendered_inr: 500 }],
+      adjustment: { short_inr: 20, reason: 'Rounded off' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(state.orderPatch).toMatchObject({
+      payment_status: 'paid',
+      settle_discount_inr: 20,
+      tip_inr: 0,
+      settle_reason: 'Rounded off',
+    });
+    // The parts are what entered the till, so the drawer excludes the shortfall.
+    expect(state.insertedParts).toEqual([expect.objectContaining({ method: 'cash', amount_inr: 480 })]);
+    await expect(res.json()).resolves.toMatchObject({
+      order: { settle_discount_inr: 20, tip_inr: 0, settle_reason: 'Rounded off' },
+      change_due_inr: 20,
+    });
+  });
+
+  it('accepts exactly ₹50 short from counter staff', async () => {
+    const res = await call({
+      parts: [{ method: 'upi', amount_inr: 450 }],
+      adjustment: { short_inr: 50, reason: 'Regular customer' },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('refuses a shortfall over ₹50 from counter staff with a 403 and writes nothing', async () => {
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 440 }],
+      adjustment: { short_inr: 60, reason: 'Customer short' },
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('manager') });
+    expect(state.orderPatch).toBeUndefined();
+    expect(state.insertedParts).toHaveLength(0);
+    expect(sendBillNotification).not.toHaveBeenCalled();
+  });
+
+  it.each(['manager', 'owner'])('lets a %s approve a shortfall over ₹50', async (role) => {
+    state.actor = { user: { id: 'boss-1' }, role, via: 'session' };
+
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 440 }],
+      adjustment: { short_inr: 60, reason: 'Customer short' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(state.orderPatch).toMatchObject({ settle_discount_inr: 60, settle_reason: 'Customer short' });
+  });
+
+  it('records extra as a tip: parts include it, the order total is untouched', async () => {
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 520, tendered_inr: 520 }],
+      adjustment: { tip_inr: 20, reason: 'Keep the change' },
+    });
+
+    expect(res.status).toBe(200);
+    expect(state.orderPatch).toMatchObject({ settle_discount_inr: 0, tip_inr: 20, settle_reason: 'Keep the change' });
+    expect(state.orderPatch).not.toHaveProperty('total_inr');
+    expect(state.insertedParts[0]).toMatchObject({ amount_inr: 520 });
+  });
+
+  it('needs a reason whenever there is a difference (400)', async () => {
+    const cases: { parts: number; adjustment: Record<string, unknown> }[] = [
+      { parts: 480, adjustment: { short_inr: 20 } },
+      { parts: 480, adjustment: { short_inr: 20, reason: 'no' } },
+      { parts: 520, adjustment: { tip_inr: 20, reason: '  ' } },
+    ];
+    for (const c of cases) {
+      const res = await call({ parts: [{ method: 'cash', amount_inr: c.parts }], adjustment: c.adjustment });
+      expect(res.status).toBe(400);
+      await expect(res.json()).resolves.toMatchObject({ error: expect.stringMatching(/reason/i) });
+    }
+    expect(state.orderPatch).toBeUndefined();
+  });
+
+  it('rejects parts that do not equal total - short (400)', async () => {
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 500 }],
+      adjustment: { short_inr: 20, reason: 'Rounded off' },
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('₹480') });
+    expect(state.insertedParts).toHaveLength(0);
+  });
+
+  it('rejects parts that do not equal total + tip (400)', async () => {
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 500 }],
+      adjustment: { tip_inr: 20, reason: 'Keep the change' },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects short and tip together, and a shortfall bigger than the bill (400)', async () => {
+    const both = await call({
+      parts: [{ method: 'cash', amount_inr: 500 }],
+      adjustment: { short_inr: 10, tip_inr: 10, reason: 'Other' },
+    });
+    expect(both.status).toBe(400);
+
+    state.actor = { user: { id: 'boss-1' }, role: 'owner', via: 'session' };
+    const tooBig = await call({
+      parts: [{ method: 'cash', amount_inr: 1 }],
+      adjustment: { short_inr: 501, reason: 'Other' },
+    });
+    expect(tooBig.status).toBe(400);
+  });
+
+  it('refuses an adjustment without parts on the single-method path (400)', async () => {
+    const res = await call({ payment_method: 'cash', adjustment: { short_inr: 20, reason: 'Rounded off' } });
+    expect(res.status).toBe(400);
+  });
+
+  it('ignores a client-supplied total when validating the adjusted sum', async () => {
+    const res = await call({
+      parts: [{ method: 'cash', amount_inr: 380 }],
+      adjustment: { short_inr: 20, reason: 'Rounded off' },
+      total_inr: 400,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('resets an earlier adjustment when the bill is re-settled without one', async () => {
+    state.existing = {
+      payment_method: 'cash',
+      payment_status: 'paid',
+      total_inr: 500,
+      subtotal_inr: 476,
+      settle_discount_inr: 20,
+      tip_inr: 0,
+      settle_reason: 'Rounded off',
+    };
+
+    const res = await call({ parts: [{ method: 'upi', amount_inr: 500 }] });
+
+    expect(res.status).toBe(200);
+    expect(state.orderPatch).toMatchObject({ settle_discount_inr: 0, tip_inr: 0, settle_reason: '' });
+  });
+
+  it('does not touch the adjustment columns on a plain settle (works before the migration)', async () => {
+    await call({ parts: [{ method: 'cash', amount_inr: 500 }] });
+    expect(state.orderPatch).not.toHaveProperty('settle_discount_inr');
+  });
+
+  it('still bills once for an adjusted settle', async () => {
+    await call({
+      parts: [{ method: 'cash', amount_inr: 480 }],
+      adjustment: { short_inr: 20, reason: 'Rounded off' },
+    });
+    expect(sendBillNotification).toHaveBeenCalledTimes(1);
+  });
+});

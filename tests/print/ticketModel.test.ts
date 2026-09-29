@@ -596,6 +596,36 @@ describe('buildTicketDoc — receipt totals', () => {
   });
 });
 
+describe('buildTicketDoc — receipt settle adjustments', () => {
+  it('prints the settlement discount and what was received after Grand Total', () => {
+    const doc = buildTicketDoc(order({ total_inr: 500, settle_discount_inr: 20, settle_reason: 'Rounded off' }), 'receipt');
+    const rows = rowBlocks(doc);
+    const lefts = rows.map((r) => r.left);
+    expect(rows.find((r) => r.left === 'Settlement discount')?.right).toBe('(Rs. 20.00)');
+    expect(rows.find((r) => r.left === 'Received')?.right).toBe('Rs. 480.00');
+    expect(rows.find((r) => r.left === 'Tip')).toBeUndefined();
+    expect(lefts.indexOf('Grand Total')).toBeLessThan(lefts.indexOf('Settlement discount'));
+    expect(lefts.indexOf('Settlement discount')).toBeLessThan(lefts.indexOf('Received'));
+  });
+
+  it('prints the tip and the larger amount received', () => {
+    const doc = buildTicketDoc(order({ total_inr: 500, tip_inr: 20, settle_reason: 'Keep the change' }), 'receipt');
+    const rows = rowBlocks(doc);
+    expect(rows.find((r) => r.left === 'Tip')?.right).toBe('Rs. 20.00');
+    expect(rows.find((r) => r.left === 'Received')?.right).toBe('Rs. 520.00');
+    expect(rows.find((r) => r.left === 'Settlement discount')).toBeUndefined();
+  });
+
+  it('prints none of these rows for a plain settle or an older row without the fields', () => {
+    for (const o of [order({ settle_discount_inr: 0, tip_inr: 0 }), order()]) {
+      const text = allText(buildTicketDoc(o, 'receipt'));
+      expect(text).not.toContain('Settlement discount');
+      expect(text).not.toContain('Tip');
+      expect(text).not.toContain('Received');
+    }
+  });
+});
+
 describe('buildTicketDoc — receipt customer notes', () => {
   it('prints "Customer Notes: …" behind its own divider only when the order has notes', () => {
     const withNotes = buildTicketDoc(order({ notes: 'Extra napkins please' }), 'receipt');
