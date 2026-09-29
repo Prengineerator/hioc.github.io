@@ -708,6 +708,9 @@ export interface CashDay {
   // database without them still serves the cash day.
   swiggy_dineout_inr?: number | null;
   zomato_district_inr?: number | null;
+  // The day's store expenses (already inside cash_out_inr), frozen at close
+  // (2026-10-cash-expenses.sql). Optional for the same reason as above.
+  expenses_inr?: number | null;
   handover_inr: number | null; // cash taken out at close = counted - float left
   float_left_denoms: CashDenoms | null;
   float_left_total_inr: number | null;
@@ -744,6 +747,7 @@ export type PermissionKey =
   | 'comp_order'
   | 'refund'
   | 'cash_day_close'
+  | 'cash_expense'
   | 'attendance_edit'
   | 'attendance_approve'
   | 'leave_approve';

@@ -19,6 +19,7 @@ const PERMISSION_META: Record<string, { label: string; hint: string }> = {
   comp_order: { label: 'Comp / settle at ₹0', hint: 'Waive a charge or settle at zero (with a reason)' },
   refund: { label: 'Issue a refund', hint: 'Refund a captured payment' },
   cash_day_close: { label: 'Close the cash day', hint: 'Count the drawer and sign off the day' },
+  cash_expense: { label: 'Record a store expense', hint: 'Punch ice, water and other petty cash paid from the drawer' },
 };
 
 const MIN_ROLE_OPTIONS: { value: 'staff' | 'manager'; label: string }[] = [
