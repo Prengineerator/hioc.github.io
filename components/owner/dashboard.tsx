@@ -216,7 +216,7 @@ export function PaymentsByMethod({
         ) : null}
       </p>
       {reportHref ? (
-        <a href={reportHref} className="mt-2 inline-block text-sm font-bold text-tan hover:underline">
+        <a href={reportHref} className="mt-2 inline-block text-sm font-bold text-tan-dark hover:underline">
           Full report →
         </a>
       ) : null}

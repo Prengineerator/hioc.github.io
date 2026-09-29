@@ -75,7 +75,7 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
           <span className="block text-muted">To</span>
           <input type="date" name="to" defaultValue={to} max={today} className="mt-1 min-h-[40px] rounded-md border border-line px-3" />
         </label>
-        <button type="submit" className="min-h-[40px] rounded-md bg-tan px-4 text-sm font-bold text-cream hover:bg-tan-dark">
+        <button type="submit" className="min-h-[40px] rounded-md bg-tan-dark px-4 text-sm font-bold text-cream hover:bg-tan-darker">
           Show report
         </button>
         <div className="flex flex-wrap gap-2">
