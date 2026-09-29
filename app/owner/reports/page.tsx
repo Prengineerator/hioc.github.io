@@ -7,6 +7,7 @@ import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card, inr } from '@/components/owner/dashboard';
+import { ReportEmailSettingsPanel } from '@/components/owner/ReportEmailSettingsPanel';
 import { parseRange, REPORT_METHODS, type Report, type ReportDay } from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
 
@@ -58,12 +59,20 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
           <h1 className="text-2xl font-bold text-charcoal">Reports</h1>
           <p className="text-sm text-muted">Reconcile sales, payments and the cash drawer for any dates.</p>
         </div>
-        <a
-          href={csvHref}
-          className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-        >
-          Download CSV
-        </a>
+        <div className="flex flex-wrap gap-2">
+          <a
+            href="#report-emails"
+            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
+          >
+            Email reports
+          </a>
+          <a
+            href={csvHref}
+            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
+          >
+            Download CSV
+          </a>
+        </div>
       </div>
 
       <form method="get" className="flex flex-wrap items-end gap-3 rounded-md border border-line bg-white p-4">
@@ -100,6 +109,13 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
       {loadError ? <p className="text-sm text-red-700">{loadError}</p> : null}
 
       {report ? <ReportBody report={report} label={label} /> : null}
+
+      {/* The same numbers, emailed daily / weekly / monthly (lib/reports/ownerDigest.ts). */}
+      <div id="report-emails" className="scroll-mt-24">
+        <Card title="Report emails">
+          <ReportEmailSettingsPanel />
+        </Card>
+      </div>
     </div>
   );
 }

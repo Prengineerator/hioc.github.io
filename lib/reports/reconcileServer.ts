@@ -21,10 +21,10 @@ import {
 const PAGE = 1000;
 const IN_CHUNK = 200;
 
-type PageResult<T> = { data: T[] | null; error: { code?: string; message?: string } | null };
+export type PageResult<T> = { data: T[] | null; error: { code?: string; message?: string } | null };
 
 /** Runs `page(from, to)` until a short page comes back. */
-async function fetchAll<T>(page: (from: number, to: number) => PromiseLike<PageResult<T>>): Promise<T[]> {
+export async function fetchAll<T>(page: (from: number, to: number) => PromiseLike<PageResult<T>>): Promise<T[]> {
   const out: T[] = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await page(from, from + PAGE - 1);

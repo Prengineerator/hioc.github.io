@@ -25,6 +25,10 @@
     {
       "path": "/api/cron/expire-points",
       "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron/owner-reports",
+      "schedule": "30 2 * * *"
     }
   ]
 }
