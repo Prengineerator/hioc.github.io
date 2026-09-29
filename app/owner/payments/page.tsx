@@ -1,28 +1,29 @@
 // Owner payment analytics (RET-2/OWN-009). Server component, styled like
-// app/owner/page.tsx — reads the Phase-2 `v_payment_mix` view (payment method
-// split + collected/refunded) plus two direct aggregate queries for online vs
-// pay-at-counter share and collected-vs-pending, all through the service-role
-// client (owner surfaces are server-side reads, same pattern as Phase 1).
+// app/owner/page.tsx. "How the money came in" and the Collected / Refunded
+// figures come from the reconciliation report (lib/reports/reconcile.ts) over
+// the last 30 IST days: every tender, i.e. cash, UPI and card at the counter,
+// split bills, and website payments. (They used to read v_payment_mix, which
+// only sees the online gateway's `payments` table, so counter money never
+// showed.) The website-vs-counter split and collected-vs-pending are direct
+// aggregate queries, all through the service-role client.
 
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { Card } from '@/components/owner/dashboard';
-import type { PaymentMixRow } from '@/lib/types';
+import { Card, inr, PaymentsByMethod } from '@/components/owner/dashboard';
+import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
+import { loadReport } from '@/lib/reports/reconcileServer';
+import type { Report } from '@/lib/reports/reconcile';
 
 export const dynamic = 'force-dynamic';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-async function getPaymentMix(): Promise<PaymentMixRow[]> {
-  const admin = createAdminSupabaseClient();
-  const { data, error } = await admin
-    .from('v_payment_mix')
-    .select('*')
-    .order('collected_inr', { ascending: false });
-  if (error) {
-    console.error('v_payment_mix query failed', error);
-    return [];
+async function getLast30Days(): Promise<Report | null> {
+  try {
+    return await loadReport(createAdminSupabaseClient(), istDateDaysAgo(29), istDateIso());
+  } catch (err) {
+    console.error('owner payments: report failed', err);
+    return null;
   }
-  return (data ?? []) as PaymentMixRow[];
 }
 
 // Online vs pay-at-counter share (RET-2) over the last `days`, counted from
@@ -69,16 +70,14 @@ async function getPaymentStatusCounts(days = 30): Promise<Record<string, number>
 }
 
 export default async function OwnerPaymentsPage() {
-  const [mix, split, statusCounts] = await Promise.all([
-    getPaymentMix(),
+  const [report, split, statusCounts] = await Promise.all([
+    getLast30Days(),
     getOnlineVsCounter(30),
     getPaymentStatusCounts(30),
   ]);
 
-  const totalCollected = mix.reduce((sum, r) => sum + r.collected_inr, 0);
-  // v_payment_mix's refunded_inr_total is a single grand total repeated on
-  // every row (not per-method) — take it once, never sum across rows.
-  const totalRefunded = mix[0]?.refunded_inr_total ?? 0;
+  const totalCollected = report?.totals.receivedTotalInr ?? 0;
+  const totalRefunded = report?.totals.refundsTotalInr ?? 0;
   const refundRatePct = totalCollected > 0 ? Math.round((totalRefunded / totalCollected) * 100) : 0;
 
   const totalSplit = split.online + split.counter;
@@ -89,29 +88,23 @@ export default async function OwnerPaymentsPage() {
       <h1 className="text-2xl font-bold text-charcoal">Payments</h1>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Collected" value={`₹${totalCollected}`} />
-        <StatCard label="Refunded" value={`₹${totalRefunded}`} sub={`${refundRatePct}% of collected`} />
+        <StatCard label="Collected (30d)" value={inr(totalCollected)} sub="cash, UPI, card and online" />
+        <StatCard label="Refunded (30d)" value={inr(totalRefunded)} sub={`${refundRatePct}% of collected`} />
         <StatCard label="Online share (30d)" value={`${onlinePct}%`} sub={`${split.online} of ${totalSplit} paid orders`} />
         <StatCard label="Pending payment" value={String(statusCounts.payment_pending ?? 0)} sub="last 30 days" />
       </div>
 
-      <Card title="Method mix">
-        {mix.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted">No payments recorded yet.</p>
+      <Card title="How the money came in · last 30 days">
+        {report ? (
+          <PaymentsByMethod
+            received={report.totals.received}
+            refunds={report.totals.refunds}
+            unpaidInr={report.totals.unpaidInr}
+            unpaidOrders={report.totals.unpaidOrders}
+            reportHref={`/owner/reports?from=${report.from}&to=${report.to}`}
+          />
         ) : (
-          <ul className="flex flex-col gap-1 text-sm">
-            {mix.map((row) => (
-              <li
-                key={row.method}
-                className="flex items-center justify-between border-b border-[#f2efe9] py-2 last:border-0"
-              >
-                <span className="font-bold uppercase text-charcoal">{row.method}</span>
-                <span className="text-muted">
-                  {row.payments} payment{row.payments === 1 ? '' : 's'} · ₹{row.collected_inr}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <p className="py-6 text-center text-sm text-muted">Payments could not be loaded.</p>
         )}
       </Card>
 

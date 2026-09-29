@@ -1,11 +1,13 @@
 'use client';
 
-// DRW-2 — "Open drawer", top-right of the new-order screen: change for a note,
-// a float top-up, anything with no sale behind it. Every tap that actually
-// opens the drawer is logged as `manual` (lib/desktop/drawer.ts), so the owner
-// sees how often, when and by whom (/owner/cash).
+// DRW-2 — "Open drawer", in the POS title bar just left of the store status
+// pill (StaffHeader): change for a note, a float top-up, anything with no sale
+// behind it. Every tap that actually opens the drawer is logged as `manual`
+// (lib/desktop/drawer.ts), so the owner sees how often, when and by whom
+// (/owner/cash).
 //
-// Rendered only inside the HIOC POS app: a plain browser has no drawer to open,
+// POS only: StaffHeader renders it on the POS surface alone, and it renders
+// itself only inside the HIOC POS app — a plain browser has no drawer to open,
 // and a button that can only fail is worse than none. Checked after mount —
 // SSR has no `window`, same pattern as StaffPinOverlay.
 
@@ -40,18 +42,28 @@ export function OpenDrawerButton() {
     clearTimer.current = setTimeout(() => setStatus(null), STATUS_MS);
   }
 
+  // Sized and coloured like the header's other controls (dark bar); the
+  // result floats just below the button so the bar's height never changes.
   return (
-    <div className="flex shrink-0 flex-col items-end gap-1">
+    <div className="relative flex shrink-0">
       <button
         type="button"
         onClick={handleClick}
         disabled={busy}
-        className="min-h-[44px] rounded-md border border-line bg-cream px-4 py-2 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-50"
+        title="Open the cash drawer (logged)"
+        className="flex h-10 items-center gap-1.5 whitespace-nowrap rounded-md border border-cream/30 px-2.5 text-sm font-bold text-cream transition-colors hover:bg-cream/10 disabled:opacity-50"
       >
-        {busy ? 'Opening…' : 'Open drawer'}
+        <span aria-hidden>💵</span>
+        {busy ? 'Opening…' : 'Drawer'}
       </button>
       {status ? (
-        <p role="status" className={'text-xs font-bold ' + (status.ok ? 'text-green-700' : 'text-red-700')}>
+        <p
+          role="status"
+          className={
+            'absolute right-0 top-full z-50 mt-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-bold shadow-lg ' +
+            (status.ok ? 'bg-green-700 text-white' : 'bg-red-700 text-white')
+          }
+        >
           {status.text}
         </p>
       ) : null}

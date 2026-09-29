@@ -12,6 +12,7 @@
 // (components/staff/StaffShell.tsx) so they survive switching tabs.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { istDateIso } from '@/lib/api/date';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { TodayOrdersList } from '@/components/staff/TodayOrdersList';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
@@ -35,6 +36,12 @@ type OrderWithItems = Order & { items: OrderItem[] };
 
 export type OrdersView = 'live' | 'today';
 
+/** '2026-09-27' → '27 Sep'. */
+function shortIstDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
 export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +58,11 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const shell = useStaffShell();
   const { refreshNewOrders } = shell;
   const prevReceivedRef = useRef<Set<string> | null>(null);
+  // Orders tab date filter: an IST day ('YYYY-MM-DD'), today by default. A
+  // ref as well, so the realtime refresh always fetches the day on screen.
+  const today = istDateIso();
+  const [date, setDate] = useState(today);
+  const dateRef = useRef(date);
 
   // PRT-1/PRT-3 — mounted HERE, not inside the order modal. The print iframe and
   // the failure chip have to outlive the modal: closing an order used to cancel
@@ -62,7 +74,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
 
   const fetchOrders = useCallback(async () => {
     try {
-      const res = await fetch('/api/orders', { cache: 'no-store' });
+      const day = dateRef.current;
+      const url = view === 'today' && day !== istDateIso() ? `/api/orders?date=${day}` : '/api/orders';
+      const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
       const next: OrderWithItems[] = data.orders ?? [];
@@ -84,7 +98,22 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [view]);
+
+  const changeDate = useCallback(
+    (next: string) => {
+      if (!next || next > istDateIso()) return;
+      dateRef.current = next;
+      // Another day's orders are not "new": don't let them ring the alert.
+      prevReceivedRef.current = null;
+      setNewOrderIds(new Set());
+      setDate(next);
+      setLoading(true);
+      void fetchOrders();
+    },
+    [fetchOrders],
+  );
+  const dayLabel = date === today ? 'today' : `on ${shortIstDate(date)}`;
 
   const connection = useStaffOrdersRealtime(fetchOrders);
 
@@ -358,8 +387,34 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         {shell.counterMode ? null : <NotClockedInBanner />}
         {shell.counterMode ? null : <LeaveReminderBanner />}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold text-charcoal">{view === 'live' ? 'Live orders' : 'Orders'}</h1>
+          <h1 className="text-2xl font-bold text-charcoal">
+            {view === 'live' ? 'Live orders' : date === today ? 'Orders' : `Orders · ${shortIstDate(date)}`}
+          </h1>
           <div className="flex items-center gap-3">
+            {view === 'today' ? (
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-2 text-sm text-muted">
+                  <span>Date</span>
+                  <input
+                    type="date"
+                    value={date}
+                    max={today}
+                    onChange={(e) => changeDate(e.target.value)}
+                    aria-label="Show orders for date"
+                    className="min-h-[40px] rounded-md border border-line bg-white px-3 text-sm text-charcoal outline-none focus:border-tan"
+                  />
+                </label>
+                {date !== today ? (
+                  <button
+                    type="button"
+                    onClick={() => changeDate(today)}
+                    className="min-h-[40px] rounded-md border border-line bg-white px-3 text-sm font-bold text-charcoal hover:border-charcoal"
+                  >
+                    Today
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <ConnectionBadge connection={connection} />
           </div>
         </div>
@@ -408,7 +463,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
               onRemind={handleRemind}
             />
           ) : (
-            <TodayOrdersList orders={filtered} onOpen={openDetail} />
+            <TodayOrdersList orders={filtered} onOpen={openDetail} dayLabel={dayLabel} />
           )
         )}
       </div>

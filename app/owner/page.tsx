@@ -18,7 +18,8 @@ import {
   getTodayAtAGlance,
   summariseChannels,
 } from '@/lib/analytics/queries';
-import { startOfTodayIstIso } from '@/lib/api/date';
+import { istDateIso, startOfTodayIstIso } from '@/lib/api/date';
+import { loadReport } from '@/lib/reports/reconcileServer';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getFeedbackSummary } from '@/lib/feedback/summary';
@@ -26,6 +27,7 @@ import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import {
   Card,
   GlanceCards,
+  PaymentsByMethod,
   Heatmap,
   RevenueBars,
   ReasonList,
@@ -70,6 +72,7 @@ export default async function OwnerOverviewPage() {
     todaySplit,
     last30Split,
     feedback,
+    todayPayments,
   ] = await Promise.all([
     getTodayAtAGlance(),
     getDailySales(30),
@@ -86,6 +89,12 @@ export default async function OwnerOverviewPage() {
     getCustomerSegmentSplit(startOfTodayIstIso()),
     getCustomerSegmentSplit(new Date(Date.now() - 30 * DAY_MS).toISOString()),
     getFeedbackSummary(),
+    // Today's money by how it came in (cash / UPI / card / online). Never
+    // fails the dashboard: a load error just hides the card.
+    loadReport(createAdminSupabaseClient(), istDateIso(), istDateIso()).catch((err) => {
+      console.error('owner overview: payments by method failed', err);
+      return null;
+    }),
   ]);
 
   // Recent-orders "Entered by <name>" needs the same profiles.name → email
@@ -107,6 +116,18 @@ export default async function OwnerOverviewPage() {
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
       <h1 className="text-2xl font-bold text-charcoal">Today at a glance</h1>
       <GlanceCards g={glance} />
+
+      {todayPayments ? (
+        <Card title="Payments received today">
+          <PaymentsByMethod
+            received={todayPayments.totals.received}
+            refunds={todayPayments.totals.refunds}
+            unpaidInr={todayPayments.totals.unpaidInr}
+            unpaidOrders={todayPayments.totals.unpaidOrders}
+            reportHref="/owner/reports"
+          />
+        </Card>
+      ) : null}
 
       {/* Live ops + the revenue trend straight under the glance cards: they
           answer "how is today going?" — the rest is deeper analysis. */}

@@ -4,7 +4,8 @@ import { actorRoleFor, getAuthUser, getCounterActor } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/constants';
 import { isMissingColumnError } from '@/lib/api/postgrest';
-import { startOfTodayIstIso } from '@/lib/api/date';
+import { istDateIso, startOfTodayIstIso } from '@/lib/api/date';
+import { istDayRange } from '@/lib/cash/date';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import { flags } from '@/lib/flags';
@@ -898,6 +899,9 @@ export async function POST(request: Request) {
 
 // GET /api/orders — staff-only. The order board itself.
 //
+// ?date=YYYY-MM-DD — the Orders tab's date filter: every order placed on that
+// IST calendar day (any status), instead of today's. Not in the future.
+//
 // PIN-3: gated by getCounterActor() — classic session first, unchanged; an
 // enrolled-device PIN operator only when there is no session at all.
 export async function GET(request: Request) {
@@ -913,6 +917,14 @@ export async function GET(request: Request) {
   }
 
   const all = searchParams.get('all') === 'true';
+
+  const dateParam = searchParams.get('date');
+  let dayRange: { startIso: string; endIso: string } | null = null;
+  if (dateParam !== null) {
+    if (!isRealIsoDate(dateParam)) return errorResponse(400, 'date must be a real date (YYYY-MM-DD)');
+    if (dateParam > istDateIso()) return errorResponse(400, 'date cannot be in the future');
+    dayRange = istDayRange(dateParam);
+  }
 
   const admin = createAdminSupabaseClient();
 
@@ -941,7 +953,9 @@ export async function GET(request: Request) {
   if (statusParam) {
     query = query.eq('status', statusParam);
   }
-  if (!all) {
+  if (dayRange) {
+    query = query.gte('created_at', dayRange.startIso).lt('created_at', dayRange.endIso);
+  } else if (!all) {
     query = query.gte('created_at', startOfTodayIstIso());
   } else {
     query = query.limit(MAX_ALL_ORDERS_ROWS);
@@ -956,4 +970,12 @@ export async function GET(request: Request) {
   const orders = (data ?? []).map((row) => toOrderResponse(row as OrderRowWithItems));
 
   return NextResponse.json({ orders });
+}
+
+/** A real calendar date as YYYY-MM-DD (rejects 2026-02-30). */
+function isRealIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }

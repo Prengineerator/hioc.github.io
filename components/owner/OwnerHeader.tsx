@@ -12,6 +12,8 @@ const LINKS = [
   // tab to tag the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on (Gate 7A).
   { href: '/owner/suggestions', label: 'Suggestions' },
   { href: '/owner/payments', label: 'Payments' },
+  // Reconcile any date range: sales, money in by method, refunds, drawer.
+  { href: '/owner/reports', label: 'Reports' },
   { href: '/owner/promotions', label: 'Promotions' },
   { href: '/owner/reviews', label: 'Reviews' },
   { href: '/owner/feedback', label: 'Feedback' },
