@@ -8,7 +8,7 @@
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { startOfTodayIstIso } from '@/lib/api/date';
+import { istDateString } from '@/lib/api/date';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import {
@@ -151,10 +151,11 @@ function metric(value: number, prior: number): GlanceMetric {
 export async function getTodayAtAGlance(): Promise<TodayAtAGlance> {
   const admin = createAdminSupabaseClient();
 
-  const todayIso = startOfTodayIstIso().slice(0, 10);
-  const lastWeekIso = new Date(Date.parse(startOfTodayIstIso()) - 7 * DAY_MS)
-    .toISOString()
-    .slice(0, 10);
+  // IST calendar dates, matching v_daily_sales.sale_date. (This used to slice
+  // startOfTodayIstIso(), whose UTC date is always yesterday, so "Today"
+  // showed yesterday's sales.)
+  const todayIso = istDateString(0);
+  const lastWeekIso = istDateString(7);
 
   const [{ data: sales }, { count: inProgress }] = await Promise.all([
     admin.from('v_daily_sales').select('*').in('sale_date', [todayIso, lastWeekIso]),
