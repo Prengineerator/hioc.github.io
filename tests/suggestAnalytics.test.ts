@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 // Pure — no Supabase, no 'server-only' — same posture as customerSegments.test.ts.
 import { computeSuggestionStats } from '@/lib/suggest/analytics';
+import { withInputDefaults } from '@/lib/suggest/inputs';
+import { MOODS } from '@/lib/suggest/types';
 import type { SuggestionEventRow, SuggestionSessionRow, SuggestInputs } from '@/lib/suggest/types';
 
 const WINDOW_START = '2026-09-17T00:00:00.000Z';
 
-function inputs(mood: SuggestInputs['mood']): SuggestInputs {
-  return { temperature: 'either', base: 'either', extras: [], needs: [], budget: 'any', mood, note: '' };
+function inputs(mood: SuggestInputs['mood'], over: Partial<SuggestInputs> = {}): SuggestInputs {
+  return withInputDefaults({ mood, ...over });
 }
 
 function session(over: Partial<SuggestionSessionRow> & { id: string }): SuggestionSessionRow {
@@ -120,15 +122,44 @@ describe('computeSuggestionStats', () => {
     expect(stats.webAovInr).toBe(350); // (300 + 500 + 250) / 3
   });
 
-  it('builds a zero-filled mood mix with per-mood conversion', () => {
+  it('builds a zero-filled mood mix with per-mood conversion — every mood, the new ones included', () => {
+    // MOODS order: boost, focus, unwind, cosy, comfort, celebrate, cool, surprise.
     expect(stats.moodMix).toEqual([
       { mood: 'boost', sessions: 2, ordered: 1 }, // s1 (ordered), s3 (not)
+      { mood: 'focus', sessions: 0, ordered: 0 }, // new in Coffey
+      { mood: 'unwind', sessions: 0, ordered: 0 }, // new in Coffey
       { mood: 'cosy', sessions: 1, ordered: 0 }, // s2
-      { mood: 'celebrate', sessions: 1, ordered: 0 }, // s4
       { mood: 'comfort', sessions: 0, ordered: 0 },
+      { mood: 'celebrate', sessions: 1, ordered: 0 }, // s4
       { mood: 'cool', sessions: 1, ordered: 1 }, // s5
       { mood: 'surprise', sessions: 0, ordered: 0 },
     ]);
+    expect(stats.moodMix.map((m) => m.mood)).toEqual([...MOODS]);
+  });
+
+  it('counts a session under its PRIMARY feeling only; the optional second one is not a session of its own', () => {
+    const out = computeSuggestionStats({
+      sessions: [
+        session({ id: 'two', inputs: inputs('focus', { secondaryMood: 'unwind' }) }),
+        session({ id: 'one', inputs: inputs('unwind') }),
+      ],
+      events: [event({ session_id: 'two', event: 'ordered', order_id: 'o1', value_inr: 100, menu_item_id: 'i' })],
+      webOrders: [],
+      itemNames: new Map(),
+      windowStart: WINDOW_START,
+    });
+    const byMood = Object.fromEntries(out.moodMix.map((m) => [m.mood, m]));
+    expect(byMood.focus).toEqual({ mood: 'focus', sessions: 1, ordered: 1 });
+    expect(byMood.unwind).toEqual({ mood: 'unwind', sessions: 1, ordered: 0 });
+  });
+
+  it('still reads a session persisted before Coffey (v1 inputs, no secondaryMood or kinds)', () => {
+    const legacy = session({
+      id: 'old',
+      inputs: { temperature: 'either', base: 'either', extras: [], needs: [], budget: 'any', mood: 'cosy', note: '' } as unknown as SuggestInputs,
+    });
+    const out = computeSuggestionStats({ sessions: [legacy], events: [], webOrders: [], itemNames: new Map(), windowStart: WINDOW_START });
+    expect(out.moodMix.find((m) => m.mood === 'cosy')).toEqual({ mood: 'cosy', sessions: 1, ordered: 0 });
   });
 
   it('tallies per-item suggested/added/ordered/feedback, sorted by suggested desc then name', () => {

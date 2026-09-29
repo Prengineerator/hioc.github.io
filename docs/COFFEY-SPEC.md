@@ -239,7 +239,7 @@ This replaces v1's `pickWithVarietyTieBreak`.
   - With v2 traits: `"{Descriptor}{ and descriptor2}{, with <flavour phrase>} — {mood clause}."`, e.g. "Bold and crisp, with espresso and roasty notes — a good lift when you need the energy."
   - Descriptors, chosen by what the customer asked for first:
     - intensity (drinks): 3 bold, 2 full-flavoured, 1 mellow, 0 gentle
-    - sweetness (only when the customer set one, or it is ≤1 or ≥8): 0–1 unsweetened, 2–3 barely sweet, 4–5 lightly sweet, 6–7 sweet, 8–10 dessert-sweet
+    - sweetness (only when the customer set one, or it is ≤1 or ≥8): 0–1 unsweetened, 2–3 lightly sweet, 4–5 medium-sweet, 6–8 sweet, 9–10 dessert-sweet. These bands line up with the customer scale (targets 0 / 3 / 5 / 7 / 10), so an item that hits the target reads as the customer's own word
     - refreshment ≥2: crisp and refreshing
     - the first texture
   - Flavour phrase: the customer's requested family if it matched (chocolatey → "rich chocolate notes", caramel → "buttery caramel notes", nutty → "toasty nutty notes", biscuit → "cookie-crumb notes", fruity → "a bright, fruity flavour", spiced → "warm spice", floral → "delicate floral notes", savoury → "cheesy, savoury comfort"). Otherwise the top two flavour notes.
@@ -249,7 +249,7 @@ This replaces v1's `pickWithVarietyTieBreak`.
 - **Match tags** (`matchTagsFor`, ≤3, fixed vocabulary, in priority order):
   1. mood (fit ≥ 2 or membership): `MOOD_INFO[m].tag`, i.e. A proper lift / Good for focus / Calming / Cosy / Comforting / A treat / Refreshing / Something new
   2. the matched requested flavour family label
-  3. sweetness pref label when achievable within ±2 (No sugar / Lightly sweet / Medium sweet / Sweet / Very sweet)
+  3. the sweetness label (Not sweet / Lightly sweet / Medium sweet / Sweet / Very sweet), only when the achievable sweetness falls in the **same band** as the target, so the tag never contradicts the reason's descriptor
   4. Strong / Smooth & milky, when requested and matched
   5. Iced / Hot, when requested
   6. Light & refreshing / Rich & filling, when requested and matched

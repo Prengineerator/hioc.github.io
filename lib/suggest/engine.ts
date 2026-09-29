@@ -14,6 +14,9 @@
 //   5. usual     lib/suggest/profile.ts   pickUsual, excluded from picks
 //   6. relaxHint lib/suggest/filter.ts    relaxHintFor
 //   7. tone      lib/suggest/tone.ts      lintReason on the header
+//   8. decorate  lib/suggest/templates.ts matchTagsFor + lib/suggest/sugar.ts
+//                sugarPresetFor on every pick AND the usual (COFFEY-SPEC §4.6,
+//                §4.7), once the picks are final
 //
 // Pure: no Supabase, no 'server-only', no network — every dependency is
 // either a pure lib or injected (`decider`), so this runs in a unit test with
@@ -21,7 +24,9 @@
 
 import { filterCandidates, relaxHintFor } from './filter';
 import { buildShortlist, scoreCandidates } from './score';
-import { deterministicPicks, templateHeader, templateReason } from './templates';
+import { isSugarAdjustable, sugarPresetFor } from './sugar';
+import { sweetnessLevel } from './sweetness';
+import { deterministicPicks, matchTagsFor, reasonCodeFor, templateHeader, templateReason } from './templates';
 import { lintReason } from './tone';
 import { pickUsual, summarizeProfile } from './profile';
 import { daypartFor } from './daypart';
@@ -100,10 +105,35 @@ function topUpPicks(picks: SuggestionPick[], shortlist: Candidate[], inputs: Sug
     if (out.length >= SUGGEST_LIMITS.picks) break;
     if (seen.has(c.menuItemId)) continue;
     seen.add(c.menuItemId);
-    const reasonCode: SuggestionPick['reasonCode'] = c.traits.moods.includes(inputs.mood) ? inputs.mood : 'trait';
-    out.push({ menuItemId: c.menuItemId, reason: templateReason(c.traits, inputs, reasonCode, c.name), reasonCode });
+    const reasonCode = reasonCodeFor(c.traits, inputs);
+    out.push({
+      menuItemId: c.menuItemId,
+      reason: templateReason(c.traits, inputs, reasonCode, c.name, c.sugarAdjustable),
+      reasonCode,
+    });
   }
   return out;
+}
+
+/** COFFEY-SPEC §4.6/§4.7 — a final pick (or the usual) with its "why it
+ * matches" tags and the sugar option to preselect. Both are read off the menu
+ * row and its traits — the same for a pick, the usual and a decider's pick —
+ * so nothing a decider wrote can affect either. Never throws: a pick whose row
+ * has gone missing simply carries no tags and no preset. */
+function decorate(
+  pick: SuggestionPick,
+  inputs: SuggestInputs,
+  itemsById: Map<string, MenuItem>,
+  traitsById: Map<string, MenuItemTraits>,
+): SuggestionPick {
+  const item = itemsById.get(pick.menuItemId);
+  const traits = traitsById.get(pick.menuItemId);
+  if (!item || !traits) return { ...pick, matchTags: [], sugarPreset: null };
+  return {
+    ...pick,
+    matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) }, inputs),
+    sugarPreset: sugarPresetFor(item, inputs.sweetness, sweetnessLevel(traits)),
+  };
 }
 
 export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult> {
@@ -197,18 +227,27 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     );
   }
 
+  const itemsById = new Map(menu.map((m) => [m.id, m]));
+  const usualItem = usualItemId ? itemsById.get(usualItemId) : undefined;
   const usualTraits = usualItemId ? traitsById.get(usualItemId) : undefined;
-  const usualName = usualItemId ? menu.find((m) => m.id === usualItemId)?.name : undefined;
-  const usual: SuggestionPick | null = usualItemId && usualTraits
-    ? { menuItemId: usualItemId, reason: templateReason(usualTraits, inputs, 'usual', usualName), reasonCode: 'usual' }
-    : null;
+  const usualBase: SuggestionPick | null =
+    usualItemId && usualItem && usualTraits
+      ? {
+          menuItemId: usualItemId,
+          reason: templateReason(usualTraits, inputs, 'usual', usualItem.name, isSugarAdjustable(usualItem)),
+          reasonCode: 'usual',
+        }
+      : null;
 
   // 7 — tone lint on the header (model-written OR our own template — belt and
   // braces): a failing header is replaced, never shown raw (§4 Enforcement).
   if (!lintReason(header).ok) header = templateHeader(inputs.mood);
 
+  // 8 — decorate, now that the picks (LLM or fallback, usual removed) are final.
+  picks = picks.map((p) => decorate(p, inputs, itemsById, traitsById));
+  const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById) : null;
+
   const pickIds = picks.map((p) => p.menuItemId);
-  const itemsById = new Map(menu.map((m) => [m.id, m]));
   const items = [...(usualItemId ? [usualItemId] : []), ...pickIds]
     .map((id) => itemsById.get(id))
     .filter((i): i is MenuItem => Boolean(i));

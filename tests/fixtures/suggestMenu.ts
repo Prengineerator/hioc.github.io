@@ -5,8 +5,16 @@
 //
 // house style: pure fixtures, no Supabase — see tests/customerSegments.test.ts
 // for the sibling pattern (factory functions + sensible overrides).
+//
+// Coffey v2 (docs/COFFEY-SPEC.md): alongside the pre-Coffey rows (legacy 0–3
+// `sweetness` only, no v2 fields — exactly what the live table held before the
+// migration) there are a few rows tagged under §3 (`traits_version: 2`,
+// `sweetness_level` 0–10, intensity, textures, a graded mood_fit) and coffees
+// carrying the live "Choice of Sugar" group (§4.7). Both eras coexist on
+// purpose: the engine has to treat them side by side until every row is re-tagged.
 
-import type { MenuItem, MenuItemVariant } from '@/lib/types';
+import type { AddonGroup, MenuItem, MenuItemVariant } from '@/lib/types';
+import { legacySweetnessFromLevel } from '@/lib/suggest/sweetness';
 import type { MenuItemTraits } from '@/lib/suggest/types';
 
 let variantSeq = 0;
@@ -56,6 +64,57 @@ function traits(over: Partial<MenuItemTraits> & { menu_item_id: string }): MenuI
     confirmed: true,
     updated_at: '2026-01-01T00:00:00Z',
     ...over,
+  };
+}
+
+/** For tests that need a one-off item or row in the fixture's own style. */
+export const makeMenuItem = menuItem;
+export const makeTraits = traits;
+
+/** A row tagged under COFFEY-SPEC §3: v2 fields present, the legacy 0–3
+ * `sweetness` derived from `sweetness_level` exactly as every v2 write does
+ * (legacySweetnessFromLevel). Neutral defaults for what a row doesn't say. */
+function traitsV2(over: Partial<MenuItemTraits> & { menu_item_id: string; sweetness_level: number }): MenuItemTraits {
+  return traits({
+    traits_version: 2,
+    sweetness: legacySweetnessFromLevel(over.sweetness_level),
+    intensity: 1,
+    refreshment: 1,
+    indulgence: 1,
+    novelty: 1,
+    textures: [],
+    mood_fit: {},
+    ...over,
+  });
+}
+export const makeTraitsV2 = traitsV2;
+
+/** The live "Choice of Sugar" group (2026-09-29): single-select, required, with
+ * a paid Stevia, a flavour choice (Brown Sugar), and the two options the sugar
+ * preset steers between. `prefix` keeps ids unique per item. */
+export function buildSugarGroup(prefix = 'sugar'): AddonGroup {
+  const groupId = `${prefix}-group`;
+  const option = (key: string, name: string, priceInr: number, sortOrder: number) => ({
+    id: `${prefix}-${key}`,
+    addon_group_id: groupId,
+    name,
+    price_inr: priceInr,
+    sort_order: sortOrder,
+  });
+  return {
+    id: groupId,
+    name: 'Sugar',
+    display_name: 'Choice of Sugar',
+    selection_type: 'single',
+    min_select: 1,
+    max_select: 1,
+    sort_order: 20,
+    options: [
+      option('stevia', 'Stevia (sugarfree)', 10, 0),
+      option('brown', 'Brown Sugar', 0, 10),
+      option('none', 'No Sugar', 0, 20),
+      option('normal', 'Normal', 0, 30),
+    ],
   };
 }
 
@@ -713,6 +772,248 @@ export const SNOOZED_ITEM_TRAITS = traits({
 });
 
 // ---------------------------------------------------------------------------
+// Coffey v2 rows (docs/COFFEY-SPEC.md §3.1). One pre-Coffey shake first — the
+// "thick shake scored like an iced americano" case from the §4.2 amendment —
+// then rows carrying v2 traits, two of them with the live sugar group.
+// ---------------------------------------------------------------------------
+
+// Legacy traits (no v2 fields). Tagged 'cool' like the live row was, so under v1
+// scoring it tied with Americano Iced on "cool me down".
+export const OREO_CREME = menuItem({
+  id: 'oreo-creme',
+  name: 'Oreo Creme',
+  category: 'Creme Non-Coffee',
+  parent_category: 'Creme',
+  priceInr: 195,
+});
+export const OREO_CREME_TRAITS = traits({
+  menu_item_id: 'oreo-creme',
+  temperature: 'iced',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness: 3,
+  body: 'rich',
+  kind: 'drink',
+  moods: ['cool', 'celebrate', 'comfort'],
+  dayparts: ['afternoon', 'evening'],
+  flavor_notes: ['oreo', 'creamy'],
+});
+
+// A coffee that can be made with or without sugar (the live "Sugar" group), v2.
+export const SIGNATURE_ICED_BREW = menuItem({
+  id: 'signature-iced-brew',
+  name: 'Signature Iced Brew',
+  category: 'Cold Brew',
+  parent_category: 'Iced Drinks',
+  priceInr: 165,
+  addon_groups: [buildSugarGroup('iced-brew')],
+});
+export const SIGNATURE_ICED_BREW_TRAITS = traitsV2({
+  menu_item_id: 'signature-iced-brew',
+  temperature: 'iced',
+  caffeine: 'high',
+  is_coffee: true,
+  sweetness_level: 0,
+  body: 'light',
+  kind: 'drink',
+  intensity: 3,
+  refreshment: 3,
+  indulgence: 0,
+  novelty: 1,
+  textures: ['icy'],
+  mood_fit: { boost: 3, focus: 2.5, cosy: 0, comfort: 0.5, celebrate: 0.5, cool: 3, surprise: 1 },
+  moods: ['boost', 'focus', 'cool'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['espresso'],
+});
+
+// A sweeter coffee, also sugar-adjustable: inherent 4, so "Normal" lifts it to 7.
+export const CARAMEL_ICED_LATTE = menuItem({
+  id: 'caramel-iced-latte',
+  name: 'Caramel Latte Iced',
+  category: 'Iced Coffee',
+  parent_category: 'Iced Drinks',
+  priceInr: 170,
+  addon_groups: [buildSugarGroup('caramel-latte')],
+});
+export const CARAMEL_ICED_LATTE_TRAITS = traitsV2({
+  menu_item_id: 'caramel-iced-latte',
+  temperature: 'iced',
+  caffeine: 'medium',
+  is_coffee: true,
+  sweetness_level: 4,
+  body: 'medium',
+  kind: 'drink',
+  intensity: 2,
+  refreshment: 2,
+  indulgence: 2,
+  novelty: 1,
+  textures: ['silky'],
+  mood_fit: { boost: 1.5, focus: 2, cosy: 0.5, comfort: 1.5, celebrate: 1.5, cool: 2.5, surprise: 1 },
+  moods: ['focus', 'cool'],
+  dayparts: ['morning', 'afternoon', 'evening'],
+  flavor_notes: ['caramel', 'espresso'],
+});
+
+export const NUTELLA_SHAKE = menuItem({
+  id: 'nutella-shake',
+  name: 'Nutella Shake',
+  category: 'Shakes',
+  parent_category: 'Iced Drinks',
+  priceInr: 210,
+});
+export const NUTELLA_SHAKE_TRAITS = traitsV2({
+  menu_item_id: 'nutella-shake',
+  temperature: 'iced',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness_level: 9,
+  body: 'rich',
+  kind: 'drink',
+  intensity: 2,
+  refreshment: 1,
+  indulgence: 3,
+  novelty: 1,
+  textures: ['thick', 'creamy'],
+  mood_fit: { boost: 0, focus: 0, cosy: 1, comfort: 2.5, celebrate: 3, cool: 1.5, surprise: 1 },
+  moods: ['celebrate', 'comfort'],
+  dayparts: ['afternoon', 'evening', 'late'],
+  flavor_notes: ['chocolate', 'hazelnut'],
+});
+
+export const MATCHA_LATTE = menuItem({
+  id: 'matcha-latte',
+  name: 'Matcha Latte',
+  category: 'Hot Non-Coffee',
+  parent_category: 'Hot',
+  priceInr: 170,
+});
+export const MATCHA_LATTE_TRAITS = traitsV2({
+  menu_item_id: 'matcha-latte',
+  temperature: 'hot',
+  caffeine: 'low',
+  is_coffee: false,
+  sweetness_level: 4,
+  body: 'medium',
+  kind: 'drink',
+  intensity: 1,
+  refreshment: 1,
+  indulgence: 1,
+  novelty: 2,
+  textures: ['silky'],
+  mood_fit: { boost: 1, focus: 3, cosy: 2.5, comfort: 1.5, celebrate: 0.5, cool: 0, surprise: 1.5 },
+  moods: ['focus', 'cosy'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['matcha'],
+});
+
+export const ROSE_LATTE = menuItem({
+  id: 'rose-latte',
+  name: 'Rose Latte',
+  category: 'Hot Non-Coffee',
+  parent_category: 'Hot',
+  priceInr: 160,
+});
+export const ROSE_LATTE_TRAITS = traitsV2({
+  menu_item_id: 'rose-latte',
+  temperature: 'hot',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness_level: 5,
+  body: 'medium',
+  kind: 'drink',
+  intensity: 1,
+  refreshment: 1,
+  indulgence: 2,
+  novelty: 3,
+  textures: ['silky'],
+  mood_fit: { boost: 0, focus: 0.5, cosy: 2.5, comfort: 1.5, celebrate: 1.5, cool: 0, surprise: 3 },
+  moods: ['surprise', 'cosy'],
+  dayparts: ['morning', 'afternoon', 'evening'],
+  flavor_notes: ['rose', 'vanilla'],
+});
+
+export const CHEESY_GARLIC_BREAD = menuItem({
+  id: 'cheesy-garlic-bread',
+  name: 'Cheesy Garlic Bread',
+  category: 'Savouries',
+  parent_category: 'Eatery',
+  priceInr: 180,
+});
+export const CHEESY_GARLIC_BREAD_TRAITS = traitsV2({
+  menu_item_id: 'cheesy-garlic-bread',
+  temperature: 'hot',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness_level: 0,
+  body: 'medium',
+  kind: 'food',
+  intensity: 2,
+  refreshment: 0,
+  indulgence: 2,
+  novelty: 0,
+  textures: ['crispy', 'gooey'],
+  mood_fit: { boost: 0, focus: 0.5, cosy: 2, comfort: 3, celebrate: 1.5, cool: 0, surprise: 0.5 },
+  moods: ['comfort', 'cosy'],
+  dayparts: ['afternoon', 'evening', 'late'],
+  flavor_notes: ['garlic', 'cheesy'],
+});
+
+// A very sweet dessert (level 9 — over the ceiling of "no sugar", "lightly
+// sweet" and "medium") and a barely sweet one (level 3 — under all of them).
+export const FUDGE_BROWNIE = menuItem({
+  id: 'fudge-brownie',
+  name: 'Fudge Brownie',
+  category: 'Brownies',
+  parent_category: '',
+  priceInr: 120,
+});
+export const FUDGE_BROWNIE_TRAITS = traitsV2({
+  menu_item_id: 'fudge-brownie',
+  temperature: 'ambient',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness_level: 9,
+  body: 'rich',
+  kind: 'dessert',
+  intensity: 2,
+  refreshment: 0,
+  indulgence: 3,
+  novelty: 0,
+  textures: ['gooey', 'chewy'],
+  mood_fit: { boost: 0, focus: 0, cosy: 1.5, comfort: 3, celebrate: 3, cool: 0, surprise: 0.5 },
+  moods: ['comfort', 'celebrate'],
+  dayparts: ['afternoon', 'evening', 'late'],
+  flavor_notes: ['chocolate'],
+});
+
+export const ALMOND_BISCOTTI = menuItem({
+  id: 'almond-biscotti',
+  name: 'Almond Biscotti',
+  category: 'Cookies',
+  parent_category: '',
+  priceInr: 90,
+});
+export const ALMOND_BISCOTTI_TRAITS = traitsV2({
+  menu_item_id: 'almond-biscotti',
+  temperature: 'ambient',
+  caffeine: 'none',
+  is_coffee: false,
+  sweetness_level: 3,
+  body: 'light',
+  kind: 'dessert',
+  intensity: 1,
+  refreshment: 0,
+  indulgence: 1,
+  novelty: 1,
+  textures: ['crunchy'],
+  mood_fit: { boost: 0.5, focus: 2, cosy: 2, comfort: 1, celebrate: 0.5, cool: 0, surprise: 1 },
+  moods: ['focus', 'cosy'],
+  dayparts: ['morning', 'afternoon'],
+  flavor_notes: ['almond', 'buttery'],
+});
+
+// ---------------------------------------------------------------------------
 // Aggregates
 // ---------------------------------------------------------------------------
 
@@ -746,6 +1047,15 @@ export const SUGGEST_FIXTURE_ITEMS: MenuItem[] = [
   BLUEBERRY_CHEESECAKE,
   BISCOFF_CHEESECAKE,
   RED_VELVET_CUPCAKE,
+  OREO_CREME,
+  SIGNATURE_ICED_BREW,
+  CARAMEL_ICED_LATTE,
+  NUTELLA_SHAKE,
+  MATCHA_LATTE,
+  ROSE_LATTE,
+  CHEESY_GARLIC_BREAD,
+  FUDGE_BROWNIE,
+  ALMOND_BISCOTTI,
   NO_TRAITS_ITEM,
   UNAVAILABLE_ITEM,
   SNOOZED_ITEM,
@@ -781,6 +1091,15 @@ const TRAITS_LIST: MenuItemTraits[] = [
   BLUEBERRY_CHEESECAKE_TRAITS,
   BISCOFF_CHEESECAKE_TRAITS,
   RED_VELVET_CUPCAKE_TRAITS,
+  OREO_CREME_TRAITS,
+  SIGNATURE_ICED_BREW_TRAITS,
+  CARAMEL_ICED_LATTE_TRAITS,
+  NUTELLA_SHAKE_TRAITS,
+  MATCHA_LATTE_TRAITS,
+  ROSE_LATTE_TRAITS,
+  CHEESY_GARLIC_BREAD_TRAITS,
+  FUDGE_BROWNIE_TRAITS,
+  ALMOND_BISCOTTI_TRAITS,
   // NO_TRAITS_ITEM deliberately has no entry.
   UNAVAILABLE_ITEM_TRAITS,
   SNOOZED_ITEM_TRAITS,

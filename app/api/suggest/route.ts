@@ -56,6 +56,14 @@ async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[
     console.error('suggest route: traits load failed', traitsResult.error);
   }
 
+  // Coffey v2 (COFFEY-SPEC §4.7): MENU_ITEM_SELECT brings every item's addon
+  // groups WITH their options, and shapeMenuItem keeps them on `addon_groups`.
+  // Sugar detection (lib/suggest/sugar.ts) reads exactly that, both to rank a
+  // sugar-adjustable coffee fairly and to preselect its sugar option, and the
+  // rows come back in the response's `items` for the customise modal — so don't
+  // narrow this select. applyMenuSwitches below drops switched-off options, so a
+  // "No Sugar" that is out of stock can never be the preset.
+  //
   // In-store-only items (water bottles…) are never suggested — not even as a
   // regular's "usual", though their counter orders and Petpooja history may be
   // full of them.

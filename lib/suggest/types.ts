@@ -277,7 +277,7 @@ export interface SuggestionPick {
   reason: string; // ≤ 120 chars, tone-linted
   reasonCode: Mood | 'trait' | 'usual' | 'popular';
   /** ≤ 3 short "why it matches" labels from a fixed vocabulary
-   * (COFFEY-SPEC §4.6), e.g. ["A proper lift", "Iced", "No sugar"]. */
+   * (COFFEY-SPEC §4.6), e.g. ["A proper lift", "Iced", "Not sweet"]. */
   matchTags?: string[];
   /** The sugar option to preselect in the customise modal (COFFEY-SPEC §4.7);
    * null/absent when the customer chose no sweetness or the item has no

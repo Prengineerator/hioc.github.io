@@ -1,16 +1,27 @@
-// Phase 7 · SUG-3 — the hard filter (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §5.2).
+// Phase 7 · SUG-3 — the hard filter (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §5.2,
+// as amended by docs/COFFEY-SPEC.md §4.1).
 //
 // This is the ONLY thing standing between a customer's explicit ask and an
-// unavailable/over-budget/wrong-temperature/caffeinated item — it must hold
-// 100% of the time (§0 DoD, §6.1). Nothing here is a model call; every rule
-// is deterministic and covered by the exhaustive hard-constraint suite in
-// tests/suggestFilter.test.ts.
+// unavailable/over-budget/wrong-temperature/caffeinated/too-sweet item — it
+// must hold 100% of the time (§0 DoD, §6.1). Nothing here is a model call;
+// every rule is deterministic and covered by the exhaustive hard-constraint
+// suite in tests/suggestFilter.test.ts.
 //
 // Pure: no Supabase, no 'server-only'.
 
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { MenuItem } from '@/lib/types';
-import type { Budget, BasePref, MenuItemTraits, RelaxHint, SuggestInputs, TemperaturePref } from './types';
+import { sweetnessLevel, sweetnessTarget } from './sweetness';
+import type {
+  Budget,
+  BasePref,
+  MenuItemTraits,
+  RelaxHint,
+  SuggestInputs,
+  SweetnessPref,
+  TemperaturePref,
+} from './types';
+import { BUDGET_CAPS, SWEETNESS_SCALE } from './types';
 
 /** Cheapest variant price (§5.2.4). An item with no variants can never be
  * confirmed affordable, so it prices as +Infinity rather than 0 — failing
@@ -22,9 +33,9 @@ export function minPriceInr(item: Pick<MenuItem, 'variants'>): number {
 }
 
 /**
- * §5.2, all six rules. `traits` is `undefined` when the item has no traits
- * row at all — rule 1 — which is why this takes `MenuItemTraits | undefined`
- * rather than requiring a Candidate: it also gets reused directly by
+ * COFFEY-SPEC §4.1, all six rules. `traits` is `undefined` when the item has
+ * no traits row at all — rule 1 — which is why this takes `MenuItemTraits |
+ * undefined` rather than requiring a Candidate: it also gets reused directly by
  * lib/suggest/profile.ts's `pickUsual` to re-check a "usual" item against
  * today's inputs.
  */
@@ -34,36 +45,22 @@ export function passesHardConstraints(
   inputs: SuggestInputs,
   excludeIds: string[],
 ): boolean {
-  // §5.2.1 — no traits row, or not currently orderable: never a candidate.
+  // §4.1.1 — no traits row, or not currently orderable: never a candidate.
   if (!traits) return false;
   if (!isMenuItemAvailable(item)) return false;
 
-  // §5.2.6 — already shown in this refine chain.
+  // Already shown in this refine chain.
   if (excludeIds.includes(item.id)) return false;
 
-  // §5.2.2b — composition: food only leaks into a "help me choose" answer
-  // when the customer actually asked to eat (root cause: production sessions
-  // were shown food/dessert for plain drink requests). 'eat'/'filling' admit
-  // food; 'eat'/'sweet'/'filling' or a celebrating mood admit dessert.
-  // Neither 'chocolatey' nor 'fruity' admits food/dessert on their own —
-  // they're soft flavour steers (§5.3), not a reason to serve cake instead
-  // of a drink.
-  if (traits.kind === 'food' && !(inputs.extras.includes('eat') || inputs.extras.includes('filling'))) {
-    return false;
-  }
-  if (
-    traits.kind === 'dessert' &&
-    !(
-      inputs.extras.includes('eat') ||
-      inputs.extras.includes('sweet') ||
-      inputs.extras.includes('filling') ||
-      inputs.mood === 'celebrate'
-    )
-  ) {
-    return false;
-  }
+  // §4.1.2 — composition. The customer says what they want ("a drink", "something
+  // sweet to eat", "something savoury"); an item is a candidate only when its kind
+  // is one of them. This replaces v1's eat/sweet/filling/celebrate rule, which now
+  // lives only in upgradeV1Inputs (root cause of the production sessions that were
+  // shown food/dessert for plain drink requests). A flavour steer or a mood never
+  // admits a kind on its own.
+  if (!inputs.kinds.includes(traits.kind)) return false;
 
-  // §5.2.2 — temperature. DRINKS ONLY: a hot food item (garlic bread, say)
+  // §4.1.3 — temperature. DRINKS ONLY: a hot food item (garlic bread, say)
   // must never be excluded just because the customer wants an iced drink —
   // temperature is a drink-serving concept, not a food one. 'either' (served
   // either way) drinks satisfy both Hot and Iced chip values by not equalling
@@ -73,19 +70,26 @@ export function passesHardConstraints(
     if (inputs.temperature === 'iced' && traits.temperature === 'hot') return false;
   }
 
-  // §5.2.3 — base + caffeine need. "Coffee" only restricts drinks; food and
+  // §4.1.4 — base + caffeine need. "Coffee" only restricts drinks; food and
   // dessert pass regardless of is_coffee, per the spec text verbatim.
   if (inputs.base === 'no_coffee' && traits.is_coffee) return false;
   if (inputs.base === 'coffee' && traits.kind === 'drink' && !traits.is_coffee) return false;
   if (inputs.needs.includes('no_caffeine') && traits.caffeine !== 'none') return false;
 
-  // §5.2.5 — less sugar excludes the top sweetness band only.
-  if (inputs.needs.includes('less_sugar') && traits.sweetness === 3) return false;
+  // §4.1.5 — the sweetness ceiling. The item's INHERENT sweetness can be raised
+  // by optional table sugar but never lowered, so the only thing the customer's
+  // choice rules out is an item already sweeter than they want by more than the
+  // tolerance. Legacy rows read through sweetnessLevel() (0→0, 1→3, 2→6, 3→9),
+  // which reproduces v1's "less sugar excludes sweetness 3" exactly.
+  const target = sweetnessTarget(inputs.sweetness);
+  if (target !== null && sweetnessLevel(traits) > target + SWEETNESS_SCALE.tolerance) return false;
 
-  // §5.2.4 — budget, cheapest variant. 'treat' and 'any' both mean no cap.
-  const price = minPriceInr(item);
-  if (inputs.budget === 'under_150' && price > 150) return false;
-  if (inputs.budget === '150_300' && (price < 150 || price > 300)) return false;
+  // §4.1.6 — budget: a CEILING on the cheapest size (BUDGET_CAPS; 'any' has no
+  // cap). v1's "₹150–₹300" was a band that hid every item under ₹150; a ceiling
+  // never does. An item with no priced size can't be confirmed affordable, so it
+  // prices as +Infinity and fails every ceiling (minPriceInr).
+  const cap = BUDGET_CAPS[inputs.budget];
+  if (cap !== null && minPriceInr(item) > cap) return false;
 
   return true;
 }
@@ -114,36 +118,41 @@ export function filterCandidates(
 }
 
 // ---------------------------------------------------------------------------
-// §5.2 last paragraph — "the response carries relaxHint naming the single
-// constraint whose removal adds the most candidates (budget first, then
-// temperature, then extras)". RELAX_ORDER below only ever names one of the
-// customer's own chips (budget/temperature/base/needs) — never a derived
-// rule the customer didn't directly set. In particular: 'extras' (sweet/eat/
-// light/filling/chocolatey/fruity) and mood now also gate composition
-// (food/dessert eligibility, above) so they CAN be part of why a request is
-// short — but they're deliberately never offered as a relaxHint. Turning off
-// "less sugar" or "no caffeine" is a sensible thing to offer; silently
-// turning ON "Something to eat" the customer never asked for is not — that
-// would put food in front of someone who explicitly wants a drink, exactly
-// the bug this composition rule exists to fix. So only budget, temperature,
-// base and needs — real, offerable customer choices — can ever be named.
-// Order given by this ticket's assignment (which reconciles that note):
-// budget, temperature, base, needs — used both as the relaxation order and
-// as the tie-break when two relaxations would add the same number of
-// candidates.
+// §5.2 last paragraph, as amended by COFFEY-SPEC §4.1 — "the response carries
+// relaxHint naming the single constraint whose removal adds the most
+// candidates". RELAX_ORDER below only ever names one of the customer's own
+// choices — budget, temperature, sweetness, base, needs — never a derived rule
+// the customer didn't directly set. In particular `kinds` (what they want to
+// have: a drink, something sweet, something savoury) is deliberately NEVER
+// offered: silently turning ON food the customer never asked for is exactly the
+// v1 bug the composition rule exists to fix. Turning off "no caffeine" or
+// letting the sweetness ceiling go is a sensible thing to offer; adding a kind
+// is not.
+//
+// Order: budget, temperature, sweetness, base, needs — used both as the
+// relaxation order and as the tie-break when two relaxations would add the same
+// number of candidates.
 // ---------------------------------------------------------------------------
 
-type RelaxableConstraint = 'budget' | 'temperature' | 'base' | 'needs';
+type RelaxableConstraint = 'budget' | 'temperature' | 'sweetness' | 'base' | 'needs';
 
-const RELAX_ORDER: RelaxableConstraint[] = ['budget', 'temperature', 'base', 'needs'];
+const RELAX_ORDER: RelaxableConstraint[] = ['budget', 'temperature', 'sweetness', 'base', 'needs'];
 
-/** True when this chip is currently doing something a relax could undo. */
+/** True when this choice is currently doing something a relax could undo. */
 function isRestrictive(constraint: RelaxableConstraint, inputs: SuggestInputs): boolean {
   switch (constraint) {
     case 'budget':
-      return inputs.budget === 'under_150' || inputs.budget === '150_300';
+      return BUDGET_CAPS[inputs.budget] !== null;
     case 'temperature':
       return inputs.temperature !== 'either';
+    case 'sweetness': {
+      // Anything but 'any' — with one honest exception: 'sweet' and 'very' set a
+      // ceiling (target + tolerance) at or above the top of the scale, so they can
+      // never exclude an item. Offering to relax a choice that is excluding
+      // nothing would blame the wrong constraint for a short list.
+      const target = sweetnessTarget(inputs.sweetness);
+      return target !== null && target + SWEETNESS_SCALE.tolerance < SWEETNESS_SCALE.max;
+    }
     case 'base':
       return inputs.base !== 'either';
     case 'needs':
@@ -157,6 +166,8 @@ function relax(constraint: RelaxableConstraint, inputs: SuggestInputs): SuggestI
       return { ...inputs, budget: 'any' as Budget };
     case 'temperature':
       return { ...inputs, temperature: 'either' as TemperaturePref };
+    case 'sweetness':
+      return { ...inputs, sweetness: 'any' as SweetnessPref };
     case 'base':
       return { ...inputs, base: 'either' as BasePref };
     case 'needs':
@@ -164,15 +175,15 @@ function relax(constraint: RelaxableConstraint, inputs: SuggestInputs): SuggestI
   }
 }
 
+/** "up to ₹150" — the customer's own ceiling, in the words the budget chips use. */
 function budgetLabel(budget: Budget): string {
-  if (budget === 'under_150') return '₹150';
-  if (budget === '150_300') return '₹150–300';
-  return 'your budget';
+  const cap = BUDGET_CAPS[budget];
+  return cap === null ? 'your budget' : `up to ₹${cap}`;
 }
 
 /** Best-effort natural-language fragment for the currently-set temperature +
  * base, used to make the budget relax message read naturally, e.g. "Nothing
- * iced under ₹150 right now…" (§5.2's own example). */
+ * iced up to ₹150 right now…" (§5.2's own example, reworded for ceilings). */
 function describeTemperatureAndBase(inputs: SuggestInputs): string {
   const bits: string[] = [];
   if (inputs.temperature !== 'either') bits.push(inputs.temperature);
@@ -185,15 +196,17 @@ function messageFor(constraint: RelaxableConstraint, inputs: SuggestInputs): str
   switch (constraint) {
     case 'budget': {
       const descriptor = describeTemperatureAndBase(inputs);
-      const under = budgetLabel(inputs.budget);
+      const within = budgetLabel(inputs.budget);
       return descriptor
-        ? `Nothing ${descriptor} under ${under} right now — shall we look a little wider?`
-        : `Nothing quite fits under ${under} right now — shall we look a little wider?`;
+        ? `Nothing ${descriptor} ${within} right now — shall we look a little wider?`
+        : `Nothing quite fits ${within} right now — shall we look a little wider?`;
     }
     case 'temperature':
       return inputs.temperature === 'hot'
         ? "We're short on hot options that fit everything else — want to see iced too?"
         : "We're short on iced options that fit everything else — want to see hot too?";
+    case 'sweetness':
+      return 'Nothing quite that light on sugar fits right now — want to see a little sweeter options?';
     case 'base':
       return inputs.base === 'coffee'
         ? "We're short on coffee options that fit everything else — want to see non-coffee picks too?"

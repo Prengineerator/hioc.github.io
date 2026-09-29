@@ -272,10 +272,12 @@ export function summarizeProfile(profile: TasteProfile): ProfileSummary {
 // constraints (§5.2), so a usual that's 86'd or now breaks a chosen filter
 // (e.g. they picked "No caffeine" today) is never shown. Takes the full menu
 // + traits (not a pre-filtered Candidate[]) because a usual item may not be
-// in today's shortlist at all (it can fail the mood/extras scoring and still
+// in today's shortlist at all (it can fail the mood/preference scoring and still
 // be a perfectly valid "usual") — only the hard constraints apply here.
 // Returns the menu_item_id, or null when signed out / no history / nothing
-// in their history clears today's filters.
+// in their history clears today's filters. Coffey v2 (docs/COFFEY-SPEC.md
+// §4.1): "today's filters" are the v2 rules — the customer's `kinds`, the
+// sweetness ceiling and the rest — because this calls passesHardConstraints.
 // ---------------------------------------------------------------------------
 
 export function pickUsual(
