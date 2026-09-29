@@ -118,7 +118,7 @@ export default async function OwnerOverviewPage() {
       </Card>
 
       <Card title="Recent orders">
-        <RecentOrdersCard rows={recentOrders} staffNames={staffNames} />
+        <RecentOrdersCard rows={recentOrders} staffNames={Object.fromEntries(staffNames)} />
       </Card>
 
       <Card title="Post-order feedback">

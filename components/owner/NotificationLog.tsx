@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Spinner } from '@/components/ui/Spinner';
+import { DataTable } from '@/components/ui/DataTable';
 import { describeSkipReason } from '@/lib/notifications/reasons';
 import { hasBeenSent } from '@/lib/notifications/status';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -257,58 +258,69 @@ export function NotificationLog() {
           Nothing here — no notifications match this filter.
         </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-[#e5e5e5] text-left text-xs uppercase tracking-wide text-muted">
-                <th className="py-2 pr-3 font-bold">Order</th>
-                <th className="py-2 pr-3 font-bold">Event</th>
-                <th className="py-2 pr-3 font-bold">Channel</th>
-                <th className="py-2 pr-3 font-bold">Status</th>
-                <th className="py-2 pr-3 font-bold">Detail</th>
-                <th className="py-2 pr-3 font-bold">When</th>
-                <th className="py-2 font-bold" />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id} className="border-b border-[#f0eeea] align-top">
-                  <td className="py-2 pr-3 font-bold text-charcoal">
-                    {row.order_number !== null ? formatOrderNumber(row.order_number) : '—'}
-                  </td>
-                  <td className="py-2 pr-3 text-charcoal">{row.event}</td>
-                  <td className="py-2 pr-3 text-charcoal">{row.channel}</td>
-                  <td className="py-2 pr-3">
-                    <StatusPill status={row.status} />
-                  </td>
-                  <td className="py-2 pr-3 text-xs text-muted">
-                    {row.error || describeSkipReason(row.skip_reason) || '—'}
-                  </td>
-                  <td className="py-2 pr-3 text-xs text-muted">
-                    {formatIstTime(new Date(row.sent_at ?? row.created_at))}
-                  </td>
-                  <td className="py-2">
-                    {/* WA-4: `!== 'sent'` was true for 'delivered' and 'read',
-                        i.e. the log offered Resend on the two rows that PROVE
-                        the customer has their bill. A stray tap there is a
-                        second billable template to someone who already read it,
-                        and the engine's upsert would wipe the receipt. */}
-                    {row.event === 'bill' && !hasBeenSent(row.status) ? (
-                      <button
-                        type="button"
-                        onClick={() => resend(row)}
-                        disabled={resendingId === row.id}
-                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
-                      >
-                        {resendingId === row.id ? '…' : 'Resend'}
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          rows={rows}
+          rowKey={(row) => row.id}
+          minWidth={720}
+          cellPadding="py-2 pr-3"
+          headerTextClassName="text-xs font-bold uppercase tracking-wide text-muted"
+          rowClassName={() => 'align-top'}
+          columns={[
+            {
+              key: 'order',
+              header: 'Order',
+              filter: 'text',
+              value: (row) => (row.order_number !== null ? formatOrderNumber(row.order_number) : ''),
+              cellClassName: 'font-bold text-charcoal',
+            },
+            { key: 'event', header: 'Event', filter: 'select', value: (row) => row.event, cellClassName: 'text-charcoal' },
+            { key: 'channel', header: 'Channel', filter: 'select', value: (row) => row.channel, cellClassName: 'text-charcoal' },
+            {
+              key: 'status',
+              header: 'Status',
+              filter: 'select',
+              value: (row) => row.status,
+              render: (row) => <StatusPill status={row.status} />,
+            },
+            {
+              key: 'detail',
+              header: 'Detail',
+              filter: 'text',
+              value: (row) => row.error || describeSkipReason(row.skip_reason) || '',
+              cellClassName: 'text-xs text-muted',
+            },
+            {
+              key: 'when',
+              header: 'When',
+              filter: 'date',
+              value: (row) => row.sent_at ?? row.created_at,
+              cellClassName: 'text-xs text-muted',
+              render: (row) => formatIstTime(new Date(row.sent_at ?? row.created_at)),
+            },
+            {
+              key: 'actions',
+              header: 'Resend',
+              filter: 'none',
+              value: () => null,
+              render: (row) =>
+                /* WA-4: `!== 'sent'` was true for 'delivered' and 'read',
+                   i.e. the log offered Resend on the two rows that PROVE
+                   the customer has their bill. A stray tap there is a
+                   second billable template to someone who already read it,
+                   and the engine's upsert would wipe the receipt. */
+                row.event === 'bill' && !hasBeenSent(row.status) ? (
+                  <button
+                    type="button"
+                    onClick={() => resend(row)}
+                    disabled={resendingId === row.id}
+                    className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
+                  >
+                    {resendingId === row.id ? '…' : 'Resend'}
+                  </button>
+                ) : null,
+            },
+          ]}
+        />
       )}
     </div>
   );

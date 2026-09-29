@@ -6,7 +6,9 @@
 // number came from will re-check it by hand, and then the product has saved
 // them nothing. Every row opens into the days that produced it.
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { istDateIso } from '@/lib/api/date';
+import { DataTable } from '@/components/ui/DataTable';
 
 interface Segment {
   monthlySalaryInr: number;
@@ -82,7 +84,7 @@ const rupees = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const hm = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
 
 function currentMonth(): string {
-  return new Date().toISOString().slice(0, 7);
+  return istDateIso().slice(0, 7);
 }
 
 /** Escapes a CSV cell, including the leading characters Excel treats as formulas. */
@@ -352,93 +354,136 @@ export function PayrollScreen() {
             </div>
           ) : null}
 
-          <div className="mt-6 overflow-x-auto rounded-md border border-[#e5e5e5] bg-white">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-[#e5e5e5] text-left">
-                  <th className="sticky left-0 z-10 bg-white px-3 py-2 font-bold text-charcoal">
-                    Staff
-                  </th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">P/H/A</th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">Hours</th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">OT</th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">Base</th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">Deduct</th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">Shortage</th>
-                  <th className="px-3 py-2 text-right font-bold text-charcoal">Net</th>
+          <DataTable
+            className="mt-6"
+            scrollClassName="rounded-md border border-[#e5e5e5] bg-white"
+            rows={draft.lines}
+            rowKey={(l) => l.user_id}
+            cellPadding="px-3 py-2"
+            headerTextClassName="text-sm font-bold text-charcoal"
+            onRowClick={(l) => setExpanded(expanded === l.user_id ? null : l.user_id)}
+            renderRowAfter={(l) =>
+              expanded === l.user_id ? (
+                <tr className="border-b border-[#f0f0f0] bg-[#faf7f4]">
+                  <td colSpan={8} className="px-3 py-3">
+                    <Derivation line={l} />
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {draft.lines.map((l) => (
-                  // Fragment carries the key — a bare <> in a list drops it and
-                  // React re-creates every row on each render.
-                  <Fragment key={l.user_id}>
-                    <tr
-                      className="cursor-pointer border-b border-[#f0f0f0] hover:bg-[#faf7f4]"
-                      onClick={() => setExpanded(expanded === l.user_id ? null : l.user_id)}
-                    >
-                      <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-3 py-2">
-                        <span className="font-bold text-charcoal">{l.name}</span>
-                        {l.unconfigured ? (
-                          <span className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700">
-                            no salary set
-                          </span>
-                        ) : null}
-                        {l.blocked ? (
-                          <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">
-                            {l.daysNeedingApproval} unapproved
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-3 py-2 text-right text-muted">
-                        {l.daysPresent}/{l.daysHalf}/{l.daysAbsent}
-                      </td>
-                      <td className="px-3 py-2 text-right">{hm(l.workedMinutes)}</td>
-                      <td className="px-3 py-2 text-right text-muted">
-                        {l.otMinutes ? hm(l.otMinutes) : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-right">{rupees(l.basePayInr)}</td>
-                      <td className="px-3 py-2 text-right text-muted">
-                        {l.deductionsInr ? `−${rupees(l.deductionsInr)}` : '—'}
-                      </td>
-                      <td className="px-3 py-2 text-right text-muted">
-                        {l.cashShortageInr ? (
-                          <a
-                            href="/owner/cash"
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-red-700 underline"
-                            title="Review cash shortages"
-                          >
-                            −{rupees(l.cashShortageInr)}
-                          </a>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right font-bold text-charcoal">
-                        {rupees(l.netPayInr)}
-                        {l.cashShortageClamped ? (
-                          <span
-                            className="ml-1 rounded bg-red-100 px-1 py-0.5 text-[10px] font-normal text-red-800"
-                            title="The approved cash shortage was more than this person had left to be paid this month. Net pay was clamped at ₹0 — the remainder is not carried over."
-                          >
-                            shortage exceeded pay
-                          </span>
-                        ) : null}
-                      </td>
-                    </tr>
-                    {expanded === l.user_id ? (
-                      <tr className="border-b border-[#f0f0f0] bg-[#faf7f4]">
-                        <td colSpan={8} className="px-3 py-3">
-                          <Derivation line={l} />
-                        </td>
-                      </tr>
+              ) : null
+            }
+            columns={[
+              {
+                key: 'staff',
+                header: 'Staff',
+                filter: 'text',
+                sticky: true,
+                value: (l) => l.name,
+                cellClassName: 'whitespace-nowrap',
+                render: (l) => (
+                  <>
+                    <span className="font-bold text-charcoal">{l.name}</span>
+                    {l.unconfigured ? (
+                      <span className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700">
+                        no salary set
+                      </span>
                     ) : null}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    {l.blocked ? (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">
+                        {l.daysNeedingApproval} unapproved
+                      </span>
+                    ) : null}
+                  </>
+                ),
+              },
+              {
+                // Sorts/filters on days present; the cell shows present/half/absent.
+                key: 'pha',
+                header: 'P/H/A',
+                filter: 'number',
+                align: 'right',
+                value: (l) => l.daysPresent,
+                cellClassName: 'text-muted',
+                render: (l) => `${l.daysPresent}/${l.daysHalf}/${l.daysAbsent}`,
+              },
+              {
+                // Filters in hours (decimal) — minutes are unreadable in a filter box.
+                key: 'hours',
+                header: 'Hours',
+                filter: 'number',
+                align: 'right',
+                value: (l) => Math.round(l.workedMinutes / 6) / 10,
+                render: (l) => hm(l.workedMinutes),
+              },
+              {
+                key: 'ot',
+                header: 'OT',
+                filter: 'number',
+                align: 'right',
+                value: (l) => Math.round(l.otMinutes / 6) / 10,
+                cellClassName: 'text-muted',
+                render: (l) => (l.otMinutes ? hm(l.otMinutes) : '—'),
+              },
+              {
+                key: 'base',
+                header: 'Base',
+                filter: 'number',
+                align: 'right',
+                value: (l) => l.basePayInr,
+                render: (l) => rupees(l.basePayInr),
+              },
+              {
+                key: 'deduct',
+                header: 'Deduct',
+                filter: 'number',
+                align: 'right',
+                value: (l) => l.deductionsInr,
+                cellClassName: 'text-muted',
+                render: (l) => (l.deductionsInr ? `−${rupees(l.deductionsInr)}` : '—'),
+              },
+              {
+                key: 'shortage',
+                header: 'Shortage',
+                filter: 'number',
+                align: 'right',
+                value: (l) => l.cashShortageInr,
+                cellClassName: 'text-muted',
+                render: (l) =>
+                  l.cashShortageInr ? (
+                    <a
+                      href="/owner/cash"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-red-700 underline"
+                      title="Review cash shortages"
+                    >
+                      −{rupees(l.cashShortageInr)}
+                    </a>
+                  ) : (
+                    '—'
+                  ),
+              },
+              {
+                key: 'net',
+                header: 'Net',
+                filter: 'number',
+                align: 'right',
+                value: (l) => l.netPayInr,
+                cellClassName: 'font-bold text-charcoal',
+                render: (l) => (
+                  <>
+                    {rupees(l.netPayInr)}
+                    {l.cashShortageClamped ? (
+                      <span
+                        className="ml-1 rounded bg-red-100 px-1 py-0.5 text-[10px] font-normal text-red-800"
+                        title="The approved cash shortage was more than this person had left to be paid this month. Net pay was clamped at ₹0 — the remainder is not carried over."
+                      >
+                        shortage exceeded pay
+                      </span>
+                    ) : null}
+                  </>
+                ),
+              },
+            ]}
+          />
 
           <button
             type="button"

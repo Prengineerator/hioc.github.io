@@ -1,11 +1,12 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { formatIstTime } from '@/lib/store/hours';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { MenuItem } from '@/lib/types';
 import { isInStoreOnly } from '@/lib/menu/inStore';
+import { DataTable } from '@/components/ui/DataTable';
 
 // S6 86/snooze durations the table offers. Page-level handler turns these
 // into the actual { is_available, unavailable_until } PATCH body — see
@@ -47,173 +48,223 @@ export function MenuItemTable({
   // id of the row whose "86 this item" duration menu is open (one at a time).
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
 
+  const catLabel = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const cat of MENU_CATEGORIES) m.set(cat.slug, cat.parent ? `${cat.parent} — ${cat.label}` : cat.label);
+    return m;
+  }, []);
+
+  // Menu order: category (in MENU_CATEGORIES order), then sort_order. Items in
+  // a category the constants don't list stay hidden, as before.
+  const rows = useMemo(
+    () =>
+      MENU_CATEGORIES.flatMap((cat) =>
+        items.filter((i) => i.category === cat.slug).sort((a, b) => a.sort_order - b.sort_order),
+      ),
+    [items],
+  );
+
   return (
-    <div className="overflow-x-auto rounded-md border border-[#e5e5e5] bg-cream shadow-sm">
-      <table className="w-full min-w-[900px] border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-[#e5e5e5] text-left text-charcoal">
-            <th className="px-4 py-3">Sort Order</th>
-            <th className="px-4 py-3">Photo</th>
-            <th className="px-4 py-3">Name</th>
-            <th className="px-4 py-3">Prices</th>
-            <th className="px-4 py-3">Addons</th>
-            <th className="px-4 py-3">Availability</th>
-            <th className="px-4 py-3">Actions</th>
+    <DataTable
+      rows={rows}
+      rowKey={(item) => item.id}
+      minWidth={900}
+      cellPadding="px-4 py-3"
+      headerTextClassName="text-charcoal"
+      scrollClassName="rounded-md border border-[#e5e5e5] bg-cream shadow-sm"
+      // Category banner rows, while the table is in its default (unsorted) order.
+      groupHeader={(item, prev) =>
+        prev && prev.category === item.category ? null : (
+          <tr className="bg-[#faf7f4]">
+            <td colSpan={8} className="px-4 py-2 font-bold text-charcoal">
+              {catLabel.get(item.category)}
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {MENU_CATEGORIES.map((cat) => {
-            const catItems = items
-              .filter((i) => i.category === cat.slug)
-              .sort((a, b) => a.sort_order - b.sort_order);
-            if (catItems.length === 0) return null;
+        )
+      }
+      columns={[
+        {
+          key: 'sort_order',
+          header: 'Sort Order',
+          filter: 'number',
+          value: (item) => item.sort_order,
+          cellClassName: 'text-charcoal',
+        },
+        {
+          key: 'photo',
+          header: 'Photo',
+          filter: 'none',
+          value: () => null,
+          render: (item) =>
+            item.image_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={item.image_url}
+                alt=""
+                className="h-10 w-10 rounded-md border border-[#e5e5e5] object-cover"
+              />
+            ) : (
+              <span className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-[#e5e5e5] text-xs text-muted">
+                —
+              </span>
+            ),
+        },
+        {
+          key: 'name',
+          header: 'Name',
+          filter: 'text',
+          value: (item) => item.name,
+          cellClassName: 'font-bold text-charcoal',
+          render: (item) => (
+            <>
+              {item.name}
+              {isInStoreOnly(item) ? (
+                <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+                  In-store
+                </span>
+              ) : null}
+              {item.gst_exempt ? (
+                <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+                  No GST
+                </span>
+              ) : null}
+            </>
+          ),
+        },
+        {
+          key: 'category',
+          header: 'Category',
+          filter: 'select',
+          value: (item) => catLabel.get(item.category) ?? item.category,
+          cellClassName: 'text-muted',
+        },
+        {
+          key: 'prices',
+          header: 'Prices',
+          filter: 'text',
+          value: (item) => variantSummary(item),
+          cellClassName: 'text-tan',
+        },
+        {
+          key: 'addons',
+          header: 'Addons',
+          filter: 'text',
+          value: (item) => item.addon_groups.map((g) => g.display_name).join(', '),
+          cellClassName: 'max-w-[220px] truncate text-muted',
+        },
+        {
+          key: 'availability',
+          header: 'Availability',
+          filter: 'select',
+          // Two buckets, not the full label: "Sold out until 4:30 pm" is different
+          // for every item and would flood the dropdown.
+          value: (item) => (isMenuItemAvailable(item) ? 'Available' : 'Sold out'),
+          render: (item) => {
+            const available = isMenuItemAvailable(item);
             return (
-              <Fragment key={cat.slug}>
-                <tr className="bg-[#faf7f4]">
-                  <td colSpan={7} className="px-4 py-2 font-bold text-charcoal">
-                    {cat.parent ? `${cat.parent} — ${cat.label}` : cat.label}
-                  </td>
-                </tr>
-                {catItems.map((item) => {
-                  const available = isMenuItemAvailable(item);
-                  return (
-                    <tr key={item.id} className="border-b border-[#e5e5e5]">
-                      <td className="px-4 py-3 text-charcoal">{item.sort_order}</td>
-                      <td className="px-4 py-3">
-                        {item.image_url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={item.image_url}
-                            alt=""
-                            className="h-10 w-10 rounded-md border border-[#e5e5e5] object-cover"
-                          />
-                        ) : (
-                          <span className="flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-[#e5e5e5] text-xs text-muted">
-                            —
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-bold text-charcoal">
-                        {item.name}
-                        {isInStoreOnly(item) ? (
-                          <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
-                            In-store
-                          </span>
-                        ) : null}
-                        {item.gst_exempt ? (
-                          <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
-                            No GST
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-tan">{variantSummary(item)}</td>
-                      <td className="max-w-[220px] truncate px-4 py-3 text-muted">
-                        {item.addon_groups.map((g) => g.display_name).join(', ') || '—'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col items-start gap-1">
-                          <span
-                            className={
-                              'text-xs font-bold ' + (available ? 'text-[#2f6b38]' : 'text-tan-dark')
-                            }
-                          >
-                            {availabilityLabel(item)}
-                          </span>
-                          {readOnly ? null : available ? (
-                            menuOpenFor === item.id ? (
-                              // Inline duration buttons (not an absolute dropdown) so they can
-                              // never be clipped by the table's overflow-x-auto scroll container.
-                              <div className="flex flex-wrap items-center gap-1">
-                                <span className="text-[11px] text-muted">Sold out for:</span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    onSnooze(item, '2h');
-                                    setMenuOpenFor(null);
-                                  }}
-                                  className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
-                                >
-                                  2 hrs
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    onSnooze(item, 'eod');
-                                    setMenuOpenFor(null);
-                                  }}
-                                  className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
-                                >
-                                  Today
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    onSnooze(item, 'indefinite');
-                                    setMenuOpenFor(null);
-                                  }}
-                                  className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
-                                >
-                                  Indefinitely
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setMenuOpenFor(null)}
-                                  className="px-1 text-xs text-muted hover:text-charcoal"
-                                  aria-label="Cancel"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => setMenuOpenFor(item.id)}
-                                className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
-                              >
-                                Mark sold out
-                              </button>
-                            )
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => onReenable(item)}
-                              className="rounded-md border border-tan px-2 py-1 text-xs font-bold text-tan hover:bg-[#f6efe9]"
-                            >
-                              Mark available
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {readOnly ? (
-                          <span className="text-xs text-muted">On the POS</span>
-                        ) : (
-                        <div className="flex gap-3">
-                          <button
-                            type="button"
-                            onClick={() => onEdit(item)}
-                            className="font-bold text-tan hover:underline"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDelete(item)}
-                            className="font-bold text-charcoal hover:underline"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </Fragment>
+              <div className="flex flex-col items-start gap-1">
+                <span
+                  className={
+                    'text-xs font-bold ' + (available ? 'text-[#2f6b38]' : 'text-tan-dark')
+                  }
+                >
+                  {availabilityLabel(item)}
+                </span>
+                {readOnly ? null : available ? (
+                  menuOpenFor === item.id ? (
+                    // Inline duration buttons (not an absolute dropdown) so they can
+                    // never be clipped by the table's overflow-x-auto scroll container.
+                    <div className="flex flex-wrap items-center gap-1">
+                      <span className="text-[11px] text-muted">Sold out for:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSnooze(item, '2h');
+                          setMenuOpenFor(null);
+                        }}
+                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                      >
+                        2 hrs
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSnooze(item, 'eod');
+                          setMenuOpenFor(null);
+                        }}
+                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                      >
+                        Today
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSnooze(item, 'indefinite');
+                          setMenuOpenFor(null);
+                        }}
+                        className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                      >
+                        Indefinitely
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMenuOpenFor(null)}
+                        className="px-1 text-xs text-muted hover:text-charcoal"
+                        aria-label="Cancel"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setMenuOpenFor(item.id)}
+                      className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan"
+                    >
+                      Mark sold out
+                    </button>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onReenable(item)}
+                    className="rounded-md border border-tan px-2 py-1 text-xs font-bold text-tan hover:bg-[#f6efe9]"
+                  >
+                    Mark available
+                  </button>
+                )}
+              </div>
             );
-          })}
-        </tbody>
-      </table>
-    </div>
+          },
+        },
+        {
+          key: 'actions',
+          header: 'Actions',
+          filter: 'none',
+          value: () => null,
+          render: (item) =>
+            readOnly ? (
+              <span className="text-xs text-muted">On the POS</span>
+            ) : (
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => onEdit(item)}
+                  className="font-bold text-tan hover:underline"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(item)}
+                  className="font-bold text-charcoal hover:underline"
+                >
+                  Delete
+                </button>
+              </div>
+            ),
+        },
+      ]}
+    />
   );
 }
