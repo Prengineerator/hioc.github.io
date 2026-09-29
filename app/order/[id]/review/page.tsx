@@ -78,7 +78,7 @@ export default function OrderReviewPage() {
       <div className="mx-auto max-w-xl px-4 py-16 text-center">
         <h1 className="text-2xl font-bold text-charcoal">Order Not Found</h1>
         <p className="mt-4 text-muted">We couldn&apos;t find that order. The link may be incorrect.</p>
-        <Link href="/menu" className="mt-6 inline-block rounded-md bg-tan px-6 py-3 font-semibold text-cream hover:bg-tan-dark">
+        <Link href="/menu" className="mt-6 inline-block rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream hover:bg-tan-darker">
           Back to Menu
         </Link>
       </div>
@@ -137,7 +137,7 @@ export default function OrderReviewPage() {
         ) : null}
       </div>
 
-      <Link href={`/order/${order.id}`} className="mt-8 inline-block text-sm text-tan hover:underline">
+      <Link href={`/order/${order.id}`} className="mt-8 inline-block text-sm text-tan-dark hover:underline">
         ← Back to order status
       </Link>
     </div>
@@ -229,7 +229,7 @@ function ReviewBlock({
         type="button"
         onClick={handleSubmit}
         disabled={submitting || rating < 1}
-        className="mt-3 rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
+        className="mt-3 rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
       >
         {submitting ? 'Submitting…' : 'Submit rating'}
       </button>

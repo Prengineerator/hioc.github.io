@@ -215,7 +215,7 @@ export function AddStaffModal({ open, onClose, onCreated }: AddStaffModalProps) 
                 <button
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-3 top-[34px] text-xs font-bold text-tan"
+                  className="absolute right-3 top-[34px] text-xs font-bold text-tan-dark"
                 >
                   {showPassword ? 'Hide' : 'Show'}
                 </button>

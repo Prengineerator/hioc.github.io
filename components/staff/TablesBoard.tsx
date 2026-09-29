@@ -176,7 +176,7 @@ function TableTile({
       >
         <div className="flex items-center justify-between">
           <span className="text-base font-bold text-charcoal">{table.label}</span>
-          <span className="rounded-full bg-tan px-2 py-0.5 text-[11px] font-bold text-cream">
+          <span className="rounded-full bg-tan-dark px-2 py-0.5 text-[11px] font-bold text-cream">
             {occ.orders.length > 1 ? `${occ.orders.length} orders` : 'Occupied'}
           </span>
         </div>
@@ -235,7 +235,7 @@ function TableTile({
                   a second order nothing ties to the first. */}
               <Link
                 href={`/staff/orders/new?add=${order.id}`}
-                className="mt-2 block rounded-md bg-tan px-3 py-2 text-center text-xs font-bold text-cream transition-colors hover:bg-tan-dark"
+                className="mt-2 block rounded-md bg-tan-dark px-3 py-2 text-center text-xs font-bold text-cream transition-colors hover:bg-tan-darker"
               >
                 + Add items to this order
               </Link>

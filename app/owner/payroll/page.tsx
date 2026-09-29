@@ -17,7 +17,7 @@ export default function OwnerPayrollPage() {
         </p>
         <Link
           href="/owner/settings"
-          className="mt-6 inline-flex rounded-md bg-tan px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-6 inline-flex rounded-md bg-tan-dark px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker"
         >
           Go to Settings
         </Link>

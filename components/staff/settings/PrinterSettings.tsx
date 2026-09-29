@@ -457,7 +457,7 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
           <button
             type="button"
             onClick={startAdd}
-            className="min-h-[44px] shrink-0 rounded-md bg-tan px-4 py-2.5 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+            className="min-h-[44px] shrink-0 rounded-md bg-tan-dark px-4 py-2.5 text-sm font-bold text-cream transition-colors hover:bg-tan-darker"
           >
             Add printer
           </button>
@@ -550,7 +550,7 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
 
       <p className="mt-6 text-xs text-muted">
         Enrolling or renaming this machine itself lives under{' '}
-        <SurfaceLink href="/staff/settings/counter" className="font-bold text-tan underline decoration-tan/50 underline-offset-2 hover:text-tan-dark">
+        <SurfaceLink href="/staff/settings/counter" className="font-bold text-tan-dark underline decoration-tan/50 underline-offset-2 hover:text-tan-dark">
           This counter
         </SurfaceLink>
         .

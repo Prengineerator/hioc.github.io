@@ -4,9 +4,9 @@ export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  primary: 'bg-tan text-cream hover:bg-tan-dark',
+  primary: 'bg-tan-dark text-cream hover:bg-tan-darker',
   secondary:
-    'border-2 border-tan text-tan hover:bg-tan hover:text-cream disabled:hover:bg-transparent disabled:hover:text-tan',
+    'border-2 border-tan text-tan-dark hover:bg-tan-dark hover:text-cream disabled:hover:bg-transparent disabled:hover:text-tan-dark',
   ghost: 'text-charcoal hover:bg-surface disabled:hover:bg-transparent',
   danger: 'bg-red-700 text-cream hover:bg-red-800',
 };

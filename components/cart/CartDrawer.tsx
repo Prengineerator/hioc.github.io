@@ -68,7 +68,7 @@ export function CartDrawer({
             aria-label="Close cart"
             data-dialog-close
             onClick={onClose}
-            className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan"
+            className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan-dark"
           >
             &times;
           </button>
@@ -146,7 +146,7 @@ export function CartDrawer({
                         type="button"
                         aria-label={`Increase ${item.name} quantity`}
                         onClick={() => increment(item.key)}
-                        className="flex h-9 w-9 items-center justify-center rounded-full bg-tan text-base text-cream transition-colors hover:bg-tan-dark"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-tan-dark text-base text-cream transition-colors hover:bg-tan-darker"
                       >
                         +
                       </button>
@@ -173,7 +173,7 @@ export function CartDrawer({
             {bill && (bill.tax_inr > 0 || bill.packaging_inr > 0) ? (
               <div className="flex items-center justify-between font-bold text-charcoal">
                 <span>Total (incl. GST)</span>
-                <span className="font-mono tabular-nums text-tan">₹{bill.total_inr}</span>
+                <span className="font-mono tabular-nums text-tan-dark">₹{bill.total_inr}</span>
               </div>
             ) : null}
           </div>
@@ -197,7 +197,7 @@ export function CartDrawer({
               'block w-full rounded-md px-4 py-3 text-center font-semibold transition-colors ' +
               (checkoutDisabled
                 ? 'cursor-not-allowed bg-line text-muted'
-                : 'bg-tan text-cream hover:bg-tan-dark')
+                : 'bg-tan-dark text-cream hover:bg-tan-darker')
             }
           >
             Proceed to Checkout

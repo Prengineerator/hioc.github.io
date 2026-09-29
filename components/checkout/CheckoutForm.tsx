@@ -588,7 +588,7 @@ export function CheckoutForm({
             <p className="rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
               Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
               follow your order on the next page.{' '}
-              <a href="/login?next=/checkout" className="font-semibold text-tan underline">
+              <a href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
                 Log in
               </a>{' '}
               to get WhatsApp updates or pay at the counter.
@@ -847,7 +847,7 @@ export function CheckoutForm({
             ) : null}
             <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
               <span className="font-bold text-charcoal">Total</span>
-              <span className="font-mono font-bold tabular-nums text-tan">₹{displayBill.total_inr}</span>
+              <span className="font-mono font-bold tabular-nums text-tan-dark">₹{displayBill.total_inr}</span>
             </div>
           </div>
         </Section>
@@ -874,7 +874,7 @@ export function CheckoutForm({
                   kitchen queue as soon as payment is confirmed.{' '}
                 </>
               )}
-              <a href="/login?next=/checkout" className="font-semibold text-tan underline">
+              <a href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
                 Log in
               </a>{' '}
               to pay at the counter instead.
@@ -976,7 +976,7 @@ export function CheckoutForm({
             type="submit"
             aria-busy={submitting || undefined}
             disabled={submitting || otp.busy || !canSubmit || guestCannotPay || !authChecked}
-            className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? (
               <span

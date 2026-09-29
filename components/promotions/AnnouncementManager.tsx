@@ -131,7 +131,7 @@ export function AnnouncementManager() {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">{items.length} announcement(s)</p>
         {editingId === null ? (
-          <button type="button" onClick={startCreate} className="rounded-md bg-tan px-4 py-2.5 text-sm font-bold text-cream hover:bg-tan-dark">
+          <button type="button" onClick={startCreate} className="rounded-md bg-tan-dark px-4 py-2.5 text-sm font-bold text-cream hover:bg-tan-darker">
             New announcement
           </button>
         ) : null}
@@ -167,7 +167,7 @@ export function AnnouncementManager() {
           </label>
           {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
           <div className="mt-4 flex items-center gap-3">
-            <button type="button" onClick={handleSubmit} disabled={saving} className="rounded-md bg-tan px-5 py-2 text-sm font-bold text-cream hover:bg-tan-dark disabled:opacity-50">
+            <button type="button" onClick={handleSubmit} disabled={saving} className="rounded-md bg-tan-dark px-5 py-2 text-sm font-bold text-cream hover:bg-tan-darker disabled:opacity-50">
               {saving ? 'Saving…' : editingId === 'new' ? 'Create' : 'Save changes'}
             </button>
             <button type="button" onClick={() => setEditingId(null)} className="text-sm font-bold text-muted hover:text-charcoal">
@@ -196,7 +196,7 @@ export function AnnouncementManager() {
               >
                 {a.active ? 'Active' : 'Inactive'}
               </button>
-              <button type="button" onClick={() => startEdit(a)} className="text-sm text-tan hover:underline">
+              <button type="button" onClick={() => startEdit(a)} className="text-sm text-tan-dark hover:underline">
                 Edit
               </button>
               <button type="button" onClick={() => remove(a)} className="text-sm text-red-700 hover:underline">

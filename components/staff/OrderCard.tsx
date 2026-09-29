@@ -21,8 +21,8 @@ import { canRemind, quickActionsFor, type QuickAction } from '@/lib/orders/quick
 import type { Order, OrderItem } from '@/lib/types';
 
 const CORNER_TONE: Record<QuickAction['tone'], string> = {
-  primary: 'bg-tan text-cream hover:bg-tan-dark',
-  complete: 'bg-green-600 text-cream hover:bg-green-700',
+  primary: 'bg-tan-dark text-cream hover:bg-tan-darker',
+  complete: 'bg-green-700 text-cream hover:bg-green-800', // 600 is 3.3:1 under white text
   neutral: 'bg-charcoal text-cream hover:opacity-90',
   danger: 'bg-red-600 text-cream hover:bg-red-700',
 };
@@ -92,7 +92,7 @@ export function OrderCard({
             <span
               className={
                 'rounded-full px-2 py-0.5 text-[11px] font-bold ' +
-                (order.status === 'received' ? 'bg-tan text-cream' : 'bg-charcoal/10 text-charcoal')
+                (order.status === 'received' ? 'bg-tan-dark text-cream' : 'bg-charcoal/10 text-charcoal')
               }
             >
               {STATUS_LABELS[order.status]}

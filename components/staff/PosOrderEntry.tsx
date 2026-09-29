@@ -1362,7 +1362,7 @@ export function PosOrderEntry({
                                   className={
                                     'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
                                     (tableId === t.id
-                                      ? 'border-tan bg-tan text-cream'
+                                      ? 'border-tan bg-tan-dark text-cream'
                                       : 'border-line text-charcoal hover:border-tan')
                                   }
                                 >
@@ -1422,7 +1422,7 @@ export function PosOrderEntry({
                           type="button"
                           aria-label={`Increase ${line.name} quantity`}
                           onClick={() => increment(line.key)}
-                          className="flex h-10 w-10 items-center justify-center rounded-full bg-tan text-lg text-cream active:scale-95"
+                          className="flex h-10 w-10 items-center justify-center rounded-full bg-tan-dark text-lg text-cream active:scale-95"
                         >
                           +
                         </button>
@@ -1462,7 +1462,7 @@ export function PosOrderEntry({
                 ) : null}
                 <div className="mt-1 flex items-center justify-between border-t border-line pt-1">
                   <span className="font-bold">{isAddMode ? 'Adding' : 'Total'}</span>
-                  <span className="font-bold text-tan">
+                  <span className="font-bold text-tan-dark">
                     {bill ? `₹${bill.total_inr}` : 'Calculating…'}
                   </span>
                 </div>
@@ -1649,7 +1649,7 @@ export function PosOrderEntry({
               <button
                 type="button"
                 onClick={() => setShowCustomer(true)}
-                className="text-left text-sm font-bold text-tan underline"
+                className="text-left text-sm font-bold text-tan-dark underline"
               >
                 + Add customer details
               </button>
@@ -1739,7 +1739,7 @@ export function PosOrderEntry({
                   type="button"
                   disabled={cart.length === 0 || submitting}
                   onClick={submitAddToOrder}
-                  className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+                  className="w-full rounded-md bg-tan-dark px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {cart.length === 0
                     ? 'Add items to continue'
@@ -1794,7 +1794,7 @@ export function PosOrderEntry({
                 type="button"
                 disabled={!canProceed || submitting}
                 onClick={openPayment}
-                className="w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+                className="w-full rounded-md bg-tan-dark px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {cart.length === 0
                   ? 'Add items to continue'
@@ -1830,7 +1830,7 @@ export function PosOrderEntry({
           <button
             type="button"
             onClick={() => setMobileCartOpen(true)}
-            className="flex w-full items-center justify-between rounded-md bg-tan px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+            className="flex w-full items-center justify-between rounded-md bg-tan-dark px-4 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker"
           >
             <span>
               View order · {totalItems} item{totalItems === 1 ? '' : 's'}
@@ -2042,8 +2042,8 @@ function ConfirmAction({
       className={
         'rounded-md px-3 py-2 text-xs font-bold transition-colors disabled:opacity-50 ' +
         (primary
-          ? 'bg-tan text-cream hover:bg-tan-dark'
-          : 'border border-line text-charcoal hover:border-tan hover:text-tan')
+          ? 'bg-tan-dark text-cream hover:bg-tan-darker'
+          : 'border border-line text-charcoal hover:border-tan hover:text-tan-dark')
       }
     >
       {label}
@@ -2094,7 +2094,7 @@ function PosMenuTile({ item, onTap }: { item: MenuItem; onTap: () => void }) {
         <span className="line-clamp-2 text-sm font-bold text-charcoal">{item.name}</span>
       </span>
       <span className="mt-2 flex w-full items-center justify-between gap-1">
-        <span className="text-xs font-bold text-tan">{priceLabel}</span>
+        <span className="text-xs font-bold text-tan-dark">{priceLabel}</span>
         <span className="flex items-center gap-1">
           {item.short_code ? (
             <span className="rounded border border-line px-1 font-mono text-[10px] font-bold uppercase text-muted">

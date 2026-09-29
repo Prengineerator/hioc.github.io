@@ -85,7 +85,7 @@ function FavoritesContent() {
         <button
           type="button"
           onClick={() => setShowPicker((v) => !v)}
-          className="text-sm font-semibold text-tan hover:underline"
+          className="text-sm font-semibold text-tan-dark hover:underline"
         >
           {showPicker ? 'Hide menu' : 'Browse menu to add favorites'}
         </button>

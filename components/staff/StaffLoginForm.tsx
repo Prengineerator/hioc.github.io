@@ -183,7 +183,7 @@ function StaffLoginFormInner() {
           <button
             type="submit"
             disabled={submitting}
-            className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? 'Logging in…' : 'Log In'}
           </button>
@@ -196,7 +196,7 @@ function StaffLoginFormInner() {
               setShowForgot((v) => !v);
               setForgotMessage(null);
             }}
-            className="text-sm font-bold text-tan underline decoration-tan/50 underline-offset-2 hover:text-tan-dark"
+            className="text-sm font-bold text-tan-dark underline decoration-tan/50 underline-offset-2 hover:text-tan-dark"
           >
             Forgot password?
           </button>
@@ -229,7 +229,7 @@ function StaffLoginFormInner() {
                 <button
                   type="submit"
                   disabled={forgotSubmitting}
-                  className="w-full rounded-md border border-tan px-4 py-2 font-bold text-tan transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-md border border-tan px-4 py-2 font-bold text-tan-dark transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {forgotSubmitting ? 'Sending…' : 'Send reset link'}
                 </button>

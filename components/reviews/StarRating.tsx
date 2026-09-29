@@ -30,7 +30,7 @@ export function StarRating({
         const filled = n <= Math.round(value);
         if (!interactive) {
           return (
-            <span key={n} aria-hidden="true" className={filled ? 'text-tan' : 'text-line'}>
+            <span key={n} aria-hidden="true" className={filled ? 'text-tan-dark' : 'text-line'}>
               ★
             </span>
           );
@@ -44,7 +44,7 @@ export function StarRating({
             aria-label={`${n} star${n === 1 ? '' : 's'}`}
             onClick={() => onChange!(n)}
             className={
-              'leading-none transition-colors ' + (filled ? 'text-tan' : 'text-line hover:text-tan/60')
+              'leading-none transition-colors ' + (filled ? 'text-tan-dark' : 'text-line hover:text-tan/60')
             }
           >
             ★

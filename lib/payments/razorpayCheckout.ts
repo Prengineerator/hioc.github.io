@@ -117,7 +117,7 @@ export async function openRazorpayCheckout(
     description: opts.description ?? 'Order payment',
     order_id: intent.gatewayOrderId,
     prefill: { name: opts.name, contact: opts.phone },
-    theme: { color: '#ad825e' },
+    theme: { color: '#8a6446' }, // tan-dark: Razorpay puts white text on it (brand tan is 3.4:1)
     handler: async (response: RazorpaySuccessResponse) => {
       const error = await verifyPayment(response);
       if (error) {

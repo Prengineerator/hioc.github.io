@@ -55,7 +55,7 @@ export function PickupReminderButton({
         type="button"
         onClick={tap}
         disabled={sending || remaining > 0}
-        className="min-h-[44px] w-full rounded-md border border-line bg-cream px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan hover:text-tan disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-line disabled:hover:text-charcoal"
+        className="min-h-[44px] w-full rounded-md border border-line bg-cream px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan hover:text-tan-dark disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-line disabled:hover:text-charcoal"
       >
         {sending
           ? 'Sending…'

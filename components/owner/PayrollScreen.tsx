@@ -489,7 +489,7 @@ export function PayrollScreen() {
             type="button"
             disabled={busy || draft.blocked}
             onClick={finalize}
-            className="mt-6 rounded-md bg-tan px-5 py-3 text-sm font-bold text-cream disabled:opacity-50"
+            className="mt-6 rounded-md bg-tan-dark px-5 py-3 text-sm font-bold text-cream disabled:opacity-50"
             title={draft.blocked ? 'Clear the unapproved days first' : undefined}
           >
             {busy ? 'Finalizing…' : 'Finalize this month'}
