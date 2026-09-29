@@ -1297,6 +1297,54 @@ async function checkCashCounts() {
 }
 
 // ---------------------------------------------------------------------------
+// Inventory — stock items, requests, POS-verified receiving, recipes
+// (docs/INVENTORY-SPEC.md, supabase/2026-10-inventory.sql). Six service-role
+// tables and the functions every multi-row write goes through. The functions
+// are probed with calls that cannot write: an empty sale for the nil order.
+// ---------------------------------------------------------------------------
+async function checkInventory() {
+  heading('INV-1 · inventory tables, functions + lockdown', '2026-10-inventory.sql');
+  const hint = 'apply supabase/2026-10-inventory.sql';
+
+  for (const table of ['inventory_items', 'stock_requests', 'stock_request_lines', 'inventory_batches', 'inventory_movements', 'recipe_lines', 'addon_recipe_lines']) {
+    const r = await rest(`/${table}?select=id&limit=1`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    const rows = Array.isArray(r.body) ? r.body : [];
+    if (rows.length === 0) {
+      skip(`${table} is not readable by the anon key`, 'no row to look for yet');
+      continue;
+    }
+    const asAnon = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+
+  // Auto-hide: the mark on menu items and the owner's switch.
+  for (const [table, col] of [['menu_items', 'stock_out_auto'], ['store_settings', 'stock_auto_hide']]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' ? hint : errText(r));
+  }
+
+  // An empty usage list writes nothing and returns 0 — proves the function
+  // is installed and callable by the service role.
+  const noop = { p_order_id: '00000000-0000-0000-0000-000000000000', p_actor: null, p_lines: [] };
+  const svc = await rest('/rpc/inventory_apply_sale', { method: 'POST', body: noop });
+  if (svc.ok && Number(svc.body) === 0) pass('inventory_apply_sale is installed', 'a no-op call returned 0');
+  else fail('inventory_apply_sale is installed', svc.ok ? `unexpected result ${JSON.stringify(svc.body)}` : `${hint} — ${errText(svc)}`);
+
+  const anon = await rest('/rpc/inventory_apply_sale', { method: 'POST', body: noop, key: ANON });
+  if (anon.ok) fail('inventory functions are not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
+  else pass('inventory functions are not callable by the anon key');
+}
+
+// ---------------------------------------------------------------------------
 // Phase 7 · SUG-1 — the "Help me choose" suggestion engine
 // (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §8 SUG-1 AC, supabase/2026-09-suggestion-engine.sql).
 // Five tables, RLS on, everything but customer_taste_profiles' self-read
@@ -1419,6 +1467,7 @@ async function main() {
   await checkStaffAccounts();
   await checkCashCounts();
   await checkSuggestionEngine();
+  await checkInventory();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

@@ -5,7 +5,7 @@
 // options off-screen on a counter tablet. Now:
 //   left   logo · the surface's tabs (POS: Live orders · Orders · Settle · New order ·
 //          Tables; staff website: fewer tabs) + More ▾
-//   right  store pill · sound icon · counter-mode icon · account ▾
+//   right  open drawer (POS app only) · store pill · sound icon · counter-mode icon · account ▾
 // The back-office pages (Cash, Attendance, Leave, Menu, Settings) live under
 // "More"; name, role, Lock/Switch and Logout under the account menu. Below md
 // everything folds into the drawer, with the sound icon kept in the bar
@@ -23,6 +23,7 @@ import { COUNTER_MODE_HREFS } from '@/lib/staff/newOrderWatch';
 import { isActiveTab, staffNav, type StaffTab } from '@/lib/staff/staffNav';
 import { SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 import { useStaffShell } from '@/components/staff/StaffShell';
+import { OpenDrawerButton } from '@/components/staff/OpenDrawerButton';
 
 
 export interface StaffPinControls {
@@ -94,6 +95,7 @@ export function StaffHeader({
     canTakeOrders: shell.canTakeOrders,
     staffPos: flags.staffPos,
     attendance: flags.attendance,
+    inventory: flags.inventory,
   });
   const primary = shell.counterMode ? nav.primary.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : nav.primary;
   const more = shell.counterMode ? [] : nav.more;
@@ -299,6 +301,8 @@ export function StaffHeader({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {/* DRW-2: POS only, and only inside the POS app (the button checks). */}
+          {shell.surface === 'pos' ? <OpenDrawerButton /> : null}
           <span className="hidden lg:inline-flex">{storePill}</span>
           {soundButton}
           <span className="hidden md:inline-flex">{counterButton}</span>

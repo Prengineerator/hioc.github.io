@@ -11,6 +11,7 @@ import { enqueueFeedbackRequest } from '@/lib/feedback/enqueue';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
+import { consumeStockForOrder } from '@/lib/inventory/server';
 import type { Order, OrderType, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -192,6 +193,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // them if it's rejected/cancelled. No-ops until the Loyalty engine is wired.
   if (to === 'completed') {
     await earnForOrder(id);
+
+    // Inventory (docs/INVENTORY-SPEC.md): take the order's recipe usage off
+    // stock. Never throws and never fails the transition; a no-op while the
+    // inventory flag is off.
+    await consumeStockForOrder(id, actor.user.id);
 
     // RCT-1: deliver the settled bill on WhatsApp/email at settle. A staff dine-in
     // order skipped the placement send (it's settled here), so this is its bill; a

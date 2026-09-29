@@ -41,7 +41,16 @@ function timeIst(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
 }
 
-export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; onOpen: (o: OrderWithItems) => void }) {
+export function TodayOrdersList({
+  orders,
+  onOpen,
+  dayLabel = 'today',
+}: {
+  orders: OrderWithItems[];
+  onOpen: (o: OrderWithItems) => void;
+  /** 'today', or e.g. 'on 27 Sep' when the Orders tab's date filter picks a past day. */
+  dayLabel?: string;
+}) {
   const [group, setGroup] = useState<StatusGroup>('all');
   const [pay, setPay] = useState<PaymentFilter>('all');
   const [search, setSearch] = useState('');
@@ -106,7 +115,7 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
           filters the list to the orders it was taken on. */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <div className="rounded-md border border-line bg-white p-3">
-          <p className="text-xs text-muted">Orders today</p>
+          <p className="text-xs text-muted">Orders {dayLabel}</p>
           <p className="text-xl font-bold text-charcoal">{orders.length}</p>
         </div>
         {PAYMENT_METHODS.filter((m) => received[m].amount_inr > 0).map((m) => (
@@ -228,7 +237,7 @@ export function TodayOrdersList({ orders, onOpen }: { orders: OrderWithItems[]; 
           {orders.length === 0
             ? 'No orders here.'
             : pay === 'unpaid' && group === 'all' && type === 'all' && status === 'all' && search.trim() === ''
-              ? 'Every order today is paid.'
+              ? `Every order ${dayLabel} is paid.`
               : 'No orders match these filters.'}
         </p>
       ) : (

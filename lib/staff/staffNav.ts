@@ -1,8 +1,8 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
 //   POS          Live orders · Orders · Settle · New order · Tables — what the
-//                counter does all day — and Cash, Attendance, Leave, Menu and
-//                Settings under "More".
+//                counter does all day — and Cash, Attendance, Leave, (Stock,)
+//                Menu and Settings under "More".
 //   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -24,6 +24,8 @@ export interface StaffNavInput {
   /** NEXT_PUBLIC flags (lib/flags.ts). */
   staffPos: boolean;
   attendance: boolean;
+  /** Inventory (docs/INVENTORY-SPEC.md); optional so older callers read off. */
+  inventory?: boolean;
 }
 
 export interface StaffNav {
@@ -41,6 +43,7 @@ const NEW_ORDER: StaffTab = { href: '/staff/orders/new', label: 'New order' };
 const TABLES: StaffTab = { href: '/staff/tables', label: 'Tables' };
 const MENU: StaffTab = { href: '/staff/menu', label: 'Menu' };
 const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
+const STOCK: StaffTab = { href: '/staff/inventory', label: 'Stock' };
 
 /** The occasional pages both surfaces keep under "More". */
 function backOffice(input: StaffNavInput): StaffTab[] {
@@ -54,6 +57,9 @@ function backOffice(input: StaffNavInput): StaffTab[] {
           { href: '/staff/leave', label: 'Leave' },
         ]
       : []),
+    // Inventory (docs/INVENTORY-SPEC.md): requests, verifying deliveries at
+    // the POS, recipes.
+    ...(input.inventory ? [STOCK] : []),
   ];
 }
 

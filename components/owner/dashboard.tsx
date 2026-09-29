@@ -162,3 +162,64 @@ export function Card({ title, children }: { title: string; children: React.React
 function Empty({ label }: { label: string }) {
   return <p className="py-6 text-center text-sm text-muted">{label}</p>;
 }
+
+// How the money came in — cash / UPI / card / online (website), with refunds
+// and the still-unpaid amount. Fed by the reconciliation report
+// (lib/reports/reconcile.ts), so it counts counter payments and split bills,
+// not only website payments. Shared by the Overview and Payments pages.
+const PAY_METHODS = [
+  ['cash', 'Cash'],
+  ['upi', 'UPI'],
+  ['card', 'Card'],
+  ['online', 'Online (website)'],
+] as const;
+
+export function PaymentsByMethod({
+  received,
+  refunds,
+  unpaidInr,
+  unpaidOrders,
+  reportHref,
+}: {
+  received: Record<'cash' | 'upi' | 'card' | 'online', number>;
+  refunds: Record<'cash' | 'upi' | 'card' | 'online', number>;
+  unpaidInr: number;
+  unpaidOrders: number;
+  reportHref?: string;
+}) {
+  const total = PAY_METHODS.reduce((s, [m]) => s + received[m], 0);
+  const refunded = PAY_METHODS.reduce((s, [m]) => s + refunds[m], 0);
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {PAY_METHODS.map(([m, label]) => {
+          const pct = total > 0 ? Math.round((received[m] / total) * 100) : 0;
+          return (
+            <div key={m} className="rounded-md bg-[#f2efe9] p-3">
+              <p className="text-xs uppercase tracking-wide text-muted">{label}</p>
+              <p className="mt-1 font-mono text-xl font-bold tabular-nums text-charcoal">{inr(received[m])}</p>
+              <p className="text-xs text-muted">
+                {pct}% of received{refunds[m] ? ` · −${inr(refunds[m])} refunded` : ''}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-3 text-sm text-charcoal">
+        <span className="font-bold">Total received {inr(total)}</span>
+        {refunded ? <span className="text-red-700"> · refunds −{inr(refunded)}</span> : null}
+        {unpaidOrders ? (
+          <span className="text-amber-800">
+            {' '}
+            · {unpaidOrders} unpaid ({inr(unpaidInr)}) still to collect
+          </span>
+        ) : null}
+      </p>
+      {reportHref ? (
+        <a href={reportHref} className="mt-2 inline-block text-sm font-bold text-tan-dark hover:underline">
+          Full report →
+        </a>
+      ) : null}
+    </div>
+  );
+}

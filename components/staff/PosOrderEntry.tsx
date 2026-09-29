@@ -65,7 +65,6 @@ import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
-import { OpenDrawerButton } from '@/components/staff/OpenDrawerButton';
 import { POS_FALLBACK_ORDER_TYPE, resolveDefaultOrderType } from '@/lib/pos/deviceSettings';
 import {
   billStatusFromDelivery,
@@ -1165,8 +1164,6 @@ export function PosOrderEntry({
               : 'Punch in a dine-in or walk-in order.'}
           </p>
         </div>
-        {/* DRW-2: opens the drawer by hand, logged for the owner. */}
-        <OpenDrawerButton />
       </div>
 
       {/* Three columns on a tablet/desktop: categories down the left, the

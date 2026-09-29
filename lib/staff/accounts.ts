@@ -16,7 +16,7 @@ export const TEAM_ROLES = ['staff', 'manager', 'owner'] as const;
 export type TeamRole = (typeof TEAM_ROLES)[number];
 
 export type AccountStatus = 'active' | 'deactivated';
-export type StaffEmailKind = 'invite' | 'password_reset' | 'password_changed' | 'payslip';
+export type StaffEmailKind = 'invite' | 'password_reset' | 'password_changed' | 'payslip' | 'stock_assigned';
 
 // Mirrors the CHECK on staff_accounts.login_id.
 const LOGIN_ID_RE = /^[a-z][a-z0-9._-]{1,29}$/;

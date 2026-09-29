@@ -131,6 +131,10 @@ export interface MenuItem {
   // No GST on this item (2026-09-gst-exempt migration). Optional so a row
   // read before the migration still type-checks; absent = taxable.
   gst_exempt?: boolean;
+  // Hidden by inventory because an ingredient ran out (2026-10-inventory
+  // migration); cleared when stock returns or a person toggles availability.
+  // Optional so a row read before the migration still type-checks.
+  stock_out_auto?: boolean;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
