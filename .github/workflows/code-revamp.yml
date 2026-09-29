@@ -93,7 +93,9 @@ jobs:
       - run: npm run build
 
   revamp:
-    name: Claude code-revamp (${{ inputs.surface || 'all' }}, ${{ inputs.mode || 'audit' }})
+    # Static on purpose: a job skipped by its `if` (every pull_request run)
+    # shows its name unevaluated, which printed the raw input expressions.
+    name: Claude code-revamp
     needs: checks
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
