@@ -72,9 +72,9 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
             </span>
             <h4 className="font-semibold leading-snug text-charcoal">{item.name}</h4>
           </div>
-          <span className="hidden shrink-0 font-mono font-bold tabular-nums text-tan sm:inline">{priceLabel(item)}</span>
+          <span className="hidden shrink-0 font-mono font-bold tabular-nums text-tan-dark sm:inline">{priceLabel(item)}</span>
         </div>
-        <span className="mt-0.5 font-mono font-bold tabular-nums text-tan sm:hidden">{priceLabel(item)}</span>
+        <span className="mt-0.5 font-mono font-bold tabular-nums text-tan-dark sm:hidden">{priceLabel(item)}</span>
         {item.description ? (
           <p className="mt-1 line-clamp-2 text-sm text-muted">{item.description}</p>
         ) : null}
@@ -127,7 +127,7 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
                   type="button"
                   aria-label={`Increase ${item.name} quantity`}
                   onClick={() => increment(simpleKey)}
-                  className={stepperButtonClasses + ' bg-tan text-cream hover:bg-tan-dark'}
+                  className={stepperButtonClasses + ' bg-tan-dark text-cream hover:bg-tan-darker'}
                 >
                   +
                 </button>

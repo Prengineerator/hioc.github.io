@@ -70,7 +70,7 @@ export function TopCustomerTable({ rows }: { rows: TopCustomerRow[] }) {
           filter: 'number',
           align: 'right',
           value: (r) => r.revenue_inr,
-          cellClassName: 'font-bold text-tan',
+          cellClassName: 'font-bold text-tan-dark',
           render: (r) => `₹${r.revenue_inr}`,
         },
         {
@@ -124,7 +124,7 @@ function PetpoojaTable({ rows, emptyMessage }: { rows: PetpoojaCustomerForDispla
           filter: 'number',
           align: 'right',
           value: (r) => r.totalSpendInr,
-          cellClassName: 'font-bold text-tan',
+          cellClassName: 'font-bold text-tan-dark',
           render: (r) => `₹${formatRupees(r.totalSpendInr)}`,
         },
         {

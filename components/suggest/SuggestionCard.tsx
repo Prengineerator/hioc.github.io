@@ -35,7 +35,7 @@ export function SuggestionCard({
   return (
     <div className="flex flex-col rounded-md border border-line bg-cream p-4 shadow-card">
       {isUsual ? (
-        <span className="mb-2 inline-block w-fit rounded-full bg-surface px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-tan">
+        <span className="mb-2 inline-block w-fit rounded-full bg-surface px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-tan-dark">
           Your usual
         </span>
       ) : null}
@@ -56,7 +56,7 @@ export function SuggestionCard({
           </span>
           <h3 className="font-semibold text-charcoal">{item.name}</h3>
         </div>
-        <span className="shrink-0 font-mono font-bold tabular-nums text-tan">{priceLabel(item)}</span>
+        <span className="shrink-0 font-mono font-bold tabular-nums text-tan-dark">{priceLabel(item)}</span>
       </div>
       <p className="mt-1 text-sm text-muted">{pick.reason}</p>
       {!available ? (

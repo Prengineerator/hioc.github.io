@@ -100,7 +100,7 @@ export function RecentOrdersCard({
           filter: 'number',
           align: 'right',
           value: (r) => r.total_inr ?? 0,
-          cellClassName: 'align-top font-bold text-tan',
+          cellClassName: 'align-top font-bold text-tan-dark',
           render: (r) => inr(r.total_inr),
         },
         {

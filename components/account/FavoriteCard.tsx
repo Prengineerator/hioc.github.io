@@ -35,7 +35,7 @@ export function FavoriteCard({
         disabled={removing}
         aria-label={`Remove ${item.name} from favorites`}
         title="Remove from favorites"
-        className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-cream text-tan shadow-sm transition-colors hover:bg-tan hover:text-cream disabled:opacity-60"
+        className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-cream text-tan-dark shadow-sm transition-colors hover:bg-tan-dark hover:text-cream disabled:opacity-60"
       >
         ♥
       </button>

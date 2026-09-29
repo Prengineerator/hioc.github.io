@@ -27,7 +27,7 @@ export function PolicyLayout({
 
       <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 border-b border-line pb-4 text-sm">
         {POLICIES.map((p) => (
-          <Link key={p.href} href={p.href} className="text-tan hover:underline">
+          <Link key={p.href} href={p.href} className="text-tan-dark hover:underline">
             {p.label}
           </Link>
         ))}
@@ -43,9 +43,9 @@ export function PolicyLayout({
         <p className="text-muted">{BUSINESS.address}</p>
         {BUSINESS.gstin ? <p className="text-muted">GSTIN: {BUSINESS.gstin}</p> : null}
         <p className="mt-1">
-          <a href={BUSINESS.phoneHref} className="text-tan hover:underline">{BUSINESS.phoneDisplay}</a>
+          <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>
           {' · '}
-          <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a>
+          <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a>
         </p>
       </div>
     </div>

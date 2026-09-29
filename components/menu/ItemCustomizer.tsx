@@ -148,10 +148,10 @@ function AddonGroupBlock({
   let badgeClass: string;
   if (group.selection_type === 'multi' && count > 0) {
     badge = `${count}/${group.max_select}`;
-    badgeClass = 'bg-surface text-tan';
+    badgeClass = 'bg-surface text-tan-dark';
   } else if (required) {
     badge = 'Required';
-    badgeClass = 'bg-surface text-tan';
+    badgeClass = 'bg-surface text-tan-dark';
   } else {
     badge = compactHint(group);
     badgeClass = 'text-muted';
@@ -205,7 +205,7 @@ function chipClasses(selected: boolean, size: 'default' | 'touch', disabled = fa
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan',
     disabled ? 'cursor-not-allowed opacity-40' : '',
     sizeClasses,
-    selected ? 'border border-tan bg-tan text-cream' : 'border border-line text-charcoal hover:border-tan hover:text-tan',
+    selected ? 'border border-tan bg-tan-dark text-cream' : 'border border-line text-charcoal hover:border-tan hover:text-tan-dark',
   ]
     .filter(Boolean)
     .join(' ');
@@ -220,7 +220,7 @@ function InstructionsField({ value, onChange }: { value: string; onChange: (valu
       <button
         type="button"
         onClick={() => setRevealed(true)}
-        className="text-sm font-semibold text-tan hover:text-tan-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+        className="text-sm font-semibold text-tan-dark hover:text-tan-dark focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
       >
         + Add note
       </button>

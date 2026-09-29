@@ -27,7 +27,7 @@ export default function AboutPage() {
         </div>
         <div className="text-center md:text-left">
           <h1 className="text-3xl font-bold tracking-tight text-charcoal md:text-5xl">
-            HIOC<span className="text-tan">.</span>
+            HIOC<span className="text-tan-dark">.</span>
           </h1>
           <p className="mt-2 italic tracking-wide text-muted">
             High on Coffee — Rooted in Kamla Nagar

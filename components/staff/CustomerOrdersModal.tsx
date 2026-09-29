@@ -119,7 +119,7 @@ function OrderCard({
             {PAYMENT_LABEL[order.payment_status] ?? order.payment_status}
           </p>
         </div>
-        <p className="shrink-0 font-bold text-tan">₹{order.total_inr ?? order.subtotal_inr}</p>
+        <p className="shrink-0 font-bold text-tan-dark">₹{order.total_inr ?? order.subtotal_inr}</p>
       </div>
 
       <ul className="mt-3 flex flex-col gap-1.5 border-t border-line pt-3 text-sm text-charcoal">
@@ -170,7 +170,7 @@ function LegacyBillCard({
           <p className="font-bold text-charcoal">Petpooja #{order.bill_no}</p>
           <p className="text-xs text-muted">{formatIstDateTime(order.created_at)}</p>
         </div>
-        <p className="shrink-0 font-bold text-tan">₹{order.total_inr}</p>
+        <p className="shrink-0 font-bold text-tan-dark">₹{order.total_inr}</p>
       </div>
 
       <ul className="mt-3 flex flex-col gap-1 border-t border-line pt-3 text-sm text-charcoal">

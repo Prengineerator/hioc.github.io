@@ -356,7 +356,7 @@ export default function ProfilePage() {
         <button
           type="submit"
           disabled={saving}
-          className="mt-2 w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
         >
           {saving ? 'Saving…' : 'Save changes'}
         </button>
@@ -367,7 +367,7 @@ export default function ProfilePage() {
         <p className="mt-1 text-sm text-muted">
           {me?.phone ? (
             <>
-              {me.phone} {me.phone_verified ? <span className="text-green-700">· Verified</span> : <span className="text-tan">· Unverified</span>}
+              {me.phone} {me.phone_verified ? <span className="text-green-700">· Verified</span> : <span className="text-tan-dark">· Unverified</span>}
             </>
           ) : (
             'No phone on file yet.'
@@ -378,7 +378,7 @@ export default function ProfilePage() {
           <button
             type="button"
             onClick={() => setPhoneStep('entering')}
-            className="mt-3 text-sm font-semibold text-tan hover:underline"
+            className="mt-3 text-sm font-semibold text-tan-dark hover:underline"
           >
             {me?.phone ? 'Change phone number' : 'Add a phone number'}
           </button>
@@ -400,7 +400,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={phoneBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
               >
                 {phoneBusy ? 'Sending…' : 'Send code'}
               </button>
@@ -436,7 +436,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={phoneBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
               >
                 {phoneBusy ? 'Verifying…' : 'Verify'}
               </button>
@@ -464,7 +464,7 @@ export default function ProfilePage() {
               {me.email_verified ? (
                 <span className="text-green-700">· Verified</span>
               ) : (
-                <span className="text-tan">· Unverified</span>
+                <span className="text-tan-dark">· Unverified</span>
               )}
             </>
           ) : (
@@ -480,7 +480,7 @@ export default function ProfilePage() {
               setEmailStep('entering');
               setEmailMsg('');
             }}
-            className="mt-3 text-sm font-semibold text-tan hover:underline"
+            className="mt-3 text-sm font-semibold text-tan-dark hover:underline"
           >
             {me?.email ? 'Change email' : 'Link an email'}
           </button>
@@ -501,7 +501,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={emailBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
               >
                 {emailBusy ? 'Sending…' : 'Send code'}
               </button>
@@ -540,7 +540,7 @@ export default function ProfilePage() {
               <button
                 type="submit"
                 disabled={emailBusy}
-                className="rounded-md bg-tan px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-dark disabled:opacity-60"
+                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
               >
                 {emailBusy ? 'Verifying…' : 'Verify'}
               </button>

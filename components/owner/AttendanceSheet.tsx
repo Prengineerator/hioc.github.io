@@ -383,7 +383,7 @@ function DayPanel({
                   ) : null}
                   {s.clock_in_lat !== null ? (
                     <a
-                      className="text-tan underline"
+                      className="text-tan-dark underline"
                       href={`https://www.google.com/maps?q=${s.clock_in_lat},${s.clock_in_lng}`}
                       target="_blank"
                       rel="noreferrer"
@@ -403,7 +403,7 @@ function DayPanel({
                       type="button"
                       disabled={busy}
                       onClick={() => act(s.id, 'approve')}
-                      className="rounded-md bg-tan px-3 py-1.5 text-xs font-bold text-cream disabled:opacity-50"
+                      className="rounded-md bg-tan-dark px-3 py-1.5 text-xs font-bold text-cream disabled:opacity-50"
                     >
                       Approve as-is
                     </button>

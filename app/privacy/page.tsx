@@ -63,7 +63,7 @@ export default function PrivacyPage() {
         <p>
           You may request access to, correction of, or deletion of your personal data, and withdraw
           marketing consent at any time. To exercise these rights or raise a grievance, contact us
-          at <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a>.
+          at <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a>.
         </p>
       </PolicySection>
 
@@ -116,8 +116,8 @@ export default function PrivacyPage() {
       <PolicySection heading="9. Contact / grievance officer">
         <p>
           For any privacy question or grievance, contact {BUSINESS.name} at{' '}
-          <a href={BUSINESS.emailHref} className="text-tan hover:underline">{BUSINESS.email}</a> or{' '}
-          <a href={BUSINESS.phoneHref} className="text-tan hover:underline">{BUSINESS.phoneDisplay}</a>.
+          <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a> or{' '}
+          <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>.
         </p>
       </PolicySection>
     </PolicyLayout>

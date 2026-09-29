@@ -29,7 +29,7 @@ export default async function CashPage() {
         </p>
         <Link
           href="/staff"
-          className="mt-6 inline-flex rounded-md bg-tan px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+          className="mt-6 inline-flex rounded-md bg-tan-dark px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker"
         >
           Back to Orders
         </Link>

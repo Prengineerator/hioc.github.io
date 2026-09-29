@@ -78,7 +78,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
     return (
       <div className="mx-auto max-w-sm px-4 py-8 text-charcoal print:py-0 print:text-black">
         <div className="mb-6 print:hidden">
-          <Link href={`/order/${order.id}`} className="text-sm text-tan hover:underline">
+          <Link href={`/order/${order.id}`} className="text-sm text-tan-dark hover:underline">
             ← Back to order
           </Link>
         </div>
@@ -96,7 +96,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
     <div className="mx-auto max-w-sm px-4 py-8 text-charcoal print:py-0 print:text-black">
       {/* On-screen actions — never printed. */}
       <div className="mb-6 flex items-center justify-between print:hidden">
-        <Link href={`/order/${order.id}`} className="text-sm text-tan hover:underline">
+        <Link href={`/order/${order.id}`} className="text-sm text-tan-dark hover:underline">
           ← Back to order
         </Link>
         <PrintButton />

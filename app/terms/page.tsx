@@ -44,7 +44,7 @@ export default function TermsPage() {
           accept it, after which you will receive an estimated ready time. We may decline or cancel
           an order (for example, if an item is unavailable, we are at capacity, or we are closing),
           in which case any amount paid online is refunded per our{' '}
-          <a href="/refund-cancellation" className="text-tan hover:underline">Refund &amp; Cancellation Policy</a>.
+          <a href="/refund-cancellation" className="text-tan-dark hover:underline">Refund &amp; Cancellation Policy</a>.
         </p>
       </PolicySection>
 

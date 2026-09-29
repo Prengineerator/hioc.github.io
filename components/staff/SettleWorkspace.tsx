@@ -265,7 +265,7 @@ function SettleGroup({
               <button
                 type="button"
                 onClick={() => onSettle(o)}
-                className="min-h-[44px] rounded-md bg-tan px-5 text-sm font-bold text-cream hover:bg-tan-dark"
+                className="min-h-[44px] rounded-md bg-tan-dark px-5 text-sm font-bold text-cream hover:bg-tan-darker"
               >
                 Settle
               </button>

@@ -321,7 +321,7 @@ export function PosPaymentPanel({
                 {bill.discount_inr > 0 ? <BillRow label="Discount" value={-bill.discount_inr} /> : null}
                 <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
                   <span className="font-bold text-charcoal">Total</span>
-                  <span className="text-lg font-bold text-tan">₹{bill.total_inr}</span>
+                  <span className="text-lg font-bold text-tan-dark">₹{bill.total_inr}</span>
                 </div>
               </>
             ) : (
@@ -360,7 +360,7 @@ export function PosPaymentPanel({
                   setPending(null);
                   phoneRef.current?.focus();
                 }}
-                className="rounded-md bg-tan px-3 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark disabled:opacity-50"
+                className="rounded-md bg-tan-dark px-3 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
               >
                 Add number
               </button>
@@ -436,7 +436,7 @@ export function PosPaymentPanel({
 
             <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
               <span className="text-sm font-bold text-charcoal">Change due</span>
-              <span className="text-2xl font-bold text-tan">₹{change}</span>
+              <span className="text-2xl font-bold text-tan-dark">₹{change}</span>
             </div>
 
             <button
@@ -445,7 +445,7 @@ export function PosPaymentPanel({
               onClick={() =>
                 attempt([{ method: 'cash', amount_inr: total, tendered_inr: tenderedNum }])
               }
-              className="mt-3 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-3 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
               Take ₹{total} cash
             </button>
@@ -549,7 +549,7 @@ export function PosPaymentPanel({
                       className={
                         'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors ' +
                         (customReason === chip
-                          ? 'border-tan bg-tan text-cream'
+                          ? 'border-tan bg-tan-dark text-cream'
                           : 'border-line text-charcoal hover:border-tan')
                       }
                     >
@@ -590,7 +590,7 @@ export function PosPaymentPanel({
                       },
                 );
               }}
-              className="mt-4 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-4 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
               {customAmountValid
                 ? `Take ₹${customNum} ${customMethod.toUpperCase()}` +
@@ -688,7 +688,7 @@ export function PosPaymentPanel({
                 openDrawerFor(splitParts);
                 attempt(splitParts);
               }}
-              className="mt-4 w-full rounded-md bg-tan px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+              className="mt-4 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
               {firstValid
                 ? `Take ₹${firstNum} ${firstMethod.toUpperCase()} + ₹${remainder} ${secondMethod.toUpperCase()}`
@@ -717,7 +717,7 @@ export function PosPaymentPanel({
                         attempt([{ method: m.value, amount_inr: total, tendered_inr: null }]);
                       }
                     }}
-                    className="rounded-md bg-tan px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-50"
+                    className="rounded-md bg-tan-dark px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {m.label}
                   </button>
@@ -782,7 +782,7 @@ function MethodChip({
       onClick={onClick}
       className={
         'rounded-md border px-3 py-2 text-sm font-bold transition-colors ' +
-        (active ? 'border-tan bg-tan text-cream' : 'border-line text-charcoal hover:border-tan')
+        (active ? 'border-tan bg-tan-dark text-cream' : 'border-line text-charcoal hover:border-tan')
       }
     >
       {label}

@@ -68,7 +68,7 @@ export function MenuItemCustomizeModal({
           type="button"
           aria-label="Increase quantity"
           onClick={() => setQty((q) => q + 1)}
-          className="flex h-6 w-6 items-center justify-center rounded-full bg-tan text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+          className="flex h-6 w-6 items-center justify-center rounded-full bg-tan-dark text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
         >
           +
         </button>

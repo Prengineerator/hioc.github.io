@@ -36,8 +36,12 @@ relevant section before changing a screen.
 ## Design system (do not drift from it)
 
 - Palette in `tailwind.config.ts` / `app/globals.css`: `charcoal`, `tan`,
-  `tan-dark` (hover only), `cream`, `muted`, `line`, `surface`. **Do not add
-  new colours.** Replace ad-hoc hex values (`bg-[#f6efe9]`, `border-[#e5e5e5]`,
+  `tan-dark`, `tan-darker`, `cream`, `muted`, `line`, `surface`. **Do not add
+  new colours.** Tan roles (contrast): `tan` is decoration only (bars, dots,
+  borders, focus rings), never text or a fill behind text; `tan-dark` is for
+  tan text and tan fills with white text; `tan-darker` is their hover. On the
+  charcoal chrome (StaffHeader, SiteFooter, LockScreen) plain `tan` text is
+  the one that passes. Replace ad-hoc hex values (`bg-[#f6efe9]`, `border-[#e5e5e5]`,
   `text-[#828282]`) with the named tokens when you touch a file.
 - Fonts: DM Sans (`font-sans`) for text; Space Mono (`font-mono`, usually with
   `tabular-nums`) for prices, bill totals, order numbers and codes.
@@ -81,8 +85,8 @@ rely on code reading — don't burn time faking a backend.
   correct `type`/`inputMode`/`autoComplete` (`tel`, `numeric`, `name`, `one-time-code`).
 - Accessibility (WCAG 2.1 AA): labelled inputs, `aria-live` for status changes,
   `aria-pressed`/`aria-selected` on toggles/tabs, dialogs trap focus and close
-  on Esc, colour is never the only signal, contrast ≥ 4.5:1 (`muted` on white
-  passes; `tan` text on white does **not** for body copy).
+  on Esc, colour is never the only signal, contrast ≥ 4.5:1 (`muted` and
+  `tan-dark` on white pass; plain `tan` text or white-on-`tan` does **not**).
 - Consistency: same spacing scale, headings, button hierarchy (one primary per
   view), currency formatting (`₹` + `font-mono tabular-nums`), date/time in IST.
 - Performance: `next/image` with `sizes` for photos, no layout shift, no

@@ -10,7 +10,7 @@ export function OrderingOffNotice() {
       <p className="mt-3 text-muted">{ORDERING_OFF_MESSAGE}</p>
       <Link
         href="/staff/orders"
-        className="mt-6 inline-flex rounded-md bg-tan px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-dark"
+        className="mt-6 inline-flex rounded-md bg-tan-dark px-5 py-3 text-sm font-bold text-cream transition-colors hover:bg-tan-darker"
       >
         See today&apos;s orders
       </Link>

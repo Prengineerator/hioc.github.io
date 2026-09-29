@@ -11,7 +11,8 @@
 :root {
   --color-charcoal: #232325;
   --color-tan: #ad825e;
-  --color-tan-dark: #96714f;
+  --color-tan-dark: #8a6446; /* AA text/fill shade — see tailwind.config.ts */
+  --color-tan-darker: #73533a;
   --color-cream: #ffffff;
   --color-muted: #6b6560;
 }

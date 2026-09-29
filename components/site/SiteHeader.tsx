@@ -88,7 +88,7 @@ export function SiteHeader() {
                     aria-current={active ? 'page' : undefined}
                     className={
                       'inline-flex min-h-[44px] items-center rounded-md px-3 text-sm font-semibold transition-colors ' +
-                      (active ? 'text-tan' : 'text-charcoal hover:text-tan')
+                      (active ? 'text-tan-dark' : 'text-charcoal hover:text-tan-dark')
                     }
                   >
                     {link.label}
@@ -101,7 +101,7 @@ export function SiteHeader() {
                 href="/menu"
                 aria-label="View menu and cart"
                 title="View menu and cart"
-                className="ml-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-charcoal transition-colors hover:text-tan"
+                className="ml-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-charcoal transition-colors hover:text-tan-dark"
               >
                 <CartIcon />
               </Link>
@@ -112,7 +112,7 @@ export function SiteHeader() {
 
         <button
           type="button"
-          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-charcoal transition-colors hover:text-tan md:hidden"
+          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-charcoal transition-colors hover:text-tan-dark md:hidden"
           aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
           aria-expanded={mobileOpen}
           aria-controls="mobile-nav"
@@ -142,7 +142,7 @@ export function SiteHeader() {
                     aria-current={active ? 'page' : undefined}
                     className={
                       'flex min-h-[44px] items-center rounded-md px-3 text-base font-semibold transition-colors ' +
-                      (active ? 'bg-surface text-tan' : 'text-charcoal hover:bg-surface hover:text-tan')
+                      (active ? 'bg-surface text-tan-dark' : 'text-charcoal hover:bg-surface hover:text-tan-dark')
                     }
                   >
                     {link.label}
@@ -153,7 +153,7 @@ export function SiteHeader() {
             <li>
               <Link
                 href="/menu"
-                className="flex min-h-[44px] items-center gap-2 rounded-md px-3 text-base font-semibold text-charcoal transition-colors hover:bg-surface hover:text-tan"
+                className="flex min-h-[44px] items-center gap-2 rounded-md px-3 text-base font-semibold text-charcoal transition-colors hover:bg-surface hover:text-tan-dark"
               >
                 <CartIcon />
                 Your Order

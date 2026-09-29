@@ -41,7 +41,7 @@ export function GetOtpButton({
       disabled={otp.busy || !otp.phoneIsValid || extraDisabled}
       className={
         variant === 'primary'
-          ? 'w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60'
+          ? 'w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60'
           : 'shrink-0 rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50'
       }
     >
@@ -92,7 +92,7 @@ export function PhoneOtpPanel({
             type="button"
             onClick={() => void otp.verifyOtp()}
             disabled={otp.busy}
-            className="w-full rounded-md bg-tan px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:cursor-not-allowed disabled:opacity-60"
+            className="w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
           >
             {otp.busy ? verifyingLabel : verifyLabel}
           </button>
@@ -101,7 +101,7 @@ export function PhoneOtpPanel({
               type="button"
               onClick={() => void otp.sendOtp()}
               disabled={otp.busy}
-              className="font-semibold text-tan underline disabled:opacity-50"
+              className="font-semibold text-tan-dark underline disabled:opacity-50"
             >
               Resend code
             </button>
@@ -117,7 +117,7 @@ export function PhoneOtpPanel({
           role="status"
           className="mt-2 flex items-center gap-2 rounded-md border border-tan bg-surface px-3 py-2 text-sm text-charcoal"
         >
-          <span aria-hidden className="text-base font-bold text-tan">
+          <span aria-hidden className="text-base font-bold text-tan-dark">
             ✓
           </span>
           <span>Number verified — you can place your order.</span>

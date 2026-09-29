@@ -43,7 +43,7 @@ export function MenuItemImage({
       ) : (
         <div
           aria-hidden="true"
-          className="flex h-full w-full items-center justify-center text-3xl text-tan"
+          className="flex h-full w-full items-center justify-center text-3xl text-tan-dark"
         >
           ☕
         </div>

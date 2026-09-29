@@ -413,7 +413,7 @@ export function SuggestWizard() {
           <button
             type="button"
             onClick={() => setStep('preferences')}
-            className="mb-4 text-sm font-semibold text-tan hover:underline"
+            className="mb-4 text-sm font-semibold text-tan-dark hover:underline"
           >
             ← Back
           </button>
@@ -478,7 +478,7 @@ export function SuggestWizard() {
           <button
             type="button"
             onClick={() => setStep('mood')}
-            className="mb-4 text-sm font-semibold text-tan hover:underline"
+            className="mb-4 text-sm font-semibold text-tan-dark hover:underline"
           >
             ← Back
           </button>
@@ -517,7 +517,7 @@ export function SuggestWizard() {
                   <button
                     type="button"
                     onClick={() => handleRelax(response.relaxHint!.constraint)}
-                    className="min-h-[44px] shrink-0 rounded-full border border-tan px-3 text-sm font-semibold text-tan hover:bg-tan hover:text-cream"
+                    className="min-h-[44px] shrink-0 rounded-full border border-tan px-3 text-sm font-semibold text-tan-dark hover:bg-tan-dark hover:text-cream"
                   >
                     Show me more options
                   </button>

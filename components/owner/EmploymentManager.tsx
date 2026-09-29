@@ -244,7 +244,7 @@ function EmploymentForm({
         type="button"
         disabled={busy}
         onClick={save}
-        className="mt-3 rounded-md bg-tan px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
+        className="mt-3 rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
       >
         {busy ? 'Saving…' : 'Save'}
       </button>
