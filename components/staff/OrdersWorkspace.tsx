@@ -232,13 +232,18 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   }, []);
 
   const handlePayment = useCallback(
-    async (o: OrderWithItems, method: PaymentMethod) => {
+    async (o: OrderWithItems, method: PaymentMethod, reference?: string) => {
       try {
         const res = await fetch(`/api/orders/${o.id}/payment`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ payment_method: method }),
+          body: JSON.stringify(reference ? { payment_method: method, reference } : { payment_method: method }),
         });
+        if (!res.ok) {
+          // e.g. a booking ID already on another bill — say which, not just "failed".
+          const d = await res.json().catch(() => ({}));
+          showToast(d?.error ?? 'Payment not recorded — try again.');
+        }
         return res.ok;
       } catch {
         return false;
@@ -491,7 +496,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           onClose={closeDetail}
           onRemind={handleRemind}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
-          onPayment={(o, m) => handlePayment(o, m)}
+          onPayment={(o, m, ref) => handlePayment(o, m, ref)}
           onPrint={(orderId, type) => printDock.enqueue([{ orderId, type }])}
           onRefund={(o, amountInr, reason, method, key) => handleRefund(o, amountInr, reason, method, key)}
           onVoid={(o, itemId, reason) => handleVoid(o, itemId, reason)}

@@ -12,6 +12,9 @@ import { Card, inr, PaymentsByMethod } from '@/components/owner/dashboard';
 import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
 import { loadReport } from '@/lib/reports/reconcileServer';
 import type { Report } from '@/lib/reports/reconcile';
+import { APP_PAYMENT_METHODS } from '@/lib/orders/payments';
+import { formatIstDateTime, PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
+import { formatOrderNumber } from '@/lib/utils/orderNumber';
 
 export const dynamic = 'force-dynamic';
 
@@ -69,11 +72,71 @@ async function getPaymentStatusCounts(days = 30): Promise<Record<string, number>
   return counts;
 }
 
+interface AppPaymentRow {
+  at: string;
+  orderNumber: number | null;
+  method: string;
+  amountInr: number;
+  reference: string | null;
+  /** Cancelled, rejected or fully refunded — the platform shouldn't be paying for it. */
+  dead: boolean;
+}
+
+// Every dining-app tender (Swiggy Dineout, Zomato District) over the last
+// `days`, newest first, with the booking ID the counter recorded — the list the
+// owner ticks off against each platform's payout statement. Null on a query
+// failure (most likely 2026-10-aggregator-payments.sql not applied yet).
+async function getAppPayments(days = 30): Promise<AppPaymentRow[] | null> {
+  const admin = createAdminSupabaseClient();
+  const since = new Date(Date.now() - days * DAY_MS).toISOString();
+  const { data, error } = await admin
+    .from('order_payments')
+    .select('order_id, method, amount_inr, reference, created_at')
+    .in('method', [...APP_PAYMENT_METHODS])
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(300);
+  if (error) {
+    console.error('dining-app payments query failed', error);
+    return null;
+  }
+  const rows = (data ?? []) as {
+    order_id: string;
+    method: string;
+    amount_inr: number;
+    reference: string | null;
+    created_at: string;
+  }[];
+  if (rows.length === 0) return [];
+  const { data: orders } = await admin
+    .from('orders')
+    .select('id, order_number, status, payment_status')
+    .in('id', [...new Set(rows.map((r) => r.order_id))]);
+  const byId = new Map(
+    ((orders ?? []) as { id: string; order_number: number; status: string; payment_status: string }[]).map((o) => [
+      o.id,
+      o,
+    ]),
+  );
+  return rows.map((r) => {
+    const o = byId.get(r.order_id);
+    return {
+      at: r.created_at,
+      orderNumber: o?.order_number ?? null,
+      method: r.method,
+      amountInr: r.amount_inr,
+      reference: r.reference,
+      dead: !!o && (o.status === 'cancelled' || o.status === 'rejected' || o.payment_status === 'refunded'),
+    };
+  });
+}
+
 export default async function OwnerPaymentsPage() {
-  const [report, split, statusCounts] = await Promise.all([
+  const [report, split, statusCounts, appPayments] = await Promise.all([
     getLast30Days(),
     getOnlineVsCounter(30),
     getPaymentStatusCounts(30),
+    getAppPayments(30),
   ]);
 
   const totalCollected = report?.totals.receivedTotalInr ?? 0;
@@ -108,6 +171,10 @@ export default async function OwnerPaymentsPage() {
         )}
       </Card>
 
+      <Card title="Dining-app payments · last 30 days">
+        <AppPaymentsTable rows={appPayments} />
+      </Card>
+
       <Card title="Online vs pay-at-counter · last 30 days">
         <div className="flex h-4 w-full overflow-hidden rounded-full bg-[#f2efe9]">
           <div className="bg-tan" style={{ width: `${onlinePct}%` }} />
@@ -127,6 +194,65 @@ export default async function OwnerPaymentsPage() {
           ))}
         </div>
       </Card>
+    </div>
+  );
+}
+
+function AppPaymentsTable({ rows }: { rows: AppPaymentRow[] | null }) {
+  if (rows === null) {
+    return <p className="py-6 text-center text-sm text-muted">Dining-app payments could not be loaded.</p>;
+  }
+  if (rows.length === 0) {
+    return <p className="py-6 text-center text-sm text-muted">No Swiggy Dineout or Zomato District payments yet.</p>;
+  }
+  const totals = APP_PAYMENT_METHODS.map((m) => ({
+    method: m,
+    count: rows.filter((r) => r.method === m && !r.dead).length,
+    amountInr: rows.filter((r) => r.method === m && !r.dead).reduce((sum, r) => sum + r.amountInr, 0),
+  }));
+  return (
+    <div>
+      <p className="text-sm text-charcoal">
+        {totals.map((t, i) => (
+          <span key={t.method}>
+            {i > 0 ? ' · ' : ''}
+            <span className="font-bold">{PAYMENT_METHOD_LABEL[t.method]}</span> {inr(t.amountInr)} ({t.count})
+          </span>
+        ))}
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        Match each booking ID against the platform&rsquo;s payout statement. Amounts are the bill, before the
+        platform&rsquo;s commission.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[560px] text-sm">
+          <thead>
+            <tr className="text-left text-xs uppercase tracking-wide text-muted">
+              <th className="py-1.5 pr-3">When</th>
+              <th className="py-1.5 pr-3">Order</th>
+              <th className="py-1.5 pr-3">App</th>
+              <th className="py-1.5 pr-3">Booking ID</th>
+              <th className="py-1.5 pr-3 text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className={`border-t border-[#f2efe9] ${r.dead ? 'text-muted line-through' : 'text-charcoal'}`}>
+                <td className="py-1.5 pr-3 whitespace-nowrap">{formatIstDateTime(r.at)}</td>
+                <td className="py-1.5 pr-3">{r.orderNumber !== null ? formatOrderNumber(r.orderNumber) : '—'}</td>
+                <td className="py-1.5 pr-3">{PAYMENT_METHOD_LABEL[r.method] ?? r.method}</td>
+                <td className="py-1.5 pr-3 font-mono font-bold">
+                  {r.reference ?? <span className="font-sans font-normal text-amber-800">not recorded</span>}
+                </td>
+                <td className="py-1.5 pr-3 text-right tabular-nums">{inr(r.amountInr)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rows.some((r) => r.dead) ? (
+        <p className="mt-2 text-xs text-muted">Struck through: cancelled, rejected or fully refunded — left out of the totals.</p>
+      ) : null}
     </div>
   );
 }

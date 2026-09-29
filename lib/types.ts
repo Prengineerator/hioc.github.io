@@ -156,6 +156,9 @@ export interface MenuItem {
 export interface OrderPaymentPart {
   method: PaymentMethod;
   amount_inr: number;
+  // Dining-app tenders only: the platform's booking / transaction ID
+  // (order_payments.reference, 2026-10-aggregator-payments.sql).
+  reference?: string | null;
 }
 
 export interface Order {

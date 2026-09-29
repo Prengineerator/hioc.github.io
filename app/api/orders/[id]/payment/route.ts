@@ -7,6 +7,7 @@ import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { sendBillNotification } from '@/lib/notifications/engine';
 import {
   dominantMethod,
+  isAppPaymentMethod,
   parseSettleAdjustment,
   shortNeedsManager,
   STAFF_SETTLE_SHORT_LIMIT_INR,
@@ -14,6 +15,8 @@ import {
   type PaymentPart,
 } from '@/lib/orders/payments';
 import { runAfterResponse } from '@/lib/api/background';
+import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
+import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -50,13 +53,25 @@ export async function GET(_request: Request, { params }: RouteParams) {
     .maybeSingle();
   if (!order) return notFound();
 
-  const { data: parts } = await admin
+  // `reference` (the dining-app booking ID) is new in
+  // 2026-10-aggregator-payments.sql; a database without it still answers.
+  type TenderRow = { method: string; amount_inr: number; reference?: string | null };
+  const withRef = await admin
     .from('order_payments')
-    .select('method, amount_inr, tendered_inr')
+    .select('method, amount_inr, tendered_inr, reference')
     .eq('order_id', id)
     .order('created_at', { ascending: true });
+  let parts = withRef.data as TenderRow[] | null;
+  if (withRef.error) {
+    const { data } = await admin
+      .from('order_payments')
+      .select('method, amount_inr, tendered_inr')
+      .eq('order_id', id)
+      .order('created_at', { ascending: true });
+    parts = data as TenderRow[] | null;
+  }
 
-  const rows = (parts ?? []) as { method: string; amount_inr: number }[];
+  const rows = parts ?? [];
   const tenders =
     rows.length > 0
       ? rows
@@ -75,8 +90,12 @@ export async function GET(_request: Request, { params }: RouteParams) {
 // PATCH /api/orders/[id]/payment — staff/owner only. Records how a walk-up paid
 // (STF-041). Two accepted shapes:
 //
-//   { payment_method, payment_status? }   single method for the whole bill
-//   { parts: [{ method, amount_inr, tendered_inr? }], adjustment? }   POS4-1 split
+//   { payment_method, payment_status?, reference? }   single method for the whole bill
+//   { parts: [{ method, amount_inr, tendered_inr?, reference? }], adjustment? }   POS4-1 split
+//
+// A dining-app tender (Swiggy Dineout, Zomato District) must carry the
+// platform's booking / transaction ID as `reference`, and that ID must not be
+// on another live order already.
 //        settlement; `adjustment: { short_inr?, tip_inr?, reason }` settles for
 //        LESS than the bill (a settlement discount) or MORE (a tip). The parts
 //        are then what actually entered the till: total - short + tip. A short
@@ -181,11 +200,60 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     );
   }
 
-  if (isSplit) {
-    const validated = validateParts(body.parts, orderTotal, adjustment);
+  // A single-method dining-app settle is stored as one tender for the whole
+  // bill, because the tender row is where its booking ID lives.
+  const appSingle = !isSplit && isAppPaymentMethod(body.payment_method as string);
+  if (isSplit || appSingle) {
+    const rawParts = isSplit
+      ? body.parts
+      : [{ method: body.payment_method, amount_inr: orderTotal, reference: body.reference }];
+    const validated = validateParts(rawParts, orderTotal, adjustment);
     if (!validated.ok) return errorResponse(400, validated.error);
     parts = validated.parts;
     changeInr = validated.changeInr;
+  }
+
+  // The same booking settled on two bills is either a typo or the platform's
+  // money being claimed twice — refuse it before anything is written. A dead
+  // order (cancelled, rejected, fully refunded) doesn't hold its ID: that
+  // booking can legitimately be billed again.
+  const referenced = (parts ?? []).filter((p) => p.reference);
+  if (referenced.length > 0) {
+    const { data: sameRef, error: refError } = await admin
+      .from('order_payments')
+      .select('order_id, method, reference')
+      .in(
+        'reference',
+        referenced.map((p) => p.reference as string),
+      )
+      .neq('order_id', id);
+    if (refError) {
+      console.error('booking ID check failed — is supabase/2026-10-aggregator-payments.sql applied?', refError);
+      return errorResponse(500, 'Could not check the booking ID. Try again.');
+    }
+    const clashes = ((sameRef ?? []) as { order_id: string; method: string; reference: string }[]).filter((r) =>
+      referenced.some((p) => p.method === r.method && p.reference === r.reference),
+    );
+    if (clashes.length > 0) {
+      const { data: others } = await admin
+        .from('orders')
+        .select('id, order_number, status, payment_status')
+        .in(
+          'id',
+          clashes.map((c) => c.order_id),
+        );
+      const live = ((others ?? []) as { id: string; order_number: number; status: string; payment_status: string }[]).find(
+        (o) => !['cancelled', 'rejected'].includes(o.status) && o.payment_status !== 'refunded',
+      );
+      if (live) {
+        const clash = clashes.find((c) => c.order_id === live.id)!;
+        return errorResponse(
+          409,
+          `${PAYMENT_METHOD_LABEL[clash.method] ?? clash.method} ID ${clash.reference} is already recorded on order ` +
+            `${formatOrderNumber(live.order_number)}. Check the ID in the app.`,
+        );
+      }
+    }
   }
 
   const methodToStore = parts ? dominantMethod(parts) : (body.payment_method as PaymentMethod);
@@ -237,6 +305,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         method: p.method,
         amount_inr: p.amount_inr,
         tendered_inr: p.tendered_inr ?? null,
+        // Only sent when there is one, so a settle with no dining-app tender
+        // never depends on the column existing.
+        ...(p.reference ? { reference: p.reference } : {}),
         created_by: user.id,
       })),
     );
@@ -293,7 +364,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // `change_due_inr` lets the POS show "give ₹120 back" without recomputing it.
   // The tenders as recorded, so the caller can show "Cash ₹300 + UPI ₹180"
   // straight away (a single-method settle has none — payment_method says it).
-  const payments = (parts ?? []).map((p) => ({ method: p.method, amount_inr: p.amount_inr }));
+  const payments = (parts ?? []).map((p) => ({
+    method: p.method,
+    amount_inr: p.amount_inr,
+    ...(p.reference ? { reference: p.reference } : {}),
+  }));
   return NextResponse.json({
     order: {
       ...(data as Order),

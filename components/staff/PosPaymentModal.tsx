@@ -7,6 +7,8 @@ import {
   changeDueInr,
   COUNTER_PAYMENT_METHODS,
   isAppPaymentMethod,
+  parsePaymentReference,
+  PAYMENT_REFERENCE_LABEL,
   shortNeedsManager,
   STAFF_SETTLE_SHORT_LIMIT_INR,
   type PaymentPart,
@@ -64,7 +66,7 @@ export interface SettleAdjustmentInput {
   reason: string;
 }
 
-type Step = 'choose' | 'cash' | 'split' | 'custom';
+type Step = 'choose' | 'cash' | 'split' | 'custom' | 'app';
 
 interface PaymentStepProps {
   bill: BillBreakdown | null;
@@ -173,6 +175,8 @@ export function PosPaymentPanel({
   const [firstAmount, setFirstAmount] = useState('');
   const [secondMethod, setSecondMethod] = useState<PaymentMethod>('upi');
   const [splitTendered, setSplitTendered] = useState('');
+  const [firstRef, setFirstRef] = useState('');
+  const [secondRef, setSecondRef] = useState('');
   const firstNum = Number.parseInt(firstAmount, 10);
   const firstValid = Number.isFinite(firstNum) && firstNum > 0 && firstNum < total;
   const remainder = firstValid ? total - firstNum : 0;
@@ -183,6 +187,7 @@ export function PosPaymentPanel({
   const [customAmount, setCustomAmount] = useState('');
   const [customTendered, setCustomTendered] = useState('');
   const [customReason, setCustomReason] = useState('');
+  const [customRef, setCustomRef] = useState('');
   const customNum = Number.parseInt(customAmount, 10);
   const customAmountValid = Number.isFinite(customNum) && customNum > 0;
   const customDiff = customAmountValid ? customNum - total : 0;
@@ -194,6 +199,20 @@ export function PosPaymentPanel({
     customMethod === 'cash' &&
     customTendered.trim().length > 0 &&
     (!Number.isFinite(customTenderedNum) || customTenderedNum < customNum);
+
+  // Dining-app step — the whole bill on one app, with its booking ID.
+  const [appMethod, setAppMethod] = useState<PaymentMethod>('swiggy_dineout');
+  const [appRef, setAppRef] = useState('');
+  const appRefParsed = parsePaymentReference(appRef);
+
+  // A dining-app tender can't be taken without its booking ID; anything else
+  // needs none. `null` reference = not needed.
+  const refFor = (method: PaymentMethod, raw: string): string | null | false => {
+    if (!isAppPaymentMethod(method)) return null;
+    const parsed = parsePaymentReference(raw);
+    return parsed.ok ? parsed.reference : false;
+  };
+  const customRefValue = refFor(customMethod, customRef);
 
   useEffect(() => {
     phoneRef.current?.focus();
@@ -230,6 +249,9 @@ export function PosPaymentPanel({
 
   const splitParts = useMemo((): PaymentPart[] | null => {
     if (!firstValid) return null;
+    const refA = refFor(firstMethod, firstRef);
+    const refB = refFor(secondMethod, secondRef);
+    if (refA === false || refB === false) return null;
     const a: PaymentPart = {
       method: firstMethod,
       amount_inr: firstNum,
@@ -237,10 +259,18 @@ export function PosPaymentPanel({
         firstMethod === 'cash' && splitTendered.trim()
           ? Number.parseInt(splitTendered, 10)
           : null,
+      ...(refA ? { reference: refA } : {}),
     };
-    const b: PaymentPart = { method: secondMethod, amount_inr: remainder, tendered_inr: null };
+    const b: PaymentPart = {
+      method: secondMethod,
+      amount_inr: remainder,
+      tendered_inr: null,
+      ...(refB ? { reference: refB } : {}),
+    };
     return [a, b];
-  }, [firstValid, firstMethod, firstNum, secondMethod, remainder, splitTendered]);
+    // refFor is a pure helper recreated each render; its inputs are listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstValid, firstMethod, firstNum, secondMethod, remainder, splitTendered, firstRef, secondRef]);
 
   const splitCashShort =
     firstMethod === 'cash' &&
@@ -477,6 +507,7 @@ export function PosPaymentPanel({
                   setCustomAmount('');
                   setCustomTendered('');
                   setCustomReason('');
+                  setCustomRef('');
                 }}
                 className="text-xs font-bold text-muted underline"
               >
@@ -498,6 +529,10 @@ export function PosPaymentPanel({
                 />
               ))}
             </div>
+
+            {isAppPaymentMethod(customMethod) ? (
+              <ReferenceField id="pos-custom-ref" method={customMethod} value={customRef} onChange={setCustomRef} />
+            ) : null}
 
             <label htmlFor="pos-custom-amount" className="mt-3 block text-xs font-bold uppercase tracking-wide text-muted">
               Amount received
@@ -585,14 +620,17 @@ export function PosPaymentPanel({
 
             <button
               type="button"
-              disabled={busy || !customAmountValid || !customReasonValid || customCashShort}
+              disabled={
+                busy || !customAmountValid || !customReasonValid || customCashShort || customRefValue === false
+              }
               onClick={() => {
-                if (!customAmountValid || stale) return;
+                if (!customAmountValid || stale || customRefValue === false) return;
                 const part: PaymentPart = {
                   method: customMethod,
                   amount_inr: customNum,
                   tendered_inr:
                     customMethod === 'cash' && customTendered.trim() ? customTenderedNum : null,
+                  ...(customRefValue ? { reference: customRefValue } : {}),
                 };
                 if (customMethod === 'cash') openDrawerFor([part]);
                 attempt(
@@ -613,6 +651,39 @@ export function PosPaymentPanel({
                 : 'Enter the amount received'}
             </button>
           </div>
+        ) : step === 'app' ? (
+          /* ---- Paid on a dining app: booking ID, then settle --------------- */
+          <div className="rounded-md border border-line px-4 py-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-charcoal">
+                {methodLabel(appMethod)} — ₹{total}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setStep('choose');
+                  setAppRef('');
+                }}
+                className="text-xs font-bold text-muted underline"
+              >
+                Back
+              </button>
+            </div>
+
+            <ReferenceField id="pos-app-ref" method={appMethod} value={appRef} onChange={setAppRef} autoFocus />
+
+            <button
+              type="button"
+              disabled={busy || !appRefParsed.ok}
+              onClick={() => {
+                if (!appRefParsed.ok || stale) return;
+                attempt([{ method: appMethod, amount_inr: total, tendered_inr: null, reference: appRefParsed.reference }]);
+              }}
+              className="mt-4 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {appRefParsed.ok ? `Settle ₹${total} on ${methodLabel(appMethod)}` : 'Enter the booking ID'}
+            </button>
+          </div>
         ) : step === 'split' ? (
           /* ---- Split across two methods ----------------------------------- */
           <div className="rounded-md border border-line px-4 py-3">
@@ -624,6 +695,8 @@ export function PosPaymentPanel({
                   setStep('choose');
                   setFirstAmount('');
                   setSplitTendered('');
+                  setFirstRef('');
+                  setSecondRef('');
                 }}
                 className="text-xs font-bold text-muted underline"
               >
@@ -676,6 +749,10 @@ export function PosPaymentPanel({
               </>
             ) : null}
 
+            {isAppPaymentMethod(firstMethod) ? (
+              <ReferenceField id="pos-split-ref-1" method={firstMethod} value={firstRef} onChange={setFirstRef} />
+            ) : null}
+
             {firstValid ? (
               <>
                 <p className="mt-4 text-xs font-bold uppercase tracking-wide text-muted">
@@ -691,6 +768,9 @@ export function PosPaymentPanel({
                     />
                   ))}
                 </div>
+                {isAppPaymentMethod(secondMethod) ? (
+                  <ReferenceField id="pos-split-ref-2" method={secondMethod} value={secondRef} onChange={setSecondRef} />
+                ) : null}
               </>
             ) : null}
 
@@ -748,8 +828,13 @@ export function PosPaymentPanel({
                     key={m.value}
                     type="button"
                     disabled={busy || !bill}
-                    // Exact, like UPI/card: the app took the whole bill.
-                    onClick={() => attempt([{ method: m.value, amount_inr: total, tendered_inr: null }])}
+                    // Exact, like UPI/card: the app took the whole bill — but
+                    // never without its booking ID, so this opens a step for it.
+                    onClick={() => {
+                      setAppMethod(m.value);
+                      setAppRef('');
+                      setStep('app');
+                    }}
                     className="rounded-md border-2 border-tan-dark px-3 py-3 text-sm font-bold text-tan-dark transition-colors hover:bg-tan-dark hover:text-cream disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {m.label}
@@ -797,6 +882,54 @@ export function PosPaymentPanel({
           <p className="text-center text-sm text-muted">{settling ? 'Recording payment…' : 'Placing order…'}</p>
         ) : null}
       </div>
+  );
+}
+
+// The booking / transaction ID for a dining-app tender. Normalised as it will
+// be stored (spaces dropped, upper-case) only for validation — the staffer's
+// typing is left alone.
+function ReferenceField({
+  id,
+  method,
+  value,
+  onChange,
+  autoFocus = false,
+}: {
+  id: string;
+  method: PaymentMethod;
+  value: string;
+  onChange: (value: string) => void;
+  autoFocus?: boolean;
+}) {
+  const parsed = parsePaymentReference(value);
+  return (
+    <div className="mt-3">
+      <label htmlFor={id} className="block text-xs font-bold uppercase tracking-wide text-muted">
+        {methodLabel(method)} {PAYMENT_REFERENCE_LABEL}
+      </label>
+      <input
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoFocus={autoFocus}
+        autoComplete="off"
+        autoCapitalize="characters"
+        spellCheck={false}
+        maxLength={60}
+        placeholder="From the diner's booking screen"
+        aria-invalid={value.trim() !== '' && !parsed.ok}
+        className="mt-1 w-full rounded-md border border-line px-3 py-3 text-lg font-bold uppercase tracking-wide outline-none focus:border-tan"
+      />
+      {value.trim() && !parsed.ok ? (
+        <p role="alert" className="mt-1 text-xs text-red-700">
+          {parsed.error}
+        </p>
+      ) : (
+        <p className="mt-1 text-xs text-muted">
+          Check it on the diner&rsquo;s app or the partner app — it&rsquo;s how the payout is matched.
+        </p>
+      )}
+    </div>
   );
 }
 

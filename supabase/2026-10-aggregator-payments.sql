@@ -9,9 +9,10 @@
 -- platform.
 --
 -- Two new `payment_method` values, so the counter can settle a bill (or one
--- part of a split) against the app that took the money. Nothing else changes
--- shape: `orders.payment_method`, `order_payments.method` and `refunds.method`
--- are all this enum already. Like UPI and card, neither value is drawer cash —
+-- part of a split) against the app that took the money, plus
+-- `order_payments.reference` for the platform's booking / transaction ID.
+-- `orders.payment_method`, `order_payments.method` and `refunds.method` are
+-- all this enum already. Like UPI and card, neither value is drawer cash —
 -- the cash-day math only ever counts method = 'cash'.
 --
 -- Safe to re-run. Apply BEFORE deploying the code that offers these buttons:
@@ -19,10 +20,25 @@
 --
 -- NOTE: `alter type ... add value` cannot run inside a transaction block that
 -- also uses the new value. Run this file on its own.
+--
+-- The column MUST exist before the code deploys: every dining-app settle
+-- writes it.
 -- ===========================================================================
 
 alter type payment_method add value if not exists 'swiggy_dineout';
 alter type payment_method add value if not exists 'zomato_district';
+
+-- The platform's booking / transaction ID, asked for at the counter on every
+-- dining-app tender. It is what the owner matches each platform's payout
+-- statement against, and what stops the same booking being settled twice.
+-- Per TENDER, not per order: a bill split across an app and cash has one ID on
+-- the app part and none on the cash part. Stored trimmed and upper-cased (the
+-- route normalises), so a lookup is an exact match. Null for every other method.
+alter table order_payments add column if not exists reference text;
+
+create index if not exists idx_order_payments_reference
+  on order_payments (method, reference)
+  where reference is not null;
 
 -- ---------------------------------------------------------------------------
 -- Verify:
@@ -34,4 +50,10 @@ alter type payment_method add value if not exists 'zomato_district';
 --     from order_payments
 --    where method in ('swiggy_dineout', 'zomato_district')
 --    group by method;
+--
+--   -- every dining-app tender with its booking ID:
+--   select o.order_number, p.method, p.reference, p.amount_inr, p.created_at
+--     from order_payments p join orders o on o.id = p.order_id
+--    where p.method in ('swiggy_dineout', 'zomato_district')
+--    order by p.created_at desc limit 20;
 -- ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import {
   COUNTER_PAYMENT_METHODS,
   dominantMethod,
   isAppPaymentMethod,
+  parsePaymentReference,
   validateParts,
 } from '@/lib/orders/payments';
 import { receivedByMethod, totalReceived } from '@/lib/orders/paymentTotals';
@@ -40,15 +41,30 @@ describe('dining-app payment methods', () => {
 });
 
 describe('settling against a dining app', () => {
-  it('accepts the whole bill on one app', () => {
-    const v = validateParts([{ method: 'swiggy_dineout', amount_inr: 850 }], 850);
-    expect(v).toEqual({ ok: true, parts: [{ method: 'swiggy_dineout', amount_inr: 850, tendered_inr: null }], changeInr: 0 });
+  it('accepts the whole bill on one app, with its booking ID', () => {
+    const v = validateParts([{ method: 'swiggy_dineout', amount_inr: 850, reference: 'sd-88231' }], 850);
+    expect(v).toEqual({
+      ok: true,
+      parts: [{ method: 'swiggy_dineout', amount_inr: 850, tendered_inr: null, reference: 'SD-88231' }],
+      changeInr: 0,
+    });
+  });
+
+  it('refuses an app part with no booking ID', () => {
+    const v = validateParts([{ method: 'zomato_district', amount_inr: 850 }], 850);
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.error).toMatch(/booking \/ transaction id/i);
+  });
+
+  it('drops a reference sent on a non-app part', () => {
+    const v = validateParts([{ method: 'upi', amount_inr: 850, reference: 'X1234' }], 850);
+    expect(v.ok && v.parts[0]).toEqual({ method: 'upi', amount_inr: 850, tendered_inr: null });
   });
 
   it('splits with cash, and only the cash part counts toward the drawer', () => {
     const v = validateParts(
       [
-        { method: 'zomato_district', amount_inr: 600 },
+        { method: 'zomato_district', amount_inr: 600, reference: 'ZD1001' },
         { method: 'cash', amount_inr: 150, tendered_inr: 200 },
       ],
       750,
@@ -61,7 +77,7 @@ describe('settling against a dining app', () => {
   });
 
   it('drops a tendered amount sent with an app part — nothing is handed over', () => {
-    const v = validateParts([{ method: 'swiggy_dineout', amount_inr: 300, tendered_inr: 500 }], 300);
+    const v = validateParts([{ method: 'swiggy_dineout', amount_inr: 300, tendered_inr: 500, reference: 'SD1001' }], 300);
     expect(v.ok && v.parts[0].tendered_inr).toBe(null);
   });
 
@@ -84,6 +100,23 @@ describe('settling against a dining app', () => {
       } as never),
     ).toBe('Swiggy Dineout ₹500 + UPI ₹120');
     expect(describeOrderPayment({ payment_method: 'zomato_district', payments: [] } as never)).toBe('Zomato District');
+  });
+});
+
+describe('parsePaymentReference', () => {
+  it('normalises how a staffer reads it off a phone: spaces out, upper-case', () => {
+    expect(parsePaymentReference('  sd 4471 9920 ')).toEqual({ ok: true, reference: 'SD44719920' });
+    expect(parsePaymentReference('zd-2026/0099_a')).toEqual({ ok: true, reference: 'ZD-2026/0099_A' });
+  });
+
+  it('refuses a missing, too-short, too-long or odd-character ID', () => {
+    expect(parsePaymentReference(undefined).ok).toBe(false);
+    expect(parsePaymentReference('   ').ok).toBe(false);
+    expect(parsePaymentReference('ab1').ok).toBe(false);
+    expect(parsePaymentReference('A'.repeat(41)).ok).toBe(false);
+    expect(parsePaymentReference('SD#1234').ok).toBe(false);
+    expect(parsePaymentReference('-1234').ok).toBe(false);
+    expect(parsePaymentReference(12345).ok).toBe(false);
   });
 });
 

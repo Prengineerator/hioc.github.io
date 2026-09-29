@@ -20,7 +20,12 @@ import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { canChangePayment, describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
-import { COUNTER_PAYMENT_METHODS } from '@/lib/orders/payments';
+import {
+  COUNTER_PAYMENT_METHODS,
+  isAppPaymentMethod,
+  parsePaymentReference,
+  PAYMENT_REFERENCE_LABEL,
+} from '@/lib/orders/payments';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import type { SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import {
@@ -79,7 +84,8 @@ export function OrderDetailModal({
   onPrint: (orderId: string, type: PrintType) => void;
   onTransition: (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => void;
   /** Resolves true once the server has recorded the payment. */
-  onPayment: (o: OrderWithItems, method: PaymentMethod) => Promise<boolean>;
+  /** `reference`: the booking / transaction ID, required for a dining-app method. */
+  onPayment: (o: OrderWithItems, method: PaymentMethod, reference?: string) => Promise<boolean>;
   // Optional — omit to hide the refund panel entirely (e.g. a surface that
   // never shows paid orders). The server route is manager/owner-gated
   // (FND-5) regardless of whether this UI is shown.
@@ -106,7 +112,7 @@ export function OrderDetailModal({
   onOpenPayment?: (o: OrderWithItems, intent: SettleIntent) => void;
 }) {
   useModalDismiss(onClose);
-  const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp'>(
+  const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp' | 'appRef'>(
     initialMode === 'reject' && order.status === 'received' ? 'reject' : 'view',
   );
   const [prepMin, setPrepMin] = useState(defaultPrepMin);
@@ -223,7 +229,63 @@ export function OrderDetailModal({
   // desktop app or with no drawer printer configured; a drawer failure is a
   // small note, never blocking.
   const [drawerNote, setDrawerNote] = useState<string | null>(null);
+  // A dining-app settle first asks for the platform's booking ID (mode
+  // 'appRef'); the server refuses one without it, or one already on another bill.
+  const [appMethod, setAppMethod] = useState<PaymentMethod>('swiggy_dineout');
+  const [appRef, setAppRef] = useState('');
+  const [appBusy, setAppBusy] = useState(false);
+  const [appError, setAppError] = useState<string | null>(null);
+  const appRefParsed = parsePaymentReference(appRef);
+  const confirmAppSettle = async () => {
+    if (!appRefParsed.ok || appBusy) return;
+    setAppBusy(true);
+    setAppError(null);
+    const ok = await onPayment(order, appMethod, appRefParsed.reference);
+    setAppBusy(false);
+    if (!ok) {
+      setAppError('Not recorded — check the booking ID and try again.');
+      return;
+    }
+    for (const type of settlePrintPlan(autoPrint)) openPrint(type);
+    setMode('view');
+  };
+
+  // The booking IDs recorded on this order's dining-app tenders, so staff can
+  // read one back to a diner or the owner. Only fetched for an order that has
+  // an app tender — the queue shouldn't pay for it on every card.
+  const hasAppTender =
+    isAppPaymentMethod(order.payment_method) || (order.payments ?? []).some((p) => isAppPaymentMethod(p.method));
+  const [appRefs, setAppRefs] = useState<{ method: string; reference: string }[]>([]);
+  useEffect(() => {
+    if (!hasAppTender || order.payment_status === 'unpaid') {
+      setAppRefs([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/orders/${order.id}/payment`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : { tenders: [] }))
+      .then((d: { tenders?: { method: string; reference?: string | null }[] }) => {
+        if (cancelled) return;
+        setAppRefs(
+          (d.tenders ?? [])
+            .filter((t): t is { method: string; reference: string } => Boolean(t.reference))
+            .map((t) => ({ method: t.method, reference: t.reference })),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hasAppTender, order.id, order.payment_status, order.payment_method]);
+
   const settle = (method: PaymentMethod) => {
+    if (isAppPaymentMethod(method)) {
+      setAppMethod(method);
+      setAppRef('');
+      setAppError(null);
+      setMode('appRef');
+      return;
+    }
     for (const type of settlePrintPlan(autoPrint)) openPrint(type);
     setDrawerNote(null);
     void openDrawerIfCash([{ method }], { orderId: order.id }).then((err) => {
@@ -506,7 +568,53 @@ export function OrderDetailModal({
         ) : null}
 
         {/* Actions */}
-        {mode === 'accept' ? (
+        {mode === 'appRef' ? (
+          <div className="mt-5 rounded-md border border-line p-4">
+            <p className="text-sm font-bold text-charcoal">
+              {PAYMENT_METHOD_LABEL[appMethod] ?? appMethod} — ₹{order.total_inr ?? order.subtotal_inr}
+            </p>
+            <label htmlFor="detail-app-ref" className="mt-3 block text-xs font-bold uppercase tracking-wide text-muted">
+              {PAYMENT_REFERENCE_LABEL}
+            </label>
+            <input
+              id="detail-app-ref"
+              value={appRef}
+              onChange={(e) => {
+                setAppRef(e.target.value);
+                setAppError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void confirmAppSettle();
+              }}
+              autoFocus
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              maxLength={60}
+              placeholder="From the diner's booking screen"
+              className="mt-1 w-full rounded-md border border-line px-3 py-2.5 text-base font-bold uppercase tracking-wide outline-none focus:border-tan"
+            />
+            {appError || (appRef.trim() && !appRefParsed.ok) ? (
+              <p role="alert" className="mt-1 text-xs text-red-700">
+                {appError ?? (appRefParsed.ok ? '' : appRefParsed.error)}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-muted">
+                Check it on the diner&rsquo;s app or the partner app — it&rsquo;s how the payout is matched.
+              </p>
+            )}
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={() => void confirmAppSettle()}
+                disabled={!appRefParsed.ok || appBusy}
+                className="flex-1 rounded-md bg-tan-dark py-2 font-bold text-cream hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {appBusy ? 'Recording…' : 'Confirm settle'}
+              </button>
+              <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
+            </div>
+          </div>
+        ) : mode === 'accept' ? (
           <div className="mt-5 rounded-md border border-line p-4">
             <p className="text-sm font-bold text-charcoal">Ready in</p>
             <div className="mt-2 flex items-center gap-3">
@@ -820,6 +928,12 @@ export function OrderDetailModal({
                   {order.payment_method ? ` (${describeOrderPayment(order)})` : ''}
                 </span>
               </p>
+              {appRefs.map((r) => (
+                <p key={`${r.method}-${r.reference}`} className="text-xs text-muted">
+                  {PAYMENT_METHOD_LABEL[r.method] ?? r.method} ID:{' '}
+                  <span className="font-mono font-bold text-charcoal">{r.reference}</span>
+                </p>
+              ))}
               {order.payment_status !== 'paid' && order.status !== 'ready' ? (
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {PAYMENT_METHODS.map((m) => (
