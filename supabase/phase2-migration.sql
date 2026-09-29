@@ -194,9 +194,9 @@ create table if not exists loyalty_config (
   is_singleton          boolean not null default true,
   points_per_inr        numeric(6,3) not null default 0.100,      -- points earned per ₹ spent (0.1 = 10% back)
   inr_per_point         numeric(6,3) not null default 1.000,      -- ₹ value when redeeming 1 point
-  min_redeem_points     integer not null default 100,
+  min_redeem_points     integer not null default 20,
   max_redeem_pct        integer not null default 50,              -- cap redemption at % of bill
-  points_expiry_days    integer not null default 365,             -- 0 = never
+  points_expiry_days    integer not null default 30,              -- 0 = never
   enrolled_by_default   boolean not null default true,
   updated_at            timestamptz not null default now()
 );
