@@ -29,7 +29,9 @@ export default async function OwnerLayout({ children }: { children: React.ReactN
   return (
     <div className="min-h-screen bg-cream">
       <OwnerHeader />
-      <main>{children}</main>
+      {/* Not <main>: the root layout already wraps every page in one, and a
+          nested second main landmark confuses screen-reader navigation. */}
+      <div>{children}</div>
     </div>
   );
 }

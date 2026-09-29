@@ -54,7 +54,8 @@ export function OwnerHeader() {
   }, [pathname]);
 
   return (
-    <header className="border-b border-line bg-cream">
+    // Sticky so the section nav stays one tap away on the long overview.
+    <header className="sticky top-0 z-30 border-b border-line bg-cream/95 backdrop-blur">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
         <span className="font-bold text-charcoal">HIOC · Owner</span>
         <nav
@@ -64,14 +65,22 @@ export function OwnerHeader() {
         >
           {LINKS.map((l) => {
             const resolved = toHref(l.href);
-            const active = resolved === '/' ? pathname === '/' : pathname.startsWith(resolved);
+            // The surface root (Overview: '/owner', or '/' on owner.hioc.in) is
+            // a prefix of every owner page, so it must match exactly — a
+            // plain startsWith lit up "Overview" alongside whatever page was
+            // actually open. Other tabs match their own subtree.
+            const isRoot = l.href === '/owner';
+            const active = isRoot
+              ? pathname === resolved || pathname === `${resolved}/`
+              : pathname === resolved || pathname.startsWith(`${resolved}/`);
             return (
               <Link
                 key={l.href}
                 href={l.href}
                 data-active={active ? 'true' : undefined}
+                aria-current={active ? 'page' : undefined}
                 className={
-                  'shrink-0 whitespace-nowrap rounded-md px-3 py-2.5 text-sm font-bold sm:py-1.5 ' +
+                  'flex min-h-[44px] shrink-0 items-center whitespace-nowrap rounded-md px-3 text-sm font-bold sm:min-h-[36px] ' +
                   (active ? 'bg-charcoal text-cream' : 'text-charcoal hover:bg-[#f2efe9]')
                 }
               >
