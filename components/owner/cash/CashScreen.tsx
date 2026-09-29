@@ -185,7 +185,7 @@ export function CashScreen() {
         )}
       </Card>
 
-      <ExpenseBreakdown movements={movements} />
+      <ExpenseBreakdown movements={movements} onChanged={() => void load()} />
 
       <CountLog counts={counts} movements={movements} onChanged={() => void load()} />
 

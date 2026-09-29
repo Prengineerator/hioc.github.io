@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { requireCashManager } from '@/lib/cash/gate';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 
 export const dynamic = 'force-dynamic';
@@ -81,11 +82,14 @@ export async function GET(request: Request) {
     Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), MAX_LIMIT) : DEFAULT_LIMIT;
 
   const admin = createAdminSupabaseClient();
-  const { data, error } = await admin
-    .from('cash_movements')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  // Undone expenses (voided_at, supabase/2026-10-cash-expenses.sql) are not
+  // movements any more; a database without the column lists everything.
+  const read = (skipVoided: boolean) => {
+    const query = admin.from('cash_movements').select('*');
+    return (skipVoided ? query.is('voided_at', null) : query).order('created_at', { ascending: false }).limit(limit);
+  };
+  let { data, error } = await read(true);
+  if (error && isMissingColumnError(error)) ({ data, error } = await read(false));
   if (error) {
     return errorResponse(
       500,

@@ -1303,6 +1303,14 @@ async function checkCashCounts() {
   if (category.ok) pass('cash_movements.category exists');
   else fail('cash_movements.category exists', errKind(category) === 'no_column' ? 'apply supabase/2026-10-cash-expenses.sql' : errText(category));
 
+  // Approval + undo of an expense (same migration): who signed it off / undid it.
+  // Reads degrade without them (everything looks pending), but approve/undo 409.
+  for (const column of ['approved_by', 'approved_at', 'voided_by', 'voided_at']) {
+    const r = await rest(`/cash_movements?select=${column}&limit=1`);
+    if (r.ok) pass(`cash_movements.${column} exists`);
+    else fail(`cash_movements.${column} exists`, errKind(r) === 'no_column' ? 'apply supabase/2026-10-cash-expenses.sql' : errText(r));
+  }
+
   const expensesInr = await rest('/cash_days?select=expenses_inr&limit=1');
   if (expensesInr.ok) pass('cash_days.expenses_inr exists');
   else fail('cash_days.expenses_inr exists', errKind(expensesInr) === 'no_column' ? 'apply supabase/2026-10-cash-expenses.sql' : errText(expensesInr));

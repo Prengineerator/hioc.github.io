@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/Card';
 import { EXPENSE_CATEGORIES, expenseCategoryLabel } from '@/lib/cash/expenses';
+import { ExpenseStatusPill, approveExpenses } from './ExpenseStatusPill';
 import type { OwnerCashCountRow, OwnerCashMovementRow } from './types';
 import { KIND_LABEL, formatWhen, isHandoverMovement, rupees } from './types';
 
@@ -96,6 +97,46 @@ function CategoryControl({ movement, onChanged }: { movement: OwnerCashMovementR
   );
 }
 
+// Approve button for a pending expense row.
+function ApproveControl({ movement, onChanged }: { movement: OwnerCashMovementRow; onChanged?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function approve() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await approveExpenses([movement.id]);
+      const skipped = res.skipped.find((s) => s.id === movement.id);
+      if (skipped) setError(skipped.reason);
+      onChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not approve.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        onClick={() => void approve()}
+        disabled={busy}
+        className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
+      >
+        {busy ? 'Approving…' : 'Approve'}
+      </button>
+      {error ? (
+        <p role="alert" className="mt-1 text-xs font-bold text-red-700">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function CountLog({
   counts,
   movements,
@@ -103,7 +144,7 @@ export function CountLog({
 }: {
   counts: OwnerCashCountRow[];
   movements: OwnerCashMovementRow[];
-  /** Called after a category change is saved, so the screen reloads (the Expenses breakdown follows). */
+  /** Called after a category change or an approval is saved, so the screen reloads (the Expenses breakdown follows). */
   onChanged?: () => void;
 }) {
   return (
@@ -136,24 +177,38 @@ export function CountLog({
 
       <h3 className="mt-5 text-sm font-bold uppercase tracking-wide text-muted">Cash movements</h3>
       <ul className="mt-3 flex flex-col divide-y divide-line">
-        {movements.map((m) => (
-          <li key={m.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 text-sm">
-            <div className="min-w-0">
-              <p className="truncate font-bold text-charcoal">{movementTitle(m)}</p>
-              {movementNote(m) ? <p className="truncate text-xs text-muted">{movementNote(m)}</p> : null}
-              {m.direction === 'out' && !isHandoverMovement(m) ? (
-                <CategoryControl movement={m} onChanged={onChanged} />
-              ) : null}
-            </div>
-            <div className="text-right">
-              <p className="text-charcoal">
-                {m.direction === 'in' ? '+' : '−'}
-                {rupees(m.amountInr)}
-              </p>
-              <p className="text-xs text-muted">{formatWhen(m.createdAt)}</p>
-            </div>
-          </li>
-        ))}
+        {movements.map((m) => {
+          const undone = m.status === 'undone';
+          return (
+            <li
+              key={m.id}
+              className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 text-sm ${undone ? 'opacity-60' : ''}`}
+            >
+              <div className="min-w-0">
+                <p className="truncate font-bold text-charcoal">{movementTitle(m)}</p>
+                {m.category && m.status ? (
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
+                    <ExpenseStatusPill status={m.status} />
+                    {m.status === 'approved' && m.approvedByName ? <span>by {m.approvedByName}</span> : null}
+                    {undone ? <span>Undone by {m.undoneByName ?? 'staff'}</span> : null}
+                  </p>
+                ) : null}
+                {movementNote(m) ? <p className="truncate text-xs text-muted">{movementNote(m)}</p> : null}
+                {m.status === 'pending' && m.canApprove ? <ApproveControl movement={m} onChanged={onChanged} /> : null}
+                {m.direction === 'out' && !isHandoverMovement(m) && !undone ? (
+                  <CategoryControl movement={m} onChanged={onChanged} />
+                ) : null}
+              </div>
+              <div className="text-right">
+                <p className={`text-charcoal ${undone ? 'line-through' : ''}`}>
+                  {m.direction === 'in' ? '+' : '−'}
+                  {rupees(m.amountInr)}
+                </p>
+                <p className="text-xs text-muted">{formatWhen(m.createdAt)}</p>
+              </div>
+            </li>
+          );
+        })}
         {movements.length === 0 ? <li className="py-3 text-sm text-muted">No cash-in/out entries yet.</li> : null}
       </ul>
     </Card>

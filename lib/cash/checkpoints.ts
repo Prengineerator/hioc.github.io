@@ -278,13 +278,21 @@ export async function cashActivityBetween(
   //    the drawer math is unchanged, the category only splits out expensesInr.
   //    A database without that column retries without it (expensesInr = 0) —
   //    the drawer chain must never break on an old schema.
+  //    An UNDONE expense (voided_at, same migration) never happened as far as
+  //    the drawer is concerned and is skipped; a PENDING one still counts —
+  //    the cash really left the drawer, approval is only the owner's sign-off.
   let cashOutInr = 0;
   let cashInInr = 0;
   let expensesInr = 0;
-  type MoveRow = { direction: string; amount_inr: number | null; category?: string | null };
+  type MoveRow = {
+    direction: string;
+    amount_inr: number | null;
+    category?: string | null;
+    voided_at?: string | null;
+  };
   const readMoves = (columns: string) =>
     admin.from('cash_movements').select(columns).gt('created_at', fromIso).lte('created_at', toIso);
-  let { data: moveRows, error: movesError } = await readMoves('direction, amount_inr, category');
+  let { data: moveRows, error: movesError } = await readMoves('direction, amount_inr, category, voided_at');
   if (movesError && isMissingRelation(movesError)) {
     ({ data: moveRows, error: movesError } = await readMoves('direction, amount_inr'));
   }
@@ -294,6 +302,7 @@ export async function cashActivityBetween(
     }
   } else {
     for (const m of (moveRows ?? []) as unknown as MoveRow[]) {
+      if (m.voided_at) continue;
       if (m.direction === 'out') {
         cashOutInr += m.amount_inr ?? 0;
         if (m.category) expensesInr += m.amount_inr ?? 0;

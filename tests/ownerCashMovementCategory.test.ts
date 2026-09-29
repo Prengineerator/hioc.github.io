@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // PATCH /api/owner/cash-movements/[id]: the owner tags a PAST cash-out as a
 // store expense (or clears the tag). Only `category` is ever written, and a
@@ -41,7 +41,7 @@ vi.mock('@/lib/supabase-server', () => ({
         let updatePayload: Row | null = null;
         let summing = false;
         chain.select = (cols: string) => {
-          if (cols === 'amount_inr') summing = true;
+          if (cols.startsWith('amount_inr')) summing = true;
           return chain;
         };
         chain.eq = self;
@@ -113,7 +113,13 @@ const CASH_OUT: Row = {
   created_at: '2026-09-28T10:00:00.000Z',
 };
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-29T12:00:00.000Z'));
   state.owner = { id: 'owner-1' };
   state.movement = { ...CASH_OUT };
   state.updates = [];
@@ -161,11 +167,13 @@ describe('PATCH /api/owner/cash-movements/[id]', () => {
     expect(state.updates).toHaveLength(0);
   });
 
-  it('sets a category and writes ONLY the category', async () => {
+  it('sets a category and approves the expense (an owner act); amount, direction and reason are never written', async () => {
     const res = await call({ category: 'ice' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ movement: { id: MOVE_ID, category: 'ice', categoryLabel: 'Ice cubes' } });
-    expect(state.updates).toEqual([{ category: 'ice' }]);
+    expect(state.updates).toEqual([
+      { category: 'ice', approved_at: '2026-09-29T12:00:00.000Z', approved_by: 'owner-1' },
+    ]);
   });
 
   it('clears the category with null', async () => {
@@ -173,7 +181,17 @@ describe('PATCH /api/owner/cash-movements/[id]', () => {
     const res = await call({ category: null });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ movement: { id: MOVE_ID, category: null, categoryLabel: '' } });
-    expect(state.updates).toEqual([{ category: null }]);
+    expect(state.updates).toEqual([{ category: null, approved_at: null, approved_by: null }]);
+  });
+
+  it('409s a voided (undone) row and writes nothing', async () => {
+    state.movement = { ...CASH_OUT, category: 'ice', voided_at: '2026-09-28T10:05:00.000Z' };
+    const res = await call({ category: 'water' });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/undone/);
+    expect(state.updates).toHaveLength(0);
+    expect((await call({ category: null })).status).toBe(409);
+    expect(state.updates).toHaveLength(0);
   });
 
   it('409s with the migration hint when the category column is missing', async () => {
@@ -185,7 +203,12 @@ describe('PATCH /api/owner/cash-movements/[id]', () => {
 
   it('re-freezes the expense total of the closed day that contains the movement', async () => {
     state.closedDays = [{ id: DAY_ID, opened_at: '2026-09-28T04:00:00.000Z', closed_at: '2026-09-28T16:00:00.000Z' }];
-    state.dayMoves = [{ amount_inr: 120 }, { amount_inr: 80 }];
+    // The third row was undone: it never left the drawer, so it is not in the frozen total.
+    state.dayMoves = [
+      { amount_inr: 120, voided_at: null },
+      { amount_inr: 80, voided_at: null },
+      { amount_inr: 500, voided_at: '2026-09-28T09:00:00.000Z' },
+    ];
     const res = await call({ category: 'ice' });
     expect(res.status).toBe(200);
     expect(state.dayWindow).toEqual({ gt: '2026-09-28T04:00:00.000Z', lte: '2026-09-28T16:00:00.000Z' });

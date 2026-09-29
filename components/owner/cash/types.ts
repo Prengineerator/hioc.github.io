@@ -60,6 +60,12 @@ export interface OwnerCashMovementRow {
   /** Set on an expense paid from the drawer; null/absent on a plain cash out / in. */
   category?: string | null;
   categoryLabel?: string;
+  /** Expense rows only; absent on old data (treated as no status). */
+  status?: 'pending' | 'approved' | 'undone' | null;
+  approvedByName?: string | null;
+  undoneByName?: string | null;
+  /** The owner may approve this (pending expense row). */
+  canApprove?: boolean;
   recordedByName: string;
   createdAt: string;
 }

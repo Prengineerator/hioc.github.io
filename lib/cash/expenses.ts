@@ -126,6 +126,66 @@ export function totalsByCategory(
   return [...map.values()].sort((a, b) => b.amountInr - a.amountInr || a.label.localeCompare(b.label));
 }
 
+// ── Approval + undo ─────────────────────────────────────────────────────────
+//
+// A punched expense is PENDING until a manager or the owner approves it. While
+// pending, the staffer who punched it (or a manager/owner) can UNDO it — a
+// wrong amount, a double tap. Undo voids the row (cash_movements.voided_at),
+// it never deletes: the owner still sees what was punched and undone, and
+// every reader of cash_movements skips voided rows, so an undone expense
+// leaves the drawer math. Pending expenses DO count as money out — the cash
+// really left the drawer; approval is the owner's sign-off, not the math.
+//
+// Undo is refused once the drawer has been counted (any cash_counts row) or a
+// cash day closed after the punch: that count already reflected the money
+// out, and voiding it afterwards would make the day and the count chain
+// disagree. A manager then corrects it with a cash in.
+
+export type ExpenseStatus = 'pending' | 'approved' | 'undone';
+
+export function expenseStatus(row: { approved_at?: string | null; voided_at?: string | null }): ExpenseStatus {
+  if (row.voided_at) return 'undone';
+  if (row.approved_at) return 'approved';
+  return 'pending';
+}
+
+export type ActorRole = 'staff' | 'manager' | 'owner';
+
+/** Why this actor may not undo this expense, or null when they may. */
+export function undoProblem(input: {
+  status: ExpenseStatus;
+  isOwnEntry: boolean;
+  actorRole: ActorRole;
+  /** A drawer count (cash_counts) or a day close happened after the punch. */
+  countedSince: boolean;
+}): string | null {
+  if (input.status === 'undone') return 'This expense was already undone.';
+  if (input.status === 'approved') return 'This expense is already approved and can no longer be undone.';
+  if (!input.isOwnEntry && input.actorRole === 'staff') return 'Only the person who punched it or a manager can undo it.';
+  if (input.countedSince) {
+    return 'The drawer has been counted since this was punched — ask a manager to correct it with a cash in.';
+  }
+  return null;
+}
+
+/**
+ * Why this actor may not approve this expense, or null when they may. The
+ * owner approves anything; a manager approves anyone's but their own (four
+ * eyes on the money); plain staff never approve.
+ */
+export function approveProblem(input: { status: ExpenseStatus; isOwnEntry: boolean; actorRole: ActorRole }): string | null {
+  if (input.status === 'undone') return 'This expense was undone.';
+  if (input.status === 'approved') return 'This expense is already approved.';
+  if (input.actorRole === 'staff') return 'Only a manager or the owner can approve expenses.';
+  if (input.actorRole === 'manager' && input.isOwnEntry) return 'Another manager or the owner must approve your own expense.';
+  return null;
+}
+
+/** Expenses punched by the owner need no one else's sign-off: they are approved on entry. */
+export function autoApproved(actorRole: ActorRole): boolean {
+  return actorRole === 'owner';
+}
+
 // ── API contract ────────────────────────────────────────────────────────────
 
 /** One entry as GET/POST /api/cash-expenses return it. */
@@ -136,8 +196,18 @@ export interface ExpenseEntry {
   amountInr: number;
   /** The note, or the category label when none was given. */
   reason: string;
+  recordedBy: string;
   recordedByName: string;
   createdAt: string;
+  status: ExpenseStatus;
+  approvedByName: string | null;
+  approvedAt: string | null;
+  undoneByName: string | null;
+  undoneAt: string | null;
+  /** For the viewer asking: undoProblem(...) === null. */
+  canUndo: boolean;
+  /** For the viewer asking: approveProblem(...) === null. */
+  canApprove: boolean;
 }
 
 /**
@@ -147,7 +217,23 @@ export interface ExpenseEntry {
 export interface ExpenseListResponse {
   since: string;
   dayOpen: boolean;
+  /** Newest first, undone ones included (shown struck through). */
   expenses: ExpenseEntry[];
+  /** Pending + approved; undone excluded. */
   totalInr: number;
   byCategory: ExpenseCategoryTotal[];
+  pendingCount: number;
+  pendingInr: number;
+}
+
+/** POST /api/cash-expenses/[id]/undo — no body. Responds { expense: ExpenseEntry }. */
+
+/** POST /api/cash-expenses/approve — manager/owner. */
+export interface ApproveExpensesBody {
+  ids: string[];
+}
+export interface ApproveExpensesResponse {
+  approved: string[];
+  /** Not approved, with the reason (already approved, undone, own expense …). */
+  skipped: { id: string; reason: string }[];
 }

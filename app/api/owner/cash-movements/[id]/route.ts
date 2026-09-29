@@ -40,15 +40,21 @@ async function refreshClosedDayExpenses(admin: ReturnType<typeof createAdminSupa
     if (error || !days) return;
     for (const day of days as { id: string; opened_at: string; closed_at: string | null }[]) {
       if (!day.closed_at) continue;
-      const { data: rows, error: sumError } = await admin
-        .from('cash_movements')
-        .select('amount_inr')
-        .eq('direction', 'out')
-        .not('category', 'is', null)
-        .gt('created_at', day.opened_at)
-        .lte('created_at', day.closed_at);
+      // An undone expense (voided_at) is not money that left the drawer.
+      const sum = (columns: string) =>
+        admin
+          .from('cash_movements')
+          .select(columns)
+          .eq('direction', 'out')
+          .not('category', 'is', null)
+          .gt('created_at', day.opened_at)
+          .lte('created_at', day.closed_at as string);
+      let { data: rows, error: sumError } = await sum('amount_inr, voided_at');
+      if (sumError && isMissingColumn(sumError)) ({ data: rows, error: sumError } = await sum('amount_inr'));
       if (sumError) continue;
-      const total = ((rows ?? []) as { amount_inr: number | null }[]).reduce((s, r) => s + (r.amount_inr ?? 0), 0);
+      const total = ((rows ?? []) as unknown as { amount_inr: number | null; voided_at?: string | null }[])
+        .filter((r) => !r.voided_at)
+        .reduce((s, r) => s + (r.amount_inr ?? 0), 0);
       await writeDayExpenses(admin, day.id, total);
     }
   } catch (err) {
@@ -77,26 +83,37 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   const admin = createAdminSupabaseClient();
-  const { data: row, error: rowError } = await admin
-    .from('cash_movements')
-    .select('id, direction, reason, created_at')
-    .eq('id', id)
-    .maybeSingle();
+  const readRow = (columns: string) =>
+    admin.from('cash_movements').select(columns).eq('id', id).maybeSingle();
+  let { data: row, error: rowError } = await readRow('id, direction, reason, created_at, voided_at');
+  // voided_at comes from the same migration as category: without it nothing can be undone.
+  if (rowError && isMissingColumn(rowError)) ({ data: row, error: rowError } = await readRow('id, direction, reason, created_at'));
   if (rowError) return errorResponse(500, rowError.message);
   if (!row) return notFound();
 
-  const movement = row as { id: string; direction: string; reason: string | null; created_at: string };
+  const movement = row as unknown as {
+    id: string;
+    direction: string;
+    reason: string | null;
+    created_at: string;
+    voided_at?: string | null;
+  };
+  if (movement.voided_at) return errorResponse(409, 'This expense was undone, so it can no longer be tagged.');
   if (movement.direction !== 'out') return errorResponse(400, 'Only a cash out can be an expense');
   if ((movement.reason ?? '').trim().toLowerCase().startsWith('day close handover')) {
     return errorResponse(400, 'The day-close handover is not an expense');
   }
 
-  const { data: updated, error: updateError } = await admin
-    .from('cash_movements')
-    .update({ category })
-    .eq('id', id)
-    .select('id, category')
-    .maybeSingle();
+  // Tagging approves (owner act); clearing the tag clears the approval too — the
+  // schema only allows approval on an expense row.
+  const review = category === null
+    ? { approved_at: null, approved_by: null }
+    : { approved_at: new Date().toISOString(), approved_by: owner.id };
+  const write = (payload: Record<string, unknown>) =>
+    admin.from('cash_movements').update(payload).eq('id', id).select('id, category').maybeSingle();
+  let { data: updated, error: updateError } = await write({ category, ...review });
+  // Approval columns missing but category present: still save the tag.
+  if (updateError && isMissingColumn(updateError)) ({ data: updated, error: updateError } = await write({ category }));
   if (updateError && isMissingColumn(updateError)) return errorResponse(409, MIGRATION_MESSAGE);
   if (updateError) return errorResponse(500, updateError.message);
   if (!updated) return notFound();

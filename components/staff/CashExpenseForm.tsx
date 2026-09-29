@@ -13,9 +13,12 @@ import {
   MAX_EXPENSE_NOTE_LEN,
   expenseCategoryLabel,
   validateExpense,
+  type ApproveExpensesBody,
+  type ApproveExpensesResponse,
   type ExpenseBody,
   type ExpenseEntry,
   type ExpenseListResponse,
+  type ExpenseStatus,
 } from '@/lib/cash/expenses';
 
 // IST, same shape as the owner cash screen's formatWhen.
@@ -33,6 +36,19 @@ function formatWhen(iso: string): string {
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
+const PILL: Record<ExpenseStatus, { label: string; className: string }> = {
+  pending: { label: 'Pending', className: 'bg-amber-100 text-amber-900' },
+  approved: { label: 'Approved', className: 'bg-green-100 text-green-800' },
+  undone: { label: 'Undone', className: 'bg-surface text-muted' },
+};
+
+function StatusPill({ status }: { status: ExpenseStatus }) {
+  const p = PILL[status];
+  return (
+    <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-bold ${p.className}`}>{p.label}</span>
+  );
+}
+
 export function CashExpenseForm() {
   const [category, setCategory] = useState('');
   const [amount, setAmount] = useState('');
@@ -42,6 +58,8 @@ export function CashExpenseForm() {
   const [notice, setNotice] = useState('');
   const [list, setList] = useState<ExpenseListResponse | null>(null);
   const [listError, setListError] = useState('');
+  const [approveBusy, setApproveBusy] = useState(false);
+  const [approveMsg, setApproveMsg] = useState('');
 
   const loadList = useCallback(async () => {
     try {
@@ -95,7 +113,11 @@ export function CashExpenseForm() {
         setError((data.error as string) ?? 'Could not record that.');
         return;
       }
-      setNotice(`Recorded ${inr(body.amountInr)} — ${expenseCategoryLabel(body.category)}.`);
+      const recorded = (data as { expense?: ExpenseEntry }).expense;
+      setNotice(
+        `Recorded ${inr(body.amountInr)} — ${expenseCategoryLabel(body.category)}.` +
+          (recorded?.status === 'approved' ? '' : " You can undo it until it's approved."),
+      );
       setAmount('');
       setNote('');
       setCategory('');
@@ -108,6 +130,34 @@ export function CashExpenseForm() {
   }
 
   const isOther = category === 'other';
+
+  const approvable = list ? list.expenses.filter((e) => e.canApprove) : [];
+
+  async function approve(ids: string[]) {
+    if (approveBusy || ids.length === 0) return;
+    setApproveBusy(true);
+    setApproveMsg('');
+    try {
+      const body: ApproveExpensesBody = { ids };
+      const res = await fetch('/api/cash-expenses/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}) as Record<string, unknown>);
+      if (!res.ok) {
+        setApproveMsg((data.error as string) ?? 'Could not approve.');
+        return;
+      }
+      const r = data as ApproveExpensesResponse;
+      setApproveMsg(`Approved ${r.approved.length}; skipped ${r.skipped.length}.`);
+      await loadList();
+    } catch {
+      setApproveMsg('Network problem — please try again.');
+    } finally {
+      setApproveBusy(false);
+    }
+  }
 
   return (
     <section className="mx-auto max-w-md px-4 pb-6">
@@ -181,11 +231,29 @@ export function CashExpenseForm() {
           <p className="text-sm font-bold text-charcoal">
             {list.dayOpen ? 'Today' : 'Last 24 hours'}: {inr(list.totalInr)} · {list.expenses.length}{' '}
             {list.expenses.length === 1 ? 'entry' : 'entries'}
+            {list.pendingInr > 0 ? ` · ${inr(list.pendingInr)} awaiting approval` : ''}
           </p>
+          {approvable.length >= 2 ? (
+            <button
+              type="button"
+              onClick={() => void approve(approvable.map((e) => e.id))}
+              disabled={approveBusy}
+              className="mt-2 min-h-[44px] w-full rounded-md bg-tan-dark px-4 py-2.5 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
+            >
+              {approveBusy ? 'Approving…' : `Approve all (${approvable.length})`}
+            </button>
+          ) : null}
+          {approveMsg ? <p className="mt-2 text-sm text-charcoal">{approveMsg}</p> : null}
           {list.expenses.length > 0 ? (
             <ul className="mt-2 divide-y divide-[#eee] rounded-md border border-line bg-white">
               {list.expenses.map((e) => (
-                <ExpenseRow key={e.id} entry={e} />
+                <ExpenseRow
+                  key={e.id}
+                  entry={e}
+                  approveBusy={approveBusy}
+                  onApprove={() => void approve([e.id])}
+                  onChanged={loadList}
+                />
               ))}
             </ul>
           ) : null}
@@ -195,20 +263,119 @@ export function CashExpenseForm() {
   );
 }
 
-function ExpenseRow({ entry }: { entry: ExpenseEntry }) {
+function ExpenseRow({
+  entry,
+  approveBusy,
+  onApprove,
+  onChanged,
+}: {
+  entry: ExpenseEntry;
+  approveBusy: boolean;
+  onApprove: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+  const [rowError, setRowError] = useState('');
+
   const label = entry.categoryLabel || expenseCategoryLabel(entry.category);
   const showNote = entry.reason && entry.reason !== label;
+  const undone = entry.status === 'undone';
+
+  async function undo() {
+    if (undoing) return;
+    setUndoing(true);
+    setRowError('');
+    try {
+      const res = await fetch(`/api/cash-expenses/${entry.id}/undo`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}) as Record<string, unknown>);
+      if (!res.ok) {
+        setRowError((data.error as string) ?? 'Could not undo that.');
+        setConfirming(false);
+        await onChanged();
+        return;
+      }
+      setConfirming(false);
+      await onChanged();
+    } catch {
+      setRowError('Network problem — please try again.');
+    } finally {
+      setUndoing(false);
+    }
+  }
+
   return (
-    <li className="px-4 py-3 text-sm">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-bold text-charcoal">{label}</span>
-        <span className="shrink-0 font-bold tabular-nums text-charcoal">− {inr(entry.amountInr)}</span>
+    <li className={`px-4 py-3 text-sm ${undone ? 'bg-surface/50' : ''}`}>
+      <div className={`flex items-center justify-between gap-2 ${undone ? 'text-muted' : ''}`}>
+        <span className={`font-bold ${undone ? 'text-muted' : 'text-charcoal'}`}>{label}</span>
+        <span className={`shrink-0 font-bold tabular-nums ${undone ? 'text-muted line-through' : 'text-charcoal'}`}>
+          − {inr(entry.amountInr)}
+        </span>
       </div>
-      {showNote ? <p className="mt-0.5 text-xs text-charcoal">{entry.reason}</p> : null}
+      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted">
+        <StatusPill status={entry.status} />
+        {entry.status === 'approved' && entry.approvedByName ? <span>by {entry.approvedByName}</span> : null}
+        {undone ? <span>Undone by {entry.undoneByName ?? 'staff'}</span> : null}
+      </p>
+      {showNote ? <p className={`mt-0.5 text-xs ${undone ? 'text-muted' : 'text-charcoal'}`}>{entry.reason}</p> : null}
       <p className="mt-0.5 text-xs text-muted">
         {entry.recordedByName ? `${entry.recordedByName} · ` : ''}
         {formatWhen(entry.createdAt)}
       </p>
+
+      {confirming ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-bold text-charcoal">
+            Undo {inr(entry.amountInr)} {label}?
+          </span>
+          <button
+            type="button"
+            onClick={() => void undo()}
+            disabled={undoing}
+            className="min-h-[44px] rounded-md bg-red-700 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-800 disabled:opacity-50"
+          >
+            {undoing ? 'Undoing…' : 'Yes'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            disabled={undoing}
+            className="min-h-[44px] rounded-md border border-[#ddd] px-4 py-2 text-sm font-bold text-charcoal disabled:opacity-50"
+          >
+            No
+          </button>
+        </div>
+      ) : entry.canUndo || entry.canApprove ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {entry.canApprove ? (
+            <button
+              type="button"
+              onClick={onApprove}
+              disabled={approveBusy}
+              className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
+            >
+              Approve
+            </button>
+          ) : null}
+          {entry.canUndo ? (
+            <button
+              type="button"
+              onClick={() => {
+                setRowError('');
+                setConfirming(true);
+              }}
+              className="min-h-[44px] rounded-md border border-[#ddd] px-4 py-2 text-sm font-bold text-charcoal"
+            >
+              Undo
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {rowError ? (
+        <p role="alert" className="mt-2 text-xs font-bold text-red-700">
+          {rowError}
+        </p>
+      ) : null}
     </li>
   );
 }

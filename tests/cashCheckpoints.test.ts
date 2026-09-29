@@ -337,6 +337,18 @@ describe('cashFlowsBetween', () => {
     expect(activity.flows.cashInInr).toBe(200);
   });
 
+  it('skips voided (undone) expenses everywhere, while pending ones still count as money out', async () => {
+    tables.cash_movements.push(
+      { direction: 'out', amount_inr: 120, category: 'ice', voided_at: null, created_at: '2026-09-01T05:00:00.000Z' }, // pending
+      { direction: 'out', amount_inr: 80, category: 'water', approved_at: '2026-09-01T05:30:00.000Z', voided_at: null, created_at: '2026-09-01T05:00:00.000Z' },
+      { direction: 'out', amount_inr: 300, category: 'milk_dairy', voided_at: '2026-09-01T05:10:00.000Z', created_at: '2026-09-01T05:00:00.000Z' }, // undone
+      { direction: 'out', amount_inr: 500, category: null, voided_at: null, created_at: '2026-09-01T05:00:00.000Z' },
+    );
+    const activity = await cashActivityBetween(admin, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z');
+    expect(activity.flows.cashOutInr).toBe(700); // 120 + 80 + 500, not the undone 300
+    expect(activity.expensesInr).toBe(200);
+  });
+
   it('retries without the category column on an old database: same flows, expensesInr 0', async () => {
     tables.cash_movements.push(
       { direction: 'out', amount_inr: 500, created_at: '2026-09-01T05:00:00.000Z' },
@@ -367,7 +379,7 @@ describe('cashFlowsBetween', () => {
       },
     };
     const activity = await cashActivityBetween(oldDb as never, '2026-09-01T04:00:00.000Z', '2026-09-01T06:00:00.000Z');
-    expect(selects).toEqual(['direction, amount_inr, category', 'direction, amount_inr']);
+    expect(selects).toEqual(['direction, amount_inr, category, voided_at', 'direction, amount_inr']);
     expect(activity.expensesInr).toBe(0);
     expect(activity.flows.cashOutInr).toBe(500);
     expect(activity.flows.cashInInr).toBe(200);

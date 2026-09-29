@@ -127,6 +127,8 @@ export interface CashMovementRow {
   created_at: string;
   /** Set on an expense paid from the drawer (supabase/2026-10-cash-expenses.sql); absent before that migration. */
   category?: string | null;
+  /** Set when an expense was undone (same migration); such a row never left the drawer. */
+  voided_at?: string | null;
 }
 
 export interface CashDayRow {
@@ -283,6 +285,7 @@ export function buildReport(input: ReportInput): Report {
   }
 
   for (const m of input.movements) {
+    if (m.voided_at) continue; // an undone expense left no cash out
     const day = dayOf(m.created_at);
     if (!day) continue;
     if (m.direction === 'in') day.cashInInr += m.amount_inr ?? 0;

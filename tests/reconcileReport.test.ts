@@ -139,6 +139,20 @@ describe('buildReport', () => {
     expect(r.totals).toMatchObject({ cashOutInr: 2240, expensesInr: 200, cashInInr: 500 });
   });
 
+  it('leaves voided (undone) expenses out of cash out and expenses, and keeps pending ones', () => {
+    const r = buildReport(
+      base({
+        movements: [
+          { direction: 'out', amount_inr: 2000, created_at: '2026-09-27T12:00:00Z', voided_at: null }, // plain manager cash out
+          { direction: 'out', amount_inr: 80, created_at: '2026-09-27T13:00:00Z', category: 'ice', voided_at: null }, // pending
+          { direction: 'out', amount_inr: 300, created_at: '2026-09-27T14:00:00Z', category: 'milk_dairy', voided_at: '2026-09-27T14:05:00Z' }, // undone
+        ],
+      }),
+    );
+    expect(r.days[0]).toMatchObject({ cashOutInr: 2080, expensesInr: 80 });
+    expect(r.totals).toMatchObject({ cashOutInr: 2080, expensesInr: 80 });
+  });
+
   it('writes a CSV with a row per day and a total row', () => {
     const r = buildReport(
       base({
