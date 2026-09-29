@@ -223,6 +223,91 @@ describe('initialSelection', () => {
   });
 });
 
+// Coffey's sugar preselection: initialSelection(item, presets) opens the modal
+// with one group already answered. A preset is only trusted when it is a
+// selection the group itself would accept; anything else falls back to the
+// ordinary default so a bad hint can never break the modal.
+describe('initialSelection — presets', () => {
+  const item = makeItem([sugarGroup, iceGroup, condimentsGroup, multiRequiredGroup]);
+
+  it('uses a valid preset for its group and leaves every other group on its default', () => {
+    expect(initialSelection(item, { sugar: ['none'] })).toEqual({
+      sugar: ['none'],
+      ice: ['normalice'],
+      condiments: [],
+      'multi-required': ['m3', 'm2'],
+    });
+  });
+
+  it('is unchanged when there are no presets (existing callers)', () => {
+    expect(initialSelection(item, undefined)).toEqual(initialSelection(item));
+    expect(initialSelection(item, {})).toEqual(initialSelection(item));
+  });
+
+  it('falls back to the default when the preset names an option the group does not have', () => {
+    expect(initialSelection(item, { sugar: ['does-not-exist'] }).sugar).toEqual(['normal']);
+    // An option that exists, but in a different group, is just as unknown here.
+    expect(initialSelection(item, { sugar: ['normalice'] }).sugar).toEqual(['normal']);
+  });
+
+  it('falls back to the default when the preset includes an unavailable option', () => {
+    const outOfNoSugar = makeItem([
+      group({
+        ...sugarGroup,
+        options: sugarGroup.options.map((o) => (o.id === 'none' ? { ...o, is_available: false } : o)),
+      }),
+    ]);
+    expect(initialSelection(outOfNoSugar, { sugar: ['none'] }).sugar).toEqual(['normal']);
+
+    // is_available absent (a row read before the migration) counts as on.
+    expect(initialSelection(item, { sugar: ['none'] }).sugar).toEqual(['none']);
+  });
+
+  it('falls back to the default when a multi-select preset goes past max_select', () => {
+    // multiRequiredGroup allows 2–3; four ids is one too many.
+    expect(initialSelection(item, { 'multi-required': ['m1', 'm2', 'm3', 'm4'] })['multi-required']).toEqual([
+      'm3',
+      'm2',
+    ]);
+  });
+
+  it('falls back to the default when a preset is short of min_select', () => {
+    expect(initialSelection(item, { 'multi-required': ['m1'] })['multi-required']).toEqual(['m3', 'm2']);
+    // ...and accepts one that sits inside the min–max range.
+    expect(initialSelection(item, { 'multi-required': ['m1', 'm4'] })['multi-required']).toEqual(['m1', 'm4']);
+  });
+
+  it('gives a single-select group exactly one option, never none or several', () => {
+    expect(initialSelection(item, { sugar: ['none', 'normal'] }).sugar).toEqual(['normal']);
+    expect(initialSelection(item, { sugar: [] }).sugar).toEqual(['normal']);
+
+    // Optional single-select: a preset must still pick exactly one.
+    const optionalSingle = makeItem([specializedRocksGroup]);
+    expect(initialSelection(optionalSingle, { rocks: ['rocks-tonic', 'rocks-ginger'] }).rocks).toEqual([]);
+    expect(initialSelection(optionalSingle, { rocks: ['rocks-ginger'] }).rocks).toEqual(['rocks-ginger']);
+  });
+
+  it('rejects a preset that repeats an option', () => {
+    expect(initialSelection(item, { 'multi-required': ['m1', 'm1'] })['multi-required']).toEqual(['m3', 'm2']);
+  });
+
+  it('ignores a preset for a group the item does not have', () => {
+    const selection = initialSelection(item, { nope: ['x'], sugar: ['none'] });
+    expect(Object.keys(selection).sort()).toEqual(['condiments', 'ice', 'multi-required', 'sugar']);
+    expect(selection.sugar).toEqual(['none']);
+  });
+
+  it('copies the preset instead of aliasing the caller’s array', () => {
+    const preset = ['none'];
+    const selection = initialSelection(item, { sugar: preset });
+    expect(selection.sugar).not.toBe(preset);
+  });
+
+  it('a valid preset always yields a selection with no invalid groups', () => {
+    expect(invalidGroups(item, initialSelection(item, { sugar: ['none'] }))).toEqual([]);
+  });
+});
+
 describe('toggleOption', () => {
   it('does not allow deselecting a required single-select group', () => {
     const selection = { sugar: ['normal'] };

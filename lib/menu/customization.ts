@@ -72,11 +72,40 @@ export function defaultOptionIds(group: AddonGroup): string[] {
   return ranked.slice(0, take).map((o) => o.id);
 }
 
-/** Builds the modal's initial selection state: prefilled required groups, empty optional ones. */
-export function initialSelection(item: MenuItem): Record<string, string[]> {
+/**
+ * Is `ids` an answer this group would accept as-is? Used to vet a preselection
+ * handed in from outside (Coffey's sugar preset): it has to name real, switched-
+ * on options and respect the group's own min/max, so a stale or malformed hint
+ * can never seed the modal with something the customer couldn't have tapped.
+ */
+function isValidPreset(group: AddonGroup, ids: string[]): boolean {
+  if (ids.length < group.min_select || ids.length > group.max_select) return false;
+  // A single-select group is answered by exactly one option (never zero, even
+  // when optional: a preset exists to pick something).
+  if (group.selection_type === 'single' && ids.length !== 1) return false;
+  if (new Set(ids).size !== ids.length) return false;
+  return ids.every((id) => group.options.some((o) => o.id === id && o.is_available !== false));
+}
+
+/**
+ * Builds the modal's initial selection state: prefilled required groups, empty
+ * optional ones.
+ *
+ * `presets` (group id → option ids) lets a caller open the modal with a choice
+ * already made — the /suggest wizard preselects the sugar option that matches
+ * the customer's sweetness pick. A preset is used for its group only when it is
+ * valid for it (see isValidPreset); otherwise that group keeps today's default,
+ * and a preset for a group the item doesn't have is ignored. Existing callers
+ * pass nothing and are unaffected.
+ */
+export function initialSelection(
+  item: MenuItem,
+  presets?: Record<string, string[]>,
+): Record<string, string[]> {
   const selection: Record<string, string[]> = {};
   for (const group of item.addon_groups) {
-    selection[group.id] = defaultOptionIds(group);
+    const preset = presets?.[group.id];
+    selection[group.id] = preset && isValidPreset(group, preset) ? [...preset] : defaultOptionIds(group);
   }
   return selection;
 }

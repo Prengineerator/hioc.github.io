@@ -79,12 +79,23 @@ const config: Config = {
           '20%, 60%': { transform: 'translateX(-6px)' },
           '40%, 80%': { transform: 'translateX(6px)' },
         },
+        // Coffey's steam wisps (components/coffey/CoffeyMascot.tsx): a gentle
+        // upward drift that fades in and out. Each wisp's resting style (its
+        // base opacity) is what shows under `prefers-reduced-motion`, where the
+        // global rule in app/globals.css cuts every animation to one 0.01ms
+        // pass — so the wisps sit still and visible rather than disappearing.
+        steam: {
+          '0%': { opacity: '0', transform: 'translateY(3px)' },
+          '35%': { opacity: '0.9' },
+          '100%': { opacity: '0', transform: 'translateY(-6px)' },
+        },
       },
       animation: {
         // Used by components/ui/Modal.tsx for the overlay + panel entrance.
         'fade-in': 'fade-in 150ms ease-out',
         'scale-in': 'scale-in 150ms ease-out',
         shake: 'shake 400ms ease-in-out',
+        steam: 'steam 2.8s ease-in-out infinite',
       },
     },
   },

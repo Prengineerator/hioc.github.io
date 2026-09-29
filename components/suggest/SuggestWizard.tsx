@@ -1,33 +1,63 @@
 'use client';
 
-// The /suggest 3-step wizard (§3.2/§3.3 of the Phase-7 spec). Owns all client
-// state; talks to the server only through components/suggest/api.ts, which is
-// the seam that follows the lib/suggest/types.ts contract.
+// The /suggest wizard, v2 — "Ask Coffey" (docs/COFFEY-SPEC.md §1). Owns all
+// client state; talks to the server only through components/suggest/api.ts,
+// which is the seam that follows the lib/suggest/types.ts contract.
+//
+// Three steps, with Coffey (the mascot and a speech bubble) on every one:
+//   1. "How are you feeling?": up to two feelings, as cards.
+//   2. "What sounds good?": what to have, hot or iced, coffee, how sweet,
+//      flavours, budget, fine-tune (texture), and a free note.
+//   3. Coffey's picks.
+// What the customer picks is sent as v2 SuggestInputs (the API also still accepts
+// v1 bodies, but nothing here sends one).
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/lib/cart/CartContext';
+import { CoffeyBubble } from '@/components/coffey/CoffeyBubble';
 import { MenuItemCustomizeModal } from '@/components/menu/MenuItemCustomizeModal';
 import { Chip } from '@/components/suggest/Chip';
 import { MoodCard } from '@/components/suggest/MoodCard';
 import { SuggestionCard } from '@/components/suggest/SuggestionCard';
-import { ResultsSkeleton } from '@/components/suggest/ResultsSkeleton';
+import { SweetnessScale } from '@/components/suggest/SweetnessScale';
+import { ResultsSkeleton, ThinkingCopy } from '@/components/suggest/ResultsSkeleton';
 import { fetchSuggestions, getAnonId, postSuggestEvent } from '@/components/suggest/api';
 import { buttonVariants } from '@/components/ui/Button';
-import { SUGGEST_LIMITS } from '@/lib/suggest/types';
+import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from '@/lib/suggest/traitVocabulary';
+import {
+  BODY_PREFS,
+  BUDGETS,
+  BUDGET_CAPS,
+  FLAVOUR_FAMILIES,
+  KINDS,
+  MAX_MOODS,
+  MOODS,
+  SUGGEST_LIMITS,
+} from '@/lib/suggest/types';
 import type {
+  BodyPref,
   Budget,
-  BasePref,
-  Extra,
+  FlavourFamily,
   Mood,
-  Need,
   RelaxHint,
   SuggestInputs,
   SuggestResponse,
+  SuggestionPick,
+  SugarPreset,
+  SweetnessPref,
   TemperaturePref,
+  TraitKind,
 } from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
+
+// "What would you like?" — in the contract's KINDS order (drink, dessert, food).
+const KIND_INFO: Record<TraitKind, { label: string; icon: string }> = {
+  drink: { label: 'A drink', icon: '☕' },
+  dessert: { label: 'Something sweet', icon: '🧇' },
+  food: { label: 'Something savoury', icon: '🥪' },
+};
 
 const TEMPERATURE_OPTIONS: { value: TemperaturePref; label: string }[] = [
   { value: 'hot', label: 'Hot' },
@@ -35,74 +65,139 @@ const TEMPERATURE_OPTIONS: { value: TemperaturePref; label: string }[] = [
   { value: 'either', label: 'Either' },
 ];
 
-const BASE_OPTIONS: { value: BasePref; label: string }[] = [
-  { value: 'coffee', label: 'Coffee' },
-  { value: 'no_coffee', label: 'No coffee' },
+// "Coffee?" is ONE question for the customer that maps onto three engine
+// fields (COFFEY-SPEC §1): whether the drink is coffee, how strong, and whether
+// it must be caffeine-free. Strength is a soft preference; coffee / no coffee /
+// caffeine-free are hard.
+type CoffeeChoice = 'strong' | 'smooth' | 'none' | 'decaf' | 'either';
+
+// Worded so no two can both be true ("No coffee (tea's fine)" vs "No caffeine at
+// all"), which is why each says what it does and doesn't allow.
+const COFFEE_OPTIONS: { value: CoffeeChoice; label: string }[] = [
+  { value: 'strong', label: 'Strong coffee' },
+  { value: 'smooth', label: 'Smooth & milky coffee' },
+  { value: 'none', label: "No coffee (tea's fine)" },
+  { value: 'decaf', label: 'No caffeine at all' },
   { value: 'either', label: 'Either' },
 ];
 
-const EXTRA_OPTIONS: { value: Extra; label: string }[] = [
-  { value: 'sweet', label: 'Something sweet' },
-  { value: 'eat', label: 'Something to eat' },
-  { value: 'light', label: 'Light' },
-  { value: 'filling', label: 'Filling' },
-  { value: 'chocolatey', label: 'Chocolatey 🍫' },
-  { value: 'fruity', label: 'Fruity 🍓' },
-];
+function coffeeFields(choice: CoffeeChoice): Pick<SuggestInputs, 'base' | 'strength' | 'needs'> {
+  switch (choice) {
+    case 'strong':
+      return { base: 'coffee', strength: 'strong', needs: [] };
+    case 'smooth':
+      return { base: 'coffee', strength: 'mild', needs: [] };
+    case 'none':
+      return { base: 'no_coffee', strength: 'any', needs: [] };
+    case 'decaf':
+      return { base: 'no_coffee', strength: 'any', needs: ['no_caffeine'] };
+    case 'either':
+      return { base: 'either', strength: 'any', needs: [] };
+  }
+}
 
-const NEED_OPTIONS: { value: Need; label: string }[] = [
-  { value: 'no_caffeine', label: 'No caffeine' },
-  { value: 'less_sugar', label: 'Less sugar' },
-];
+// "Filling" keeps a hunger cue now that the old "Filling" chip is gone.
+const BODY_LABEL: Record<BodyPref, string> = {
+  light: 'Light & refreshing',
+  rich: 'Rich & filling',
+  any: 'Any',
+};
 
-const BUDGET_OPTIONS: { value: Budget; label: string }[] = [
-  { value: 'under_150', label: 'Under ₹150' },
-  { value: '150_300', label: '₹150–₹300' },
-  { value: 'treat', label: 'Treat myself' },
-  { value: 'any', label: 'No preference' },
-];
-
-const MOOD_OPTIONS: { value: Mood; label: string; icon: string }[] = [
-  { value: 'boost', label: 'Need a boost', icon: '⚡' },
-  { value: 'cosy', label: 'Calm & cosy', icon: '☕' },
-  { value: 'celebrate', label: 'Celebrating', icon: '🎉' },
-  { value: 'comfort', label: 'Need some comfort', icon: '🤗' },
-  { value: 'cool', label: 'Hot day, cool me down', icon: '🧊' },
-  { value: 'surprise', label: 'Surprise me', icon: '✨' },
-];
+// Budget is a price CEILING on an item's cheapest size (COFFEY-SPEC §1), so the
+// labels are read straight off the contract's caps and can't drift from what the
+// engine filters on.
+const BUDGET_OPTIONS: { value: Budget; label: string }[] = BUDGETS.map((value) => {
+  const cap = BUDGET_CAPS[value];
+  return { value, label: cap === null ? 'Any' : `Up to ₹${cap}` };
+});
 
 // Above SUGGEST_LIMITS.deciderTimeoutMs (9s) plus room for the rest of the
-// route's work; the ResultsSkeleton + its rotating copy cover the wait.
+// route's work; the skeleton cards + Coffey's rotating "thinking" lines cover
+// the wait.
 const SUGGEST_TIMEOUT_MS = 15000;
 
-function FieldGroup({ label, children }: { label: string; children: ReactNode }) {
+const FALLBACK_HEADER = "Here's what I'd pour for you ☕";
+
+// A titled group of controls: the heading names the group for assistive tech
+// (role="group" + aria-labelledby) so a screen-reader user hears "Hot or iced?,
+// group" before the toggles, and the optional hint is read as its description.
+function FieldGroup({
+  label,
+  hint,
+  className = 'flex flex-wrap gap-2',
+  children,
+}: {
+  label: string;
+  hint?: string;
+  /** Layout of the controls; most groups are a wrapping row of chips. */
+  className?: string;
+  children: ReactNode;
+}) {
+  const labelId = useId();
+  const hintId = useId();
   return (
     <div className="mt-6">
-      <h2 className="mb-2 text-sm font-semibold text-charcoal">{label}</h2>
-      <div className="flex flex-wrap gap-2">{children}</div>
+      <h2 id={labelId} className="text-sm font-semibold text-charcoal">
+        {label}
+      </h2>
+      {hint ? (
+        <p id={hintId} className="mt-0.5 text-sm text-muted">
+          {hint}
+        </p>
+      ) : null}
+      <div
+        role="group"
+        aria-labelledby={labelId}
+        aria-describedby={hint ? hintId : undefined}
+        className={'mt-2 ' + className}
+      >
+        {children}
+      </div>
     </div>
   );
 }
 
-type Step = 'preferences' | 'mood' | 'results';
+function BackButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="-ml-2 mb-2 inline-flex min-h-[44px] items-center px-2 text-sm font-semibold text-tan-dark hover:underline"
+    >
+      <span aria-hidden="true">←&nbsp;</span>
+      Back
+    </button>
+  );
+}
+
+type Step = 'feeling' | 'wants' | 'results';
 
 interface CustomizeTarget {
   item: MenuItem;
   sessionId: string;
   beforeCartTotal: number;
+  /** The sugar option Coffey preselected for this pick, if any (§4.7). */
+  sugarPreset: SugarPreset | null;
 }
 
 export function SuggestWizard() {
   const router = useRouter();
   const { addItem, totalItems, setPendingSuggestionSessionId } = useCart();
 
-  const [step, setStep] = useState<Step>('preferences');
+  const [step, setStep] = useState<Step>('feeling');
+  // In the order they were picked: the first is the primary feeling, the second
+  // the secondary one. Taking the primary off promotes the other.
+  const [moods, setMoods] = useState<Mood[]>([]);
+  const [kinds, setKinds] = useState<TraitKind[]>(['drink']);
   const [temperature, setTemperature] = useState<TemperaturePref>('either');
-  const [base, setBase] = useState<BasePref>('either');
-  const [extras, setExtras] = useState<Extra[]>([]);
-  const [needs, setNeeds] = useState<Need[]>([]);
+  const [coffee, setCoffee] = useState<CoffeeChoice>('either');
+  const [sweetness, setSweetness] = useState<SweetnessPref>('any');
+  const [flavours, setFlavours] = useState<FlavourFamily[]>([]);
+  const [body, setBody] = useState<BodyPref>('any');
   const [budget, setBudget] = useState<Budget>('any');
-  const [mood, setMood] = useState<Mood | null>(null);
+  // null = the customer hasn't touched the disclosure, so it follows the value:
+  // shut while texture is on "any", open as soon as it isn't.
+  const [fineTuneOpen, setFineTuneOpen] = useState<boolean | null>(null);
   const [note, setNote] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -120,6 +215,15 @@ export function SuggestWizard() {
   // do we consider it "dismissed" when the customer leaves (see the pagehide
   // effect below).
   const engagedRef = useRef(false);
+  // Context defaults (COFFEY-SPEC §1) fill in a group only if the customer
+  // hasn't touched it, and only once per feeling — so going Back and forth never
+  // undoes an edit or re-ticks something they un-ticked. Refs, not state: they
+  // are only ever read from event handlers and never change what is drawn.
+  const touchedRef = useRef({ kinds: false, temperature: false });
+  const appliedMoodsRef = useRef(new Set<Mood>());
+
+  const fineTunePanelId = useId();
+  const noteId = useId();
 
   useEffect(() => {
     sessionIdRef.current = response?.sessionId ?? null;
@@ -128,10 +232,11 @@ export function SuggestWizard() {
   // Accessibility: move focus to the current step's heading on every step
   // change, so a screen-reader user (and a keyboard user who just pressed
   // Next/Back) lands on the new step's content instead of wherever the old
-  // button used to be.
+  // button used to be. It also runs when a request starts and ends, because
+  // "Show me something different" replaces the very button that was focused.
   useEffect(() => {
     headingRef.current?.focus();
-  }, [step]);
+  }, [step, loading]);
 
   // 'dismissed' (§7): fires once, only if suggestions were actually shown and
   // the customer leaves without adding anything, refining, or explicitly
@@ -158,21 +263,30 @@ export function SuggestWizard() {
     return map;
   }, [response]);
 
+  const wantsDrink = kinds.includes('drink');
+
   const buildInputs = useCallback(
     (overrides: Partial<SuggestInputs> = {}): SuggestInputs => ({
-      temperature,
-      base,
-      extras,
-      needs,
+      // moods[0] exists by the time this runs: Next is disabled until one is
+      // picked, so the 'surprise' fallback is unreachable in practice — it only
+      // satisfies the type.
+      mood: moods[0] ?? 'surprise',
+      secondaryMood: moods[1] ?? null,
+      // Canonical order, no duplicates, whatever order they were ticked in.
+      kinds: KINDS.filter((k) => kinds.includes(k)),
+      // Hot or iced and Coffee? are only shown while "A drink" is ticked; when
+      // hidden they go out as their neutral values, so a stale pick can't filter
+      // a dessert-only request.
+      temperature: wantsDrink ? temperature : 'either',
+      ...coffeeFields(wantsDrink ? coffee : 'either'),
+      sweetness,
+      body,
+      flavours: FLAVOUR_FAMILIES.filter((f) => flavours.includes(f)),
       budget,
-      // mood is required to reach step 3 (the button that calls this is
-      // disabled until one is chosen), so this fallback is unreachable in
-      // practice — it only satisfies the type.
-      mood: mood ?? 'surprise',
       note: note.trim().slice(0, SUGGEST_LIMITS.noteMaxChars),
       ...overrides,
     }),
-    [temperature, base, extras, needs, budget, mood, note],
+    [moods, kinds, wantsDrink, temperature, coffee, sweetness, body, flavours, budget, note],
   );
 
   const runSuggest = useCallback(
@@ -206,11 +320,11 @@ export function SuggestWizard() {
         }
         setResponse(result);
         engagedRef.current = false;
-        const ids = [
+        const shown = [
           ...(result.usual ? [result.usual.menuItemId] : []),
           ...result.picks.map((p) => p.menuItemId),
         ];
-        setShownIds((prev) => Array.from(new Set([...prev, ...ids])));
+        setShownIds((prev) => Array.from(new Set([...prev, ...shown])));
       } catch {
         setErrorMsg(
           "We couldn't quite get suggestions together just now. Please try again in a moment, or head straight to the menu.",
@@ -222,15 +336,44 @@ export function SuggestWizard() {
     [],
   );
 
-  function toggleExtra(value: Extra) {
-    setExtras((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+  function toggleMood(mood: Mood) {
+    setMoods((prev) => {
+      if (prev.includes(mood)) return prev.filter((m) => m !== mood);
+      // The cards past the cap are disabled, so this is a backstop.
+      return prev.length >= MAX_MOODS ? prev : [...prev, mood];
+    });
   }
-  function toggleNeed(value: Need) {
-    setNeeds((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+
+  // Leaving step 1: apply the context defaults (visible and editable on the next
+  // step). `celebrate` ticks the sweet kind; `cool` selects Iced.
+  function goToWants() {
+    if (moods.length === 0) return;
+    const fresh = moods.filter((m) => !appliedMoodsRef.current.has(m));
+    if (fresh.includes('celebrate') && !touchedRef.current.kinds) {
+      setKinds((prev) => (prev.includes('dessert') ? prev : [...prev, 'dessert']));
+    }
+    if (fresh.includes('cool') && !touchedRef.current.temperature) {
+      setTemperature('iced');
+    }
+    for (const m of fresh) appliedMoodsRef.current.add(m);
+    setStep('wants');
+  }
+
+  function toggleKind(kind: TraitKind) {
+    touchedRef.current.kinds = true;
+    setKinds((prev) => {
+      if (!prev.includes(kind)) return [...prev, kind];
+      // The last one ticked can't be un-ticked: a request needs something in it.
+      return prev.length > 1 ? prev.filter((k) => k !== kind) : prev;
+    });
+  }
+
+  function toggleFlavour(flavour: FlavourFamily) {
+    setFlavours((prev) => (prev.includes(flavour) ? prev.filter((f) => f !== flavour) : [...prev, flavour]));
   }
 
   function submitForSuggestions() {
-    if (!mood) return;
+    if (moods.length === 0) return;
     runSuggest(buildInputs());
   }
 
@@ -241,6 +384,8 @@ export function SuggestWizard() {
     runSuggest(buildInputs(), { refineOf: response.sessionId, exclude: shownIds });
   }
 
+  // "Show me more options": drop the one constraint the engine named, on screen
+  // as well as in the request, so what the customer sees on Back matches.
   function handleRelax(constraint: RelaxHint['constraint']) {
     let nextInputs: SuggestInputs;
     switch (constraint) {
@@ -248,29 +393,38 @@ export function SuggestWizard() {
         setTemperature('either');
         nextInputs = buildInputs({ temperature: 'either' });
         break;
+      case 'sweetness':
+        setSweetness('any');
+        nextInputs = buildInputs({ sweetness: 'any' });
+        break;
       case 'base':
-        setBase('either');
-        nextInputs = buildInputs({ base: 'either' });
+        if (coffee === 'decaf') {
+          // "Caffeine-free" is one choice made of two parts; only loosen the
+          // coffee half. (The engine offers `needs` for the other.)
+          nextInputs = buildInputs({ base: 'either' });
+        } else {
+          setCoffee('either');
+          nextInputs = buildInputs({ base: 'either', strength: 'any' });
+        }
+        break;
+      case 'needs':
+        // No caffeine only ever comes from "Caffeine-free": relaxing it leaves
+        // "No coffee".
+        if (coffee === 'decaf') setCoffee('none');
+        nextInputs = buildInputs({ needs: [] });
         break;
       case 'budget':
         setBudget('any');
         nextInputs = buildInputs({ budget: 'any' });
         break;
-      case 'extras':
-        setExtras([]);
-        nextInputs = buildInputs({ extras: [] });
-        break;
-      case 'needs':
-        setNeeds([]);
-        nextInputs = buildInputs({ needs: [] });
-        break;
       default:
+        // 'extras' (the v1 composition rule) is never offered by the v2 engine.
         nextInputs = buildInputs();
     }
     runSuggest(nextInputs);
   }
 
-  function handleAddToCart(item: MenuItem) {
+  function handleAddToCart(item: MenuItem, pick: SuggestionPick) {
     if (!response) return;
     const isSimple = item.variants.length === 1 && item.addon_groups.length === 0;
     engagedRef.current = true;
@@ -294,7 +448,12 @@ export function SuggestWizard() {
       // session id rides along via the cart's one-shot "pending" hint since
       // that modal calls addItem() itself and isn't part of this phase.
       setPendingSuggestionSessionId(response.sessionId);
-      setCustomizeTarget({ item, sessionId: response.sessionId, beforeCartTotal: totalItems });
+      setCustomizeTarget({
+        item,
+        sessionId: response.sessionId,
+        beforeCartTotal: totalItems,
+        sugarPreset: pick.sugarPreset ?? null,
+      });
     }
   }
 
@@ -329,62 +488,156 @@ export function SuggestWizard() {
     router.push('/menu');
   }
 
+  function renderCard(pick: SuggestionPick, isUsual = false) {
+    const item = itemsById.get(pick.menuItemId);
+    if (!item) return null;
+    return (
+      <SuggestionCard
+        key={pick.menuItemId}
+        item={item}
+        pick={pick}
+        isUsual={isUsual}
+        feedback={feedbackGiven[pick.menuItemId]}
+        onAddToCart={() => handleAddToCart(item, pick)}
+        onFeedback={(dir) => handleFeedback(pick.menuItemId, dir)}
+      />
+    );
+  }
+
+  const moodsFull = moods.length >= MAX_MOODS;
+
+  const fineTuneIsOpen = fineTuneOpen ?? body !== 'any';
+  const fineTuneSummary = body === 'any' ? 'Any texture' : BODY_LABEL[body];
+
   return (
     <div className="mx-auto max-w-2xl px-4 py-8 pb-28">
-      {step === 'preferences' ? (
+      {step === 'feeling' ? (
         <section aria-labelledby="suggest-step1-heading">
+          <CoffeyBubble>
+            Hi, I&apos;m Coffey! I know every item on the HIOC. menu — let&apos;s find your pick.
+          </CoffeyBubble>
+
           <h1
             id="suggest-step1-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="text-2xl font-bold text-charcoal outline-none"
+            className="mt-6 text-2xl font-bold text-charcoal outline-none"
           >
-            What are you in the mood for?
+            How are you feeling?
           </h1>
-          <p className="mt-1 text-sm text-muted">
-            Pick as many or as few as you like — nothing here is required.
+          {/* role="status": when the second pick fills the cap, the other cards
+              switch off, and this is where a screen-reader user hears why. */}
+          <p id="suggest-mood-hint" role="status" className="mt-1 text-sm text-muted">
+            {moodsFull ? 'Pick up to two — tap one to swap.' : 'Pick one or two.'}
           </p>
 
-          <FieldGroup label="Temperature">
-            {TEMPERATURE_OPTIONS.map((opt) => (
+          <div
+            role="group"
+            aria-labelledby="suggest-step1-heading"
+            aria-describedby="suggest-mood-hint"
+            className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"
+          >
+            {/* Eight cards: a 2×4 grid on phones, 4×2 on wider screens. */}
+            {MOODS.map((mood) => {
+              const selected = moods.includes(mood);
+              return (
+                <MoodCard
+                  key={mood}
+                  label={MOOD_INFO[mood].card}
+                  icon={MOOD_INFO[mood].icon}
+                  selected={selected}
+                  disabled={moodsFull && !selected}
+                  onToggle={() => toggleMood(mood)}
+                />
+              );
+            })}
+          </div>
+
+          <div className="mt-8 flex justify-end">
+            <button
+              type="button"
+              disabled={moods.length === 0}
+              onClick={goToWants}
+              className={buttonVariants({ size: 'lg' })}
+            >
+              Next
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {step === 'wants' ? (
+        <section aria-labelledby="suggest-step2-heading">
+          <BackButton onClick={() => setStep('feeling')} />
+          <CoffeyBubble>Lovely. What sounds good right now?</CoffeyBubble>
+
+          <h1
+            id="suggest-step2-heading"
+            ref={headingRef}
+            tabIndex={-1}
+            className="mt-6 text-2xl font-bold text-charcoal outline-none"
+          >
+            What sounds good?
+          </h1>
+          <p className="mt-1 text-sm text-muted">Skip whatever you like — I&apos;ll work with the rest.</p>
+
+          <FieldGroup label="What would you like?" hint="Pick one or more.">
+            {KINDS.map((kind) => (
               <Chip
-                key={opt.value}
-                label={opt.label}
-                pressed={temperature === opt.value}
-                onClick={() => setTemperature(opt.value)}
+                key={kind}
+                label={KIND_INFO[kind].label}
+                icon={KIND_INFO[kind].icon}
+                pressed={kinds.includes(kind)}
+                onClick={() => toggleKind(kind)}
               />
             ))}
           </FieldGroup>
 
-          <FieldGroup label="Coffee or not">
-            {BASE_OPTIONS.map((opt) => (
-              <Chip
-                key={opt.value}
-                label={opt.label}
-                pressed={base === opt.value}
-                onClick={() => setBase(opt.value)}
-              />
-            ))}
+          {wantsDrink ? (
+            <>
+              <FieldGroup label="Hot or iced?">
+                {TEMPERATURE_OPTIONS.map((opt) => (
+                  <Chip
+                    key={opt.value}
+                    label={opt.label}
+                    pressed={temperature === opt.value}
+                    onClick={() => {
+                      touchedRef.current.temperature = true;
+                      setTemperature(opt.value);
+                    }}
+                  />
+                ))}
+              </FieldGroup>
+
+              <FieldGroup label="Coffee?" hint="Strong = bold and espresso-forward. Smooth = milky and mellow.">
+                {COFFEE_OPTIONS.map((opt) => (
+                  <Chip
+                    key={opt.value}
+                    label={opt.label}
+                    pressed={coffee === opt.value}
+                    onClick={() => setCoffee(opt.value)}
+                  />
+                ))}
+              </FieldGroup>
+            </>
+          ) : null}
+
+          <FieldGroup
+            label="How sweet?"
+            hint="Coffee drinks can be made with or without sugar — Coffey sets it for you."
+            className="flex flex-col gap-3"
+          >
+            <SweetnessScale value={sweetness} onChange={setSweetness} />
           </FieldGroup>
 
-          <FieldGroup label="Anything extra">
-            {EXTRA_OPTIONS.map((opt) => (
+          <FieldGroup label="Flavours you love" hint="Pick any that tempt you.">
+            {FLAVOUR_FAMILIES.map((family) => (
               <Chip
-                key={opt.value}
-                label={opt.label}
-                pressed={extras.includes(opt.value)}
-                onClick={() => toggleExtra(opt.value)}
-              />
-            ))}
-          </FieldGroup>
-
-          <FieldGroup label="Any needs">
-            {NEED_OPTIONS.map((opt) => (
-              <Chip
-                key={opt.value}
-                label={opt.label}
-                pressed={needs.includes(opt.value)}
-                onClick={() => toggleNeed(opt.value)}
+                key={family}
+                label={FLAVOUR_FAMILY_INFO[family].label}
+                icon={FLAVOUR_FAMILY_INFO[family].emoji}
+                pressed={flavours.includes(family)}
+                onClick={() => toggleFlavour(family)}
               />
             ))}
           </FieldGroup>
@@ -400,60 +653,51 @@ export function SuggestWizard() {
             ))}
           </FieldGroup>
 
-          <div className="mt-8 flex justify-end">
-            <button type="button" onClick={() => setStep('mood')} className={buttonVariants({ size: 'lg' })}>
-              Next
+          {/* Fine-tune: progressive disclosure for the one rarely-needed control.
+              Shut, it summarises what's set; it opens by itself when texture isn't
+              "any". */}
+          <div className="mt-6 rounded-md border border-line">
+            <button
+              type="button"
+              aria-expanded={fineTuneIsOpen}
+              aria-controls={fineTunePanelId}
+              onClick={() => setFineTuneOpen(!fineTuneIsOpen)}
+              className="flex min-h-[56px] w-full items-center justify-between gap-3 rounded-md px-4 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-tan"
+            >
+              <span>
+                <span className="block text-sm font-semibold text-charcoal">Fine-tune</span>
+                {fineTuneIsOpen ? null : <span className="block text-sm text-muted">{fineTuneSummary}</span>}
+              </span>
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                className={'h-5 w-5 shrink-0 text-charcoal transition-transform ' + (fineTuneIsOpen ? 'rotate-180' : '')}
+              >
+                <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
-          </div>
-        </section>
-      ) : null}
-
-      {step === 'mood' ? (
-        <section aria-labelledby="suggest-step2-heading">
-          <button
-            type="button"
-            onClick={() => setStep('preferences')}
-            className="mb-4 text-sm font-semibold text-tan-dark hover:underline"
-          >
-            ← Back
-          </button>
-          <h1
-            id="suggest-step2-heading"
-            ref={headingRef}
-            tabIndex={-1}
-            className="text-2xl font-bold text-charcoal outline-none"
-          >
-            How are you feeling?
-          </h1>
-
-          <div
-            role="radiogroup"
-            aria-labelledby="suggest-step2-heading"
-            className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3"
-          >
-            {MOOD_OPTIONS.map((opt) => (
-              <MoodCard
-                key={opt.value}
-                label={opt.label}
-                icon={opt.icon}
-                selected={mood === opt.value}
-                onSelect={() => setMood(opt.value)}
-              />
-            ))}
+            <div id={fineTunePanelId} hidden={!fineTuneIsOpen} className="border-t border-line px-4 pb-4">
+              <FieldGroup label="Texture">
+                {BODY_PREFS.map((pref) => (
+                  <Chip key={pref} label={BODY_LABEL[pref]} pressed={body === pref} onClick={() => setBody(pref)} />
+                ))}
+              </FieldGroup>
+            </div>
           </div>
 
           <div className="mt-6">
-            <label htmlFor="suggest-note" className="mb-1 block text-sm font-semibold text-charcoal">
-              Anything else? <span className="font-normal text-muted">(optional)</span>
+            <label htmlFor={noteId} className="mb-1 block text-sm font-semibold text-charcoal">
+              Tell Coffey anything <span className="font-normal text-muted">(optional)</span>
             </label>
             <input
-              id="suggest-note"
+              id={noteId}
               type="text"
               value={note}
               maxLength={SUGGEST_LIMITS.noteMaxChars}
               onChange={(e) => setNote(e.target.value.slice(0, SUGGEST_LIMITS.noteMaxChars))}
-              placeholder="e.g. meeting a friend"
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              placeholder="e.g. studying late, sharing with a friend"
+              className="w-full rounded-md border border-line px-3 py-2 text-base text-charcoal placeholder:text-muted focus:border-tan"
             />
             <p className="mt-1 text-right text-sm text-muted">
               {note.length}/{SUGGEST_LIMITS.noteMaxChars}
@@ -461,13 +705,8 @@ export function SuggestWizard() {
           </div>
 
           <div className="mt-8 flex justify-end">
-            <button
-              type="button"
-              disabled={!mood}
-              onClick={submitForSuggestions}
-              className={buttonVariants({ size: 'lg' })}
-            >
-              Show me some picks
+            <button type="button" onClick={submitForSuggestions} className={buttonVariants({ size: 'lg' })}>
+              Ask Coffey
             </button>
           </div>
         </section>
@@ -475,24 +714,27 @@ export function SuggestWizard() {
 
       {step === 'results' ? (
         <section aria-labelledby="suggest-step3-heading">
-          <button
-            type="button"
-            onClick={() => setStep('mood')}
-            className="mb-4 text-sm font-semibold text-tan-dark hover:underline"
-          >
-            ← Back
-          </button>
+          <BackButton onClick={() => setStep('wants')} />
+          {/* One bubble stays mounted from "thinking" through the picks (and the
+              error), so its live region is already on the page when its text
+              changes and a screen reader speaks Coffey's header when it lands. */}
+          <CoffeyBubble expression={loading || errorMsg ? 'thinking' : 'happy'} live>
+            {loading ? (
+              <ThinkingCopy />
+            ) : errorMsg ? (
+              "Hmm, that one got away from me."
+            ) : (
+              response?.header || FALLBACK_HEADER
+            )}
+          </CoffeyBubble>
+
           <h1
             id="suggest-step3-heading"
             ref={headingRef}
             tabIndex={-1}
-            className="text-2xl font-bold text-charcoal outline-none"
+            className="mt-6 text-2xl font-bold text-charcoal outline-none"
           >
-            {loading
-              ? 'Finding your picks…'
-              : errorMsg
-                ? 'We had trouble with that'
-                : (response?.header ?? "Here's what we'd pour for you ☕")}
+            {loading ? 'Finding your picks…' : errorMsg ? 'We had trouble with that' : 'Your picks'}
           </h1>
 
           {loading ? (
@@ -525,30 +767,8 @@ export function SuggestWizard() {
               ) : null}
 
               <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {response.usual && itemsById.get(response.usual.menuItemId) ? (
-                  <SuggestionCard
-                    item={itemsById.get(response.usual.menuItemId)!}
-                    pick={response.usual}
-                    isUsual
-                    feedback={feedbackGiven[response.usual.menuItemId]}
-                    onAddToCart={() => handleAddToCart(itemsById.get(response.usual!.menuItemId)!)}
-                    onFeedback={(dir) => handleFeedback(response.usual!.menuItemId, dir)}
-                  />
-                ) : null}
-                {response.picks.map((pick) => {
-                  const item = itemsById.get(pick.menuItemId);
-                  if (!item) return null;
-                  return (
-                    <SuggestionCard
-                      key={pick.menuItemId}
-                      item={item}
-                      pick={pick}
-                      feedback={feedbackGiven[pick.menuItemId]}
-                      onAddToCart={() => handleAddToCart(item)}
-                      onFeedback={(dir) => handleFeedback(pick.menuItemId, dir)}
-                    />
-                  );
-                })}
+                {response.usual ? renderCard(response.usual, true) : null}
+                {response.picks.map((pick) => renderCard(pick))}
               </div>
 
               {response.picks.length === 0 && !response.usual ? (
@@ -557,7 +777,7 @@ export function SuggestWizard() {
                 </p>
               ) : null}
 
-              <div className="mt-8 flex flex-col items-center gap-2">
+              <div className="mt-8 flex flex-col items-center gap-1">
                 {response.refinesLeft > 0 ? (
                   <button
                     type="button"
@@ -571,6 +791,12 @@ export function SuggestWizard() {
                     Browse the full menu
                   </Link>
                 )}
+                <Link
+                  href="/coffey"
+                  className="mt-2 inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline"
+                >
+                  What can Coffey do?&nbsp;<span aria-hidden="true">→</span>
+                </Link>
               </div>
             </>
           ) : null}
@@ -588,7 +814,22 @@ export function SuggestWizard() {
       </div>
 
       {customizeTarget ? (
-        <MenuItemCustomizeModal item={customizeTarget.item} onClose={handleCloseCustomize} />
+        <MenuItemCustomizeModal
+          item={customizeTarget.item}
+          onClose={handleCloseCustomize}
+          // Coffey's sugar preselection (§4.7): the engine names the group and
+          // option; the modal vets them against the item before using them.
+          initialSelection={
+            customizeTarget.sugarPreset
+              ? { [customizeTarget.sugarPreset.groupId]: [customizeTarget.sugarPreset.optionId] }
+              : undefined
+          }
+          hint={
+            customizeTarget.sugarPreset
+              ? `Coffey set sugar to “${customizeTarget.sugarPreset.label}” for you — change it anytime.`
+              : undefined
+          }
+        />
       ) : null}
     </div>
   );

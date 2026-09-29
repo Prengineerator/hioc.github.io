@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { flags } from '@/lib/flags';
+import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
 import type { MenuItem } from '@/lib/types';
 
 const DEFAULT_CATEGORY = CUSTOMER_MENU_CATEGORIES[0].slug;
@@ -212,7 +213,8 @@ function MenuPageContent() {
             href="/suggest"
             className="mb-6 flex items-center justify-center gap-2 rounded-md border border-tan bg-surface px-4 py-3 text-center text-sm font-semibold text-charcoal transition-colors hover:bg-[#f0e6da]"
           >
-            Can&apos;t decide? Tell us your mood <span aria-hidden="true">→</span>
+            <CoffeyMascot size={24} />
+            Can&apos;t decide? Ask Coffey <span aria-hidden="true">→</span>
           </Link>
         ) : null}
 
