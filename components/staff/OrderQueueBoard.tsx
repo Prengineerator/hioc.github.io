@@ -5,18 +5,24 @@
 
 import { OrderCard } from '@/components/staff/OrderCard';
 import { ACTIVE_LANES, STATUS_LABELS } from '@/lib/orders/stateMachine';
+import type { QuickAction } from '@/lib/orders/quickActions';
 import type { Order, OrderItem } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
 export function OrderQueueBoard({
   orders,
+  busyIds,
   onOpen,
-  onPrimary,
+  onAction,
+  onRemind,
 }: {
   orders: OrderWithItems[];
+  // Orders with a status request in flight — their card buttons are disabled.
+  busyIds: ReadonlySet<string>;
   onOpen: (o: OrderWithItems) => void;
-  onPrimary: (o: OrderWithItems) => void;
+  onAction: (o: OrderWithItems, action: QuickAction) => void;
+  onRemind: (o: OrderWithItems) => Promise<void>;
 }) {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -36,7 +42,14 @@ export function OrderQueueBoard({
               <p className="py-6 text-center text-xs text-muted">No orders</p>
             ) : (
               laneOrders.map((o) => (
-                <OrderCard key={o.id} order={o} onOpen={onOpen} onPrimary={onPrimary} />
+                <OrderCard
+                  key={o.id}
+                  order={o}
+                  busy={busyIds.has(o.id)}
+                  onOpen={onOpen}
+                  onAction={onAction}
+                  onRemind={onRemind}
+                />
               ))
             )}
           </section>

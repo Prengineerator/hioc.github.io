@@ -191,6 +191,9 @@ export interface Order {
   // from a request body. Deliberately NOT user_id, which means "the session that
   // placed it" and stays null for staff orders. Null when nobody was matched.
   customer_user_id: string | null;
+  // 2026-09-pickup-reminder.sql: when staff last resent the "order ready"
+  // WhatsApp. Optional — absent until the migration is applied.
+  pickup_reminded_at?: string | null;
 }
 
 export interface OrderItemAddon {

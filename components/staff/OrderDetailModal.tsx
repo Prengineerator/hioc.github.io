@@ -14,6 +14,8 @@ import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
+import { canRemind } from '@/lib/orders/quickActions';
+import { PickupReminderButton } from '@/components/staff/PickupReminderButton';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
@@ -44,7 +46,9 @@ const OPEN_STATUSES: Order['status'][] = ['accepted', 'preparing', 'ready'];
 export function OrderDetailModal({
   order,
   defaultPrepMin = DEFAULT_PREP_MIN,
+  initialMode,
   onClose,
+  onRemind,
   onTransition,
   onPayment,
   onPrint,
@@ -55,7 +59,14 @@ export function OrderDetailModal({
 }: {
   order: OrderWithItems;
   defaultPrepMin?: number;
+  /** Open straight on the reject-reason step (a card's "Reject…" menu item). */
+  initialMode?: 'reject';
   onClose: () => void;
+  /**
+   * Resend the "order ready" WhatsApp (POST /api/orders/[id]/remind). The parent
+   * owns the request and the toast; omit to hide the button.
+   */
+  onRemind?: (o: OrderWithItems) => Promise<void>;
   /**
    * Hands a print to the page-level dock (components/staff/PrintDock). Not a
    * queue owned here: this modal unmounts the moment the staffer closes the
@@ -91,7 +102,9 @@ export function OrderDetailModal({
   onOpenPayment?: (o: OrderWithItems, intent: SettleIntent) => void;
 }) {
   useModalDismiss(onClose);
-  const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp'>('view');
+  const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp'>(
+    initialMode === 'reject' && order.status === 'received' ? 'reject' : 'view',
+  );
   const [prepMin, setPrepMin] = useState(defaultPrepMin);
   const [reasonChoice, setReasonChoice] = useState(REJECT_REASONS[0]);
   const [reasonText, setReasonText] = useState('');
@@ -778,6 +791,12 @@ export function OrderDetailModal({
               <button onClick={() => onTransition(order, next)} className="rounded-md bg-tan py-2.5 font-bold text-cream hover:bg-tan-dark">
                 Mark {STATUS_LABELS[next]}
               </button>
+            ) : null}
+            {onRemind && canRemind(order) ? (
+              <PickupReminderButton
+                remindedAt={order.pickup_reminded_at}
+                onRemind={() => onRemind(order)}
+              />
             ) : null}
             {isActive && !isNew && order.status !== 'ready' ? (
               <button onClick={() => onTransition(order, 'cancelled', { reason: 'Cancelled by staff' })} className="rounded-md border border-[#e5e5e5] py-2 text-sm font-bold text-muted hover:text-red-700">

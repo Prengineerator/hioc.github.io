@@ -25,6 +25,7 @@ import {
   providerSkipReason,
   warnIfMisconfigured,
   whatsappBillHealth,
+  whatsappReminderHealth,
 } from '@/lib/notifications/health';
 import { hasBeenSent } from '@/lib/notifications/status';
 import { FEEDBACK_BUTTONS, formatFeedbackButtonPayload } from '@/lib/feedback/payload';
@@ -251,6 +252,52 @@ export async function sendOrderNotification(
     event,
     templateVars,
   });
+}
+
+/**
+ * Staff "Send pickup reminder": re-sends the approved 'ready' WhatsApp to the
+ * customer of an order that is sitting on the counter.
+ *
+ * The normal 'ready' send is idempotent per (order, event, channel), so a second
+ * one is a no-op by design — this is the ONE deliberate bypass, and it exists as
+ * its own function rather than a flag on sendOrderNotification so the automatic
+ * lifecycle path can never pick it up. It also refuses the log stub: a reminder
+ * the customer never receives, reported as sent, is worse than an honest error.
+ * The caller owns the rate limit (POST /api/orders/[id]/remind).
+ *
+ * Never throws. The forced outcome upserts the order's one 'ready' row, like a
+ * forced bill resend.
+ */
+export async function sendReadyReminder(
+  order: Order,
+): Promise<{ sent: boolean; skipped?: string; error?: string }> {
+  if (!flags.notifications) {
+    return { sent: false, skipped: 'notifications_disabled' };
+  }
+  if (!order.customer_phone) {
+    return { sent: false, skipped: 'no_phone' };
+  }
+  const health = whatsappReminderHealth();
+  if (!health.configured) {
+    return { sent: false, skipped: `not_configured:${health.missing.join(',')}` };
+  }
+
+  const { body } = renderNotification(order, 'ready');
+  const r = await deliverAndLog(
+    createAdminSupabaseClient(),
+    order,
+    'ready',
+    whatsappAdapter,
+    {
+      to: order.customer_phone,
+      channel: 'whatsapp',
+      body,
+      event: 'ready',
+      templateVars: templateVarsFor(order, 'ready'),
+    },
+    true,
+  );
+  return { sent: r.sent, error: r.error };
 }
 
 /**
