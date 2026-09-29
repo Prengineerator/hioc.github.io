@@ -37,6 +37,17 @@ const STEP_LABEL: Record<string, string> = {
   completed: 'Collected',
 };
 
+// One plain-language line per status, shown above the progress track and
+// announced to screen readers (aria-live) as the order moves — the numbered
+// dots alone didn't say what's happening or what the customer should do.
+const STATUS_HEADLINE: Record<string, { title: string; body: string }> = {
+  received: { title: 'Order received', body: 'Waiting for the café to accept it.' },
+  accepted: { title: 'Accepted', body: 'The café has your order and will start it shortly.' },
+  preparing: { title: 'Being prepared', body: "We're making it now." },
+  ready: { title: 'Ready for pickup!', body: 'Show your pickup code at the counter.' },
+  completed: { title: 'Collected — enjoy!', body: 'Thanks for ordering with us.' },
+};
+
 const PAYMENT_POLL_MS = 4000;
 const PAYMENT_POLL_MAX_ATTEMPTS = 30; // ~2 minutes bounded reconciliation window
 
@@ -276,14 +287,14 @@ export default function OrderStatusPage() {
       {paymentUnavailable && !awaitingPayment && order.payment_status !== 'paid' ? (
         <p
           role="status"
-          className="mt-6 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm font-semibold text-charcoal"
+          className="mt-6 rounded-md border border-tan bg-surface px-4 py-3 text-sm font-semibold text-charcoal"
         >
           {PAYMENT_UNAVAILABLE_MSG}
         </p>
       ) : null}
 
       {awaitingPayment ? (
-        <div className="mt-6 rounded-md border border-tan bg-[#f6efe9] p-6 text-center">
+        <div className="mt-6 rounded-md border border-tan bg-surface p-6 text-center">
           <h2 className="text-lg font-bold text-charcoal">Waiting on payment</h2>
           <p className="mt-2 text-sm text-charcoal">
             Your order will join the kitchen queue as soon as payment is confirmed — this
@@ -297,7 +308,7 @@ export default function OrderStatusPage() {
               type="button"
               onClick={handleRetryPayment}
               disabled={paying}
-              className="rounded-md bg-tan px-5 py-2.5 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
+              className="min-h-[44px] rounded-md bg-tan px-5 py-2.5 font-semibold text-cream transition-colors hover:bg-tan-dark disabled:opacity-60"
             >
               {paying ? 'Opening payment…' : 'Retry payment'}
             </button>
@@ -306,7 +317,7 @@ export default function OrderStatusPage() {
                 type="button"
                 onClick={handleSwitchToCounter}
                 disabled={switching}
-                className="rounded-md border border-[#e5e5e5] px-5 py-2.5 font-semibold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
+                className="min-h-[44px] rounded-md border border-line px-5 py-2.5 font-semibold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
               >
                 {switching ? 'Switching…' : 'Switch to pay at counter'}
               </button>
@@ -330,6 +341,19 @@ export default function OrderStatusPage() {
         </div>
       ) : (
         <>
+          {STATUS_HEADLINE[order.status] ? (
+            <div
+              aria-live="polite"
+              className={
+                'mt-6 rounded-md px-4 py-3 text-center ' +
+                (order.status === 'ready' ? 'bg-tan text-cream' : 'bg-surface text-charcoal')
+              }
+            >
+              <p className="text-lg font-bold">{STATUS_HEADLINE[order.status].title}</p>
+              <p className="text-sm">{STATUS_HEADLINE[order.status].body}</p>
+            </div>
+          ) : null}
+
           <ProgressTrack status={order.status} />
 
           {order.status === 'accepted' && order.promised_ready_at ? (
@@ -338,17 +362,11 @@ export default function OrderStatusPage() {
             </p>
           ) : null}
 
-          {order.status === 'ready' ? (
-            <p className="mt-4 text-center font-bold text-tan">
-              Your order is ready — come collect it!
-            </p>
-          ) : null}
-
           {order.status === 'completed' ? (
             <div className="mt-4 text-center">
               <Link
                 href={`/order/${order.id}/review`}
-                className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-semibold text-tan-dark hover:bg-[#f6efe9]"
+                className="inline-flex min-h-[44px] items-center rounded-md border border-tan px-5 text-sm font-semibold text-tan-dark hover:bg-surface"
               >
                 Rate your order
               </Link>
@@ -357,7 +375,7 @@ export default function OrderStatusPage() {
 
           {/* Pickup code, shown prominently for the counter (CUS-056). */}
           {order.pickup_code ? (
-            <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 text-center shadow-sm">
+            <div className="mt-6 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
               <p className="text-xs uppercase tracking-wide text-muted">Show this at the counter</p>
               <p className="mt-1 font-mono text-4xl font-bold tracking-[0.3em] tabular-nums text-charcoal">
                 {order.pickup_code}
@@ -368,7 +386,7 @@ export default function OrderStatusPage() {
       )}
 
       {/* Items + bill breakup / receipt (C5, PAY-1). */}
-      <div className="mt-8 rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
+      <div className="mt-8 rounded-md border border-line bg-cream p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-bold text-charcoal">
           {order.payment_status === 'paid' ? 'Receipt' : 'Order Summary'}
         </h2>
@@ -399,7 +417,7 @@ export default function OrderStatusPage() {
           <div className="mt-4 text-center">
             <Link
               href={`/order/${order.id}/receipt`}
-              className="inline-block rounded-md border border-tan px-5 py-2 text-sm font-semibold text-tan-dark hover:bg-[#f6efe9]"
+              className="inline-flex min-h-[44px] items-center rounded-md border border-tan px-5 text-sm font-semibold text-tan-dark hover:bg-surface"
             >
               View / print bill
             </Link>
@@ -412,8 +430,11 @@ export default function OrderStatusPage() {
           Pickup: <span className="font-bold">{order.pickup_slot_label || order.pickup_time}</span>
         </p>
       ) : null}
+      {/* Guest orders carry no phone — don't promise messages to nobody. */}
       <p className="mt-1 text-center text-sm italic text-muted">
-        We&apos;ll message you on {order.customer_phone} as your order progresses.
+        {order.customer_phone
+          ? <>We&apos;ll message you on {order.customer_phone} as your order progresses.</>
+          : 'Keep this page open — it updates live as your order progresses.'}
       </p>
 
       {/* Self-cancel — only before staff accept the order (F1). */}
@@ -423,7 +444,7 @@ export default function OrderStatusPage() {
             type="button"
             onClick={handleCancel}
             disabled={cancelling}
-            className="rounded-md border border-[#e5e5e5] px-5 py-2 text-sm font-semibold text-muted transition-colors hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+            className="min-h-[44px] rounded-md border border-line px-5 py-2 text-sm font-semibold text-muted transition-colors hover:border-red-300 hover:text-red-700 disabled:opacity-50"
           >
             {cancelling ? 'Cancelling…' : 'Cancel order'}
           </button>
@@ -431,7 +452,7 @@ export default function OrderStatusPage() {
         </div>
       ) : null}
 
-      <div className="mt-10 rounded-md border border-[#e5e5e5] bg-cream p-6 text-center shadow-sm">
+      <div className="mt-10 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
         <h3 className="font-semibold text-charcoal">Need help?</h3>
         <p className="mt-2 text-sm text-muted">{CAFE_ADDRESS}</p>
         <a href={CAFE_PHONE_HREF} className="mt-1 inline-block text-sm text-tan hover:underline">
@@ -457,7 +478,7 @@ function PaymentBadge({ order }: { order: OrderWithItems }) {
       : order.payment_status === 'payment_pending'
         ? 'bg-[#fbeecb] text-[#8a6116]'
         : order.payment_status === 'refunded' || order.payment_status === 'partially_refunded'
-          ? 'bg-[#f6efe9] text-tan-dark'
+          ? 'bg-surface text-tan-dark'
           : 'bg-[#f2efe9] text-muted';
   return (
     <span className={'mt-2 inline-block rounded-md px-2.5 py-1 text-xs font-semibold ' + tone}>
@@ -471,12 +492,12 @@ function BillRows({ order }: { order: OrderWithItems }) {
   const total = order.total_inr ?? order.subtotal_inr;
   const discountLabel = order.coupon_code ? `Discount (${order.coupon_code})` : 'Discount';
   return (
-    <div className="mt-4 flex flex-col gap-1 border-t border-[#e5e5e5] pt-4 text-sm">
+    <div className="mt-4 flex flex-col gap-1 border-t border-line pt-4 text-sm">
       <Row label="Subtotal" value={order.subtotal_inr} />
       {order.tax_inr > 0 ? <Row label="GST" value={order.tax_inr} /> : null}
       {order.packaging_inr > 0 ? <Row label="Packaging" value={order.packaging_inr} /> : null}
       {order.discount_inr > 0 ? <Row label={discountLabel} value={-order.discount_inr} /> : null}
-      <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-2">
+      <div className="mt-1 flex items-center justify-between border-t border-line pt-2">
         <span className="font-bold text-charcoal">Total</span>
         <span className="font-mono font-bold tabular-nums text-tan">₹{total}</span>
       </div>
@@ -504,30 +525,31 @@ function ProgressTrack({ status }: { status: OrderStatus }) {
         const done = i <= currentIndex && currentIndex >= 0;
         const isCurrent = i === currentIndex;
         return (
-          <li key={step} className="flex flex-1 flex-col items-center">
+          <li key={step} aria-current={isCurrent ? 'step' : undefined} className="flex flex-1 flex-col items-center">
             <div className="flex w-full items-center">
               {i > 0 ? (
-                <div className={`h-1 flex-1 ${done ? 'bg-tan' : 'bg-[#e5e5e5]'}`} />
+                <div className={`h-1 flex-1 ${done ? 'bg-tan' : 'bg-line'}`} />
               ) : (
                 <div className="flex-1" />
               )}
               <div
                 className={
                   'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ' +
-                  (done ? 'bg-tan text-cream' : 'bg-[#e5e5e5] text-muted') +
+                  (done ? 'bg-tan text-cream' : 'bg-line text-muted') +
                   (isCurrent ? ' ring-2 ring-tan ring-offset-2' : '')
                 }
               >
-                {i + 1}
+                {done && !isCurrent ? <span aria-hidden="true">✓</span> : <span aria-hidden="true">{i + 1}</span>}
               </div>
               {i < CUSTOMER_PROGRESS.length - 1 ? (
-                <div className={`h-1 flex-1 ${i < currentIndex ? 'bg-tan' : 'bg-[#e5e5e5]'}`} />
+                <div className={`h-1 flex-1 ${i < currentIndex ? 'bg-tan' : 'bg-line'}`} />
               ) : (
                 <div className="flex-1" />
               )}
             </div>
-            <span className={'mt-2 text-[11px] ' + (done ? 'font-bold text-charcoal' : 'text-muted')}>
+            <span className={'mt-2 text-xs ' + (done ? 'font-bold text-charcoal' : 'text-muted')}>
               {STEP_LABEL[step]}
+              {done && !isCurrent ? <span className="sr-only"> (done)</span> : null}
             </span>
           </li>
         );

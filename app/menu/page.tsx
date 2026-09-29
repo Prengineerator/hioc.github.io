@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState, useMemo } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CartProvider } from '@/lib/cart/CartContext';
@@ -33,13 +33,15 @@ function MenuGridSkeleton() {
   return (
     <div
       aria-hidden="true"
-      className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3"
+      className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3"
     >
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="rounded-md border border-line bg-cream p-4 shadow-card">
-          <Skeleton className="mb-3 aspect-[4/3] w-full" />
-          <Skeleton className="mb-2 h-4 w-2/3" />
-          <Skeleton className="h-4 w-1/3" />
+        <div key={i} className="flex gap-3 rounded-md border border-line bg-cream p-4 shadow-card sm:flex-col sm:gap-0">
+          <Skeleton className="order-last h-24 w-24 shrink-0 sm:order-none sm:mb-3 sm:aspect-[4/3] sm:h-auto sm:w-full" />
+          <div className="flex-1">
+            <Skeleton className="mb-2 h-4 w-2/3" />
+            <Skeleton className="h-4 w-1/3" />
+          </div>
         </div>
       ))}
     </div>
@@ -66,7 +68,38 @@ function MenuPageContent() {
 
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  // Menu search (CUS-004). The category endpoint only returns one category,
+  // so the first keystroke lazily fetches the whole customer menu once (the
+  // same public GET /api/menu, just without ?category=) and filters it on the
+  // client — the full menu is a few dozen items, so this is cheaper than a
+  // request per keystroke and needs no API change.
+  const [query, setQuery] = useState('');
+  const [allItems, setAllItems] = useState<MenuItem[] | null>(null);
+  const [allLoading, setAllLoading] = useState(false);
+  const searching = query.trim().length > 0;
+  const fetchAllItems = useCallback(() => {
+    setAllLoading(true);
+    return fetch('/api/menu?includeUnavailable=true')
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data: { items?: MenuItem[] }) => setAllItems(data.items ?? []))
+      .catch(() => setAllItems(null))
+      .finally(() => setAllLoading(false));
+  }, []);
+  useEffect(() => {
+    if (searching && allItems === null && !allLoading) fetchAllItems();
+  }, [searching, allItems, allLoading, fetchAllItems]);
+  const searchResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !allItems) return [];
+    return allItems.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) || (item.description ?? '').toLowerCase().includes(q),
+    );
+  }, [query, allItems]);
   const { settings, openState } = useStoreSettings();
 
   useEffect(() => {
@@ -85,13 +118,16 @@ function MenuPageContent() {
     // includeUnavailable=true (C3): 86'd items still render, greyed out and
     // disabled, rather than silently disappearing from the menu.
     fetch(`/api/menu?category=${encodeURIComponent(category)}&includeUnavailable=true`)
-      .then((res) => res.json())
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((data: { items?: MenuItem[] }) => {
         if (cancelled) return;
         setItems(data.items ?? []);
+        setLoadFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setItems([]);
+        // A failed load is not an empty category — say so and offer a retry
+        // instead of the misleading "Nothing here yet".
+        if (!cancelled) setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -108,7 +144,12 @@ function MenuPageContent() {
 
   // Live availability (C3, XC-011): a staff 86/un-86 anywhere refetches the
   // current category so the grey-out state updates in under ~5s.
-  useMenuAvailabilityRealtime(fetchItems);
+  // The search index goes stale the same way, so refresh it too once loaded.
+  const refreshAll = useCallback(() => {
+    fetchItems();
+    if (allItems !== null) fetchAllItems();
+  }, [fetchItems, fetchAllItems, allItems]);
+  useMenuAvailabilityRealtime(refreshAll);
 
   // A category switched off for now (POS → Menu → On / off) has no tab; if the
   // URL points at one, move to the first category that is on.
@@ -124,9 +165,17 @@ function MenuPageContent() {
 
   const handleCategoryChange = useCallback(
     (next: string) => {
+      setQuery('');
       const params = new URLSearchParams(searchParams.toString());
       params.set('category', next);
-      router.replace(`/menu?${params.toString()}`);
+      router.replace(`/menu?${params.toString()}`, { scroll: false });
+      // The tab strip is sticky, so a tab can be tapped from deep in a long
+      // category — bring the new category's first items into view instead of
+      // leaving the customer mid-page in a list they didn't pick.
+      const grid = gridRef.current;
+      if (grid && grid.getBoundingClientRect().top < 0) {
+        grid.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
     },
     [router, searchParams],
   );
@@ -167,24 +216,116 @@ function MenuPageContent() {
           </Link>
         ) : null}
 
-        <MenuCategoryTabs active={category} onChange={handleCategoryChange} hidden={hiddenCategories} />
+        {/* Sticky just under the site header (44px tap-target row + py-3 +
+            border ≈ 69px; 68 so there is never a hairline gap) so search and
+            category switching stay one tap away while scrolling a long list. */}
+        <div className="sticky top-[68px] z-30 -mx-4 border-b border-line bg-cream/95 px-4 pb-2 pt-3 backdrop-blur">
+          <div className="relative mb-3">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted"
+            >
+              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+              <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search coffee, shakes, snacks…"
+              aria-label="Search the menu"
+              enterKeyHint="search"
+              autoComplete="off"
+              className="h-11 w-full rounded-full border border-line bg-cream pl-10 pr-11 text-base text-charcoal outline-none transition-colors placeholder:text-muted focus:border-tan"
+            />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                aria-label="Clear search"
+                className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-full text-xl leading-none text-muted hover:text-charcoal"
+              >
+                &times;
+              </button>
+            ) : null}
+          </div>
+          <MenuCategoryTabs active={category} onChange={handleCategoryChange} hidden={hiddenCategories} />
+        </div>
 
-        <div className="mt-8">
-          {loading ? (
+        <div ref={gridRef} className="mt-6 scroll-mt-52 md:mt-8">
+          {searching ? (
+            allLoading && allItems === null ? (
+              <MenuGridSkeleton />
+            ) : allItems === null ? (
+              <EmptyState
+                icon="⚠️"
+                heading="Couldn't search the menu"
+                body="Check your connection and try again."
+                action={
+                  <button
+                    type="button"
+                    onClick={() => fetchAllItems()}
+                    className="inline-flex min-h-[44px] items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+                  >
+                    Try again
+                  </button>
+                }
+              />
+            ) : searchResults.length === 0 ? (
+              <EmptyState
+                icon="🔍"
+                heading={`No matches for “${query.trim()}”`}
+                body="Try a shorter word, or browse the categories above."
+              />
+            ) : (
+              <>
+                <p className="mb-4 text-sm text-muted" aria-live="polite">
+                  {searchResults.length} result{searchResults.length === 1 ? '' : 's'} for “{query.trim()}”
+                </p>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
+                  {searchResults.map((item) => (
+                    <MenuItemCard key={item.id} item={item} />
+                  ))}
+                </div>
+              </>
+            )
+          ) : loading ? (
             <MenuGridSkeleton />
+          ) : loadFailed ? (
+            <EmptyState
+              icon="⚠️"
+              heading="Couldn't load the menu"
+              body="Check your connection and try again."
+              action={
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoading(true);
+                    fetchItems();
+                  }}
+                  className="inline-flex min-h-[44px] items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+                >
+                  Try again
+                </button>
+              }
+            />
           ) : items.length === 0 ? (
             <EmptyState
               heading="Nothing here yet"
               body="No items in this category yet"
             />
           ) : (
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
               {items.map((item) => (
                 <MenuItemCard key={item.id} item={item} />
               ))}
             </div>
           )}
         </div>
+        {/* Room for the floating cart bar so it never covers the last item. */}
+        <div aria-hidden="true" className="h-20" />
       </div>
 
       <FloatingCartBar onOpen={() => setDrawerOpen(true)} />

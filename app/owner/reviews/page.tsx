@@ -72,15 +72,15 @@ export default async function OwnerReviewsPage() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+        <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-muted">Average rating</p>
           <p className="mt-1 text-2xl font-bold text-charcoal">{avgRating === null ? '—' : avgRating.toFixed(2)}</p>
         </div>
-        <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+        <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-muted">Reviews (visible)</p>
           <p className="mt-1 text-2xl font-bold text-charcoal">{visible.length}</p>
         </div>
-        <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+        <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-muted">Volume (last 90 days)</p>
           <p className="mt-1 text-2xl font-bold text-charcoal">{totalVolume}</p>
         </div>

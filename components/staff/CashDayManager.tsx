@@ -412,13 +412,13 @@ function OpenForm({
             rows={2}
             disabled={busy}
             placeholder="e.g. owner added ₹500 for change"
-            className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+            className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
           />
         </label>
       ) : null}
 
       {confirmAt ? (
-        <div className="mt-3 rounded-md border border-tan bg-[#f6efe9] p-4">
+        <div className="mt-3 rounded-md border border-tan bg-surface p-4">
           <p className="text-sm font-bold text-charcoal">
             Open cash day at {formatTime(confirmAt.toISOString())} with {inr(counted)} float?
           </p>
@@ -480,7 +480,7 @@ function DaySummary({ openDay, summary, sales }: { openDay: CashDay; summary: Op
     ['Cash out', `− ${inr(summary.cash_out_inr)}`],
   ];
   return (
-    <div className="rounded-md border border-tan bg-[#f6efe9] p-4">
+    <div className="rounded-md border border-tan bg-surface p-4">
       <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
         Day so far <span className="font-normal normal-case text-muted">· since {formatDayTime(openDay.opened_at)}</span>
       </h2>
@@ -508,7 +508,7 @@ function DaySummary({ openDay, summary, sales }: { openDay: CashDay; summary: Op
             {showSales ? 'Hide' : 'Show'} the {sales.length} cash sale{sales.length === 1 ? '' : 's'}
           </button>
           {showSales ? (
-            <ul className="mt-2 divide-y divide-[#f0ece6] rounded-md border border-[#e5e5e5] bg-white text-sm">
+            <ul className="mt-2 divide-y divide-[#f0ece6] rounded-md border border-line bg-white text-sm">
               {sales.map((s) => (
                 <li key={s.order_id} className="flex items-center justify-between gap-3 px-3 py-2">
                   <span className="text-charcoal">
@@ -667,10 +667,10 @@ function CloseForm({
         disabled={busy}
       />
 
-      <div className="mt-4 rounded-md border border-[#e5e5e5] bg-cream p-3">
+      <div className="mt-4 rounded-md border border-line bg-cream p-3">
         <Line label="Expected in drawer" value={inr(expectedInr)} />
         <Line label="Counted" value={inr(countedInr)} />
-        <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-2 text-sm">
+        <div className="mt-1 flex items-center justify-between border-t border-line pt-2 text-sm">
           <span className="font-bold text-charcoal">Over / short</span>
           <OverShort variance={varianceInr} />
         </div>
@@ -702,7 +702,7 @@ function CloseForm({
             rows={2}
             disabled={busy}
             placeholder="e.g. two ₹200 notes stuck together, recount pending"
-            className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+            className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
           />
         </label>
       ) : null}
@@ -719,10 +719,10 @@ function CloseForm({
         max={closingDenoms}
         totalLabel="Float left"
       />
-      <div className="mt-3 rounded-md border border-[#e5e5e5] bg-cream p-3">
+      <div className="mt-3 rounded-md border border-line bg-cream p-3">
         <Line label="Counted" value={inr(countedInr)} />
         <Line label="Float left for tomorrow" value={`− ${inr(evaluation.floatLeftInr)}`} />
-        <div className="mt-1 flex items-center justify-between border-t border-[#e5e5e5] pt-2 text-sm">
+        <div className="mt-1 flex items-center justify-between border-t border-line pt-2 text-sm">
           <span className="font-bold text-charcoal">Cash taken out</span>
           <span className="text-lg font-bold tabular-nums text-charcoal">{inr(evaluation.takenOutInr)}</span>
         </div>
@@ -738,7 +738,7 @@ function CloseForm({
           rows={2}
           disabled={busy}
           placeholder="Any handover notes…"
-          className="mt-1 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+          className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
         />
       </label>
 
@@ -751,7 +751,7 @@ function CloseForm({
       ) : null}
 
       {confirming && !blocked ? (
-        <div className="mt-3 rounded-md border border-tan bg-[#f6efe9] p-4">
+        <div className="mt-3 rounded-md border border-tan bg-surface p-4">
           <p className="text-sm font-bold text-charcoal">Close the cash day?</p>
           <dl className="mt-2 flex flex-col gap-1 text-sm">
             <Line label="Expected" value={inr(expectedInr)} />
@@ -813,7 +813,7 @@ function ReopenCard({
   const [reason, setReason] = useState('');
   const problem = cashReasonProblem(reason, 'reopening the day');
   return (
-    <section className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-4">
+    <section className="mt-6 rounded-md border border-line bg-cream p-4">
       <h2 className="text-sm font-bold uppercase tracking-wide text-charcoal">Closed by mistake?</h2>
       <p className="mt-1 text-sm text-muted">
         The last day ({day.business_date}
@@ -828,7 +828,7 @@ function ReopenCard({
             rows={2}
             disabled={busy}
             placeholder="Why is the day being reopened?"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm focus:border-tan focus:outline-none"
+            className="w-full rounded-md border border-line px-3 py-2 text-sm focus:border-tan focus:outline-none"
           />
           <div className="mt-2 flex gap-3">
             <button
@@ -896,10 +896,10 @@ function ClosureHistory({ history }: { history: CashDay[] }) {
   return (
     <section className="mt-8">
       <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-charcoal">Recent closures</h2>
-      <div className="overflow-x-auto rounded-md border border-[#e5e5e5]">
+      <div className="overflow-x-auto rounded-md border border-line">
         <table className="w-full min-w-[40rem] text-sm">
           <thead>
-            <tr className="border-b border-[#e5e5e5] text-left text-[11px] uppercase tracking-wide text-muted">
+            <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-muted">
               <th className="px-3 py-2 font-bold">Date</th>
               <th className="px-3 py-2 text-right font-bold">Cash sales</th>
               <th className="px-3 py-2 text-right font-bold">Expected</th>

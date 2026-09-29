@@ -38,7 +38,7 @@ export default async function RewardsPage() {
     <div className="mx-auto max-w-2xl px-4 py-10">
       <h1 className="text-2xl font-bold text-charcoal">Rewards</h1>
 
-      <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 text-center shadow-sm">
+      <div className="mt-6 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
         <p className="text-xs uppercase tracking-wide text-muted">Your balance</p>
         <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-tan">{balance} pts</p>
         {config ? (
@@ -54,7 +54,7 @@ export default async function RewardsPage() {
       <div className="mt-8">
         <h2 className="mb-3 text-lg font-semibold text-charcoal">History</h2>
         {transactions.length === 0 ? (
-          <p className="rounded-md border border-[#e5e5e5] bg-cream p-6 text-center text-sm text-muted">
+          <p className="rounded-md border border-line bg-cream p-6 text-center text-sm text-muted">
             No points activity yet — place an order to start earning.
           </p>
         ) : (
@@ -78,7 +78,7 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
     );
   }
   return (
-    <div className="mt-6 rounded-md border border-[#e5e5e5] bg-cream p-6 shadow-sm">
+    <div className="mt-6 rounded-md border border-line bg-cream p-6 shadow-sm">
       <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-charcoal">How points work</h2>
       <ul className="flex flex-col gap-1 text-sm text-charcoal">
         <li>• Earn {Number(config.points_per_inr)} point(s) for every ₹1 spent on a completed, paid order.</li>
@@ -103,7 +103,7 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
     year: 'numeric',
   });
   return (
-    <li className="flex items-center justify-between rounded-md border border-[#e5e5e5] bg-cream px-4 py-3">
+    <li className="flex items-center justify-between rounded-md border border-line bg-cream px-4 py-3">
       <div>
         <p className="text-sm font-semibold capitalize text-charcoal">{tx.type}</p>
         <p className="text-sm text-muted">

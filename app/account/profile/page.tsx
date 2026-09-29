@@ -270,7 +270,7 @@ export default function ProfilePage() {
 
       <form
         onSubmit={handleSave}
-        className="flex flex-col gap-4 rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm"
+        className="flex flex-col gap-4 rounded-md border border-line bg-cream p-5 shadow-sm"
       >
         <div>
           <label htmlFor="name" className="mb-1 block text-sm font-semibold text-charcoal">
@@ -282,7 +282,7 @@ export default function ProfilePage() {
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
 
@@ -295,7 +295,7 @@ export default function ProfilePage() {
             type="date"
             value={dateOfBirth}
             onChange={(e) => setDateOfBirth(e.target.value)}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
 
@@ -308,7 +308,7 @@ export default function ProfilePage() {
             type="date"
             value={dateOfAnniversary}
             onChange={(e) => setDateOfAnniversary(e.target.value)}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
 
@@ -320,7 +320,7 @@ export default function ProfilePage() {
             id="orderType"
             value={defaultOrderType}
             onChange={(e) => setDefaultOrderType(e.target.value as OrderType)}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           >
             {(Object.keys(ORDER_TYPE_LABEL) as OrderType[]).map((t) => (
               <option key={t} value={t}>
@@ -362,7 +362,7 @@ export default function ProfilePage() {
         </button>
       </form>
 
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="font-semibold text-charcoal">Phone number</h2>
         <p className="mt-1 text-sm text-muted">
           {me?.phone ? (
@@ -393,7 +393,7 @@ export default function ProfilePage() {
               value={newPhone}
               onChange={(e) => setNewPhone(e.target.value)}
               placeholder="10-digit mobile number"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
             {phoneErr ? <p className="text-sm text-red-700">{phoneErr}</p> : null}
             <div className="flex gap-2">
@@ -410,7 +410,7 @@ export default function ProfilePage() {
                   setPhoneStep('idle');
                   setPhoneErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
+                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -429,7 +429,7 @@ export default function ProfilePage() {
               value={phoneCode}
               onChange={(e) => setPhoneCode(e.target.value)}
               placeholder="6-digit code"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
             {phoneErr ? <p className="text-sm text-red-700">{phoneErr}</p> : null}
             <div className="flex gap-2">
@@ -446,7 +446,7 @@ export default function ProfilePage() {
                   setPhoneStep('idle');
                   setPhoneErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
+                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -455,7 +455,7 @@ export default function ProfilePage() {
         ) : null}
       </div>
 
-      <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+      <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="font-semibold text-charcoal">Email</h2>
         <p className="mt-1 text-sm text-muted">
           {me?.email ? (
@@ -494,7 +494,7 @@ export default function ProfilePage() {
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
               placeholder="you@example.com"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
             {emailErr ? <p className="text-sm text-red-700">{emailErr}</p> : null}
             <div className="flex gap-2">
@@ -511,7 +511,7 @@ export default function ProfilePage() {
                   setEmailStep('idle');
                   setEmailErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
+                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -533,7 +533,7 @@ export default function ProfilePage() {
               value={emailCode}
               onChange={(e) => setEmailCode(e.target.value)}
               placeholder="6-digit code"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
             {emailErr ? <p className="text-sm text-red-700">{emailErr}</p> : null}
             <div className="flex gap-2">
@@ -550,7 +550,7 @@ export default function ProfilePage() {
                   setEmailStep('idle');
                   setEmailErr('');
                 }}
-                className="rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-semibold text-charcoal"
+                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>

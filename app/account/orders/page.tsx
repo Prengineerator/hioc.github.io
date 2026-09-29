@@ -201,7 +201,7 @@ function AccountOrdersContent() {
       <h1 className="text-2xl font-bold text-charcoal">Your Orders</h1>
 
       {phoneVerified ? null : (
-        <div className="rounded-md border border-[#e5e5e5] bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+        <div className="rounded-md border border-line bg-surface px-4 py-3 text-sm text-charcoal">
           Placed an order at the counter?{' '}
           <Link href="/account/profile" className="font-semibold text-tan hover:underline">
             Verify your WhatsApp number
@@ -211,12 +211,12 @@ function AccountOrdersContent() {
       )}
 
       {notice ? (
-        <div className="rounded-md border border-[#e5e5e5] bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+        <div className="rounded-md border border-line bg-surface px-4 py-3 text-sm text-charcoal">
           {notice}
         </div>
       ) : null}
 
-      <div className="flex gap-1 rounded-md border border-[#e5e5e5] p-1 text-sm">
+      <div className="flex gap-1 rounded-md border border-line p-1 text-sm">
         <button
           type="button"
           onClick={() => switchTab('active')}
@@ -244,7 +244,7 @@ function AccountOrdersContent() {
       ) : error ? (
         <p className="py-10 text-center text-sm text-muted">{error}</p>
       ) : orders.length === 0 ? (
-        <div className="rounded-md border border-[#e5e5e5] bg-cream p-8 text-center shadow-sm">
+        <div className="rounded-md border border-line bg-cream p-8 text-center shadow-sm">
           <p className="text-muted">{tab === 'active' ? 'No active orders.' : 'No past orders yet.'}</p>
           <Link
             href="/menu"
@@ -259,7 +259,7 @@ function AccountOrdersContent() {
             const active = isActiveOrderStatus(order.status);
             const typeLabel = orderTypeLabel(order);
             return (
-              <li key={order.id} className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+              <li key={order.id} className="rounded-md border border-line bg-cream p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <Link
@@ -311,7 +311,7 @@ function AccountOrdersContent() {
                     type="button"
                     onClick={() => handleReorder(order.id)}
                     disabled={reorderingId === order.id}
-                    className="rounded-md border border-[#e5e5e5] px-3 py-1.5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan disabled:opacity-60"
+                    className="rounded-md border border-line px-3 py-1.5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan disabled:opacity-60"
                   >
                     {reorderingId === order.id ? 'Adding to cart…' : 'Order again'}
                   </button>
@@ -327,7 +327,7 @@ function AccountOrdersContent() {
           <h2 className="text-lg font-semibold text-charcoal">Earlier orders (before our new app)</h2>
           <ul className="flex flex-col gap-3">
             {petpoojaOrders.map((order) => (
-              <li key={order.id} className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+              <li key={order.id} className="rounded-md border border-line bg-cream p-4 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-mono font-bold tabular-nums text-charcoal">Bill #{order.bill_no}</p>
@@ -370,7 +370,7 @@ function AccountOrdersContent() {
             type="button"
             onClick={() => tab && load(tab, page - 1)}
             disabled={page <= 1}
-            className="min-h-[40px] rounded-md border border-[#e5e5e5] px-4 text-sm font-semibold text-charcoal disabled:opacity-40"
+            className="min-h-[40px] rounded-md border border-line px-4 text-sm font-semibold text-charcoal disabled:opacity-40"
           >
             Newer
           </button>
@@ -381,7 +381,7 @@ function AccountOrdersContent() {
             type="button"
             onClick={() => tab && load(tab, page + 1)}
             disabled={!hasMore}
-            className="min-h-[40px] rounded-md border border-[#e5e5e5] px-4 text-sm font-semibold text-charcoal disabled:opacity-40"
+            className="min-h-[40px] rounded-md border border-line px-4 text-sm font-semibold text-charcoal disabled:opacity-40"
           >
             Older
           </button>

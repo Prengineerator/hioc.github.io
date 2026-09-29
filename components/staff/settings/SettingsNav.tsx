@@ -37,7 +37,7 @@ export function SettingsNav() {
                   'inline-flex min-h-[44px] items-center whitespace-nowrap rounded-full border px-4 text-sm font-bold transition-colors ' +
                   (active
                     ? 'border-charcoal bg-charcoal text-cream'
-                    : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                    : 'border-line text-charcoal hover:border-tan')
                 }
               >
                 {section.label}

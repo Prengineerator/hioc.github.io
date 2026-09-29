@@ -94,7 +94,7 @@ export default function OrderReviewPage() {
         <p className="mt-4 text-muted">
           You can rate this order once it&apos;s been picked up. Check back after collection.
         </p>
-        <Link href={`/order/${order.id}`} className="mt-6 inline-block rounded-md border border-[#e5e5e5] px-6 py-3 font-semibold text-charcoal hover:bg-[#f2efe9]">
+        <Link href={`/order/${order.id}`} className="mt-6 inline-block rounded-md border border-line px-6 py-3 font-semibold text-charcoal hover:bg-[#f2efe9]">
           Back to order status
         </Link>
       </div>
@@ -118,7 +118,7 @@ export default function OrderReviewPage() {
         />
 
         {uniqueItems.length > 0 ? (
-          <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+          <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-charcoal">Rate individual items</h2>
             <div className="flex flex-col gap-5">
               {uniqueItems.map((item) => (
@@ -166,7 +166,7 @@ function ReviewBlock({
 
   if (existing) {
     return (
-      <div className={compact ? '' : 'rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm'}>
+      <div className={compact ? '' : 'rounded-md border border-line bg-cream p-5 shadow-sm'}>
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-charcoal">{title}</h3>
           <StarRating value={existing.rating} size="sm" />
@@ -210,7 +210,7 @@ function ReviewBlock({
   }
 
   return (
-    <div className={compact ? '' : 'rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm'}>
+    <div className={compact ? '' : 'rounded-md border border-line bg-cream p-5 shadow-sm'}>
       <h3 className="text-sm font-semibold text-charcoal">{title}</h3>
       <div className="mt-2">
         <StarRating value={rating} onChange={setRating} size={compact ? 'sm' : 'md'} />
@@ -221,7 +221,7 @@ function ReviewBlock({
           onChange={(e) => setComment(e.target.value.slice(0, MAX_COMMENT_LENGTH))}
           placeholder="Tell us more (optional)"
           rows={3}
-          className="mt-3 w-full rounded-md border border-[#e5e5e5] p-2 text-sm outline-none focus:border-tan"
+          className="mt-3 w-full rounded-md border border-line p-2 text-sm outline-none focus:border-tan"
         />
       ) : null}
       {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}

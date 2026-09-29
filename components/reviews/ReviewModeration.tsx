@@ -53,7 +53,7 @@ export function ReviewModeration({ initialReviews }: { initialReviews: Review[] 
   return (
     <ul className="flex flex-col gap-3">
       {reviews.map((r) => (
-        <li key={r.id} className={'rounded-md border p-4 ' + (r.hidden ? 'border-red-200 bg-red-50' : 'border-[#e5e5e5] bg-cream')}>
+        <li key={r.id} className={'rounded-md border p-4 ' + (r.hidden ? 'border-red-200 bg-red-50' : 'border-line bg-cream')}>
           <div className="flex items-center justify-between">
             <StarRating value={r.rating} size="sm" />
             <span className="text-xs text-muted">{new Date(r.created_at).toLocaleDateString('en-IN')}</span>
@@ -78,7 +78,7 @@ export function ReviewModeration({ initialReviews }: { initialReviews: Review[] 
                 value={draft}
                 onChange={(e) => setDraft(e.target.value.slice(0, 1000))}
                 rows={2}
-                className="w-full rounded-md border border-[#e5e5e5] p-2 text-sm outline-none focus:border-tan"
+                className="w-full rounded-md border border-line p-2 text-sm outline-none focus:border-tan"
                 placeholder="Write a response…"
               />
               <div className="mt-2 flex gap-3">

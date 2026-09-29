@@ -116,7 +116,8 @@ export default async function StaffLayout({
     <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
       <div className="min-h-screen bg-cream">
         <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
-        <main>{children}</main>
+        {/* Not <main> — the root layout already provides the landmark. */}
+        <div>{children}</div>
       </div>
     </StaffShell>
   );

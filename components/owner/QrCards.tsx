@@ -148,7 +148,7 @@ export function QrCards() {
 
             {/* Modal panel (on-screen only) */}
             <div className="mx-auto mt-6 mb-6 flex max-h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden rounded-md bg-cream shadow-xl">
-              <div className="qr-cards-toolbar flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e5e5] px-5 py-3">
+              <div className="qr-cards-toolbar flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-3">
                 <div>
                   <h2 className="text-sm font-bold uppercase tracking-wide text-muted">
                     Print QR cards

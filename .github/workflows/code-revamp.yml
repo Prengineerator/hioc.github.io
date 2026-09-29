@@ -1,0 +1,165 @@
+name: Code revamp (UI/UX)
+
+# Two jobs:
+#
+#   checks  — the quality gate: lint, typecheck, unit tests and a production
+#             build. Runs on every PR that touches the web app, and before
+#             every revamp run so Claude never starts from a red baseline.
+#
+#   revamp  — runs the `code-revamp` Claude Code skill
+#             (.claude/skills/code-revamp/SKILL.md) over the customer ordering
+#             site, the staff POS/back office (/staff) and the owner dashboard
+#             (/owner).
+#               mode=audit → writes docs/revamp/CODE-REVAMP-<date>.md, opens an
+#                            issue with the findings, changes no code.
+#               mode=fix   → same report, plus the safe UI/UX fixes, on a new
+#                            branch `code-revamp/<surface>-<run>` with a PR.
+#             Triggered manually ("Run workflow" in the Actions tab) or by the
+#             weekly schedule, which is audit-only on all three surfaces.
+#
+# Setup (once): add an `ANTHROPIC_API_KEY` repository secret
+# (Settings → Secrets and variables → Actions). To bill a Claude Pro/Max plan
+# instead, create `CLAUDE_CODE_OAUTH_TOKEN` with `claude setup-token` and swap
+# the `anthropic_api_key` line below for
+# `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}`.
+# Also enable Settings → Actions → General → "Allow GitHub Actions to create
+# and approve pull requests" so fix-mode runs can open their PR.
+#
+# PRs opened with the default GITHUB_TOKEN don't trigger other workflows, so
+# `checks` won't run on the revamp PR by itself — the revamp job already ran
+# the same checks before it pushed, and pushing any commit to the branch
+# afterwards re-triggers them.
+#
+# The build needs the Supabase env vars at compile time only to satisfy
+# client construction; placeholders are enough because nothing is fetched
+# during `next build` (every data route is dynamic).
+
+on:
+  workflow_dispatch:
+    inputs:
+      surface:
+        description: Which site to revamp
+        type: choice
+        options: [all, customer, staff, owner]
+        default: all
+      mode:
+        description: audit = report only, fix = report + code changes in a PR
+        type: choice
+        options: [fix, audit]
+        default: fix
+  schedule:
+    # Mondays 03:40 UTC = 09:10 IST, before the cafe opens. Audit only.
+    - cron: '40 3 * * 1'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'components/**'
+      - 'lib/**'
+      - 'middleware.ts'
+      - 'tailwind.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/code-revamp.yml'
+
+concurrency:
+  group: code-revamp-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+  NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+  SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+
+jobs:
+  checks:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
+
+  revamp:
+    # Static on purpose: a job skipped by its `if` (every pull_request run)
+    # shows its name unevaluated, which printed the raw input expressions.
+    name: Claude code-revamp
+    needs: checks
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      SURFACE: ${{ inputs.surface || 'all' }}
+      # The schedule has no inputs, so it falls back to audit.
+      MODE: ${{ inputs.mode || 'audit' }}
+      BRANCH: code-revamp/${{ inputs.surface || 'all' }}-${{ github.run_number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Prepare branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$MODE" = "fix" ]; then git checkout -b "$BRANCH"; fi
+
+      - name: Run code-revamp skill
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --max-turns 200
+            --allowedTools "Read,Write,Edit,MultiEdit,Glob,Grep,TodoWrite,Bash(npm run lint),Bash(npm run build),Bash(npm test),Bash(npx tsc --noEmit),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(gh pr create:*),Bash(gh issue create:*),Bash(mkdir:*),Bash(date:*)"
+          prompt: |
+            /code-revamp surface=${{ env.SURFACE }} mode=${{ env.MODE }}
+
+            You are running in GitHub Actions for ${{ github.repository }}.
+            Dependencies are installed and the `checks` job already passed on
+            this commit, so the baseline is green. Follow the skill exactly.
+
+            When the skill is done:
+            - mode=audit: do not edit code. Commit nothing. Open an issue with
+              `gh issue create --title "Code revamp audit (${{ env.SURFACE }}) — run ${{ github.run_number }}" --body-file <the report file>`.
+            - mode=fix: you are on branch `${{ env.BRANCH }}`. Commit per the
+              skill's rules (report file included), run the full verification
+              once more, then `git push -u origin ${{ env.BRANCH }}` and open a
+              PR against `${{ github.event.repository.default_branch }}` with
+              `gh pr create` whose body lists what was fixed per surface, what
+              is proposed and needs a decision, and the verification results.
+              If verification fails and you cannot fix it, push nothing and
+              open an issue explaining why instead.
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-revamp-report-${{ github.run_number }}
+          path: docs/revamp/
+          if-no-files-found: ignore

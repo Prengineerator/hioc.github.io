@@ -163,7 +163,7 @@ export default function StaffMenuPage() {
             onClick={() => setView(id)}
             className={
               'min-h-[40px] rounded-full border px-4 text-sm font-bold transition-colors ' +
-              (view === id ? 'border-charcoal bg-charcoal text-cream' : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+              (view === id ? 'border-charcoal bg-charcoal text-cream' : 'border-line text-charcoal hover:border-tan')
             }
           >
             {label}
@@ -184,13 +184,13 @@ export default function StaffMenuPage() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search menu by name or category…"
-        className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm outline-none focus:border-tan sm:max-w-sm"
+        className="mb-4 w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan sm:max-w-sm"
       />
 
       {loading ? (
         <Spinner label="Loading menu items…" />
       ) : visibleItems.length === 0 ? (
-        <p className="rounded-md border border-[#e5e5e5] bg-cream py-10 text-center text-sm text-muted">
+        <p className="rounded-md border border-line bg-cream py-10 text-center text-sm text-muted">
           No items match &ldquo;{query}&rdquo;.
         </p>
       ) : (

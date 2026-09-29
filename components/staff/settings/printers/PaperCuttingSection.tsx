@@ -45,7 +45,7 @@ export function PaperCuttingSection({
       {eligible.map((p) => {
         const cutMode = p.cutMode ?? 'standard';
         return (
-          <li key={p.id} className="rounded-md border border-[#e5e5e5] p-3">
+          <li key={p.id} className="rounded-md border border-line p-3">
             <div className="flex items-center justify-between gap-3">
               <span className="text-sm font-bold text-charcoal">{p.name}</span>
               <ToggleSwitch
@@ -60,7 +60,7 @@ export function PaperCuttingSection({
                   value={cutMode}
                   disabled={savingId === p.id}
                   onChange={(e) => setCutMode(p.id, e.target.value as CutMode)}
-                  className="min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:opacity-50"
+                  className="min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:opacity-50"
                 >
                   {CUT_MODES.map((mode) => (
                     <option key={mode} value={mode}>

@@ -252,7 +252,7 @@ export function QrCheckout({
         >
           &larr; Add more
         </button>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#f6efe9] px-3 py-1 text-xs font-semibold text-charcoal">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-charcoal">
           <span aria-hidden>🍽️</span> Table {table.label}
         </span>
       </div>
@@ -262,16 +262,16 @@ export function QrCheckout({
       {serverError ? (
         <div
           role="alert"
-          className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+          className="mb-4 rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
         >
           {serverError}
         </div>
       ) : null}
 
       {/* Editable cart — qty steppers reuse the shared cart state (not forked). */}
-      <ul className="mb-4 flex flex-col gap-3 rounded-md border border-[#e5e5e5] bg-cream p-4">
+      <ul className="mb-4 flex flex-col gap-3 rounded-md border border-line bg-cream p-4">
         {items.map((item) => (
-          <li key={item.key} className="flex flex-col gap-2 border-b border-[#e5e5e5] pb-3 last:border-b-0 last:pb-0">
+          <li key={item.key} className="flex flex-col gap-2 border-b border-line pb-3 last:border-b-0 last:pb-0">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="font-semibold text-charcoal">{item.name}</span>
@@ -295,7 +295,7 @@ export function QrCheckout({
               </button>
             </div>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 rounded-md border border-[#e5e5e5] px-3 py-1">
+              <div className="flex items-center gap-3 rounded-md border border-line px-3 py-1">
                 <button
                   type="button"
                   aria-label="Decrease quantity"
@@ -334,7 +334,7 @@ export function QrCheckout({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Ayush"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
         <div>
@@ -359,7 +359,7 @@ export function QrCheckout({
                 if (phoneError) setPhoneError(null);
               }}
               placeholder="e.g. 98765 43210"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
             {verifyRequired ? (
               <GetOtpButton
@@ -388,7 +388,7 @@ export function QrCheckout({
               if (emailError) setEmailError(null);
             }}
             placeholder="you@example.com"
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
           {emailError ? <p className="mt-1 text-sm text-red-700">{emailError}</p> : null}
         </div>
@@ -402,25 +402,25 @@ export function QrCheckout({
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Any special requests"
             rows={2}
-            className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
           />
         </div>
       </div>
 
       {/* Bill breakup (from the quote endpoint) — packaging is ₹0 for dine-in. */}
-      <div className="mb-4 rounded-md border border-[#e5e5e5] px-4 py-3 text-sm text-charcoal">
+      <div className="mb-4 rounded-md border border-line px-4 py-3 text-sm text-charcoal">
         <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
         {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
         {displayBill.discount_inr > 0 ? (
           <BillRow label="Discount" value={-displayBill.discount_inr} />
         ) : null}
-        <div className="mt-2 flex items-center justify-between border-t border-[#e5e5e5] pt-2">
+        <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
           <span className="font-bold text-charcoal">Total</span>
           <span className="font-mono font-bold tabular-nums text-tan">₹{displayBill.total_inr}</span>
         </div>
       </div>
 
-      <p className="mb-4 rounded-md bg-[#f6efe9] px-4 py-3 text-sm text-charcoal">
+      <p className="mb-4 rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
         Pay securely now — your order joins the kitchen queue as soon as payment is confirmed, and
         we&apos;ll bring it to table {table.label}.
       </p>

@@ -102,7 +102,7 @@ export default async function StaffPrintPage({
           Silent mode renders neither: the desktop shell drives printing. */}
       {silent ? null : auto ? <PrintOnLoad orderId={id} type={type} /> : <AutoPrint label={LABELS[type]} />}
 
-      <div className="rounded-md border border-[#e5e5e5] bg-white p-4 shadow-sm print:border-0 print:p-0 print:shadow-none">
+      <div className="rounded-md border border-line bg-white p-4 shadow-sm print:border-0 print:p-0 print:shadow-none">
         {type === 'kot' ? (
           <KotTicket order={order} />
         ) : type === 'receipt' ? (

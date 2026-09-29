@@ -119,7 +119,7 @@ export function CashMovementForm() {
         For bank deposits, petty expenses and float top-ups — so a deposit or top-up never reads as a shortage.
       </p>
 
-      <div className="mt-3 rounded-md border border-[#e5e5e5] bg-white p-4">
+      <div className="mt-3 rounded-md border border-line bg-white p-4">
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -154,7 +154,7 @@ export function CashMovementForm() {
             onChange={(e) => setAmount(e.target.value)}
             placeholder="0"
             disabled={busy}
-            className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-right text-base tabular-nums focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+            className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-right text-base tabular-nums focus:border-tan focus:outline-none disabled:bg-surface"
           />
         </label>
 
@@ -165,7 +165,7 @@ export function CashMovementForm() {
             onChange={(e) => setReason(e.target.value)}
             placeholder={direction === 'out' ? 'e.g. bank deposit' : 'e.g. float top-up'}
             disabled={busy}
-            className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:bg-[#f6efe9]"
+            className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none disabled:bg-surface"
           />
         </label>
 
@@ -183,7 +183,7 @@ export function CashMovementForm() {
       </div>
 
       {recent.length > 0 ? (
-        <ul className="mt-4 divide-y divide-[#eee] rounded-md border border-[#e5e5e5] bg-white">
+        <ul className="mt-4 divide-y divide-[#eee] rounded-md border border-line bg-white">
           {recent.slice(0, 10).map((m) => (
             <li key={m.id} className="flex items-center justify-between gap-2 px-4 py-3 text-sm">
               <span className="text-charcoal">

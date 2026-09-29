@@ -86,7 +86,7 @@ export function PosQuickAddBar({
 
   return (
     <div className="relative mb-3">
-      <div className="flex items-center gap-2 rounded-md border border-[#e5e5e5] px-3 focus-within:border-tan">
+      <div className="flex items-center gap-2 rounded-md border border-line px-3 focus-within:border-tan">
         <span aria-hidden className="text-muted">
           ⌨
         </span>
@@ -115,7 +115,7 @@ export function PosQuickAddBar({
         <ul
           id={listboxId}
           role="listbox"
-          className="absolute z-30 mt-1 max-h-[22rem] w-full overflow-y-auto rounded-md border border-[#e5e5e5] bg-cream shadow-lg"
+          className="absolute z-30 mt-1 max-h-[22rem] w-full overflow-y-auto rounded-md border border-line bg-cream shadow-lg"
         >
           {candidates.length === 0 ? (
             <li className="px-3 py-3 text-sm text-muted">No item matches “{parsed.term}”.</li>
@@ -166,7 +166,7 @@ function QuickAddRow({
       }}
       className={
         'flex cursor-pointer items-center gap-2 px-3 py-2 text-sm ' +
-        (active ? 'bg-[#f6efe9]' : '') +
+        (active ? 'bg-surface' : '') +
         (available ? '' : ' opacity-50')
       }
     >
@@ -184,7 +184,7 @@ function QuickAddRow({
       <span className="min-w-0 flex-1 truncate font-bold text-charcoal">{item.name}</span>
       <span className="hidden shrink-0 text-xs text-muted sm:inline">{item.category}</span>
       {item.short_code ? (
-        <span className="shrink-0 rounded border border-[#e5e5e5] px-1 font-mono text-[10px] font-bold uppercase text-muted">
+        <span className="shrink-0 rounded border border-line px-1 font-mono text-[10px] font-bold uppercase text-muted">
           {item.short_code}
         </span>
       ) : null}

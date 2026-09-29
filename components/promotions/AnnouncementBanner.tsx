@@ -65,7 +65,7 @@ export function AnnouncementBanner() {
       {visible.map((a) => (
         <div
           key={a.id}
-          className="mx-auto flex w-full max-w-4xl items-start gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 shadow-sm"
+          className="mx-auto flex w-full max-w-4xl items-start gap-3 rounded-md border border-tan bg-surface px-4 py-3 shadow-sm"
         >
           {a.image_url ? (
             // eslint-disable-next-line @next/next/no-img-element

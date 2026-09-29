@@ -365,10 +365,13 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         </div>
 
         <input
+          type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search orders"
           placeholder="Search order #, name, phone, or pickup code…"
-          className="mb-4 w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-sm sm:max-w-sm"
+          autoComplete="off"
+          className="mb-4 min-h-[44px] w-full rounded-md border border-line px-3 py-2 text-base outline-none focus:border-tan sm:max-w-sm sm:text-sm"
         />
 
         <NewOrderAlert count={newOrderIds.size} soundReady={shell.soundOn && shell.soundReady} />
@@ -384,7 +387,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
                   key={o.id}
                   type="button"
                   onClick={() => openDetail(o)}
-                  className="rounded-md border border-red-300 bg-cream px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-100"
+                  className="min-h-[40px] rounded-md border border-red-300 bg-cream px-3 font-mono text-xs font-bold tabular-nums text-red-700 hover:bg-red-100"
                 >
                   #{formatOrderNumber(o.order_number)} · ₹{o.total_inr ?? o.subtotal_inr}
                 </button>
@@ -411,7 +414,11 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
       </div>
 
       {toast ? (
-        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md bg-charcoal px-4 py-2 text-sm text-cream shadow-lg">
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 animate-fade-in rounded-md bg-charcoal px-4 py-2 text-sm text-cream shadow-lg"
+        >
           {toast}
         </div>
       ) : null}

@@ -114,7 +114,7 @@ export function AttendanceSettingsPanel() {
   const configured = settings.store_lat !== null && settings.store_lng !== null;
 
   return (
-    <section className="rounded-md border border-[#e5e5e5] bg-white p-5">
+    <section className="rounded-md border border-line bg-white p-5">
       <h2 className="text-lg font-bold text-charcoal">Attendance &amp; geofence</h2>
       <p className="mt-1 text-sm text-muted">
         Staff can only clock in when their phone reports them inside this circle. Nothing here
@@ -170,7 +170,7 @@ export function AttendanceSettingsPanel() {
           desk, which is how most people will actually do it. An embedded
           interactive map would need a Google API key and billing for no extra
           precision, so we take the coordinates Maps already gives you. */}
-      <div className="mt-4 rounded-md border border-[#e5e5e5] p-3">
+      <div className="mt-4 rounded-md border border-line p-3">
         <label className="block text-sm">
           <span className="font-bold text-charcoal">…or paste from Google Maps</span>
           <div className="mt-1 flex flex-wrap gap-2">
@@ -212,7 +212,7 @@ export function AttendanceSettingsPanel() {
       </div>
 
       {measured ? (
-        <div className="mt-3 rounded-md border border-[#e5e5e5] bg-[#faf7f4] p-3 text-sm">
+        <div className="mt-3 rounded-md border border-line bg-[#faf7f4] p-3 text-sm">
           <p className="font-mono text-charcoal">
             {measured.lat.toFixed(6)}, {measured.lng.toFixed(6)}
           </p>
@@ -258,7 +258,7 @@ export function AttendanceSettingsPanel() {
       {/* NET-1 — the cafe's network. Sits with the geofence because the two are
           one question asked twice ("is this person actually here?") and are
           tuned in the same on-site sitting. */}
-      <div className="mt-8 border-t border-[#e5e5e5] pt-6">
+      <div className="mt-8 border-t border-line pt-6">
         <h3 className="text-base font-bold text-charcoal">Cafe network</h3>
         <p className="mt-1 text-sm text-muted">
           Punches made off your cafe&apos;s internet connection get flagged on the attendance
@@ -273,7 +273,7 @@ export function AttendanceSettingsPanel() {
         </p>
 
         {yourIp ? (
-          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-[#e5e5e5] bg-[#faf7f4] p-3 text-sm">
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-line bg-[#faf7f4] p-3 text-sm">
             <span className="text-muted">This device is connecting from</span>
             <span className="font-mono font-bold text-charcoal">{yourIp}</span>
             {(settings.store_networks ?? []).includes(yourIp) ? (
@@ -304,7 +304,7 @@ export function AttendanceSettingsPanel() {
             {(settings.store_networks ?? []).map((entry) => (
               <li
                 key={entry}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[#e5e5e5] px-3 py-2 text-sm"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-line px-3 py-2 text-sm"
               >
                 <span className="font-mono text-charcoal">{entry}</span>
                 <button
@@ -357,7 +357,7 @@ export function AttendanceSettingsPanel() {
       {/* OPS5-1b — the payroll rules. Separated by a rule from the geofence
           because the two get tuned at completely different moments: the fence
           on site with a phone, these once, at a desk. */}
-      <div className="mt-8 border-t border-[#e5e5e5] pt-6">
+      <div className="mt-8 border-t border-line pt-6">
         <h3 className="text-base font-bold text-charcoal">Pay rules</h3>
         <p className="mt-1 text-sm text-muted">
           How hours turn into pay. Defaults are sensible — change them only where your cafe
@@ -459,7 +459,7 @@ export function AttendanceSettingsPanel() {
           (docs/PHASE-5-CASH-COUNTS.md). Sits after pay rules because a
           shortage this produces eventually shows up as a payroll deduction —
           same "tuned once, at a desk" rhythm as the section above. */}
-      <div className="mt-8 border-t border-[#e5e5e5] pt-6">
+      <div className="mt-8 border-t border-line pt-6">
         <h3 className="text-base font-bold text-charcoal">Cash counts</h3>
         {settings.cash_count_required === undefined || settings.cash_count_tolerance_inr === undefined ? (
           <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
@@ -474,7 +474,7 @@ export function AttendanceSettingsPanel() {
               sent to you to approve, waive, or reassign to someone else — approving deducts it
               from that person&apos;s next payroll run.
             </p>
-            <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-[#e5e5e5] p-3">
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-line p-3">
               <span>
                 <span className="block text-sm font-bold text-charcoal">
                   Require a cash count at clock-in and clock-out

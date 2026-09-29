@@ -70,7 +70,7 @@ export function SettingsOverview({ device }: { device: { name: string } | null }
           <li key={card.href}>
             <Link
               href={card.href}
-              className="block min-h-[44px] rounded-md border border-[#e5e5e5] bg-white p-4 transition-colors hover:border-tan"
+              className="block min-h-[44px] rounded-md border border-line bg-white p-4 transition-colors hover:border-tan"
             >
               <h2 className="text-base font-bold text-charcoal">{card.title}</h2>
               <p className="mt-1 text-sm text-muted">{card.summary}</p>

@@ -15,7 +15,7 @@ import { MENU_CATEGORIES } from '@/lib/constants';
 import { isHiddenSize, isSizeOffEverywhere, sizeLabels, toggleSizeEntry } from '@/lib/menu/menuSwitches';
 import type { AddonGroup, MenuItem, StoreSettings } from '@/lib/types';
 
-const CARD = 'rounded-md border border-[#e5e5e5] bg-white p-4';
+const CARD = 'rounded-md border border-line bg-white p-4';
 
 const categoryLabel = (slug: string) => MENU_CATEGORIES.find((c) => c.slug === slug)?.label ?? slug;
 

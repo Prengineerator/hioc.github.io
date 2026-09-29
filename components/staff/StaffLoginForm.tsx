@@ -121,7 +121,7 @@ function StaffLoginFormInner() {
 
   return (
     <div className="flex min-h-screen items-start justify-center bg-[#faf7f4] px-4">
-      <div className="mt-24 w-full max-w-sm rounded-md border border-[#e5e5e5] bg-cream p-8 shadow-sm">
+      <div className="mt-24 w-full max-w-sm rounded-md border border-line bg-cream p-8 shadow-sm">
         <div className="mb-6 text-center">
           <Image
             src="/images/logo-black.png"
@@ -144,7 +144,7 @@ function StaffLoginFormInner() {
         {error ? (
           <div
             role="alert"
-            className="mb-4 rounded-md border border-tan bg-[#f6efe9] px-4 py-3 text-sm text-charcoal"
+            className="mb-4 rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
           >
             {error}
           </div>
@@ -164,7 +164,7 @@ function StaffLoginFormInner() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="ayush or ayush@hioc.in"
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
           </div>
           <div>
@@ -177,7 +177,7 @@ function StaffLoginFormInner() {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
           </div>
           <button
@@ -203,7 +203,7 @@ function StaffLoginFormInner() {
         </div>
 
         {showForgot ? (
-          <form onSubmit={handleForgotSubmit} className="mt-4 flex flex-col gap-3 border-t border-[#e5e5e5] pt-4">
+          <form onSubmit={handleForgotSubmit} className="mt-4 flex flex-col gap-3 border-t border-line pt-4">
             {forgotMessage ? (
               <p role="status" className="text-sm text-charcoal">
                 {forgotMessage}
@@ -223,13 +223,13 @@ function StaffLoginFormInner() {
                     value={forgotLoginId}
                     onChange={(e) => setForgotLoginId(e.target.value)}
                     placeholder="ayush or ayush@hioc.in"
-                    className="w-full rounded-md border border-[#e5e5e5] px-3 py-2 text-charcoal outline-none focus:border-tan"
+                    className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                   />
                 </div>
                 <button
                   type="submit"
                   disabled={forgotSubmitting}
-                  className="w-full rounded-md border border-tan px-4 py-2 font-bold text-tan transition-colors hover:bg-[#f6efe9] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="w-full rounded-md border border-tan px-4 py-2 font-bold text-tan transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {forgotSubmitting ? 'Sending…' : 'Send reset link'}
                 </button>

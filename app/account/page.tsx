@@ -83,7 +83,7 @@ export default function AccountHomePage() {
       </div>
 
       {activeOrder ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-tan bg-[#f6efe9] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-tan bg-surface px-4 py-3">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-wide text-tan">
               {ORDER_STATUS_LABEL[activeOrder.status]}
@@ -117,7 +117,7 @@ export default function AccountHomePage() {
               <li key={order.id}>
                 <Link
                   href={`/order/${order.id}`}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#e5e5e5] bg-cream p-3 shadow-sm transition-colors hover:border-tan"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-cream p-3 shadow-sm transition-colors hover:border-tan"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-sm font-mono font-bold tabular-nums text-charcoal">
@@ -153,7 +153,7 @@ export default function AccountHomePage() {
           <Link
             key={s.href}
             href={s.href}
-            className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm transition-colors hover:border-tan"
+            className="rounded-md border border-line bg-cream p-5 shadow-sm transition-colors hover:border-tan"
           >
             <h2 className="font-semibold text-charcoal">{s.title}</h2>
             <p className="mt-1 text-sm text-muted">{s.body}</p>

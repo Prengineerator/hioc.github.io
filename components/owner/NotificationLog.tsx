@@ -150,7 +150,7 @@ export function NotificationLog() {
             key={h.channel}
             className={
               'rounded-md border px-4 py-3 ' +
-              (h.configured ? 'border-[#e5e5e5] bg-cream' : 'border-red-200 bg-red-50')
+              (h.configured ? 'border-line bg-cream' : 'border-red-200 bg-red-50')
             }
           >
             <p className="flex items-center gap-2 text-sm font-bold capitalize text-charcoal">
@@ -178,7 +178,7 @@ export function NotificationLog() {
       {/* WA-3 — "is it working right now?" without a deploy, a script, or a
           customer guinea pig. The real bill template, the real engine, sample
           data marked TEST. */}
-      <form onSubmit={testSend} className="rounded-md border border-[#e5e5e5] bg-cream px-4 py-3">
+      <form onSubmit={testSend} className="rounded-md border border-line bg-cream px-4 py-3">
         <p className="text-sm font-bold text-charcoal">Send a test bill</p>
         <p className="mt-0.5 text-xs text-muted">
           Sends the real bill message to a number you choose, through the same path a customer&apos;s bill
@@ -241,7 +241,7 @@ export function NotificationLog() {
               'rounded-md border px-3 py-2.5 text-sm font-bold transition-colors ' +
               (filter === f.key
                 ? 'border-tan bg-tan text-cream'
-                : 'border-[#e5e5e5] text-charcoal hover:border-tan')
+                : 'border-line text-charcoal hover:border-tan')
             }
           >
             {f.label}
@@ -313,7 +313,7 @@ export function NotificationLog() {
                     type="button"
                     onClick={() => resend(row)}
                     disabled={resendingId === row.id}
-                    className="rounded-md border border-[#e5e5e5] px-2 py-1 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
+                    className="rounded-md border border-line px-2 py-1 text-xs font-bold text-charcoal hover:border-tan hover:text-tan disabled:opacity-50"
                   >
                     {resendingId === row.id ? '…' : 'Resend'}
                   </button>
@@ -336,7 +336,7 @@ const STATUS_TONES: Record<string, string> = {
   delivered: 'bg-green-50 text-green-800',
   sent: 'bg-amber-50 text-amber-900',
   failed: 'bg-red-50 text-red-800',
-  skipped: 'bg-[#f6efe9] text-tan-dark',
+  skipped: 'bg-surface text-tan-dark',
 };
 
 function StatusPill({ status }: { status: string }) {

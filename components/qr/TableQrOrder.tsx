@@ -19,12 +19,14 @@ const DEFAULT_CATEGORY = CUSTOMER_MENU_CATEGORIES[0].slug;
 // Mirrors the /menu grid skeleton so the first paint doesn't jump.
 function MenuGridSkeleton() {
   return (
-    <div aria-hidden="true" className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+    <div aria-hidden="true" className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
       {Array.from({ length: 4 }).map((_, i) => (
-        <div key={i} className="rounded-md border border-line bg-cream p-4 shadow-card">
-          <Skeleton className="mb-3 aspect-[4/3] w-full" />
-          <Skeleton className="mb-2 h-4 w-2/3" />
-          <Skeleton className="h-4 w-1/3" />
+        <div key={i} className="flex gap-3 rounded-md border border-line bg-cream p-4 shadow-card sm:flex-col sm:gap-0">
+          <Skeleton className="order-last h-24 w-24 shrink-0 sm:order-none sm:mb-3 sm:aspect-[4/3] sm:h-auto sm:w-full" />
+          <div className="flex-1">
+            <Skeleton className="mb-2 h-4 w-2/3" />
+            <Skeleton className="h-4 w-1/3" />
+          </div>
         </div>
       ))}
     </div>
@@ -53,7 +55,15 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
   const [category, setCategory] = useState<string>(DEFAULT_CATEGORY);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'menu' | 'checkout'>('menu');
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [view, setViewState] = useState<'menu' | 'checkout'>('menu');
+  // Both views live on one URL, so switching doesn't reset scroll — without
+  // this the checkout opened wherever the menu had been scrolled to (often
+  // below its own fold, hiding the table badge and the first fields).
+  const setView = useCallback((next: 'menu' | 'checkout') => {
+    setViewState(next);
+    window.scrollTo({ top: 0 });
+  }, []);
 
   // Categories switched off for now have no tab; never sit on one.
   const hiddenCategories = useMemo(() => settings?.hidden_categories ?? [], [settings]);
@@ -68,13 +78,14 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
     // includeUnavailable=true (C3): 86'd items render greyed-out rather than
     // vanishing — same behavior as the web /menu.
     fetch(`/api/menu?category=${encodeURIComponent(category)}&includeUnavailable=true`)
-      .then((res) => res.json())
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((data: { items?: MenuItem[] }) => {
         if (cancelled) return;
         setItems(data.items ?? []);
+        setLoadFailed(false);
       })
       .catch(() => {
-        if (!cancelled) setItems([]);
+        if (!cancelled) setLoadFailed(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -120,15 +131,36 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
 
         <StoreStatusBanner openState={openState} />
 
-        <MenuCategoryTabs active={category} onChange={setCategory} hidden={hiddenCategories} />
+        {/* Sticky under the site header, same as /menu. */}
+        <div className="sticky top-[68px] z-30 -mx-4 border-b border-line bg-cream/95 px-4 pb-2 pt-3 backdrop-blur">
+          <MenuCategoryTabs active={category} onChange={setCategory} hidden={hiddenCategories} />
+        </div>
 
         <div className="mt-6">
           {loading ? (
             <MenuGridSkeleton />
+          ) : loadFailed ? (
+            <EmptyState
+              icon="⚠️"
+              heading="Couldn't load the menu"
+              body="Check your connection and try again."
+              action={
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoading(true);
+                    fetchItems();
+                  }}
+                  className="inline-flex min-h-[44px] items-center rounded-md bg-tan px-4 text-sm font-semibold text-cream hover:bg-tan-dark"
+                >
+                  Try again
+                </button>
+              }
+            />
           ) : items.length === 0 ? (
             <EmptyState heading="Nothing here yet" body="No items in this category yet" />
           ) : (
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
               {items.map((item) => (
                 <MenuItemCard key={item.id} item={item} />
               ))}
@@ -139,15 +171,24 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
 
       {/* Review-order bar → the QR checkout view (stays on /t/<token>, keeping
           the table context; never navigates to the web /checkout flow). */}
+      {/* Same shape as FloatingCartBar: full-width and safe-area aware on a
+          phone (which is every QR scan), a floating pill from sm up. */}
       {totalItems > 0 ? (
-        <button
-          type="button"
-          onClick={() => setView('checkout')}
-          className="fixed bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-full bg-charcoal px-6 py-3 font-semibold text-cream shadow-sm transition-transform hover:scale-105"
-        >
-          Review order ({totalItems} item{totalItems === 1 ? '' : 's'} ·{' '}
-          <span className="font-mono tabular-nums">₹{totalPrice}</span>)
-        </button>
+        <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:inset-x-auto sm:bottom-6 sm:left-1/2 sm:-translate-x-1/2 sm:p-0">
+          <button
+            type="button"
+            onClick={() => setView('checkout')}
+            className="pointer-events-auto flex min-h-[52px] w-full animate-scale-in items-center justify-between gap-4 rounded-full bg-charcoal px-5 py-3 font-semibold text-cream shadow-elevated transition-transform hover:scale-[1.02] sm:w-auto"
+          >
+            <span>
+              {totalItems} item{totalItems === 1 ? '' : 's'} ·{' '}
+              <span className="font-mono tabular-nums">₹{totalPrice}</span>
+            </span>
+            <span className="flex items-center gap-1">
+              Review order <span aria-hidden="true">→</span>
+            </span>
+          </button>
+        </div>
       ) : null}
     </>
   );

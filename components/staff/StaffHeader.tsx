@@ -159,7 +159,7 @@ export function StaffHeader({
       title="Store status: tap to change"
       className={
         'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-bold transition-opacity hover:opacity-80 ' +
-        (openState.acceptingOrders ? 'bg-[#e8f3ea] text-[#2f6b38]' : 'bg-[#f6efe9] text-tan-dark')
+        (openState.acceptingOrders ? 'bg-[#e8f3ea] text-[#2f6b38]' : 'bg-surface text-tan-dark')
       }
     >
       <span
@@ -247,7 +247,7 @@ export function StaffHeader({
                     href={tab.href}
                     aria-current={active(tab) ? 'page' : undefined}
                     className={
-                      'flex items-center whitespace-nowrap rounded-md px-3 py-2 font-bold transition-colors ' +
+                      'flex min-h-[40px] items-center whitespace-nowrap rounded-md px-3 font-bold transition-colors ' +
                       (active(tab) ? 'bg-cream/10 text-tan' : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
                     }
                   >
@@ -264,7 +264,7 @@ export function StaffHeader({
                       aria-expanded={moreOpen}
                       aria-haspopup="menu"
                       className={
-                        'flex items-center gap-1 whitespace-nowrap rounded-md px-3 py-2 font-bold transition-colors ' +
+                        'flex min-h-[40px] items-center gap-1 whitespace-nowrap rounded-md px-3 font-bold transition-colors ' +
                         (moreActive ? 'bg-cream/10 text-tan' : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
                       }
                     >
@@ -356,7 +356,7 @@ export function StaffHeader({
                       type="button"
                       role="menuitem"
                       onClick={pinControls.onLock}
-                      className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+                      className="min-h-[44px] rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
                     >
                       {pinControls.label}
                     </button>
@@ -365,7 +365,7 @@ export function StaffHeader({
                     type="button"
                     role="menuitem"
                     onClick={handleLogout}
-                    className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+                    className="min-h-[44px] rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
                   >
                     {logoutLabel}
                   </button>
@@ -401,7 +401,7 @@ export function StaffHeader({
                     href={tab.href}
                     aria-current={active(tab) ? 'page' : undefined}
                     className={
-                      'flex items-center rounded-md px-3 py-2.5 font-bold transition-colors ' +
+                      'flex min-h-[44px] items-center rounded-md px-3 font-bold transition-colors ' +
                       (active(tab) ? 'bg-cream/10 text-tan' : 'text-cream/80 hover:bg-cream/5 hover:text-cream')
                     }
                   >
@@ -427,7 +427,7 @@ export function StaffHeader({
                   <button
                     type="button"
                     onClick={pinControls.onLock}
-                    className="rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
+                    className="min-h-[44px] rounded-md border border-tan/60 px-4 py-2 text-sm font-bold text-tan transition-colors hover:bg-tan hover:text-charcoal"
                   >
                     {pinControls.label}
                   </button>
@@ -435,7 +435,7 @@ export function StaffHeader({
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
+                  className="min-h-[44px] rounded-md border border-cream/40 px-4 py-2 text-sm text-cream transition-colors hover:bg-cream hover:text-charcoal"
                 >
                   {logoutLabel}
                 </button>

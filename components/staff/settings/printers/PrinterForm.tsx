@@ -47,7 +47,7 @@ export function PrinterForm({
           value={draft.name}
           onChange={(e) => onChange((d) => ({ ...d, name: e.target.value }))}
           placeholder="e.g. Kitchen"
-          className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+          className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
         />
       </label>
 
@@ -60,7 +60,7 @@ export function PrinterForm({
               type="button"
               onClick={() => onChange((d) => ({ ...d, connKind: kind }))}
               className={`min-h-[44px] rounded-md border px-3 py-2 text-xs font-bold transition-colors ${
-                draft.connKind === kind ? 'border-charcoal bg-charcoal text-cream' : 'border-[#e5e5e5] text-charcoal'
+                draft.connKind === kind ? 'border-charcoal bg-charcoal text-cream' : 'border-line text-charcoal'
               }`}
             >
               {kind === 'network' ? 'Network' : kind === 'usb' ? 'USB' : 'Installed printer'}
@@ -77,7 +77,7 @@ export function PrinterForm({
               value={draft.networkHost}
               onChange={(e) => onChange((d) => ({ ...d, networkHost: e.target.value }))}
               placeholder="192.168.1.50"
-              className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+              className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
             />
           </label>
           <label className="text-sm">
@@ -86,7 +86,7 @@ export function PrinterForm({
               value={draft.networkPort}
               onChange={(e) => onChange((d) => ({ ...d, networkPort: e.target.value }))}
               inputMode="numeric"
-              className="mt-1 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+              className="mt-1 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
             />
           </label>
         </div>
@@ -100,7 +100,7 @@ export function PrinterForm({
               type="button"
               onClick={onRunDetect}
               disabled={detecting}
-              className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1 text-xs font-bold text-charcoal hover:border-tan disabled:opacity-50"
+              className="min-h-[36px] rounded-md border border-line px-3 py-1 text-xs font-bold text-charcoal hover:border-tan disabled:opacity-50"
             >
               {detecting ? 'Scanning…' : 'Scan for printers'}
             </button>
@@ -118,7 +118,7 @@ export function PrinterForm({
                 );
                 onChange((d) => ({ ...d, usb: match ? match.connection : null }));
               }}
-              className="mt-2 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+              className="mt-2 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
             >
               <option value="">Choose a device…</option>
               {detectedUsb.map((d) => (
@@ -142,7 +142,7 @@ export function PrinterForm({
               type="button"
               onClick={onRunDetect}
               disabled={detecting}
-              className="min-h-[36px] rounded-md border border-[#e5e5e5] px-3 py-1 text-xs font-bold text-charcoal hover:border-tan disabled:opacity-50"
+              className="min-h-[36px] rounded-md border border-line px-3 py-1 text-xs font-bold text-charcoal hover:border-tan disabled:opacity-50"
             >
               {detecting ? 'Scanning…' : 'Scan for printers'}
             </button>
@@ -153,7 +153,7 @@ export function PrinterForm({
             <select
               value={draft.systemDeviceName}
               onChange={(e) => onChange((d) => ({ ...d, systemDeviceName: e.target.value }))}
-              className="mt-2 min-h-[44px] w-full rounded-md border border-[#e5e5e5] px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
+              className="mt-2 min-h-[44px] w-full rounded-md border border-line px-3 py-2.5 text-sm focus:border-tan focus:outline-none"
             >
               <option value="">Choose a printer…</option>
               {detectedSystem.map((d) => (
@@ -170,7 +170,7 @@ export function PrinterForm({
                 type="button"
                 onClick={() => onChange((d) => ({ ...d, systemMode: mode }))}
                 className={`min-h-[44px] rounded-md border px-3 py-2 text-xs font-bold transition-colors ${
-                  draft.systemMode === mode ? 'border-charcoal bg-charcoal text-cream' : 'border-[#e5e5e5] text-charcoal'
+                  draft.systemMode === mode ? 'border-charcoal bg-charcoal text-cream' : 'border-line text-charcoal'
                 }`}
               >
                 {mode === 'raw' ? 'Raw' : 'Driver'}
@@ -194,7 +194,7 @@ export function PrinterForm({
               type="button"
               onClick={() => onChange((d) => ({ ...d, paperWidthMm: w }))}
               className={`min-h-[44px] rounded-md border px-3 py-2 text-xs font-bold transition-colors ${
-                draft.paperWidthMm === w ? 'border-charcoal bg-charcoal text-cream' : 'border-[#e5e5e5] text-charcoal'
+                draft.paperWidthMm === w ? 'border-charcoal bg-charcoal text-cream' : 'border-line text-charcoal'
               }`}
             >
               {w}mm
@@ -215,7 +215,7 @@ export function PrinterForm({
         <button
           type="button"
           onClick={onCancel}
-          className="min-h-[44px] rounded-md border border-[#e5e5e5] px-4 py-2 text-sm font-bold text-charcoal hover:border-tan"
+          className="min-h-[44px] rounded-md border border-line px-4 py-2 text-sm font-bold text-charcoal hover:border-tan"
         >
           Cancel
         </button>

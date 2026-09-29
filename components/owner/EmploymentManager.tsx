@@ -61,7 +61,7 @@ export function EmploymentManager() {
   if (loading) return <p className="text-sm text-muted">Loading salary records…</p>;
 
   return (
-    <section className="rounded-md border border-[#e5e5e5] bg-white p-5">
+    <section className="rounded-md border border-line bg-white p-5">
       <h2 className="text-lg font-bold text-charcoal">Salary &amp; shifts</h2>
       <p className="mt-1 text-sm text-muted">
         Used to work out pay from hours actually worked, and to know when a shift should have
@@ -173,7 +173,7 @@ function EmploymentForm({
   }
 
   return (
-    <div className="mt-3 rounded-md border border-[#e5e5e5] bg-[#faf7f4] p-4">
+    <div className="mt-3 rounded-md border border-line bg-[#faf7f4] p-4">
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label="Monthly salary (₹)">
           <input

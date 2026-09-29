@@ -70,21 +70,21 @@ export function PosCustomizeModal({
 
   const footer = (
     <div className="flex items-center gap-3">
-      <div className="flex items-center gap-3 rounded-md border border-line px-3 py-1">
+      <div className="flex items-center gap-3 rounded-md border border-line p-0.5">
         <button
           type="button"
           aria-label="Decrease quantity"
           onClick={() => setQty((q) => Math.max(1, q - 1))}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-charcoal text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-charcoal text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
         >
           &minus;
         </button>
-        <span className="min-w-[1.5rem] text-center font-bold text-charcoal">{qty}</span>
+        <span className="min-w-[1.5rem] text-center font-mono font-bold tabular-nums text-charcoal">{qty}</span>
         <button
           type="button"
           aria-label="Increase quantity"
           onClick={() => setQty((q) => q + 1)}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-tan text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-tan text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
         >
           +
         </button>

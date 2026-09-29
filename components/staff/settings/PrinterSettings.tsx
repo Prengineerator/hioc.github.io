@@ -140,7 +140,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <details open className="mt-6 rounded-md border border-[#e5e5e5] bg-white p-4">
+    <details open className="mt-6 rounded-md border border-line bg-white p-4">
       <summary className="cursor-pointer list-none">
         <h2 id={id} className="inline text-lg font-bold text-charcoal">
           {title}

@@ -1,7 +1,10 @@
 'use client';
 
+import { useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
+import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
 import { computeBill } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 
@@ -18,30 +21,54 @@ export function CartDrawer({
   settings?: StoreSettings | null;
   checkoutDisabledReason?: string | null;
 }) {
-  const { items, totalPrice, increment, decrement, removeItem } = useCart();
+  const { items, totalPrice, totalItems, increment, decrement, removeItem } = useCart();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  // Same Escape / scroll-lock / focus-trap / focus-restore behaviour as every
+  // Modal — the drawer used to be a bare overlay a keyboard or screen-reader
+  // user could tab straight out of, with the menu still scrolling behind it.
+  useDialogBehavior(open, onClose, panelRef);
 
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
   const isEmpty = items.length === 0;
   const bill = settings ? computeBill(totalPrice, settings, 0, cartTaxableSubtotal(items)) : null;
   const checkoutDisabled = isEmpty || !!checkoutDisabledReason;
 
-  return (
+  // Portalled for the same reason as Modal: a transformed ancestor would
+  // otherwise become the fixed overlay's containing block.
+  return createPortal(
     <div className="fixed inset-0 z-50">
       <button
         type="button"
         aria-label="Close cart"
+        tabIndex={-1}
         onClick={onClose}
-        className="absolute inset-0 bg-charcoal/50"
+        className="absolute inset-0 animate-fade-in bg-charcoal/50"
       />
-      <div className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col bg-cream shadow-sm">
-        <div className="flex items-center justify-between border-b border-[#e5e5e5] px-4 py-4">
-          <h2 className="text-lg font-semibold text-charcoal">Your Cart</h2>
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col bg-cream shadow-elevated outline-none"
+      >
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <h2 id={titleId} className="text-lg font-semibold text-charcoal">
+            Your Cart
+            {totalItems > 0 ? (
+              <span className="ml-2 text-sm font-normal text-muted">
+                {totalItems} item{totalItems === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </h2>
           <button
             type="button"
             aria-label="Close cart"
+            data-dialog-close
             onClick={onClose}
-            className="text-2xl leading-none text-charcoal hover:text-tan"
+            className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full text-2xl leading-none text-charcoal transition-colors hover:bg-surface hover:text-tan"
           >
             &times;
           </button>
@@ -49,15 +76,25 @@ export function CartDrawer({
 
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {isEmpty ? (
-            <p className="py-8 text-center text-sm text-muted">
-              Your cart is empty. Add something delicious from the menu!
-            </p>
+            <div className="flex flex-col items-center gap-3 py-12 text-center">
+              <span aria-hidden="true" className="text-3xl">
+                ☕
+              </span>
+              <p className="text-sm text-muted">Your cart is empty. Add something delicious from the menu!</p>
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex min-h-[44px] items-center rounded-md border border-line px-4 text-sm font-semibold text-charcoal transition-colors hover:border-tan"
+              >
+                Browse the menu
+              </button>
+            </div>
           ) : (
             <ul className="flex flex-col gap-4">
               {items.map((item) => (
                 <li
                   key={item.key}
-                  className="flex flex-col gap-2 border-b border-[#e5e5e5] pb-4"
+                  className="flex flex-col gap-2 border-b border-line pb-4"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -82,29 +119,34 @@ export function CartDrawer({
                       type="button"
                       aria-label={`Remove ${item.name} from cart`}
                       onClick={() => removeItem(item.key)}
-                      className="shrink-0 text-sm text-muted hover:text-charcoal"
+                      className="-mr-2 -mt-2 inline-flex min-h-[44px] shrink-0 items-center px-2 text-sm text-muted underline-offset-2 hover:text-charcoal hover:underline"
                     >
                       Remove
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 rounded-md border border-[#e5e5e5] px-3 py-1">
+                    {/* 36px steppers inside a 44px-tall pill — the old 20px dots
+                        were the smallest tap targets on the whole customer site. */}
+                    <div className="flex items-center gap-2 rounded-full border border-line p-1">
                       <button
                         type="button"
-                        aria-label="Decrease quantity"
+                        aria-label={item.qty === 1 ? `Remove ${item.name}` : `Decrease ${item.name} quantity`}
                         onClick={() => decrement(item.key)}
-                        className="flex h-5 w-5 items-center justify-center rounded-full bg-charcoal text-xs text-cream"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-charcoal text-base text-cream transition-opacity hover:opacity-90"
                       >
                         &minus;
                       </button>
-                      <span className="min-w-[1.25rem] text-center text-sm font-mono font-semibold tabular-nums text-charcoal">
+                      <span
+                        aria-live="polite"
+                        className="min-w-[1.5rem] text-center font-mono font-semibold tabular-nums text-charcoal"
+                      >
                         {item.qty}
                       </span>
                       <button
                         type="button"
-                        aria-label="Increase quantity"
+                        aria-label={`Increase ${item.name} quantity`}
                         onClick={() => increment(item.key)}
-                        className="flex h-5 w-5 items-center justify-center rounded-full bg-tan text-xs text-cream"
+                        className="flex h-9 w-9 items-center justify-center rounded-full bg-tan text-base text-cream transition-colors hover:bg-tan-dark"
                       >
                         +
                       </button>
@@ -122,7 +164,7 @@ export function CartDrawer({
           )}
         </div>
 
-        <div className="border-t border-[#e5e5e5] px-4 py-4">
+        <div className="border-t border-line px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4">
           <div className="mb-4 flex flex-col gap-1 text-sm text-charcoal">
             <div className="flex items-center justify-between">
               <span>Subtotal</span>
@@ -154,7 +196,7 @@ export function CartDrawer({
             className={
               'block w-full rounded-md px-4 py-3 text-center font-semibold transition-colors ' +
               (checkoutDisabled
-                ? 'cursor-not-allowed bg-[#e5e5e5] text-muted'
+                ? 'cursor-not-allowed bg-line text-muted'
                 : 'bg-tan text-cream hover:bg-tan-dark')
             }
           >
@@ -162,6 +204,7 @@ export function CartDrawer({
           </Link>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

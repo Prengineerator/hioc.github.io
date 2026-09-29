@@ -140,7 +140,7 @@ export default async function OwnerPaymentsPage() {
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm">
+    <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
       <p className="text-xs uppercase tracking-wide text-muted">{label}</p>
       <p className="mt-1 text-2xl font-bold text-charcoal">{value}</p>
       {sub ? <p className="text-xs text-muted">{sub}</p> : null}

@@ -75,13 +75,17 @@ export function OrderCard({
         }
       }}
       className={
-        'flex cursor-pointer flex-col gap-2 rounded-md border border-[#e5e5e5] bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
+        'flex cursor-pointer flex-col gap-2 rounded-md border border-line bg-cream p-4 shadow-sm transition hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
         (isReady ? 'border-l-4 border-l-tan' : '')
       }
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</span>
+          {/* Read at arm's length off a counter tablet — the number is what
+              staff call out and customers match, so it's the biggest thing. */}
+          <span className="font-mono text-xl font-bold leading-none tabular-nums text-charcoal">
+            #{formatOrderNumber(order.order_number)}
+          </span>
           <span className="flex flex-wrap items-center gap-1.5">
             <PaymentBadge status={order.payment_status} />
             <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
@@ -118,13 +122,14 @@ export function OrderCard({
       <div className="text-sm text-charcoal">
         <p className="font-bold">{order.customer_name}</p>
         <p className="text-xs text-muted">
-          {itemCount} item{itemCount === 1 ? '' : 's'} · ₹{order.total_inr ?? order.subtotal_inr} · {whereLabel}
+          {itemCount} item{itemCount === 1 ? '' : 's'} ·{' '}
+          <span className="font-mono tabular-nums">₹{order.total_inr ?? order.subtotal_inr}</span> · {whereLabel}
           {hasVoid ? <span className="ml-1 font-bold text-red-600">· voided</span> : null}
         </p>
       </div>
 
       {order.items.length > 0 ? (
-        <ul className="flex flex-col gap-1 border-t border-[#e5e5e5] pt-2 text-sm text-charcoal">
+        <ul className="flex flex-col gap-1 border-t border-line pt-2 text-sm text-charcoal">
           {order.items.map((item) => (
             <li key={item.id} className={item.voided ? 'text-muted line-through' : ''}>
               <span className="font-bold">{item.quantity}×</span> {item.name_snapshot}
@@ -137,7 +142,9 @@ export function OrderCard({
                 </span>
               ) : null}
               {item.special_instructions ? (
-                <span className="block pl-4 text-xs italic text-tan">Note: {item.special_instructions}</span>
+                // A prep instruction is the line a barista must not miss: tan-dark
+                // + semibold (the old italic tan was ~3.4:1, below AA at 12px).
+                <span className="block pl-4 text-xs font-semibold text-tan-dark">Note: {item.special_instructions}</span>
               ) : null}
             </li>
           ))}
@@ -145,7 +152,7 @@ export function OrderCard({
       ) : null}
 
       {order.notes ? (
-        <p className="rounded bg-[#f6efe9] px-2 py-1 text-xs text-charcoal">
+        <p className="rounded bg-surface px-2 py-1 text-xs text-charcoal">
           <span className="font-bold">Order note:</span> {order.notes}
         </p>
       ) : null}
@@ -211,14 +218,14 @@ function CardMenu({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="flex h-11 w-11 items-center justify-center rounded-md border border-[#e5e5e5] bg-cream text-lg font-bold leading-none text-charcoal transition-colors hover:border-tan disabled:cursor-wait disabled:opacity-60"
+        className="flex h-11 w-11 items-center justify-center rounded-md border border-line bg-cream text-lg font-bold leading-none text-charcoal transition-colors hover:border-tan disabled:cursor-wait disabled:opacity-60"
       >
         ⋯
       </button>
       {open ? (
         <ul
           role="menu"
-          className="absolute right-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-[#e5e5e5] bg-cream py-1 shadow-lg"
+          className="absolute right-0 top-full z-20 mt-1 min-w-[180px] overflow-hidden rounded-md border border-line bg-cream py-1 shadow-lg"
         >
           {actions.map((a) => (
             <li key={a.key} role="none">

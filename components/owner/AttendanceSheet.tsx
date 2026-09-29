@@ -147,7 +147,7 @@ export function AttendanceSheet() {
       {data && !loading ? (
         <DataTable
           className="mt-6"
-          scrollClassName="rounded-md border border-[#e5e5e5] bg-white"
+          scrollClassName="rounded-md border border-line bg-white"
           rows={rows}
           rowKey={(row) => row.user_id}
           emptyMessage="No staff to show."
@@ -364,7 +364,7 @@ function DayPanel({
         ) : (
           <ul className="mt-2 space-y-3">
             {sessions.map((s) => (
-              <li key={s.id} className="rounded-md border border-[#e5e5e5] p-3 text-sm">
+              <li key={s.id} className="rounded-md border border-line p-3 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-charcoal">
                     {istTime(s.clock_in_at)} → {s.clock_out_at ? istTime(s.clock_out_at) : 'still open'}

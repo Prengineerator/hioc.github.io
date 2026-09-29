@@ -239,7 +239,7 @@ export function TraitsTab() {
   const noVisibleToConfirm = visibleRows.every((r) => !r.traits || r.traits.confirmed);
 
   return (
-    <div className="rounded-md border border-[#e5e5e5] bg-cream p-5 shadow-sm">
+    <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-bold uppercase tracking-wide text-muted">Menu traits</h2>
