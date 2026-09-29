@@ -3,8 +3,8 @@
 // eval-suggest — SUG-11 offline relevance eval (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md
 // §6.2). Runs every scenario in tests/fixtures/suggest-eval.json through the
 // REAL engine (lib/suggest/engine.ts) against the LIVE menu + traits, once in
-// fallback (deterministic) mode and, when ANTHROPIC_API_KEY is set AND --llm
-// is passed, once more with the real Opus decider. Prints the overall and
+// fallback (deterministic) mode and, when TYPESAFE_API_KEY is set AND --llm
+// is passed, once more with the real Jev decider. Prints the overall and
 // per-mood top-3 hit rate (at least one of the top-3 picks is in that
 // scenario's barista-labelled `goodFit` list) and the misses, and exits
 // non-zero when the number that matters is below --min (default 0.9).
@@ -20,7 +20,7 @@
 //
 // Usage:
 //   npm run eval:suggest                  fallback mode only
-//   npm run eval:suggest -- --llm         fallback + Opus (needs ANTHROPIC_API_KEY)
+//   npm run eval:suggest -- --llm         fallback + Jev (needs TYPESAFE_API_KEY)
 //   npm run eval:suggest -- --min 0.85    a different bar than the default 0.9
 // ===========================================================================
 
@@ -130,7 +130,7 @@ async function loadMenu() {
 // ---------------------------------------------------------------------------
 // A fixture scenario's `profile` is the COARSE bands a decider is allowed to
 // see (lib/suggest/types.ts ProfileSummary) — that's deliberately all the
-// spec asks a hand-written eval fixture to carry (§5.4 "what Opus sees").
+// spec asks a hand-written eval fixture to carry (§5.4 "what the decider sees").
 // The pure scorer (lib/suggest/score.ts) needs the fuller TasteProfile shape
 // though, so this expands the stub into a plausible one for scoring purposes
 // only — a labelled APPROXIMATION, not real customer data.
@@ -244,17 +244,17 @@ async function main() {
   let gateLabel = 'fallback';
 
   if (useLlm) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      process.stdout.write('\n--llm was passed but ANTHROPIC_API_KEY is not set — skipping the Opus run.\n');
+    if (!process.env.TYPESAFE_API_KEY) {
+      process.stdout.write('\n--llm was passed but TYPESAFE_API_KEY is not set — skipping the Jev run.\n');
     } else {
-      const { opusDecider } = await import('../lib/suggest/llm.ts');
-      const llmRate = await runMode('OPUS (llm)', opusDecider, menuData, now);
-      // §6.2: "Opus must reach >=90%; the fallback's number is the floor
-      // we're protecting" — Opus is the bar this harness gates on once it has
+      const { jevDecider } = await import('../lib/suggest/jevDecider.ts');
+      const llmRate = await runMode('JEV (llm)', jevDecider, menuData, now);
+      // §6.2: "the decider must reach >=90%; the fallback's number is the floor
+      // we're protecting" — Jev is the bar this harness gates on once it has
       // actually run; fallback is reported for visibility, not required to
       // clear --min on its own.
       gateRate = llmRate;
-      gateLabel = 'Opus';
+      gateLabel = 'Jev';
     }
   }
 

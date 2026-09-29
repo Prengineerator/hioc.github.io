@@ -1,7 +1,7 @@
 // The ONE place the TypeSafe AI ("Jev") client is constructed (playbook S-1,
 // extended to Jev: TYPESAFE_API_KEY is read only in a 'server-only' module
 // and never reaches a client bundle — docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md
-// §9 S-7). Mirrors lib/suggest/anthropic.ts's shape exactly.
+// §9 S-7).
 //
 // retry: { maxRetries: 0 } is the CLIENT default on purpose: the decider path
 // (lib/suggest/jevDecider.ts) owns its own deterministic fallback and a hard

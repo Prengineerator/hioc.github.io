@@ -245,7 +245,7 @@ export interface DeciderResult {
 }
 
 // The injectable seam: engine.ts takes one of these so tests never hit the
-// network. lib/suggest/llm.ts provides the real (Opus) implementation.
+// network. lib/suggest/jevDecider.ts provides the real (Jev) implementation.
 export type Decider = (args: {
   inputs: SuggestInputs;
   shortlist: Candidate[];

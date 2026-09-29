@@ -1,8 +1,8 @@
 // Phase 7 · SUG-4 — the Jev decision (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md
 // §1, §5.4): TypeSafe AI's "Jev" is a decision-only "System One" model — it
 // answers structured questions about a `state` (a `choice`/`score`/`noul`
-// question, never prose) and can't write text. So unlike opusDecider /
-// geminiDecider, this decider never asks for a written reason or header: it
+// question, never prose) and can't write text. So this decider never asks
+// for a written reason or header: it
 // asks Jev ONE `choice` question — "which one item would you recommend
 // first?" — over the shortlist, then ranks every candidate by
 // `answers.best.probabilities` and takes the top 3. Every reason is written
@@ -12,9 +12,9 @@
 //
 // 'server-only' — this is where TYPESAFE_API_KEY-backed calls happen
 // (playbook S-1/S-7). Every failure mode throws a DeciderError with a `kind`
-// the engine can map 1:1 onto a FallbackReason, exactly like
-// lib/suggest/llm.ts's Opus/Gemini deciders: timeout / error / invalid_output
-// (Jev has no `refusal` concept — it always answers the question it's asked).
+// the engine can map 1:1 onto a FallbackReason: timeout / error /
+// invalid_output (Jev has no `refusal` concept — it always answers the
+// question it's asked).
 //
 // No prompt caching here (Jev has no such concept in the SDK) and no
 // system-prompt/state split to keep byte-stable — the whole `state` +
@@ -43,8 +43,7 @@ function sortedById(shortlist: Candidate[]): Candidate[] {
 }
 
 /** §5.4 "What the decider sees about a person" — the coarse ProfileSummary
- * only, or null for a guest. Same S-3 rule as opusDecider/geminiDecider: no
- * name, phone, email, order id or rupee amount ever reaches the model. */
+ * only, or null for a guest (S-3): no name, phone, email, order id or rupee amount ever reaches the model. */
 // Returns a plain object that IS JSON-compatible at runtime (every field is a
 // string/number/boolean/array/plain-object drawn from SuggestInputs/Candidate/
 // ProfileSummary) — typed loosely here and cast to EntryType at the call site
@@ -185,7 +184,7 @@ async function callJev(args: {
   };
 }
 
-/** The Jev `Decider` implementation — same `Decider` contract as
- * `opusDecider`/`geminiDecider` (lib/suggest/llm.ts), so
- * lib/suggest/engine.ts never needs to know which provider answered. */
+/** The Jev `Decider` implementation. Injected into lib/suggest/engine.ts by
+ * app/api/suggest/route.ts (via lib/suggest/llm.ts's activeDecider()); tests
+ * inject a stub instead (SUG-4 AC). */
 export const jevDecider: Decider = callJev;

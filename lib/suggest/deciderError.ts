@@ -1,7 +1,7 @@
 // Phase 7 · SUG-4 — the Decider failure vocabulary (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md
 // §5.4 "Fallback triggers"). Split out from lib/suggest/llm.ts so
 // lib/suggest/engine.ts can catch and classify a decider's failure WITHOUT
-// importing the Anthropic SDK or 'server-only' — engine.ts stays pure and
+// importing the TypeSafe SDK or 'server-only' — engine.ts stays pure and
 // network-free, which is what makes it unit-testable with an injected fake
 // Decider and no network/DB (SUG-4).
 //

@@ -73,7 +73,7 @@ export const RECENT_ORDERS_FOR_ORDERING_MOOD = 3;
 
 // Thresholds used only by summarizeProfile (below) to turn the profile's
 // continuous numbers into the coarse bands the decider model is allowed to
-// see (§5.4 "What Opus sees", playbook S-3).
+// see (§5.4 "What the decider sees", playbook S-3).
 export const ICED_LEAN_ICED_THRESHOLD = 0.65; // icedShare ≥ this → 'iced'
 export const ICED_LEAN_HOT_THRESHOLD = 0.35; // icedShare ≤ this → 'hot'; between → 'mixed'
 export const SWEET_LEAN_LOW_MAX = 1; // meanSweetness < this → 'low'
@@ -232,7 +232,7 @@ export function buildTasteProfile(args: BuildTasteProfileArgs): TasteProfile {
 
 // ---------------------------------------------------------------------------
 // summarizeProfile — the ONLY view of a customer the decider model may see
-// (§5.4 "What Opus sees", playbook S-3): coarse bands, ≤3 categories, ≤5
+// (§5.4 "What the decider sees", playbook S-3): coarse bands, ≤3 categories, ≤5
 // item ids. No name, phone, email, order ids, timestamps or rupee totals.
 // ---------------------------------------------------------------------------
 

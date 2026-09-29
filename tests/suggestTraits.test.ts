@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 // Pure — no Supabase, no 'server-only'. Validates the same rules the migration's
 // CHECK constraints enforce (SUG-2), for both the Opus batch path and the
 // owner PATCH path.
-import { validateOpusTraitRows, validateTraitContent, validateTraitPatch } from '@/lib/suggest/traitsValidate';
+import { validateModelTraitRows, validateTraitContent, validateTraitPatch } from '@/lib/suggest/traitsValidate';
 
 const VALID_ROW = {
   temperature: 'iced',
@@ -87,11 +87,11 @@ describe('validateTraitPatch', () => {
   });
 });
 
-describe('validateOpusTraitRows', () => {
+describe('validateModelTraitRows', () => {
   const allowedIds = new Set(['item-1', 'item-2']);
 
   it('keeps valid rows whose id was in the batch', () => {
-    const rows = validateOpusTraitRows(
+    const rows = validateModelTraitRows(
       [
         { menu_item_id: 'item-1', ...VALID_ROW },
         { menu_item_id: 'item-2', ...VALID_ROW, temperature: 'hot' },
@@ -104,17 +104,17 @@ describe('validateOpusTraitRows', () => {
   });
 
   it('drops a row whose id was never in the batch — never trusts an invented id', () => {
-    const rows = validateOpusTraitRows([{ menu_item_id: 'item-999', ...VALID_ROW }], allowedIds);
+    const rows = validateModelTraitRows([{ menu_item_id: 'item-999', ...VALID_ROW }], allowedIds);
     expect(rows).toEqual([]);
   });
 
   it('drops a row with invalid content even if the id is in the batch', () => {
-    const rows = validateOpusTraitRows([{ menu_item_id: 'item-1', ...VALID_ROW, kind: 'beverage' }], allowedIds);
+    const rows = validateModelTraitRows([{ menu_item_id: 'item-1', ...VALID_ROW, kind: 'beverage' }], allowedIds);
     expect(rows).toEqual([]);
   });
 
   it('keeps only the first occurrence of a duplicate id', () => {
-    const rows = validateOpusTraitRows(
+    const rows = validateModelTraitRows(
       [
         { menu_item_id: 'item-1', ...VALID_ROW, temperature: 'hot' },
         { menu_item_id: 'item-1', ...VALID_ROW, temperature: 'iced' },
@@ -126,7 +126,7 @@ describe('validateOpusTraitRows', () => {
   });
 
   it('returns an empty array when the model output is not an array', () => {
-    expect(validateOpusTraitRows(undefined, allowedIds)).toEqual([]);
-    expect(validateOpusTraitRows({ items: [] }, allowedIds)).toEqual([]);
+    expect(validateModelTraitRows(undefined, allowedIds)).toEqual([]);
+    expect(validateModelTraitRows({ items: [] }, allowedIds)).toEqual([]);
   });
 });

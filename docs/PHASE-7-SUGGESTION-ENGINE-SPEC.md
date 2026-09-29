@@ -44,25 +44,23 @@
 
 ## 1. Who decides what: model routing
 
-The owner's rule: **decision-making is done by the most capable model (Opus, or Gemini Flash when that's the configured provider — see "Provider" below); execution is done by cheaper agents (Sonnet, or Gemini Flash) or by plain code.** Applied to the product:
+> **2026-09 update — the engine runs on Jev only.** Jev (TypeSafe AI) is now generally available, so the Anthropic (Opus/Sonnet) and Gemini providers were removed: `@anthropic-ai/sdk`, `lib/suggest/anthropic.ts`, `lib/suggest/gemini.ts`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GEMINI_*_MODEL`, `SUGGEST_DECIDER_MODEL`/`SUGGEST_WORKER_MODEL` and `SUGGEST_LLM_PROVIDER` are gone. Later sections that mention Opus, Sonnet or Gemini describe the original design; where they disagree with this section, this section wins.
+
+The owner's rule: **decisions are made by the model; everything else is plain code.** Jev is a decision-only "System One" model — it answers structured questions and cannot write prose — so every customer-facing sentence and the owner digest come from deterministic templates.
 
 | Job | Kind | Done by | Why |
 |---|---|---|---|
-| Tag each menu item with taste traits (caffeine, sweetness, temperature, body, mood fit, time of day) | **Decision.** Every later match depends on it. | **Jev** (TypeSafe AI, decision-only) when configured, else **Opus** (`claude-opus-5`), else **Gemini Flash** (free tier) — owner-reviewed | Needs real-world coffee knowledge. Runs rarely (menu changes), so cost is negligible. |
+| Tag each menu item with taste traits (caffeine, sweetness, temperature, body, mood fit, time of day) | **Decision.** Every later match depends on it. | **Jev** — one `systemOne` call per item, owner-reviewed | Needs real-world coffee knowledge. Runs rarely (menu changes), so cost is negligible. |
 | Enforce hard constraints (availability, budget, hot/iced, caffeine) | Rules | **Deterministic code** | Must hold 100% of the time. Never delegated to a model. |
 | Score and shortlist ~12 candidates from preferences + mood + taste profile | Mechanical ranking | **Deterministic code** | Fast (< 20 ms), testable, and it is the fallback. |
-| Choose the final 3 from the shortlist | **Decision** | **Jev** (one `choice` question, ranked by probability) when configured, else **Opus** (`claude-opus-5`, effort `low`, structured JSON), else **Gemini Flash** (free tier, same structured JSON schema) | This is where "accuracy should be very high" is won: weighing mood, history and pairing like a barista would. Jev is a decision-only model — it can't write the one-line reason, so that comes from the same tone-safe templates the fallback path uses (§5.4). |
+| Choose the final 3 from the shortlist | **Decision** | **Jev** (one `choice` question, ranked by probability) | This is where "accuracy should be very high" is won. The one-line reason comes from the same tone-safe templates the fallback path uses (§5.4). |
 | Build the per-account taste profile (the preference cache) | Aggregation | **Deterministic code** | Numbers from orders. No model sees raw order history. |
-| Weekly owner digest: "what customers told the engine this week" | Summarising numbers already computed | **Sonnet** (`claude-sonnet-5`) or **Gemini Flash** (free tier) — **never Jev**, which can't write prose | Execution work; cheaper model. |
-| Tone lint on customer-facing copy | Rules | **Deterministic code** | Banned-phrase list and length cap applied to every model output. |
+| Weekly owner digest: "what customers told the engine this week" | Summarising numbers already computed | **Deterministic template** (`lib/suggest/digest.ts`) | Jev can't write prose; the template reports the same numbers. |
+| Tone lint on customer-facing copy | Rules | **Deterministic code** | Banned-phrase list and length cap. |
 
-**Development follows the same rule:** this spec, the data contracts (`supabase/2026-09-suggestion-engine.sql`, `lib/suggest/types.ts`) and final review are the Opus work. Implementation tickets SUG-1…SUG-12 are executed by Sonnet agents against those contracts.
+The model id lives in one place (`lib/suggest/models.ts`), overridable by `JEV_MODEL` (default `jev-latest`).
 
-Model IDs live in one place (`lib/suggest/models.ts`), overridable by env (`SUGGEST_DECIDER_MODEL`, `SUGGEST_WORKER_MODEL` for Anthropic; `GEMINI_MODEL`, `GEMINI_WORKER_MODEL` for Gemini; `JEV_MODEL` for Jev), so moving to a newer model is a config change.
-
-**Provider:** three providers are supported for the two DECISION jobs (trait tagging, choosing picks): **TypeSafe AI's Jev** (`TYPESAFE_API_KEY`) — a decision-only "System One" model, fast (70–500ms) and cheap (input $0.042/MTok, output free), currently early access — is preferred when configured; otherwise a paid Anthropic key runs the decider on Opus; without either, setting only `GEMINI_API_KEY` runs the same jobs on Gemini Flash instead, at $0 (Google's free tier). `lib/suggest/models.ts`'s `deciderProvider()` picks Jev when `TYPESAFE_API_KEY` is set, else Anthropic when `ANTHROPIC_API_KEY` is set, else Gemini when `GEMINI_API_KEY` is set (or `SUGGEST_LLM_PROVIDER` pins one explicitly); `SUGGEST_LLM=off` disables all three. Whichever provider answers, its output goes through the exact same validation (§5.4, `lib/suggest/validate.ts`) and the exact same fallback path on failure — the customer-visible behaviour, and the accuracy bar in §6, do not depend on which provider is configured.
-
-Jev cannot generate text, so it is never used for the weekly digest (SUG-12), which needs prose: `lib/suggest/models.ts`'s separate `textProvider()` picks Anthropic when `ANTHROPIC_API_KEY` is set, else Gemini when `GEMINI_API_KEY` is set — skipping Jev even when `SUGGEST_LLM_PROVIDER=jev` is pinned, since that pin only makes sense for the decision jobs.
+**Provider:** `lib/suggest/models.ts`'s `deciderProvider()` returns `'jev'` when `TYPESAFE_API_KEY` is set and `SUGGEST_LLM` is not `off`; otherwise null, and the engine runs on its deterministic ranker (`source: 'fallback'`). Jev's output goes through the same validation (§5.4, `lib/suggest/validate.ts`, `traitsValidate.ts`) and the same fallback path on failure.
 
 ---
 
@@ -240,12 +238,11 @@ Table `customer_taste_profiles` (PK `user_id`), holding `profile jsonb`, `order_
 **Privacy (DPDP-aligned):** `/account` gets a "Your taste profile" card: a plain-language summary ("You usually go for iced coffee in the afternoon"), a **Reset** button (deletes the row and recomputes), and a **Don't personalise** toggle (`opted_out = true` means the profile is not used or recomputed, and suggestions behave as for a guest). Only the owning user and service-role code can read it. The owner dashboard shows **aggregates only**, never an individual's profile.
 
 ### 5.6 Cost & abuse controls (SUG-6)
-- **Provider:** the decider (§5.4) runs on **Jev** when `TYPESAFE_API_KEY` is set, else Opus, else **Gemini Flash** when the owner has only configured `GEMINI_API_KEY` (§1) — free-tier, $0 per call. The weekly digest worker (SUG-12) runs on Sonnet or Gemini Flash only — never Jev, which can't write prose. Every provider's output goes through the same validation (`lib/suggest/validate.ts`, `traitsValidate.ts`), and a Jev or Gemini failure falls back exactly like an Anthropic one (§5.4 "Fallback triggers"). `lib/suggest/gemini.ts` speaks the Gemini REST API directly (`fetch`, no SDK dependency) and sends the key only as the `x-goog-api-key` header (S-6); `lib/suggest/jev.ts` constructs the ONE `@typesafe-ai/sdk` client (S-7).
-- **Gemini speed:** trait tagging and the picks decision both pass `thinkingLevel: 'low'` to Gemini (`lib/suggest/gemini.ts`'s `geminiGenerateJson`) to cut latency for these JSON-schema-constrained classification calls; the digest never does (it wants full reasoning for prose). If an older model 400s specifically because it doesn't support `thinkingConfig`, the call retries once without it (on top of the existing one-shot schema-retry), capped at 3 HTTP attempts total for one logical call.
+- **Provider:** the decider (§5.4) and trait tagging run on **Jev** (§1); a Jev failure falls back per §5.4 "Fallback triggers". `lib/suggest/jev.ts` constructs the ONE `@typesafe-ai/sdk` client (S-7).
 - **Rate limits:** 20 suggestion requests per 10 min per IP, and 60 per day per signed-in user, via `rateLimitOk()`. Beyond the limit the request succeeds using the **fallback path only** (no LLM call); it is not refused.
 - **Spend cap:** each LLM call records `input_tokens`, `cache_read_tokens`, `output_tokens` and `cost_usd_micros` on its session. Before calling the decider, the endpoint sums today's `cost_usd_micros` (IST day); at or above `SUGGEST_DAILY_BUDGET_USD` (default 3) it uses the fallback. This is a DB-backed check, not in-memory, so it holds across serverless instances.
-- **Pricing constants** (USD per MTok) live in `lib/suggest/models.ts`: Opus 5 in $5 / out $25 / cache read $0.50; Sonnet 5 in $2 / out $10 / cache read $0.20; **Jev** in $0.042 / out free (`costUsdMicros()` for a `jev`-prefixed model id is `round(inputTokens × 0.042)` micro-dollars — no PRICES table entry, same posture as Gemini's early return). Expected Opus cost: ~3k cached + ~600 fresh input and ~250 output tokens ≈ **$0.01 per suggestion**; Jev, at a few hundred input tokens per call and no output cost, is roughly two orders of magnitude cheaper still. Gemini's free tier is **$0** — `costUsdMicros()` returns 0 for any model id starting with `gemini`, so the daily spend cap only ever limits Anthropic (and, much more lightly, Jev) spend.
-- `ANTHROPIC_API_KEY` is read only in `lib/suggest/llm.ts`/`lib/suggest/anthropic.ts`; `GEMINI_API_KEY` only in `lib/suggest/gemini.ts`; `TYPESAFE_API_KEY` only in `lib/suggest/jev.ts` — all import `'server-only'` (playbook C-1).
+- **Pricing:** Jev bills input only — $0.042/MTok, output free. `lib/suggest/models.ts`'s `costUsdMicros()` is `round(inputTokens × 0.042)` micro-dollars; a few hundred input tokens per suggestion is a small fraction of a cent.
+- `TYPESAFE_API_KEY` is read only in `lib/suggest/jev.ts`, which imports `'server-only'` (playbook C-1).
 
 ---
 
@@ -335,12 +332,12 @@ Pure aggregation goes in `lib/suggest/analytics.ts`; server queries in `lib/sugg
 
 ## 9. Security checklist (added to SECURITY-PLAYBOOK as S-1…S-5)
 
-- **S-1:** `ANTHROPIC_API_KEY` is only read in `'server-only'` modules. It is never `NEXT_PUBLIC_`.
+- **S-1:** Model API keys (today only `TYPESAFE_API_KEY`) are only read in `'server-only'` modules. They are never `NEXT_PUBLIC_`.
 - **S-2:** A model output is **data**. Ids are validated against the shortlist, text is linted, and nothing from the model is rendered as HTML.
 - **S-3:** No PII goes to any model: no name, phone, email or order ids. The profile summary only.
 - **S-4:** `ordered` attribution is server-written only. Client events are whitelisted and session-bound.
 - **S-5:** Every LLM route has a fallback path and a DB-backed spend cap. A missing key means the fallback, never a 500.
-- **S-6:** `GEMINI_API_KEY` is only read in `'server-only'` modules (`lib/suggest/gemini.ts`). It is sent ONLY as the `x-goog-api-key` request header, NEVER as a URL query parameter and NEVER written to a log or an error message — URLs get logged by proxies and error trackers even when headers don't.
+- **S-6:** *(Retired with the Gemini provider, 2026-09.)* `GEMINI_API_KEY` was only read in `'server-only'` modules (`lib/suggest/gemini.ts`). It is sent ONLY as the `x-goog-api-key` request header, NEVER as a URL query parameter and NEVER written to a log or an error message — URLs get logged by proxies and error trackers even when headers don't.
 - **S-7:** `TYPESAFE_API_KEY` is only read in `'server-only'` modules. The `@typesafe-ai/sdk` `TypeSafeClient` is constructed in exactly ONE place, `lib/suggest/jev.ts` — no other module imports `TypeSafeClient` or constructs its own client — and NEVER with `dangerouslyAllowBrowser` (the SDK default, `false`, is never overridden). Every Jev error is mapped to a `DeciderError` whose message carries an HTTP status at most, never the key (§5.4).
 
 ## 10. Out of scope (Phase 7)

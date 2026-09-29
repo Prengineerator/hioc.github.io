@@ -15,7 +15,6 @@
     "import:petpooja": "tsx scripts/import-petpooja.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.128.0",
     "@supabase/ssr": "^0.4.0",
     "@supabase/supabase-js": "^2.44.4",
     "@typesafe-ai/sdk": "^0.6.0",
