@@ -6,8 +6,9 @@
 //   left   logo · the surface's tabs (POS: Live orders · Orders · Settle · New order ·
 //          Tables; staff website: fewer tabs) + More ▾
 //   right  open drawer (POS app only) · store pill · sound icon · counter-mode icon · account ▾
-// The back-office pages (Cash, Attendance, Leave, Menu, Settings) live under
-// "More"; name, role, Lock/Switch and Logout under the account menu. Below md
+// The back-office pages (Cash, Expenses, Cash in / out, Attendance, Leave,
+// Menu, Settings) live under "More"; name, role, Lock/Switch and Logout under
+// the account menu. Below md
 // everything folds into the drawer, with the sound icon kept in the bar
 // because it is the one control a counter needs at a glance.
 // Tab lists: lib/staff/staffNav.ts. Sound and counter mode: StaffShell.
@@ -96,6 +97,7 @@ export function StaffHeader({
     staffPos: flags.staffPos,
     attendance: flags.attendance,
     inventory: flags.inventory,
+    canManageCash: role === 'manager' || role === 'owner',
   });
   const primary = shell.counterMode ? nav.primary.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : nav.primary;
   const more = shell.counterMode ? [] : nav.more;

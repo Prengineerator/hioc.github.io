@@ -1,9 +1,6 @@
 import Link from 'next/link';
 import { flags } from '@/lib/flags';
-import { getCounterActor } from '@/lib/api/auth';
 import { CashDayManager } from '@/components/staff/CashDayManager';
-import { CashExpenseForm } from '@/components/staff/CashExpenseForm';
-import { CashMovementForm } from '@/components/staff/CashMovementForm';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,15 +12,9 @@ export const dynamic = 'force-dynamic';
 // ON): when off it renders a clear "not enabled" state, matching the
 // New-order and Tables pages.
 //
-// CC-3 — role resolved server-side (same pattern as app/staff/leave/page.tsx)
-// to decide whether CashMovementForm (cash-out/cash-in, manager/owner only)
-// mounts at all; the API re-checks regardless. getCounterActor() already caps
-// a device-unlocked owner at 'manager' (lib/api/operator.ts), so this
-// role-string comparison stays correct for that path without change.
-//
-// Store expenses (ice, milk, water …) are mounted for EVERY counter actor —
-// CashExpenseForm sits between the day manager and the manager-only movement
-// form; POST /api/cash-expenses re-checks the 'cash_expense' permission.
+// Only the cash day lives here. Store expenses (/staff/expenses) and the
+// manager-only cash in / out (/staff/cash-movements) have their own pages
+// under "More" (lib/staff/staffNav.ts) — all three on one page was too much.
 export default async function CashPage() {
   if (!flags.staffPos) {
     return (
@@ -42,14 +33,5 @@ export default async function CashPage() {
     );
   }
 
-  const account = await getCounterActor();
-  const canManageCash = account ? account.role === 'manager' || account.role === 'owner' : false;
-
-  return (
-    <>
-      <CashDayManager />
-      <CashExpenseForm />
-      {canManageCash ? <CashMovementForm /> : null}
-    </>
-  );
+  return <CashDayManager />;
 }

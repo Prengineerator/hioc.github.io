@@ -1,8 +1,8 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
 //   POS          Live orders · Orders · Settle · New order · Tables — what the
-//                counter does all day — and Cash, Attendance, Leave, (Stock,)
-//                Menu and Settings under "More".
+//                counter does all day — and Cash, Expenses, (Cash in / out,)
+//                Attendance, Leave, (Stock,) Menu and Settings under "More".
 //   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -26,6 +26,8 @@ export interface StaffNavInput {
   attendance: boolean;
   /** Inventory (docs/INVENTORY-SPEC.md); optional so older callers read off. */
   inventory?: boolean;
+  /** Manager or owner: sees Cash in / out. Display only — the page and API re-check. */
+  canManageCash?: boolean;
 }
 
 export interface StaffNav {
@@ -44,12 +46,16 @@ const TABLES: StaffTab = { href: '/staff/tables', label: 'Tables' };
 const MENU: StaffTab = { href: '/staff/menu', label: 'Menu' };
 const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
 const STOCK: StaffTab = { href: '/staff/inventory', label: 'Stock' };
+const CASH: StaffTab = { href: '/staff/cash', label: 'Cash' };
+const EXPENSES: StaffTab = { href: '/staff/expenses', label: 'Expenses' };
+const CASH_MOVEMENTS: StaffTab = { href: '/staff/cash-movements', label: 'Cash in / out' };
 
 /** The occasional pages both surfaces keep under "More". */
 function backOffice(input: StaffNavInput): StaffTab[] {
   return [
-    // OPS-2: cash drawer day-open/close by denomination.
-    ...(input.staffPos ? [{ href: '/staff/cash', label: 'Cash' }] : []),
+    // OPS-2: cash drawer day-open/close by denomination. Expenses (any staffer)
+    // and the manager-only cash in / out are their own pages next to it.
+    ...(input.staffPos ? [CASH, EXPENSES, ...(input.canManageCash ? [CASH_MOVEMENTS] : [])] : []),
     // ATT-1 / LEAVE-3: their own flag — dark until the geofence is tuned.
     ...(input.attendance
       ? [
