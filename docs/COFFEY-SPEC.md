@@ -314,3 +314,36 @@ Numbers on the page come from code constants, so they stay true: `MOODS.length`,
 
 Kept as judgement calls, with no direct evidence either way: the two-mood cap, and the 0/3/5/7/10 mapping of the five sweetness labels onto the item scale.
 
+
+## 9. Measured (2026-09-29, before regenerating with Jev)
+This is `npm run eval:suggest -- --min 0 --now 2026-09-29T15:00:00+05:30`, the deterministic fallback ranker, against the live menu (116 customer items). It uses the **old** v1 traits, because the migration and Regenerate haven't run yet. "Before" is origin/main's engine on the same menu, the same 64 v1 scenarios and the same pinned clock.
+
+| | Before | After |
+|---|---|---|
+| Top-3 hit rate | 31.3% (20/64) | **46.9% (30/64)** |
+| boost | 9.1% | 81.8% |
+| surprise | 40.0% | 70.0% |
+| cosy | 27.3% | 36.4% |
+| comfort | 50.0% | 30.0% |
+| celebrate | 9.1% | 9.1% |
+| cool | 54.5% | 54.5% |
+| Distinct pick sets / scenarios | 0.51 | 0.63 |
+| Most repeated item | 34.9% of scenarios | 23.8% |
+
+The result depends on the time of day, and "after" wins at every clock tried:
+
+| Clock | Before | After |
+|---|---|---|
+| 10:30 | 46.9% | 57.8% |
+| 15:00 | 31.3% | 46.9% |
+| 19:00 | 18.8% | 34.4% |
+| 22:30 | 20.3% | 46.9% |
+
+**Read with care:**
+- A random top-3 from each scenario's hard-filtered pool scores 19.0%.
+- 14 of the 64 draft labels include items that are no longer on the menu or that break the scenario's own hard rules. The harness prints a label audit.
+- The 14 new v2 scenarios reach 86–100%, but their pools are much tighter, so they are an easier test.
+- What remains is mostly **ties from the old traits**. The legacy mood term is 1.0 for 56 of 116 items on comfort and 36 on celebrate, so the top score is often a 30+-way tie.
+  - The harness has no popularity data, so ties fall to id order. In production, popularity breaks them.
+  - Jev's graded `mood_fit` (§3.2) exists to separate exactly these items.
+- **Re-run after Regenerate, with the same `--now`**, for a like-for-like number. Add `--llm` once `TYPESAFE_API_KEY` is available to measure the Jev decision.
