@@ -191,6 +191,13 @@ export interface Order {
   // from a request body. Deliberately NOT user_id, which means "the session that
   // placed it" and stays null for staff orders. Null when nobody was matched.
   customer_user_id: string | null;
+  // 2026-09-settle-adjustments.sql: settling for less/more than the total.
+  // A shortfall is a settlement discount (revenue = total - this); extra is a
+  // tip, kept out of sales. The reason is required when either is non-zero.
+  // Optional so rows read before the migration (and older fixtures) compile.
+  settle_discount_inr?: number;
+  tip_inr?: number;
+  settle_reason?: string;
 }
 
 export interface OrderItemAddon {

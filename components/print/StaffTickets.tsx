@@ -314,6 +314,8 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   const redeemed = order.points_redeemed ?? 0;
   const totalQty = activeItems.reduce((sum, i) => sum + i.quantity, 0);
   const billNo = formatOrderNumber(order.order_number);
+  const settleDiscount = order.settle_discount_inr ?? 0;
+  const tip = order.tip_inr ?? 0;
   const hasPointsRows = redeemed > 0 || points > 0 || (order.points_balance !== null && order.points_balance !== undefined);
 
   return (
@@ -399,6 +401,15 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
           <span>Grand Total</span>
           <span>{money(total)}</span>
         </div>
+        {/* Settled for less/more than the total — mirrors buildReceiptBlocks. */}
+        {settleDiscount > 0 ? <BillRow label="Settlement discount" value={`(${money(settleDiscount)})`} /> : null}
+        {tip > 0 ? <BillRow label="Tip" value={money(tip)} /> : null}
+        {settleDiscount > 0 || tip > 0 ? (
+          <div className="flex items-center justify-between font-bold">
+            <span>Received</span>
+            <span>{money(total - settleDiscount + tip)}</span>
+          </div>
+        ) : null}
         {order.payment_status === 'paid' && order.payment_method ? (
           <p className="text-center">
             Paid via {describeOrderPayment(order)}
