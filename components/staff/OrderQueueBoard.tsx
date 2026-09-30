@@ -7,6 +7,7 @@
 
 import { OrderCard } from '@/components/staff/OrderCard';
 import { ACTIVE_LANES } from '@/lib/orders/stateMachine';
+import { kitchenOrders } from '@/lib/pos/ritual';
 import type { QuickAction } from '@/lib/orders/quickActions';
 import type { Order, OrderItem } from '@/lib/types';
 
@@ -29,7 +30,10 @@ export function OrderQueueBoard({
   // Filtered here rather than trusting the feed, so finished orders never show
   // whatever /api/orders returns. Oldest first — a kitchen queue is FIFO, and
   // created_at (unlike status) never changes, so cards don't jump around.
-  const active = orders
+  // A HIOC Ritual sale is a payment, not food: it sits 'accepted' while unpaid,
+  // which would otherwise put it on the kitchen's board. It lives in Settle and
+  // Orders instead (the status API refuses its kitchen moves anyway).
+  const active = kitchenOrders(orders)
     .filter((o) => (ACTIVE_LANES as readonly string[]).includes(o.status))
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
 

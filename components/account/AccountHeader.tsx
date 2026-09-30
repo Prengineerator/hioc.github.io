@@ -4,12 +4,16 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { formatIndianMobileDisplay } from '@/lib/phone';
+import { flags } from '@/lib/flags';
+import { PASS_SHORT_NAME } from '@/lib/passes/brand';
 
 const LINKS = [
   { href: '/account', label: 'Overview' },
   { href: '/account/orders', label: 'Orders' },
   { href: '/account/favorites', label: 'Favorites' },
   { href: '/rewards', label: 'Rewards' },
+  // HIOC Ritual: only while the feature is on.
+  ...(flags.coffeePass ? [{ href: '/ritual', label: PASS_SHORT_NAME }] : []),
   { href: '/account/profile', label: 'Profile' },
 ];
 

@@ -3,6 +3,7 @@ import {
   AUTO_PRINT_DEFAULTS,
   placementPrintPlan,
   printUrl,
+  printsKot,
   readAutoPrintSettings,
   settlePrintPlan,
 } from '@/lib/staff/autoPrint';
@@ -66,6 +67,39 @@ describe('settlePrintPlan', () => {
 
   it('never reprints the KOT — the kitchen got it at placement', () => {
     expect(settlePrintPlan({ kot: true, bill: false })).toEqual([]);
+  });
+});
+
+// HIOC Ritual: the SALE of a pass is a payment, not food. Whatever the KOT switch
+// says, no ticket goes to the kitchen for it (and it has no pickup token either):
+// its receipt is the one thing it prints.
+describe('a HIOC Ritual sale never prints a KOT', () => {
+  it('printsKot is false only for a coffee_pass order', () => {
+    expect(printsKot('coffee_pass')).toBe(false);
+    expect(printsKot('menu')).toBe(true);
+    // Rows read before the migration have no order_kind: a menu order.
+    expect(printsKot(undefined)).toBe(true);
+    expect(printsKot(null)).toBe(true);
+  });
+
+  it.each([
+    ['kot on, bill on, settled', { kot: true, bill: true }, true, ['receipt']],
+    ['kot on, bill off, settled', { kot: true, bill: false }, true, []],
+    ['kot on, bill on, unpaid', { kot: true, bill: true }, false, []],
+    ['kot off, bill on, settled', { kot: false, bill: true }, true, ['receipt']],
+  ])('placementPrintPlan for a pass sale: %s', (_label, settings, settled, expected) => {
+    expect(placementPrintPlan(settings, { settled, orderKind: 'coffee_pass' })).toEqual(expected);
+  });
+
+  it('settlePrintPlan prints the receipt only, for a pass sale as for any order', () => {
+    expect(settlePrintPlan({ kot: true, bill: true }, { orderKind: 'coffee_pass' })).toEqual(['receipt']);
+    expect(settlePrintPlan({ kot: true, bill: false }, { orderKind: 'coffee_pass' })).toEqual([]);
+  });
+
+  it('leaves a menu order exactly as it was', () => {
+    expect(placementPrintPlan({ kot: true, bill: true }, { settled: true, orderKind: 'menu' })).toEqual(['kot', 'receipt']);
+    expect(placementPrintPlan({ kot: true, bill: true }, { settled: true })).toEqual(['kot', 'receipt']);
+    expect(settlePrintPlan({ kot: true, bill: true }, { orderKind: 'menu' })).toEqual(['receipt']);
   });
 });
 

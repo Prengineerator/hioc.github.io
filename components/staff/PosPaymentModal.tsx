@@ -17,7 +17,8 @@ import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
 import type { Feedback } from '@/lib/pos/loyalty';
-import type { BillBreakdown } from '@/lib/store/hours';
+import { ritualBillRow, type PosBill } from '@/lib/pos/ritual';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { OrderType, PaymentMethod } from '@/lib/types';
 
 // The POS-1 "Collect payment" step, extended by POS4-1 with cash tendered/change
@@ -69,7 +70,17 @@ export interface SettleAdjustmentInput {
 type Step = 'choose' | 'cash' | 'split' | 'custom' | 'app';
 
 interface PaymentStepProps {
-  bill: BillBreakdown | null;
+  /** The server's bill. `pass_discount_inr` is what HIOC Ritual cups cover (0 when none did). */
+  bill: PosBill | null;
+  /** Cups behind `bill.pass_discount_inr`, for its row's label ("HIOC Ritual (2 cups)"). Unknown = plain "HIOC Ritual". */
+  passCups?: number;
+  /**
+   * Replaces the "Takeaway · N items" header — for an order that isn't a food
+   * order (the sale of a HIOC Ritual pass): `contextLabel` is the bold half and
+   * `contextDetail` the muted one.
+   */
+  contextLabel?: string;
+  contextDetail?: string;
   orderType: OrderType;
   tableLabel: string | null;
   itemCount: number;
@@ -125,6 +136,9 @@ export function PosPaymentModal(props: PaymentStepProps) {
  */
 export function PosPaymentPanel({
   bill,
+  passCups = 0,
+  contextLabel,
+  contextDetail,
   orderType,
   tableLabel,
   itemCount,
@@ -143,6 +157,11 @@ export function PosPaymentPanel({
   const settling = mode === 'settle';
   const phoneRef = useRef<HTMLInputElement>(null);
   const total = bill?.total_inr ?? 0;
+  // What HIOC Ritual cups cover: its own row, apart from the coupon/Beanies discount.
+  const ritualRow = ritualBillRow(bill, passCups);
+  // A bill brought to ₹0 (cups or a full coupon) has nothing to collect: see the
+  // step below. Only when placing — a settled bill is never ₹0.
+  const nothingDue = !settling && bill !== null && bill.total_inr <= 0;
 
   // Every button that would COMMIT money is gated on both. Navigation (Back,
   // "Back to order") and the phone field stay live: a stale quote is a reason to
@@ -295,12 +314,12 @@ export function PosPaymentPanel({
             </button>
           </div>
         ) : (
-          <div className="flex items-center justify-between rounded-md bg-surface px-4 py-3 text-sm">
+          <div className="flex items-center justify-between gap-3 rounded-md bg-surface px-4 py-3 text-sm">
             <span className="font-bold text-charcoal">
-              {isDineIn ? `Dine-in · ${tableLabel ?? '—'}` : 'Takeaway'}
+              {contextLabel ?? (isDineIn ? `Dine-in · ${tableLabel ?? '—'}` : 'Takeaway')}
             </span>
-            <span className="text-muted">
-              {itemCount} item{itemCount === 1 ? '' : 's'}
+            <span className="text-right text-muted">
+              {contextDetail ?? `${itemCount} item${itemCount === 1 ? '' : 's'}`}
             </span>
           </div>
         )}
@@ -364,6 +383,7 @@ export function PosPaymentPanel({
                 {bill.tax_inr > 0 ? <BillRow label="GST" value={bill.tax_inr} /> : null}
                 {bill.packaging_inr > 0 ? <BillRow label="Packaging" value={bill.packaging_inr} /> : null}
                 {bill.discount_inr > 0 ? <BillRow label="Discount" value={-bill.discount_inr} /> : null}
+                {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}
                 <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
                   <span className="font-bold text-charcoal">Total</span>
                   <span className="text-lg font-bold text-tan-dark">₹{bill.total_inr}</span>
@@ -788,6 +808,25 @@ export function PosPaymentPanel({
               {firstValid
                 ? `Take ₹${firstNum} ${methodLabel(firstMethod)} + ₹${remainder} ${methodLabel(secondMethod)}`
                 : 'Enter the first amount'}
+            </button>
+          </div>
+        ) : nothingDue ? (
+          /* ---- Nothing to collect ------------------------------------------
+             HIOC Ritual cups (or a full coupon) can bring the bill to ₹0. The
+             server creates such an order already paid, and payment parts must be
+             a positive number of rupees, so there is nothing to record: the order
+             is simply placed. */
+          <div className="flex flex-col gap-3">
+            <p className="rounded-md bg-surface px-4 py-3 text-sm font-bold text-charcoal">
+              {ritualRow ? `${PASS_PROGRAM_NAME} covers this order — nothing to collect.` : 'Nothing to collect — this order comes to ₹0.'}
+            </p>
+            <button
+              type="button"
+              disabled={busy || !bill}
+              onClick={() => attempt(null)}
+              className="rounded-md bg-tan-dark px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Place order — ₹0 due
             </button>
           </div>
         ) : (

@@ -10,6 +10,7 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 import { getStoreSettings } from '@/lib/store/settings';
 import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
+import { flags } from '@/lib/flags';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,6 +39,10 @@ function shapeMenuItem(row: MenuItemRow): MenuItem {
   return { ...rest, variants, addon_groups } as MenuItem;
 }
 
+// `*` already carries menu_items.pass_eligible (HIOC Ritual, 2026-10-coffee-pass.sql)
+// once the column exists, and simply leaves it out before, so the select needs no
+// change and a database without the migration keeps serving the menu. See the
+// GET below for how the field is shaped.
 const MENU_ITEM_SELECT = `
   *,
   menu_item_variants(*),
@@ -113,7 +118,12 @@ export async function GET(request: Request) {
   const items = (data ?? [])
     .map((row) => applyMenuSwitches(shapeMenuItem(row as unknown as MenuItemRow), switches))
     .filter((item) => !isCategoryHidden(item.category, switches.hiddenCategories))
-    .filter((item) => includeInStore || !isInStoreOnly(item));
+    .filter((item) => includeInStore || !isInStoreOnly(item))
+    // pass_eligible (docs/COFFEE-PASS-SPEC.md CP-D3): always a boolean, so a
+    // screen never has to tell "not eligible" from "column not there yet", and
+    // false for everything while the feature is off, so nothing about HIOC
+    // Ritual is visible on a menu until the owner switches it on.
+    .map((item) => ({ ...item, pass_eligible: flags.coffeePass === true && item.pass_eligible === true }));
 
   return NextResponse.json({ items });
 }

@@ -27,3 +27,11 @@ export const BUSINESS = {
   // Shown as "Last updated" on each policy page.
   lastUpdated: '18 July 2026',
 } as const;
+
+/**
+ * "Last updated" on the pages that carry the HIOC Ritual wording (Refund &
+ * Cancellation, Terms), from the day the wording is added. The pages show it only
+ * while the feature is on: until then their text is what it was on
+ * BUSINESS.lastUpdated, and a newer date over unchanged terms would be untrue.
+ */
+export const RITUAL_POLICY_UPDATED = '30 September 2026';

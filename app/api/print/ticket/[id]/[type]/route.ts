@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getCounterActor } from '@/lib/api/auth';
-import { unauthorized, notFound } from '@/lib/api/http';
+import { unauthorized, notFound, errorResponse } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { getStaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { buildTicketDoc } from '@/lib/print/ticketModel';
 import { onlyKotItems, parseKotItemsParam } from '@/lib/print/kotAddition';
-import type { PrintType } from '@/lib/staff/autoPrint';
+import { printsKot, type PrintType } from '@/lib/staff/autoPrint';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +30,12 @@ function isPrintType(value: string): value is PrintType {
 // browser tab, no cookies-from-a-page-load) — it must keep working on an
 // enrolled counter with nobody signed in classically, or printing breaks
 // outright the moment PIN switching is turned on.
+//
+// HIOC Ritual: the SALE of a pass (order_kind 'coffee_pass') is a payment, not
+// food, so there is no kitchen ticket for it: a KOT request is refused (409),
+// which the print dock shows as a failed job rather than sending a phantom order
+// to the kitchen (and it has no pickup token to hand over either). Its receipt
+// prints as usual.
 export async function GET(request: Request, { params }: RouteParams) {
   const account = await getCounterActor();
   if (!account) return unauthorized();
@@ -39,6 +45,9 @@ export async function GET(request: Request, { params }: RouteParams) {
 
   const loaded = await getStaffPrintOrder(id);
   if (!loaded) return notFound();
+  if ((type === 'kot' || type === 'token') && !printsKot(loaded.order_kind)) {
+    return errorResponse(409, 'A HIOC Ritual sale has no kitchen ticket or pickup token.');
+  }
   // `?items=` — a KOT of only the lines added to a running order.
   const order =
     type === 'kot' ? onlyKotItems(loaded, parseKotItemsParam(new URL(request.url).searchParams.get('items'))) : loaded;

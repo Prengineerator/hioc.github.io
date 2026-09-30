@@ -10,6 +10,10 @@
 // money; it does not compute it (POST /api/orders/quote is authoritative, and
 // POST /api/orders re-derives it all again at submit).
 
+import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
+import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
+import type { PassShortfall, PassSummary } from '@/lib/passes/types';
+
 /**
  * What the customer lookup (GET /api/customers/lookup) says about a number.
  *
@@ -36,6 +40,13 @@ export type CustomerLookup =
       points_balance?: number;
       order_count: number;
       last_order_at: string | null;
+      /**
+       * The HIOC Ritual passes this account can spend right now (active, in
+       * date, cups left), soonest-expiring first. Present only for a verified
+       * account, and only while NEXT_PUBLIC_FLAG_COFFEE_PASS is on: absent
+       * means "no Ritual to offer", never "unknown".
+       */
+      passes?: PassSummary[];
     };
 
 /**
@@ -51,15 +62,36 @@ export interface QuotedDiscount {
   reason?: string;
 }
 
+/**
+ * The `pass` block of the quote response (POST /api/orders/quote), as the
+ * counter reads it. Null/absent when the feature is off, no account is known
+ * for the phone, or the quote was sent without `items`.
+ *
+ * Every number is the server's: `discount_inr` is what the cups cover, and
+ * `max_usable` is the most cups this exact cart could use right now (the
+ * stepper's ceiling). `message` is the server's own wording for a shortfall.
+ */
+export interface QuotedPass {
+  requested: number;
+  applied: number;
+  discount_inr: number;
+  eligible_units: number;
+  available: number;
+  max_usable: number;
+  shortfall?: PassShortfall;
+  message: string | null;
+  passes?: PassSummary[];
+}
+
 export interface Feedback {
   ok: boolean;
   text: string;
 }
 
-/** "1 point" / "240 points" — the plural is the only decision here. */
+/** "1 Beanie" / "240 Beanies" — the plural is the only decision here. */
 export function formatPoints(points: number): string {
   const n = Number.isFinite(points) ? Math.max(0, Math.trunc(points)) : 0;
-  return `${n} ${n === 1 ? 'point' : 'points'}`;
+  return beaniesLabel(n);
 }
 
 /**
@@ -75,7 +107,7 @@ export function describeCustomer(lookup: CustomerLookup | null): Feedback | null
   if (!lookup.found) {
     // POS-ACC: placing the order opens the account (POST /api/orders), so the
     // staffer can tell the customer they are earning from this order on.
-    return { ok: false, text: 'New customer — this order opens their HIOC account and earns points.' };
+    return { ok: false, text: `New customer — this order opens their HIOC account and earns ${LOYALTY_UNIT.many}.` };
   }
   const name = lookup.name.trim() || 'Account';
   if (lookup.source === 'account') {
@@ -146,5 +178,23 @@ export function pointsFeedback(result: QuotedDiscount | null | undefined): Feedb
   if (result.ok) {
     return { ok: true, text: `${formatPoints(result.points ?? 0)} — ₹${result.discountInr ?? 0} off` };
   }
-  return { ok: false, text: result.reason ?? 'Those points could not be redeemed.' };
+  return { ok: false, text: result.reason ?? `Those ${LOYALTY_UNIT.many} could not be redeemed.` };
+}
+
+/**
+ * Same, for HIOC Ritual cups (CP-D10: the counter asks the customer, so the
+ * stepper starts at 0 and this says nothing until a cup has been asked for).
+ *
+ * `message` is the server's own reason for a shortfall and is shown verbatim,
+ * like a coupon's: a friendlier local rewording would eventually contradict what
+ * POST /api/orders enforces. A quote that applied everything asked for is a
+ * confirmation with the rupees the cups cover; one that applied fewer is a
+ * refusal (the order would 400), with whatever reason the server gave.
+ */
+export function passFeedback(result: QuotedPass | null | undefined): Feedback | null {
+  if (!result || result.requested <= 0) return null;
+  if (result.applied >= result.requested) {
+    return { ok: true, text: `${PASS_PROGRAM_NAME}: ${cupsLabel(result.applied)} — ₹${result.discount_inr} covered` };
+  }
+  return { ok: false, text: result.message ?? `${PASS_PROGRAM_NAME} could not be applied to this order.` };
 }

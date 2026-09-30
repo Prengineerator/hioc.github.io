@@ -26,6 +26,18 @@ function credentials(): { keyId: string; keySecret: string } | null {
   return { keyId, keySecret };
 }
 
+/**
+ * True when the server holds both Razorpay keys, i.e. createPaymentIntent() can
+ * possibly succeed. Lets a route that cannot fall back to pay-at-counter (a
+ * HIOC Ritual purchase has no counter fallback) refuse BEFORE it creates an
+ * order, and lets GET /api/passes/plans say whether to show "Buy" at all. It
+ * asks the same credentials() the gateway calls use, so the answer can never
+ * disagree with what a real payment attempt would do.
+ */
+export function isGatewayConfigured(): boolean {
+  return credentials() !== null;
+}
+
 function authHeader(keyId: string, keySecret: string): string {
   return 'Basic ' + Buffer.from(`${keyId}:${keySecret}`).toString('base64');
 }

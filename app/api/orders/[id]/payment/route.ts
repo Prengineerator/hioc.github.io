@@ -15,6 +15,7 @@ import {
   type PaymentPart,
 } from '@/lib/orders/payments';
 import { runAfterResponse } from '@/lib/api/background';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
@@ -22,13 +23,13 @@ import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: { id: string } };
-const PAYMENT_STATUSES: readonly PaymentStatus[] = [
-  'unpaid',
-  'payment_pending',
-  'paid',
-  'refunded',
-  'partially_refunded',
-];
+// What this route may SET. 'refunded' and 'partially_refunded' are deliberately
+// not here: only the refund route produces them (it moves the money, checks the
+// `refund` permission and voids a HIOC Ritual pass first), and the coffee-pass
+// trigger returns every cup on an order the moment it reads 'refunded' — so a
+// bare status flip from here would hand back cups for money that never left.
+const PAYMENT_STATUSES: readonly PaymentStatus[] = ['unpaid', 'payment_pending', 'paid'];
+const REFUND_STATUSES: readonly string[] = ['refunded', 'partially_refunded'];
 
 // GET /api/orders/[id]/payment — staff/owner only. The tender breakdown for one
 // order: the POS4-1 parts if it was split, else a single synthetic part for the
@@ -91,6 +92,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
 // (STF-041). Two accepted shapes:
 //
 //   { payment_method, payment_status?, reference? }   single method for the whole bill
+//                                     (payment_status: unpaid | payment_pending | paid;
+//                                     a refund state is refused, refunds have their own route)
 //   { parts: [{ method, amount_inr, tendered_inr?, reference? }], adjustment? }   POS4-1 split
 //
 // A dining-app tender (Swiggy Dineout, Zomato District) must carry the
@@ -99,7 +102,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
 //        settlement; `adjustment: { short_inr?, tip_inr?, reason }` settles for
 //        LESS than the bill (a settlement discount) or MORE (a tip). The parts
 //        are then what actually entered the till: total - short + tip. A short
-//        above ₹50 needs a manager or the owner.
+//        above ₹50 needs a manager or the owner. A HIOC Ritual sale can't be
+//        settled short at all (tips are fine).
 //
 // Fulfillment status is untouched — payment tracking is deliberately independent
 // of the order_status lifecycle. Since BILL-1, a settle to 'paid' also delivers
@@ -123,6 +127,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
+
+  // Refuse a refund state before anything else, for every order: it is a policy
+  // line, not a validation of this order. No screen sends one (the refund panel
+  // calls /refund), so this only ever stops a hand-made request from a counter
+  // actor who holds no refund permission.
+  if (typeof body.payment_status === 'string' && REFUND_STATUSES.includes(body.payment_status)) {
+    return errorResponse(400, 'Refunds go through the refund screen.');
+  }
 
   const isSplit = body.parts !== undefined;
   if (!isSplit && !isPaymentMethod(body.payment_method)) {
@@ -166,6 +178,25 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     );
   }
 
+  // The SALE of a HIOC Ritual pass is what issued the pass the moment it turned
+  // 'paid' (a database trigger does it, CP-D6). Moving it off 'paid' from here
+  // would leave a live pass behind an order that says the customer never paid
+  // for it, so the way back is the refund, which voids the pass first (CP-D15).
+  // Re-recording HOW it was paid while it stays paid (cash → UPI, a corrected
+  // split) is an ordinary re-settle and is fine. `order_kind` is absent before
+  // 2026-10-coffee-pass.sql (existing is select('*')), which reads as a menu
+  // order, so this is inert there.
+  if (
+    existing.order_kind === 'coffee_pass' &&
+    existing.payment_status === 'paid' &&
+    paymentStatus !== 'paid'
+  ) {
+    return errorResponse(
+      409,
+      `A ${PASS_PROGRAM_NAME} has been issued for this sale — refund it instead.`,
+    );
+  }
+
   // Changing how a bill was paid (cash → UPI…) is a re-settle and allowed —
   // but not once money has gone back: the refund was taken off a specific
   // tender, and re-recording the tenders would detach it from what it refunded
@@ -190,6 +221,18 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const adjusted = adjustment.shortInr > 0 || adjustment.tipInr > 0;
   if (adjusted && !isSplit) {
     return errorResponse(400, 'A short or tip settlement must send the amounts received as `parts`.');
+  }
+  // The pass is issued in FULL the moment the sale turns 'paid' (a trigger, CP-D6),
+  // at the price the line charged. Taking less money for it would leave a full
+  // pass behind a discounted sale, and neither a staffer's ₹50 nor a manager's
+  // any-amount override changes that: the sale is paid in full or cancelled. A
+  // tip is extra money, so it stays allowed. `order_kind` is absent before
+  // 2026-10-coffee-pass.sql (existing is select('*')), which reads as a menu order.
+  if (existing.order_kind === 'coffee_pass' && adjustment.shortInr > 0) {
+    return errorResponse(
+      409,
+      `A ${PASS_PROGRAM_NAME} can't be settled short — take the full amount or cancel the sale.`,
+    );
   }
   // A big shortfall is a discount decision, not a counter one. Enforced on the
   // server: hiding the option in the UI is not a control.

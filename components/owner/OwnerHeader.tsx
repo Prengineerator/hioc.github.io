@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { flags } from '@/lib/flags';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 
 const LINKS = [
   { href: '/owner', label: 'Overview' },
@@ -15,6 +16,10 @@ const LINKS = [
   // Reconcile any date range: sales, money in by method, refunds, drawer.
   { href: '/owner/reports', label: 'Reports' },
   { href: '/owner/promotions', label: 'Promotions' },
+  // CP-9. HIOC Ritual (prepaid coffee plans): its plans, numbers and eligible
+  // drinks. Hidden while the flag is off, like the page itself (which 404s).
+  // Beside Promotions because both are offers the owner sets up for regulars.
+  ...(flags.coffeePass ? [{ href: '/owner/passes', label: PASS_PROGRAM_NAME }] : []),
   // Marketing agent (docs/MARKETING-AGENT-SPEC.md). Right after Promotions because
   // the two are used in the same sitting — coupons you make by hand vs. campaigns
   // the agent prepares for you. Flag-gated like Attendance below: with it off the

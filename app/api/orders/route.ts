@@ -28,7 +28,7 @@ import {
 import { getStoreSettings } from '@/lib/store/settings';
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { runAfterResponse } from '@/lib/api/background';
-import { computeBill, computeStoreOpenState } from '@/lib/store/hours';
+import { computeStoreOpenState } from '@/lib/store/hours';
 import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import { createCounterCustomer, findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
@@ -37,6 +37,12 @@ import { parseSuggestionSessionIds, writeOrderAttribution } from '@/lib/suggest/
 import { markProfileStale } from '@/lib/suggest/profileStore';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
+import { allocateOrderPass, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { parsePassDrinks, passRedeemMessage, passShortfallMessage } from '@/lib/passes/rules';
+import { redeemPassDrinks } from '@/lib/passes/server';
+import type { AllocationResult } from '@/lib/passes/types';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
@@ -87,6 +93,7 @@ export async function POST(request: Request) {
     require_online: rawRequireOnline,
     coupon_code,
     redeem_points,
+    pass_drinks: rawPassDrinks,
     suggestion_session_ids,
   } = body;
 
@@ -235,6 +242,20 @@ export async function POST(request: Request) {
   const items = parseItems(rawItems);
   if (typeof items === 'string') {
     return errorResponse(400, items);
+  }
+
+  // HIOC Ritual cups to spend on this order (docs/COFFEE-PASS-SPEC.md §7). Absent
+  // means 0, and a request that never mentions it behaves exactly as it always
+  // did. Asking for cups while the feature is off is a 400, not a silent
+  // "ignored": the customer would otherwise pay full price believing a cup had
+  // been used. Which pass and which lines pay is decided server-side below.
+  const passDrinksParsed = parsePassDrinks(rawPassDrinks);
+  if (!passDrinksParsed.ok) {
+    return errorResponse(400, passDrinksParsed.error);
+  }
+  const requestedPassDrinks = passDrinksParsed.value;
+  if (requestedPassDrinks > 0 && !flags.coffeePass) {
+    return errorResponse(400, `${PASS_PROGRAM_NAME} isn't available yet`);
   }
 
   // Online vs pay-at-counter (PAY-1). Default preserves Phase-1 behavior.
@@ -414,7 +435,21 @@ export async function POST(request: Request) {
     return errorResponse(400, resolved.error);
   }
   const resolvedLines = resolved.lines;
-  let subtotal_inr = resolved.subtotalInr;
+  const subtotal_inr = resolved.subtotalInr;
+
+  // Perf: this used to be one `order_items` insert + one
+  // `order_item_addons` insert PER LINE (an N+1 that dominated latency on a
+  // multi-item cart — e.g. 3 lines with addons meant up to 6 round trips just
+  // for line items). Ids are generated here instead of read back via
+  // `.select('id').single()`, so every line's row — and its addons, which
+  // reference it by id — can go in ONE bulk insert each, independent of
+  // insert/return order. order_items.id has a `default gen_random_uuid()` in
+  // the schema; supplying our own uuid here is equally valid.
+  //
+  // They are generated BEFORE anything is priced (they used to be made just
+  // before the insert) because a HIOC Ritual redemption points at the order
+  // line it paid for: the allocation below names each line by this id.
+  const lineIds = resolvedLines.map(() => crypto.randomUUID());
 
   // Per-slot capacity (C4 edge case): if a real slot was chosen and capacity is
   // capped, reject when it's already full (excludes rejected/cancelled orders).
@@ -459,6 +494,49 @@ export async function POST(request: Request) {
   // balance (F9).
   const loyaltyUserId = customerUserId ?? userId;
 
+  // HIOC Ritual (docs/COFFEE-PASS-SPEC.md CP-D9/CP-D12): the pass is applied
+  // FIRST, before the coupon and before Beanies, so a coupon is worth a
+  // percentage of what the customer is actually left to pay and nothing below
+  // zero can happen further down.
+  //
+  // The beneficiary is loyaltyUserId, derived above like the coupon's and the
+  // points': the session on the web, the linked verified customer at the counter
+  // (never a body field), so a staffer cannot spend a stranger's cups by
+  // typing a number the customer has not verified. A brand-new counter number
+  // has no account yet (it is opened only when the order is inserted, below) and
+  // so no pass: that is a 400 the staffer can fix in a second.
+  //
+  // The client quoted (POST /api/orders/quote) before it submitted, so if fewer
+  // cups can be applied than it asked for, something changed in between (a cup
+  // spent on another device, the pass expired, an item was swapped): refuse and
+  // say why rather than quietly charge a different bill.
+  let passAllocation: AllocationResult | null = null;
+  if (requestedPassDrinks > 0) {
+    if (!loyaltyUserId) {
+      return errorResponse(
+        400,
+        isStaff
+          ? `No customer account is linked to this number, so there are no ${PASS_PROGRAM_NAME} cups to use. Check the number — a new number opens its account with this order, and it has no pass yet.`
+          : `You must be logged in to use your ${PASS_PROGRAM_NAME} cups`,
+      );
+    }
+    const { allocation } = await allocateOrderPass(admin, {
+      userId: loyaltyUserId,
+      lines: resolvedLines,
+      keys: lineIds,
+      requested: requestedPassDrinks,
+    });
+    if (allocation.applied < requestedPassDrinks) {
+      const why = passShortfallMessage(allocation) ?? `Your ${PASS_PROGRAM_NAME} cups could not be applied.`;
+      return errorResponse(400, `${why} Please review your bill and try again.`);
+    }
+    passAllocation = allocation;
+  }
+  const passCoveredInr = passAllocation?.covered_inr ?? 0;
+  const passCoveredTaxableInr = passAllocation?.covered_taxable_inr ?? 0;
+  // What a coupon and Beanies are computed on (CP-D12).
+  const payableAfterPass = afterPass(subtotal_inr, passCoveredInr);
+
   // Coupon (FND-3) — validated + computed server-side (authoritative); the
   // checkout preview (POST /api/orders/quote) shows the same numbers ahead of
   // submit, but this is what actually gets applied.
@@ -473,7 +551,7 @@ export async function POST(request: Request) {
       ),
     ];
     const couponResult = await validateAndComputeCoupon(coupon_code.trim(), {
-      subtotalInr: subtotal_inr,
+      subtotalInr: payableAfterPass,
       userId: loyaltyUserId,
       itemIds: resolvedLines.map((l) => l.menu_item_id),
       categories,
@@ -486,13 +564,13 @@ export async function POST(request: Request) {
     if (!couponResult.ok) {
       return errorResponse(400, couponResult.reason ?? 'Coupon is not valid for this order');
     }
-    couponDiscountInr = Math.min(couponResult.discountInr, subtotal_inr);
+    couponDiscountInr = Math.min(couponResult.discountInr, payableAfterPass);
     appliedCoupon = couponResult.coupon ?? null;
   }
 
-  // Points redemption (FND-4) — validated + computed server-side. Applied
-  // against whatever remains after the coupon discount (coupon-then-points
-  // precedence per FND-3's stacking edge case).
+  // Beanies redemption (FND-4) — validated + computed server-side. Applied
+  // against whatever remains after the pass and the coupon discount
+  // (coupon-then-Beanies precedence per FND-3's stacking edge case).
   let pointsDiscountInr = 0;
   let pointsToRedeem = 0;
   if (redeem_points !== undefined) {
@@ -506,32 +584,34 @@ export async function POST(request: Request) {
         return errorResponse(
           400,
           isStaff
-            ? 'No customer account is linked to this number, so there are no points to redeem. Check the number — a new number opens its account with this order and starts earning from it.'
-            : 'You must be logged in to redeem points',
+            ? `No customer account is linked to this number, so there are no ${LOYALTY_UNIT.many} to redeem. Check the number — a new number opens its account with this order and starts earning from it.`
+            : `You must be logged in to redeem ${LOYALTY_UNIT.many}`,
         );
       }
-      const remaining = Math.max(0, subtotal_inr - couponDiscountInr);
+      const remaining = Math.max(0, payableAfterPass - couponDiscountInr);
       const quote = await quoteRedemption(loyaltyUserId, redeem_points, remaining);
       if (!quote.ok) {
-        return errorResponse(400, quote.reason ?? 'Points could not be redeemed');
+        return errorResponse(400, quote.reason ?? `${LOYALTY_UNIT.many} could not be redeemed`);
       }
       pointsDiscountInr = quote.discountInr;
       pointsToRedeem = quote.points;
     }
   }
 
-  const discount_inr = Math.min(couponDiscountInr + pointsDiscountInr, subtotal_inr);
-
-  // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand total.
-  // GST applies only to the non-exempt lines (2026-09-gst-exempt).
-  const bill = computeBill(subtotal_inr, settings, discount_inr, resolved.taxableSubtotalInr);
-
-  // Dine-in has no packaging charge (D5): force packaging to 0 and drop it from
-  // the total, regardless of the store's packaging setting. GST/discount unchanged.
-  if (isDineIn && bill.packaging_inr !== 0) {
-    bill.total_inr -= bill.packaging_inr;
-    bill.packaging_inr = 0;
-  }
+  // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand
+  // total. GST applies only to the non-exempt lines (2026-09-gst-exempt), less
+  // what the pass covers there (CP-D11); dine-in has no packaging charge (D5).
+  // With no pass this is exactly the bill this route has always made.
+  const bill = composeOrderBill({
+    settings,
+    subtotalInr: subtotal_inr,
+    taxableSubtotalInr: resolved.taxableSubtotalInr,
+    couponDiscountInr,
+    pointsDiscountInr,
+    passCoveredInr,
+    passCoveredTaxableInr,
+    isDineIn,
+  });
 
   // Online payment (PAY-1/FND-1) gates the order at 'placed' — kept OUT of
   // the staff queue until the gateway confirms it (webhook/reconcile). A
@@ -621,6 +701,9 @@ export async function POST(request: Request) {
     packaging_inr: bill.packaging_inr,
     discount_inr: bill.discount_inr,
     total_inr: bill.total_inr,
+    // Only sent when a pass paid for something, so an order that uses no pass
+    // never depends on the column existing (2026-10-coffee-pass.sql).
+    ...(bill.pass_discount_inr > 0 ? { pass_discount_inr: bill.pass_discount_inr } : {}),
     pickup_code: isDineIn ? null : generatePickupCode(),
     notes: notes ?? '',
     // The session that placed it — null for a staff order by design (D4-3).
@@ -678,18 +761,21 @@ export async function POST(request: Request) {
   // here on replays instead of racing.
   if (idempotencyKey) await completeIdempotencyKey(admin, idempotencyKey, orderRow.id as string);
 
-  // Perf: this used to be one `order_items` insert + one
-  // `order_item_addons` insert PER LINE (an N+1 that dominated latency on a
-  // multi-item cart — e.g. 3 lines with addons meant up to 6 round trips just
-  // for line items). Ids are generated here instead of read back via
-  // `.select('id').single()`, so every line's row — and its addons, which
-  // reference it by id — can go in ONE bulk insert each, independent of
-  // insert/return order. order_items.id has a `default gen_random_uuid()` in
-  // the schema; supplying our own uuid here is equally valid.
-  const lineIds = resolvedLines.map(() => crypto.randomUUID());
+  // The line ids were generated up with the pricing (see lineIds, above), so
+  // every line's row — and its addons — goes in ONE bulk insert each. A line a
+  // HIOC Ritual cup paid for also records how many units and how many rupees it
+  // covered, only when there is something to record (pre-migration safe).
   const orderItemRows = resolvedLines.map((line, i) => {
     const { addons, ...lineFields } = line;
-    return { id: lineIds[i], ...lineFields, order_id: orderRow.id };
+    const cover = passAllocation?.by_line[lineIds[i]];
+    return {
+      id: lineIds[i],
+      ...lineFields,
+      ...(cover && cover.drinks > 0
+        ? { pass_drinks: cover.drinks, pass_covered_inr: cover.covered_inr }
+        : {}),
+      order_id: orderRow.id,
+    };
   });
   const addonRows = resolvedLines.flatMap((line, i) =>
     line.addons.map((a) => ({ ...a, order_item_id: lineIds[i] })),
@@ -735,6 +821,41 @@ export async function POST(request: Request) {
     }
   }
 
+  // Spend the HIOC Ritual cups (CP-D9), now that the order and its lines exist for
+  // the redemption rows to point at, and BEFORE the coupon and Beanies steps
+  // below so that anything that fails from here on takes the cups back with it:
+  // deleting the order cascades to its redemptions, so the derived balance
+  // restores itself (spec §5.5) and no route can forget to.
+  //
+  // coffee_pass_redeem re-checks every rule under a row lock on each pass
+  // (owner, active, in date, cups left, daily cap), so two devices spending the
+  // last cup at once cannot both win: the loser gets a reason code here. It is
+  // the same shape as the coupon and Beanies races — roll the order back and ask
+  // the customer to look at the bill again.
+  if (passAllocation && passAllocation.applied > 0 && loyaltyUserId) {
+    const redeemed = await redeemPassDrinks(admin, {
+      userId: loyaltyUserId,
+      orderId: orderRow.id as string,
+      allocations: passAllocation.allocations.map((a) => ({
+        pass_id: a.pass_id,
+        order_item_id: a.line_key,
+        drinks: a.drinks,
+        covered_inr: a.covered_inr,
+      })),
+    });
+    if (redeemed !== 'ok') {
+      await admin.from('orders').delete().eq('id', orderRow.id);
+      if (redeemed === 'error') {
+        // The call itself failed (the function is missing, the database is
+        // unreachable): we cannot tell whether the cups were spent, and the
+        // order is now gone, so say the feature is unavailable, not "your pass
+        // changed".
+        return errorResponse(503, `${PASS_PROGRAM_NAME} is temporarily unavailable`);
+      }
+      return errorResponse(409, `${passRedeemMessage(redeemed)} Please review your bill and try again.`);
+    }
+  }
+
   // Snapshot the coupon redemption ATOMICALLY (FND-3 / H1): try_redeem_coupon
   // re-checks usage_limit/per_user_limit under a per-coupon lock and inserts in
   // one step, closing the last-use race. If the coupon just hit its limit
@@ -767,7 +888,7 @@ export async function POST(request: Request) {
     }
   }
 
-  // Record the points redemption ATOMICALLY (FND-4 / H1): try_redeem_points
+  // Record the Beanies redemption ATOMICALLY (FND-4 / H1): try_redeem_points
   // re-checks the balance under a per-user lock. loyaltyUserId is non-null here
   // — the quote above refuses to redeem without an account. Same rollback-on-race
   // + RPC fallback. The fallback resolves the beneficiary from the order itself,
@@ -784,7 +905,7 @@ export async function POST(request: Request) {
       await redeemForOrder(orderRow.id, pointsToRedeem, pointsDiscountInr);
     } else if (ok === false) {
       await admin.from('orders').delete().eq('id', orderRow.id);
-      return errorResponse(409, 'Your points balance changed — please review and try again.');
+      return errorResponse(409, `Your ${LOYALTY_UNIT.many} balance changed — please review and try again.`);
     }
   }
 

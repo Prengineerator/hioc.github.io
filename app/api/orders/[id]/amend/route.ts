@@ -16,6 +16,7 @@ import { getStoreSettings } from '@/lib/store/settings';
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { OrderStatus, OrderType, UserRole } from '@/lib/types';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
@@ -30,16 +31,48 @@ type RouteParams = { params: { id: string } };
 const OPEN_STATUSES: OrderStatus[] = ['accepted', 'preparing', 'ready'];
 
 // The subset of the loaded order + lines the recompute + preconditions need.
-type OrderLine = { id: string; voided: boolean; line_total_inr: number; gst_exempt?: boolean };
+type OrderLine = {
+  id: string;
+  voided: boolean;
+  line_total_inr: number;
+  gst_exempt?: boolean;
+  /** Rupees a HIOC Ritual cup paid for on this line; absent before 2026-10-coffee-pass.sql. */
+  pass_covered_inr?: number;
+};
 type LoadedOrder = {
   id: string;
   status: OrderStatus;
   version: number;
   order_type: OrderType;
   payment_status: string;
+  /** 'coffee_pass' for the sale of a HIOC Ritual; absent before 2026-10-coffee-pass.sql (= a menu order). */
+  order_kind?: string;
   discount_inr: number;
+  /** What HIOC Ritual cups cover on the order; absent before 2026-10-coffee-pass.sql. */
+  pass_discount_inr?: number;
   order_items: OrderLine[] | null;
 };
+
+// The order and its lines, for a correction. `*` on both, rather than a column
+// list, on purpose: pass_discount_inr / pass_covered_inr arrive with
+// 2026-10-coffee-pass.sql, and naming them would make every void and every add
+// fail on a database that has not had that migration yet (a select naming an
+// unknown column is refused outright). With `*` they are simply absent there —
+// which reads as "no pass cover", the truth for every order on such a database.
+const AMEND_ORDER_SELECT = '*, order_items(*)';
+
+// A HIOC Ritual SALE is one line, one price, issued as a pass the moment it is
+// paid (a trigger, CP-D6). Voiding that line or adding menu items to it would
+// leave a bill that no longer describes the pass, so neither path may touch it:
+// a mistaken sale is cancelled and sold again. Checked before any write.
+const RITUAL_SALE_LOCKED = `A ${PASS_PROGRAM_NAME} sale can't be changed — cancel it instead.`;
+
+// The order's pass cover only changes when a line a cup paid for is voided, so
+// the column is written back only then: an order that never used a pass never
+// sends the column, and a pre-migration database is never asked to store it.
+function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_discount_inr?: number } {
+  return passDiscountInr !== (order.pass_discount_inr ?? 0) ? { pass_discount_inr: passDiscountInr } : {};
+}
 
 // POST /api/orders/[id]/amend — correct an open order. Two operations:
 //
@@ -47,6 +80,8 @@ type LoadedOrder = {
 //   { op: 'add', items: [...] }→ ADD lines to the running order (TAB-1, UI TAB-2)
 //
 // `op` defaults to 'void' so the existing POS-4 contract is unchanged.
+//
+// Both refuse a HIOC Ritual sale (order_kind 'coffee_pass') outright (409).
 //
 // Both share the same invariants: the order must be open and unpaid, totals are
 // recomputed SERVER-SIDE under the optimistic `version` guard, a lost race rolls
@@ -105,15 +140,14 @@ export async function POST(request: Request, { params }: RouteParams) {
   // line list feeds both the target lookup and the server-side recompute.
   const { data, error: readError } = await admin
     .from('orders')
-    .select(
-      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr, gst_exempt)',
-    )
+    .select(AMEND_ORDER_SELECT)
     .eq('id', id)
     .maybeSingle();
 
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
 
   const items: OrderLine[] = order.order_items ?? [];
   const target = items.find((line) => line.id === itemId);
@@ -174,6 +208,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       packaging_inr: bill.packaging_inr,
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
+      ...passDiscountPatch(order, bill.pass_discount_inr),
       version: order.version + 1,
     })
     .eq('id', id)
@@ -261,15 +296,14 @@ async function addLines(
 
   const { data, error: readError } = await admin
     .from('orders')
-    .select(
-      'id, status, version, order_type, payment_status, discount_inr, order_items(id, voided, line_total_inr, gst_exempt)',
-    )
+    .select(AMEND_ORDER_SELECT)
     .eq('id', id)
     .maybeSingle();
 
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
   const existingItems: OrderLine[] = order.order_items ?? [];
 
   if (!OPEN_STATUSES.includes(order.status)) {
@@ -327,7 +361,14 @@ async function addLines(
   const settings = await getStoreSettings();
   const allLines = [
     ...existingItems,
-    ...resolved.lines.map((l) => ({ voided: false, line_total_inr: l.line_total_inr, gst_exempt: l.gst_exempt })),
+    // A line added to a running tab never carries a pass cup (v1): the cups an
+    // order uses are chosen when it is created, so the new lines are paid in full.
+    ...resolved.lines.map((l) => ({
+      voided: false,
+      line_total_inr: l.line_total_inr,
+      gst_exempt: l.gst_exempt,
+      pass_covered_inr: 0,
+    })),
   ];
   const bill = recomputeOrderTotals({
     items: allLines,
@@ -349,6 +390,7 @@ async function addLines(
       packaging_inr: bill.packaging_inr,
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
+      ...passDiscountPatch(order, bill.pass_discount_inr),
       version: order.version + 1,
       ...(nextStatus !== order.status ? { status: nextStatus } : {}),
     })

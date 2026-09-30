@@ -18,6 +18,9 @@ import {
 import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
 import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
+import { cupsOnOrder, ritualBillLabel } from '@/lib/pos/ritual';
+import { passCoveredNote, passValidTillText } from '@/lib/print/ticketModel';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -317,6 +320,11 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   const settleDiscount = order.settle_discount_inr ?? 0;
   const tip = order.tip_inr ?? 0;
   const hasPointsRows = redeemed > 0 || points > 0 || (order.points_balance !== null && order.points_balance !== undefined);
+  // HIOC Ritual — mirrors buildReceiptBlocks: the cups' cover as its own row
+  // after Discount, "(Ritual ×N)" under a covered line, and "Valid till …" under
+  // the pass on a pass SALE once the pass exists.
+  const passCovered = order.pass_discount_inr ?? 0;
+  const validTill = order.order_kind === 'coffee_pass' ? passValidTillText(order) : null;
 
   return (
     <div className="font-sans text-black">
@@ -377,11 +385,15 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
             <span className="text-right">{unitPriceInclAddons(item).toFixed(2)}</span>
             <span className="text-right font-bold">{item.line_total_inr.toFixed(2)}</span>
             {addonsLines(item.addons, { withPrice: true, itemQuantity: item.quantity }).length > 0 ||
+            passCoveredNote(item) ||
+            validTill ||
             item.special_instructions ? (
               <div className="col-start-2 col-end-6 flex flex-col gap-0.5 text-[11px]">
                 {addonsLines(item.addons, { withPrice: true, itemQuantity: item.quantity }).map((line) => (
                   <p key={line}>{line}</p>
                 ))}
+                {passCoveredNote(item) ? <p>{passCoveredNote(item)}</p> : null}
+                {validTill ? <p>{validTill}</p> : null}
                 {item.special_instructions ? <p className="italic">Note: {item.special_instructions}</p> : null}
               </div>
             ) : null}
@@ -395,6 +407,9 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         <BillRow label="Total Qty" value={String(totalQty)} />
         <BillRow label="Sub Total" value={money(order.subtotal_inr)} />
         {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`(${money(order.discount_inr)})`} /> : null}
+        {passCovered > 0 ? (
+          <BillRow label={ritualBillLabel(cupsOnOrder(activeItems))} value={`(${money(passCovered)})`} />
+        ) : null}
         {order.tax_inr > 0 ? <BillRow label="GST" value={money(order.tax_inr)} /> : null}
         {order.packaging_inr > 0 ? <BillRow label="Packaging" value={money(order.packaging_inr)} /> : null}
         <div className="mt-1 flex items-center justify-between border-t border-black pt-1 text-base font-bold">
@@ -433,10 +448,10 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
                 customer account (getStaffPrintOrder resolves all three
                 best-effort from the ledger); a guest order leaves them null
                 and none of these rows (or this whole block) render. */}
-            {redeemed > 0 ? <BillRow label="Points redeemed" value={String(redeemed)} /> : null}
-            {points > 0 ? <BillRow label="Points earned" value={String(points)} /> : null}
+            {redeemed > 0 ? <BillRow label={`${LOYALTY_UNIT.many} redeemed`} value={String(redeemed)} /> : null}
+            {points > 0 ? <BillRow label={`${LOYALTY_UNIT.many} earned`} value={String(points)} /> : null}
             {order.points_balance !== null && order.points_balance !== undefined ? (
-              <BillRow label="Points balance" value={String(order.points_balance)} />
+              <BillRow label={`${LOYALTY_UNIT.many} balance`} value={String(order.points_balance)} />
             ) : null}
           </div>
           <Divider />

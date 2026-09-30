@@ -11,6 +11,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
+import { Badge } from '@/components/ui/Badge';
+import { RITUAL_SALE_LABEL, isRitualSale } from '@/lib/pos/ritual';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import { Spinner } from '@/components/ui/Spinner';
@@ -38,6 +40,8 @@ function dateIst(iso: string): string {
 }
 
 function whereOf(o: Order): string {
+  // A HIOC Ritual sale has no table or pickup: name what it is.
+  if (isRitualSale(o)) return RITUAL_SALE_LABEL;
   if (o.order_type === 'dine_in') return o.table_label ? `Table ${o.table_label}` : 'Dine-in';
   if (o.pickup_code) return `Token ${o.pickup_code}`;
   return o.order_type === 'delivery' ? 'Delivery' : 'Takeaway';
@@ -99,7 +103,7 @@ export function SettleWorkspace() {
     const label = `#${formatOrderNumber(order.order_number)}`;
     if (intent === 'settle') {
       // Same print rule as settling from the order detail or the POS.
-      const jobs = settlePrintPlan(autoPrint).map((type) => ({ orderId: order.id, type }));
+      const jobs = settlePrintPlan(autoPrint, { orderKind: order.order_kind }).map((type) => ({ orderId: order.id, type }));
       if (jobs.length > 0) printDock.enqueue(jobs);
       setToast(`${label} settled · ${describeOrderPayment(updated)}`);
     } else {
@@ -252,11 +256,17 @@ function SettleGroup({
                   {showDate ? `${dateIst(o.created_at)}, ` : ''}
                   {timeIst(o.created_at)}
                 </span>
-                <span className="font-bold text-charcoal">{whereOf(o)}</span>
+                {isRitualSale(o) ? null : <span className="font-bold text-charcoal">{whereOf(o)}</span>}
                 {o.customer_name ? <span className="text-charcoal">{o.customer_name}</span> : null}
-                <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
-                  {STATUS_LABELS[o.status] ?? o.status}
-                </span>
+                {isRitualSale(o) ? (
+                  // The sale sits 'accepted' until it is paid, which says nothing
+                  // to a cashier: the label says what is being collected.
+                  <Badge variant="tan">{RITUAL_SALE_LABEL}</Badge>
+                ) : (
+                  <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
+                    {STATUS_LABELS[o.status] ?? o.status}
+                  </span>
+                )}
               </p>
               <p className="mt-1 truncate text-xs text-muted">{itemsSummary(o)}</p>
             </div>

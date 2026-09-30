@@ -20,6 +20,8 @@ const PERMISSION_META: Record<string, { label: string; hint: string }> = {
   refund: { label: 'Issue a refund', hint: 'Refund a captured payment' },
   cash_day_close: { label: 'Close the cash day', hint: 'Count the drawer and sign off the day' },
   cash_expense: { label: 'Record a store expense', hint: 'Punch ice, water and other petty cash paid from the drawer' },
+  pass_sell: { label: 'Sell a Ritual pass', hint: 'Sell a HIOC Ritual pass at the counter and collect payment for it' },
+  pass_manage: { label: 'Adjust a Ritual pass', hint: 'Extend a pass or give a cup back (with a reason)' },
 };
 
 const MIN_ROLE_OPTIONS: { value: 'staff' | 'manager'; label: string }[] = [

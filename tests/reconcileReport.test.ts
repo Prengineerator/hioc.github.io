@@ -183,3 +183,42 @@ describe('buildReport', () => {
     expect(total.slice(at, at + 2)).toEqual(['590', '90']);
   });
 });
+
+describe('reportCsv — HIOC Ritual columns (CP-D21)', () => {
+  it('always carries the four Ritual columns right after Net sales, zero when unused', () => {
+    const r = buildReport(
+      base({
+        orders: [{ id: 'a', created_at: '2026-09-27T05:00:00Z', status: 'completed', payment_status: 'paid', total_inr: 300, subtotal_inr: 300, tax_inr: 0, discount_inr: 0 }],
+        paidOrders: [{ id: 'a', payment_method: 'cash', total_inr: 300, subtotal_inr: 300, paid_at: '2026-09-27T05:10:00Z' }],
+      }),
+    );
+    const [header, day1, , total] = reportCsv(r).trim().split('\n').map((l) => l.split(','));
+    const at = header.indexOf('Net sales (INR)');
+    expect(header.slice(at + 1, at + 5)).toEqual([
+      'HIOC Ritual sales',
+      'HIOC Ritual sales (INR)',
+      'Ritual cups served',
+      'Ritual cups covered (INR)',
+    ]);
+    expect(day1.slice(at + 1, at + 5)).toEqual(['0', '0', '0', '0']);
+    expect(total.slice(at + 1, at + 5)).toEqual(['0', '0', '0', '0']);
+  });
+
+  it('writes the day and TOTAL figures from passSales and passRedemptions', () => {
+    const r = buildReport(
+      base({
+        orders: [{ id: 'a', created_at: '2026-09-27T05:00:00Z', status: 'completed', payment_status: 'paid', total_inr: 300, subtotal_inr: 300, tax_inr: 0, discount_inr: 0 }],
+        paidOrders: [{ id: 'a', payment_method: 'cash', total_inr: 300, subtotal_inr: 300, paid_at: '2026-09-27T05:10:00Z' }],
+      }),
+    );
+    // The CSV only reads the report's own figures; set them as buildReport would.
+    r.days[0].passSales = { count: 2, inr: 1576 };
+    r.days[0].passRedemptions = { drinks: 3, inr: 390 };
+    r.totals.passSales = { count: 2, inr: 1576 };
+    r.totals.passRedemptions = { drinks: 3, inr: 390 };
+    const [header, day1, , total] = reportCsv(r).trim().split('\n').map((l) => l.split(','));
+    const at = header.indexOf('HIOC Ritual sales');
+    expect(day1.slice(at, at + 4)).toEqual(['2', '1576', '3', '390']);
+    expect(total.slice(at, at + 4)).toEqual(['2', '1576', '3', '390']);
+  });
+});

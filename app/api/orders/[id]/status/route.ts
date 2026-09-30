@@ -12,6 +12,7 @@ import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import { consumeStockForOrder } from '@/lib/inventory/server';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { Order, OrderType, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -51,9 +52,13 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // Read current status + version (source of truth for the transition + guard).
   // order_type/payment_status feed the FND3-5 dine-in settlement guard, which
   // must see them BEFORE the write decides whether the transition is legal.
+  // `*` rather than a column list because order_kind (HIOC Ritual, 2026-10-
+  // coffee-pass.sql) does not exist before that migration, and a select naming
+  // an unknown column would fail every status change on such a database; here
+  // it is simply absent, which reads as an ordinary menu order.
   const { data: current, error: readError } = await admin
     .from('orders')
-    .select('id, status, version, customer_phone, order_number, order_type, payment_status')
+    .select('*')
     .eq('id', id)
     .maybeSingle();
 
@@ -74,6 +79,23 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       .eq('id', id)
       .single();
     return NextResponse.json({ order: unchanged as Order });
+  }
+
+  // The SALE of a HIOC Ritual pass has no kitchen steps: a database trigger
+  // completes it the moment it is paid, and it never appears on the board. So
+  // every transition is refused here — except withdrawing a sale that has not
+  // been paid yet (a mistaken or abandoned one).
+  //
+  // This runs BEFORE the manager-comp logic below on purpose. A comp writes
+  // payment_status = 'paid' ahead of the transition, and paying a pass sale is
+  // what ISSUES the pass: comping one would hand out a free 7-cup pass with an
+  // audit row that says "comp". Refusing first means the comp write never runs.
+  // A paid sale is undone by refunding it (which voids the pass), never by a
+  // status change.
+  if (current.order_kind === 'coffee_pass') {
+    if (!(to === 'cancelled' && current.payment_status === 'unpaid')) {
+      return errorResponse(409, `A ${PASS_PROGRAM_NAME} sale has no kitchen steps.`);
+    }
   }
 
   // FND3-5 manager comp override: an unpaid order at `ready` can be completed
@@ -189,9 +211,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     await sendOrderNotification(order, check.rule.notify);
   }
 
-  // Loyalty ledger hooks (FND-4): earn points when an order completes, reverse
+  // Loyalty ledger hooks (FND-4): earn Beanies when an order completes, reverse
   // them if it's rejected/cancelled. No-ops until the Loyalty engine is wired.
-  if (to === 'completed') {
+  //
+  // A HIOC Ritual pass sale never gets here (refused above), and this is the
+  // belt to those braces: a pass is already the discount (CP-D13), so its sale
+  // earns no Beanies, uses no stock and asks for no feedback, however it came to
+  // be completed.
+  if (to === 'completed' && current.order_kind !== 'coffee_pass') {
     await earnForOrder(id);
 
     // Inventory (docs/INVENTORY-SPEC.md): take the order's recipe usage off

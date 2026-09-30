@@ -27,7 +27,7 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-5">
           <li>To take, prepare, and fulfil your orders.</li>
           <li>To send you <strong>transactional</strong> updates about your order (accepted, ready, cancelled) via SMS/WhatsApp — these are essential to the service.</li>
-          <li>To operate accounts, order history, loyalty points, and reviews.</li>
+          <li>To operate accounts, order history, loyalty Beanies, and reviews.</li>
           <li>To send <strong>marketing</strong> messages only if you have given consent, which you can withdraw at any time.</li>
           <li>To comply with legal and tax obligations.</li>
         </ul>

@@ -1,8 +1,9 @@
 // The staff header's navigation, per surface (lib/staff/surfaceRules.ts).
 //
 //   POS          Live orders · Orders · Settle · New order · Tables — what the
-//                counter does all day — and Cash, Expenses, (Cash in / out,)
-//                Attendance, Leave, (Stock,) Menu and Settings under "More".
+//                counter does all day — and (Ritual passes,) Cash, Expenses,
+//                (Cash in / out,) Attendance, Leave, (Stock,) Menu and Settings
+//                under "More".
 //   staff site   Live orders · Orders · Settle, plus New order and Tables only when
 //                taking orders on the staff website is switched on; the
 //                back-office pages under "More".
@@ -28,6 +29,12 @@ export interface StaffNavInput {
   inventory?: boolean;
   /** Manager or owner: sees Cash in / out. Display only — the page and API re-check. */
   canManageCash?: boolean;
+  /**
+   * HIOC Ritual (docs/COFFEE-PASS-SPEC.md): NEXT_PUBLIC_FLAG_COFFEE_PASS. Optional
+   * so older callers read off. Selling a pass is taking an order (CP-D20), so the
+   * entry also needs `canTakeOrders`.
+   */
+  coffeePass?: boolean;
 }
 
 export interface StaffNav {
@@ -48,11 +55,17 @@ const SETTINGS: StaffTab = { href: SETTINGS_ROOT, label: 'Settings' };
 const STOCK: StaffTab = { href: '/staff/inventory', label: 'Stock' };
 const CASH: StaffTab = { href: '/staff/cash', label: 'Cash' };
 const EXPENSES: StaffTab = { href: '/staff/expenses', label: 'Expenses' };
+const RITUAL_PASSES: StaffTab = { href: '/staff/passes', label: 'Ritual passes' };
 const CASH_MOVEMENTS: StaffTab = { href: '/staff/cash-movements', label: 'Cash in / out' };
 
 /** The occasional pages both surfaces keep under "More". */
 function backOffice(input: StaffNavInput): StaffTab[] {
   return [
+    // HIOC Ritual: sell a prepaid plan, see what a customer holds. A counter job
+    // rather than back office, so it leads the menu; visible to anyone who can
+    // take orders (the sell and manage permissions are checked on the page and
+    // by the API).
+    ...(input.coffeePass && input.canTakeOrders ? [RITUAL_PASSES] : []),
     // OPS-2: cash drawer day-open/close by denomination. Expenses (any staffer)
     // and the manager-only cash in / out are their own pages next to it.
     ...(input.staffPos ? [CASH, EXPENSES, ...(input.canManageCash ? [CASH_MOVEMENTS] : [])] : []),

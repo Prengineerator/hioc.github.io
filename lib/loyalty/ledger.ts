@@ -11,6 +11,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { expiryCutoff, pointsToExpire, type ExpiryRow } from '@/lib/loyalty/expiry';
+import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
 
 /**
@@ -99,10 +100,10 @@ export async function quoteRedemption(
   knownBalance?: number,
 ): Promise<RedeemQuote> {
   if (!userId) {
-    return { ok: false, points: 0, discountInr: 0, reason: 'Log in to redeem points' };
+    return { ok: false, points: 0, discountInr: 0, reason: `Log in to redeem ${LOYALTY_UNIT.many}` };
   }
   if (!Number.isInteger(points) || points <= 0) {
-    return { ok: false, points: 0, discountInr: 0, reason: 'Enter a valid number of points to redeem' };
+    return { ok: false, points: 0, discountInr: 0, reason: `Enter a valid number of ${LOYALTY_UNIT.many} to redeem` };
   }
   if (!Number.isFinite(subtotalInr) || subtotalInr <= 0) {
     return { ok: false, points: 0, discountInr: 0, reason: 'Your cart is empty' };
@@ -118,13 +119,13 @@ export async function quoteRedemption(
       ok: false,
       points: 0,
       discountInr: 0,
-      reason: `Minimum ${config.min_redeem_points} points required to redeem`,
+      reason: `Minimum ${beaniesLabel(config.min_redeem_points)} required to redeem`,
     };
   }
 
   const balance = knownBalance ?? (await getBalance(userId));
   if (points > balance) {
-    return { ok: false, points: 0, discountInr: 0, reason: `You only have ${balance} points available` };
+    return { ok: false, points: 0, discountInr: 0, reason: `You only have ${beaniesLabel(balance)} available` };
   }
 
   const discountInr = Math.floor(points * config.inr_per_point);
@@ -134,7 +135,7 @@ export async function quoteRedemption(
       ok: false,
       points: 0,
       discountInr: 0,
-      reason: `Points redemption is capped at ${config.max_redeem_pct}% of the bill (₹${maxDiscountInr})`,
+      reason: `Redeeming ${LOYALTY_UNIT.many} is capped at ${config.max_redeem_pct}% of the bill (₹${maxDiscountInr})`,
     };
   }
   if (discountInr <= 0) {
@@ -434,7 +435,7 @@ export async function expireLoyaltyPoints(now = new Date()): Promise<{ users: nu
       order_id: null,
       type: 'expire',
       points: -expiring,
-      note: `Expired — points older than ${config.points_expiry_days} days`,
+      note: `Expired — ${LOYALTY_UNIT.many} older than ${config.points_expiry_days} days`,
     });
   }
 

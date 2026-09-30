@@ -6,6 +6,7 @@ import { createPaymentIntent, fetchOrderPaymentAttempts } from '@/lib/payments/g
 import { captureGatewayPayment } from '@/lib/payments/reconcile';
 import { canTransition } from '@/lib/orders/stateMachine';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { Order } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -90,7 +91,10 @@ export async function POST(request: Request, { params }: RouteParams) {
   const admin = createAdminSupabaseClient();
   const { data: current, error: readError } = await admin
     .from('orders')
-    .select('id, status, version, payment_status, total_inr, channel, user_id')
+    // '*' rather than a column list: order_kind (HIOC Ritual) only exists once
+    // supabase/2026-10-coffee-pass.sql is applied, and naming it would fail
+    // every retry before then. Absent, it reads as an ordinary menu order.
+    .select('*')
     .eq('id', orderId)
     .maybeSingle();
   if (readError) return errorResponse(500, 'Failed to load order');
@@ -108,6 +112,16 @@ export async function POST(request: Request, { params }: RouteParams) {
   // physically at the table, so switching to pay at counter after a failed
   // attempt is fine for them.
   if (action === 'switch_to_counter') {
+    // HIOC Ritual (CP-D8): a Ritual bought online has no pay-at-counter path.
+    // Switching would park an unpaid pass sale at the counter with nothing for
+    // the kitchen to make and nobody expecting to collect it. The customer
+    // retries the payment, or buys it at the counter where it is sold properly.
+    if ((current as { order_kind?: string }).order_kind === 'coffee_pass') {
+      return errorResponse(
+        409,
+        `A ${PASS_PROGRAM_NAME} bought online is paid online — please retry the payment, or buy it at the counter.`,
+      );
+    }
     const mustPayOnline = current.channel === 'customer_web' && !current.user_id;
     if (mustPayOnline) {
       return errorResponse(

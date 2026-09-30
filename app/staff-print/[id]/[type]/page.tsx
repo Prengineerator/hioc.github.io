@@ -5,6 +5,7 @@ import { getCounterActor } from '@/lib/api/auth';
 import { getStaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { onlyKotItems, parseKotItemsParam } from '@/lib/print/kotAddition';
 import { KotTicket, ReceiptTicket, TokenSlip } from '@/components/print/StaffTickets';
+import { printsKot } from '@/lib/staff/autoPrint';
 import { AutoPrint } from '@/components/print/AutoPrint';
 import { PrintOnLoad } from './PrintOnLoad';
 
@@ -76,6 +77,13 @@ export default async function StaffPrintPage({
 
   const loaded = await getStaffPrintOrder(id);
   if (!loaded) {
+    notFound();
+  }
+  // HIOC Ritual: the sale of a pass is a payment, not food — it has no kitchen
+  // ticket (and no pickup token). Refused here exactly as the JSON route refuses
+  // it, so a stray KOT job in the print dock can never put a phantom order on
+  // the kitchen's rail. The receipt is the one ticket a pass sale prints.
+  if ((type === 'kot' || type === 'token') && !printsKot(loaded.order_kind)) {
     notFound();
   }
   // `?items=` — a KOT of only the lines added to a running order.

@@ -10,6 +10,24 @@ import type { StoreSettings } from '@/lib/types';
 
 export type PrintType = 'kot' | 'receipt' | 'token';
 
+/**
+ * Whether a KOT (kitchen ticket) may ever print for this kind of order. A HIOC
+ * Ritual pass SALE (order_kind 'coffee_pass') is a payment, not food: it has no
+ * kitchen ticket and no pickup token, only a receipt.
+ */
+export function printsKot(orderKind?: string | null): boolean {
+  return orderKind !== 'coffee_pass';
+}
+
+/**
+ * A plan cut down to what this kind of order may print. The one place the rule
+ * lives, so the two plans below cannot disagree: a pass sale keeps only its
+ * receipt (no KOT, and no pickup token either — there is nothing to hand over).
+ */
+function printsFor(plan: PrintType[], orderKind?: string | null): PrintType[] {
+  return orderKind === 'coffee_pass' ? plan.filter((t) => t === 'receipt') : plan;
+}
+
 export interface AutoPrintSettings {
   kot: boolean;
   bill: boolean;
@@ -47,12 +65,13 @@ export function printUrl(orderId: string, type: PrintType, itemIds?: readonly st
  */
 export function placementPrintPlan(
   settings: AutoPrintSettings,
-  opts: { settled: boolean },
+  opts: { settled: boolean; orderKind?: string | null },
 ): PrintType[] {
   const plan: PrintType[] = [];
   if (settings.kot) plan.push('kot');
   if (settings.bill && opts.settled) plan.push('receipt');
-  return plan;
+  // A pass sale never goes to the kitchen, whatever the KOT switch says.
+  return printsFor(plan, opts.orderKind);
 }
 
 /**
@@ -60,6 +79,6 @@ export function placementPrintPlan(
  * No KOT: the kitchen got its ticket when the order was placed, and a second one
  * at payment time reads as a second order on the rail.
  */
-export function settlePrintPlan(settings: AutoPrintSettings): PrintType[] {
-  return settings.bill ? ['receipt'] : [];
+export function settlePrintPlan(settings: AutoPrintSettings, opts: { orderKind?: string | null } = {}): PrintType[] {
+  return printsFor(settings.bill ? ['receipt'] : [], opts.orderKind);
 }

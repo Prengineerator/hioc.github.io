@@ -16,6 +16,22 @@ import { createClient } from '@/lib/supabase';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
+import { LOYALTY_UNIT, beaniesUnit } from '@/lib/loyalty/brand';
+import { flags } from '@/lib/flags';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { useRitualOffer } from '@/components/passes/useRitualOffer';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { SurfaceLink } from '@/components/SurfaceLink';
+import {
+  passCupsToRequest,
+  passCupsToSend,
+  passHelperLine,
+  passRowMode,
+  ritualBillLabel,
+  ritualOnSale,
+  stepPassCups,
+  type PassQuote,
+} from '@/lib/passes/ui';
 
 // Takeaway + dine-in for Phase-1. Both are pickup-at-counter flows (dine-in
 // just means eating in), so they share the same checkout. 'delivery' stays out
@@ -55,6 +71,9 @@ interface QuoteResponse {
   coupon: { ok: boolean; discountInr: number; reason?: string } | null;
   points: { ok: boolean; points: number; discountInr: number; reason?: string } | null;
   balance: number | null;
+  // HIOC Ritual preview (docs/COFFEE-PASS-SPEC.md §7): null when the feature is
+  // off, no account is known, or the quote was asked without `items`.
+  pass?: PassQuote | null;
 }
 
 export function CheckoutForm({
@@ -152,6 +171,31 @@ export function CheckoutForm({
   const [bill, setBill] = useState<BillBreakdown | null>(null);
   const [couponDiscountInr, setCouponDiscountInr] = useState(0);
   const [pointsDiscountInr, setPointsDiscountInr] = useState(0);
+
+  // HIOC Ritual (docs/COFFEE-PASS-SPEC.md CP-D10). Only for a signed-in customer
+  // with the feature on: the quote then also prices the cart's cups. The stepper
+  // opens at the most the cart can use (the first quote asks for the maximum and
+  // the server says what it can apply) and follows the server after that.
+  //   passQuote      the `pass` block of the latest quote (null: none yet / none known)
+  //   passDrinks     the stepper: cups the customer is using
+  //   passTouched    the customer has used − / +, so their number is what is asked for
+  //   passSettled    the first pass-aware quote has come back (or failed), so the row
+  //                  is known; Place Order waits for it so a cup is never left unused
+  //                  by a customer who submitted a moment too soon
+  const passEnabled = flags.coffeePass && Boolean(userId);
+  const [passQuote, setPassQuote] = useState<PassQuote | null>(null);
+  const [passDrinks, setPassDrinks] = useState(0);
+  const passDrinksRef = useRef(0);
+  const passTouched = useRef(false);
+  const [passSettled, setPassSettled] = useState(false);
+  const [passBusy, setPassBusy] = useState(false);
+  // Only the newest quote may update the screen: with a stepper in play two can
+  // be in flight, and a slow older answer must not overwrite a newer one.
+  const quoteSeq = useRef(0);
+  // "Save with HIOC Ritual" is offered only to someone with no usable cups, and
+  // only while a plan is actually on sale (one shared read, see useRitualOffer).
+  const noPassKnown = passEnabled && passSettled && passQuote !== null && passQuote.available <= 0;
+  const ritualOffer = useRitualOffer({ enabled: noPassKnown });
 
   const slots = useMemo(
     () => (settings ? generatePickupSlots(settings) : []),
@@ -253,24 +297,63 @@ export function CheckoutForm({
     };
   }, [prefill]);
 
+  // The cart in the shape POST /api/orders takes it: the quote prices it
+  // server-side (so it can see which drinks a Ritual cup could pay for) and the
+  // order itself sends exactly the same lines.
+  function orderItemsPayload() {
+    return items.map((i) => ({
+      menu_item_id: i.menuItemId,
+      variant_id: i.variantId,
+      quantity: i.qty,
+      addon_option_ids: i.addons.map((a) => a.optionId),
+      special_instructions: i.specialInstructions,
+    }));
+  }
+
   // Live bill preview (PAY-1): re-quotes whenever the cart subtotal changes.
   // Coupon/points are (re-)applied explicitly via their Apply buttons, which
-  // call the same function with the values being applied.
-  async function refreshQuote(nextCoupon: string, nextPoints: number): Promise<QuoteResponse | null> {
-    try {
-      const res = await fetch('/api/orders/quote', {
+  // call the same function with the values being applied. `nextPassCups`
+  // overrides how many Ritual cups to ask for (the stepper passes its new value).
+  async function refreshQuote(
+    nextCoupon: string,
+    nextPoints: number,
+    nextPassCups?: number,
+  ): Promise<QuoteResponse | null> {
+    const seq = ++quoteSeq.current;
+    const withPass = passEnabled;
+    const base = {
+      subtotal_inr: totalPrice,
+      taxable_subtotal_inr: cartTaxableSubtotal(items),
+      coupon_code: nextCoupon || undefined,
+      redeem_points: nextPoints || undefined,
+      item_ids: items.map((i) => i.menuItemId),
+    };
+    const post = (extra: Record<string, unknown>) =>
+      fetch('/api/orders/quote', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subtotal_inr: totalPrice,
-          taxable_subtotal_inr: cartTaxableSubtotal(items),
-          coupon_code: nextCoupon || undefined,
-          redeem_points: nextPoints || undefined,
-          item_ids: items.map((i) => i.menuItemId),
-        }),
+        body: JSON.stringify({ ...base, ...extra }),
       });
+    try {
+      let res = await post(
+        withPass
+          ? {
+              items: orderItemsPayload(),
+              pass_drinks: nextPassCups ?? passCupsToRequest(passTouched.current, passDrinksRef.current),
+            }
+          : {},
+      );
+      let priced = withPass;
+      // A cart the server cannot price (an item just went off the menu) still
+      // gets its plain preview, as it did before the Ritual existed.
+      if (!res.ok && withPass) {
+        res = await post({});
+        priced = false;
+      }
+      if (withPass && seq === quoteSeq.current) setPassSettled(true);
       if (!res.ok) return null;
       const data = (await res.json()) as QuoteResponse;
+      if (seq !== quoteSeq.current) return data;
       setBill(data.bill);
       setBalance(data.balance);
       // Keep the itemized discount lines in sync with whatever was actually
@@ -278,8 +361,18 @@ export function CheckoutForm({
       // not just the explicit Apply buttons.
       setCouponDiscountInr(nextCoupon && data.coupon?.ok ? data.coupon.discountInr : 0);
       setPointsDiscountInr(nextPoints > 0 && data.points?.ok ? data.points.discountInr : 0);
+      if (withPass) {
+        const pass = priced ? (data.pass ?? null) : null;
+        setPassQuote(pass);
+        // The server's answer is the truth for the stepper (CP-D10: opens at the
+        // most the cart can use, and never shows more than was applied).
+        const applied = pass?.applied ?? 0;
+        passDrinksRef.current = applied;
+        setPassDrinks(applied);
+      }
       return data;
     } catch {
+      if (withPass && seq === quoteSeq.current) setPassSettled(true);
       return null;
     }
   }
@@ -288,6 +381,45 @@ export function CheckoutForm({
     refreshQuote(couponApplied ?? '', pointsApplied ?? 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalPrice]);
+
+  // The session is only known a moment after mount: once it is, and the customer
+  // can have a Ritual, ask again with the cart's lines so the cups are priced.
+  useEffect(() => {
+    if (!passEnabled) return;
+    refreshQuote(couponApplied ?? '', pointsApplied ?? 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passEnabled]);
+
+  // The coupon and Beanies are worked out on what is left after the Ritual
+  // (CP-D12), so changing the cups can make an applied one stop applying. Drop
+  // such an offer (with the reason) instead of leaving the customer to place an
+  // order the server would refuse.
+  function dropOffersThatNoLongerApply(data: QuoteResponse | null) {
+    if (!data) return;
+    if (couponApplied && !data.coupon?.ok) {
+      setCouponApplied(null);
+      setCouponInput('');
+      setCouponError(data.coupon?.reason ?? 'This coupon no longer applies to your order.');
+    }
+    if (pointsApplied && !data.points?.ok) {
+      setPointsApplied(null);
+      setPointsInput('');
+      setPointsError(data.points?.reason ?? `Your ${LOYALTY_UNIT.many} no longer apply to your order.`);
+    }
+  }
+
+  async function changePassCups(delta: 1 | -1) {
+    if (!passQuote) return;
+    const next = stepPassCups(passDrinksRef.current, delta, passQuote.max_usable);
+    if (next === passDrinksRef.current) return;
+    passTouched.current = true;
+    passDrinksRef.current = next;
+    setPassDrinks(next);
+    setPassBusy(true);
+    const data = await refreshQuote(couponApplied ?? '', pointsApplied ?? 0, next);
+    dropOffersThatNoLongerApply(data);
+    setPassBusy(false);
+  }
 
   async function applyCoupon() {
     const code = couponInput.trim();
@@ -316,7 +448,7 @@ export function CheckoutForm({
   async function applyPoints() {
     const pts = parseInt(pointsInput, 10);
     if (!Number.isFinite(pts) || pts <= 0) {
-      setPointsError('Enter a valid number of points.');
+      setPointsError(`Enter a valid number of ${LOYALTY_UNIT.many}.`);
       return;
     }
     setPointsBusy(true);
@@ -327,7 +459,7 @@ export function CheckoutForm({
       setPointsError(null);
     } else {
       setPointsApplied(null);
-      setPointsError(data?.points?.reason ?? 'Points could not be redeemed.');
+      setPointsError(data?.points?.reason ?? `${LOYALTY_UNIT.many} could not be redeemed.`);
       await refreshQuote(couponApplied ?? '', 0);
     }
     setPointsBusy(false);
@@ -418,6 +550,10 @@ export function CheckoutForm({
 
   async function placeOrder() {
     const selectedSlot = slots.find((s) => s.start === slotStart) ?? slots[0];
+    // Ritual cups ride along only when the latest quote applied them and that is
+    // the number on screen — the same rule the coupon and Beanies follow, so the
+    // order never asks for cups the customer did not see priced.
+    const passToSend = passEnabled ? passCupsToSend(passQuote, passDrinksRef.current) : undefined;
 
     setSubmitting(true);
     try {
@@ -434,17 +570,12 @@ export function CheckoutForm({
           pickup_slot_start:
             selectedSlot && !selectedSlot.isAsap ? selectedSlot.start : undefined,
           notes,
-          items: items.map((i) => ({
-            menu_item_id: i.menuItemId,
-            variant_id: i.variantId,
-            quantity: i.qty,
-            addon_option_ids: i.addons.map((a) => a.optionId),
-            special_instructions: i.specialInstructions,
-          })),
+          items: orderItemsPayload(),
           payment_mode: ONLINE_PAYMENT_AVAILABLE ? effectivePaymentMode : 'counter',
           require_online: isGuest,
           coupon_code: couponApplied ?? undefined,
           redeem_points: pointsApplied ?? undefined,
+          ...(passToSend !== undefined ? { pass_drinks: passToSend } : {}),
           // Phase-7 (SUG-8): omitted entirely (not sent as []) when no cart
           // line came from a /suggest session.
           ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
@@ -489,6 +620,14 @@ export function CheckoutForm({
 
       const data = await res.json().catch(() => ({ error: 'Unknown error' }));
       setServerError(data.error ?? 'Unknown error');
+      // The Ritual changed between the quote and the order (a cup spent on
+      // another device, the pass expired): 409, or a 400 when fewer cups can be
+      // applied than were asked for. The message says why; quote again so the
+      // stepper and the bill show what is possible now.
+      if (passToSend !== undefined && (res.status === 409 || res.status === 400)) {
+        const requote = await refreshQuote(couponApplied ?? '', pointsApplied ?? 0, passDrinksRef.current);
+        dropOffersThatNoLongerApply(requote);
+      }
     } catch {
       setServerError('Network error — please check your connection.');
     } finally {
@@ -533,7 +672,13 @@ export function CheckoutForm({
 
   const guestBlocker = mustVerify ? guestReadinessBlocker() : null;
 
-  const anySavings = couponDiscountInr > 0 && pointsDiscountInr > 0;
+  // What the Ritual takes off, from the latest quote (0 when no cups are used).
+  const passApplied = passEnabled && passQuote ? passQuote.applied : 0;
+  const passDiscountInr = passApplied > 0 && passQuote ? passQuote.discount_inr : 0;
+  const savings = [passDiscountInr, couponDiscountInr, pointsDiscountInr].filter((n) => n > 0);
+  const anySavings = savings.length >= 2;
+  const rowMode = passEnabled ? passRowMode(passQuote) : 'hidden';
+  const passHelper = passEnabled ? passHelperLine(passQuote, passTouched.current) : null;
 
   return (
     <div className="flex flex-col gap-4 md:gap-5">
@@ -723,6 +868,93 @@ export function CheckoutForm({
         <div className="rounded-md border border-dashed border-tan bg-surface p-4 md:p-5">
           <h2 className="mb-3 text-sm font-semibold text-tan-dark">Offers &amp; rewards</h2>
           <div className="flex flex-col gap-4">
+            {/* HIOC Ritual — signed-in customers with the feature on. With cups
+                to use it is a stepper pre-filled to the most this cart can use
+                (CP-D10); with none, nothing advertises an empty pass — at most a
+                quiet link to the plans. Above the coupon because the pass is
+                applied first (CP-D12). */}
+            {passEnabled && !passSettled ? <Skeleton className="h-11 w-full" /> : null}
+            {rowMode === 'stepper' && passQuote ? (
+              <>
+                <div>
+                  <div
+                    className={
+                      'flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md border px-3 py-2 text-sm text-charcoal ' +
+                      (passApplied > 0 ? 'border-green-700/30 bg-green-50' : 'border-line bg-cream')
+                    }
+                  >
+                    <p aria-live="polite" className="flex min-w-0 flex-1 basis-44 items-start gap-1.5">
+                      <CupIcon className="mt-0.5" />
+                      <span>
+                        {PASS_PROGRAM_NAME} — using{' '}
+                        <span className="font-mono font-bold tabular-nums">{passApplied}</span> of{' '}
+                        <span className="font-mono tabular-nums">{passQuote.available}</span>{' '}
+                        {passQuote.available === 1 ? 'cup' : 'cups'}
+                        {passDiscountInr > 0 ? (
+                          <>
+                            {' '}
+                            <span className="font-mono font-bold tabular-nums text-green-700">
+                              (&minus;₹{passDiscountInr})
+                            </span>
+                          </>
+                        ) : null}
+                      </span>
+                    </p>
+                    <div role="group" aria-label={`${PASS_PROGRAM_NAME} cups to use`} className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        aria-label="Use one fewer cup"
+                        onClick={() => void changePassCups(-1)}
+                        disabled={passBusy || passApplied <= 0}
+                        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-line bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        &minus;
+                      </button>
+                      <span className="min-w-[2ch] text-center font-mono font-bold tabular-nums text-charcoal">
+                        {passDrinks}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Use one more cup"
+                        onClick={() => void changePassCups(1)}
+                        disabled={passBusy || passApplied >= passQuote.max_usable}
+                        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-line bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                  {passHelper ? <p className="mt-1 text-sm text-muted">{passHelper}</p> : null}
+                </div>
+                <div className="border-t border-dashed border-tan/50" />
+              </>
+            ) : null}
+            {rowMode === 'unusable' && passQuote ? (
+              <>
+                <p className="flex items-start gap-1.5 text-sm text-muted">
+                  <CupIcon className="mt-0.5" />
+                  <span>
+                    <span className="font-semibold text-charcoal">{PASS_PROGRAM_NAME}</span> —{' '}
+                    {passHelper ??
+                      `you have ${passQuote.available} ${passQuote.available === 1 ? 'cup' : 'cups'} left, but none can be used on this order.`}
+                  </span>
+                </p>
+                <div className="border-t border-dashed border-tan/50" />
+              </>
+            ) : null}
+            {noPassKnown && ritualOnSale(ritualOffer.offer) ? (
+              <>
+                <SurfaceLink
+                  href="/ritual"
+                  className="-my-1 inline-flex min-h-[44px] items-center gap-1.5 self-start text-sm font-semibold text-tan-dark hover:underline"
+                >
+                  <CupIcon />
+                  Save with {PASS_PROGRAM_NAME} <span aria-hidden="true">→</span>
+                </SurfaceLink>
+                <div className="border-t border-dashed border-tan/50" />
+              </>
+            ) : null}
+
             {/* Coupon code. */}
             <div>
               <div className="mb-1 flex items-center gap-1.5">
@@ -778,19 +1010,19 @@ export function CheckoutForm({
                     <div className="flex items-center gap-1.5">
                       <StarIcon />
                       <label htmlFor="points" className="text-sm font-semibold text-charcoal">
-                        Redeem points
+                        Redeem {LOYALTY_UNIT.many}
                       </label>
                     </div>
                     {balance !== null ? (
                       <span className="rounded-full border border-tan/50 bg-cream px-2 py-0.5 text-xs font-semibold text-tan-dark">
-                        Balance: <span className="font-mono tabular-nums">{balance}</span> pts
+                        Balance: <span className="font-mono tabular-nums">{balance}</span> {beaniesUnit(balance)}
                       </span>
                     ) : null}
                   </div>
                   {pointsApplied ? (
                     <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
                       <span>
-                        <span className="font-mono tabular-nums">{pointsApplied}</span> pts applied · You save{' '}
+                        <span className="font-mono tabular-nums">{pointsApplied}</span> {beaniesUnit(pointsApplied)} applied · You save{' '}
                         <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>
                       </span>
                       <button type="button" onClick={removePoints} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
@@ -826,7 +1058,7 @@ export function CheckoutForm({
 
             {anySavings ? (
               <p className="border-t border-dashed border-tan/50 pt-3 text-sm font-bold text-tan-dark">
-                Total savings <span className="font-mono tabular-nums">₹{couponDiscountInr + pointsDiscountInr}</span>
+                Total savings <span className="font-mono tabular-nums">₹{savings.reduce((sum, n) => sum + n, 0)}</span>
               </p>
             ) : null}
           </div>
@@ -839,16 +1071,22 @@ export function CheckoutForm({
             <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
             {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
             {displayBill.packaging_inr > 0 ? <BillRow label="Packaging" value={displayBill.packaging_inr} /> : null}
+            {passDiscountInr > 0 ? (
+              <BillRow label={ritualBillLabel(passApplied)} value={-passDiscountInr} tone="success" />
+            ) : null}
             {couponDiscountInr > 0 ? (
               <BillRow label={`Coupon (${couponApplied})`} value={-couponDiscountInr} tone="success" />
             ) : null}
             {pointsDiscountInr > 0 ? (
-              <BillRow label={`Points (${pointsApplied} pts)`} value={-pointsDiscountInr} tone="success" />
+              <BillRow label={`${LOYALTY_UNIT.many} redeemed (${pointsApplied})`} value={-pointsDiscountInr} tone="success" />
             ) : null}
             <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
               <span className="font-bold text-charcoal">Total</span>
               <span className="font-mono font-bold tabular-nums text-tan-dark">₹{displayBill.total_inr}</span>
             </div>
+            {displayBill.total_inr === 0 && passApplied > 0 ? (
+              <p className="mt-2 text-sm text-muted">Fully covered by your {PASS_PROGRAM_NAME} — nothing to pay.</p>
+            ) : null}
           </div>
         </Section>
 
@@ -975,7 +1213,17 @@ export function CheckoutForm({
           <button
             type="submit"
             aria-busy={submitting || undefined}
-            disabled={submitting || otp.busy || !canSubmit || guestCannotPay || !authChecked}
+            disabled={
+              submitting ||
+              otp.busy ||
+              !canSubmit ||
+              guestCannotPay ||
+              !authChecked ||
+              // Wait for the Ritual row to be known (a moment after sign-in) and for a
+              // stepper tap to be priced, so the bill the customer sees is what is sent.
+              (passEnabled && !passSettled) ||
+              passBusy
+            }
             className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? (
@@ -988,7 +1236,7 @@ export function CheckoutForm({
               'Placing Order…'
             ) : !storeAcceptingOrders ? (
               'Checkout Unavailable'
-            ) : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online' ? (
+            ) : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online' && displayBill.total_inr > 0 ? (
               <>
                 Pay <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span> & Place Order
               </>
@@ -1069,6 +1317,27 @@ function TicketIcon() {
     >
       <path d="M3 9a2 2 0 0 0 0 4v3a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-3a2 2 0 0 1 0-4V6a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v3Z" />
       <path d="M9 4v16" strokeDasharray="2.5 2.5" />
+    </svg>
+  );
+}
+
+function CupIcon({ className = '' }: { className?: string }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={'shrink-0 text-tan-dark ' + className}
+    >
+      <path d="M4 8h12v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z" />
+      <path d="M16 10h1.5a2.5 2.5 0 0 1 0 5H16" />
+      <path d="M8 3v2M12 3v2" />
     </svg>
   );
 }

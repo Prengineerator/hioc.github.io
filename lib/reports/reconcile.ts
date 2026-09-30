@@ -14,6 +14,12 @@
 //     is what the drawer on each day actually saw.
 // "Unpaid" explains most of the gap between the two: orders from the range
 // whose money has still not been taken.
+//
+// HIOC Ritual (docs/COFFEE-PASS-SPEC.md §7, CP-D21): revenue is counted when the
+// pass is SOLD, so a pass sale is an ordinary paid order in every number below
+// and is also broken out as `passSales`. What a redeemed cup covered
+// (orders.pass_discount_inr) is NOT a marketing discount: it stays out of
+// `discountInr` and is reported on its own as `passRedemptions`.
 
 import type { PaymentMethod } from '@/lib/types';
 
@@ -97,6 +103,16 @@ export interface SaleOrderRow {
   tax_inr: number | null;
   discount_inr: number | null;
   settle_discount_inr?: number | null;
+  /** 'coffee_pass' = the SALE of a HIOC Ritual pass; absent (before 2026-10-coffee-pass.sql) = 'menu'. */
+  order_kind?: string | null;
+  /** What pass cups covered on this order (kept apart from discount_inr); absent = 0. */
+  pass_discount_inr?: number | null;
+}
+
+/** Cups a HIOC Ritual pass paid for on one order line (order_items.pass_drinks). */
+export interface PassLineRow {
+  order_id: string;
+  pass_drinks: number | null;
 }
 
 export interface PaymentPartRow {
@@ -156,6 +172,8 @@ export interface ReportInput {
   refunds: RefundRow[];
   movements: CashMovementRow[];
   cashDays: CashDayRow[];
+  /** The non-voided lines of orders that used pass cups, with the cups each spent. Absent = none. */
+  passLines?: PassLineRow[];
 }
 
 // ── Output ─────────────────────────────────────────────────────────────────
@@ -173,6 +191,10 @@ export interface ReportDay {
   settleDiscountInr: number;
   /** Gross minus settlement discounts (tips are never sales). */
   netSalesInr: number;
+  /** Passes sold: paid HIOC Ritual sale orders placed this day (already inside grossSalesInr). */
+  passSales: { count: number; inr: number };
+  /** Cups redeemed: the cups and the rupees pass cover on orders placed this day that stand (not cancelled, rejected or fully refunded). Not part of discountInr. */
+  passRedemptions: { drinks: number; inr: number };
   /** From this day's orders, still not paid. */
   unpaidOrders: number;
   unpaidInr: number;
@@ -218,6 +240,8 @@ function emptyDay(date: string): ReportDay {
     discountInr: 0,
     settleDiscountInr: 0,
     netSalesInr: 0,
+    passSales: { count: 0, inr: 0 },
+    passRedemptions: { drinks: 0, inr: 0 },
     unpaidOrders: 0,
     unpaidInr: 0,
     received: zeroMethods(),
@@ -237,6 +261,13 @@ export function buildReport(input: ReportInput): Report {
   const days = new Map(datesBetween(input.from, input.to).map((d) => [d, emptyDay(d)]));
   const dayOf = (iso: string) => days.get(istDateOf(iso));
 
+  // Cups spent per order, from the lines that were not voided since (a voided
+  // line's cups went back to the pass).
+  const cupsByOrder = new Map<string, number>();
+  for (const l of input.passLines ?? []) {
+    cupsByOrder.set(l.order_id, (cupsByOrder.get(l.order_id) ?? 0) + (l.pass_drinks ?? 0));
+  }
+
   for (const o of input.orders) {
     const day = dayOf(o.created_at);
     if (!day) continue;
@@ -250,6 +281,22 @@ export function buildReport(input: ReportInput): Report {
     day.taxInr += o.tax_inr ?? 0;
     day.discountInr += o.discount_inr ?? 0;
     day.settleDiscountInr += o.settle_discount_inr ?? 0;
+    if (o.order_kind === 'coffee_pass') {
+      // A pass SALE. Counted once it is paid (an abandoned or unpaid sale issued
+      // nothing); a refunded one drops out, its refund showing under refunds.
+      if (o.payment_status === 'paid') {
+        day.passSales.count += 1;
+        day.passSales.inr += total;
+      }
+    } else if (o.payment_status !== 'refunded') {
+      // A menu order that used cups. A fully refunded one is left out: its cups
+      // went back to the pass (CP-D14), so nothing was redeemed.
+      const cover = o.pass_discount_inr ?? 0;
+      if (cover > 0) {
+        day.passRedemptions.inr += cover;
+        day.passRedemptions.drinks += cupsByOrder.get(o.id) ?? 0;
+      }
+    }
     if (o.payment_status === 'unpaid' || o.payment_status === 'payment_pending') {
       day.unpaidOrders += 1;
       day.unpaidInr += total;
@@ -332,6 +379,10 @@ export function buildReport(input: ReportInput): Report {
   ] as const;
   for (const d of list) {
     for (const k of numericKeys) totals[k] += d[k];
+    totals.passSales.count += d.passSales.count;
+    totals.passSales.inr += d.passSales.inr;
+    totals.passRedemptions.drinks += d.passRedemptions.drinks;
+    totals.passRedemptions.inr += d.passRedemptions.inr;
     for (const m of REPORT_METHODS) {
       totals.received[m] += d.received[m];
       totals.refunds[m] += d.refunds[m];
@@ -356,6 +407,15 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['Discounts (INR)', (d) => d.discountInr],
   ['Settle discounts (INR)', (d) => d.settleDiscountInr],
   ['Net sales (INR)', (d) => d.netSalesInr],
+  // HIOC Ritual (CP-D21), for the accountant. Ritual sales are already inside
+  // Gross sales (the money came in when the Ritual was sold). What a redeemed cup
+  // covered is NOT a discount (it was prepaid), so it sits in its own columns
+  // rather than in Discounts. Always present, zero when unused, so the sheet's
+  // columns never shift with the feature flag.
+  ['HIOC Ritual sales', (d) => d.passSales.count],
+  ['HIOC Ritual sales (INR)', (d) => d.passSales.inr],
+  ['Ritual cups served', (d) => d.passRedemptions.drinks],
+  ['Ritual cups covered (INR)', (d) => d.passRedemptions.inr],
   ['Unpaid orders', (d) => d.unpaidOrders],
   ['Unpaid (INR)', (d) => d.unpaidInr],
   ['Cash received (INR)', (d) => d.received.cash],

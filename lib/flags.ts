@@ -83,6 +83,17 @@ export const flags = {
   // /api/inventory routes, and the completion hook — so it is read on the
   // server too, hence NEXT_PUBLIC_.
   inventory: boolEnv(process.env.NEXT_PUBLIC_FLAG_INVENTORY, false),
+  // HIOC Ritual — prepaid coffee passes (docs/COFFEE-PASS-SPEC.md): two plans
+  // (7 cups for the price of 5 for a week, 7 for 6 over 30 days) sold on the
+  // website and at the POS, and redeemed on either. Default OFF: the plans are
+  // seeded inactive with placeholder prices and no drink is marked eligible
+  // until the owner has made the §9 B decisions (prices, which drinks, a daily
+  // cap, and the GST treatment confirmed with the CA) — switching it on before
+  // then would put a half-configured product in front of paying customers.
+  // Gates /ritual, the /api/passes and /api/owner/passes routes (404 while
+  // off), the checkout and POS pass rows, and the owner Passes screen. Read on
+  // the server too (every route guards on it), so NEXT_PUBLIC_ on purpose.
+  coffeePass: boolEnv(process.env.NEXT_PUBLIC_FLAG_COFFEE_PASS, false),
   // Marketing agent (docs/MARKETING-AGENT-SPEC.md): /owner/marketing, the nav link
   // and /owner card, the customer WhatsApp opt-in card on the order confirmation,
   // and the nightly planner. Default OFF: nothing here may run before the migration

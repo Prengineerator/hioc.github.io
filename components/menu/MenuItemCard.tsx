@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/Card';
 import { buttonVariants } from '@/components/ui/Button';
 import { MenuItemCustomizeModal } from '@/components/menu/MenuItemCustomizeModal';
 import { MenuItemImage } from '@/components/menu/MenuItemImage';
+import { RitualChip } from '@/components/passes/RitualChip';
 import type { MenuItem } from '@/lib/types';
 
 function priceLabel(item: MenuItem): string {
@@ -32,7 +33,10 @@ function unavailableLabel(item: MenuItem): string {
 const stepperButtonClasses =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan';
 
-export function MenuItemCard({ item }: { item: MenuItem }) {
+// `showRitual`: a HIOC Ritual is on sale (the menu page asks once, not per card).
+// The chip then marks the drinks a Ritual cup can pay for. `item.pass_eligible`
+// is only ever true while the feature flag is on (GET /api/menu).
+export function MenuItemCard({ item, showRitual = false }: { item: MenuItem; showRitual?: boolean }) {
   const { getQty, addItem, increment, decrement } = useCart();
   const [customizing, setCustomizing] = useState(false);
 
@@ -77,6 +81,12 @@ export function MenuItemCard({ item }: { item: MenuItem }) {
         <span className="mt-0.5 font-mono font-bold tabular-nums text-tan-dark sm:hidden">{priceLabel(item)}</span>
         {item.description ? (
           <p className="mt-1 line-clamp-2 text-sm text-muted">{item.description}</p>
+        ) : null}
+
+        {showRitual && item.pass_eligible === true ? (
+          <div className="mt-2">
+            <RitualChip />
+          </div>
         ) : null}
 
         {!available ? (

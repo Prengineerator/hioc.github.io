@@ -132,3 +132,37 @@ describe('POST /api/payments/[orderId]/status — switch_to_counter guest gate (
     expect(res.status).toBe(502);
   });
 });
+
+describe('POST /api/payments/[orderId]/status — HIOC Ritual bought online (CP-D8)', () => {
+  it('refuses switch_to_counter for a coffee_pass sale, even for a signed-in customer', async () => {
+    state.order = {
+      id: UUID, status: 'placed', version: 0, payment_status: 'payment_pending',
+      total_inr: 788, channel: 'customer_web', user_id: 'cust-1', order_kind: 'coffee_pass',
+    };
+    const res = await call({ action: 'switch_to_counter' });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/HIOC Ritual bought online is paid online/);
+    expect(state.updatedPatch).toBeUndefined();
+    expect(state.eventRow).toBeUndefined();
+  });
+
+  it('still lets a coffee_pass sale retry its payment', async () => {
+    state.order = {
+      id: UUID, status: 'placed', version: 0, payment_status: 'payment_pending',
+      total_inr: 788, channel: 'customer_web', user_id: 'cust-1', order_kind: 'coffee_pass',
+    };
+    const res = await call({ action: 'retry' });
+    // createPaymentIntent is mocked to null → the gateway-unavailable 502, not the Ritual refusal.
+    expect(res.status).toBe(502);
+  });
+
+  it('a menu order (order_kind absent before the migration) switches as before', async () => {
+    state.order = {
+      id: UUID, status: 'placed', version: 0, payment_status: 'payment_pending',
+      total_inr: 250, channel: 'customer_web', user_id: 'cust-1',
+    };
+    const res = await call({ action: 'switch_to_counter' });
+    expect(res.status).toBe(200);
+  });
+});
