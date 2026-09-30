@@ -7,6 +7,8 @@ import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card, inr } from '@/components/owner/dashboard';
+import { flags } from '@/lib/flags';
+import { reportPassRows } from '@/lib/passes/ownerUi';
 import { ReportEmailSettingsPanel } from '@/components/owner/ReportEmailSettingsPanel';
 import { parseRange, REPORT_METHODS, type Report, type ReportDay } from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
@@ -130,6 +132,10 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
 function ReportBody({ report, label }: { report: Report; label: string }) {
   const t = report.totals;
   const cashNet = t.received.cash - t.refunds.cash + t.cashInInr - t.cashOutInr;
+  // HIOC Ritual (CP-D21): two informational rows. Ritual sales are already inside
+  // Gross sales, and the cover on a redeemed cup is not a discount, so neither
+  // changes Gross or Net. Only with the flag on and something to show.
+  const ritual = reportPassRows(t, flags.coffeePass);
   return (
     <>
       <h2 className="text-lg font-bold text-charcoal">{label}</h2>
@@ -177,12 +183,20 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
           <dl className="grid grid-cols-2 gap-y-1 text-sm">
             <Row k="Gross sales" v={inr(t.grossSalesInr)} />
             <Row k="of which GST" v={inr(t.taxInr)} />
+            {ritual.sales ? <Row k={ritual.sales.label} v={ritual.sales.value} /> : null}
             <Row k="Discounts (coupons, Beanies)" v={inr(t.discountInr)} />
             <Row k="Settle discounts" v={`− ${inr(t.settleDiscountInr)}`} />
             <Row k="Net sales" v={inr(t.netSalesInr)} strong />
             <Row k="Cancelled / rejected" v={String(t.cancelled)} />
+            {ritual.cups ? <Row k={ritual.cups.label} v={ritual.cups.value} /> : null}
           </dl>
           <p className="mt-3 text-xs text-muted">Counted on the day the order was placed.</p>
+          {ritual.sales || ritual.cups ? (
+            <p className="mt-1 text-xs text-muted">
+              Ritual sales are inside Gross sales. Cups served on a Ritual were paid for when it was sold, so what they
+              covered is not in Discounts.
+            </p>
+          ) : null}
         </Card>
       </div>
 
