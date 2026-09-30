@@ -202,6 +202,20 @@ Relax hints: order `budget, temperature, sweetness, base, needs`. For `sweetness
   | surprise | 1 if the item is not in the profile's top items (always 1 for a guest) |
 
   Here `level = sweetnessLevel(traits)`.
+- **mood, graded rows only: character tie-break.** When `mood_fit[m]` is present, `moodFit = (1 − CHARACTER_SHARE)·clamp01(mood_fit[m] / 3) + CHARACTER_SHARE·moodCharacter(m)`, with `CHARACTER_SHARE = 0.25` (exported). When a mood's top grade is shared by most of the menu (81 of 117 items have `celebrate` fit 3), `mood_fit / 3` alone ties them and the ranker returns the same three items for every request; the mood's defining traits break the tie. The legacy path is unchanged. `moodCharacter` is in [0, 1] and reads the v2 fields (`x/3` for 0–3 fields). If any v2 field its formula needs is null or undefined, it returns `g(m)` (the table above) instead:
+
+  | mood | `moodCharacter(m)` |
+  |---|---|
+  | celebrate | `0.6·indulgence/3 + 0.25·novelty/3 + 0.15·[kind = dessert]` |
+  | comfort | `0.5·indulgence/3 + 0.3·(1 − novelty/3) + 0.2·{rich 1 / medium 0.5 / light 0}[body]` |
+  | cosy | `0.5·[hot] + 0.3·(1 − refreshment/3) + 0.2·(hot ? {rich 1 / medium 0.7 / light 0.4}[body] : 0)` |
+  | boost | `0.7·{high 1 / medium 0.6 / low 0.3 / none 0}[caffeine] + 0.3·intensity/3` |
+  | focus | `g('focus')` (no v2 dependency) |
+  | unwind | `0.7·g('unwind') + 0.3·(1 − intensity/3)` |
+  | cool | `0.7·refreshment/3 + 0.3·[iced]` |
+  | surprise | `0.7·novelty/3 + 0.3·(item not in the profile's top items ? 1 : 0)` |
+
+  The result is clamped to [0, 1].
 - **preference** = the mean of the sub-fits that apply (1 when none apply):
   - sweetness (≠ any): `achievable = adjustable ? clamp(target, base, min(10, base + SWEETNESS_SCALE.sugarAdds)) : base`; fit = `1 − |achievable − target| / 10`.
   - body (≠ any): light → light 1 / medium 0.5 / rich 0. With `refreshment` present, the light fit is averaged with `refreshment / 3`. Rich → rich 1 / medium 0.5 / light 0.
