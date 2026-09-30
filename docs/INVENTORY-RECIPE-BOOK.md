@@ -162,8 +162,13 @@ npm run inventory:import-petpooja [-- --csv <path>]   # default <book>/petpooja/
   - An item whose sizes all differ from the general recipe in the same way gets an item scope. Otherwise only the sizes that differ get size scopes.
 - **What it writes.**
   - Recipes: `status: confirmed, source: petpooja`. It never overwrites an item or option whose `source` is `owner` or `pos`. It does replace `chef-default` drafts and earlier `petpooja` imports.
-  - `import-report.md`: what matched; Petpooja items that are not on the menu; **live items and sizes with no Petpooja recipe (what is still missing)**; add-ons it could not match; unit conflicts; blank quantities; unmapped or merged materials.
-- **Idempotent.** The same inputs give byte-identical files.
+  - `stock-items.json`: the import **owns** every stock item whose name (trimmed, any case) is a Petpooja material key in `materials.json` or a `name` a mapping there gives. It rebuilds those on every run and leaves every other item (a chef or owner addition) exactly as it is.
+    - One item per mapped name that an imported recipe uses, spelled **exactly as the mapping's `name`**. The mapping wins over an existing spelling, case included, so fixing a name in `materials.json` and re-importing renames the item everywhere the import wrote it. The category and `tracks_expiry` come from the mapping (a mapping still waiting for a category keeps the one the book has).
+    - `par_level`, `reorder_qty`, `standalone` and `notes` are carried over from every existing item that collapses into the same mapped name. If two disagree, the first non-default value in file order wins and the report warns.
+    - An owned item that no imported recipe uses any more is dropped, unless it has one of those settings. Then it is kept and the report warns ("stale stock item kept because it has owner settings"), and the owner decides.
+    - Recipes and add-ons kept as they were (`owner`, `pos`) are never edited. If one still names a replaced spelling, the report warns and `inventory:check` flags it until it is fixed by hand.
+  - `import-report.md`: what matched; Petpooja items that are not on the menu; **live items and sizes with no Petpooja recipe (what is still missing)**; add-ons it could not match; unit conflicts; blank quantities; unmapped or merged materials; stock items renamed or dropped; warnings.
+- **Idempotent.** The same inputs give byte-identical files. The one exception is the report, which lists the stock items renamed or dropped by that run, so the run after a rename has nothing left to list.
 
 ## House defaults for `chef-default` drafts
 

@@ -17,7 +17,7 @@ import {
   type MaterialsMap,
   type PetpoojaAliases,
 } from '@/lib/inventory/petpoojaRecipes';
-import type { RecipeItemEntry, SnapshotAddonOption, SnapshotItem } from '@/lib/inventory/recipeBook';
+import type { RecipeItemEntry, SnapshotAddonOption, SnapshotItem, StockItemEntry } from '@/lib/inventory/recipeBook';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -487,7 +487,7 @@ describe('materials and stock items', () => {
     expect(result.stockItems.items.map((s) => s.name)).toEqual(['Coffee beans', 'Milk', 'Sugar', 'Cup 12oz', 'Unmapped A', 'Unmapped B']);
   });
 
-  it('keeps existing stock items the import does not produce, and existing par, reorder, standalone and notes for the ones it does', () => {
+  it('keeps a stock item the import does not own untouched, and carries par, reorder, standalone and notes onto the one it does', () => {
     const existing: ExistingBook = {
       stockItems: {
         items: [
@@ -499,10 +499,10 @@ describe('materials and stock items', () => {
     const result = run([item('1#1', 'Test Cake', [['Milk', 4, 'gm']])], { existing });
     const byName = Object.fromEntries(result.stockItems.items.map((s) => [s.name, s]));
     expect(byName['Chef Special Glaze']).toEqual(existing.stockItems!.items![0]);
-    // The unit is Petpooja's; the chef's numbers and spelling stay.
-    expect(byName.milk).toEqual({ name: 'milk', unit: 'g', category: 'Dairy & Alternatives', tracks_expiry: true, par_level: 5000, reorder_qty: 10000, standalone: true, notes: 'bulk' });
-    expect(byName.Milk).toBeUndefined();
-    expect(recipeOf(result, 'i-cake')?.base).toEqual(lines(['milk', 4]));
+    // The unit is Petpooja's and the spelling is the mapping's; the chef's numbers stay.
+    expect(byName.Milk).toEqual({ name: 'Milk', unit: 'g', category: 'Dairy & Alternatives', tracks_expiry: true, par_level: 5000, reorder_qty: 10000, standalone: true, notes: 'bulk' });
+    expect(byName.milk).toBeUndefined();
+    expect(recipeOf(result, 'i-cake')?.base).toEqual(lines(['Milk', 4]));
     expect(result.report.counts).toMatchObject({ stockItems: 2, stockItemsImported: 1, stockItemsKept: 1 });
   });
 
@@ -512,6 +512,238 @@ describe('materials and stock items', () => {
     expect(result.stockItems.items[0]).toMatchObject({ name: 'Mystery', category: 'Bakery', tracks_expiry: true });
     expect(result.materials.Mystery.category).toBe(''); // still to be mapped
     expect(result.report.materialsNeedingMapping).toEqual(['Mystery']);
+  });
+});
+
+// ── Re-importing: the stock items the import owns ───────────────────────────
+//
+// An existing stock item is import-owned when its name (trimmed, any case) is a
+// Petpooja material key in materials.json or a mapped `name` there. Those are
+// rebuilt from the mapping; everything else is the chef's and stays untouched.
+
+describe('re-import: import-owned stock items', () => {
+  const REMAP: MaterialsMap = {
+    'Test Flakez': { name: 'Test Flakes', category: 'Powders & Mixes', tracks_expiry: false },
+    'Test Lid 9oz': { name: 'Test Lid 9 Oz', category: 'Packaging', tracks_expiry: false },
+    'test cocoa raw': { name: 'Test Cocoa', category: 'Chocolate & Spreads', tracks_expiry: true },
+    Milk: { name: 'Milk', category: 'Dairy & Alternatives', tracks_expiry: true },
+    'Old Raw': { name: 'Old Mapped', category: 'Toppings & Inclusions', tracks_expiry: false },
+  };
+  const stock = (name: string, extra: Partial<Record<keyof StockItemEntry, unknown>> = {}): StockItemEntry =>
+    ({ name, unit: 'g', category: '', tracks_expiry: false, par_level: 0, reorder_qty: 0, standalone: false, notes: '', ...extra }) as unknown as StockItemEntry;
+  const cake = (...mats: Mat[]) => [item('1#1', 'Test Cake', mats)];
+  const namesOf = (r: ReturnType<typeof run>) => r.stockItems.items.map((s) => s.name);
+
+  it('replaces the old raw spelling with the mapped name, once, with the mapping\'s category', () => {
+    const result = run(cake(['Test Flakez', 5, 'gm'], ['Test Lid 9oz', 1, 'pcs']), {
+      materials: REMAP,
+      existing: { stockItems: { items: [stock('Test Flakez'), stock(' Test Lid 9oz ', { unit: 'pcs' })] } },
+    });
+    expect(namesOf(result).sort()).toEqual(['Test Flakes', 'Test Lid 9 Oz']);
+    expect(result.stockItems.items).toEqual([
+      { name: 'Test Flakes', unit: 'g', category: 'Powders & Mixes', tracks_expiry: false, par_level: 0, reorder_qty: 0, standalone: false, notes: '' },
+      { name: 'Test Lid 9 Oz', unit: 'pcs', category: 'Packaging', tracks_expiry: false, par_level: 0, reorder_qty: 0, standalone: false, notes: '' },
+    ]);
+    expect(recipeOf(result, 'i-cake')?.base).toEqual(lines(['Test Flakes', 5], ['Test Lid 9 Oz', 1]));
+    expect(result.report.renamedStockItems).toEqual([
+      { from: 'Test Flakez', to: 'Test Flakes' },
+      { from: 'Test Lid 9oz', to: 'Test Lid 9 Oz' },
+    ]);
+    expect(result.report.droppedStockItems).toEqual([]);
+    expect(result.report.counts).toMatchObject({ stockItems: 2, stockItemsImported: 2, stockItemsKept: 0, stockItemsRenamed: 2, stockItemsDropped: 0 });
+    expect(result.report.warnings).toEqual([]);
+  });
+
+  it('takes the mapped spelling for a case-only difference too, and the mapping\'s category over an existing one', () => {
+    const result = run(cake(['test cocoa raw', 5, 'gm']), {
+      materials: REMAP,
+      existing: { stockItems: { items: [stock('TEST COCOA', { category: 'Bakery', tracks_expiry: false })] } },
+    });
+    expect(result.stockItems.items).toEqual([
+      { name: 'Test Cocoa', unit: 'g', category: 'Chocolate & Spreads', tracks_expiry: true, par_level: 0, reorder_qty: 0, standalone: false, notes: '' },
+    ]);
+    expect(recipeOf(result, 'i-cake')?.base).toEqual(lines(['Test Cocoa', 5]));
+    expect(result.report.renamedStockItems).toEqual([{ from: 'TEST COCOA', to: 'Test Cocoa' }]);
+  });
+
+  it('does not report an item that already has the mapped spelling', () => {
+    const result = run(cake(['Milk', 5, 'gm']), { materials: REMAP, existing: { stockItems: { items: [stock('Milk', { category: 'Dairy & Alternatives' })] } } });
+    expect(result.report.renamedStockItems).toEqual([]);
+    expect(namesOf(result)).toEqual(['Milk']);
+  });
+
+  it('carries par, reorder, standalone and notes from the old spelling onto the mapped item', () => {
+    const result = run(cake(['Test Flakez', 5, 'gm']), {
+      materials: REMAP,
+      existing: { stockItems: { items: [stock('Test Flakez', { par_level: 12, reorder_qty: 24, standalone: true, notes: 'keep dry' })] } },
+    });
+    expect(result.stockItems.items).toEqual([
+      { name: 'Test Flakes', unit: 'g', category: 'Powders & Mixes', tracks_expiry: false, par_level: 12, reorder_qty: 24, standalone: true, notes: 'keep dry' },
+    ]);
+    expect(result.report.warnings).toEqual([]);
+  });
+
+  it('merges several old spellings into one, taking each setting from whichever has it, without a warning when they agree', () => {
+    const result = run(cake(['Test Flakez', 5, 'gm']), {
+      materials: REMAP,
+      existing: {
+        stockItems: {
+          items: [stock('Test Flakez', { par_level: 12 }), stock('test flakes', { par_level: 12, notes: 'from the other spelling' }), stock('Test Flakes', { reorder_qty: 6 })],
+        },
+      },
+    });
+    expect(result.stockItems.items).toEqual([
+      { name: 'Test Flakes', unit: 'g', category: 'Powders & Mixes', tracks_expiry: false, par_level: 12, reorder_qty: 6, standalone: false, notes: 'from the other spelling' },
+    ]);
+    expect(result.report.warnings).toEqual([]);
+    // Sorted by name, ignoring case.
+    expect(result.report.renamedStockItems).toEqual([
+      { from: 'test flakes', to: 'Test Flakes' },
+      { from: 'Test Flakez', to: 'Test Flakes' },
+    ]);
+  });
+
+  it('keeps the first non-default value in file order when spellings disagree, and warns by name', () => {
+    const result = run(cake(['Test Flakez', 5, 'gm']), {
+      materials: REMAP,
+      existing: {
+        stockItems: {
+          items: [
+            stock('Test Flakez', { par_level: 3 }),
+            stock('test flakes', { par_level: 9, notes: 'first note' }),
+            stock('TEST FLAKES', { par_level: 3, notes: 'second note', standalone: true }),
+          ],
+        },
+      },
+    });
+    expect(result.stockItems.items).toEqual([
+      { name: 'Test Flakes', unit: 'g', category: 'Powders & Mixes', tracks_expiry: false, par_level: 3, reorder_qty: 0, standalone: true, notes: 'first note' },
+    ]);
+    expect(result.report.warnings).toEqual([
+      'stock items merged into "Test Flakes" disagree on par_level, notes: the first non-default value in file order was kept ("Test Flakez", "test flakes", "TEST FLAKES")',
+    ]);
+    const md = renderImportReport(result.report);
+    expect(md).toContain('## Warnings (1)');
+    expect(md).not.toContain('first note'); // names only
+  });
+
+  it('leaves a stock item the chef added untouched, even next to the import\'s own', () => {
+    const glaze = stock('Chef Glaze', { unit: 'ml', category: 'Syrups & Sauces', tracks_expiry: true, par_level: 2, standalone: true, notes: 'chef' });
+    const noCategory = stock('Chef Mystery');
+    const result = run(cake(['Test Flakez', 5, 'gm']), { materials: REMAP, existing: { stockItems: { items: [glaze, stock('Test Flakez'), noCategory] } } });
+    const byName = Object.fromEntries(result.stockItems.items.map((s) => [s.name, s]));
+    expect(byName['Chef Glaze']).toBe(glaze);
+    expect(byName['Chef Mystery']).toBe(noCategory); // not ours, so not "fixed" either
+    expect(result.report.counts).toMatchObject({ stockItems: 3, stockItemsImported: 1, stockItemsKept: 2, stockItemsRenamed: 1, stockItemsDropped: 0 });
+    expect(result.report.droppedStockItems).toEqual([]);
+    expect(result.report.warnings).toEqual([]);
+  });
+
+  it('drops a stale import-owned item with no owner settings: by raw key or by mapped name, however it is spelled', () => {
+    const result = run(cake(['Milk', 5, 'gm']), {
+      materials: REMAP,
+      existing: { stockItems: { items: [stock('Milk', { category: 'Dairy & Alternatives' }), stock('old raw'), stock('OLD MAPPED'), stock('Test Flakez')] } },
+    });
+    expect(namesOf(result)).toEqual(['Milk']);
+    expect(result.report.droppedStockItems).toEqual(['OLD MAPPED', 'old raw', 'Test Flakez']);
+    expect(result.report.counts).toMatchObject({ stockItems: 1, stockItemsKept: 0, stockItemsDropped: 3 });
+    expect(result.report.warnings).toEqual([]);
+    expect(renderImportReport(result.report)).toContain('- OLD MAPPED');
+  });
+
+  it('keeps a stale import-owned item that has owner settings, as it was, and reports it', () => {
+    const settings: Partial<Record<keyof StockItemEntry, unknown>>[] = [{ par_level: 4 }, { reorder_qty: 4 }, { standalone: true }, { notes: 'ours' }];
+    for (const extra of settings) {
+      const old = stock('Old Raw', extra);
+      const result = run(cake(['Milk', 5, 'gm']), { materials: REMAP, existing: { stockItems: { items: [old] } } });
+      expect(result.stockItems.items).toContain(old);
+      expect(result.report.warnings).toEqual(['stale stock item kept because it has owner settings: Old Raw']);
+      expect(result.report.droppedStockItems).toEqual([]);
+      expect(result.report.counts).toMatchObject({ stockItems: 2, stockItemsKept: 1, stockItemsDropped: 0 });
+    }
+  });
+
+  it('warns when a kept owner recipe or add-on still names a spelling that was replaced, but never edits it', () => {
+    const owner: RecipeItemEntry = { menu_item_id: 'i-latte', menu_item: 'Test Latte', status: 'confirmed', source: 'owner', notes: '', base: lines(['Test Flakez', 9], ['Milk', 1]), sizes: { Large: lines(['test lid 9OZ', 1]) } };
+    const ownerOption = { addon_option_id: 'o-normal', group: 'Sugar', option: 'Normal', status: 'confirmed' as const, source: 'owner' as const, notes: '', lines: lines(['Old Raw', 1]) };
+    const result = run(cake(['Test Flakez', 5, 'gm'], ['Test Lid 9oz', 1, 'pcs'], ['Milk', 1, 'gm']), {
+      materials: REMAP,
+      existing: {
+        stockItems: { items: [stock('Test Flakez'), stock('Test Lid 9oz'), stock('Old Raw')] },
+        recipeFiles: [{ path: 'recipes/hot.json', file: { categories: ['Coffee'], items: [owner] } }],
+        addonRecipes: { options: [ownerOption] },
+      },
+    });
+    expect(recipeOf(result, 'i-latte')).toBe(owner);
+    expect(optionOf(result, 'o-normal')).toBe(ownerOption);
+    // "Test Flakez" is gone; "test lid 9OZ" differs from "Test Lid 9 Oz" by more than case.
+    expect(result.report.warnings).toEqual([
+      'kept recipe "Test Latte" still uses stock item "Test Flakez", which this import renamed or dropped: fix the ingredient spelling',
+      'kept recipe "Test Latte" still uses stock item "test lid 9OZ", which this import renamed or dropped: fix the ingredient spelling',
+      'kept add-on "Sugar › Normal" still uses stock item "Old Raw", which this import renamed or dropped: fix the ingredient spelling',
+    ]);
+  });
+
+  it('does not warn about a kept recipe whose spelling differs only in case', () => {
+    const owner: RecipeItemEntry = { menu_item_id: 'i-latte', menu_item: 'Test Latte', status: 'confirmed', source: 'owner', notes: '', base: lines(['test cocoa', 9]), sizes: {} };
+    const result = run(cake(['test cocoa raw', 5, 'gm']), {
+      materials: REMAP,
+      existing: { stockItems: { items: [stock('test cocoa')] }, recipeFiles: [{ path: 'recipes/hot.json', file: { categories: ['Coffee'], items: [owner] } }] },
+    });
+    expect(namesOf(result)).toEqual(['Test Cocoa']);
+    expect(result.report.warnings).toEqual([]);
+  });
+
+  it('a placeholder mapping keeps the category (and expiry) an existing spelling has', () => {
+    const result = run(cake(['Mystery Dust', 5, 'gm']), {
+      materials: {},
+      existing: { stockItems: { items: [stock('Mystery Dust', { category: 'Bakery', tracks_expiry: true, par_level: 2 })] } },
+    });
+    expect(result.stockItems.items).toEqual([
+      { name: 'Mystery Dust', unit: 'g', category: 'Bakery', tracks_expiry: true, par_level: 2, reorder_qty: 0, standalone: false, notes: '' },
+    ]);
+    expect(result.report.materialsNeedingMapping).toEqual(['Mystery Dust']);
+  });
+
+  it('is idempotent: its own output, fed back, is stable, and the second report has nothing left to rename or drop', () => {
+    const rows = cake(['Test Flakez', 5, 'gm'], ['Test Lid 9oz', 1, 'pcs'], ['test cocoa raw', 2, 'gm'], ['Milk', 3, 'gm']);
+    const messy: ExistingBook = {
+      stockItems: {
+        items: [
+          stock('Chef Glaze', { unit: 'ml', category: 'Syrups & Sauces' }),
+          stock('Test Flakez', { par_level: 3 }),
+          stock('test flakes', { par_level: 9, notes: 'n' }),
+          stock('Test Lid 9oz', { unit: 'pcs' }),
+          stock('TEST COCOA', { reorder_qty: 8 }),
+          stock('Old Raw', { notes: 'ours' }),
+          stock('Old Mapped'),
+          stock('Milk', { category: 'Dairy & Alternatives', tracks_expiry: true }),
+        ],
+      },
+    };
+    const first = run(rows, { materials: REMAP, existing: messy });
+    expect(namesOf(first).sort()).toEqual(['Chef Glaze', 'Milk', 'Old Raw', 'Test Cocoa', 'Test Flakes', 'Test Lid 9 Oz']);
+    expect(first.report.droppedStockItems).toEqual(['Old Mapped']);
+    expect(first.report.renamedStockItems.length).toBe(4);
+
+    const again = (previous: ReturnType<typeof run>) =>
+      run(rows, {
+        materials: previous.materials,
+        existing: { stockItems: previous.stockItems as ExistingBook['stockItems'], recipeFiles: previous.recipeFiles, addonRecipes: previous.addonRecipes },
+      });
+    const second = again(first);
+    expect(second.stockItems).toEqual(first.stockItems);
+    expect(second.recipeFiles).toEqual(first.recipeFiles);
+    expect(second.addonRecipes).toEqual(first.addonRecipes);
+    expect(second.materials).toEqual(first.materials);
+    expect(second.report.renamedStockItems).toEqual([]);
+    expect(second.report.droppedStockItems).toEqual([]);
+    expect(second.report.warnings).toEqual(['stale stock item kept because it has owner settings: Old Raw']);
+
+    // From then on even the report is identical.
+    const third = again(second);
+    expect(JSON.stringify(third)).toBe(JSON.stringify(second));
+    expect(renderImportReport(third.report)).toBe(renderImportReport(second.report));
   });
 });
 

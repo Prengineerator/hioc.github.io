@@ -187,7 +187,12 @@ export interface ImportReport {
     addonScopes: number;
     stockItems: number;
     stockItemsImported: number;
+    /** Stock items the book had that the import does not own (chef/owner additions), plus stale ones kept for their owner settings. */
     stockItemsKept: number;
+    /** Existing import-owned stock items whose name changed to the mapped spelling (or that merged into another). */
+    stockItemsRenamed: number;
+    /** Stale import-owned stock items removed from the book. */
+    stockItemsDropped: number;
     materialsNeedingMapping: number;
     unitConflicts: number;
     droppedLines: number;
@@ -241,6 +246,12 @@ export interface ImportReport {
   /** Petpooja materials whose stock item still has no category. */
   materialsNeedingMapping: string[];
   merges: MergeReport[];
+  /** Import-owned stock items respelled to the mapping's `name` (or merged into it): names only. */
+  renamedStockItems: { from: string; to: string }[];
+  /** Stale import-owned stock items no longer in the book: names only. */
+  droppedStockItems: string[];
+  /** Things the owner should look at that are not errors: conflicting owner settings, stale items kept, kept recipes that name a renamed item. Names only. */
+  warnings: string[];
 }
 
 export interface ImportResult {
@@ -614,6 +625,8 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
       stockItems: 0,
       stockItemsImported: 0,
       stockItemsKept: 0,
+      stockItemsRenamed: 0,
+      stockItemsDropped: 0,
       materialsNeedingMapping: 0,
       unitConflicts: 0,
       droppedLines: 0,
@@ -653,6 +666,9 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
     droppedLines: [],
     materialsNeedingMapping: [],
     merges: [],
+    renamedStockItems: [],
+    droppedStockItems: [],
+    warnings: [],
   };
 
   // ── 1. Item rows -> menu item + size ──────────────────────────────────────
@@ -894,8 +910,6 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
   }
 
   // ── 4. Materials -> stock items; a row's lines ────────────────────────────
-  const existingStockByKey = new Map<string, StockItemEntry>();
-  for (const s of existingStock) if (s && typeof s.name === 'string' && !existingStockByKey.has(lc(s.name))) existingStockByKey.set(lc(s.name), s);
   const materialKeyByLc = new Map<string, string>();
   for (const key of Object.keys(materialsIn)) if (!materialKeyByLc.has(lc(key))) materialKeyByLc.set(lc(key), key);
 
@@ -1134,12 +1148,15 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
     }
   };
 
-  // Canonical spelling of each stock item: the existing item's, else the mapped name.
+  // The spelling of each stock item is the mapping's `name`, exactly. It never
+  // comes from an existing stock item: the mapping wins, case included (see
+  // step 8). When two mappings give names that differ only in case, the first one
+  // a written line reaches wins, which is deterministic for the same input.
   const canonicalName = new Map<string, string>();
   function canonical(stock: string, fallbackMaterial: string): string {
     const known = canonicalName.get(stock);
     if (known) return known;
-    const name = existingStockByKey.get(stock)?.name.trim() || stockNameFor(fallbackMaterial);
+    const name = stockNameFor(fallbackMaterial);
     canonicalName.set(stock, name);
     return name;
   }
@@ -1158,6 +1175,11 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
     }
   }
 
+  // Recipes and add-on options carried over from the book untouched (owner, pos,
+  // or another source with no Petpooja recipe). Step 8 checks their ingredients.
+  const keptRecipes: RecipeItemEntry[] = [];
+  const keptOptions: AddonOptionEntry[] = [];
+
   const fileItems = new Map<string, RecipeItemEntry[]>();
   const fileOf = (category: string): string => FILE_TABLE.find((f) => f.categories.includes(category))?.path ?? OTHER_FILE;
   for (const item of items) {
@@ -1166,6 +1188,7 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
     let out: RecipeItemEntry | undefined;
     if (existing && isOwnerOrPos(existing.source)) {
       out = existing;
+      keptRecipes.push(existing);
       report.counts.recipesKeptOwnerOrPos += 1;
       report.keptItems.push({ name: item.name, status: String(existing.status), source: String(existing.source) });
     } else if (finished) {
@@ -1191,6 +1214,7 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
       }
     } else if (existing) {
       out = existing;
+      keptRecipes.push(existing);
       report.counts.recipesKeptOther += 1;
       report.keptItems.push({ name: item.name, status: String(existing.status), source: String(existing.source) });
     } else {
@@ -1235,6 +1259,7 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
     const finished = finishedOptions.get(o.id);
     if (existing && isOwnerOrPos(existing.source)) {
       options.push(existing);
+      keptOptions.push(existing);
       report.counts.addonsKeptOwnerOrPos += 1;
       report.addons.kept.push({ name: `${o.group} › ${o.option}`, status: String(existing.status), source: String(existing.source) });
     } else if (finished) {
@@ -1263,6 +1288,7 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
       report.addons.matched += 1;
     } else if (existing) {
       options.push(existing);
+      keptOptions.push(existing);
       report.counts.addonsKeptOther += 1;
       report.addons.kept.push({ name: `${o.group} › ${o.option}`, status: String(existing.status), source: String(existing.source) });
     } else {
@@ -1290,12 +1316,86 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
   const sortedMaterials: MaterialsMap = {};
   for (const key of Object.keys(materialsOut).sort(cmp)) sortedMaterials[key] = materialsOut[key];
 
+  // ── Which stock items in the book are the import's ────────────────────────
+  //
+  // An existing stock item is IMPORT-OWNED when its name, trimmed and compared
+  // case-insensitively, equals a Petpooja material key in materials.json (as this
+  // run writes it back, so a placeholder added just now counts) or a stock item
+  // `name` that any mapping there gives. Everything else was added by the chef
+  // or the owner and is kept exactly as it is.
+  //
+  // Import-owned items are REBUILT, not kept as they were:
+  //  - The output has exactly one stock item per mapped name that an imported
+  //    recipe uses, spelled EXACTLY as the mapping's `name`. The mapping wins over
+  //    any existing spelling, including a spelling that differs only in case, so
+  //    "Oat Flakez", "oat flakes" and "Oat Flakes" become one "Oat Flakes" when the
+  //    mapping says so. Category and tracks_expiry come
+  //    from the mapping, except that a mapping that is still a placeholder (empty
+  //    category) does not blank a category an existing item has. The unit is
+  //    Petpooja's, as before.
+  //  - Owner settings carry over: par_level, reorder_qty, standalone and notes of
+  //    ALL the existing import-owned items that collapse into the same mapped name
+  //    go onto it. Default values (0, 0, false, '') do not count. When several
+  //    items have different non-default values for a field, the first in the
+  //    existing file order wins and a warning names the stock item.
+  //  - A STALE import-owned item, one that collapses into no mapped name an
+  //    imported recipe uses, is dropped, unless it has non-default owner settings.
+  //    Then it is kept as it was and a warning says so; the checker will flag it
+  //    if it is broken, and the owner decides.
+  //  - Renamed (respelled or merged) and dropped items are listed in the report,
+  //    by name only.
+  // The result depends only on the inputs and is stable when fed back in.
+  const mappedNames = new Set<string>(); // lower-cased stock names the mappings give
+  const mappedByMaterial = new Map<string, string>(); // lower-cased material key -> lower-cased stock name
+  for (const key of Object.keys(materialsOut)) {
+    const target = lc(stockNameFor(key));
+    mappedNames.add(target);
+    if (!mappedByMaterial.has(lc(key))) mappedByMaterial.set(lc(key), target);
+  }
+
+  // The stock items a written line reaches, and the first material that names each.
+  const firstMaterial = new Map<string, string>();
+  for (const material of materialsUsed) {
+    const key = lc(stockNameFor(material));
+    if (!stockLinesUsed.has(key) || !unitFor(material) || firstMaterial.has(key)) continue;
+    firstMaterial.set(key, material);
+  }
+
+  type OwnerField = 'par_level' | 'reorder_qty' | 'standalone' | 'notes';
+  const OWNER_FIELDS: OwnerField[] = ['par_level', 'reorder_qty', 'standalone', 'notes'];
+  const isDefault = (field: OwnerField, value: unknown): boolean =>
+    value === undefined || value === null || (field === 'notes' ? value === '' : field === 'standalone' ? value === false : value === 0);
+  const hasOwnerSettings = (s: StockItemEntry): boolean => OWNER_FIELDS.some((f) => !isDefault(f, s[f]));
+
+  interface OwnedExisting {
+    entry: StockItemEntry;
+    /** The lower-cased mapped name it collapses into. */
+    target: string;
+  }
+  const ownedExisting: OwnedExisting[] = []; // existing file order
+  const untouched: StockItemEntry[] = []; // added by the chef or owner
+  for (const s of existingStock) {
+    // Not a stock item at all (no name): as before, it is not carried over.
+    if (!s || typeof s.name !== 'string') continue;
+    const own = lc(s.name);
+    // A mapped name is itself; a Petpooja material key is the stock item it maps to.
+    // If both readings apply, the one an imported recipe uses is taken.
+    const targets: string[] = [];
+    if (mappedNames.has(own)) targets.push(own);
+    const viaMaterial = mappedByMaterial.get(own);
+    if (viaMaterial !== undefined && viaMaterial !== own) targets.push(viaMaterial);
+    if (targets.length === 0) untouched.push(s);
+    else ownedExisting.push({ entry: s, target: targets.find((t) => firstMaterial.has(t)) ?? targets[0] });
+  }
+
   interface Produced {
     key: string;
     name: string;
     unit: InventoryUnit;
     category: string;
     tracks_expiry: boolean;
+    /** The existing import-owned items that collapse into it, in file order. */
+    from: OwnedExisting[];
   }
   const produced = new Map<string, Produced>();
   const unitsOfStock = new Map<string, { material: string; unit: InventoryUnit }[]>();
@@ -1307,15 +1407,17 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
     unitsOfStock.set(key, [...(unitsOfStock.get(key) ?? []), { material, unit }]);
     if (produced.has(key)) continue;
     const mapping = mappingFor(material) ?? { name: material, category: '', tracks_expiry: false };
-    const prior = existingStockByKey.get(key);
+    const from = ownedExisting.filter((o) => o.target === key);
     // A placeholder must not blank a category the book already has.
-    const keepExisting = !mapping.category && !!prior?.category;
+    const prior = from.find((o) => !!o.entry.category)?.entry;
+    const keepExisting = !mapping.category && !!prior;
     produced.set(key, {
       key,
       name: canonical(key, material),
       unit,
       category: keepExisting ? prior!.category : mapping.category ?? '',
       tracks_expiry: keepExisting ? prior!.tracks_expiry === true : mapping.tracks_expiry === true,
+      from,
     });
   }
   for (const [key, list] of unitsOfStock) {
@@ -1332,28 +1434,82 @@ export function importPetpoojaRecipes(input: ImportInput): ImportResult {
   report.unitMergeErrors.sort((a, b) => cmpCi(a.stock_item, b.stock_item));
 
   const stockOut: ImportedStockItem[] = [];
+  const renamed = new Map<string, { from: string; to: string }>();
   for (const p of produced.values()) {
-    const prior = existingStockByKey.get(p.key);
+    const carried = {} as Record<OwnerField, unknown>;
+    const conflicting: OwnerField[] = [];
+    for (const field of OWNER_FIELDS) {
+      const values = p.from.map((o) => o.entry[field]).filter((v) => !isDefault(field, v));
+      carried[field] = values[0];
+      if (values.some((v) => v !== values[0])) conflicting.push(field);
+    }
+    if (conflicting.length > 0) {
+      report.warnings.push(
+        `stock items merged into "${p.name}" disagree on ${conflicting.join(', ')}: the first non-default value in file order was kept (${p.from.map((o) => `"${o.entry.name.trim()}"`).join(', ')})`,
+      );
+    }
+    for (const o of p.from) {
+      const from = o.entry.name.trim();
+      if (from !== p.name) renamed.set(`${from}\u0000${p.name}`, { from, to: p.name });
+    }
     stockOut.push({
       name: p.name,
       unit: p.unit,
       category: p.category,
       tracks_expiry: p.tracks_expiry,
-      par_level: prior?.par_level ?? 0,
-      reorder_qty: prior?.reorder_qty ?? 0,
-      standalone: prior?.standalone ?? false,
-      notes: prior?.notes ?? '',
+      par_level: (carried.par_level as number | undefined) ?? 0,
+      reorder_qty: (carried.reorder_qty as number | undefined) ?? 0,
+      standalone: (carried.standalone as boolean | undefined) ?? false,
+      notes: (carried.notes as string | undefined) ?? '',
     });
   }
   report.counts.stockItemsImported = stockOut.length;
-  let kept = 0;
-  for (const s of existingStock) {
-    if (!s || typeof s.name !== 'string' || produced.has(lc(s.name))) continue;
-    // A duplicate spelling of an item already listed stays as it is; the checker reports it.
-    stockOut.push(s as ImportedStockItem);
-    kept += 1;
+
+  // Stale import-owned items: dropped, unless the owner set something on them.
+  const dropped = new Set<string>();
+  let staleKept = 0;
+  for (const o of ownedExisting) {
+    if (produced.has(o.target)) continue;
+    if (hasOwnerSettings(o.entry)) {
+      stockOut.push(o.entry as ImportedStockItem);
+      staleKept += 1;
+      report.warnings.push(`stale stock item kept because it has owner settings: ${o.entry.name.trim()}`);
+    } else {
+      dropped.add(o.entry.name.trim());
+    }
   }
-  report.counts.stockItemsKept = kept;
+  // Chef and owner additions stay exactly as they were.
+  for (const s of untouched) stockOut.push(s as ImportedStockItem);
+  report.counts.stockItemsKept = untouched.length + staleKept;
+  report.renamedStockItems = [...renamed.values()].sort((a, b) => cmpCi(a.from, b.from) || cmpCi(a.to, b.to));
+  report.droppedStockItems = [...dropped].sort(cmpCi);
+  report.counts.stockItemsRenamed = report.renamedStockItems.length;
+  report.counts.stockItemsDropped = report.droppedStockItems.length;
+
+  // A recipe or add-on kept as it was (owner, pos, ...) may still name an
+  // import-owned item by a spelling this import replaced or removed. It is not
+  // edited (it is the owner's); the warning says where to fix the spelling.
+  {
+    const now = new Set(stockOut.map((s) => lc(s.name)));
+    const before = new Set(ownedExisting.map((o) => lc(o.entry.name)));
+    const gone = (ingredient: unknown): string | null => (typeof ingredient === 'string' && before.has(lc(ingredient)) && !now.has(lc(ingredient)) ? ingredient.trim() : null);
+    const namesOf = (lists: unknown[]): string[] => {
+      const found: string[] = [];
+      for (const list of lists) {
+        for (const line of Array.isArray(list) ? (list as { ingredient?: unknown }[]) : []) {
+          const name = gone(line?.ingredient);
+          if (name !== null) pushUnique(found, name);
+        }
+      }
+      return found;
+    };
+    const warnAbout = (label: string, lists: unknown[]) => {
+      for (const name of namesOf(lists)) report.warnings.push(`kept ${label} still uses stock item "${name}", which this import renamed or dropped: fix the ingredient spelling`);
+    };
+    for (const e of keptRecipes) warnAbout(`recipe "${e.menu_item}"`, [e.base, ...Object.values(e.sizes ?? {})]);
+    for (const e of keptOptions) warnAbout(`add-on "${e.group} › ${e.option}"`, [e.lines, ...(Array.isArray(e.scopes) ? e.scopes.map((sc) => sc?.lines) : [])]);
+  }
+
   const categoryRank = (category: string): number => {
     if (!category) return STOCK_CATEGORIES.length + 1;
     const index = (STOCK_CATEGORIES as readonly string[]).indexOf(category);
@@ -1406,8 +1562,17 @@ export function renderImportReport(report: ImportReport): string {
   line(
     `- Add-on options: ${c.addonOptions}. Imported: ${c.addonsImported} (${c.addonsDraft} as drafts; ${plural(c.addonScopes, 'scope')}). Kept as they were: ${c.addonsKeptOwnerOrPos} owner/pos, ${c.addonsKeptOther} other. **Still missing: ${c.addonsMissing}.**`,
   );
-  line(`- Stock items: ${c.stockItems} (${c.stockItemsImported} from this import, ${c.stockItemsKept} already in the book)`);
+  line(
+    `- Stock items: ${c.stockItems} (${c.stockItemsImported} from this import, ${c.stockItemsKept} already in the book). Respelled to the mapped name: ${c.stockItemsRenamed}. Stale, dropped: ${c.stockItemsDropped}.`,
+  );
   line(`- Materials needing a category: ${c.materialsNeedingMapping} · unit conflicts: ${c.unitConflicts} · lines dropped: ${c.droppedLines} · merged stock items: ${c.merges}`);
+
+  // ── Warnings
+  line();
+  line(`## Warnings (${report.warnings.length})`);
+  line();
+  if (report.warnings.length === 0) line('None.');
+  for (const w of report.warnings) line(`- ${w}`);
 
   // ── Still missing
   line();
@@ -1583,6 +1748,18 @@ export function renderImportReport(report: ImportReport): string {
   line();
   if (report.merges.length === 0) line('None.');
   for (const m of report.merges) line(`- ${m.stock_item}: ${m.materials.join(', ')}`);
+  line();
+  line(`### Stock items respelled to the name in materials.json (${report.renamedStockItems.length})`);
+  line();
+  line('Items the import owns (named like a Petpooja material or a mapped name) take the mapped spelling; their par level, reorder quantity, standalone flag and notes carry over.');
+  line();
+  if (report.renamedStockItems.length === 0) line('None.');
+  for (const r of report.renamedStockItems) line(`- ${r.from} → ${r.to}`);
+  line();
+  line(`### Stale stock items dropped: no imported recipe uses them (${report.droppedStockItems.length})`);
+  line();
+  if (report.droppedStockItems.length === 0) line('None.');
+  for (const n of report.droppedStockItems) line(`- ${n}`);
 
   // ── Kept / dropped
   line();

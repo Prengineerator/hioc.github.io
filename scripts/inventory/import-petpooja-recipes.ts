@@ -8,7 +8,8 @@
 // Writes stock-items.json, recipes/*.json, addon-recipes.json,
 // petpooja/materials.json and import-report.md into the book directory (all
 // git-ignored: the recipes are private). Never removes a file. Idempotent: the
-// same inputs give byte-identical files.
+// same inputs give byte-identical files. (The report also lists the stock items
+// renamed or dropped by that run, so it differs once, on the run that did it.)
 //
 // Exit 0: imported. Exit 1: a file could not be read or is not valid. Exit 2: bad arguments.
 
@@ -80,6 +81,10 @@ function main(): number {
       `Add-ons: ${c.addonsImported} imported (${c.addonsDraft} draft, ${c.addonScopes} scopes) · ${c.addonsKeptOwnerOrPos + c.addonsKeptOther} kept · ${c.addonsMissing} missing of ${c.addonOptions}`,
     );
     console.log(`Stock items: ${c.stockItems} (${c.stockItemsImported} from the import) · ${c.materialsNeedingMapping} materials need a category`);
+    if (c.stockItemsRenamed + c.stockItemsDropped > 0) {
+      console.log(`Stock items respelled to the mapped name: ${c.stockItemsRenamed} · stale ones dropped: ${c.stockItemsDropped} (names in import-report.md)`);
+    }
+    for (const warning of result.report.warnings) console.log(`Warning: ${warning}`);
     console.log(
       `Petpooja items not matched: ${result.report.unmatchedItems.length} · add-ons not matched: ${result.report.addons.unmatched.length} · unit conflicts: ${c.unitConflicts} · lines dropped: ${c.droppedLines}`,
     );
