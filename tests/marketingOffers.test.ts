@@ -66,9 +66,9 @@ describe('offerText (spec §1.6 table)', () => {
     expect(offerText(freeItem({ item_name: undefined, variant_label: undefined }))).toBe('a FREE item with any order above ₹200');
   });
 
-  it('points: "₹X of points"', () => {
-    expect(offerText({ type: 'points', points_value_inr: 80 })).toBe('₹80 of points');
-    expect(offerText({ type: 'points', points_value_inr: 79.6 })).toBe('₹80 of points');
+  it('points: "₹X of Beanies"', () => {
+    expect(offerText({ type: 'points', points_value_inr: 80 })).toBe('₹80 of Beanies');
+    expect(offerText({ type: 'points', points_value_inr: 79.6 })).toBe('₹80 of Beanies');
   });
 });
 

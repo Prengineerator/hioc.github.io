@@ -12,7 +12,7 @@
 // A phone is linked to an account ONLY through a VERIFIED profile phone. The consent row's
 // user_id is deliberately not a second link: it goes stale the day its user moves to a new
 // verified number, and the old, recycled number would then inherit that account's orders,
-// points and name ("Hi Asha, 120 points expire…" to a stranger).
+// points and name ("Hi Asha, 120 Beanies expire…" to a stranger).
 //
 // Order matching follows orderMatchFilter (lib/loyalty/customerLink.ts): an order
 // belongs to a contact when its user_id or customer_user_id is the contact's account,

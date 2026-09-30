@@ -178,7 +178,7 @@ export function OverviewBody({
       {/* 5. Insights */}
       <Panel title="What the agent noticed">
         {insights.length === 0 ? (
-          <p className="text-sm text-muted">Nothing to flag right now. It looks at points, lapsed customers, opt-ins and product costs every day.</p>
+          <p className="text-sm text-muted">Nothing to flag right now. It looks at Beanies, lapsed customers, opt-ins and product costs every day.</p>
         ) : (
           <ul className="flex flex-col divide-y divide-[#f2efe9]">
             {insights.map((i) => (

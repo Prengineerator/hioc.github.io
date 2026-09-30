@@ -374,7 +374,7 @@ export function parsePlaybookPatch<K extends PlaybookKey>(key: K, body: unknown)
     const r = parseOffer(body.offer);
     if (!r.ok) return r;
     if (key.startsWith('points_') && r.value.type !== 'none') {
-      return bad('Points reminders cannot carry an offer: the customer’s own points are the offer.');
+      return bad('Beanies reminders cannot carry an offer: the customer’s own Beanies are the offer.');
     }
     patch.offer = r.value;
   }
@@ -427,7 +427,7 @@ export function parseAudienceFilter(raw: unknown): ParseResult<AudienceFilter> {
     ['min_spend_inr', 'Minimum spend (₹)', AUDIENCE_BOUNDS.min_spend_inr],
     ['last_order_from_days', 'Last order from (days ago)', AUDIENCE_BOUNDS.last_order_days],
     ['last_order_to_days', 'Last order to (days ago)', AUDIENCE_BOUNDS.last_order_days],
-    ['min_points', 'Minimum points', AUDIENCE_BOUNDS.min_points],
+    ['min_points', 'Minimum Beanies', AUDIENCE_BOUNDS.min_points],
   ];
   for (const [key, label, b] of ints) {
     if (!has(raw, key) || raw[key] === null) continue;

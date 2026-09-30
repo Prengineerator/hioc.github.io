@@ -19,6 +19,7 @@ import {
 } from './types';
 import type { CouponFields, EconomicOffer, FreeItemOffer, Offer, PlaybookKey } from './types';
 import { endOfIstDay, type Instant } from './ist';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 
 /** True once a free-item offer has been pinned to a real, priced, costed variant (at plan time or by the owner). */
 export function isFreeItemResolved(offer: FreeItemOffer): boolean {
@@ -47,7 +48,7 @@ function aboveClause(minOrder: number): string {
 /**
  * The customer-facing text of an offer, for the {{offer_text}} token:
  *   none       ''                                          (a template that uses it gets '-')
- *   points     "₹X of points"
+ *   points     "₹X of Beanies"
  *   percent    "p% off (up to ₹K) on orders above ₹M"     (cap and minimum clauses dropped when 0)
  *   flat       "₹F off on orders above ₹M"
  *   free_item  "a FREE {item} with any order above ₹M"
@@ -60,7 +61,7 @@ export function offerText(offer: EconomicOffer): string {
     case 'none':
       return '';
     case 'points':
-      return `${rupees(offer.points_value_inr)} of points`;
+      return `${rupees(offer.points_value_inr)} of ${LOYALTY_UNIT.many}`;
     case 'percent':
       return `${offer.percent}% off${offer.cap_inr > 0 ? ` (up to ${rupees(offer.cap_inr)})` : ''}${aboveClause(offer.min_order_inr)}`;
     case 'flat':

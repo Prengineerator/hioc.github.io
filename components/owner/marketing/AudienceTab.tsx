@@ -78,8 +78,8 @@ export function AudienceBody({ data, reload, onNavigate }: { data: AudienceSumma
       </Panel>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Kpi label="Customers with points" value={formatCount(data.points.customers_with_balance)} />
-        <Kpi label="Points outstanding" value={inr(data.points.outstanding_inr)} hint="what you would owe if all were used" />
+        <Kpi label="Customers with Beanies" value={formatCount(data.points.customers_with_balance)} />
+        <Kpi label="Beanies outstanding" value={inr(data.points.outstanding_inr)} hint="what you would owe if all were used" />
         <Kpi label="Expiring in 7 days" value={inr(data.points.expiring_7d_inr)} hint={`${formatCount(data.points.expiring_7d_customers)} customers`} />
         <Kpi label="Opted in / out" value={`${formatCount(data.consent.opted_in)} / ${formatCount(data.consent.opted_out)}`} hint="customers who said yes / stop" />
       </div>

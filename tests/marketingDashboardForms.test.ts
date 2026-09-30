@@ -258,6 +258,7 @@ describe('playbook cards → PATCH body', () => {
   it('lists exactly the params each playbook has (a new param must get a field)', () => {
     for (const key of PLAYBOOK_KEYS) {
       expect(PARAM_FIELDS[key].map((f) => f.name).sort()).toEqual(Object.keys(defaultPlaybook(key).params).sort());
+      for (const f of PARAM_FIELDS[key]) expect(`${f.label} ${f.unit} ${f.help}`).not.toMatch(/\bpoints?\b/i);
       for (const f of PARAM_FIELDS[key]) {
         expect(paramBounds(key, f.name)).toEqual((PARAM_BOUNDS[key] as Record<string, { min: number; max: number }>)[f.name]);
         expect(f.help.length).toBeGreaterThan(10);

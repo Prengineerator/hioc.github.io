@@ -263,7 +263,7 @@ insert into public.marketing_playbooks (key, mode, priority, params, offer, temp
   ('points_expiring', 'off', 1,
     '{"min_points":20,"days_ahead":5,"recent_order_days":2,"cooldown_days":14}'::jsonb,
     '{"type":"none"}'::jsonb,
-    '{"name":"hioc_points_expiring_1","lang":"en","vars":["first_name","expiring_points","expiring_value_inr","expiry_date"],"url_button":true,"body_preview":"Hi {{1}}, {{2}} of your HIOC reward points (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon!"}'::jsonb,
+    '{"name":"hioc_points_expiring_1","lang":"en","vars":["first_name","expiring_points","expiring_value_inr","expiry_date"],"url_button":true,"body_preview":"Hi {{1}}, {{2}} of your HIOC Beanies (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon!"}'::jsonb,
     15),
   ('winback_3', 'off', 2,
     '{"offset_days":60,"max_days":180}'::jsonb,
@@ -283,7 +283,7 @@ insert into public.marketing_playbooks (key, mode, priority, params, offer, temp
   ('points_balance', 'off', 5,
     '{"min_points":50,"min_days_since_order":10,"cooldown_days":21}'::jsonb,
     '{"type":"none"}'::jsonb,
-    '{"name":"hioc_points_balance_1","lang":"en","vars":["first_name","points","points_value_inr"],"url_button":true,"body_preview":"Hi {{1}}, you have {{2}} HIOC reward points worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon!"}'::jsonb,
+    '{"name":"hioc_points_balance_1","lang":"en","vars":["first_name","points","points_value_inr"],"url_button":true,"body_preview":"Hi {{1}}, you have {{2}} HIOC Beanies worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon!"}'::jsonb,
     8)
 on conflict (key) do nothing;
 

@@ -419,10 +419,10 @@ describe('parsePlaybookPatch', () => {
       expect(parsePlaybookPatch('winback_2', { offer: { type: 'none' } }).ok).toBe(true);
     });
 
-    it('a points playbook can only have no offer — the customer’s points are the offer', () => {
+    it('a points playbook can only have no offer — the customer’s Beanies are the offer', () => {
       for (const key of ['points_expiring', 'points_balance'] as const) {
         expect(parsePlaybookPatch(key, { offer: { type: 'none' } }).ok).toBe(true);
-        expect(errorOf(parsePlaybookPatch(key, { offer: { type: 'percent', percent: 10, validity_days: 7 } }))).toContain('cannot carry an offer');
+        expect(errorOf(parsePlaybookPatch(key, { offer: { type: 'percent', percent: 10, validity_days: 7 } }))).toContain('Beanies reminders cannot carry an offer: the customer’s own Beanies are the offer.');
       }
     });
 

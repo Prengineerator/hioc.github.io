@@ -192,5 +192,6 @@ describe('review wording', () => {
     expect(text).toContain('last order 30–60 days ago');
     expect(describeAudience({ last_order_from_days: 45 })).toContain('45+ days ago');
     expect(describeAudience({ min_spend_inr: 5000 })).toContain('₹5,000+');
+    expect(describeAudience({ min_points: 50 })).toContain('50+ Beanies');
   });
 });

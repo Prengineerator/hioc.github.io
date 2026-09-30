@@ -8,6 +8,7 @@
 //
 // Pure: unit-tested in tests/marketingDashboardForms.test.ts.
 
+import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
 import { parsePlaybookPatch, validatePlaybookParams } from '@/lib/marketing/parse';
 import {
   PARAM_BOUNDS,
@@ -42,11 +43,11 @@ export const PARAM_FIELDS: Record<PlaybookKey, ParamField[]> = {
     {
       name: 'min_points',
       label: 'Smallest expiring balance worth a message',
-      unit: 'points',
-      help: 'Below the minimum redemption (20 points) they can’t be used anyway.',
+      unit: LOYALTY_UNIT.many,
+      help: `Below the minimum redemption (${beaniesLabel(20)}) they can’t be used anyway.`,
       step: 1,
     },
-    { name: 'days_ahead', label: 'Warn this many days before points expire', unit: 'days', help: 'The look-ahead window.', step: 1 },
+    { name: 'days_ahead', label: 'Warn this many days before Beanies expire', unit: 'days', help: 'The look-ahead window.', step: 1 },
     {
       name: 'recent_order_days',
       label: 'Skip customers who ordered in the last',
@@ -63,7 +64,7 @@ export const PARAM_FIELDS: Record<PlaybookKey, ParamField[]> = {
     },
   ],
   points_balance: [
-    { name: 'min_points', label: 'Smallest balance worth a message', unit: 'points', help: 'Customers with fewer points are left alone.', step: 1 },
+    { name: 'min_points', label: 'Smallest balance worth a message', unit: LOYALTY_UNIT.many, help: 'Customers with fewer Beanies are left alone.', step: 1 },
     {
       name: 'min_days_since_order',
       label: 'Only customers who haven’t ordered for at least',
