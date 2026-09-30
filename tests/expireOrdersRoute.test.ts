@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Handler-level test for GET /api/cron/expire-orders. Mocks Supabase, the
+// Handler-level test for GET and POST /api/cron/expire-orders. Mocks Supabase, the
 // Razorpay lookup and the capture logic so the route's decision — recover a
 // paid order, cancel an unpaid one, leave it alone when the gateway can't
 // confirm — is exercised without network or DB.
@@ -60,12 +60,22 @@ vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderEvent: () => Promise.
 process.env.CRON_SECRET = 'cron_secret';
 
 // Imported after mocks are registered (vi.mock is hoisted).
-const { GET } = await import('@/app/api/cron/expire-orders/route');
+const { GET, POST } = await import('@/app/api/cron/expire-orders/route');
 
 const run = () =>
   GET(
     new Request('http://localhost/api/cron/expire-orders', {
       headers: { authorization: 'Bearer cron_secret' },
+    }),
+  );
+
+// pg_cron's net.http_post issues a POST, not a GET — this is the method the
+// scheduled job (supabase/2026-10-expire-orders-cron.sql) actually calls.
+const runPost = (auth: string | null = 'Bearer cron_secret') =>
+  POST(
+    new Request('http://localhost/api/cron/expire-orders', {
+      method: 'POST',
+      headers: auth ? { authorization: auth } : {},
     }),
   );
 
@@ -108,5 +118,47 @@ describe('GET /api/cron/expire-orders', () => {
     const res = await run();
     expect(await res.json()).toEqual({ expired: 0, recovered: 0 });
     expect(state.cancelled).toEqual([]);
+  });
+});
+
+describe('POST /api/cron/expire-orders — what pg_cron actually calls', () => {
+  it('a POST with a valid bearer token cancels the unpaid stale order, like the GET path', async () => {
+    state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_failed', status: 'failed', amount: 25000 }];
+    const res = await runPost();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ expired: 1, recovered: 0 });
+    expect(state.cancelled).toEqual(['order-1']);
+  });
+
+  it('a POST with a valid bearer token still recovers an order whose payment was captured', async () => {
+    state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_ok', status: 'captured', amount: 25000 }];
+    const res = await runPost();
+    expect(await res.json()).toEqual({ expired: 0, recovered: 1 });
+    expect(state.captured).toEqual(['rzp_order_1']);
+    expect(state.cancelled).toEqual([]);
+  });
+
+  it('POST fails CLOSED with no Authorization header', async () => {
+    const res = await runPost(null);
+    expect(res.status).toBe(401);
+    expect(state.cancelled).toEqual([]);
+  });
+
+  it('POST fails CLOSED with a wrong bearer token', async () => {
+    const res = await runPost('Bearer wrong');
+    expect(res.status).toBe(401);
+    expect(state.cancelled).toEqual([]);
+  });
+
+  it('POST fails CLOSED when CRON_SECRET itself is unset', async () => {
+    const original = process.env.CRON_SECRET;
+    delete process.env.CRON_SECRET;
+    try {
+      const res = await runPost('Bearer cron_secret');
+      expect(res.status).toBe(401);
+      expect(state.cancelled).toEqual([]);
+    } finally {
+      process.env.CRON_SECRET = original;
+    }
   });
 });

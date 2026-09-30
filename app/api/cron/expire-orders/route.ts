@@ -56,11 +56,14 @@ async function reconcileWithGateway(
   return result;
 }
 
-// GET /api/cron/expire-orders — point a Vercel Cron at this (e.g. every 5 min):
-//   vercel.json → { "crons": [{ "path": "/api/cron/expire-orders", "schedule": "*/5 * * * *" }] }
+// /api/cron/expire-orders — runs every 5 minutes from Supabase pg_cron +
+// pg_net (supabase/2026-10-expire-orders-cron.sql, job `expire-orders-poll`),
+// because the Vercel plan only runs crons daily. The daily entry in vercel.json
+// is kept as a backstop. Covers menu orders and HIOC Ritual pass-sale orders
+// (order_kind = 'coffee_pass') alike — both sit at status 'placed' until paid.
 // Protected by CRON_SECRET (Bearer). Fails CLOSED: if CRON_SECRET is unset the
 // endpoint is disabled (401), so it can never be triggered publicly.
-export async function GET(request: Request) {
+async function handle(request: Request) {
   const secret = process.env.CRON_SECRET;
   // S2: fail CLOSED — if CRON_SECRET is not configured, the endpoint is disabled
   // rather than runnable by anyone. It must be set (and matched) to run.
@@ -118,4 +121,17 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ expired, recovered });
+}
+
+// GET — Vercel's daily backstop cron (vercel.json) and manual triggering
+// (curl, an owner "run it now" button if one is ever added).
+export async function GET(request: Request) {
+  return handle(request);
+}
+
+// POST — what pg_cron's `net.http_post` actually issues (supabase/
+// 2026-10-expire-orders-cron.sql's scheduled job). Without this export every
+// tick 405s and nothing ever expires — GET alone was not enough.
+export async function POST(request: Request) {
+  return handle(request);
 }
