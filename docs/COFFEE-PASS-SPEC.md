@@ -49,7 +49,7 @@ Defaults chosen by the lead. Every number is an owner setting, not a code consta
 | # | Decision |
 |---|---|
 | CP-D1 | **A plan is data.** `coffee_pass_plans` holds name, drinks given, drinks paid for (display only), validity days, **drink value**, price, optional daily cap, GST-exempt and active flags. The two plans above are seeded **inactive** with placeholder prices (§9 B). The owner confirms them before anything is sold. |
-| CP-D2 | **Drink value.** Each pass drink covers **up to the plan's drink value** (seeded ₹150) of **one unit** of an eligible drink. Size and add-ons count towards it. Anything above is paid as a top-up. The pass price is `drinks_paid × drink_value` by default (₹750 weekly, ₹900 for 30 days), and the owner may override it. |
+| CP-D2 | **Drink value — superseded by CP-D22 (per-drink pricing).** ~~Each pass drink covers up to the plan's drink value (seeded ₹150)… price is `drinks_paid × drink_value`.~~ The cup value and the price now come from the drink the customer chooses when buying (§13). |
 | CP-D3 | **Eligibility is a menu switch.** `menu_items.pass_eligible` (default false), shared by all plans. The owner ticks drinks on Owner → Passes, with a "select the whole category" shortcut for Coffee / Creme Coffee / Iced Coffee / Cold Brews. |
 | CP-D4 | **A pass belongs to one account.** Sold at the POS, it goes to the account of the phone given. The account is opened if needed, exactly as a counter order does. Bought online, it goes to the signed-in account. The account is **never** taken from a request body. |
 | CP-D5 | **Validity runs in IST calendar days.** A pass bought on day D is valid until the end of day D + validity − 1 (IST). A Weekly bought Monday 10:00 is good through Sunday 23:59. `expires_at` is stored as the instant the next IST day starts. |
@@ -409,3 +409,35 @@ against this spec. Everything is behind `NEXT_PUBLIC_FLAG_COFFEE_PASS` (default 
 - The shared `ToggleSwitch` is 24 px tall, below the 44 px tap target. A primitive fix will cover
   every screen.
 - `GET /api/passes/mine` keeps an abandoned checkout in `pending` for 60 minutes.
+
+## 13. Per-drink pricing (v1.2, owner decision 30 Sep 2026)
+
+"The price has to be dynamic according to the drink." The owner chose to **pick the drink when buying**.
+The cups then cover that drink's value on any eligible coffee.
+
+| # | Decision |
+|---|---|
+| CP-D22 | **The customer chooses a drink and size when buying a Ritual.** The choice is any `pass_eligible`, available item, in a size on sale. The Ritual's **price = `drinks_paid` × that size's menu price** at the moment of sale: Weekly is 5 ×, Monthly is 6 ×. GST is charged on top at the store rate, per CP-D11 (5% at sale). |
+| CP-D23 | **Cup value = the chosen size's menu price**, frozen on the Ritual when it is sold. A later menu price change never alters a Ritual already bought. Each cup still covers up to that value on **any** eligible coffee (CP-D9). A drink of the same price or cheaper is free. A dearer drink, or add-ons beyond the value, pays the difference, and GST applies to that difference only. |
+| CP-D24 | **A plan no longer has a price or a cup value.** It is the recipe: cups given, cups paid for, validity, daily cap, GST-exempt and active. `coffee_pass_plans.price_inr` and `drink_value_inr` become nullable and are cleared. The owner screen shows worked examples ("Cappuccino L ₹120 → ₹600") instead of a price field. |
+| CP-D25 | **The Ritual remembers its drink** (`coffee_passes.drink_menu_item_id`, `drink_label`, e.g. "Cappuccino · Large"). Screens call it "your Cappuccino Ritual", and the sale line reads "Weekly Ritual — Cappuccino (Large)". |
+
+**Money examples** (5% GST exclusive):
+
+| Case | Charge |
+|---|---|
+| Weekly, Cappuccino L ₹120 | 5 × 120 = ₹600 + ₹30 GST = **₹630** |
+| Monthly, Latte L ₹140 | 6 × 140 = ₹840 + ₹42 GST = **₹882** |
+| Cappuccino Ritual (cup ₹120), redeem Americano L ₹100 | **₹0** |
+| Cappuccino Ritual (cup ₹120), redeem Latte L ₹140 | ₹20 + ₹1 GST = **₹21** |
+
+**API changes:**
+
+- `POST /api/passes/sell` and `POST /api/passes/checkout` take `menu_item_id` and `variant_id`.
+  - The server prices the single cup through `resolveOrderLines`, so availability, menu switches and in-store rules apply as for an order.
+  - It refuses a drink that is not `pass_eligible` (400).
+  - The sale line stores the terms with the chosen drink, and the issue trigger copies `drink_value_inr`, `drink_menu_item_id` and `drink_label` from them.
+- `GET /api/passes/plans` lists eligible drinks with their sizes and prices, so a screen can show the price before buying. The server is authoritative.
+- Owner plan create and edit no longer take `price_inr` or `drink_value_inr`.
+
+**Migration:** `supabase/2026-10-coffee-pass-per-drink.sql`. It is additive and safe to re-run. It must be applied **before** the code deploys. Production had 0 Rituals sold when this was decided.
