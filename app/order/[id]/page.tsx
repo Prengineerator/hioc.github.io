@@ -20,6 +20,7 @@ import { formatIstTime } from '@/lib/store/hours';
 import { CUSTOMER_PROGRESS, isTerminal } from '@/lib/orders/stateMachine';
 import { useOrderRealtime, type RealtimeConnection } from '@/lib/realtime/hooks';
 import { Spinner } from '@/components/ui/Spinner';
+import { OptInCard } from '@/components/marketing/OptInCard';
 import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
@@ -451,6 +452,12 @@ export default function OrderStatusPage() {
           {cancelError ? <p className="mt-2 text-sm text-red-700">{cancelError}</p> : null}
         </div>
       ) : null}
+
+      {/* Marketing opt-in (spec §2). Below the order details, quiet: renders nothing
+          unless the flag is on and there is a way for this customer to say yes. The
+          old /order-confirmation/[orderId] URL redirects here, so this IS the
+          confirmation page. */}
+      <OptInCard />
 
       <div className="mt-10 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
         <h3 className="font-semibold text-charcoal">Need help?</h3>

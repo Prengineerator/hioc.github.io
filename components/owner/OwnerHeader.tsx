@@ -15,6 +15,11 @@ const LINKS = [
   // Reconcile any date range: sales, money in by method, refunds, drawer.
   { href: '/owner/reports', label: 'Reports' },
   { href: '/owner/promotions', label: 'Promotions' },
+  // Marketing agent (docs/MARKETING-AGENT-SPEC.md). Right after Promotions because
+  // the two are used in the same sitting — coupons you make by hand vs. campaigns
+  // the agent prepares for you. Flag-gated like Attendance below: with it off the
+  // link would lead to a "Marketing isn't enabled" page, which is noise in the nav.
+  ...(flags.marketing ? [{ href: '/owner/marketing', label: 'Marketing' }] : []),
   { href: '/owner/reviews', label: 'Reviews' },
   { href: '/owner/feedback', label: 'Feedback' },
   { href: '/owner/tables', label: 'Tables' },

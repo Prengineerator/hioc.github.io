@@ -419,7 +419,7 @@ const PAGE_ROWS = 1000;
  * being absent on a DB without 2026-08-counter-loyalty.sql (null-filled).
  * Returns null on failure so callers can pick their own degraded value.
  */
-async function fetchValidOrdersSince<T>(
+export async function fetchValidOrdersSince<T>(
   columns: string,
   sinceIso: string,
   max: number,

@@ -22,6 +22,18 @@
 // Requires supabase/2026-08-notify-delivery.sql to be applied first, and
 // supabase/2026-10-order-feedback.sql for the feedback tables.
 //
+// MARKETING (docs/MARKETING-AGENT-SPEC.md §2, §6). The same endpoint is where a customer
+// opts in and out of marketing, and where the agent's delivery receipts land:
+//   - a status callback that matches no `notifications` row is tried against
+//     marketing_recipients (by provider_ref), forward-only, with a 131050 failure
+//     ("Stop promotions") recorded as an opt-out;
+//   - START / SUBSCRIBE / OFFERS / UNSTOP opts in (and is answered), STOP also opts out of
+//     marketing, and Meta's "Stop promotions" button is an opt-out with no reply;
+//   - the `user_preferences` field (subscribe it next to `messages`) reports a customer
+//     pausing/resuming marketing inside WhatsApp itself.
+// Every phone comes from the HMAC-signed payload and nowhere else. If the marketing tables
+// are not there yet, all of it falls through to the behaviour this file always had.
+//
 // ⚠ WHATSAPP_APP_SECRET IS NOT SET IN PRODUCTION as of the feedback feature's
 // launch. Rule 1 below means this endpoint fails EVERY inbound request closed
 // (401, nothing written) until an operator sets it — so button taps, opt-outs
@@ -54,6 +66,14 @@ import {
   ratingFromButtonText,
   type FeedbackButtonRating,
 } from '@/lib/feedback/payload';
+import {
+  isOptInKeyword,
+  isStopPromotionsButton,
+  recordOptIn,
+  recordOptOut,
+  type ConsentResult,
+} from '@/lib/marketing/server/consent';
+import { isMigrationMissing } from '@/lib/marketing/server/repo';
 import { getStoreSettings } from '@/lib/store/settings';
 import { resolveGoogleReviewUrl } from '@/lib/feedback/reviewLink';
 import type { FeedbackRequest, NotificationStatus } from '@/lib/types';
@@ -73,6 +93,8 @@ interface StatusUpdate {
   at: string;
   /** '' unless Meta attached an error object. */
   error: string;
+  /** Meta's numeric error code as a string ('131050'), '' when there is none. */
+  errorCode: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +165,13 @@ function errorTextFrom(status: Record<string, unknown>): string {
   return [code, title].filter(Boolean).join(': ').slice(0, 300);
 }
 
+/** Meta's numeric error code for a failed status ('131049', '131050', …), '' when there is none. */
+function errorCodeFrom(status: Record<string, unknown>): string {
+  const first = asRecord(asArray(status.errors)[0]);
+  if (!first || first.code === undefined || first.code === null) return '';
+  return String(first.code).slice(0, 20);
+}
+
 /**
  * Pulls every status callback out of a webhook body, ignoring everything else
  * it may carry (inbound messages, template updates, fields we never subscribed
@@ -178,6 +207,7 @@ function parseStatusUpdates(rawBody: string): StatusUpdate[] {
           status: name as NotificationStatus,
           at: isoFrom(status.timestamp),
           error: errorTextFrom(status),
+          errorCode: errorCodeFrom(status),
         });
       }
     }
@@ -278,7 +308,28 @@ function parseInboundMessages(rawBody: string): InboundMessage[] {
 // ---------------------------------------------------------------------------
 
 const SORRY_FOLLOWUP = 'Sorry to hear that — what could we do better? Just reply here.';
-const STOP_CONFIRMATION = "You're unsubscribed from HIOC feedback messages. Reply START any time to opt back in.";
+// STOP now ends offers as well as feedback messages (marketing consent, spec §2), and says
+// so — plus that order updates continue, which a customer who just typed STOP will worry about.
+const STOP_CONFIRMATION =
+  "You're unsubscribed from HIOC offers and feedback messages. You'll still get updates about orders you place. Reply START any time to opt back in.";
+const START_CONFIRMATION =
+  "You're subscribed to HIOC offers on WhatsApp — at most one message a week. Reply STOP anytime to unsubscribe.";
+
+/**
+ * Runs one marketing-consent write and never lets it throw or fail the webhook. `true`
+ * when the ledger was written. A missing marketing migration is expected (the webhook then
+ * behaves exactly as it did before marketing existed) and is not logged as an error.
+ */
+async function applyConsent(what: string, run: () => Promise<ConsentResult>): Promise<boolean> {
+  try {
+    const result = await run();
+    if (!result.ok && !result.migration_missing) console.error(`[whatsapp:webhook] ${what} not recorded`, result.error);
+    return result.ok;
+  } catch (err) {
+    console.error(`[whatsapp:webhook] ${what} threw`, err);
+    return false;
+  }
+}
 
 /** Fire-and-forget free-text WhatsApp send + its own feedback_messages row. Never throws. */
 async function sendFollowUp(
@@ -345,6 +396,43 @@ async function applyInboundMessage(
   msg: InboundMessage,
 ): Promise<void> {
   try {
+    // MARKETING opt-in (START / SUBSCRIBE / OFFERS / UNSTOP), handled before anything in the
+    // feedback thread. Stored exactly the way STOP is stored below: linked to the customer's
+    // latest feedback request, deduplicated on wa_message_id BEFORE it acts, so a Meta retry
+    // cannot record two opt-ins or send two replies.
+    if (msg.kind === 'text' && isOptInKeyword(msg.text)) {
+      const request = await resolveFeedbackRequest(admin, msg.fromPhone, null);
+      const { error: insertError } = await admin.from('feedback_messages').insert({
+        request_id: request?.id ?? null,
+        order_id: request?.order_id ?? null,
+        phone: msg.fromPhone,
+        direction: 'in',
+        body: msg.text,
+        wa_message_id: msg.waMessageId,
+      });
+      if (insertError) {
+        if ((insertError as { code?: string }).code !== '23505') {
+          console.error('[whatsapp:webhook] inbound insert failed', insertError);
+        }
+        return;
+      }
+      const subscribed = await applyConsent('START opt-in', () =>
+        recordOptIn({ phone: msg.fromPhone, source: 'whatsapp_keyword' }),
+      );
+      if (request) {
+        await admin
+          .from('feedback_requests')
+          .update({ unread: true, last_inbound_at: msg.at })
+          .eq('id', request.id);
+      }
+      // Only confirm what actually happened: with the marketing tables absent nothing was
+      // recorded, and "you're subscribed" would be a lie (the message is then just stored).
+      if (subscribed) {
+        await sendFollowUp(admin, msg.fromPhone, START_CONFIRMATION, request?.id ?? null, request?.order_id ?? null);
+      }
+      return;
+    }
+
     if (msg.kind === 'text' && isOptOutKeyword(msg.text)) {
       const request = await resolveFeedbackRequest(admin, msg.fromPhone, null);
       const { error: insertError } = await admin.from('feedback_messages').insert({
@@ -365,6 +453,11 @@ async function applyInboundMessage(
         }
         return;
       }
+      // STOP is also a marketing opt-out. Recorded BEFORE the legacy upsert below so that row
+      // keeps the source it has always had ('stop_keyword'); the ledger and its audit event are
+      // what the marketing agent reads. A failure here (migration not applied) never blocks the
+      // legacy opt-out that the feedback cron honours.
+      await applyConsent('STOP opt-out', () => recordOptOut({ phone: msg.fromPhone, source: 'stop_keyword' }));
       await admin
         .from('whatsapp_opt_outs')
         .upsert({ phone: msg.fromPhone, source: 'stop_keyword' }, { onConflict: 'phone' });
@@ -375,6 +468,32 @@ async function applyInboundMessage(
           .eq('id', request.id);
       }
       await sendFollowUp(admin, msg.fromPhone, STOP_CONFIRMATION, request?.id ?? null, request?.order_id ?? null);
+      return;
+    }
+
+    // Meta's marketing opt-out button ("Stop promotions") on a marketing template. Stored like
+    // any other inbound message, recorded as an opt-out, and NOT answered: Meta confirms to the
+    // customer itself, and a second message from us would be an unrequested one.
+    if ((msg.kind === 'button' || msg.kind === 'interactive') && isStopPromotionsButton(msg.text)) {
+      const request = await resolveFeedbackRequest(admin, msg.fromPhone, null);
+      const { error: insertError } = await admin.from('feedback_messages').insert({
+        request_id: request?.id ?? null,
+        order_id: request?.order_id ?? null,
+        phone: msg.fromPhone,
+        direction: 'in',
+        body: msg.text,
+        button_payload: msg.buttonPayload,
+        wa_message_id: msg.waMessageId,
+      });
+      if (insertError) {
+        if ((insertError as { code?: string }).code !== '23505') {
+          console.error('[whatsapp:webhook] inbound insert failed', insertError);
+        }
+        return;
+      }
+      await applyConsent('Stop promotions opt-out', () =>
+        recordOptOut({ phone: msg.fromPhone, source: 'stop_promotions' }),
+      );
       return;
     }
 
@@ -544,7 +663,9 @@ async function applyStatusUpdate(admin: Admin, update: StatusUpdate): Promise<Ou
     .limit(1)
     .maybeSingle();
 
-  if (!row) return 'unknown';
+  // Not one of ours from the order flow: it may be a MARKETING message (matched the same way,
+  // by provider_ref). Unknown to both really is unknown.
+  if (!row) return applyMarketingStatus(admin, update);
 
   // The out-of-order case: a 'delivered' arriving after 'read'. The status must
   // not regress, but the timestamp is a fact we didn't have and the row has an
@@ -559,6 +680,156 @@ async function applyStatusUpdate(admin: Admin, update: StatusUpdate): Promise<Ou
       .is(column, null);
   }
   return 'ignored';
+}
+
+// ---------------------------------------------------------------------------
+// Marketing receipts and preferences
+// ---------------------------------------------------------------------------
+
+/**
+ * A status callback for a message the MARKETING agent sent (matched by provider_ref, after
+ * `notifications` had no such row). Forward-only, like the ladder above:
+ *
+ *   sent < delivered < read     the sender itself records 'sent'; a callback only advances
+ *   failed                      accepted from 'sending' / 'sent' only. A message that failed
+ *                               was not delivered, so its cost is 0; 131050 (the customer
+ *                               tapped Meta's "Stop promotions") is also an opt-out.
+ *
+ * Each move is ONE guarded UPDATE (`status in (…)`), so two callbacks in flight cannot let
+ * the loser overwrite the winner. 'unknown' when there is no such recipient — or the
+ * marketing tables do not exist, which must leave the old behaviour untouched.
+ */
+async function applyMarketingStatus(admin: Admin, update: StatusUpdate): Promise<Outcome> {
+  try {
+    const { data: row, error } = await admin
+      .from('marketing_recipients')
+      .select('id, phone, user_id, status, delivered_at, read_at')
+      .eq('provider_ref', update.ref)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (isMigrationMissing(error)) return 'unknown';
+      console.error(`[whatsapp:webhook] marketing lookup failed for ${refTail(update.ref)}`, error.message);
+      return 'failed';
+    }
+    if (!row) return 'unknown';
+    const r = row as {
+      id: string;
+      phone: string;
+      user_id: string | null;
+      status: string;
+      delivered_at: string | null;
+      read_at: string | null;
+    };
+
+    // 'sent' is recorded by the sender itself, at the moment it sends.
+    if (update.status === 'sent') return 'ignored';
+
+    const patch: Record<string, unknown> = { status: update.status };
+    let from: string[];
+    if (update.status === 'delivered') {
+      from = ['sent'];
+      patch.delivered_at = update.at;
+    } else if (update.status === 'read') {
+      from = ['sent', 'delivered'];
+      patch.read_at = update.at;
+      // A read implies delivery; if the 'delivered' callback never came (or is late), stamp it now.
+      if (!r.delivered_at) patch.delivered_at = update.at;
+    } else {
+      from = ['sending', 'sent'];
+      patch.cost_inr = 0;
+      patch.error = update.error;
+      patch.error_code = update.errorCode;
+    }
+
+    const { data: moved, error: moveError } = await admin
+      .from('marketing_recipients')
+      .update(patch)
+      .eq('id', r.id)
+      .in('status', from)
+      .select('id');
+    if (moveError) {
+      console.error(`[whatsapp:webhook] marketing update failed for ${refTail(update.ref)}`, moveError.message);
+      return 'failed';
+    }
+
+    if ((moved ?? []).length > 0) {
+      if (update.status === 'failed' && update.errorCode === '131050') {
+        await applyConsent('131050 opt-out', () =>
+          recordOptOut({ phone: r.phone, userId: r.user_id, source: 'meta_131050' }),
+        );
+      }
+      return 'applied';
+    }
+
+    // Already at or above this rung. A late 'delivered' after 'read' must not regress the
+    // status, but the timestamp is a fact we did not have: set-once, guarded by `is null`.
+    if (update.status === 'delivered' && r.status === 'read' && !r.delivered_at) {
+      await admin.from('marketing_recipients').update({ delivered_at: update.at }).eq('id', r.id).is('delivered_at', null);
+    }
+    return 'ignored';
+  } catch (err) {
+    console.error(`[whatsapp:webhook] marketing status failed for ${refTail(update.ref)}`, err);
+    return 'failed';
+  }
+}
+
+/** One `user_preferences` entry: a customer changed their marketing preference inside WhatsApp. */
+interface PreferenceUpdate {
+  /** E.164, '+' + Meta's digits-only wa_id (from the signed payload). */
+  phone: string;
+  value: 'stop' | 'resume';
+}
+
+/**
+ * Pulls the marketing-preference changes out of a webhook body: entry[].changes[] whose
+ * value carries a `user_preferences` array of {wa_id, category, value}. Only the
+ * `marketing_messages` category matters, and only 'stop' / 'resume'. Never throws.
+ */
+function parsePreferenceUpdates(rawBody: string): PreferenceUpdate[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody);
+  } catch {
+    return [];
+  }
+  const body = asRecord(parsed);
+  if (!body) return [];
+
+  const out: PreferenceUpdate[] = [];
+  for (const entry of asArray(body.entry)) {
+    for (const change of asArray(asRecord(entry)?.changes)) {
+      const value = asRecord(asRecord(change)?.value);
+      if (!value) continue;
+      for (const raw of asArray(value.user_preferences)) {
+        const pref = asRecord(raw);
+        if (!pref) continue;
+        const waId = typeof pref.wa_id === 'string' ? pref.wa_id.replace(/^\+/, '') : '';
+        if (!/^[0-9]{8,15}$/.test(waId)) continue;
+        if (pref.category !== 'marketing_messages') continue;
+        if (pref.value !== 'stop' && pref.value !== 'resume') continue;
+        out.push({ phone: `+${waId}`, value: pref.value });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Applies the preference changes. 'stop' is an opt-out. 'resume' is an opt-in ONLY if we
+ * already hold an earlier opt-in for that phone (recordOptIn enforces it for source
+ * 'meta_resume'): Meta saying "they turned marketing back on" is not consent TO US.
+ */
+async function processPreferenceUpdates(updates: PreferenceUpdate[]): Promise<number> {
+  let applied = 0;
+  for (const u of updates) {
+    const ok =
+      u.value === 'stop'
+        ? await applyConsent('user_preferences stop', () => recordOptOut({ phone: u.phone, source: 'meta_stop' }))
+        : await applyConsent('user_preferences resume', () => recordOptIn({ phone: u.phone, source: 'meta_resume' }));
+    if (ok) applied += 1;
+  }
+  return applied;
 }
 
 // ---------------------------------------------------------------------------
@@ -649,5 +920,15 @@ export async function POST(request: Request) {
     console.error('[whatsapp:webhook] inbound message processing failed', err);
   }
 
-  return NextResponse.json({ received: true, ...tally, messages });
+  // Marketing preferences reported by Meta (the `user_preferences` field) — its own
+  // try/catch again: a fault here never blocks anything above, and it still answers 200.
+  let preferences = 0;
+  try {
+    const updates = parsePreferenceUpdates(raw);
+    if (updates.length > 0) preferences = await processPreferenceUpdates(updates);
+  } catch (err) {
+    console.error('[whatsapp:webhook] user_preferences processing failed', err);
+  }
+
+  return NextResponse.json({ received: true, ...tally, messages, ...(preferences > 0 ? { preferences } : {}) });
 }
