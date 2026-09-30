@@ -22,7 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import type { OrderRowWithItems } from '@/lib/api/orders';
 import { isMissingPassSchema } from '@/lib/passes/api';
 import { cupsLabel } from '@/lib/passes/brand';
-import type { CoffeePassPlan } from '@/lib/passes/types';
+import type { CoffeePassPlan, CoffeePassTerms } from '@/lib/passes/types';
 import { computeBill, type BillBreakdown } from '@/lib/store/hours';
 import type { ActorRole, OrderChannel, OrderStatus, PaymentMethod, PaymentStatus, StoreSettings } from '@/lib/types';
 
@@ -50,6 +50,27 @@ export interface PassSaleInput {
 export function passLineLabel(plan: Pick<CoffeePassPlan, 'drinks_total' | 'validity_days'>): string {
   const days = plan.validity_days;
   return `${cupsLabel(plan.drinks_total)} · ${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/**
+ * The terms the customer is being SOLD, taken from the plan as it reads at this
+ * moment. They are written on the sale's line and the issuing trigger reads them
+ * back when the order is paid, so an owner's edit to the plan in between (a
+ * Razorpay payment that lands ten minutes later, a counter sale settled after a
+ * price change) never changes what the customer gets. The price is not in here:
+ * the line's own total is what the pass records as paid.
+ */
+export function passSaleTerms(
+  plan: Pick<CoffeePassPlan, 'name' | 'drinks_total' | 'drink_value_inr' | 'validity_days' | 'max_per_day'>,
+): CoffeePassTerms {
+  return {
+    plan_name: plan.name,
+    drinks_total: plan.drinks_total,
+    drink_value_inr: plan.drink_value_inr,
+    validity_days: plan.validity_days,
+    // Always written, null included: the trigger treats a missing key as unreadable.
+    max_per_day: plan.max_per_day ?? null,
+  };
 }
 
 /**
@@ -128,6 +149,8 @@ export function buildPassSaleRows(input: PassSaleInput): {
     special_instructions: '',
     gst_exempt: plan.gst_exempt,
     coffee_pass_plan_id: plan.id,
+    // What was SOLD, frozen here: the issuing trigger reads it instead of the live plan.
+    coffee_pass_terms: passSaleTerms(plan),
   };
   return { order, item, bill };
 }

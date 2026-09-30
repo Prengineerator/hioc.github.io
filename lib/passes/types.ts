@@ -30,6 +30,21 @@ export interface CoffeePassPlan {
   sort_order: number;
 }
 
+/**
+ * What a pass was SOLD with, frozen on the sale's one order line
+ * (order_items.coffee_pass_terms). The issuing trigger reads this rather than the
+ * live plan, so an owner's edit between the sale and the payment never changes
+ * what the customer receives. The price is not here: it is the line's total.
+ */
+export interface CoffeePassTerms {
+  plan_name: string;
+  drinks_total: number;
+  drink_value_inr: number;
+  validity_days: number;
+  /** null = no daily limit. Always present: the trigger requires all five keys. */
+  max_per_day: number | null;
+}
+
 /** One pass with its derived balance, as the customer or the counter sees it. */
 export interface PassSummary {
   id: string;

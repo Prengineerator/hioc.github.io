@@ -16,6 +16,7 @@ import { getStoreSettings } from '@/lib/store/settings';
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { OrderStatus, OrderType, UserRole } from '@/lib/types';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
@@ -44,6 +45,8 @@ type LoadedOrder = {
   version: number;
   order_type: OrderType;
   payment_status: string;
+  /** 'coffee_pass' for the sale of a HIOC Ritual; absent before 2026-10-coffee-pass.sql (= a menu order). */
+  order_kind?: string;
   discount_inr: number;
   /** What HIOC Ritual cups cover on the order; absent before 2026-10-coffee-pass.sql. */
   pass_discount_inr?: number;
@@ -58,6 +61,12 @@ type LoadedOrder = {
 // which reads as "no pass cover", the truth for every order on such a database.
 const AMEND_ORDER_SELECT = '*, order_items(*)';
 
+// A HIOC Ritual SALE is one line, one price, issued as a pass the moment it is
+// paid (a trigger, CP-D6). Voiding that line or adding menu items to it would
+// leave a bill that no longer describes the pass, so neither path may touch it:
+// a mistaken sale is cancelled and sold again. Checked before any write.
+const RITUAL_SALE_LOCKED = `A ${PASS_PROGRAM_NAME} sale can't be changed — cancel it instead.`;
+
 // The order's pass cover only changes when a line a cup paid for is voided, so
 // the column is written back only then: an order that never used a pass never
 // sends the column, and a pre-migration database is never asked to store it.
@@ -71,6 +80,8 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
 //   { op: 'add', items: [...] }→ ADD lines to the running order (TAB-1, UI TAB-2)
 //
 // `op` defaults to 'void' so the existing POS-4 contract is unchanged.
+//
+// Both refuse a HIOC Ritual sale (order_kind 'coffee_pass') outright (409).
 //
 // Both share the same invariants: the order must be open and unpaid, totals are
 // recomputed SERVER-SIDE under the optimistic `version` guard, a lost race rolls
@@ -136,6 +147,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
 
   const items: OrderLine[] = order.order_items ?? [];
   const target = items.find((line) => line.id === itemId);
@@ -291,6 +303,7 @@ async function addLines(
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
   const existingItems: OrderLine[] = order.order_items ?? [];
 
   if (!OPEN_STATUSES.includes(order.status)) {

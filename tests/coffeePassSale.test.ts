@@ -5,6 +5,7 @@ import {
   createPassSaleOrder,
   passLineLabel,
   passSaleBill,
+  passSaleTerms,
   toPassSaleSummaries,
   type PassSaleInput,
 } from '@/lib/passes/sale';
@@ -54,6 +55,18 @@ function counterSale(over: Partial<PassSaleInput> = {}): PassSaleInput {
     ...over,
   };
 }
+
+describe('passSaleTerms', () => {
+  it('reads the five things a pass is issued with from a plan', () => {
+    expect(passSaleTerms(PLAN)).toEqual({
+      plan_name: 'Weekly Ritual',
+      drinks_total: 7,
+      drink_value_inr: 150,
+      validity_days: 7,
+      max_per_day: null,
+    });
+  });
+});
 
 describe('passLineLabel', () => {
   it('reads "7 cups · 7 days" and uses the singular where it should', () => {
@@ -127,6 +140,43 @@ describe('buildPassSaleRows', () => {
       gst_exempt: false,
       coffee_pass_plan_id: PLAN.id,
     });
+  });
+
+  it('freezes the terms it is SOLD with on the line: name, cups, cup value, validity, daily cap (the trigger issues from these)', () => {
+    const { item } = buildPassSaleRows(counterSale());
+    expect(item.coffee_pass_terms).toEqual({
+      plan_name: 'Weekly Ritual',
+      drinks_total: 7,
+      drink_value_inr: 150,
+      validity_days: 7,
+      max_per_day: null,
+    });
+  });
+
+  it('carries a daily cap through, and writes an uncapped plan as an explicit null (the trigger needs all five keys)', () => {
+    const capped = buildPassSaleRows(counterSale({ plan: { ...PLAN, max_per_day: 1 } })).item;
+    expect((capped.coffee_pass_terms as { max_per_day: unknown }).max_per_day).toBe(1);
+    const open = buildPassSaleRows(counterSale()).item.coffee_pass_terms as Record<string, unknown>;
+    expect(Object.keys(open).sort()).toEqual(
+      ['drink_value_inr', 'drinks_total', 'max_per_day', 'plan_name', 'validity_days'],
+    );
+    expect(open).toHaveProperty('max_per_day', null);
+  });
+
+  it('is a copy taken at sale time: editing the plan afterwards cannot reach the terms already built', () => {
+    const plan = { ...PLAN };
+    const { item } = buildPassSaleRows(counterSale({ plan }));
+    plan.drinks_total = 20;
+    plan.drink_value_inr = 400;
+    plan.validity_days = 60;
+    plan.name = 'Renamed';
+    expect(item.coffee_pass_terms).toMatchObject({ plan_name: 'Weekly Ritual', drinks_total: 7, drink_value_inr: 150, validity_days: 7 });
+  });
+
+  it('keeps the price on the line, not in the terms (the pass records the line total as paid)', () => {
+    const { item } = buildPassSaleRows(counterSale());
+    expect(item.line_total_inr).toBe(750);
+    expect(item.coffee_pass_terms).not.toHaveProperty('price_inr');
   });
 
   it('fills every NOT NULL column of orders with a sensible value and leaves the pickup ones empty', () => {
@@ -219,6 +269,14 @@ describe('createPassSaleOrder', () => {
     expect(result.order.id).toBe(orders[0].id);
     expect(result.order.order_items).toHaveLength(1);
     expect(result.order.order_items?.[0]).toMatchObject({ name_snapshot: 'Weekly Ritual', coffee_pass_plan_id: PLAN.id });
+    // The line stored the terms it was sold with.
+    expect(items[0].coffee_pass_terms).toEqual({
+      plan_name: 'Weekly Ritual',
+      drinks_total: 7,
+      drink_value_inr: 150,
+      validity_days: 7,
+      max_per_day: null,
+    });
   });
 
   it('attributes an online sale to the system, not to a person', async () => {

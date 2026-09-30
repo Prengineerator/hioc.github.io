@@ -385,6 +385,21 @@ against this spec. Everything is behind `NEXT_PUBLIC_FLAG_COFFEE_PASS` (default 
 - **Copy.** Customer-facing copy never says "Coffee Pass" or "pass". It says **HIOC Ritual** and
   **cups**. Loyalty is **Beanies**.
 
+**Hardening after the independent review:**
+
+- **Sold terms.** The sale line stores the plan's terms (`order_items.coffee_pass_terms`: cups, cup
+  value, validity, daily cap, name). The issue trigger reads them, so an owner's edit between sale and
+  payment never changes what the customer bought. The live plan is used only if the terms are missing
+  or unreadable, and that logs a warning.
+- **Refund states.** `PATCH /api/orders/[id]/payment` refuses `refunded` / `partially_refunded` for
+  every order (400). Those states belong to the refund route, which has the `refund` permission.
+  Before this, any staffer could set them and the return trigger would hand back spent cups.
+- **No short settle.** A pass sale cannot be settled short (409). Tips are still allowed.
+- **Un-void.** When a void is rolled back, the cups are restored only while the order is not
+  cancelled, rejected or fully refunded, and only if the pass still has the cups (row-locked).
+  Otherwise the reversal stands and a warning is logged.
+- **No amendments.** A pass sale refuses amendments: no void and no added lines (409).
+
 **Known limits in v1 (backlog):**
 
 - Table-QR orders cannot use a Ritual. The QR pad sends no `items` or `pass_drinks`.

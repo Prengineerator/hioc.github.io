@@ -3,6 +3,8 @@
 // additions live in supabase/phase1-migration.sql. Keep this file in EXACT
 // sync with BOTH — do not let them drift (Phase-1 DoD, docs/PHASE-1-SPEC.md §0).
 
+import type { CoffeePassTerms } from '@/lib/passes/types';
+
 // ---------------------------------------------------------------------------
 // Enums (supabase/schema.sql + phase1-migration.sql Sections 1–2, 8)
 // ---------------------------------------------------------------------------
@@ -259,6 +261,9 @@ export interface OrderItem {
   pass_drinks?: number;
   pass_covered_inr?: number;
   coffee_pass_plan_id?: string | null;
+  // The terms that pass was sold with (see CoffeePassTerms); the trigger that
+  // issues the pass reads them. Null/absent on any other line.
+  coffee_pass_terms?: CoffeePassTerms | null;
   addons: OrderItemAddon[];
   // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
   // is VOIDED, never deleted — kept for audit; excluded from totals server-side.

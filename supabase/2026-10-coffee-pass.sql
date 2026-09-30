@@ -98,6 +98,18 @@ alter table order_items
 alter table order_items
   add column if not exists coffee_pass_plan_id uuid
     references coffee_pass_plans(id) on delete restrict;
+-- The terms the pass was SOLD with, frozen on that same line when it is sold:
+--   { plan_name, drinks_total, drink_value_inr, validity_days, max_per_day }
+-- (lib/passes/sale.ts buildPassSaleRows). The issuing trigger reads THESE, not
+-- the live plan, so an owner edit between the sale and the payment (a customer
+-- who pays on Razorpay ten minutes later, a counter sale settled after a price
+-- change) never changes what the customer receives. The price is not in here:
+-- it is the line's own line_total_inr. NULL only on a line that was not written
+-- by the app (the trigger then falls back to the live plan). Deliberately not a
+-- CHECK: the trigger validates it and falls back, because a constraint that
+-- rejected a sale line would be a sale nobody could make.
+alter table order_items
+  add column if not exists coffee_pass_terms jsonb;
 -- CP-D3: which drinks a pass can pay for. Shared by all plans; the owner
 -- ticks them on Owner → Passes. Nothing is pre-set.
 alter table menu_items
@@ -533,8 +545,17 @@ create trigger trg_coffee_pass_complete_on_paid
   for each row execute function public.coffee_pass_complete_on_paid();
 
 -- 2. AFTER: issue the pass. The plan comes from the order's pass line
---    (order_items.coffee_pass_plan_id); the price snapshot is what that line
---    actually charged. The pass goes to the order's account —
+--    (order_items.coffee_pass_plan_id) and the price snapshot is what that line
+--    actually charged. The TERMS (name, cups, cup value, validity, daily cap) are
+--    the ones frozen on that line when the pass was SOLD
+--    (order_items.coffee_pass_terms): the customer gets what they were sold even
+--    if the owner edited the plan before the payment landed. Only a line with no
+--    terms at all (not written by the app) falls back to the live plan, and so
+--    does a line whose terms are unreadable — with a WARNING, because that one
+--    means something wrote garbage. This trigger must never RAISE an error on
+--    bad terms: it runs inside the transaction that records the customer's
+--    payment, and an exception would roll the payment back. The pass goes to the
+--    order's account —
 --    customer_user_id (the account a counter sale was linked to) or user_id
 --    (the session that bought online). With no account there is nobody to give
 --    it to: warn loudly and issue nothing (the routes refuse such a sale, so
@@ -551,6 +572,13 @@ declare
   v_line record;
   v_plan public.coffee_pass_plans%rowtype;
   v_user uuid;
+  v_terms jsonb;
+  v_name text;
+  v_drinks integer;
+  v_value integer;
+  v_days integer;
+  v_cap integer;
+  v_sold boolean := false;
 begin
   if new.order_kind is distinct from 'coffee_pass'
      or new.payment_status is distinct from 'paid'
@@ -558,7 +586,7 @@ begin
     return null;
   end if;
 
-  select oi.coffee_pass_plan_id, oi.line_total_inr
+  select oi.coffee_pass_plan_id, oi.line_total_inr, oi.coffee_pass_terms
     into v_line
     from public.order_items oi
    where oi.order_id = new.id and oi.coffee_pass_plan_id is not null and not oi.voided
@@ -581,13 +609,57 @@ begin
     return null;
   end if;
 
+  -- The terms the pass was sold with. Checked by pattern before any cast (SQL
+  -- does not promise AND short-circuits, so a cast may not share an expression
+  -- with the check that makes it safe): every key present, a name of 1-60
+  -- characters, whole numbers for the counts, and max_per_day a whole number or
+  -- JSON null (no cap). The bounds are the plan table's own, so a pass can
+  -- never be issued that a plan could not have described.
+  v_terms := v_line.coffee_pass_terms;
+  if v_terms is not null then
+    if jsonb_typeof(v_terms) = 'object'
+       and v_terms ?& array['plan_name', 'drinks_total', 'drink_value_inr', 'validity_days', 'max_per_day']
+       and jsonb_typeof(v_terms -> 'plan_name') = 'string'
+       and length(trim(v_terms ->> 'plan_name')) between 1 and 60
+       and jsonb_typeof(v_terms -> 'drinks_total') = 'number'
+       and (v_terms ->> 'drinks_total') ~ '^[0-9]{1,6}$'
+       and jsonb_typeof(v_terms -> 'drink_value_inr') = 'number'
+       and (v_terms ->> 'drink_value_inr') ~ '^[0-9]{1,9}$'
+       and jsonb_typeof(v_terms -> 'validity_days') = 'number'
+       and (v_terms ->> 'validity_days') ~ '^[0-9]{1,6}$'
+       and (jsonb_typeof(v_terms -> 'max_per_day') = 'null'
+            or (jsonb_typeof(v_terms -> 'max_per_day') = 'number'
+                and (v_terms ->> 'max_per_day') ~ '^[0-9]{1,6}$')) then
+      v_name   := v_terms ->> 'plan_name';
+      v_drinks := (v_terms ->> 'drinks_total')::integer;
+      v_value  := (v_terms ->> 'drink_value_inr')::integer;
+      v_days   := (v_terms ->> 'validity_days')::integer;
+      v_cap    := (v_terms ->> 'max_per_day')::integer;   -- JSON null -> SQL NULL
+      v_sold   := v_drinks between 1 and 50
+              and v_value >= 1
+              and v_days between 1 and 365
+              and (v_cap is null or v_cap >= 1);
+    end if;
+    if not v_sold then
+      raise warning 'coffee pass: order % carries unreadable sold terms (%) — issuing from the live plan instead',
+        new.id, left(v_terms::text, 200);
+    end if;
+  end if;
+  if not v_sold then
+    v_name   := v_plan.name;
+    v_drinks := v_plan.drinks_total;
+    v_value  := v_plan.drink_value_inr;
+    v_days   := v_plan.validity_days;
+    v_cap    := v_plan.max_per_day;
+  end if;
+
   insert into public.coffee_passes (
     user_id, plan_id, order_id, plan_name, drinks_total, drink_value_inr, price_inr,
     max_per_day, starts_at, expires_at, issued_by
   ) values (
-    v_user, v_plan.id, new.id, v_plan.name, v_plan.drinks_total, v_plan.drink_value_inr,
-    v_line.line_total_inr, v_plan.max_per_day, now(),
-    (((now() at time zone 'Asia/Kolkata')::date + v_plan.validity_days)::timestamp)
+    v_user, v_plan.id, new.id, v_name, v_drinks, v_value,
+    v_line.line_total_inr, v_cap, now(),
+    (((now() at time zone 'Asia/Kolkata')::date + v_days)::timestamp)
       at time zone 'Asia/Kolkata',
     new.created_by
   )
@@ -664,6 +736,12 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_order_status text;
+  v_order_pay text;
+  v_redemption record;
+  v_pass_id uuid;
+  v_left integer;
 begin
   if new.voided and not old.voided then
     update public.coffee_pass_redemptions
@@ -674,10 +752,52 @@ begin
     -- un-voids it when its version-guarded total update loses a race. The line
     -- is back on the bill with its pass cover, so the cups it spent are spent
     -- again. Only the reversal the void made is undone, never one a cancel or
-    -- refund made.
-    update public.coffee_pass_redemptions
-       set reversed_at = null, reversed_reason = null
-     where order_item_id = new.id and reversed_reason = 'Line voided';
+    -- refund made — and that includes a cancel or refund that landed AFTER the
+    -- void (void, then cancel, then un-void): the cancel found nothing live to
+    -- reverse, so the void's mark is the only thing keeping those cups returned.
+    select o.status::text, o.payment_status::text
+      into v_order_status, v_order_pay
+      from public.orders o where o.id = new.order_id;
+    if v_order_status in ('cancelled', 'rejected') or v_order_pay = 'refunded' then
+      if exists (select 1 from public.coffee_pass_redemptions
+                  where order_item_id = new.id and reversed_reason = 'Line voided') then
+        raise warning 'coffee pass: line % was un-voided but its order is % / % — its cups stay returned',
+          new.id, v_order_status, v_order_pay;
+      end if;
+      return null;
+    end if;
+
+    -- Spending is not free: while the line was voided its cups went back into
+    -- the pass and may have been spent again elsewhere. Take a cup back only if
+    -- the pass still has it (the same arithmetic as v_coffee_pass_balances and
+    -- coffee_pass_redeem), under the pass's row lock so a checkout racing this
+    -- cannot spend it in between. Passes are locked in id order, like redeem, so
+    -- the two cannot deadlock. A row the pass can no longer cover stays reversed
+    -- and warns: the line is back on the bill, but a pass never goes below zero.
+    for v_redemption in
+      select r.id, r.pass_id, r.drinks
+        from public.coffee_pass_redemptions r
+       where r.order_item_id = new.id and r.reversed_reason = 'Line voided'
+       order by r.pass_id
+    loop
+      select p.id into v_pass_id
+        from public.coffee_passes p where p.id = v_redemption.pass_id for update;
+      select p.drinks_total
+             + coalesce((select sum(x.drinks) from public.coffee_pass_adjustments x
+                          where x.pass_id = p.id and x.kind = 'credit'), 0)
+             - coalesce((select sum(r.drinks) from public.coffee_pass_redemptions r
+                          where r.pass_id = p.id and r.reversed_at is null), 0)
+        into v_left
+        from public.coffee_passes p where p.id = v_redemption.pass_id;
+      if v_left >= v_redemption.drinks then
+        update public.coffee_pass_redemptions
+           set reversed_at = null, reversed_reason = null
+         where id = v_redemption.id;
+      else
+        raise warning 'coffee pass: line % was un-voided but pass % has % cup(s) left and the line needs % — its cups stay returned',
+          new.id, v_redemption.pass_id, v_left, v_redemption.drinks;
+      end if;
+    end loop;
   end if;
   return null;
 end $$;
@@ -758,10 +878,10 @@ grant execute on function public.coffee_pass_restore_after_failed_refund(uuid) t
 --   -- both seeded plans are there, and OFF until the owner switches them on:
 --   select name, drinks_total, drinks_paid, validity_days, drink_value_inr, price_inr, is_active
 --     from coffee_pass_plans order by sort_order;
---   -- the columns added to existing tables (6 rows):
+--   -- the columns added to existing tables (7 rows):
 --   select table_name, column_name from information_schema.columns
 --    where (table_name = 'orders'      and column_name in ('order_kind', 'pass_discount_inr'))
---       or (table_name = 'order_items' and column_name in ('pass_drinks', 'pass_covered_inr', 'coffee_pass_plan_id'))
+--       or (table_name = 'order_items' and column_name in ('pass_drinks', 'pass_covered_inr', 'coffee_pass_plan_id', 'coffee_pass_terms'))
 --       or (table_name = 'menu_items'  and column_name = 'pass_eligible');
 --   select permission_key, min_role from role_permissions where permission_key like 'pass_%';
 --

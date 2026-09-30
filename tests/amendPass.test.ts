@@ -18,7 +18,9 @@ const state: {
   orderPatch?: Record<string, unknown>;
   itemUpdate?: Record<string, unknown>;
   selectArgs: string[];
-} = { actor: null, current: null, updated: null, menuRows: [], selectArgs: [] };
+  /** Every table an insert went to (order_items lines, order_amendments audit, status events). */
+  inserts: string[];
+} = { actor: null, current: null, updated: null, menuRows: [], selectArgs: [], inserts: [] };
 
 vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient: () => ({}),
@@ -39,6 +41,7 @@ vi.mock('@/lib/supabase-server', () => ({
         },
         insert: () => {
           ctx.isInsert = true;
+          state.inserts.push(table);
           return table === 'order_items' ? chain : Promise.resolve({ error: null });
         },
         eq: () => chain,
@@ -179,6 +182,7 @@ describe('POST /api/orders/[id]/amend with HIOC Ritual cover', () => {
     state.orderPatch = undefined;
     state.itemUpdate = undefined;
     state.selectArgs = [];
+    state.inserts = [];
     state.menuRows = [];
     // Example C's order: takeaway, ₹18 coupon, ₹140 covered by the pass.
     state.current = {
@@ -273,5 +277,126 @@ describe('POST /api/orders/[id]/amend with HIOC Ritual cover', () => {
       total_inr: 470 + 17 + 20 - 18 - 140,
     });
     expect(state.orderPatch).not.toHaveProperty('pass_discount_inr'); // unchanged, so not rewritten
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. The SALE of a HIOC Ritual can't be amended (docs/COFFEE-PASS-SPEC.md CP-D6):
+//    one line, one price, issued as a pass when paid. Both paths refuse it (409),
+//    before any write.
+// ---------------------------------------------------------------------------
+describe('POST /api/orders/[id]/amend on a HIOC Ritual sale', () => {
+  const PLAN_LINE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3';
+  const REFUSAL = "A HIOC Ritual sale can't be changed — cancel it instead.";
+  const LATTE = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const LATTE_VARIANT = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+  // The shape POST /api/passes/sell makes: takeaway, accepted, unpaid, ONE line.
+  const passSale = (over: Record<string, unknown> = {}) => ({
+    id: ORDER_ID,
+    order_kind: 'coffee_pass',
+    status: 'accepted',
+    version: 1,
+    order_type: 'takeaway',
+    payment_status: 'unpaid',
+    discount_inr: 0,
+    order_items: [{ id: PLAN_LINE, voided: false, line_total_inr: 750, coffee_pass_plan_id: 'plan-1' }],
+    ...over,
+  });
+
+  const addLatte = () =>
+    POST(req({ op: 'add', items: [{ menu_item_id: LATTE, variant_id: LATTE_VARIANT, quantity: 1 }] }), params);
+
+  beforeEach(() => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager', via: 'session' };
+    state.updated = { id: ORDER_ID };
+    state.orderPatch = undefined;
+    state.itemUpdate = undefined;
+    state.selectArgs = [];
+    state.inserts = [];
+    state.menuRows = [
+      {
+        id: LATTE,
+        name: 'Latte',
+        category: 'coffee',
+        is_available: true,
+        unavailable_until: null,
+        menu_item_variants: [{ id: LATTE_VARIANT, label: 'Regular', price_inr: 150, sort_order: 0 }],
+        menu_item_addon_groups: [],
+      },
+    ];
+    state.current = passSale();
+  });
+
+  const wroteNothing = () => {
+    expect(state.orderPatch).toBeUndefined();
+    expect(state.itemUpdate).toBeUndefined();
+    expect(state.inserts).toEqual([]);
+  };
+
+  it('refuses a void with a 409 that says why (not the "would empty the order" of its one line)', async () => {
+    const res = await POST(req({ item_id: PLAN_LINE, reason: 'wrong plan' }), params);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(REFUSAL);
+    wroteNothing();
+  });
+
+  it('refuses adding a line with the same 409', async () => {
+    const res = await addLatte();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(REFUSAL);
+    wroteNothing();
+  });
+
+  it.each([
+    ['still open, unpaid', {}],
+    ['already paid (issued, completed)', { payment_status: 'paid', status: 'completed' }],
+    ['placed, waiting on the gateway', { payment_status: 'payment_pending', status: 'placed' }],
+    ['cancelled', { status: 'cancelled' }],
+  ])('refuses both paths whatever the sale is up to: %s', async (_label, over) => {
+    state.current = passSale(over);
+    for (const res of [await POST(req({ item_id: PLAN_LINE, reason: 'wrong plan' }), params), await addLatte()]) {
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: string }).error).toBe(REFUSAL);
+    }
+    wroteNothing();
+  });
+
+  it('even a sale that (wrongly) has two lines is refused, so the guard is the kind, not the line count', async () => {
+    state.current = passSale({
+      order_items: [
+        { id: PLAN_LINE, voided: false, line_total_inr: 750 },
+        { id: SANDWICH_LINE, voided: false, line_total_inr: 180 },
+      ],
+    });
+    const res = await POST(req({ item_id: SANDWICH_LINE, reason: 'wrong item' }), params);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(REFUSAL);
+    wroteNothing();
+  });
+
+  it('a menu order is amended as before (void and add), and so is one from before the migration (no order_kind)', async () => {
+    for (const kind of ['menu', undefined]) {
+      state.orderPatch = undefined;
+      state.itemUpdate = undefined;
+      state.current = {
+        id: ORDER_ID,
+        order_kind: kind,
+        status: 'accepted',
+        version: 3,
+        order_type: 'takeaway',
+        payment_status: 'unpaid',
+        discount_inr: 0,
+        order_items: [
+          { id: LATTE_LINE, voided: false, line_total_inr: 140 },
+          { id: SANDWICH_LINE, voided: false, line_total_inr: 180 },
+        ],
+      };
+      const voided = await POST(req({ item_id: LATTE_LINE, reason: 'wrong item' }), params);
+      expect(voided.status).toBe(200);
+      expect((state.itemUpdate as Record<string, unknown> | undefined)?.voided).toBe(true);
+      const added = await addLatte();
+      expect(added.status).toBe(200);
+    }
   });
 });
