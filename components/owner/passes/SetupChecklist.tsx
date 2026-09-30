@@ -2,10 +2,11 @@
 
 // "What is left before this is ready" (docs/COFFEE-PASS-SPEC.md §9 B), at the
 // top of Owner → HIOC Ritual. The steps are read from the data (a plan on sale,
-// drinks chosen), so it updates as the owner works below it; the GST reminder is
-// static because nothing in the database records the CA's answer. Dismissible
-// for this visit only: it comes back on the next load, on purpose, until the
-// steps are done.
+// drinks chosen), so it updates as the owner works below it. Settled facts (the
+// feature is on, the GST rule the owner decided) are listed too, already ticked,
+// so the owner can see them without them counting as a step. Dismissible for
+// this visit only: it comes back on the next load, on purpose, until the steps
+// are done.
 
 import { useState } from 'react';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
@@ -24,12 +25,8 @@ function Mark({ item }: { item: ChecklistItem }) {
   return (
     <span
       aria-hidden="true"
-      className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold ${
-        item.kind === 'reminder' ? 'border-amber-500 text-amber-900' : 'border-tan-dark text-tan-dark'
-      }`}
-    >
-      {item.kind === 'reminder' ? '!' : ''}
-    </span>
+      className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 border-tan-dark"
+    />
   );
 }
 
@@ -49,7 +46,7 @@ export function SetupChecklist({ plans, eligibleCount }: { plans: CoffeePassPlan
           <p className="mt-1 text-sm text-muted">
             {todo > 0
               ? 'Nothing is sold until a plan is switched on and drinks are chosen.'
-              : 'One thing only you can check.'}
+              : 'Everything here is done.'}
           </p>
         </div>
         <button
@@ -74,7 +71,7 @@ export function SetupChecklist({ plans, eligibleCount }: { plans: CoffeePassPlan
                 ) : (
                   item.label
                 )}
-                <span className="sr-only">{item.done ? ' (done)' : item.kind === 'reminder' ? ' (reminder)' : ' (to do)'}</span>
+                <span className="sr-only">{item.done ? ' (done)' : ' (to do)'}</span>
               </p>
               <p className="text-muted">{item.detail}</p>
             </div>

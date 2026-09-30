@@ -26,8 +26,13 @@ import type { CoffeePassPlan, PassState } from '@/lib/passes/types';
 /** Shown under the liability figure: what the number means, in one line. */
 export const LIABILITY_EXPLAINER = 'Cups still owed × what customers paid per cup.';
 
-/** The reminder the owner is given until the CA has confirmed how a Ritual is taxed (CP-D11, §9 B4). */
-export const GST_REMINDER = 'Confirm GST treatment with your CA (spec CP-D11).';
+/**
+ * The GST rule the owner has settled for HIOC Ritual (CP-D11, §9 B4): tax is
+ * charged when a Ritual is sold, and a redeemed cup carries none because the
+ * sale already paid it. Words only; the maths is lib/passes/rules.ts
+ * composePassBill, which takes the covered amount out of the taxable base.
+ */
+export const GST_RULE = 'GST: 5% when a Ritual is sold · 0% on redeemed cups';
 
 /** ₹ with Indian digit grouping; up to two decimals (a per-cup price), none when whole. "—" for anything that is not a number. */
 export function formatRupees(n: number | null | undefined): string {
@@ -472,11 +477,10 @@ export function planRow(plan: CoffeePassPlan): {
 export interface ChecklistItem {
   id: 'live' | 'plan' | 'drinks' | 'gst';
   /**
-   * todo      derived from the data; done when the owner has done it
-   * info      already true, nothing to do
-   * reminder  cannot be derived from anything (the CA's answer), so it stays until dismissed
+   * todo  derived from the data; done when the owner has done it
+   * info  already true or already decided (the feature flag, the GST rule), nothing to do
    */
-  kind: 'todo' | 'info' | 'reminder';
+  kind: 'todo' | 'info';
   done: boolean;
   label: string;
   detail: string;
@@ -486,10 +490,10 @@ export interface ChecklistItem {
 
 /**
  * What is left before HIOC Ritual is ready, read from the data: a plan that is
- * switched on, and drinks chosen. The GST reminder is static (nothing in the
- * database says the CA has answered). `todo` counts only the derived steps
- * still open. The feature flag is on by definition (the page does not render
- * otherwise), so it is shown as done.
+ * switched on, and drinks chosen. The GST rule is already decided by the owner,
+ * so it is listed as a settled `info` item, not a step. `todo` counts only the
+ * derived steps still open. The feature flag is on by definition (the page does
+ * not render otherwise), so it is shown as done too.
  */
 export function setupChecklist(input: {
   plans: Pick<CoffeePassPlan, 'is_active'>[];
@@ -530,10 +534,11 @@ export function setupChecklist(input: {
     },
     {
       id: 'gst',
-      kind: 'reminder',
-      done: false,
-      label: GST_REMINDER,
-      detail: 'GST is charged when a plan is sold. If your CA says otherwise, mark that plan GST exempt.',
+      kind: 'info',
+      done: true,
+      label: GST_RULE,
+      detail:
+        'Decided by the owner on 30 Sep 2026. Cups are paid for when the Ritual is sold, so a redeemed cup carries no GST; a top-up above the cup value is taxed like any sale.',
       href: '#ritual-plans',
     },
   ];

@@ -19,6 +19,7 @@ import {
   formPriceText,
   formSuggestedPrice,
   groupMenuByCategory,
+  GST_RULE,
   nextSortOrder,
   parseWholeNumber,
   passStateLabel,
@@ -435,15 +436,19 @@ describe('planSaveConfirmation', () => {
 describe('setupChecklist', () => {
   const byId = (r: ReturnType<typeof setupChecklist>) => Object.fromEntries(r.items.map((i) => [i.id, i]));
 
-  it('starts with everything to do, and the GST reminder', () => {
+  it('starts with the two real steps to do, and the GST rule already settled', () => {
     const r = setupChecklist({ plans: [], eligibleCount: 0 });
-    expect(r.todo).toBe(2);
+    expect(r.todo).toBe(2); // the settled GST item is not an open step
     const items = byId(r);
     expect(items.live).toMatchObject({ kind: 'info', done: true });
     expect(items.plan).toMatchObject({ kind: 'todo', done: false, label: 'Create a plan and switch it on', detail: 'No plans yet.', href: '#ritual-plans' });
     expect(items.drinks).toMatchObject({ kind: 'todo', done: false, href: '#ritual-drinks' });
-    expect(items.gst).toMatchObject({ kind: 'reminder', done: false });
-    expect(items.gst.label).toBe('Confirm GST treatment with your CA (spec CP-D11).');
+    expect(items.gst).toMatchObject({ kind: 'info', done: true, href: '#ritual-plans' });
+    expect(items.gst.label).toBe(GST_RULE);
+    expect(items.gst.label).toBe('GST: 5% when a Ritual is sold · 0% on redeemed cups');
+    expect(items.gst.detail).toBe(
+      'Decided by the owner on 30 Sep 2026. Cups are paid for when the Ritual is sold, so a redeemed cup carries no GST; a top-up above the cup value is taxed like any sale.',
+    );
   });
 
   it('plans that exist but none on sale: still to do', () => {
@@ -463,8 +468,22 @@ describe('setupChecklist', () => {
     expect(byId(r).plan.detail).toBe('1 of 1 plan is on sale.');
     expect(byId(r).drinks).toMatchObject({ done: true, detail: '1 drink chosen.' });
     expect(r.todo).toBe(0);
-    // The reminder never goes away by itself: nothing in the data says the CA has answered.
-    expect(byId(r).gst.done).toBe(false);
+    // Every item is ticked once the two steps are done: the GST rule was settled from the start.
+    expect(r.items.every((i) => i.done)).toBe(true);
+    expect(byId(r).gst.done).toBe(true);
+  });
+
+  it('never counts the settled items (feature flag, GST rule) as open steps, whatever the data', () => {
+    for (const input of [
+      { plans: [], eligibleCount: 0 },
+      { plans: [WEEKLY], eligibleCount: 3 },
+      { plans: [{ ...WEEKLY, is_active: true }], eligibleCount: 0 },
+    ]) {
+      const r = setupChecklist(input);
+      expect(r.items.filter((i) => i.kind === 'info').every((i) => i.done)).toBe(true);
+      expect(r.todo).toBe(r.items.filter((i) => i.kind === 'todo' && !i.done).length);
+      expect(byId(r).gst).toMatchObject({ kind: 'info', done: true });
+    }
   });
 
   it('counts drinks in the plural', () => {
