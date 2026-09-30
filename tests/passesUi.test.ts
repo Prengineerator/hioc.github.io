@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MAX_PASS_DRINKS_PER_ORDER, passExpiresAt } from '@/lib/passes/rules';
+import { passCoverLine, passTitle, ritualCoverLine } from '@/lib/passes/ritualDrinks';
 import type { PassRedemptionEntry, PassSummary } from '@/lib/passes/types';
 import {
   clampCups,
@@ -20,16 +21,14 @@ import {
   passLastDay,
   passReadyMessage,
   passRowMode,
+  passRowName,
   passSaleNote,
   passStateBadge,
   passValidTill,
   passValidityLine,
   paymentDismissedMessage,
   planBuyLabel,
-  planCoverageLabel,
-  planGstNote,
   planHeadline,
-  planPerCupInr,
   planSaveLabel,
   planValidityLabel,
   purchaseError,
@@ -47,8 +46,9 @@ import {
 // order), a wrong word is a wrong promise (a date, a refund rule), so the edges are
 // asserted.
 
-const WEEKLY = { drinks_total: 7, drinks_paid: 5, price_inr: 750, validity_days: 7, drink_value_inr: 150, gst_exempt: false, name: 'Weekly Ritual' };
-const MONTHLY = { drinks_total: 7, drinks_paid: 6, price_inr: 900, validity_days: 30, drink_value_inr: 150, gst_exempt: false, name: 'Monthly Ritual' };
+// A plan is the recipe (CP-D24): no price, no cup value. What a cup costs depends on the drink picked.
+const WEEKLY = { drinks_total: 7, drinks_paid: 5, price_inr: null, validity_days: 7, drink_value_inr: null, gst_exempt: false, name: 'Weekly Ritual' };
+const MONTHLY = { drinks_total: 7, drinks_paid: 6, price_inr: null, validity_days: 30, drink_value_inr: null, gst_exempt: false, name: 'Monthly Ritual' };
 
 describe('IST dates', () => {
   it('names the IST calendar day: weekday, day, month', () => {
@@ -91,31 +91,18 @@ describe('plan cards', () => {
     expect(planHeadline({ drinks_total: 7, drinks_paid: 7 })).toBe('7 cups, prepaid');
   });
 
-  it('works out what a cup costs and how much you save', () => {
-    expect(planPerCupInr(WEEKLY)).toBe(107); // 750 / 7 = 107.14
-    expect(planPerCupInr(MONTHLY)).toBe(129); // 900 / 7 = 128.57
-    expect(planPerCupInr({ price_inr: 500, drinks_total: 0 })).toBe(500);
+  it('says how much you save, from the cups alone (the price follows the drink, so there is no price here)', () => {
     expect(planSaveLabel(WEEKLY)).toBe('Save 29%');
     expect(planSaveLabel(MONTHLY)).toBe('Save 14%');
     expect(planSaveLabel({ drinks_total: 7, drinks_paid: 7 })).toBeNull();
   });
 
-  it('says "+ GST" only when GST is added on top of the price', () => {
-    const exclusive = { percent: 5, inclusive: false };
-    expect(planGstNote(WEEKLY, exclusive)).toBe('+ GST');
-    expect(planGstNote(WEEKLY, { percent: 5, inclusive: true })).toBeNull();
-    expect(planGstNote({ gst_exempt: true }, exclusive)).toBeNull();
-    expect(planGstNote(WEEKLY, { percent: 0, inclusive: false })).toBeNull();
-    expect(planGstNote(WEEKLY, null)).toBeNull();
-  });
-
-  it('words the validity, the coverage and the buy button', () => {
+  it('words the validity and the buy button (with the total once a drink and size are chosen)', () => {
     expect(planValidityLabel(WEEKLY)).toBe('Valid 7 days');
     expect(planValidityLabel({ validity_days: 1 })).toBe('Valid 1 day');
-    expect(planCoverageLabel(WEEKLY)).toBe(
-      'Covers any Ritual drink up to ₹150 — pricier drinks just pay the difference.',
-    );
     expect(planBuyLabel(WEEKLY)).toBe('Buy Weekly Ritual');
+    expect(planBuyLabel(WEEKLY, 630)).toBe('Buy Weekly Ritual · ₹630');
+    expect(planBuyLabel(MONTHLY, null)).toBe('Buy Monthly Ritual');
   });
 
   it('is on sale only when at least one plan is', () => {
@@ -156,15 +143,17 @@ function pass(over: Partial<PassSummary> = {}): PassSummary {
     drinks_used: 2,
     drinks_credited: 0,
     drinks_remaining: 5,
-    drink_value_inr: 150,
+    drink_value_inr: 120,
     max_per_day: null,
     used_today: 0,
-    price_inr: 750,
+    price_inr: 600,
     starts_at: '2026-10-05T04:30:00.000Z',
     expires_at: '2026-10-11T18:30:00.000Z',
     status: 'active',
     state: 'active',
     order_id: 'order-1',
+    drink_menu_item_id: 'menu-cappuccino',
+    drink_label: 'Cappuccino · Large',
     ...over,
   };
 }
@@ -276,9 +265,11 @@ describe('buying', () => {
     expect(findPassForOrder([], 'o-a')).toBeNull();
   });
 
-  it('announces a new pass with its cups and last day', () => {
-    expect(passReadyMessage(pass())).toBe('Your Weekly Ritual is ready — 7 cups, valid till Sun 11 Oct');
-    expect(passReadyMessage(pass({ expires_at: 'garbage' }))).toBe('Your Weekly Ritual is ready — 7 cups');
+  it('announces a new pass with its drink, its cups and last day', () => {
+    expect(passReadyMessage(pass())).toBe('Your Weekly Ritual is ready — Cappuccino · Large, 7 cups, valid till Sun 11 Oct');
+    expect(passReadyMessage(pass({ expires_at: 'garbage' }))).toBe('Your Weekly Ritual is ready — Cappuccino · Large, 7 cups');
+    // A pass from before per-drink pricing has no drink on it.
+    expect(passReadyMessage(pass({ drink_label: '' }))).toBe('Your Weekly Ritual is ready — 7 cups, valid till Sun 11 Oct');
   });
 
   it('turns each refusal into words and a next step', () => {
@@ -288,6 +279,19 @@ describe('buying', () => {
       action: 'profile',
     });
     expect(purchaseError(400, 'plan_id must be a plan id').action).toBe('retry');
+    // The drink and size go with every purchase (CP-D22): the new refusals, in words a customer can act on.
+    expect(purchaseError(400, 'menu_item_id must be a drink id')).toEqual({ message: 'Pick a drink and a size first.', action: 'retry' });
+    expect(purchaseError(400, 'variant_id must be a size id').message).toBe('Pick a drink and a size first.');
+    expect(purchaseError(400, "That drink isn't part of HIOC Ritual.").message).toBe("That drink isn't part of HIOC Ritual.");
+    expect(purchaseError(400, '"Cappuccino" in Large isn\'t available right now').message).toBe(
+      "That drink or size isn't available right now — please pick another.",
+    );
+    expect(purchaseError(400, '"Cappuccino" has no such variant').message).toBe(
+      "That drink or size isn't available right now — please pick another.",
+    );
+    expect(purchaseError(400, 'Cappuccino in Large can\'t be bought as a HIOC Ritual.').message).toBe(
+      "Cappuccino in Large can't be bought as a HIOC Ritual.",
+    );
     expect(purchaseError(404, "That HIOC Ritual plan isn't available.").message).toBe(
       "That HIOC Ritual plan isn't available.",
     );
@@ -351,6 +355,30 @@ describe('checkout: cups to ask for, show and send', () => {
     expect(passRowMode(quote({ available: 0, max_usable: 0, shortfall: 'no_pass' }))).toBe('hidden');
     expect(passRowMode(quote())).toBe('stepper');
     expect(passRowMode(quote({ applied: 0, max_usable: 0, shortfall: 'no_eligible_items' }))).toBe('unusable');
+  });
+
+  it('names the row after the drink when every usable Ritual is for the same one (CP-D25)', () => {
+    const held = (drink_label: string, over: Partial<PassSummary> = {}) => ({
+      state: 'active' as const,
+      drinks_remaining: 3,
+      drink_label,
+      ...over,
+    });
+    // One Cappuccino Ritual: "Cappuccino Ritual — using 1 of 5 cups".
+    expect(passRowName(quote({ passes: [held('Cappuccino · Large')] }))).toBe('Cappuccino Ritual');
+    // Two, same drink in different sizes: still the drink.
+    expect(passRowName(quote({ passes: [held('Cappuccino · Large'), held('Cappuccino · Small')] }))).toBe('Cappuccino Ritual');
+    // A size-less label is just the drink.
+    expect(passRowName(quote({ passes: [held('Cold Brew')] }))).toBe('Cold Brew Ritual');
+    // Different drinks, a pass with no drink, or nothing usable: the programme's own name.
+    expect(passRowName(quote({ passes: [held('Cappuccino · Large'), held('Latte · Large')] }))).toBe('HIOC Ritual');
+    expect(passRowName(quote({ passes: [held('Cappuccino · Large'), held('')] }))).toBe('HIOC Ritual');
+    expect(passRowName(quote({ passes: [held('')] }))).toBe('HIOC Ritual');
+    // A used-up or lapsed pass is not what the cups come from.
+    expect(passRowName(quote({ passes: [held('Latte · Large', { state: 'expired' }), held('Cappuccino · Large')] }))).toBe('Cappuccino Ritual');
+    expect(passRowName(quote({ passes: [held('Latte · Large', { drinks_remaining: 0 })] }))).toBe('HIOC Ritual');
+    expect(passRowName(quote())).toBe('HIOC Ritual'); // a quote without passes
+    expect(passRowName(null)).toBe('HIOC Ritual');
   });
 
   it('shows the server line only for reasons the customer needs to hear', () => {
@@ -430,7 +458,9 @@ describe('wording', () => {
   it('never says "Coffee Pass" or "points" to a customer', () => {
     const said = [
       planHeadline(WEEKLY),
-      planCoverageLabel(WEEKLY),
+      ritualCoverLine(120),
+      passTitle(pass()),
+      passCoverLine(pass()),
       passReadyMessage(pass()),
       purchaseError(401).message,
       purchaseError(503).message,

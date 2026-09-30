@@ -9,7 +9,11 @@
 //   eligible drinks   which menu items a cup can pay for
 //
 // This component loads the plans and the menu once (GET /api/owner/passes) and holds
-// them, so the checklist, the plans and the picker stay in step as the owner saves. The
+// them, so the checklist, the plans and the picker stay in step as the owner saves. It
+// also reads the drinks a Ritual can be bought for WITH their sizes (the public GET
+// /api/passes/plans: the owner route has no prices), which is what the plans' worked
+// examples ("Cappuccino Large ₹120 → ₹600") are made from; it re-reads them whenever
+// the eligible drinks are saved. A failed read only means no examples. The
 // summary loads on its own (SummarySection), so one failing never blanks the other.
 // The page itself (app/owner/passes/page.tsx) is a server component that returns 404
 // while the flag is off; the API routes 404 too.
@@ -18,7 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { sortPlans, type PickerItem } from '@/lib/passes/ownerUi';
-import type { CoffeePassPlan } from '@/lib/passes/types';
+import type { CoffeePassPlan, RitualDrink } from '@/lib/passes/types';
 import { callOwnerApi } from './api';
 import { EligibleDrinks } from './EligibleDrinks';
 import { PlansSection } from './PlansSection';
@@ -36,6 +40,13 @@ export function PassesScreen() {
   const [data, setData] = useState<OwnerPassesPayload | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  // The drinks with their sizes, for the worked examples. Empty until read, or when the read fails.
+  const [drinks, setDrinks] = useState<RitualDrink[]>([]);
+
+  const loadDrinks = useCallback(async () => {
+    const res = await callOwnerApi<{ eligible?: RitualDrink[] }>('/api/passes/plans');
+    if (res.ok && Array.isArray(res.data.eligible)) setDrinks(res.data.eligible);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,7 +59,8 @@ export function PassesScreen() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadDrinks();
+  }, [load, loadDrinks]);
 
   // A saved plan replaces its old self, or joins the list; the order is the server's.
   const planSaved = (plan: CoffeePassPlan) =>
@@ -76,12 +88,15 @@ export function PassesScreen() {
         </div>
       ) : (
         <>
-          <PlansSection plans={data.plans} onPlanSaved={planSaved} />
+          <PlansSection plans={data.plans} drinks={drinks} onPlanSaved={planSaved} />
           <EligibleDrinks
             menu={data.menu}
             eligibleIds={data.eligible_ids}
             plans={data.plans}
-            onSaved={(ids) => setData((d) => (d ? { ...d, eligible_ids: ids } : d))}
+            onSaved={(ids) => {
+              setData((d) => (d ? { ...d, eligible_ids: ids } : d));
+              void loadDrinks(); // the examples follow the drinks that were just saved
+            }}
           />
         </>
       )}

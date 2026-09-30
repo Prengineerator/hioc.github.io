@@ -1534,6 +1534,49 @@ async function checkCoffeePass() {
 }
 
 // ---------------------------------------------------------------------------
+// CP-2 · HIOC Ritual per-drink pricing (docs/COFFEE-PASS-SPEC.md §13, CP-D22..D25,
+// supabase/2026-10-coffee-pass-per-drink.sql). A Ritual now remembers the drink it
+// was bought for, and the balances view carries it. The view is DROPPED and
+// re-created by that migration (new columns cannot be added in the middle of a
+// view), so besides the two pass columns this checks the VIEW exposes them and is
+// still closed to the anon key. Reads only.
+// ---------------------------------------------------------------------------
+async function checkCoffeePassPerDrink() {
+  heading('CP-2 · Ritual per-drink pricing: the drink on each pass', '2026-10-coffee-pass-per-drink.sql');
+  const hint = 'apply supabase/2026-10-coffee-pass-per-drink.sql (after 2026-10-coffee-pass.sql)';
+
+  for (const col of ['drink_menu_item_id', 'drink_label']) {
+    const r = await rest(`/coffee_passes?select=${col}&limit=1`);
+    if (r.ok) pass(`coffee_passes.${col} exists`);
+    else fail(`coffee_passes.${col} exists`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+
+    const v = await rest(`/v_coffee_pass_balances?select=${col}&limit=1`);
+    if (v.ok) pass(`v_coffee_pass_balances.${col} exists`);
+    else fail(`v_coffee_pass_balances.${col} exists`, errKind(v) === 'no_column' || errKind(v) === 'no_table' ? `${hint} — it re-creates the view` : errText(v));
+  }
+
+  // The view was dropped and re-created: its lock has to be put back each time.
+  const asAnon = await rest('/v_coffee_pass_balances?select=id&limit=1', { key: ANON });
+  const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+  if (leaked) fail('v_coffee_pass_balances is still closed to the anon key', 'the view was re-created without its REVOKE / security_invoker');
+  else pass('v_coffee_pass_balances is still closed to the anon key');
+
+  // A plan no longer has a price or a cup value (CP-D24). Informational: a plan
+  // that still carries one is harmless (the sale reads the drink's price), it only
+  // means the migration's clean-up has not run.
+  const plans = await rest('/coffee_pass_plans?select=name,price_inr,drink_value_inr');
+  if (plans.ok && Array.isArray(plans.body)) {
+    const stale = plans.body.filter((p) => p.price_inr !== null || p.drink_value_inr !== null).length;
+    pass(
+      'coffee pass plans carry no price or cup value',
+      stale === 0
+        ? 'the price now follows the drink the customer picks'
+        : `${stale} plan(s) still hold a legacy price or cup value (unused; re-running the migration clears them)`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase 7 · SUG-1 — the "Help me choose" suggestion engine
 // (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §8 SUG-1 AC, supabase/2026-09-suggestion-engine.sql).
 // Five tables, RLS on, everything but customer_taste_profiles' self-read
@@ -1927,6 +1970,7 @@ async function main() {
   await checkCoffeyTraitsV2();
   await checkInventory();
   await checkCoffeePass();
+  await checkCoffeePassPerDrink();
   await checkMarketingAgent();
   await checkCleanup();
 

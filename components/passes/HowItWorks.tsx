@@ -3,7 +3,7 @@ import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 const STEPS = [
   {
     title: 'Buy',
-    body: 'Pick a plan and pay online, or at the counter. It is ready the moment the payment goes through.',
+    body: 'Pick a plan and your drink, and pay online or at the counter. The price follows the drink you pick. It is ready the moment the payment goes through.',
   },
   {
     title: 'Order as usual',
@@ -11,7 +11,7 @@ const STEPS = [
   },
   {
     title: 'Enjoy',
-    body: 'One cup pays for one drink. Cups expire when the plan does, so come by while they are fresh.',
+    body: 'One cup pays for one drink, up to the price of the drink you chose. Cups expire when the plan does, so come by while they are fresh.',
   },
 ] as const;
 

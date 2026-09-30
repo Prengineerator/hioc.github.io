@@ -9,16 +9,17 @@
 //
 // The hard line from loyalty.ts holds: nothing here decides a payable amount.
 // Every rupee that is charged comes from the server (POST /api/orders/quote,
-// the order row). The one preview computed here, `salePreview`, reuses
-// computeBill — the single copy of GST maths — and is labelled a preview; the
-// payment step always shows the order's own total.
+// the order row). The one preview a Ritual sale shows beforehand is
+// ritualPriceQuote (lib/passes/ritualDrinks.ts), which reuses computeBill — the
+// single copy of GST maths — and is labelled a preview; the payment step always
+// shows the order's own total.
 
-import { computeBill, type BillBreakdown } from '@/lib/store/hours';
+import type { BillBreakdown } from '@/lib/store/hours';
 import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
 import { MAX_PASS_DRINKS_PER_ORDER, planDiscountPercent } from '@/lib/passes/rules';
 import type { CoffeePassPlan, PassRedemptionEntry, PassState, PassSummary } from '@/lib/passes/types';
+import { choiceLineName, passTitle, type CompleteChoice } from '@/lib/passes/ritualDrinks';
 import type { QuotedPass } from '@/lib/pos/loyalty';
-import type { StoreSettings } from '@/lib/types';
 
 // ---------------------------------------------------------------------------
 // Shapes the Ritual passes screen reads (the API's own, restated client-side:
@@ -270,39 +271,10 @@ export function planSummaryLabel(plan: Pick<CoffeePassPlan, 'drinks_total' | 'va
   return `${cupsLabel(plan.drinks_total)} · ${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
-/** What one cup costs on the plan, to the nearest rupee (display only). */
-export function planPerCupInr(plan: Pick<CoffeePassPlan, 'price_inr' | 'drinks_total'>): number {
-  return plan.drinks_total > 0 ? Math.round(plan.price_inr / plan.drinks_total) : plan.price_inr;
-}
-
 /** "Save 29%" — how much cheaper a cup is than paying for every one; null when nothing is saved. */
 export function planSaveLabel(plan: Pick<CoffeePassPlan, 'drinks_total' | 'drinks_paid'>): string | null {
   const pct = planDiscountPercent(plan);
   return pct > 0 ? `Save ${pct}%` : null;
-}
-
-/** "+ GST" when tax is added on top of the price (exclusive pricing, plan not exempt). */
-export function planPriceNote(plan: Pick<CoffeePassPlan, 'gst_exempt'>, gst: PlanGst | null | undefined): string {
-  if (!gst || gst.inclusive || gst.percent <= 0 || plan.gst_exempt) return '';
-  return '+ GST';
-}
-
-/**
- * What the sale should come to, for the confirm sheet only. The same bill the
- * server builds for a pass sale (price as subtotal, GST unless the plan is
- * exempt, no packaging, no discount) via the one computeBill; the payment step
- * that follows always shows the order's own total, which is what is charged.
- */
-export function salePreview(
-  plan: Pick<CoffeePassPlan, 'price_inr' | 'gst_exempt'>,
-  gst: PlanGst | null | undefined,
-): BillBreakdown {
-  const settings = {
-    gst_percent: gst?.percent ?? 0,
-    gst_inclusive: gst?.inclusive ?? true,
-    packaging_charge_inr: 0,
-  } as StoreSettings;
-  return computeBill(plan.price_inr, settings, 0, plan.gst_exempt ? 0 : plan.price_inr);
 }
 
 // ---------------------------------------------------------------------------
@@ -338,9 +310,9 @@ export function newSaleKey(): string {
 
 /**
  * One sale attempt's idempotency key, kept across a retry of the SAME sale
- * (same customer, same plan) and replaced for any other. Held by the caller in a
- * ref; a successful sale clears it. A lost response is retried with the same key
- * and returns the first sale, never a second one.
+ * (same customer, same plan, same drink and size) and replaced for any other.
+ * Held by the caller in a ref; a successful sale clears it. A lost response is
+ * retried with the same key and returns the first sale, never a second one.
  */
 export function saleAttemptKey(
   current: { fingerprint: string; key: string } | null,
@@ -350,10 +322,56 @@ export function saleAttemptKey(
   return current && current.fingerprint === fingerprint ? current : { fingerprint, key: make() };
 }
 
-/** "Weekly Ritual active — 7 cups, valid till Mon 5 Oct". */
-export function saleActiveMessage(pass: Pick<PassSummary, 'plan_name' | 'drinks_remaining' | 'expires_at'>): string {
+/**
+ * What makes two sale attempts the SAME sale: the customer, the plan and the drink
+ * and size (CP-D22). Fed to saleAttemptKey, so a different drink or plan gets a
+ * NEW Idempotency-Key. The server keys the order it made on the key, and a reused
+ * key would hand back the first sale (the first drink) instead of selling the new one.
+ */
+export function saleFingerprint(input: {
+  phone: string;
+  name: string;
+  planId: string;
+  menuItemId: string;
+  variantId: string;
+}): string {
+  return [input.phone, input.name.trim(), input.planId, input.menuItemId, input.variantId].join('|');
+}
+
+/**
+ * The confirm sheet's one line for what is being sold: "Weekly Ritual — Cappuccino
+ * (Large) · 7 cups · ₹630" (the sale line's own name, the cups, what it comes to).
+ * `totalInr` is ritualPriceQuote's total: a preview, the order's total is charged.
+ */
+export function saleSummaryLine(
+  plan: Pick<CoffeePassPlan, 'name' | 'drinks_total'>,
+  choice: CompleteChoice,
+  totalInr: number,
+): string {
+  return `${choiceLineName(plan, choice)} · ${cupsLabel(plan.drinks_total)} · ₹${totalInr}`;
+}
+
+/**
+ * An unpaid sale of this same plan AND drink already waiting for this number, if
+ * any. A sale's `plan_name` is its line's name ("Weekly Ritual — Cappuccino
+ * (Large)"), so that is what it is matched on: a different drink is a different
+ * sale and needs no warning.
+ */
+export function unpaidSaleFor<T extends Pick<RitualSale, 'plan_name'>>(
+  unpaid: readonly T[],
+  plan: Pick<CoffeePassPlan, 'name'>,
+  choice: CompleteChoice,
+): T | null {
+  const lineName = choiceLineName(plan, choice);
+  return unpaid.find((s) => s.plan_name === lineName) ?? null;
+}
+
+/** "Weekly Ritual · Cappuccino · Large active — 7 cups, valid till Mon 5 Oct". */
+export function saleActiveMessage(
+  pass: Pick<PassSummary, 'plan_name' | 'drink_label' | 'drinks_remaining' | 'expires_at'>,
+): string {
   const till = validTillLabel(pass.expires_at);
-  return `${pass.plan_name} active — ${cupsLabel(pass.drinks_remaining)}${till ? `, valid till ${till}` : ''}`;
+  return `${passTitle(pass)} active — ${cupsLabel(pass.drinks_remaining)}${till ? `, valid till ${till}` : ''}`;
 }
 
 /** When the pass isn't visible yet after a paid sale (the read failed): honest, not a false success. */

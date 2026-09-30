@@ -3,12 +3,13 @@ import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 
 // The short version, in plain words. The full wording is on the Refund &
 // Cancellation page (app/refund-cancellation), and the two say the same things
-// (CP-D15, CP-D18, CP-D19, CP-D2).
+// (CP-D15, CP-D18, CP-D19, CP-D22, CP-D23).
 const TERMS = [
+  "You choose your drink and size when you buy. The price is the cups you pay for × that size's menu price, with GST where it applies. A later change to the menu price doesn't change a Ritual you have already bought.",
   `Once a cup is used it can't be refunded. A ${PASS_PROGRAM_NAME} with no cups used can be refunded, at the counter or to your original payment method.`,
   "Cups that expire aren't refunded or carried over.",
   'Cups can be shared: use them for anyone in your order.',
-  'Each cup covers a drink up to the cup value. For pricier drinks, or add-ons that take it over, you just pay the difference.',
+  "Each cup covers a drink up to your drink's price. For pricier drinks, or add-ons that take it over, you just pay the difference.",
   'At the counter, give the phone number on your account so we can find your Ritual.',
 ] as const;
 

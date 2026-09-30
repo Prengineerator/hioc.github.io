@@ -9,13 +9,17 @@ import { PLAN_COLUMNS, toCoffeePassPlan } from '@/lib/passes/server';
 export const dynamic = 'force-dynamic';
 
 // POST /api/owner/passes/plans — owner only. Creates a plan. Responds 201 { plan }.
-// Body: { name, drinks_total, drinks_paid, validity_days, drink_value_inr } plus
-// optional { description, price_inr, max_per_day, gst_exempt, is_active, sort_order }.
+// Body: { name, drinks_total, drinks_paid, validity_days } plus optional
+// { description, max_per_day, gst_exempt, is_active, sort_order }.
+//
+// A plan is only the recipe (CP-D22..D24): it has NO price and NO cup value. The
+// price is drinks_paid x the menu price of the drink and size the customer picks
+// when buying, and the cup value is that same menu price, so `price_inr` and
+// `drink_value_inr` in the body are refused (400) rather than ignored.
 //
 // The rules are lib/passes/rules.ts validatePlanInput, shared with the edit form:
-// a missing price defaults to drinks_paid x drink_value (CP-D2), a new plan is
-// INACTIVE unless the owner says otherwise (nothing is sold until it is switched
-// on), and there is no daily cap. A name already in use (case-insensitive: the
+// a new plan is INACTIVE unless the owner says otherwise (nothing is sold until it
+// is switched on), and there is no daily cap. A name already in use (case-insensitive: the
 // unique index is on lower(trim(name))) is a 409. There is no delete: a plan that
 // has been sold is deactivated, never removed (the order line references it).
 //

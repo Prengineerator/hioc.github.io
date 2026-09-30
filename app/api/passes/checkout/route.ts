@@ -7,7 +7,7 @@ import { rateLimitOk } from '@/lib/api/rateLimit';
 import { toStoredPhone } from '@/lib/loyalty/customerLink';
 import { coffeePassDisabled, PASS_MIGRATION_HINT } from '@/lib/passes/api';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import { createPassSaleOrder } from '@/lib/passes/sale';
+import { createPassSaleOrder, resolveRitualCup } from '@/lib/passes/sale';
 import { loadPlanById } from '@/lib/passes/server';
 import { createPaymentIntent, isGatewayConfigured } from '@/lib/payments/gateway';
 import { getStoreSettings } from '@/lib/store/settings';
@@ -18,7 +18,15 @@ const NO_PHONE_MESSAGE = 'Add your mobile number in your profile first';
 const ONLINE_UNAVAILABLE_MESSAGE = `Online purchase isn't available right now — buy your ${PASS_PROGRAM_NAME} at the counter.`;
 
 // POST /api/passes/checkout — the signed-in customer buys a HIOC Ritual online.
-// Body: { plan_id }. Responds 201 { order_id, order_number, total_inr, payment }.
+// Body: { plan_id, menu_item_id, variant_id }. Responds 201
+// { order_id, order_number, total_inr, payment }.
+//
+// THE DRINK (CP-D22). The customer picks a drink and a size, and the Ritual costs
+// drinks_paid × that size's menu price (plus GST); each cup then covers up to that
+// price. Only the two ids are sent: resolveRitualCup() prices the cup from the live
+// menu with the order rules (pass_eligible, available, size on sale, not in-store
+// only on the website), so the client's idea of the price is never used, and a
+// refusal is a 400 before any order exists.
 //
 // It creates the SALE ORDER (order_kind 'coffee_pass', channel 'customer_web',
 // status 'placed', payment_pending, payment_method 'online') and the Razorpay
@@ -58,11 +66,24 @@ export async function POST(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
   if (!isUuid(body.plan_id)) return errorResponse(400, 'plan_id must be a plan id');
+  if (!isUuid(body.menu_item_id)) return errorResponse(400, 'menu_item_id must be a drink id');
+  if (!isUuid(body.variant_id)) return errorResponse(400, 'variant_id must be a size id');
 
   const admin = createAdminSupabaseClient();
   const plan = await loadPlanById(admin, body.plan_id);
   // An inactive plan reads as missing: the customer never learns which plans exist unsold.
   if (!plan || !plan.is_active) return errorResponse(404, `That ${PASS_PROGRAM_NAME} plan isn't available.`);
+
+  // The drink and size, priced from the live menu by the order rules. Before the
+  // profile and gateway checks: a drink that cannot be sold should say so first.
+  const settings = await getStoreSettings();
+  const cup = await resolveRitualCup(admin, {
+    menuItemId: body.menu_item_id,
+    variantId: body.variant_id,
+    settings,
+    channel: 'customer_web',
+  });
+  if (!cup.ok) return errorResponse(cup.status, cup.error);
 
   const { data: profile, error: profileError } = await admin
     .from('profiles')
@@ -84,9 +105,9 @@ export async function POST(request: Request) {
 
   if (!isGatewayConfigured()) return errorResponse(503, ONLINE_UNAVAILABLE_MESSAGE);
 
-  const settings = await getStoreSettings();
   const sale = await createPassSaleOrder(admin, {
     plan,
+    cup: cup.cup,
     channel: 'customer_web',
     status: 'placed',
     paymentStatus: 'payment_pending',

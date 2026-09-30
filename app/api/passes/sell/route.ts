@@ -14,7 +14,7 @@ import {
 } from '@/lib/orders/idempotency';
 import { coffeePassDisabled, PASS_MIGRATION_HINT } from '@/lib/passes/api';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import { createPassSaleOrder } from '@/lib/passes/sale';
+import { createPassSaleOrder, resolveRitualCup } from '@/lib/passes/sale';
 import { loadPlanById } from '@/lib/passes/server';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders } from '@/lib/staff/surfaceRules';
@@ -28,8 +28,14 @@ const NOT_A_COUNTER_MESSAGE = `Sell ${PASS_PROGRAM_NAME} from the counter`;
 const NO_ACCOUNT_MESSAGE = "Couldn't open an account for this number — check it and try again.";
 
 // POST /api/passes/sell — a staffer sells a HIOC Ritual at the counter.
-// Header: Idempotency-Key (required). Body: { plan_id, customer_phone, customer_name }.
-// Responds 201 { order, customer: { name, created } }.
+// Header: Idempotency-Key (required). Body: { plan_id, menu_item_id, variant_id,
+// customer_phone, customer_name }. Responds 201 { order, customer: { name, created } }.
+//
+// THE DRINK (CP-D22). The customer picks a drink and a size, and the Ritual costs
+// drinks_paid × that size's menu price; each cup then covers up to that price. The
+// body carries only the two ids: resolveRitualCup() prices the cup from the live
+// menu with the order rules (eligible, available, size on sale), so a screen's
+// numbers are never trusted, and a refusal is a 400 before anything is written.
 //
 // It creates the SALE ORDER only (order_kind 'coffee_pass', channel 'staff_pos',
 // status 'accepted', payment 'unpaid', created_by the staffer), and returns it for
@@ -85,6 +91,8 @@ export async function POST(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
   if (!isUuid(body.plan_id)) return errorResponse(400, 'plan_id must be a plan id');
+  if (!isUuid(body.menu_item_id)) return errorResponse(400, 'menu_item_id must be a drink id');
+  if (!isUuid(body.variant_id)) return errorResponse(400, 'variant_id must be a size id');
   const phone = toStoredPhone(body.customer_phone);
   if (!phone) return errorResponse(400, 'customer_phone must be a valid 10-digit Indian mobile number');
   const name = typeof body.customer_name === 'string' ? body.customer_name.trim() : '';
@@ -95,6 +103,16 @@ export async function POST(request: Request) {
   const admin = createAdminSupabaseClient();
   const plan = await loadPlanById(admin, body.plan_id);
   if (!plan || !plan.is_active) return errorResponse(404, `That ${PASS_PROGRAM_NAME} plan isn't available.`);
+
+  // The drink and size, priced from the menu. Before the idempotency key is
+  // claimed, like every other validation, so a refusal does not burn the key.
+  const cup = await resolveRitualCup(admin, {
+    menuItemId: body.menu_item_id,
+    variantId: body.variant_id,
+    settings,
+    channel: 'staff_pos',
+  });
+  if (!cup.ok) return errorResponse(cup.status, cup.error);
 
   const claim = await claimIdempotencyKey(admin, idempotencyKey, actor.user.id);
   if (claim.state === 'replay') {
@@ -137,6 +155,7 @@ export async function POST(request: Request) {
 
   const sale = await createPassSaleOrder(admin, {
     plan,
+    cup: cup.cup,
     channel: 'staff_pos',
     status: 'accepted',
     paymentStatus: 'unpaid',

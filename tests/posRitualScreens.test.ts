@@ -12,13 +12,20 @@ vi.mock('next/navigation', () => ({
   usePathname: () => '/staff/passes',
 }));
 
+import { DrinkSizePicker } from '@/components/staff/passes/DrinkSizePicker';
 import { PassCard } from '@/components/staff/passes/PassCard';
 import { PlanCard } from '@/components/staff/passes/PlanCard';
 import { RitualPassesScreen } from '@/components/staff/passes/RitualPassesScreen';
-import type { CoffeePassPlan } from '@/lib/passes/types';
+import type { CoffeePassPlan, RitualDrink } from '@/lib/passes/types';
 import type { HolderPass } from '@/lib/pos/ritual';
 
 const noop = () => {};
+
+/** The opening tag of the button whose content holds `text`. */
+function buttonTag(html: string, text: string): string {
+  const segment = html.split('<button').find((part, i) => i > 0 && part.slice(part.indexOf('>')).split('</button>')[0].includes(text));
+  return segment ? segment.slice(0, segment.indexOf('>')) : '';
+}
 
 function pass(overrides: Partial<HolderPass> = {}): HolderPass {
   return {
@@ -38,11 +45,14 @@ function pass(overrides: Partial<HolderPass> = {}): HolderPass {
     status: 'active',
     state: 'active',
     order_id: 'order-1',
+    drink_menu_item_id: 'menu-cappuccino',
+    drink_label: 'Cappuccino · Large',
     history: [],
     ...overrides,
   };
 }
 
+// A plan is the recipe (CP-D24): no price, no cup value.
 const plan: CoffeePassPlan = {
   id: 'plan-1',
   name: 'Weekly Ritual',
@@ -50,8 +60,8 @@ const plan: CoffeePassPlan = {
   drinks_total: 7,
   drinks_paid: 5,
   validity_days: 7,
-  drink_value_inr: 150,
-  price_inr: 750,
+  drink_value_inr: null,
+  price_inr: null,
   max_per_day: null,
   gst_exempt: false,
   is_active: true,
@@ -70,6 +80,19 @@ describe('PassCard', () => {
     expect(html).toContain('Active');
     // One decorative dot per cup the pass can give.
     expect(html.match(/rounded-full border-2 border-tan-dark/g)).toHaveLength(7);
+  });
+
+  it('titles the pass with its drink and says what a cup covers (CP-D25)', () => {
+    const html = card(pass(), false);
+    expect(html).toContain('Weekly Ritual · Cappuccino · Large');
+    expect(html).toContain('Each cup covers up to');
+    expect(html).toContain('₹150');
+  });
+
+  it('a pass with no drink label (from before per-drink pricing) reads as its plan', () => {
+    const html = card(pass({ drink_label: '', drink_menu_item_id: null }), false);
+    expect(html).toContain('Weekly Ritual');
+    expect(html).not.toContain('Cappuccino');
   });
 
   it('offers Extend and Give back a cup to a manager only', () => {
@@ -110,35 +133,102 @@ describe('PassCard', () => {
 });
 
 describe('PlanCard', () => {
-  const render = (over: Partial<CoffeePassPlan> = {}, gst = { percent: 5, inclusive: false }, sellBlocked = false) =>
+  const render = (over: Partial<CoffeePassPlan> = {}, sellBlocked = false) =>
     renderToStaticMarkup(
-      createElement(PlanCard, { plan: { ...plan, ...over }, gst, sellBlocked, blockedReasonId: 'reason', onSell: noop }),
+      createElement(PlanCard, { plan: { ...plan, ...over }, sellBlocked, blockedReasonId: 'reason', onSell: noop }),
     );
 
-  it('shows the name, "7 cups · 7 days", the price with "+ GST", the per-cup price and the saving', () => {
+  it('shows the name, "7 cups · 7 days", the saving and that the price follows the drink (no fixed price, no ₹NaN)', () => {
     const html = render();
     expect(html).toContain('Weekly Ritual');
     expect(html).toContain('7 cups · 7 days');
-    expect(html).toContain('₹750');
-    expect(html).toContain('+ GST');
-    expect(html).toContain('₹107');
-    expect(html).toContain('pay for 5, get');
     expect(html).toContain('Save 29%');
-    expect(html).toContain('font-mono');
+    expect(html).toContain('The price follows the drink you pick.');
+    expect(html).not.toContain('NaN');
+    expect(html).not.toContain('₹');
+    expect(html).not.toContain('GST');
+    expect(html).toContain('Sell Weekly Ritual');
   });
 
-  it('drops "+ GST" when the price already includes it or the plan is exempt', () => {
-    expect(render({}, { percent: 5, inclusive: true })).not.toContain('+ GST');
-    expect(render({ gst_exempt: true })).not.toContain('+ GST');
+  it('says a daily limit when the plan has one', () => {
+    expect(render({ max_per_day: 1 })).toContain('up to 1 a day');
+    expect(render()).not.toContain('a day');
   });
 
   it('disables Sell, and points at the reason, while the customer is not ready', () => {
-    const html = render({}, { percent: 5, inclusive: false }, true);
+    const html = render({}, true);
     // The class list carries "disabled:…" variants, so match the attribute itself.
     expect(html).toMatch(/<button[^>]*\sdisabled=""/);
     expect(html).toContain('aria-describedby="reason"');
     expect(render()).not.toMatch(/<button[^>]*\sdisabled=""/);
     expect(render()).not.toContain('aria-describedby');
+  });
+});
+
+describe('DrinkSizePicker — first paint and the choice', () => {
+  const drink = (id: string, name: string, category: string, over: Partial<RitualDrink> = {}): RitualDrink => ({
+    id,
+    name,
+    category,
+    is_available: true,
+    sizes: [
+      { variant_id: `${id}-s`, label: 'Small', price_inr: 90 },
+      { variant_id: `${id}-l`, label: 'Large', price_inr: 120 },
+    ],
+    ...over,
+  });
+  const drinks = [
+    drink('cap', 'Cappuccino', 'Coffee'),
+    drink('lat', 'Latte', 'Coffee'),
+    drink('ice', 'Iced Americano', 'Iced Coffee', { sizes: [{ variant_id: 'ice-r', label: '', price_inr: 100 }] }),
+    drink('cold', 'Cold Brew', 'Cold Brews', { is_available: false }),
+  ];
+  const render = (choice = { drinkId: null as string | null, variantId: null as string | null }, list = drinks) =>
+    renderToStaticMarkup(createElement(DrinkSizePicker, { drinks: list, choice, onChoice: noop }));
+
+  it('puts the search box first, then the category chips, then the drinks as tiles with their prices', () => {
+    const html = render();
+    expect(html.indexOf('Search drinks')).toBeGreaterThan(-1);
+    expect(html.indexOf('Search drinks')).toBeLessThan(html.indexOf('aria-label="Category"'));
+    expect(html.indexOf('aria-label="Category"')).toBeLessThan(html.indexOf('Cappuccino'));
+    expect(html).toContain('Iced Coffee');
+    expect(html).toContain('₹90–₹120');
+    expect(html).toContain('₹100'); // a single size: one price
+    // Chips name the category with how many drinks it holds, and are toggles.
+    expect(html).toContain('aria-pressed="true"'); // "All" is on
+  });
+
+  it('has big tap targets on the tiles and chips (at least 48px), and no size row before a drink is chosen', () => {
+    const html = render();
+    expect(html).toContain('min-h-[64px]');
+    expect(html).toContain('min-h-[48px]');
+    expect(html).not.toContain('Size for');
+  });
+
+  it('greys a drink that is off the menu today and cannot be picked', () => {
+    const html = render();
+    expect(html).toContain('Not available today');
+    expect(buttonTag(html, 'Not available today')).toContain('disabled=""');
+    expect(buttonTag(html, '₹90–₹120')).not.toContain('disabled=""');
+  });
+
+  it('shows the sizes of the chosen drink with their prices, and marks the chosen one', () => {
+    const html = render({ drinkId: 'cap', variantId: 'cap-l' });
+    expect(html).toContain('Size for Cappuccino');
+    expect(html).toContain('Small');
+    expect(html).toContain('₹90');
+    expect(html).toContain('Large');
+    expect(html).toContain('₹120');
+    // The chosen drink tile and the chosen size are both marked (colour is never the only signal).
+    expect((html.match(/aria-pressed="true"/g) ?? []).length).toBeGreaterThanOrEqual(3); // All, the tile, the size
+  });
+
+  it('a drink with one size and no size name reads "One size"', () => {
+    expect(render({ drinkId: 'ice', variantId: 'ice-r' })).toContain('One size');
+  });
+
+  it('says so when no drink is set up for a Ritual yet', () => {
+    expect(render({ drinkId: null, variantId: null }, [])).toContain('No drinks are set up');
   });
 });
 

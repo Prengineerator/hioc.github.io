@@ -104,7 +104,8 @@ export function makePassAdmin(tables: Record<string, Row[]>, hooks: FakeHooks = 
   const seq: Record<string, number> = {};
   const store = (t: string) => tables[t] ?? (tables[t] = []);
 
-  // The embeds the pass routes select: children of orders by order_id, and the order of a redemption.
+  // The embeds the pass routes select: children of orders by order_id, the order of a redemption, and
+  // the menu item's sizes and add-on groups (the drink a Ritual is bought for).
   function embed(table: string, row: Row, select: string): Row {
     const out: Row = { ...row };
     for (const token of splitTop(select)) {
@@ -117,6 +118,16 @@ export function makePassAdmin(tables: Record<string, Row[]>, hooks: FakeHooks = 
           .map((r) => embed(name, r, inner));
       } else if (name === 'order_item_addons') {
         out[name] = store(name).filter((r) => r.order_item_id === row.id);
+      } else if (name === 'menu_item_variants') {
+        // The menu select the order pricing uses (lib/orders/lines.ts MENU_ITEM_SELECT).
+        out[name] = store(name).filter((r) => r.menu_item_id === row.id);
+      } else if (name === 'menu_item_addon_groups') {
+        out[name] = store(name)
+          .filter((r) => r.menu_item_id === row.id)
+          .map((r) => embed(name, r, inner));
+      } else if (name === 'addon_groups') {
+        const group = store('addon_groups').find((r) => r.id === row.addon_group_id);
+        out[name] = group ? { ...group, options: store('addon_options').filter((o) => o.addon_group_id === group.id) } : null;
       } else if (name === 'orders') {
         const parent = store('orders').find((r) => r.id === row.order_id);
         out[name] = parent ? project(parent, inner) : null;

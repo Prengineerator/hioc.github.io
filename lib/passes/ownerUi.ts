@@ -1,23 +1,28 @@
 // Pure helpers behind the owner's HIOC Ritual screen (app/owner/passes,
-// components/owner/passes, docs/COFFEE-PASS-SPEC.md §8 "Owner").
+// components/owner/passes, docs/COFFEE-PASS-SPEC.md §8 "Owner", §13).
 //
 // No React, no fetch, no clock of its own ("today" and "now" are arguments): the
 // screen only holds state and draws, and every rule the owner relies on lives
-// here where a table-driven test can pin it. That covers what the price form
-// shows live (the suggested price, the price per cup, the discount, the
-// "customers would pay more than menu price" warning), what must be confirmed
-// before a plan changes (CP-D1: activating a plan puts it in front of paying
-// customers), how the menu is grouped for the eligible-drinks picker (CP-D3),
-// the setup checklist (§9 B), the date presets for the summary, and the rows the
-// Reports page adds (CP-D21).
+// here where a table-driven test can pin it. That covers what the plan form shows
+// live (the discount, and worked examples of what customers would pay), what must
+// be confirmed before a plan changes (CP-D1: activating a plan puts it in front of
+// paying customers), how the menu is grouped for the eligible-drinks picker
+// (CP-D3), the setup checklist (§9 B), the date presets for the summary, and the
+// rows the Reports page adds (CP-D21).
+//
+// PER-DRINK PRICING (§13, CP-D22..D24): a plan has no price and no cup value. The
+// customer picks a drink and a size when buying, the price is cups paid × that
+// size's menu price, and each cup covers up to that same price. So the plan form
+// has no price box: it shows the discount (which does not depend on the drink) and
+// worked examples ("Cappuccino Large ₹120 → ₹600") taken from the live menu.
 //
 // Money is integer rupees. The one exception is the price per cup, which is
 // price / cups and is shown to two decimals (₹107.14), never used to charge.
 
 import { PASS_PROGRAM_NAME, PASS_SHORT_NAME, cupsLabel } from '@/lib/passes/brand';
-import { validatePlanInput } from '@/lib/passes/rules';
+import { planDiscountPercent, ritualPriceFor, validatePlanInput } from '@/lib/passes/rules';
 import { parseSummaryRange, type PassProgramSummary } from '@/lib/passes/summary';
-import type { CoffeePassPlan, PassState } from '@/lib/passes/types';
+import type { CoffeePassPlan, PassState, RitualDrink } from '@/lib/passes/types';
 
 // ---------------------------------------------------------------------------
 // Words and small formats
@@ -26,8 +31,13 @@ import type { CoffeePassPlan, PassState } from '@/lib/passes/types';
 /** Shown under the liability figure: what the number means, in one line. */
 export const LIABILITY_EXPLAINER = 'Cups still owed × what customers paid per cup.';
 
-/** The reminder the owner is given until the CA has confirmed how a Ritual is taxed (CP-D11, §9 B4). */
-export const GST_REMINDER = 'Confirm GST treatment with your CA (spec CP-D11).';
+/**
+ * The GST rule the owner has settled for HIOC Ritual (CP-D11, §9 B4): tax is
+ * charged when a Ritual is sold, and a redeemed cup carries none because the
+ * sale already paid it. Words only; the maths is lib/passes/rules.ts
+ * composePassBill, which takes the covered amount out of the taxable base.
+ */
+export const GST_RULE = 'GST: 5% when a Ritual is sold · 0% on redeemed cups';
 
 /** ₹ with Indian digit grouping; up to two decimals (a per-cup price), none when whole. "—" for anything that is not a number. */
 export function formatRupees(n: number | null | undefined): string {
@@ -125,72 +135,125 @@ export function passStateTone(state: PassState): 'success' | 'neutral' | 'outlin
 // Price maths (what the plan form shows live)
 // ---------------------------------------------------------------------------
 
-/** The default price: cups paid for × cup value (CP-D2). Null until both are positive whole numbers. */
-export function suggestedPriceInr(drinksPaid: number, drinkValueInr: number): number | null {
-  if (!Number.isInteger(drinksPaid) || !Number.isInteger(drinkValueInr)) return null;
-  if (drinksPaid < 1 || drinkValueInr < 1) return null;
-  return drinksPaid * drinkValueInr;
-}
-
-/** What one cup costs the customer on this plan: price ÷ cups given, to two decimals. Null when it cannot be worked out. */
+/** What one cup costs the customer for a given price: price ÷ cups given, to two decimals. Null when it cannot be worked out. */
 export function perCupPriceInr(priceInr: number, drinksTotal: number): number | null {
   if (!Number.isFinite(priceInr) || !Number.isFinite(drinksTotal)) return null;
   if (priceInr < 1 || drinksTotal < 1) return null;
   return round2(priceInr / drinksTotal);
 }
 
-/** What all the cups are worth at their cup value: cups given × cup value. Null when it cannot be worked out. */
-export function cupsWorthInr(drinksTotal: number, drinkValueInr: number): number | null {
-  if (!Number.isFinite(drinksTotal) || !Number.isFinite(drinkValueInr)) return null;
-  if (drinksTotal < 1 || drinkValueInr < 1) return null;
-  return drinksTotal * drinkValueInr;
+/** One worked example of what a Ritual costs for a real drink on the menu. */
+export interface PriceExample {
+  /** "Cappuccino". */
+  drink: string;
+  /** "Large" ('' when the size has no name). */
+  size: string;
+  /** The size's menu price: what each cup covers. */
+  cup_price_inr: number;
+  /** What the customer pays for the Ritual before GST: cups paid × cup_price_inr. */
+  price_inr: number;
+  /** What one cup costs them: price ÷ cups given, two decimals. */
+  per_cup_inr: number | null;
+  /** "Cappuccino Large ₹120 → ₹600". */
+  text: string;
 }
 
 /**
- * How much cheaper the cups are than their cup value, as a whole percent:
- * 1 − price ÷ (cups given × cup value). 29 for 7 cups of ₹150 sold at ₹750;
- * 0 when the price equals the value; NEGATIVE when the price is above it (the
- * screen warns). Null when it cannot be worked out.
+ * Worked examples for the plan form and the plans table, so the owner sees what
+ * customers would actually pay now that a plan has no price: for each of the first
+ * `limit` drinks, its DEAREST size (the one a customer is most likely to be quoting,
+ * "Cappuccino Large"), priced with the very function the server prices a sale
+ * with (ritualPriceFor: cups paid × the size's menu price, CP-D22).
  *
- * This is the PRICE's discount, so it follows an overridden price. (The
- * customer-facing "Save 29%" in lib/passes/rules.ts planDiscountPercent counts
- * cups paid for instead; the two agree at the suggested price.)
+ * `drinks` is the shape GET /api/passes/plans returns as `eligible`, in its order.
+ * A drink that is off the menu today (`is_available` false) is skipped unless
+ * nothing else is left, a size at ₹0 never counts, and a drink with no usable size
+ * gives no example. `plan` needs only cups paid and cups given, so a half-typed
+ * form works as soon as both boxes read as numbers. Empty when there is nothing to
+ * show (no drink is ticked yet).
  */
-export function effectiveDiscountPercent(priceInr: number, drinksTotal: number, drinkValueInr: number): number | null {
-  const worth = cupsWorthInr(drinksTotal, drinkValueInr);
-  if (worth === null || !Number.isFinite(priceInr) || priceInr < 1) return null;
-  const percent = Math.round((1 - priceInr / worth) * 100);
-  return percent === 0 ? 0 : percent; // never -0
+export function examplePrices(
+  plan: Pick<CoffeePassPlan, 'drinks_paid' | 'drinks_total'>,
+  drinks: readonly RitualDrink[],
+  limit = 3,
+): PriceExample[] {
+  if (!Number.isInteger(plan.drinks_paid) || plan.drinks_paid < 1) return [];
+  const usable = drinks.filter((d) => d.sizes.some((sz) => sz.price_inr >= 1));
+  const preferred = usable.filter((d) => d.is_available);
+  const pool = preferred.length > 0 ? preferred : usable;
+  return pool.slice(0, Math.max(0, Math.trunc(limit))).map((drink) => {
+    const dearest = drink.sizes.filter((sz) => sz.price_inr >= 1).reduce((a, b) => (b.price_inr > a.price_inr ? b : a));
+    const price = ritualPriceFor(plan, dearest.price_inr);
+    const size = dearest.label.trim();
+    return {
+      drink: drink.name,
+      size,
+      cup_price_inr: dearest.price_inr,
+      price_inr: price,
+      per_cup_inr: perCupPriceInr(price, plan.drinks_total),
+      text: `${drink.name}${size ? ` ${size}` : ''} ${formatRupees(dearest.price_inr)} → ${formatRupees(price)}`,
+    };
+  });
+}
+
+/** "Price: 5 × the drink": the whole pricing rule of a plan, in words (CP-D22, CP-D24). */
+export function priceRuleLabel(plan: Pick<CoffeePassPlan, 'drinks_paid'>): string {
+  return `Price: ${plan.drinks_paid} × the drink`;
+}
+
+/** The drinks the owner is shown worked examples for first (by name, compared without case). */
+const EXAMPLE_FAVOURITES = ['cappuccino', 'latte'] as const;
+
+/**
+ * Which drinks the worked examples are about: Cappuccino and Latte when the menu
+ * has them (the two an owner thinks in), otherwise the first few by price, cheapest
+ * first (by the same size the example quotes: the dearest). One favourite found is
+ * topped up with the cheapest others, so there are two or three examples whenever
+ * the menu has that many drinks. A drink that is off the menu today is passed over
+ * unless nothing else is left, and a drink with no size priced at ₹1 or more never
+ * counts. Returned in the order the examples should read.
+ */
+export function exampleDrinks(drinks: readonly RitualDrink[], limit = 3): RitualDrink[] {
+  const cap = Math.max(0, Math.trunc(limit));
+  const usable = drinks.filter((d) => d.sizes.some((sz) => sz.price_inr >= 1));
+  const onMenu = usable.filter((d) => d.is_available);
+  const pool = onMenu.length > 0 ? onMenu : usable;
+  const nameOf = (d: RitualDrink) => d.name.trim().toLowerCase();
+  const favourites = EXAMPLE_FAVOURITES.map((fav) => pool.find((d) => nameOf(d) === fav)).filter(
+    (d): d is RitualDrink => d !== undefined,
+  );
+  if (favourites.length >= 2) return favourites.slice(0, cap);
+  const dearest = (d: RitualDrink) => Math.max(...d.sizes.filter((sz) => sz.price_inr >= 1).map((sz) => sz.price_inr));
+  const others = pool
+    .filter((d) => !favourites.includes(d))
+    .sort((a, b) => dearest(a) - dearest(b) || a.name.localeCompare(b.name));
+  return [...favourites, ...others].slice(0, cap);
 }
 
 /**
- * The warning shown when the price is more than the cups are worth: customers
- * would pay more than menu price for the same drinks, so nobody should buy it.
- * Null when the price is at or under the value, or cannot be checked.
+ * The worked examples the plans table and the plan form show: what a customer
+ * would pay for this plan on the drinks exampleDrinks picks. Empty until some drink
+ * is ticked (there is nothing real to quote).
  */
-export function priceWarning(priceInr: number, drinksTotal: number, drinkValueInr: number): string | null {
-  const worth = cupsWorthInr(drinksTotal, drinkValueInr);
-  if (worth === null || !Number.isFinite(priceInr) || priceInr < 1) return null;
-  if (priceInr <= worth) return null;
-  return `The price (${formatRupees(priceInr)}) is more than the cups are worth (${drinksTotal} × ${formatRupees(drinkValueInr)} = ${formatRupees(worth)}). Customers would pay more than menu price.`;
+export function planExamples(
+  plan: Pick<CoffeePassPlan, 'drinks_paid' | 'drinks_total'>,
+  drinks: readonly RitualDrink[],
+  limit = 3,
+): PriceExample[] {
+  return examplePrices(plan, exampleDrinks(drinks, limit), limit);
 }
 
 // ---------------------------------------------------------------------------
 // The plan form
 // ---------------------------------------------------------------------------
 
-/** The plan form as typed: numbers stay text until saved. */
+/** The plan form as typed: numbers stay text until saved. There is no price or cup value (CP-D24). */
 export interface PlanForm {
   name: string;
   description: string;
   drinks_total: string;
   drinks_paid: string;
   validity_days: string;
-  drink_value_inr: string;
-  /** What was typed in the price box. Ignored while price_custom is false. */
-  price_inr: string;
-  /** False = the price follows cups paid for × cup value; true = the owner typed their own. */
-  price_custom: boolean;
   /** Empty = no daily limit. */
   max_per_day: string;
   gst_exempt: boolean;
@@ -213,93 +276,52 @@ export function emptyPlanForm(): PlanForm {
     drinks_total: '7',
     drinks_paid: '5',
     validity_days: '7',
-    drink_value_inr: '150',
-    price_inr: '',
-    price_custom: false,
     max_per_day: '',
     gst_exempt: false,
     is_active: false,
   };
 }
 
-/** The form for editing a plan. The price counts as the owner's own when it differs from the suggestion. */
+/** The form for editing a plan. */
 export function planToForm(plan: CoffeePassPlan): PlanForm {
-  const suggested = suggestedPriceInr(plan.drinks_paid, plan.drink_value_inr);
   return {
     name: plan.name,
     description: plan.description,
     drinks_total: String(plan.drinks_total),
     drinks_paid: String(plan.drinks_paid),
     validity_days: String(plan.validity_days),
-    drink_value_inr: String(plan.drink_value_inr),
-    price_inr: String(plan.price_inr),
-    price_custom: plan.price_inr !== suggested,
     max_per_day: plan.max_per_day === null ? '' : String(plan.max_per_day),
     gst_exempt: plan.gst_exempt,
     is_active: plan.is_active,
   };
 }
 
-/** The suggested price for what is typed now (cups paid for × cup value), or null while either is unreadable. */
-export function formSuggestedPrice(form: PlanForm): number | null {
-  const paid = parseWholeNumber(form.drinks_paid);
-  const value = parseWholeNumber(form.drink_value_inr);
-  if (paid === null || value === null) return null;
-  return suggestedPriceInr(paid, value);
-}
-
-/** The price the form would save: the typed one when it is the owner's own, otherwise the suggestion. Null while unreadable. */
-export function formPriceInr(form: PlanForm): number | null {
-  return form.price_custom ? parseWholeNumber(form.price_inr) : formSuggestedPrice(form);
-}
-
-/** What the price box shows: the typed text when custom, otherwise the suggestion. */
-export function formPriceText(form: PlanForm): string {
-  if (form.price_custom) return form.price_inr;
-  const suggested = formSuggestedPrice(form);
-  return suggested === null ? '' : String(suggested);
-}
-
-/** The form after "Use suggested price": the price follows the suggestion again. */
-export function withSuggestedPrice(form: PlanForm): PlanForm {
-  return { ...form, price_custom: false, price_inr: '' };
-}
-
-/** The form after the owner types in the price box. */
-export function withTypedPrice(form: PlanForm, text: string): PlanForm {
-  return { ...form, price_custom: true, price_inr: text };
-}
-
-/** Whether the "Use suggested price" button makes sense: there is a suggestion and the price is not already it. */
-export function canUseSuggestedPrice(form: PlanForm): boolean {
-  const suggested = formSuggestedPrice(form);
-  return suggested !== null && formPriceInr(form) !== suggested;
-}
-
 export interface PlanPreview {
-  price: number | null;
-  suggested: number | null;
-  /** Price per cup, two decimals. */
-  perCup: number | null;
-  /** Whole percent, negative when the price is above the cups' value. */
+  /** Cups given free: cups given − cups paid for. Null while either box is unreadable. */
+  freeCups: number | null;
+  /** The saving on every cup, whole percent: free cups ÷ cups given. The same whatever the drink. */
   discountPercent: number | null;
-  /** cups given × cup value. */
-  worth: number | null;
-  warning: string | null;
+  /** Cups paid for, readable as a number (what examplePrices multiplies). Null while unreadable. */
+  drinksPaid: number | null;
+  /** Cups given, readable as a number. Null while unreadable. */
+  drinksTotal: number | null;
 }
 
-/** Everything the form shows live under the price box. Every field is null while the boxes are unreadable. */
+/**
+ * Everything the form shows live under the cups boxes. Every field is null while
+ * the boxes are unreadable. The discount needs no drink: paying for 5 of 7 cups is
+ * 29% off whichever size is bought, so the screen shows it with the worked
+ * examples (examplePrices) that put rupees to it.
+ */
 export function planPreview(form: PlanForm): PlanPreview {
   const total = parseWholeNumber(form.drinks_total);
-  const value = parseWholeNumber(form.drink_value_inr);
-  const price = formPriceInr(form);
+  const paid = parseWholeNumber(form.drinks_paid);
+  const readable = total !== null && paid !== null && total >= 1 && paid >= 1 && paid <= total;
   return {
-    price,
-    suggested: formSuggestedPrice(form),
-    perCup: price !== null && total !== null ? perCupPriceInr(price, total) : null,
-    discountPercent: price !== null && total !== null && value !== null ? effectiveDiscountPercent(price, total, value) : null,
-    worth: total !== null && value !== null ? cupsWorthInr(total, value) : null,
-    warning: price !== null && total !== null && value !== null ? priceWarning(price, total, value) : null,
+    freeCups: readable ? total - paid : null,
+    discountPercent: readable ? planDiscountPercent({ drinks_total: total, drinks_paid: paid }) : null,
+    drinksPaid: paid !== null && paid >= 1 ? paid : null,
+    drinksTotal: total !== null && total >= 1 ? total : null,
   };
 }
 
@@ -310,8 +332,6 @@ const EDITABLE_KEYS = [
   'drinks_total',
   'drinks_paid',
   'validity_days',
-  'drink_value_inr',
-  'price_inr',
   'max_per_day',
   'gst_exempt',
   'is_active',
@@ -323,8 +343,6 @@ const TERMS_KEYS: readonly PlanEditableKey[] = [
   'drinks_total',
   'drinks_paid',
   'validity_days',
-  'drink_value_inr',
-  'price_inr',
   'max_per_day',
   'gst_exempt',
 ];
@@ -336,7 +354,8 @@ export type PlanPayload =
 /**
  * Turns the form into the request body, after the SAME checks the server makes
  * (lib/passes/rules.ts validatePlanInput), so a mistake is caught in the form
- * with the server's own wording.
+ * with the server's own wording. The body never carries a price or a cup value:
+ * the server refuses both (CP-D24).
  *
  *   create (`existing` null): the whole plan, with `sortOrder` so the new plan
  *     lands after the others rather than at 0.
@@ -346,7 +365,6 @@ export type PlanPayload =
  */
 export function buildPlanPayload(form: PlanForm, existing: CoffeePassPlan | null, sortOrder?: number): PlanPayload {
   const num = (raw: string) => parseWholeNumber(raw) ?? Number.NaN;
-  const price = formPriceInr(form);
   const cap = form.max_per_day.trim() === '' ? null : num(form.max_per_day);
   const checked = validatePlanInput(
     {
@@ -355,8 +373,6 @@ export function buildPlanPayload(form: PlanForm, existing: CoffeePassPlan | null
       drinks_total: num(form.drinks_total),
       drinks_paid: num(form.drinks_paid),
       validity_days: num(form.validity_days),
-      drink_value_inr: num(form.drink_value_inr),
-      price_inr: price ?? Number.NaN,
       max_per_day: cap,
       gst_exempt: form.gst_exempt,
       is_active: form.is_active,
@@ -385,9 +401,9 @@ export function nextSortOrder(plans: Pick<CoffeePassPlan, 'sort_order'>[]): numb
   return plans.length === 0 ? 10 : Math.max(...plans.map((p) => p.sort_order)) + 10;
 }
 
-/** The order the server lists plans in (sort_order, then price, then name), so a saved plan lands where a reload would put it. */
-export function sortPlans<T extends Pick<CoffeePassPlan, 'sort_order' | 'price_inr' | 'name'>>(plans: T[]): T[] {
-  return [...plans].sort((a, b) => a.sort_order - b.sort_order || a.price_inr - b.price_inr || a.name.localeCompare(b.name));
+/** The order the server lists plans in (sort_order, then name), so a saved plan lands where a reload would put it. */
+export function sortPlans<T extends Pick<CoffeePassPlan, 'sort_order' | 'name'>>(plans: T[]): T[] {
+  return [...plans].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
 }
 
 export interface PlanConfirmation {
@@ -405,7 +421,7 @@ export interface PlanConfirmation {
  *   switching a plan ON       "Customers will be able to buy this now."
  *   switching a plan OFF      customers can no longer buy it; Rituals already sold keep working
  *   changing a live plan's    the new terms apply to new sales straight away
- *   price or terms
+ *   cups, validity or cap
  *
  * `body` is the request body (buildPlanPayload's), or `{ is_active }` for the
  * switch in the table. `existing` is null for a new plan.
@@ -436,7 +452,7 @@ export function planSaveConfirmation(
   if (wasActive && TERMS_KEYS.some((key) => body[key] !== undefined && body[key] !== existing?.[key])) {
     return {
       title: 'Change a live plan?',
-      message: `This plan is on sale. The new price and terms apply to every sale from now on. ${PASS_SHORT_NAME}s already sold keep the terms they were sold with.`,
+      message: `This plan is on sale. The new terms apply to every sale from now on. ${PASS_SHORT_NAME}s already sold keep the terms they were sold with.`,
       confirmLabel: 'Save changes',
       danger: false,
     };
@@ -448,18 +464,20 @@ export function planSaveConfirmation(
 // Table cells for the plans list
 // ---------------------------------------------------------------------------
 
-/** The plan's row as the table shows it, so the screen does no arithmetic of its own. */
+/**
+ * The plan's row as the table shows it, so the screen does no arithmetic of its
+ * own. There is no price column: what a customer pays depends on the drink they
+ * pick (CP-D22), so the table shows the saving, and examplePrices puts rupees to it.
+ */
 export function planRow(plan: CoffeePassPlan): {
-  perCup: number | null;
-  discountPercent: number | null;
-  overpriced: boolean;
+  freeCups: number;
+  discountPercent: number;
   validity: string;
   cap: string;
 } {
   return {
-    perCup: perCupPriceInr(plan.price_inr, plan.drinks_total),
-    discountPercent: effectiveDiscountPercent(plan.price_inr, plan.drinks_total, plan.drink_value_inr),
-    overpriced: priceWarning(plan.price_inr, plan.drinks_total, plan.drink_value_inr) !== null,
+    freeCups: Math.max(0, plan.drinks_total - plan.drinks_paid),
+    discountPercent: planDiscountPercent(plan),
     validity: validityLabel(plan.validity_days),
     cap: dailyCapLabel(plan.max_per_day),
   };
@@ -472,11 +490,10 @@ export function planRow(plan: CoffeePassPlan): {
 export interface ChecklistItem {
   id: 'live' | 'plan' | 'drinks' | 'gst';
   /**
-   * todo      derived from the data; done when the owner has done it
-   * info      already true, nothing to do
-   * reminder  cannot be derived from anything (the CA's answer), so it stays until dismissed
+   * todo  derived from the data; done when the owner has done it
+   * info  already true or already decided (the feature flag, the GST rule), nothing to do
    */
-  kind: 'todo' | 'info' | 'reminder';
+  kind: 'todo' | 'info';
   done: boolean;
   label: string;
   detail: string;
@@ -486,10 +503,10 @@ export interface ChecklistItem {
 
 /**
  * What is left before HIOC Ritual is ready, read from the data: a plan that is
- * switched on, and drinks chosen. The GST reminder is static (nothing in the
- * database says the CA has answered). `todo` counts only the derived steps
- * still open. The feature flag is on by definition (the page does not render
- * otherwise), so it is shown as done.
+ * switched on, and drinks chosen. The GST rule is already decided by the owner,
+ * so it is listed as a settled `info` item, not a step. `todo` counts only the
+ * derived steps still open. The feature flag is on by definition (the page does
+ * not render otherwise), so it is shown as done too.
  */
 export function setupChecklist(input: {
   plans: Pick<CoffeePassPlan, 'is_active'>[];
@@ -508,7 +525,7 @@ export function setupChecklist(input: {
       id: 'plan',
       kind: 'todo',
       done: active > 0,
-      label: input.plans.length === 0 ? 'Create a plan and switch it on' : 'Check the prices, then switch a plan on',
+      label: input.plans.length === 0 ? 'Create a plan and switch it on' : 'Check the plans, then switch one on',
       detail:
         input.plans.length === 0
           ? 'No plans yet.'
@@ -521,19 +538,20 @@ export function setupChecklist(input: {
       id: 'drinks',
       kind: 'todo',
       done: input.eligibleCount > 0,
-      label: 'Choose the drinks a cup can pay for',
+      label: `Choose the drinks a ${PASS_SHORT_NAME} can be bought for`,
       detail:
         input.eligibleCount > 0
           ? `${input.eligibleCount} ${input.eligibleCount === 1 ? 'drink' : 'drinks'} chosen.`
-          : 'No drink is chosen yet, so a cup would cover nothing.',
+          : 'No drink is chosen yet, so customers have nothing to buy.',
       href: '#ritual-drinks',
     },
     {
       id: 'gst',
-      kind: 'reminder',
-      done: false,
-      label: GST_REMINDER,
-      detail: 'GST is charged when a plan is sold. If your CA says otherwise, mark that plan GST exempt.',
+      kind: 'info',
+      done: true,
+      label: GST_RULE,
+      detail:
+        'Decided by the owner on 30 Sep 2026. Cups are paid for when the Ritual is sold, so a redeemed cup carries no GST; a top-up above the cup value is taxed like any sale.',
       href: '#ritual-plans',
     },
   ];
@@ -633,12 +651,13 @@ export function countSelected(menu: PickerItem[], selected: ReadonlySet<string>)
 }
 
 /**
- * What to say before saving an empty set while a plan is on sale: the cups
- * would cover nothing. Null when there is nothing to warn about.
+ * What to say before saving an empty set while a plan is on sale: customers
+ * choose their drink from this set when they buy (CP-D22), so with nothing in it
+ * a plan on sale cannot be bought. Null when there is nothing to warn about.
  */
 export function eligibleSaveWarning(input: { selectedCount: number; hasActivePlan: boolean }): string | null {
   if (input.selectedCount > 0 || !input.hasActivePlan) return null;
-  return `No drink is chosen, so a ${PASS_SHORT_NAME} cup would cover nothing while a plan is on sale.`;
+  return `No drink is chosen, so nobody could buy a ${PASS_SHORT_NAME} while a plan is on sale.`;
 }
 
 // ---------------------------------------------------------------------------

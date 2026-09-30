@@ -9,8 +9,9 @@
 // here is exactly what customers can use a cup on. The save bar sticks to the bottom
 // of the screen while anything is changed, because on a phone the list is long.
 //
-// The menu payload carries no prices, so the "a customer would always top up" warning
-// (an item dearer than every plan's cup value) is not possible here; see the report.
+// The menu payload carries no prices, and none is needed: the customer picks one of
+// these drinks when buying and each cup covers up to THAT drink's price (CP-D22,
+// CP-D23), so there is no cup value to compare an item against.
 
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/Button';
@@ -95,7 +96,7 @@ export function EligibleDrinks({
     <Section
       id="ritual-drinks"
       title="Eligible drinks"
-      description="Tick the drinks a cup can pay for. Size and add-ons count towards the cup value; the customer pays anything above it."
+      description="Tick the drinks customers can buy a Ritual for, and that a cup can pay for. A cup covers up to the price of the drink the Ritual was bought for (size and add-ons count towards it); the customer pays anything above it."
       actions={
         <p aria-live="polite" className="text-sm font-semibold text-charcoal">
           <span className="font-mono tabular-nums">{count}</span> of <span className="font-mono tabular-nums">{menu.length}</span> selected

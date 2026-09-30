@@ -7,15 +7,14 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { EligibleDrinks } from '@/components/passes/EligibleDrinks';
 import { PassCard } from '@/components/passes/PassCard';
-import { PlanCard } from '@/components/passes/PlanCard';
+import { RitualBuilder, type RitualPurchase } from '@/components/passes/RitualBuilder';
 import { useRitualOffer } from '@/components/passes/useRitualOffer';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import type { CoffeePassPlan, PassSummary } from '@/lib/passes/types';
+import type { PassSummary } from '@/lib/passes/types';
 import {
   findPassForOrder,
   passReadyMessage,
   paymentDismissedMessage,
-  planBuyLabel,
   purchaseError,
   usablePasses,
   type PurchaseErrorAction,
@@ -34,8 +33,8 @@ const CONFIRM_MAX_ASKS = 15;
 
 type BuyState =
   | { phase: 'idle' }
-  | { phase: 'starting'; planId: string }
-  | { phase: 'paying'; planId: string }
+  | { phase: 'starting' }
+  | { phase: 'paying' }
   | { phase: 'confirming'; orderId: string; planName: string }
   | { phase: 'done'; pass: PassSummary }
   | { phase: 'delayed'; orderId: string; planName: string }
@@ -48,9 +47,9 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 const notePanel = 'rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal';
 
 /**
- * The interactive part of /ritual: the plans and their Buy buttons, the
- * purchase (checkout, Razorpay, waiting for the pass to appear), and "Your
- * Ritual" for a signed-in customer. The hero, "How it works" and the terms are
+ * The interactive part of /ritual: choosing a plan and a drink and seeing the
+ * price (RitualBuilder), the purchase (checkout, Razorpay, waiting for the pass to
+ * appear), and "Your Ritual" for a signed-in customer. The hero, "How it works" and the terms are
  * static and render on the server around it (app/ritual/page.tsx).
  */
 export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boolean }) {
@@ -161,13 +160,15 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
   );
 
   const startPurchase = useCallback(
-    async (plan: CoffeePassPlan) => {
-      setBuy({ phase: 'starting', planId: plan.id });
+    async ({ plan, menu_item_id, variant_id, drinkLabel }: RitualPurchase) => {
+      setBuy({ phase: 'starting' });
       try {
+        // The drink and size go with the plan (CP-D22): the server prices the cup
+        // again from the live menu, so what the page showed is only a preview.
         const res = await fetch('/api/passes/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan_id: plan.id }),
+          body: JSON.stringify({ plan_id: plan.id, menu_item_id, variant_id }),
         });
         const data = (await res.json().catch(() => ({}))) as {
           error?: string;
@@ -180,13 +181,13 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
           return;
         }
         const orderId = data.order_id;
-        setBuy({ phase: 'paying', planId: plan.id });
+        setBuy({ phase: 'paying' });
         // Every outcome is handled here rather than on another page: a success
         // waits for the pass, a closed window says so and leaves Buy available.
         await openRazorpayCheckout(data.payment, {
           name: prefill.current.name,
           phone: prefill.current.phone,
-          description: `${PASS_PROGRAM_NAME} — ${plan.name}`,
+          description: `${PASS_PROGRAM_NAME} — ${plan.name} · ${drinkLabel}`,
           onSuccess: () => {
             void confirmPurchase(orderId, plan.name);
           },
@@ -214,29 +215,6 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
   const offer = offerState.offer;
   const busy = buy.phase === 'starting' || buy.phase === 'paying' || buy.phase === 'confirming';
 
-  function buyControl(plan: CoffeePassPlan) {
-    if (offer && !offer.online_purchase) {
-      return (
-        <p className="rounded-md bg-surface px-4 py-3 text-sm font-semibold text-charcoal">
-          Buy at the counter — just give us your number.
-        </p>
-      );
-    }
-    if (!signedIn) {
-      return (
-        <SurfaceLink href="/login?next=/ritual" className={buttonVariants({ fullWidth: true })}>
-          Log in to buy
-        </SurfaceLink>
-      );
-    }
-    const thisPlan = (buy.phase === 'starting' || buy.phase === 'paying') && buy.planId === plan.id;
-    return (
-      <Button fullWidth loading={thisPlan} disabled={busy} onClick={() => void startPurchase(plan)}>
-        {thisPlan ? (buy.phase === 'starting' ? 'Starting…' : 'Opening payment…') : planBuyLabel(plan)}
-      </Button>
-    );
-  }
-
   return (
     <div>
       <div ref={statusRef} aria-live="polite" className="empty:hidden">
@@ -250,48 +228,48 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
         <YourRitual mine={mine} onRetry={() => { setMine({ status: 'loading' }); void fetchMine(false); }} />
       ) : null}
 
-      <section aria-labelledby="ritual-plans" className="mt-8">
-        <h2 id="ritual-plans" className="text-xl font-bold text-charcoal">
-          Pick a plan
-        </h2>
-        {offerState.status === 'loading' ? (
-          <div aria-hidden="true" className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Skeleton className="h-72 w-full" />
-            <Skeleton className="h-72 w-full" />
-          </div>
-        ) : offerState.status === 'error' ? (
-          <div className="mt-4">
-            <EmptyState
-              icon="⚠️"
-              heading="Couldn't load the plans"
-              body="Check your connection and try again."
-              action={
-                <Button variant="secondary" onClick={offerState.reload}>
-                  Try again
-                </Button>
-              }
-            />
-          </div>
-        ) : offer && offer.plans.length === 0 ? (
-          <div className="mt-4">
-            <EmptyState
-              heading="No plans on sale right now"
-              body={`${PASS_PROGRAM_NAME} is between plans. Check back soon, or ask us at the counter.`}
-              action={
-                <SurfaceLink href="/menu" className={buttonVariants({ variant: 'secondary' })}>
-                  See the menu
-                </SurfaceLink>
-              }
-            />
-          </div>
-        ) : offer ? (
+      {offerState.status === 'loading' ? (
+        <div aria-hidden="true" className="mt-8">
+          <Skeleton className="h-8 w-40" />
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            {offer.plans.map((plan) => (
-              <PlanCard key={plan.id} plan={plan} gst={offer.gst} action={buyControl(plan)} />
-            ))}
+            <Skeleton className="h-56 w-full" />
+            <Skeleton className="h-56 w-full" />
           </div>
-        ) : null}
-      </section>
+        </div>
+      ) : offerState.status === 'error' ? (
+        <div className="mt-8">
+          <EmptyState
+            icon="⚠️"
+            heading="Couldn't load the plans"
+            body="Check your connection and try again."
+            action={
+              <Button variant="secondary" onClick={offerState.reload}>
+                Try again
+              </Button>
+            }
+          />
+        </div>
+      ) : offer && offer.plans.length === 0 ? (
+        <div className="mt-8">
+          <EmptyState
+            heading="No plans on sale right now"
+            body={`${PASS_PROGRAM_NAME} is between plans. Check back soon, or ask us at the counter.`}
+            action={
+              <SurfaceLink href="/menu" className={buttonVariants({ variant: 'secondary' })}>
+                See the menu
+              </SurfaceLink>
+            }
+          />
+        </div>
+      ) : offer ? (
+        <RitualBuilder
+          offer={offer}
+          signedIn={signedIn}
+          opening={buy.phase === 'starting' || buy.phase === 'paying' ? buy.phase : null}
+          busy={busy}
+          onBuy={(purchase) => void startPurchase(purchase)}
+        />
+      ) : null}
 
       {offer ? <EligibleDrinks eligible={offer.eligible} /> : null}
     </div>
@@ -404,7 +382,7 @@ function YourRitual({ mine, onRetry }: { mine: MineState; onRetry: () => void })
           {mine.data.passes.length === 0 ? (
             mine.data.pending.length === 0 ? (
               <p className="mt-3 text-sm text-muted">
-                You don&apos;t have a {PASS_PROGRAM_NAME} yet — pick a plan below.
+                You don&apos;t have a {PASS_PROGRAM_NAME} yet — pick a plan and a drink below.
               </p>
             ) : null
           ) : (

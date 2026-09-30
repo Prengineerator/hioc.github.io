@@ -1,61 +1,58 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPlanPayload,
-  canUseSuggestedPrice,
   categorySelection,
   checkCustomRange,
   countSelected,
   cupsLeftLabel,
-  cupsWorthInr,
   dailyCapLabel,
-  effectiveDiscountPercent,
   eligibleSaveWarning,
   emptyPlanForm,
+  exampleDrinks,
+  examplePrices,
   formatCount,
   formatIstDay,
   formatRupees,
   formatValidTill,
-  formPriceInr,
-  formPriceText,
-  formSuggestedPrice,
   groupMenuByCategory,
+  GST_RULE,
   nextSortOrder,
   parseWholeNumber,
   passStateLabel,
   passStateTone,
   passValidTillIso,
   perCupPriceInr,
+  planExamples,
   planPreview,
   planRow,
   planSaveConfirmation,
   planToForm,
   presetRange,
-  priceWarning,
+  priceRuleLabel,
   quickCategories,
   reportPassRows,
   sameSelection,
   setCategorySelected,
   setupChecklist,
   sortPlans,
-  suggestedPriceInr,
   summaryCards,
   summaryQuery,
   validityLabel,
   withSelection,
-  withSuggestedPrice,
-  withTypedPrice,
   type CategoryGroup,
   type PickerItem,
   type PlanForm,
 } from '@/lib/passes/ownerUi';
-import { validatePlanInput } from '@/lib/passes/rules';
+import { PLAN_NO_PRICE_MESSAGE, validatePlanInput } from '@/lib/passes/rules';
 import type { PassProgramSummary } from '@/lib/passes/summary';
-import type { CoffeePassPlan, PassState } from '@/lib/passes/types';
+import type { CoffeePassPlan, PassState, RitualDrink } from '@/lib/passes/types';
 
 // lib/passes/ownerUi.ts: the rules behind Owner → HIOC Ritual, as pure functions. The
 // screens (components/owner/passes) only hold state and draw, so what the owner is
-// TOLD (a price, a discount, a warning, what to confirm, what is left to do) is pinned
-// here. The seeded plans (spec §5.6) are the running example.
+// TOLD (a discount, worked examples, what to confirm, what is left to do) is pinned
+// here. The seeded plans (spec §5.6) are the running example. Since per-drink pricing
+// (spec §13) a plan has no price or cup value: the price is cups paid × the price of
+// the drink and size the customer picks, so the form shows the saving and examples.
 
 const WEEKLY: CoffeePassPlan = {
   id: 'plan-weekly',
@@ -64,8 +61,8 @@ const WEEKLY: CoffeePassPlan = {
   drinks_total: 7,
   drinks_paid: 5,
   validity_days: 7,
-  drink_value_inr: 150,
-  price_inr: 750,
+  drink_value_inr: null,
+  price_inr: null,
   max_per_day: null,
   gst_exempt: false,
   is_active: false,
@@ -78,8 +75,33 @@ const MONTHLY: CoffeePassPlan = {
   description: 'Pay for 6, get 7',
   drinks_paid: 6,
   validity_days: 30,
-  price_inr: 900,
   sort_order: 20,
+};
+
+// What GET /api/passes/plans lists as `eligible`: drinks with the sizes on sale.
+const CAPPUCCINO: RitualDrink = {
+  id: 'cappuccino',
+  name: 'Cappuccino',
+  category: 'Coffee',
+  is_available: true,
+  sizes: [
+    { variant_id: 'cap-s', label: 'Small', price_inr: 90 },
+    { variant_id: 'cap-l', label: 'Large', price_inr: 120 },
+  ],
+};
+const LATTE: RitualDrink = {
+  id: 'latte',
+  name: 'Latte',
+  category: 'Coffee',
+  is_available: true,
+  sizes: [{ variant_id: 'lat-l', label: 'Large', price_inr: 140 }],
+};
+const COLD_BREW: RitualDrink = {
+  id: 'cold',
+  name: 'Cold Brew',
+  category: 'Cold Brews',
+  is_available: true,
+  sizes: [{ variant_id: 'cold-r', label: 'Regular', price_inr: 150 }],
 };
 
 describe('formatting', () => {
@@ -143,18 +165,6 @@ describe('formatting', () => {
 
 describe('price maths', () => {
   it.each([
-    [5, 150, 750],
-    [6, 150, 900],
-    [1, 1, 1],
-    [0, 150, null],
-    [5, 0, null],
-    [-1, 150, null],
-    [2.5, 150, null],
-  ])('suggested price for %s cups paid at ₹%s is %s', (paid, value, expected) => {
-    expect(suggestedPriceInr(paid, value)).toBe(expected);
-  });
-
-  it.each([
     [750, 7, 107.14],
     [900, 7, 128.57],
     [700, 7, 100],
@@ -166,46 +176,136 @@ describe('price maths', () => {
     expect(perCupPriceInr(price, total)).toBe(expected);
   });
 
-  it('works out what the cups are worth', () => {
-    expect(cupsWorthInr(7, 150)).toBe(1050);
-    expect(cupsWorthInr(0, 150)).toBeNull();
-    expect(cupsWorthInr(7, 0)).toBeNull();
+  it('describes a plan row without further arithmetic: the saving, not a price', () => {
+    expect(planRow(WEEKLY)).toEqual({ freeCups: 2, discountPercent: 29, validity: '7 days', cap: 'No limit' });
+    expect(planRow({ ...MONTHLY, max_per_day: 1 })).toEqual({ freeCups: 1, discountPercent: 14, validity: '30 days', cap: '1 a day' });
+    // paying for every cup saves nothing
+    expect(planRow({ ...WEEKLY, drinks_paid: 7 })).toMatchObject({ freeCups: 0, discountPercent: 0 });
+  });
+});
+
+describe('examplePrices (what customers would pay, for real drinks)', () => {
+  it('shows the dearest size of each drink: "Cappuccino Large ₹120 → ₹600" for a Weekly', () => {
+    expect(examplePrices(WEEKLY, [CAPPUCCINO])).toEqual([
+      {
+        drink: 'Cappuccino',
+        size: 'Large',
+        cup_price_inr: 120,
+        price_inr: 600,
+        per_cup_inr: 85.71, // 600 / 7
+        text: 'Cappuccino Large ₹120 → ₹600',
+      },
+    ]);
   });
 
-  it.each([
-    // The seeded plans: 29% and 14%.
-    [750, 7, 150, 29],
-    [900, 7, 150, 14],
-    // An overridden price follows the price, not the cups paid for.
-    [800, 7, 150, 24],
-    [1050, 7, 150, 0],
-    [1000, 7, 150, 5],
-    // Above the cups' value: negative, and priceWarning speaks.
-    [1200, 7, 150, -14],
-    [1051, 7, 150, 0], // -0.09% rounds to 0, never -0
-    [0, 7, 150, null],
-    [750, 0, 150, null],
-    [750, 7, 0, null],
-  ])('₹%s for %s cups of ₹%s is %s%% off', (price, total, value, expected) => {
-    const got = effectiveDiscountPercent(price, total, value);
-    expect(got).toBe(expected);
-    if (got === 0) expect(Object.is(got, -0)).toBe(false);
+  it('prices a Monthly at 6 ×: Latte Large ₹140 → ₹840', () => {
+    expect(examplePrices(MONTHLY, [LATTE])[0]).toMatchObject({ cup_price_inr: 140, price_inr: 840, text: 'Latte Large ₹140 → ₹840' });
   });
 
-  it('warns when the price is above what the cups are worth, and only then', () => {
-    expect(priceWarning(750, 7, 150)).toBeNull();
-    expect(priceWarning(1050, 7, 150)).toBeNull(); // equal is not a warning
-    expect(priceWarning(1051, 7, 150)).toBe(
-      'The price (₹1,051) is more than the cups are worth (7 × ₹150 = ₹1,050). Customers would pay more than menu price.',
-    );
-    expect(priceWarning(Number.NaN, 7, 150)).toBeNull();
-    expect(priceWarning(750, 0, 150)).toBeNull();
+  it('gives the first three drinks by default, in the order given, or as many as asked', () => {
+    const many = [CAPPUCCINO, LATTE, COLD_BREW, { ...LATTE, id: 'mocha', name: 'Mocha' }];
+    expect(examplePrices(WEEKLY, many).map((e) => e.drink)).toEqual(['Cappuccino', 'Latte', 'Cold Brew']);
+    expect(examplePrices(WEEKLY, many, 1).map((e) => e.drink)).toEqual(['Cappuccino']);
+    expect(examplePrices(WEEKLY, many, 0)).toEqual([]);
   });
 
-  it('describes a plan row without further arithmetic', () => {
-    expect(planRow(WEEKLY)).toEqual({ perCup: 107.14, discountPercent: 29, overpriced: false, validity: '7 days', cap: 'No limit' });
-    expect(planRow({ ...MONTHLY, max_per_day: 1 })).toMatchObject({ perCup: 128.57, discountPercent: 14, validity: '30 days', cap: '1 a day' });
-    expect(planRow({ ...WEEKLY, price_inr: 2000 })).toMatchObject({ overpriced: true, discountPercent: -90 });
+  it('uses the same price the server charges: ritualPriceFor, whole rupees', () => {
+    for (const plan of [WEEKLY, MONTHLY]) {
+      for (const e of examplePrices(plan, [CAPPUCCINO, LATTE, COLD_BREW])) {
+        expect(e.price_inr).toBe(plan.drinks_paid * e.cup_price_inr);
+        expect(Number.isInteger(e.price_inr)).toBe(true);
+      }
+    }
+  });
+
+  it('follows a half-typed form: it needs only the cups paid for and given', () => {
+    expect(examplePrices({ drinks_paid: 3, drinks_total: 4 }, [COLD_BREW])[0]).toMatchObject({ price_inr: 450, per_cup_inr: 112.5 });
+  });
+
+  it('a size with no name reads without it', () => {
+    const plain: RitualDrink = { ...COLD_BREW, sizes: [{ variant_id: 'x', label: '  ', price_inr: 150 }] };
+    expect(examplePrices(WEEKLY, [plain])[0]).toMatchObject({ size: '', text: 'Cold Brew ₹150 → ₹750' });
+  });
+
+  it('skips a drink that is off the menu today, unless nothing else is left', () => {
+    const off = { ...CAPPUCCINO, is_available: false };
+    expect(examplePrices(WEEKLY, [off, LATTE]).map((e) => e.drink)).toEqual(['Latte']);
+    expect(examplePrices(WEEKLY, [off]).map((e) => e.drink)).toEqual(['Cappuccino']);
+  });
+
+  it('ignores a ₹0 size and a drink with no usable size', () => {
+    const free: RitualDrink = { ...CAPPUCCINO, sizes: [{ variant_id: 'a', label: 'Taster', price_inr: 0 }, { variant_id: 'b', label: 'Large', price_inr: 120 }] };
+    expect(examplePrices(WEEKLY, [free])[0]).toMatchObject({ size: 'Large', cup_price_inr: 120 });
+    expect(examplePrices(WEEKLY, [{ ...CAPPUCCINO, sizes: [] }, { ...LATTE, sizes: [{ variant_id: 'c', label: 'Free', price_inr: 0 }] }])).toEqual([]);
+  });
+
+  it('is empty when nothing is ticked yet, or the cups paid for are unusable', () => {
+    expect(examplePrices(WEEKLY, [])).toEqual([]);
+    expect(examplePrices({ drinks_paid: 0, drinks_total: 7 }, [CAPPUCCINO])).toEqual([]);
+    expect(examplePrices({ drinks_paid: Number.NaN, drinks_total: 7 }, [CAPPUCCINO])).toEqual([]);
+  });
+
+  it('does not reorder or change its input', () => {
+    const drinks = [LATTE, CAPPUCCINO];
+    examplePrices(WEEKLY, drinks);
+    expect(drinks).toEqual([LATTE, CAPPUCCINO]);
+    expect(CAPPUCCINO.sizes.map((z) => z.label)).toEqual(['Small', 'Large']);
+  });
+});
+
+describe('priceRuleLabel and planExamples (the plans table and the plan form)', () => {
+  const cheap = (id: string, name: string, price: number, over: Partial<RitualDrink> = {}): RitualDrink => ({
+    id,
+    name,
+    category: 'Coffee',
+    is_available: true,
+    sizes: [{ variant_id: `${id}-v`, label: 'Regular', price_inr: price }],
+    ...over,
+  });
+
+  it('says the pricing rule in a line: "Price: 5 × the drink"', () => {
+    expect(priceRuleLabel(WEEKLY)).toBe('Price: 5 × the drink');
+    expect(priceRuleLabel(MONTHLY)).toBe('Price: 6 × the drink');
+  });
+
+  it('prefers Cappuccino and Latte when the menu has both, whatever the order or case', () => {
+    const menu = [cheap('a', 'Americano', 80), COLD_BREW, { ...LATTE, name: 'LATTE' }, CAPPUCCINO];
+    expect(exampleDrinks(menu).map((d) => d.id)).toEqual(['cappuccino', 'latte']);
+    expect(planExamples(WEEKLY, menu).map((e) => e.text)).toEqual([
+      'Cappuccino Large ₹120 → ₹600',
+      'LATTE Large ₹140 → ₹700',
+    ]);
+    expect(planExamples(MONTHLY, menu)[1].text).toBe('LATTE Large ₹140 → ₹840');
+  });
+
+  it('with only one of them, adds the cheapest others so there are still up to three', () => {
+    const menu = [COLD_BREW, cheap('a', 'Americano', 80), CAPPUCCINO, cheap('m', 'Mocha', 110)];
+    expect(exampleDrinks(menu).map((d) => d.name)).toEqual(['Cappuccino', 'Americano', 'Mocha']);
+  });
+
+  it('with neither, takes the first few by price, cheapest first (by the size the example quotes)', () => {
+    const menu = [COLD_BREW, cheap('a', 'Americano', 80), cheap('m', 'Mocha', 110), cheap('f', 'Flat White', 95)];
+    expect(exampleDrinks(menu).map((d) => d.name)).toEqual(['Americano', 'Flat White', 'Mocha']);
+    expect(exampleDrinks(menu, 2).map((d) => d.name)).toEqual(['Americano', 'Flat White']);
+    expect(exampleDrinks(menu, 0)).toEqual([]);
+  });
+
+  it('passes over a drink that is off the menu today (unless nothing else is left) and one with no usable size', () => {
+    const off = { ...CAPPUCCINO, is_available: false };
+    expect(exampleDrinks([off, LATTE, COLD_BREW]).map((d) => d.name)).toEqual(['Latte', 'Cold Brew']);
+    expect(exampleDrinks([off]).map((d) => d.name)).toEqual(['Cappuccino']);
+    expect(exampleDrinks([{ ...CAPPUCCINO, sizes: [{ variant_id: 'z', label: 'Free', price_inr: 0 }] }, LATTE]).map((d) => d.name)).toEqual(['Latte']);
+  });
+
+  it('is empty until a drink is ticked, and follows a half-typed form', () => {
+    expect(planExamples(WEEKLY, [])).toEqual([]);
+    expect(planExamples({ drinks_paid: 4, drinks_total: 0 }, [CAPPUCCINO])[0]).toMatchObject({ price_inr: 480, per_cup_inr: null });
+  });
+
+  it('does not change its input', () => {
+    const menu = [COLD_BREW, LATTE, CAPPUCCINO];
+    exampleDrinks(menu);
+    expect(menu.map((d) => d.id)).toEqual(['cold', 'latte', 'cappuccino']);
   });
 });
 
@@ -228,72 +328,58 @@ describe('parseWholeNumber', () => {
 });
 
 describe('the plan form', () => {
-  it('starts a new plan Weekly-shaped, with the suggested price, switched off', () => {
+  it('starts a new plan Weekly-shaped, switched off, with no price or cup value', () => {
     const form = emptyPlanForm();
-    expect(form).toMatchObject({ name: '', drinks_total: '7', drinks_paid: '5', validity_days: '7', drink_value_inr: '150', is_active: false, price_custom: false });
-    expect(formSuggestedPrice(form)).toBe(750);
-    expect(formPriceInr(form)).toBe(750);
-    expect(formPriceText(form)).toBe('750');
-  });
-
-  it('follows the suggested price until the owner types their own', () => {
-    let form: PlanForm = emptyPlanForm();
-    form = { ...form, drinks_paid: '6' };
-    expect(formPriceInr(form)).toBe(900); // the price moved with the cups paid for
-    expect(canUseSuggestedPrice(form)).toBe(false);
-
-    form = withTypedPrice(form, '850');
-    expect(form.price_custom).toBe(true);
-    expect(formPriceInr(form)).toBe(850);
-    expect(formPriceText(form)).toBe('850');
-    expect(canUseSuggestedPrice(form)).toBe(true);
-    // ...and no longer follows the cups
-    expect(formPriceInr({ ...form, drinks_paid: '5' })).toBe(850);
-
-    form = withSuggestedPrice(form);
-    expect(form.price_custom).toBe(false);
-    expect(formPriceInr(form)).toBe(900);
-    expect(canUseSuggestedPrice(form)).toBe(false);
-  });
-
-  it('treats a typed price that equals the suggestion as still the owner\'s own, but offers no button', () => {
-    const form = withTypedPrice(emptyPlanForm(), '750');
-    expect(canUseSuggestedPrice(form)).toBe(false);
-  });
-
-  it('cannot suggest while the boxes are unreadable', () => {
-    const form: PlanForm = { ...emptyPlanForm(), drinks_paid: '' };
-    expect(formSuggestedPrice(form)).toBeNull();
-    expect(formPriceInr(form)).toBeNull();
-    expect(formPriceText(form)).toBe('');
-    expect(canUseSuggestedPrice(form)).toBe(false);
-    expect(planPreview(form)).toMatchObject({ price: null, suggested: null, perCup: null, discountPercent: null, warning: null });
-  });
-
-  it('edits a stored plan: its own price counts as custom only when it differs from the suggestion', () => {
-    expect(planToForm(WEEKLY)).toMatchObject({ name: 'Weekly Ritual', drinks_total: '7', price_inr: '750', price_custom: false, max_per_day: '', is_active: false });
-    expect(planToForm({ ...WEEKLY, price_inr: 700, max_per_day: 1, is_active: true })).toMatchObject({ price_inr: '700', price_custom: true, max_per_day: '1', is_active: true });
-  });
-
-  it('shows the live preview: per cup, discount, warning', () => {
-    expect(planPreview(emptyPlanForm())).toEqual({
-      price: 750,
-      suggested: 750,
-      perCup: 107.14,
-      discountPercent: 29,
-      worth: 1050,
-      warning: null,
+    expect(form).toEqual({
+      name: '',
+      description: '',
+      drinks_total: '7',
+      drinks_paid: '5',
+      validity_days: '7',
+      max_per_day: '',
+      gst_exempt: false,
+      is_active: false,
     });
-    const over = planPreview(withTypedPrice(emptyPlanForm(), '1200'));
-    expect(over.discountPercent).toBe(-14);
-    expect(over.warning).toContain('more than the cups are worth');
+    expect(form).not.toHaveProperty('price_inr');
+    expect(form).not.toHaveProperty('drink_value_inr');
+  });
+
+  it('edits a stored plan', () => {
+    expect(planToForm(WEEKLY)).toEqual({
+      name: 'Weekly Ritual',
+      description: '7 cups for the price of 5',
+      drinks_total: '7',
+      drinks_paid: '5',
+      validity_days: '7',
+      max_per_day: '',
+      gst_exempt: false,
+      is_active: false,
+    });
+    expect(planToForm({ ...WEEKLY, max_per_day: 1, is_active: true })).toMatchObject({ max_per_day: '1', is_active: true });
+  });
+
+  it('shows the live preview: the free cups and the saving, which do not depend on the drink', () => {
+    expect(planPreview(emptyPlanForm())).toEqual({ freeCups: 2, discountPercent: 29, drinksPaid: 5, drinksTotal: 7 });
+    expect(planPreview({ ...emptyPlanForm(), drinks_paid: '6' })).toMatchObject({ freeCups: 1, discountPercent: 14 });
+    expect(planPreview({ ...emptyPlanForm(), drinks_paid: '7' })).toMatchObject({ freeCups: 0, discountPercent: 0 });
+  });
+
+  it('cannot preview while the boxes are unreadable or the cups paid exceed the cups given', () => {
+    expect(planPreview({ ...emptyPlanForm(), drinks_paid: '' })).toEqual({ freeCups: null, discountPercent: null, drinksPaid: null, drinksTotal: 7 });
+    expect(planPreview({ ...emptyPlanForm(), drinks_total: 'x' })).toMatchObject({ freeCups: null, discountPercent: null, drinksTotal: null, drinksPaid: 5 });
+    expect(planPreview({ ...emptyPlanForm(), drinks_paid: '8' })).toMatchObject({ freeCups: null, discountPercent: null, drinksPaid: 8, drinksTotal: 7 });
+  });
+
+  it('feeds examplePrices from the typed cups', () => {
+    const pv = planPreview({ ...emptyPlanForm(), drinks_paid: '6' });
+    expect(examplePrices({ drinks_paid: pv.drinksPaid as number, drinks_total: pv.drinksTotal as number }, [CAPPUCCINO])[0].price_inr).toBe(720);
   });
 });
 
 describe('buildPlanPayload', () => {
   const create = (patch: Partial<PlanForm> = {}) => buildPlanPayload({ ...emptyPlanForm(), name: 'Weekly Ritual', ...patch }, null, 30);
 
-  it('creates: the whole plan, the suggested price, and a sort order after the others', () => {
+  it('creates: the whole recipe (no price, no cup value) and a sort order after the others', () => {
     expect(create()).toEqual({
       ok: true,
       changed: true,
@@ -303,8 +389,6 @@ describe('buildPlanPayload', () => {
         drinks_total: 7,
         drinks_paid: 5,
         validity_days: 7,
-        drink_value_inr: 150,
-        price_inr: 750,
         max_per_day: null,
         gst_exempt: false,
         is_active: false,
@@ -313,21 +397,29 @@ describe('buildPlanPayload', () => {
     });
   });
 
-  it('what it builds for a create passes the server\'s own validator', () => {
+  it("what it builds for a create passes the server's own validator (which refuses a price)", () => {
     const built = create({ description: '  7 for 5  ', max_per_day: '1', gst_exempt: true, is_active: true });
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     expect(validatePlanInput(built.body as Record<string, unknown>, { partial: false }).ok).toBe(true);
     expect(built.body).toMatchObject({ description: '7 for 5', max_per_day: 1, gst_exempt: true, is_active: true });
+    // sanity: the server would refuse the old body
+    expect(validatePlanInput({ ...built.body, price_inr: 750 } as Record<string, unknown>, { partial: false })).toEqual({ ok: false, error: PLAN_NO_PRICE_MESSAGE });
   });
 
-  it('sends an overridden price and a trimmed name', () => {
+  it('never sends a price or a cup value, create or edit', () => {
+    const built = create();
+    expect(built.ok && Object.keys(built.body)).not.toContain('price_inr');
+    expect(built.ok && Object.keys(built.body)).not.toContain('drink_value_inr');
+    const edit = buildPlanPayload({ ...planToForm(WEEKLY), drinks_paid: '6' }, WEEKLY);
+    expect(edit.ok && Object.keys(edit.body)).toEqual(['drinks_paid']);
+  });
+
+  it('sends a trimmed name, and no sort order when none is given (the server defaults it)', () => {
     const built = create({ name: '  Sunday Ritual ' });
     expect(built.ok && built.body.name).toBe('Sunday Ritual');
-    const custom = buildPlanPayload(withTypedPrice({ ...emptyPlanForm(), name: 'X' }, '₹1,000'), null);
-    expect(custom.ok && custom.body.price_inr).toBe(1000);
-    // no sort order given: none sent (the server defaults it)
-    expect(custom.ok && 'sort_order' in custom.body).toBe(false);
+    const none = buildPlanPayload({ ...emptyPlanForm(), name: 'X' }, null);
+    expect(none.ok && 'sort_order' in none.body).toBe(false);
   });
 
   // The message is the server's own wording (validatePlanInput), so the form and the API say the same thing.
@@ -339,9 +431,6 @@ describe('buildPlanPayload', () => {
     ['cups paid above cups given', { drinks_total: '5', drinks_paid: '6' }, 'Cups paid for cannot be more than the cups in the pass.'],
     ['a fractional validity', { validity_days: '7.5' }, 'Validity must be a whole number of days from 1 to 365.'],
     ['a year and a day', { validity_days: '366' }, 'Validity must be a whole number of days from 1 to 365.'],
-    ['a zero cup value', { drink_value_inr: '0' }, 'Cup value must be a whole number of rupees from 1 to 5000.'],
-    ['a typed price of words', { price_custom: true, price_inr: 'cheap' }, 'Price must be a whole number of rupees from 1 to 100000.'],
-    ['an emptied price', { price_custom: true, price_inr: '' }, 'Price must be a whole number of rupees from 1 to 100000.'],
     ['a daily limit of words', { max_per_day: 'one' }, 'Daily limit must be empty or a whole number of cups from 1 up.'],
     ['a daily limit above the cups', { max_per_day: '8' }, 'Daily limit cannot be more than the cups in the pass.'],
     ['a description over 500', { description: 'y'.repeat(501) }, 'Description must be 500 characters or fewer.'],
@@ -350,8 +439,8 @@ describe('buildPlanPayload', () => {
   });
 
   it('edits: only the fields that changed, never the sort order', () => {
-    const form = { ...planToForm(WEEKLY), name: 'Weekly Ritual+', price_custom: true, price_inr: '700' };
-    expect(buildPlanPayload(form, WEEKLY, 99)).toEqual({ ok: true, changed: true, body: { name: 'Weekly Ritual+', price_inr: 700 } });
+    const form = { ...planToForm(WEEKLY), name: 'Weekly Ritual+', validity_days: '10' };
+    expect(buildPlanPayload(form, WEEKLY, 99)).toEqual({ ok: true, changed: true, body: { name: 'Weekly Ritual+', validity_days: 10 } });
   });
 
   it('edits: no change means no request', () => {
@@ -360,17 +449,19 @@ describe('buildPlanPayload', () => {
     expect(buildPlanPayload({ ...planToForm(WEEKLY), name: ' Weekly Ritual ' }, WEEKLY)).toMatchObject({ changed: false });
   });
 
+  it('edits a legacy plan that still has a price: still no price in the body', () => {
+    const legacy = { ...WEEKLY, price_inr: 750, drink_value_inr: 150 };
+    expect(buildPlanPayload(planToForm(legacy), legacy)).toEqual({ ok: true, changed: false, body: {} });
+  });
+
   it('edits: clearing the daily limit sends null; setting one sends the number', () => {
     const capped = { ...WEEKLY, max_per_day: 1 };
     expect(buildPlanPayload({ ...planToForm(capped), max_per_day: '' }, capped)).toMatchObject({ body: { max_per_day: null } });
     expect(buildPlanPayload({ ...planToForm(WEEKLY), max_per_day: '1' }, WEEKLY)).toMatchObject({ body: { max_per_day: 1 } });
   });
 
-  it('edits: changing the cups paid for moves a suggested price with it, unless the owner overrode it', () => {
-    expect(buildPlanPayload({ ...planToForm(WEEKLY), drinks_paid: '6' }, WEEKLY)).toMatchObject({ body: { drinks_paid: 6, price_inr: 900 } });
-    const overridden = { ...WEEKLY, price_inr: 700 };
-    expect(buildPlanPayload({ ...planToForm(overridden), drinks_paid: '6' }, overridden)).toMatchObject({ body: { drinks_paid: 6 } });
-    expect(buildPlanPayload({ ...planToForm(overridden), drinks_paid: '6' }, overridden)).not.toMatchObject({ body: { price_inr: expect.anything() } });
+  it('edits: changing the cups paid for sends just that, since the price follows the drink', () => {
+    expect(buildPlanPayload({ ...planToForm(WEEKLY), drinks_paid: '6' }, WEEKLY)).toEqual({ ok: true, changed: true, body: { drinks_paid: 6 } });
   });
 
   it('sorts new plans after the existing ones, in steps of 10', () => {
@@ -379,11 +470,12 @@ describe('buildPlanPayload', () => {
     expect(nextSortOrder([{ sort_order: 0 }])).toBe(10);
   });
 
-  it('lists plans the way the server does', () => {
-    const cheap = { ...WEEKLY, id: 'a', name: 'A', sort_order: 10, price_inr: 500 };
-    const dear = { ...WEEKLY, id: 'b', name: 'B', sort_order: 10, price_inr: 900 };
-    const later = { ...WEEKLY, id: 'c', name: 'C', sort_order: 20, price_inr: 100 };
-    expect(sortPlans([later, dear, cheap]).map((p) => p.id)).toEqual(['a', 'b', 'c']);
+  it('lists plans the way the server does: sort order, then name', () => {
+    const first = { ...WEEKLY, id: 'a', name: 'A', sort_order: 10 };
+    const second = { ...WEEKLY, id: 'b', name: 'B', sort_order: 10 };
+    const later = { ...WEEKLY, id: 'c', name: 'A', sort_order: 20 };
+    expect(sortPlans([later, second, first]).map((p) => p.id)).toEqual(['a', 'b', 'c']);
+    const cheap = first;
     const input = [later, cheap];
     sortPlans(input);
     expect(input[0]).toBe(later); // the input is not reordered
@@ -412,43 +504,57 @@ describe('planSaveConfirmation', () => {
     expect(c?.message).toContain('Rituals already sold keep working');
   });
 
-  it('asks before the price or terms of a live plan change', () => {
-    for (const change of [{ price_inr: 800 }, { drinks_total: 8 }, { drink_value_inr: 140 }, { validity_days: 10 }, { max_per_day: 1 }, { gst_exempt: true }, { drinks_paid: 4 }]) {
+  it('asks before the terms of a live plan change', () => {
+    for (const change of [{ drinks_total: 8 }, { validity_days: 10 }, { max_per_day: 1 }, { gst_exempt: true }, { drinks_paid: 4 }]) {
       expect(planSaveConfirmation(live, change), JSON.stringify(change)).toMatchObject({ title: 'Change a live plan?', danger: false });
     }
+    // The wording no longer promises a "price": there is none to change.
+    expect(planSaveConfirmation(live, { drinks_paid: 4 })?.message).toBe(
+      'This plan is on sale. The new terms apply to every sale from now on. Rituals already sold keep the terms they were sold with.',
+    );
   });
 
   it('does not ask when nothing that matters to a sale changes', () => {
     expect(planSaveConfirmation(live, { name: 'Renamed', description: 'New words' })).toBeNull(); // wording only
-    expect(planSaveConfirmation(WEEKLY, { price_inr: 800, drinks_total: 8 })).toBeNull(); // not on sale yet
+    expect(planSaveConfirmation(WEEKLY, { validity_days: 10, drinks_total: 8 })).toBeNull(); // not on sale yet
     expect(planSaveConfirmation(null, { name: 'New', is_active: false })).toBeNull(); // a new plan left off
-    expect(planSaveConfirmation(live, { price_inr: 750 })).toBeNull(); // the same price
+    expect(planSaveConfirmation(live, { validity_days: 7 })).toBeNull(); // the same validity
     expect(planSaveConfirmation(live, { is_active: true })).toBeNull(); // still on
     expect(planSaveConfirmation(WEEKLY, { is_active: false })).toBeNull(); // still off
   });
 
   it('activating wins over a terms change in the same save', () => {
-    expect(planSaveConfirmation(WEEKLY, { price_inr: 800, is_active: true })?.title).toBe('Make this plan available?');
+    expect(planSaveConfirmation(WEEKLY, { validity_days: 10, is_active: true })?.title).toBe('Make this plan available?');
   });
 });
 
 describe('setupChecklist', () => {
   const byId = (r: ReturnType<typeof setupChecklist>) => Object.fromEntries(r.items.map((i) => [i.id, i]));
 
-  it('starts with everything to do, and the GST reminder', () => {
+  it('starts with the two real steps to do, and the GST rule already settled', () => {
     const r = setupChecklist({ plans: [], eligibleCount: 0 });
-    expect(r.todo).toBe(2);
+    expect(r.todo).toBe(2); // the settled GST item is not an open step
     const items = byId(r);
     expect(items.live).toMatchObject({ kind: 'info', done: true });
     expect(items.plan).toMatchObject({ kind: 'todo', done: false, label: 'Create a plan and switch it on', detail: 'No plans yet.', href: '#ritual-plans' });
-    expect(items.drinks).toMatchObject({ kind: 'todo', done: false, href: '#ritual-drinks' });
-    expect(items.gst).toMatchObject({ kind: 'reminder', done: false });
-    expect(items.gst.label).toBe('Confirm GST treatment with your CA (spec CP-D11).');
+    expect(items.drinks).toMatchObject({
+      kind: 'todo',
+      done: false,
+      href: '#ritual-drinks',
+      label: 'Choose the drinks a Ritual can be bought for',
+      detail: 'No drink is chosen yet, so customers have nothing to buy.',
+    });
+    expect(items.gst).toMatchObject({ kind: 'info', done: true, href: '#ritual-plans' });
+    expect(items.gst.label).toBe(GST_RULE);
+    expect(items.gst.label).toBe('GST: 5% when a Ritual is sold · 0% on redeemed cups');
+    expect(items.gst.detail).toBe(
+      'Decided by the owner on 30 Sep 2026. Cups are paid for when the Ritual is sold, so a redeemed cup carries no GST; a top-up above the cup value is taxed like any sale.',
+    );
   });
 
   it('plans that exist but none on sale: still to do', () => {
     const r = setupChecklist({ plans: [WEEKLY, MONTHLY], eligibleCount: 0 });
-    expect(byId(r).plan).toMatchObject({ done: false, label: 'Check the prices, then switch a plan on', detail: 'No plan is on sale yet, so customers cannot buy anything.' });
+    expect(byId(r).plan).toMatchObject({ done: false, label: 'Check the plans, then switch one on', detail: 'No plan is on sale yet, so customers cannot buy anything.' });
     expect(r.todo).toBe(2);
   });
 
@@ -463,8 +569,22 @@ describe('setupChecklist', () => {
     expect(byId(r).plan.detail).toBe('1 of 1 plan is on sale.');
     expect(byId(r).drinks).toMatchObject({ done: true, detail: '1 drink chosen.' });
     expect(r.todo).toBe(0);
-    // The reminder never goes away by itself: nothing in the data says the CA has answered.
-    expect(byId(r).gst.done).toBe(false);
+    // Every item is ticked once the two steps are done: the GST rule was settled from the start.
+    expect(r.items.every((i) => i.done)).toBe(true);
+    expect(byId(r).gst.done).toBe(true);
+  });
+
+  it('never counts the settled items (feature flag, GST rule) as open steps, whatever the data', () => {
+    for (const input of [
+      { plans: [], eligibleCount: 0 },
+      { plans: [WEEKLY], eligibleCount: 3 },
+      { plans: [{ ...WEEKLY, is_active: true }], eligibleCount: 0 },
+    ]) {
+      const r = setupChecklist(input);
+      expect(r.items.filter((i) => i.kind === 'info').every((i) => i.done)).toBe(true);
+      expect(r.todo).toBe(r.items.filter((i) => i.kind === 'todo' && !i.done).length);
+      expect(byId(r).gst).toMatchObject({ kind: 'info', done: true });
+    }
   });
 
   it('counts drinks in the plural', () => {
@@ -545,7 +665,7 @@ describe('the eligible-drinks picker', () => {
 
   it('warns about saving nothing only while a plan is on sale', () => {
     expect(eligibleSaveWarning({ selectedCount: 0, hasActivePlan: true })).toBe(
-      'No drink is chosen, so a Ritual cup would cover nothing while a plan is on sale.',
+      'No drink is chosen, so nobody could buy a Ritual while a plan is on sale.',
     );
     expect(eligibleSaveWarning({ selectedCount: 0, hasActivePlan: false })).toBeNull();
     expect(eligibleSaveWarning({ selectedCount: 3, hasActivePlan: true })).toBeNull();

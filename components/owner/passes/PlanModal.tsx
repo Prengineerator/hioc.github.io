@@ -1,11 +1,12 @@
 'use client';
 
-// Edit or create a HIOC Ritual plan (docs/COFFEE-PASS-SPEC.md CP-D1, CP-D2, CP-D17).
-// The price defaults to cups paid for × cup value and the form shows, live, what
-// one cup then costs and how much cheaper that is; a price above what the cups are
-// worth is warned about, not blocked (the owner may have a reason). The same checks
-// the server makes run here first (lib/passes/ownerUi.ts buildPlanPayload), and the
-// server's own message is shown if it still refuses.
+// Edit or create a HIOC Ritual plan (docs/COFFEE-PASS-SPEC.md CP-D1, CP-D17, CP-D22,
+// CP-D24). A plan is the recipe, not a price: cups given, cups paid for, validity, a
+// daily limit, GST-exempt, on sale. What a customer pays follows the drink they pick
+// (cups paid for × that size's menu price), so the form shows, live as the cups are
+// typed, the saving and a few worked examples from the drinks that can be bought.
+// The same checks the server makes run here first (lib/passes/ownerUi.ts
+// buildPlanPayload), and the server's own message is shown if it still refuses.
 //
 // Switching a plan on, off, or changing a live plan's terms asks for confirmation
 // first. The confirmation is a second STEP of this same dialog, not a second dialog:
@@ -21,19 +22,16 @@ import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { Textarea } from '@/components/ui/Textarea';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import type { CoffeePassPlan } from '@/lib/passes/types';
+import type { CoffeePassPlan, RitualDrink } from '@/lib/passes/types';
 import {
   buildPlanPayload,
-  canUseSuggestedPrice,
   emptyPlanForm,
-  formatRupees,
-  formPriceText,
   nextSortOrder,
+  planExamples,
   planPreview,
   planSaveConfirmation,
   planToForm,
-  withSuggestedPrice,
-  withTypedPrice,
+  priceRuleLabel,
   type PlanConfirmation,
   type PlanForm,
   type PlanPayload,
@@ -45,6 +43,7 @@ const FORM_ID = 'ritual-plan-form';
 export function PlanModal({
   plan,
   plans,
+  drinks,
   onClose,
   onSaved,
 }: {
@@ -52,6 +51,8 @@ export function PlanModal({
   plan: CoffeePassPlan | null;
   /** Every plan, so a new one sorts after them. */
   plans: CoffeePassPlan[];
+  /** The drinks a Ritual can be bought for, with their sizes (GET /api/passes/plans `eligible`): what the worked examples are made from. */
+  drinks: RitualDrink[];
   onClose: () => void;
   onSaved: (plan: CoffeePassPlan) => void;
 }) {
@@ -66,6 +67,9 @@ export function PlanModal({
     setError('');
   };
   const preview = planPreview(form);
+  // Worked examples follow the cups as they are typed (a half-typed box reads as no example).
+  const examples =
+    preview.drinksPaid !== null ? planExamples({ drinks_paid: preview.drinksPaid, drinks_total: preview.drinksTotal ?? 0 }, drinks) : [];
 
   async function send(body: Record<string, unknown>) {
     setSaving(true);
@@ -128,7 +132,7 @@ export function PlanModal({
         <p className="text-charcoal">{confirmation.message}</p>
         <p className="mt-3 rounded-md bg-surface px-3 py-2 text-sm text-muted">
           <span className="font-semibold text-charcoal">{form.name.trim() || 'This plan'}</span>
-          {preview.price !== null ? <> · {formatRupees(preview.price)}</> : null}
+          {preview.drinksPaid !== null ? <> · {priceRuleLabel({ drinks_paid: preview.drinksPaid })}</> : null}
         </p>
       </Modal>
     );
@@ -181,7 +185,7 @@ export function PlanModal({
           />
           <Input
             label="Cups paid for"
-            hint="What they pay for. Sets the suggested price."
+            hint="What they pay for: the price is this many cups of the drink they pick."
             inputMode="numeric"
             autoComplete="off"
             value={form.drinks_paid}
@@ -195,63 +199,44 @@ export function PlanModal({
             value={form.validity_days}
             onChange={(e) => set({ validity_days: e.target.value })}
           />
-          <Input
-            label="Cup value (₹)"
-            hint="One cup covers up to this much of one drink. Above it, the customer tops up."
-            inputMode="numeric"
-            autoComplete="off"
-            value={form.drink_value_inr}
-            onChange={(e) => set({ drink_value_inr: e.target.value })}
-          />
         </div>
 
-        <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-[10rem] flex-1">
-              <Input
-                label="Price (₹)"
-                hint={
-                  preview.suggested !== null
-                    ? `Suggested ${formatRupees(preview.suggested)}: cups paid for × cup value.`
-                    : 'Fill in the cups and the cup value to see a suggestion.'
-                }
-                inputMode="numeric"
-                autoComplete="off"
-                value={formPriceText(form)}
-                onChange={(e) => setForm((f) => withTypedPrice(f, e.target.value))}
-              />
+        {/* Live: the saving (the same on every drink) and what customers would pay for a few real drinks. */}
+        <div aria-live="polite" className="rounded-md bg-surface px-3 py-3 text-sm text-charcoal">
+          {preview.freeCups !== null && preview.discountPercent !== null ? (
+            <p>
+              <span className="font-semibold">{priceRuleLabel({ drinks_paid: preview.drinksPaid ?? 0 })}.</span>{' '}
+              {preview.freeCups > 0 ? (
+                <>
+                  <span className="font-mono font-bold tabular-nums">{preview.freeCups}</span> free{' '}
+                  {preview.freeCups === 1 ? 'cup' : 'cups'}:{' '}
+                  <span className="font-mono font-bold tabular-nums">{preview.discountPercent}%</span> off whatever the drink.
+                </>
+              ) : (
+                'No free cups, so no discount.'
+              )}
+            </p>
+          ) : (
+            <p className="text-muted">The saving shows here once the cups boxes above are filled in.</p>
+          )}
+          {examples.length > 0 ? (
+            <div className="mt-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">What customers would pay (before GST)</p>
+              <ul className="mt-1 flex flex-col gap-0.5">
+                {examples.map((e) => (
+                  <li key={e.text} className="font-mono text-sm tabular-nums text-charcoal">
+                    {e.text}
+                  </li>
+                ))}
+              </ul>
             </div>
-            {canUseSuggestedPrice(form) ? (
-              <Button variant="secondary" onClick={() => setForm((f) => withSuggestedPrice(f))}>
-                Use suggested price
-              </Button>
-            ) : null}
-          </div>
-
-          {/* Live: what one cup costs and how much cheaper that is. */}
-          <div aria-live="polite" className="rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
-            {preview.perCup !== null && preview.price !== null ? (
-              <p>
-                <span className="font-mono font-bold tabular-nums">{formatRupees(preview.perCup)}</span> per cup
-                {preview.discountPercent !== null && preview.discountPercent > 0 ? (
-                  <>
-                    {' · '}
-                    <span className="font-mono font-bold tabular-nums">{preview.discountPercent}%</span> cheaper than the cups&apos; value
-                    {preview.worth !== null ? <> ({formatRupees(preview.worth)})</> : null}
-                  </>
-                ) : preview.discountPercent === 0 ? (
-                  ' · no discount'
-                ) : null}
-              </p>
-            ) : (
-              <p className="text-muted">The price per cup shows here once the boxes above are filled in.</p>
-            )}
-            {preview.warning ? (
-              <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
-                {preview.warning}
-              </p>
-            ) : null}
-          </div>
+          ) : (
+            <p className="mt-2 text-muted">
+              {drinks.length === 0
+                ? 'Worked examples appear once you choose the drinks a Ritual can be bought for (Eligible drinks, below).'
+                : 'Fill in the cups paid for to see what customers would pay.'}
+            </p>
+          )}
         </div>
 
         <Input

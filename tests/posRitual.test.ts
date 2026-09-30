@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 // lives in lib/** and not inside a component.
 
 import { passExpiresAt } from '@/lib/passes/rules';
+import type { CompleteChoice } from '@/lib/passes/ritualDrinks';
 import type { PassRedemptionEntry, PassSummary } from '@/lib/passes/types';
 import type { QuotedPass } from '@/lib/pos/loyalty';
 import {
@@ -25,8 +26,6 @@ import {
   parseExtendDays,
   passStateLabel,
   passValidityLabel,
-  planPerCupInr,
-  planPriceNote,
   planSaveLabel,
   planSummaryLabel,
   ritualApproved,
@@ -38,8 +37,10 @@ import {
   saleActiveMessage,
   saleAttemptKey,
   salePaidFallbackMessage,
-  salePreview,
+  saleFingerprint,
+  saleSummaryLine,
   sellBlockedReason,
+  unpaidSaleFor,
   validTillLabel,
   validateCredit,
   validateExtend,
@@ -63,6 +64,8 @@ function pass(overrides: Partial<PassSummary> = {}): PassSummary {
     status: 'active',
     state: 'active',
     order_id: 'order-1',
+    drink_menu_item_id: 'menu-cappuccino',
+    drink_label: 'Cappuccino · Large',
     ...overrides,
   };
 }
@@ -294,57 +297,21 @@ describe('a ₹0 bill', () => {
 });
 
 describe('plan cards', () => {
-  const weekly = { drinks_total: 7, drinks_paid: 5, validity_days: 7, price_inr: 750, gst_exempt: false };
-  const monthly = { drinks_total: 7, drinks_paid: 6, validity_days: 30, price_inr: 900, gst_exempt: false };
+  // A plan has no price (CP-D24): what a cup costs depends on the drink picked, so the card
+  // has only the cups, the validity and the saving. The price is ritualPriceQuote's
+  // (tests/ritualDrinks.test.ts, with the spec §13 worked examples).
+  const weekly = { drinks_total: 7, drinks_paid: 5, validity_days: 7 };
+  const monthly = { drinks_total: 7, drinks_paid: 6, validity_days: 30 };
 
   it('reads "7 cups · 7 days" and "1 day"', () => {
     expect(planSummaryLabel(weekly)).toBe('7 cups · 7 days');
     expect(planSummaryLabel({ drinks_total: 1, validity_days: 1 })).toBe('1 cup · 1 day');
   });
 
-  it('works out a cup to the nearest rupee', () => {
-    expect(planPerCupInr(weekly)).toBe(107); // 750 / 7 = 107.14
-    expect(planPerCupInr(monthly)).toBe(129); // 900 / 7 = 128.57
-    expect(planPerCupInr({ price_inr: 500, drinks_total: 0 })).toBe(500);
-  });
-
   it('says how much is saved (29% weekly, 14% monthly), or nothing when nothing is', () => {
     expect(planSaveLabel(weekly)).toBe('Save 29%');
     expect(planSaveLabel(monthly)).toBe('Save 14%');
     expect(planSaveLabel({ drinks_total: 5, drinks_paid: 5 })).toBeNull();
-  });
-
-  it.each([
-    ['exclusive GST', weekly, { percent: 5, inclusive: false }, '+ GST'],
-    ['inclusive GST', weekly, { percent: 5, inclusive: true }, ''],
-    ['a GST-exempt plan', { ...weekly, gst_exempt: true }, { percent: 5, inclusive: false }, ''],
-    ['no GST charged', weekly, { percent: 0, inclusive: false }, ''],
-    ['GST unknown', weekly, null, ''],
-  ])('price note for %s', (_label, plan, gst, expected) => {
-    expect(planPriceNote(plan, gst)).toBe(expected);
-  });
-});
-
-describe('salePreview — the spec §6 worked examples (the server’s order total is what is charged)', () => {
-  it('Weekly at ₹750, GST 5% exclusive → ₹38 GST, ₹788', () => {
-    const bill = salePreview({ price_inr: 750, gst_exempt: false }, { percent: 5, inclusive: false });
-    expect(bill).toMatchObject({ subtotal_inr: 750, tax_inr: 38, packaging_inr: 0, discount_inr: 0, total_inr: 788 });
-  });
-
-  it('GST-inclusive → total stays ₹750, ₹36 of it GST', () => {
-    const bill = salePreview({ price_inr: 750, gst_exempt: false }, { percent: 5, inclusive: true });
-    expect(bill).toMatchObject({ tax_inr: 36, total_inr: 750 });
-  });
-
-  it('a GST-exempt plan carries no tax either way', () => {
-    expect(salePreview({ price_inr: 750, gst_exempt: true }, { percent: 5, inclusive: false })).toMatchObject({
-      tax_inr: 0,
-      total_inr: 750,
-    });
-  });
-
-  it('with no GST setting known it charges the price as it is', () => {
-    expect(salePreview({ price_inr: 900, gst_exempt: false }, null)).toMatchObject({ tax_inr: 0, total_inr: 900 });
   });
 });
 
@@ -384,9 +351,73 @@ describe('the sale’s idempotency key — one per attempt, reused on retry', ()
   });
 });
 
+describe('the sale\u2019s idempotency key rotates when the drink or size changes (CP-D22)', () => {
+  const base = { phone: '9876543210', name: 'Asha', planId: 'plan-1', menuItemId: 'cap', variantId: 'cap-l' };
+
+  it('fingerprints the customer, the plan, the drink and the size', () => {
+    expect(saleFingerprint(base)).toBe('9876543210|Asha|plan-1|cap|cap-l');
+    // The name is trimmed, like the one sent.
+    expect(saleFingerprint({ ...base, name: '  Asha ' })).toBe(saleFingerprint(base));
+  });
+
+  it('keeps the key for a retry of the same drink and size, and makes a NEW one for any change', () => {
+    let n = 0;
+    const make = () => `key-${++n}`;
+    const first = saleAttemptKey(null, saleFingerprint(base), make);
+    expect(first.key).toBe('key-1');
+    // A lost response, retried or reopened with the same choice: the same key returns the first sale, not a second.
+    expect(saleAttemptKey(first, saleFingerprint({ ...base }), make).key).toBe('key-1');
+    // A different drink, a different size of the same drink, a different plan: each is a different sale.
+    expect(saleAttemptKey(first, saleFingerprint({ ...base, menuItemId: 'lat', variantId: 'lat-l' }), make).key).toBe('key-2');
+    expect(saleAttemptKey(first, saleFingerprint({ ...base, variantId: 'cap-s' }), make).key).toBe('key-3');
+    expect(saleAttemptKey(first, saleFingerprint({ ...base, planId: 'plan-2' }), make).key).toBe('key-4');
+  });
+
+  it('going back and choosing the same drink again reuses the key; choosing another and back does not', () => {
+    let n = 0;
+    const make = () => `key-${++n}`;
+    const first = saleAttemptKey(null, saleFingerprint(base), make);
+    const other = saleAttemptKey(first, saleFingerprint({ ...base, variantId: 'cap-s' }), make);
+    expect(other.key).not.toBe(first.key);
+    // The key is held for the LATEST choice only: returning to the first drink is a new attempt.
+    expect(saleAttemptKey(other, saleFingerprint(base), make).key).not.toBe(first.key);
+  });
+});
+
+describe('the confirm sheet\u2019s words', () => {
+  const plan = { name: 'Weekly Ritual', drinks_total: 7 };
+  const cappuccino: CompleteChoice = {
+    drink: { id: 'cap', name: 'Cappuccino', category: 'Coffee', is_available: true, sizes: [] },
+    size: { variant_id: 'cap-l', label: 'Large', price_inr: 120 },
+  };
+
+  it('reads "Weekly Ritual — Cappuccino (Large) · 7 cups · ₹630"', () => {
+    expect(saleSummaryLine(plan, cappuccino, 630)).toBe('Weekly Ritual — Cappuccino (Large) · 7 cups · ₹630');
+    expect(saleSummaryLine({ name: 'Monthly Ritual', drinks_total: 1 }, { ...cappuccino, size: { ...cappuccino.size, label: '' } }, 120)).toBe(
+      'Monthly Ritual — Cappuccino · 1 cup · ₹120',
+    );
+  });
+
+  it('finds the unpaid sale of the same plan AND drink, not another drink\u2019s', () => {
+    const unpaid = [
+      { plan_name: 'Weekly Ritual — Latte (Large)', order_id: 'o1' },
+      { plan_name: 'Weekly Ritual — Cappuccino (Large)', order_id: 'o2' },
+      { plan_name: 'Monthly Ritual — Cappuccino (Large)', order_id: 'o3' },
+    ];
+    expect(unpaidSaleFor(unpaid, plan, cappuccino)?.order_id).toBe('o2');
+    expect(unpaidSaleFor(unpaid, { name: 'Monthly Ritual' }, cappuccino)?.order_id).toBe('o3');
+    expect(unpaidSaleFor(unpaid, plan, { ...cappuccino, size: { ...cappuccino.size, label: 'Small' } })).toBeNull();
+    expect(unpaidSaleFor([], plan, cappuccino)).toBeNull();
+  });
+});
+
 describe('the paid-sale messages', () => {
-  it('reads "Weekly Ritual active — 7 cups, valid till Sun 4 Oct"', () => {
-    expect(saleActiveMessage(pass({ drinks_remaining: 7 }))).toBe('Weekly Ritual active — 7 cups, valid till Sun 4 Oct');
+  it('reads "Weekly Ritual · Cappuccino · Large active — 7 cups, valid till Sun 4 Oct"', () => {
+    expect(saleActiveMessage(pass({ drinks_remaining: 7 }))).toBe(
+      'Weekly Ritual · Cappuccino · Large active — 7 cups, valid till Sun 4 Oct',
+    );
+    // A pass with no drink on it reads as its plan.
+    expect(saleActiveMessage(pass({ drinks_remaining: 7, drink_label: '' }))).toBe('Weekly Ritual active — 7 cups, valid till Sun 4 Oct');
   });
 
   it('does not claim a pass it could not read back', () => {

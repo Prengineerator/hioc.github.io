@@ -1,13 +1,14 @@
 'use client';
 
-// The plans the cafe sells (docs/COFFEE-PASS-SPEC.md CP-D1): one row per plan with
-// what the customer gets and pays, the per-cup price and the real discount, and a
-// switch to put it on sale or take it off. Edit and New open PlanModal. There is no
+// The plans the cafe sells (docs/COFFEE-PASS-SPEC.md CP-D1, CP-D22, CP-D24): one row
+// per plan with what the customer gets, the saving, how it is priced ("Price: 5 ×
+// the drink", with worked examples from real drinks, because a plan has no price of
+// its own: the customer picks the drink), and a switch to put it on sale or take it off. Edit and New open PlanModal. There is no
 // delete: a plan that has been sold is switched off, never removed (passes hold
 // snapshots of the plan, so an edit or a switch-off never touches one already sold).
 //
 // The table scrolls sideways on a phone with the name column pinned. Money is
-// mono, right-aligned.
+// mono.
 
 import { useState } from 'react';
 import { Badge } from '@/components/ui/Badge';
@@ -16,8 +17,8 @@ import { DataTable, type DataTableColumn } from '@/components/ui/DataTable';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
-import type { CoffeePassPlan } from '@/lib/passes/types';
-import { formatRupees, planRow, planSaveConfirmation, type PlanConfirmation } from '@/lib/passes/ownerUi';
+import type { CoffeePassPlan, RitualDrink } from '@/lib/passes/types';
+import { planExamples, planRow, planSaveConfirmation, priceRuleLabel, type PlanConfirmation } from '@/lib/passes/ownerUi';
 import { callOwnerApi } from './api';
 import { PlanModal } from './PlanModal';
 import { Section } from './shared';
@@ -27,9 +28,12 @@ type Editing = CoffeePassPlan | 'new' | null;
 
 export function PlansSection({
   plans,
+  drinks,
   onPlanSaved,
 }: {
   plans: CoffeePassPlan[];
+  /** The drinks a Ritual can be bought for, with sizes: what the worked examples are made from. */
+  drinks: RitualDrink[];
   onPlanSaved: (plan: CoffeePassPlan) => void;
 }) {
   const [editing, setEditing] = useState<Editing>(null);
@@ -91,55 +95,37 @@ export function PlansSection({
       cellClassName: 'whitespace-nowrap text-charcoal',
     },
     {
-      key: 'cup',
-      header: 'Cup value',
-      filter: 'none',
-      sortable: false,
-      align: 'right',
-      value: (p) => p.drink_value_inr,
-      render: (p) => formatRupees(p.drink_value_inr),
-      cellClassName: 'font-mono tabular-nums text-charcoal',
-    },
-    {
       key: 'price',
       header: 'Price',
       filter: 'none',
       sortable: false,
-      align: 'right',
-      value: (p) => p.price_inr,
-      render: (p) => formatRupees(p.price_inr),
-      cellClassName: 'font-mono tabular-nums font-bold text-charcoal',
-    },
-    {
-      key: 'percup',
-      header: 'Per cup',
-      filter: 'none',
-      sortable: false,
-      align: 'right',
-      value: (p) => planRow(p).perCup,
-      render: (p) => formatRupees(planRow(p).perCup),
-      cellClassName: 'font-mono tabular-nums text-charcoal',
+      value: (p) => p.drinks_paid,
+      render: (p) => {
+        const examples = planExamples(p, drinks);
+        return (
+          <span className="flex flex-col gap-0.5">
+            <span className="font-semibold text-charcoal">{priceRuleLabel(p)}</span>
+            {examples.length > 0 ? (
+              examples.map((e) => (
+                <span key={e.text} className="whitespace-nowrap font-mono text-xs tabular-nums text-muted">
+                  {e.text}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-muted">Examples appear once drinks are chosen</span>
+            )}
+          </span>
+        );
+      },
     },
     {
       key: 'discount',
-      header: 'Discount',
+      header: 'Saving',
       filter: 'none',
       sortable: false,
       align: 'right',
       value: (p) => planRow(p).discountPercent,
-      render: (p) => {
-        const row = planRow(p);
-        if (row.discountPercent === null) return '—';
-        if (row.overpriced) {
-          // Above the cups' value: say so in words, not only in a colour.
-          return (
-            <span className="font-semibold text-red-700">
-              {row.discountPercent < 0 ? `${Math.abs(row.discountPercent)}% over value` : 'Over value'}
-            </span>
-          );
-        }
-        return `${row.discountPercent}%`;
-      },
+      render: (p) => `${planRow(p).discountPercent}%`,
       cellClassName: 'whitespace-nowrap font-mono tabular-nums text-charcoal',
     },
     {
@@ -205,7 +191,7 @@ export function PlansSection({
           rows={plans}
           columns={columns}
           rowKey={(p) => p.id}
-          minWidth={1080}
+          minWidth={980}
           cellPadding="py-2 pr-4"
           headerTextClassName="text-[10px] font-semibold uppercase tracking-wide text-muted"
         />
@@ -215,6 +201,7 @@ export function PlansSection({
         <PlanModal
           plan={editing === 'new' ? null : editing}
           plans={plans}
+          drinks={drinks}
           onClose={() => setEditing(null)}
           onSaved={(saved) => {
             onPlanSaved(saved);
@@ -242,7 +229,7 @@ export function PlansSection({
         >
           <p className="text-charcoal">{toggle.confirmation.message}</p>
           <p className="mt-3 rounded-md bg-surface px-3 py-2 text-sm text-muted">
-            <span className="font-semibold text-charcoal">{toggle.plan.name}</span> · {formatRupees(toggle.plan.price_inr)}
+            <span className="font-semibold text-charcoal">{toggle.plan.name}</span> · {priceRuleLabel(toggle.plan)}
           </p>
           {toggleError ? (
             <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">

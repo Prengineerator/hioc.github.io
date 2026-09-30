@@ -15,6 +15,7 @@ vi.mock('@/lib/flags', () => ({
 
 const {
   adjustPass,
+  PASS_BALANCE_COLUMNS,
   loadActivePlans,
   loadEligibleMenuIds,
   loadPassRedemptionHistory,
@@ -50,6 +51,8 @@ function balance(over: Row = {}): Row {
     status: 'active',
     state: 'active',
     order_id: 'order-1',
+    drink_menu_item_id: 'menu-cappuccino',
+    drink_label: 'Cappuccino · Large',
     created_at: '2026-10-05T04:30:00.000Z',
     ...over,
   };
@@ -149,8 +152,30 @@ describe('loadPassSummaries', () => {
       status: 'active',
       state: 'active',
       order_id: 'order-1',
+      // Per-drink pricing (CP-D25): the drink the Ritual was bought for.
+      drink_menu_item_id: 'menu-cappuccino',
+      drink_label: 'Cappuccino · Large',
     });
     expect(list.find((p) => p.id === 'weird')?.state).toBe('expired');
+  });
+
+  it('reads a pass with no drink (an old pass, or its menu item was deleted) as a null id and an empty label', async () => {
+    const admin = adminWith({
+      v_coffee_pass_balances: [
+        balance({ id: 'gone', drink_menu_item_id: null, drink_label: '' }),
+        balance({ id: 'legacy', drink_menu_item_id: undefined, drink_label: undefined }),
+        balance({ id: 'odd', drink_menu_item_id: 42, drink_label: 7 }),
+      ],
+    });
+    const list = await loadPassSummaries(admin, 'u1', { includeInactive: true });
+    for (const id of ['gone', 'legacy', 'odd']) {
+      expect(list.find((p) => p.id === id)).toMatchObject({ drink_menu_item_id: null, drink_label: '' });
+    }
+  });
+
+  it('asks the view for the drink columns', () => {
+    expect(PASS_BALANCE_COLUMNS).toContain('drink_menu_item_id');
+    expect(PASS_BALANCE_COLUMNS).toContain('drink_label');
   });
 
   it('a read failure logs and returns [] (never throws)', async () => {
@@ -271,6 +296,15 @@ describe('loadActivePlans / loadPlanById', () => {
 
   it('toCoffeePassPlan tolerates a sparse row', () => {
     expect(toCoffeePassPlan({ id: 'x' })).toMatchObject({ id: 'x', name: '', max_per_day: null, gst_exempt: false, is_active: false });
+  });
+
+  it('reads a plan without a price or cup value (CP-D24) as null, never as 0', () => {
+    const plan = toCoffeePassPlan({ id: 'w', name: 'Weekly Ritual', drinks_total: 7, drinks_paid: 5, validity_days: 7, price_inr: null, drink_value_inr: null });
+    expect(plan.price_inr).toBeNull();
+    expect(plan.drink_value_inr).toBeNull();
+    expect(plan).toMatchObject({ drinks_total: 7, drinks_paid: 5, validity_days: 7 });
+    // ...and a legacy row that still carries them reads them as numbers.
+    expect(toCoffeePassPlan({ id: 'l', price_inr: '750', drink_value_inr: 150 })).toMatchObject({ price_inr: 750, drink_value_inr: 150 });
   });
 });
 

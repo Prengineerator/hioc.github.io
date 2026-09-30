@@ -9,7 +9,8 @@ import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 
 /** Appended to a 500 / a log line when the usual cause is a database without the migration. */
-export const PASS_MIGRATION_HINT = 'is supabase/2026-10-coffee-pass.sql applied?';
+export const PASS_MIGRATION_HINT =
+  'is supabase/2026-10-coffee-pass.sql applied, and then 2026-10-coffee-pass-per-drink.sql?';
 
 export const PASS_OFF_MESSAGE = `${PASS_PROGRAM_NAME} is not switched on for this environment.`;
 
