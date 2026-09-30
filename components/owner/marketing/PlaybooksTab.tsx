@@ -134,7 +134,7 @@ export function PlaybookCard({
   const hasOffer = playbookHasOffer(view.key);
   const parsedOffer = hasOffer ? parseOffer(draftToOfferInput(draft.offer)) : null;
   const offerSummary = !hasOffer
-    ? 'No coupon: the customer’s own points are the offer'
+    ? 'No coupon: the customer’s own Beanies are the offer'
     : parsedOffer && parsedOffer.ok
       ? describeOfferForOwner(parsedOffer.value, ranking)
       : 'Offer needs attention';
@@ -244,7 +244,7 @@ export function PlaybookCard({
               />
             ) : (
               <p className="text-sm text-charcoal">
-                Points reminders carry no coupon. The customer’s own points are the offer, so there is nothing to set here.
+                Beanies reminders carry no coupon. The customer’s own Beanies are the offer, so there is nothing to set here.
               </p>
             )}
           </Section>

@@ -74,7 +74,7 @@ describe('who is a contact', () => {
 
   // STALE LINK: marketing_consent.user_id goes stale the day its user moves to a new verified number. It used to
   // be a second way to link a phone to an account, so the OLD number — recycled to a stranger — inherited the
-  // account's orders, points and name ("Hi Asha, 120 points expire…").
+  // account's orders, points and name ("Hi Asha, 120 Beanies expire…").
   describe('the VERIFIED profile phone is the only link from a phone to an account', () => {
     const OLD = phone(1);
     const NEW = phone(2);

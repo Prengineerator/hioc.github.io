@@ -6,6 +6,7 @@ import 'server-only';
 import { computeLift, rankFreeItems } from '@/lib/marketing/economics';
 import { DAY_MS, istMonthStart } from '@/lib/marketing/ist';
 import { optinUrl } from '@/lib/marketing/optin';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { detectDrop, weeklyActive } from '@/lib/marketing/segments';
 import {
   DEFAULT_SETTINGS,
@@ -72,8 +73,8 @@ export function buildInsights(snapshot: AudienceSnapshot, receiptsConnected: boo
       out.push({
         id: 'points_expiring_off',
         tone: 'warn',
-        message: `₹${value} of points (${expiring.length} ${expiring.length === 1 ? 'customer' : 'customers'}) expire in the next ${INSIGHT_EXPIRY_DAYS} days.`,
-        cta: { label: 'Turn on points reminders', tab: 'playbooks', playbook_key: 'points_expiring' },
+        message: `₹${value} of ${LOYALTY_UNIT.many} (${expiring.length} ${expiring.length === 1 ? 'customer' : 'customers'}) expire in the next ${INSIGHT_EXPIRY_DAYS} days.`,
+        cta: { label: 'Turn on Beanies reminders', tab: 'playbooks', playbook_key: 'points_expiring' },
       });
     }
   }

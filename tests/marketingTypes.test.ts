@@ -44,7 +44,8 @@ describe('playbook constants', () => {
       expect(PLAYBOOK_LABELS[k]).toBeTruthy();
       expect(PLAYBOOK_DESCRIPTIONS[k]).toBeTruthy();
     }
-    expect(PLAYBOOK_LABELS.points_expiring).toBe('Points expiring');
+    expect(PLAYBOOK_LABELS.points_expiring).toBe('Beanies expiring');
+    expect(PLAYBOOK_LABELS.points_balance).toBe('Beanies waiting');
     expect(PLAYBOOK_LABELS.winback_1).toBe('Win-back · stage 1 (we miss you)');
   });
 

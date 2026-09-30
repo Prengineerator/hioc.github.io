@@ -439,7 +439,7 @@ export function AudienceStep({
           hint="Leave empty for no upper limit."
         />
         <Input
-          label="At least this many points"
+          label="At least this many Beanies"
           type="number"
           inputMode="numeric"
           min={AUDIENCE_BOUNDS.min_points.min}

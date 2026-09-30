@@ -8,10 +8,12 @@ You create **four** templates. Each is created the same way; only the body diffe
 
 | Template name | Used by | Body starts with |
 |---|---|---|
-| `hioc_points_expiring_1` | Points expiring playbook | "Hi {{1}}, {{2}} of your HIOC reward points…" |
-| `hioc_points_balance_1` | Points waiting playbook | "Hi {{1}}, you have {{2}} HIOC reward points…" |
+| `hioc_points_expiring_1` | Beanies expiring playbook | "Hi {{1}}, {{2}} of your HIOC Beanies…" |
+| `hioc_points_balance_1` | Beanies waiting playbook | "Hi {{1}}, you have {{2}} HIOC Beanies…" |
 | `hioc_winback_1` | Win-back stages 1, 2 and 3 (one template, three offers) | "Hi {{1}}, we've missed you at HIOC!…" |
 | `hioc_offer_1` | Your own campaigns (Campaigns → New campaign) | "Hi {{1}}, {{2}} at HIOC!…" |
+
+The two Beanies templates keep `points` in their names for continuity (the names are identifiers the code and the dashboard refer to, so they must not change), while the message text itself says Beanies.
 
 ---
 
@@ -42,7 +44,7 @@ Meta Business Suite → **WhatsApp Manager** → **Message templates** → **Cre
 
 ### Why Marketing
 
-A points reminder is only "Utility" when it is purely informational. As soon as a message nudges the customer to *do* something ("use them on your next coffee", "here's 10% off", "we've missed you"), it is Marketing, and Meta re-categorises a template it judges to be miscategorised, sometimes after approval and without telling you. We submit all four as Marketing from the start so nothing changes underneath us, and so the price we plan around (marketing rate plus 18% GST, about ₹1.02 a message) is the price we actually pay.
+A Beanies reminder is only "Utility" when it is purely informational. As soon as a message nudges the customer to *do* something ("use them on your next coffee", "here's 10% off", "we've missed you"), it is Marketing, and Meta re-categorises a template it judges to be miscategorised, sometimes after approval and without telling you. We submit all four as Marketing from the start so nothing changes underneath us, and so the price we plan around (marketing rate plus 18% GST, about ₹1.02 a message) is the price we actually pay.
 
 Marketing templates come with two obligations that the copy below already meets: an **opt-out on every message** (the footer and the "Stop promotions" button) and recipients who have **asked** for the messages (the agent only ever messages customers who opted in).
 
@@ -53,26 +55,26 @@ Paste each body exactly, including the apostrophe in `we've` / `Here's` and the 
 ### `hioc_points_expiring_1`
 
 ```
-Hi {{1}}, {{2}} of your HIOC reward points (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon!
+Hi {{1}}, {{2}} of your HIOC Beanies (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon!
 ```
 
 | Var | Meaning | Sample value for Meta review |
 |---|---|---|
 | `{{1}}` | Customer's first name (falls back to `there`) | `Asha` |
-| `{{2}}` | Points expiring | `80` |
-| `{{3}}` | ₹ value of those points, bare number (the `₹` is in the body) | `80` |
-| `{{4}}` | Date the oldest expiring points go | `5 Oct` |
+| `{{2}}` | Beanies expiring | `80` |
+| `{{3}}` | ₹ value of those Beanies, bare number (the `₹` is in the body) | `80` |
+| `{{4}}` | Date the oldest expiring Beanies go | `5 Oct` |
 
 ### `hioc_points_balance_1`
 
 ```
-Hi {{1}}, you have {{2}} HIOC reward points worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon!
+Hi {{1}}, you have {{2}} HIOC Beanies worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon!
 ```
 
 | Var | Meaning | Sample value for Meta review |
 |---|---|---|
 | `{{1}}` | Customer's first name | `Asha` |
-| `{{2}}` | Points balance | `120` |
+| `{{2}}` | Beanies balance | `120` |
 | `{{3}}` | ₹ value of the balance, bare number | `120` |
 
 ### `hioc_winback_1`

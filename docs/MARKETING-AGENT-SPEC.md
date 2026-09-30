@@ -4,7 +4,7 @@
 **Version:** 1.0
 **Date:** 2026-09-30
 **Owner:** Product
-**Scope:** A marketing agent that uses WhatsApp to bring customers back. It reminds customers to spend loyalty points before they expire, wins back lapsed customers with staged offers, and alerts the owner when customer counts drop. Every campaign is priced first: WhatsApp message cost, offer cost and product cost (COGS) are weighed against the profit it should bring back. **The owner controls everything from `/owner/marketing`**: on/off, budget, caps, offers, templates, product costs, and approve-before-send.
+**Scope:** A marketing agent that uses WhatsApp to bring customers back. It reminds customers to spend their Beanies before they expire, wins back lapsed customers with staged offers, and alerts the owner when customer counts drop. Every campaign is priced first: WhatsApp message cost, offer cost and product cost (COGS) are weighed against the profit it should bring back. **The owner controls everything from `/owner/marketing`**: on/off, budget, caps, offers, templates, product costs, and approve-before-send.
 
 ---
 
@@ -21,7 +21,7 @@
 | R3 | **131050** means the user tapped Meta's "Stop promotions". The `user_preferences` webhook reports stop/resume. | Both become an opt-out in our consent ledger. |
 | R4 | Meta requires explicit opt-in naming the business, opt-out on every marketing template, and opt-outs honoured within 24h. Block/report rates above ~0.5% degrade number quality. | We keep a consent ledger with an audit trail. We only send with `opted_in` status, every template has STOP + "Stop promotions", and fatigue rules (pause after N unread) protect number quality. |
 | R5 | India's **DPDP Act 2023 / Rules 2025** require consent that is free, specific, informed, unambiguous and given by a clear affirmative action. Withdrawal must be as easy as giving consent. Notice/consent rules are in force from **13 May 2027**. | No pre-ticked boxes and no owner bulk import of "opted-in" numbers. Opt-in is one tap or one keyword, and so is opt-out. Every change is logged with its source. |
-| R6 | A points-expiry reminder is **utility** only when purely informational. Any "use them" nudge is **marketing**, and Meta will re-categorise a miscategorised template. | All agent templates are submitted as **Marketing** and costed at the marketing rate. We don't risk re-categorisation. |
+| R6 | A Beanies-expiry reminder is **utility** only when purely informational. Any "use them" nudge is **marketing**, and Meta will re-categorise a miscategorised template. | All agent templates are submitted as **Marketing** and costed at the marketing rate. We don't risk re-categorisation. |
 | R7 | Restaurant win-back benchmarks: **30 days** of absence is the lapse signal for coffee shops. Staged offers get **~12–18%** return at 30d with a small offer, **8–12%** at 60d with a stronger offer (free item / credit), and **4–7%** at 90d as a last chance. 60% of restaurant revenue comes from repeat guests. | Three win-back stages with these as starting conversion rates. The threshold is personalised by each customer's own visit rhythm. |
 | R8 | Campaign "conversions" include people who would have come anyway. The standard fix is a **holdout group**. | Default 10% holdout per campaign. The dashboard reports **measured lift** (treated vs holdout), not just raw returns. |
 
@@ -35,7 +35,7 @@ Sources: myoperator.com/blog/whatsapp-business-api-pricing-india-2026 · chatmax
 | F2 | `notifications.order_id` is NOT NULL and the log is keyed `(order_id,event,channel)`. It cannot log a non-order message. | `supabase/phase1-migration.sql:112-128` |
 | F3 | The webhook verifies the HMAC and handles inbound messages. STOP writes `whatsapp_opt_outs`. **START is promised in the reply text but is not handled.** Status receipts only update `notifications`. `WHATSAPP_APP_SECRET` is not set in production, so every POST is currently rejected. | `app/api/webhooks/whatsapp/route.ts:25-32, 217-471, 524-562` |
 | F4 | Consent today is `profiles.marketing_consent` (bool, logged-in users only, no audit trail). Nothing reads it for sending. Petpooja customers were never asked. | `phase2-migration.sql:104`, `app/api/account/me/route.ts:135` |
-| F5 | Loyalty: 10% back as points, 1 pt = ₹1, min redeem 20, max 50% of bill, **points expire 30 days after earning** (FIFO). There is no "expiring soon" logic anywhere. | `lib/loyalty/ledger.ts`, `lib/loyalty/expiry.ts` |
+| F5 | Loyalty: 10% back as Beanies, 1 Beanie = ₹1, min redeem 20, max 50% of bill, **Beanies expire 30 days after earning** (FIFO). There is no "expiring soon" logic anywhere. | `lib/loyalty/ledger.ts`, `lib/loyalty/expiry.ts` |
 | F6 | Coupons cannot be tied to a customer. `per_user_limit` keys on auth user. Scope is an eligibility check, and the discount is computed on the whole subtotal. | `lib/promotions/coupons.ts`, `phase2-migration.sql:121-152` |
 | F7 | **There is no cost/COGS data anywhere.** `menu_items` is publicly readable, so a cost column there would leak margins to anyone. | `supabase/schema.sql:16-39`, RLS public menu read |
 | F8 | "Lapsed" logic exists only for imported Petpooja history (60 days). App customers have no lifecycle/RFM logic. | `lib/legacy/ownerStats.ts:50-68` |
@@ -69,7 +69,7 @@ The agent is deterministic. It is **not** an LLM: WhatsApp copy must be a Meta-a
 ┌──────────────────────────────────────────┐    ┌──────────────────────────────────┐
 │ 1 MEASURE  attribute returns (treated +   │    │ SEND  claim queued recipients     │
 │            holdout), update learned rates │    │   ├ window? budget? daily cap?    │
-│ 2 OBSERVE  orders, points, consent, caps  │    │   ├ re-check consent + caps       │
+│ 2 OBSERVE  orders, Beanies, consent, caps │    │   ├ re-check consent + caps       │
 │ 3 SEGMENT  lifecycle stage per customer   │    │   ├ issue phone-locked coupon     │
 │ 4 DECIDE   playbooks by priority, one     │    │   ├ send template (URL = /r/tok)  │
 │            message per customer per day,  │    │   └ log ref, cost, status         │
@@ -114,9 +114,9 @@ lost_after  = winback_3.params.max_days                           // default 180
 
 A daily regular (gap 2 days) counts as lapsed after 14 days; a monthly visitor only after 45. A fixed 30-day rule wastes messages on the second group and misses the first.
 
-### 1.3 Points expiring soon
+### 1.3 Beanies expiring soon
 
-Points expire FIFO `points_expiry_days` after they are earned (`lib/loyalty/expiry.ts`). The points that will expire within the next `k` days are:
+Beanies expire FIFO `points_expiry_days` after they are earned (`lib/loyalty/expiry.ts`). The Beanies that will expire within the next `k` days are:
 
 ```
 expiringWithin(rows, now, expiryDays, k) = pointsToExpire(rows, cutoff = now + k days − expiryDays)
@@ -131,7 +131,7 @@ Seeded in `marketing_playbooks`, all `mode='off'`. Priority 1 is highest. A cont
 
 | Key | Pri | Who qualifies (all also pass §1.5) | Default offer | Prior conv. |
 |---|---|---|---|---|
-| `points_expiring` | 1 | `expiring_points ≥ min_points(20)` within `days_ahead(5)`; no order in last `recent_order_days(2)`; no `points_expiring` message in `cooldown_days(14)` | none (points are the offer) | 15% |
+| `points_expiring` | 1 | `expiring_points ≥ min_points(20)` within `days_ahead(5)`; no order in last `recent_order_days(2)`; no `points_expiring` message in `cooldown_days(14)` | none (Beanies are the offer) | 15% |
 | `winback_3` | 2 | stage `lapsed_3`; no `winback_3` message since last order | 20% off, cap ₹120, min ₹200, valid 7d | 5% |
 | `winback_2` | 3 | stage `lapsed_2`; no `winback_2` message since last order | **free item** (auto-picked, §1.6), min ₹200 other items, valid 10d | 8% |
 | `winback_1` | 4 | stage `lapsed_1`; no `winback_1` message since last order | 10% off, cap ₹60, min ₹150, valid 10d | 12% |
@@ -172,7 +172,7 @@ The inputs:
 | Offer | `discount` | `offer_cost` | Customer sees |
 |---|---|---|---|
 | `none` | 0 | 0 | — |
-| `points` (points playbooks) | min(points_value, A × max_redeem_pct/100) | = discount | "₹X of points" |
+| `points` (Beanies playbooks) | min(points_value, A × max_redeem_pct/100) | = discount | "₹X of Beanies" |
 | `percent` p, cap K | min(A·p/100, K or ∞) | = discount | "p% off (up to ₹K) on orders above ₹M" |
 | `flat` F | min(F, A) | = discount | "₹F off on orders above ₹M" |
 | `free_item` i (a variant) | 0 (the item isn't revenue) | **cost_i (COGS of that variant)** | "a FREE {item} with any order above ₹M" |
@@ -214,7 +214,7 @@ Manual campaigns use a prior of 5%.
 
 When a treated recipient is **sent** (not at plan time, so skipped or rejected campaigns leave no orphans), the sender inserts a `coupons` row:
 
-- `code`: prefix (`PT` for points playbooks, `WB` for win-back, `OF` for manual) + 6 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`. Retry on a unique violation, up to 3 times.
+- `code`: prefix (`PT` for the Beanies playbooks, `WB` for win-back, `OF` for manual) + 6 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`. Retry on a unique violation, up to 3 times.
 - `discount_type` / `discount_value` / `max_discount_inr` / `min_order_inr` / `scope`:
   - `percent`: (`percent`, p, K, M, `{}`)
   - `flat`: (`flat`, F, 0, M, `{}`)
@@ -226,7 +226,7 @@ When a treated recipient is **sent** (not at plan time, so skipped or rejected c
 
 The existing coupon list (`GET /api/coupons`, `CouponManager`) must **hide `campaign_id is not null` rows by default**. Otherwise the promotions screen fills with per-recipient codes.
 
-Points playbooks issue no coupon. The customer redeems points as usual.
+Beanies playbooks issue no coupon. The customer redeems Beanies as usual.
 
 ### 1.8 Attribution & lift
 
@@ -249,7 +249,7 @@ Here `treated_delivered` counts sent/delivered/read treated recipients. The dash
 - **Weekly active customers:** distinct identified customers (user id, or normalised phone) with a valid order in each IST week (Mon–Sun), for the last 9 complete weeks, plus weekly order counts.
 - **Drop alert** when `last_week < (1 − drop_alert_pct/100) × mean(previous 4 weeks)`. The alert gives the size of the drop and recommends a win-back push.
 - **Insights** (computed on load, each with a call to action):
-  1. "₹X of points (Y customers) expire in the next 7 days" when `points_expiring` is off → enable it.
+  1. "₹X of Beanies (Y customers) expire in the next 7 days" when `points_expiring` is off → enable it.
   2. "Z customers became lapsed this month" when every win-back playbook is off → enable win-back.
   3. "Only P% of your active customers can receive offers" when consent coverage is under 30% → put the opt-in QR on tables and the counter.
   4. "Costs missing for items making Q% of revenue" → go to Product costs.
@@ -268,7 +268,7 @@ Here `treated_delivered` counts sent/delivered/read treated recipients. The dash
 | Where | Action | `source` |
 |---|---|---|
 | Account → Profile toggle (existing) | PATCH `/api/account/me` `marketing_consent` → also records opt-in/out when the profile phone is verified | `profile` |
-| Order confirmation page (logged-in, verified phone, not opted in) | Card: "Get offers & points reminders from HIOC on WhatsApp — at most one a week. Reply STOP anytime." Button **Yes, send me offers** → PATCH `/api/account/me {marketing_consent:true}` | `profile` |
+| Order confirmation page (logged-in, verified phone, not opted in) | Card: "Get offers & Beanies reminders from HIOC on WhatsApp — at most one a week. Reply STOP anytime." Button **Yes, send me offers** → PATCH `/api/account/me {marketing_consent:true}` | `profile` |
 | Order confirmation page (everyone else) and the printable QR card | Link `https://wa.me/<whatsapp_business_number>?text=START`. The customer sends START and the webhook opts them in | `whatsapp_keyword` |
 | WhatsApp inbound `START` / `SUBSCRIBE` / `OFFERS` / `UNSTOP` (whole message, trimmed, case-insensitive) | opt-in + reply "You're subscribed to HIOC offers on WhatsApp — at most one message a week. Reply STOP anytime to unsubscribe." | `whatsapp_keyword` |
 | WhatsApp inbound STOP keywords (existing `isOptOutKeyword`) | existing behaviour **plus** `recordOptOut`. Reply text changes to "You're unsubscribed from HIOC offers and feedback messages. You'll still get updates about orders you place. Reply START any time to opt back in." | `stop_keyword` |
@@ -535,8 +535,8 @@ Default templates (full submission guide: `docs/WHATSAPP-MARKETING-TEMPLATES.md`
 
 | Name | Body | vars |
 |---|---|---|
-| `hioc_points_expiring_1` | Hi {{1}}, {{2}} of your HIOC reward points (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon! | first_name, expiring_points, expiring_value_inr, expiry_date |
-| `hioc_points_balance_1` | Hi {{1}}, you have {{2}} HIOC reward points worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon! | first_name, points, points_value_inr |
+| `hioc_points_expiring_1` | Hi {{1}}, {{2}} of your HIOC Beanies (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon! | first_name, expiring_points, expiring_value_inr, expiry_date |
+| `hioc_points_balance_1` | Hi {{1}}, you have {{2}} HIOC Beanies worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon! | first_name, points, points_value_inr |
 | `hioc_winback_1` | Hi {{1}}, we've missed you at HIOC! Here's {{2}} on your next visit. Use code {{3}} at the counter or online, valid till {{4}}. Your favourites are waiting! | first_name, offer_text, code, valid_till |
 | `hioc_offer_1` | Hi {{1}}, {{2}} at HIOC! Enjoy {{3}} with code {{4}}, valid till {{5}}. See you soon. | first_name, headline, offer_text, code, valid_till |
 
@@ -648,7 +648,7 @@ Gated by `flags.marketing` (`NEXT_PUBLIC_FLAG_MARKETING`, default **false**). Wh
      5. Schedule: now or date/time
 5. **Audience**
    - Counts per lifecycle stage (all identified customers vs opted in).
-   - Points: customers with a balance, ₹ outstanding, ₹ expiring within 7 days.
+   - Beanies: customers with a balance, ₹ outstanding, ₹ expiring within 7 days.
    - Consent: opted in / out, by source, and the last 30 days of events.
    - **Opt-in link + QR** (`qrcode` package, already a dependency) for `wa.me/<number>?text=START`, a printable "Scan to get HIOC offers on WhatsApp" card, and a notice if `whatsapp_business_number` is empty.
    - "Record an opt-out" form.
@@ -717,7 +717,7 @@ These were adopted after review. Where they differ from the sections above, **th
 | B1 | Phone normalisation treats a `+`-prefixed number as Indian **only** when it starts with `+91`. | `+6581234567` (Singapore) was being read as an Indian mobile. A foreign START could have opted in, or cleared the opt-out of, an unrelated Indian number. |
 | B2 | Rule 8 `in_holdout` (§1.5) blocks holdout members of open windows from everything. | Keeps the lift measurement honest and stops one order converting two rows. |
 | B3 | Drafts don't count as in flight, and drafts expire after 7 days. `pending_approval` still expires after 2 days. | A forgotten draft for "everyone" silently stopped all planning. |
-| B4 | The verified profile phone is the **only** link from a phone to an account. The consent row's `user_id` is never used as a fallback, and one order converts at most one recipient per campaign. | A recycled number must not inherit someone else's orders, points or name. |
+| B4 | The verified profile phone is the **only** link from a phone to an account. The consent row's `user_id` is never used as a fallback, and one order converts at most one recipient per campaign. | A recycled number must not inherit someone else's orders, Beanies or name. |
 | B5 | Staff are excluded by any non-customer profile phone (verified or not) plus `staff_accounts.phone`. | Staff sign in with login IDs. Their profile phone is usually unverified. |
 | B6 | Deliverability = (delivered + read) ÷ every treated row with `sent_at`, **including** later-failed ones. | 131049 arrives asynchronously after `sent`. Leaving those rows out overstated reach and understated break-even. |
 | B7 | VIP = top 20% by spend among **messageable** contacts with ≥ 3 orders. | This is the §1.1 intent. |
@@ -734,7 +734,7 @@ These were adopted after review. Where they differ from the sections above, **th
 - Staff-recorded counter consent on the POS
 - Birthday/anniversary playbook (DOB exists in `profiles`)
 - Slow-hour/slow-day boosters
-- Double-points offers
+- Double-Beanies offers
 - LLM-written weekly insight narrative
-- Utility-category transactional points statements
+- Utility-category transactional Beanies statements
 - Fixing F12 (the `'feedback'` notifications CHECK)

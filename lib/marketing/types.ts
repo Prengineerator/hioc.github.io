@@ -272,8 +272,8 @@ export const PARAM_BOUNDS: { [K in PlaybookKey]: { [P in keyof PlaybookParamsMap
 
 /** Owner-facing names. */
 export const PLAYBOOK_LABELS: Record<PlaybookKey, string> = {
-  points_expiring: 'Points expiring',
-  points_balance: 'Points waiting',
+  points_expiring: 'Beanies expiring',
+  points_balance: 'Beanies waiting',
   winback_1: 'Win-back · stage 1 (we miss you)',
   winback_2: 'Win-back · stage 2 (a bigger treat)',
   winback_3: 'Win-back · stage 3 (last chance)',
@@ -282,9 +282,9 @@ export const PLAYBOOK_LABELS: Record<PlaybookKey, string> = {
 /** One-line plain-English "who gets this" for each playbook card. */
 export const PLAYBOOK_DESCRIPTIONS: Record<PlaybookKey, string> = {
   points_expiring:
-    'Customers whose loyalty points are about to expire, so they use them before they are lost. Points are the offer, no coupon.',
+    'Customers whose loyalty Beanies are about to expire, so they use them before they are lost. Beanies are the offer, no coupon.',
   points_balance:
-    'Customers sitting on a healthy points balance who have not ordered in a while. Points are the offer, no coupon.',
+    'Customers sitting on a healthy Beanies balance who have not ordered in a while. Beanies are the offer, no coupon.',
   winback_1: 'Customers who have just gone quiet, measured against their own visit rhythm. A small offer.',
   winback_2: 'Customers who are still away a month later. A stronger offer, ideally a free item that costs you little.',
   winback_3: 'A last try before a customer counts as lost. Sent once per lapse.',
@@ -388,9 +388,9 @@ export type TemplateToken = (typeof TEMPLATE_TOKENS)[number];
 
 export const TEMPLATE_TOKEN_LABELS: Record<TemplateToken, string> = {
   first_name: 'First name',
-  points: 'Points balance',
-  points_value_inr: 'Points value (₹)',
-  expiring_points: 'Expiring points',
+  points: 'Beanies balance',
+  points_value_inr: 'Beanies value (₹)',
+  expiring_points: 'Expiring Beanies',
   expiring_value_inr: 'Expiring value (₹)',
   expiry_date: 'Expiry date',
   offer_text: 'Offer text',
@@ -448,7 +448,7 @@ export const DEFAULT_TEMPLATES = {
     vars: ['first_name', 'expiring_points', 'expiring_value_inr', 'expiry_date'],
     url_button: true,
     body_preview:
-      'Hi {{1}}, {{2}} of your HIOC reward points (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon!',
+      'Hi {{1}}, {{2}} of your HIOC Beanies (worth ₹{{3}}) expire on {{4}}. Use them on your next coffee or waffle: just share your number at the counter, or log in when you order online. See you soon!',
   },
   points_balance: {
     name: 'hioc_points_balance_1',
@@ -456,7 +456,7 @@ export const DEFAULT_TEMPLATES = {
     vars: ['first_name', 'points', 'points_value_inr'],
     url_button: true,
     body_preview:
-      'Hi {{1}}, you have {{2}} HIOC reward points worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon!',
+      'Hi {{1}}, you have {{2}} HIOC Beanies worth ₹{{3}} waiting for you. Redeem them on your next visit: just share your number at the counter, or log in when you order online. See you soon!',
   },
   winback: {
     name: 'hioc_winback_1',

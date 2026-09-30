@@ -4,6 +4,7 @@
 //
 // Pure: unit-tested in tests/marketingDashboardWizard.test.ts.
 
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { parseAudienceFilter, parseManualCampaign, parseOffer, parseTemplate } from '@/lib/marketing/parse';
 import { IST_OFFSET_MS } from '@/lib/marketing/ist';
 import {
@@ -247,6 +248,6 @@ export function describeAudience(f: AudienceFilter): string {
     const to = f.last_order_to_days;
     parts.push(to === undefined ? `last order ${from}+ days ago` : `last order ${from}–${to} days ago`);
   }
-  if (f.min_points) parts.push(`${f.min_points}+ points`);
+  if (f.min_points) parts.push(`${f.min_points}+ ${LOYALTY_UNIT.many}`);
   return parts.length === 0 ? 'Everyone who opted in' : `Opted-in customers · ${parts.join(' · ')}`;
 }

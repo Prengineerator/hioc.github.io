@@ -317,8 +317,8 @@ describe('overview: insights', () => {
     let o = await getOverview(NOW_SEND);
     expect(insight(o, 'points_expiring_off')).toMatchObject({
       tone: 'warn',
-      message: '₹100 of points (2 customers) expire in the next 7 days.',
-      cta: { tab: 'playbooks', playbook_key: 'points_expiring' },
+      message: '₹100 of Beanies (2 customers) expire in the next 7 days.',
+      cta: { label: 'Turn on Beanies reminders', tab: 'playbooks', playbook_key: 'points_expiring' },
     });
     seedPlaybooks(db(), { points_expiring: 'review' });
     o = await getOverview(NOW_SEND);

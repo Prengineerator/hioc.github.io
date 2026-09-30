@@ -11,7 +11,7 @@
 
 A helper that uses WhatsApp to bring customers back:
 
-- **Points reminders.** "Your points are about to expire" and "you have points waiting".
+- **Beanies reminders.** "Your Beanies are about to expire" and "you have Beanies waiting".
 - **Win-back.** Three gentle messages, each a little stronger, to customers who have gone quiet. "Quiet" is measured against each customer's own habits: a daily regular is flagged after two weeks, a monthly visitor after six.
 - **Your own campaigns.** A new item, a slow-day offer.
 - **A drop alert** when fewer customers ordered last week than usual.
@@ -74,7 +74,7 @@ How you will know it works: after the first message is delivered to a phone, the
 
 ### 4. Create the four message templates
 
-Follow `docs/WHATSAPP-MARKETING-TEMPLATES.md`. It has the exact wording to paste, the sample values Meta asks for, and the buttons. Create all four (points expiring, points waiting, win-back, and your own offers) and wait until each shows **Active** in WhatsApp Manager. Choose **English** (not "English (US)"), or every send fails with error `#132001`.
+Follow `docs/WHATSAPP-MARKETING-TEMPLATES.md`. It has the exact wording to paste, the sample values Meta asks for, and the buttons. Create all four (Beanies expiring, Beanies waiting, win-back, and your own offers) and wait until each shows **Active** in WhatsApp Manager. Choose **English** (not "English (US)"), or every send fails with error `#132001`.
 
 ### 5. Settings and product costs
 
@@ -110,7 +110,7 @@ Customers can also opt in from a card on their order page after they order, and 
 ### 7. Try each message on your phone, then turn on two playbooks
 
 1. `/owner/marketing?tab=playbooks` → open a card (**Edit who, offer and message**) → **Send test to my phone**. One real message arrives with sample values. Check that it reads well, that **Order now** and **Stop promotions** both show, and that nothing says `-` where a value should be. Repeat for each playbook.
-2. Set **Points expiring** and **Win-back · stage 1** to **Review** and press **Save**. Leave the others **Off** for now.
+2. Set **Beanies expiring** and **Win-back · stage 1** to **Review** and press **Save**. Leave the others **Off** for now.
 
 **Review** means: each morning the helper prepares the campaign and waits for you. Nothing is sent until you tap **Approve**.
 

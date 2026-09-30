@@ -154,7 +154,7 @@ export function ApprovalCard({
         <div>
           <dt className="text-xs uppercase tracking-wide text-muted">Offer</dt>
           <dd className="text-charcoal">
-            {c.offer_text ? c.offer_text : isPoints ? 'No coupon. Their own points are the offer.' : 'No offer'}
+            {c.offer_text ? c.offer_text : isPoints ? 'No coupon. Their own Beanies are the offer.' : 'No offer'}
           </dd>
         </div>
         <div>

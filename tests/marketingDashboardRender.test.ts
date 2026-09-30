@@ -119,7 +119,7 @@ const overview = (over: Partial<MarketingOverview> = {}): MarketingOverview => (
   weekly,
   drop_alert: { week_start: '2026-09-21', last_week_customers: 18, baseline_customers: 24, drop_pct: 25, drop_customers: 6 },
   insights: [
-    { id: 'points_expiring_off', tone: 'warn', message: '₹1,240 of points (31 customers) expire in the next 7 days.', cta: { label: 'Turn on the points reminder', tab: 'playbooks', playbook_key: 'points_expiring' } },
+    { id: 'points_expiring_off', tone: 'warn', message: '₹1,240 of Beanies (31 customers) expire in the next 7 days.', cta: { label: 'Turn on the Beanies reminder', tab: 'playbooks', playbook_key: 'points_expiring' } },
     { id: 'receipts_not_connected', tone: 'warn', message: 'RECEIPTS-INSIGHT-SENTENCE', cta: null },
     { id: 'best_free_item', tone: 'info', message: 'Best free-item offer: Cold Coffee (worth ₹180, costs ₹45).', cta: { label: 'See product costs', tab: 'costs' } },
   ],
@@ -253,7 +253,7 @@ describe('Overview', () => {
     expect(out).toContain('Plan a win-back');
     expect(out).toContain('Delivery receipts are not connected');
     expect(out).toContain('WHATSAPP_APP_SECRET');
-    expect(out).toContain('Turn on the points reminder');
+    expect(out).toContain('Turn on the Beanies reminder');
     expect(out).toContain('See product costs');
     // the dedicated receipts notice replaces the duplicate insight
     expect(out).not.toContain('RECEIPTS-INSIGHT-SENTENCE');
@@ -314,7 +314,7 @@ describe('Approvals', () => {
 
   it('handles a points campaign with no coupon and a template that is not set', () => {
     const out = html(createElement(ApprovalCard, { campaign: summary({ playbook_key: 'points_expiring', offer: { type: 'none' }, offer_text: '', template_name: '', guardrail_flags: ['no_template'] }), sendingEnabled: true, onDone: noop, onOpen: noop }));
-    expect(out).toContain('Their own points are the offer');
+    expect(out).toContain('Their own Beanies are the offer');
     expect(out).toContain('Not set');
     expect(out).toContain('1 warning');
   });
@@ -349,7 +349,8 @@ describe('Playbooks', () => {
 
   it('keeps a points reminder free of offers, and tells the owner why', () => {
     const out = html(createElement(PlaybookCard, { view: playbookView('points_expiring'), ranking: [], costsAvailable: false, focused: true, onSaved: noop, onOpenCampaign: noop }));
-    expect(out).toContain('carry no coupon');
+    expect(out).toContain('Beanies reminders carry no coupon');
+    expect(out).toContain('own Beanies are the offer');
     expect(out).not.toContain('Which free item?');
   });
 

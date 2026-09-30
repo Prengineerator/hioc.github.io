@@ -7,7 +7,7 @@
 // nag, because of an optional offer.
 //
 // Consent rules it keeps: never pre-ticked, one explicit tap, and the wording says
-// what they are agreeing to (offers and points reminders, on WhatsApp, at most one
+// what they are agreeing to (offers and Beanies reminders, on WhatsApp, at most one
 // a week) and how to stop. The logged-in path saves through the same
 // PATCH /api/account/me the Account page uses; the server records the opt-in
 // against the customer's verified phone. Everyone else gets a wa.me link that opens
@@ -82,12 +82,12 @@ export function OptInCard() {
     <section aria-label="WhatsApp offers" className="mt-8 rounded-md border border-line bg-surface p-5 text-center">
       {view === 'thanks' ? (
         <p role="status" className="text-sm text-charcoal">
-          <span className="font-bold">You&apos;re on the list.</span> We&apos;ll send offers and points reminders on WhatsApp, at most one a week. Reply STOP any time to unsubscribe.
+          <span className="font-bold">You&apos;re on the list.</span> We&apos;ll send offers and Beanies reminders on WhatsApp, at most one a week. Reply STOP any time to unsubscribe.
         </p>
       ) : view === 'profile' ? (
         <>
           <p className="text-sm text-charcoal">
-            Get offers &amp; points reminders from HIOC on WhatsApp <span aria-hidden="true">&mdash;</span> at most one a week. Reply STOP anytime.
+            Get offers &amp; Beanies reminders from HIOC on WhatsApp <span aria-hidden="true">&mdash;</span> at most one a week. Reply STOP anytime.
           </p>
           <div className="mt-3">
             <Button size="sm" onClick={accept} loading={saving}>
@@ -103,7 +103,7 @@ export function OptInCard() {
       ) : (
         <>
           <p className="text-sm text-charcoal">
-            Want offers &amp; points reminders from HIOC on WhatsApp? At most one a week, and you can reply STOP anytime.
+            Want offers &amp; Beanies reminders from HIOC on WhatsApp? At most one a week, and you can reply STOP anytime.
           </p>
           <div className="mt-3">
             <a

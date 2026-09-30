@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildVars,
@@ -272,4 +273,36 @@ describe('generateClickToken', () => {
     expect(generateClickToken(() => 1)).toBe('_'.repeat(12));
     expect(CLICK_TOKEN_ALPHABET).toHaveLength(64);
   });
+});
+
+// The loyalty currency is "Beanies". The template NAMES keep "points" (they are identifiers
+// referenced by code and config), but the text a customer reads must not.
+describe('loyalty templates say Beanies', () => {
+  const cases = [
+    { key: 'points_expiring', placeholders: [1, 2, 3, 4] },
+    { key: 'points_balance', placeholders: [1, 2, 3] },
+  ] as const;
+
+  for (const { key, placeholders } of cases) {
+    const t = DEFAULT_TEMPLATES[key];
+
+    it(`${t.name} body says Beanies, never loyalty "points", and keeps placeholders {{1}}..{{${placeholders.length}}}`, () => {
+      expect(t.body_preview).toContain('HIOC Beanies');
+      expect(t.body_preview).not.toMatch(/\bpoints?\b/i);
+      const nums = [...t.body_preview.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1]));
+      expect(nums).toEqual([...placeholders]);
+      expect(t.vars).toHaveLength(placeholders.length);
+    });
+
+    it(`${t.name} keeps its identifier name`, () => {
+      expect(t.name).toMatch(/^hioc_points_/);
+    });
+
+    it(`${t.name} body is identical to the paste-ready text in docs/WHATSAPP-MARKETING-TEMPLATES.md`, () => {
+      const doc = readFileSync('docs/WHATSAPP-MARKETING-TEMPLATES.md', 'utf8');
+      const section = doc.split(`### \`${t.name}\``)[1] ?? '';
+      const block = /```\n([^\n]*)\n```/.exec(section);
+      expect(block?.[1]).toBe(t.body_preview);
+    });
+  }
 });
