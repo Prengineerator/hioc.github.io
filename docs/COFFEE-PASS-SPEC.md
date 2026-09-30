@@ -1,8 +1,15 @@
-# Coffee Pass: prepaid coffee plans, sold and redeemed on the website and at the POS
+# HIOC Ritual: prepaid coffee plans, sold and redeemed on the website and at the POS
 
 **Version:** 1.0 · **Date:** 2026-09-30 · **Status:** approved plan, build in progress
 **Flag:** `NEXT_PUBLIC_FLAG_COFFEE_PASS` (default **off**) · **Migration:** `supabase/2026-10-coffee-pass.sql`
 **Ticket prefix:** `CP-` · **Decision prefix:** `CP-D`
+
+> **Naming (owner, 2026-09-30).**
+> - The customer-facing brand is **HIOC Ritual**. The plans are **Weekly Ritual** and **Monthly Ritual**, and they are counted in **cups** ("your Ritual · 5 cups left").
+> - Loyalty points are now **Beanies** (1 Beanie = ₹1 off).
+> - Only display copy uses these names. They are held in `lib/passes/brand.ts` and `lib/loyalty/brand.ts`, so a later rename is one line.
+> - Technical names stay neutral and do not change: the `coffee_pass_*` tables, `order_kind = 'coffee_pass'`, `/api/passes/*`, the flag `NEXT_PUBLIC_FLAG_COFFEE_PASS`, and loyalty's `points` fields and tables.
+> - "Coffee Pass" below means the HIOC Ritual feature.
 
 ---
 
@@ -12,8 +19,8 @@ Two prepaid plans for regulars:
 
 | Plan | Customer pays for | Customer gets | Valid for |
 |---|---|---|---|
-| **Weekly Coffee Pass** | 5 coffees | **7 coffees** | 7 days |
-| **30-Day Coffee Pass** | 6 coffees | **7 coffees** | 30 days |
+| **Weekly Ritual** | 5 coffees | **7 coffees** | 7 days |
+| **Monthly Ritual** | 6 coffees | **7 coffees** | 30 days |
 
 Both must be **buyable on the website and at the POS**, and **usable on the website and at the POS**.
 The weekly plan gives the bigger discount (29%) for a tighter window. The 30-day plan gives a smaller
@@ -47,8 +54,8 @@ Defaults chosen by the lead. Every number is an owner setting, not a code consta
 | CP-D4 | **A pass belongs to one account.** Sold at the POS, it goes to the account of the phone given. The account is opened if needed, exactly as a counter order does. Bought online, it goes to the signed-in account. The account is **never** taken from a request body. |
 | CP-D5 | **Validity runs in IST calendar days.** A pass bought on day D is valid until the end of day D + validity − 1 (IST). A Weekly bought Monday 10:00 is good through Sunday 23:59. `expires_at` is stored as the instant the next IST day starts. |
 | CP-D6 | **The pass is issued when its order is paid, and only then.** A database trigger issues it when a `coffee_pass` order's `payment_status` becomes `paid`, whichever path got there: counter settle, Razorpay verify, webhook, reconcile poll, or cron. The same trigger marks the sale order `completed`, so it never sits on the kitchen board. It is idempotent: `unique(order_id)`. |
-| CP-D7 | **Buying a pass is a separate order.** v1 does not mix a pass and menu items in one cart. The POS sells it from the Passes screen. The customer buys it on `/passes`. The first drink can be redeemed on the very next order, seconds later. |
-| CP-D8 | **Online purchase needs Razorpay.** There is no "reserve a pass, pay at the counter". If the gateway is not configured, `/passes` says "Buy at the counter" instead of showing Buy. |
+| CP-D7 | **Buying a pass is a separate order.** v1 does not mix a pass and menu items in one cart. The POS sells it from the Passes screen. The customer buys it on `/ritual`. The first drink can be redeemed on the very next order, seconds later. |
+| CP-D8 | **Online purchase needs Razorpay.** There is no "reserve a pass, pay at the counter". If the gateway is not configured, `/ritual` says "Buy at the counter" instead of showing Buy. |
 | CP-D9 | **Redemption happens on a normal order.** The request says how many pass drinks to use (`pass_drinks`). The **server** chooses which lines and which passes. It covers the **most expensive eligible units first** and uses the **soonest-expiring pass first**. It stops at the drinks left, the daily cap and the eligible units in the cart. |
 | CP-D10 | **Default use.** On the website the checkout pre-selects the maximum usable, and the customer can lower it. At the POS it starts at **0**, and the staffer asks the customer and taps "Use pass". The staffer is not the pass holder. |
 | CP-D11 | **Money and GST.** GST on a pass is charged **when it is sold**, following the store's GST settings like any item (unless the plan is marked GST-exempt). On a redeemed drink, the **covered amount is taken out of the taxable base**, so tax is never charged twice. A top-up is taxed normally. See §6 worked examples. **The owner must confirm this treatment with their CA (§9 B4).** |
@@ -72,7 +79,7 @@ added later to a running tab.
 
 ```
 WEBSITE — BUY                               POS — SELL
-/passes ─► Buy (signed in) ─► Razorpay       Passes screen ─► phone ─► plan ─► Sell
+/ritual ─► Buy (signed in) ─► Razorpay        Passes screen ─► phone ─► plan ─► Sell
    │         POST /api/passes/checkout          │     POST /api/passes/sell (unpaid order)
    │         (coffee_pass order, placed)        ▼
    ▼                                          Payment panel (cash / UPI / card / split)
@@ -83,7 +90,7 @@ WEBSITE — BUY                               POS — SELL
                Pass active: 7 drinks, valid till <date>
 
 WEBSITE — USE                                POS — USE
-Checkout "Coffee Pass: use 1 of 5"           Customer phone attached → "Coffee pass · 5 left"
+Checkout "HIOC Ritual: use 1 of 5"           Customer phone attached → "Coffee pass · 5 left"
   (pre-filled to max usable)                 staffer taps "Use pass" (starts at 0)
         └──── POST /api/orders/quote {items, pass_drinks} ─► preview ────┘
         └──── POST /api/orders {…, pass_drinks} ─► coffee_pass_redeem() (row-locked) ─► order
@@ -159,8 +166,8 @@ derived balance restores itself.
 
 - `role_permissions`: `('pass_sell','staff')`, `('pass_manage','manager')`, `on conflict do nothing`.
 - Plans seeded **inactive**:
-  - Weekly Coffee Pass: 7 drinks, 5 paid, 7 days, ₹150 drink value, ₹750, no daily cap.
-  - 30-Day Coffee Pass: 7 drinks, 6 paid, 30 days, ₹150 drink value, ₹900, no daily cap.
+  - Weekly Ritual: 7 drinks, 5 paid, 7 days, ₹150 drink value, ₹750, no daily cap.
+  - Monthly Ritual: 7 drinks, 6 paid, 30 days, ₹150 drink value, ₹900, no daily cap.
 - No `pass_eligible` rows are pre-set. The owner chooses them (§9 B2).
 
 ## 6. Money: worked examples
@@ -217,7 +224,7 @@ Refusals from database functions come back as 409s with a readable message.
 | `app/api/orders/[id]/status` | `coffee_pass` orders: every transition is refused (409) except `→ cancelled` while unpaid. |
 | `app/api/orders/[id]/refund` | `coffee_pass` orders (CP-D15): before any money moves, call `coffee_pass_void_for_refund`. `'used'` gives 409 "This pass has already been used — it can't be refunded." `'ok'` means this call voided it. `'already'` means an earlier refund did, and the refund continues. If the money step fails **and** this call voided the pass, call `coffee_pass_restore_after_failed_refund`. |
 | `lib/payments/reconcile.ts` `captureGatewayPayment` | For `coffee_pass` orders, do **not** advance `placed → received` (the trigger completes the order). Still send the bill (best-effort). |
-| `lib/loyalty/ledger.ts` `earnForOrder` | Skip `coffee_pass` orders (defence in depth for CP-D13). |
+| `app/api/orders/[id]/status` completion hooks | Never call `earnForOrder`, inventory consumption or the feedback enqueue for a `coffee_pass` order (defence in depth for CP-D13). |
 | `GET /api/orders` (board) | Unchanged API: the rows carry `order_kind`. The **live board's kitchen columns and KOT auto-print skip `coffee_pass` orders** (UI, CP-8). Settle and the Orders history show them labelled "Coffee pass sale". |
 | `GET /api/customers/lookup` | Adds `passes` (usable summaries) for a found account. |
 | `GET /api/menu` / `MenuItem` | Exposes `pass_eligible`. |
@@ -230,26 +237,26 @@ primitives, `font-mono tabular-nums` for money, 44 px tap targets, loading, empt
 and `SurfaceLink`.
 
 **Customer (phone first)**
-- **`/passes`.** The top section explains the offer ("7 coffees for the price of 5" / "Pay for 6, get
+- **`/ritual`.** The top section explains the offer ("7 coffees for the price of 5" / "Pay for 6, get
   7"). Below it:
   - the two plan cards, with price (and "+ GST" when exclusive), validity, and "covers any eligible
     coffee up to ₹150, pricier drinks pay the difference";
   - eligible drinks as chips;
   - how it works in three steps, and the terms;
-  - a Buy button. It asks a signed-out customer to log in (`next=/passes`). When online purchase is
+  - a Buy button. It asks a signed-out customer to log in (`next=/ritual`). When online purchase is
     unavailable it shows "Buy at the counter".
-  - **Your passes** (signed in): drinks left as dots, "valid till Sun 5 Oct", history, and a note when
-    the phone is unverified: "Verify your number in Profile to use your pass at the counter".
-- **Checkout** "Offers & rewards": a row "Coffee Pass — using **1** of 5 (−₹120)" with a stepper,
+  - **Your Ritual** (signed in): drinks left as dots, "valid till Sun 5 Oct", history, and a note when
+    the phone is unverified: "Verify your number in Profile to use your Ritual at the counter".
+- **Checkout** "Offers & rewards": a row "HIOC Ritual — using **1** of 5 cups (−₹120)" with a stepper,
   pre-filled to the maximum usable (CP-D10). It is only shown when signed in with a usable pass.
-- **Bill rows** "Coffee Pass (N drinks) −₹X" on the cart summary, order status page, e-receipt and QR
+- **Bill rows** "HIOC Ritual (N cups) −₹X" on the cart summary, order status page, e-receipt and QR
   checkout.
-- **Menu**: a small "Pass" chip on eligible items. **Account**: a "Coffee Pass" card and nav link.
-  **Home**: a teaser linking `/passes`. **Legal**: a Coffee Pass section on the refund & cancellation
+- **Menu**: a small "Ritual" chip on eligible items. **Account**: a "HIOC Ritual" card and nav link.
+  **Home**: a teaser linking `/ritual`. **Legal**: a HIOC Ritual section on the refund & cancellation
   page (CP-D15, CP-D19).
 
 **Staff / POS (landscape tablet and Electron)**
-- **`/staff/passes`** (More → "Coffee passes"):
+- **`/staff/passes`** (More → "Ritual passes"):
   - phone lookup with the existing suggestions;
   - the holder's passes and history;
   - plan cards → **Sell** → the existing payment panel for the new order (split tender works) → a
@@ -281,8 +288,8 @@ and `SurfaceLink`.
 |---|---|---|---|
 | A1 | Earlier migrations applied, including `2026-08-counter-loyalty.sql`, `2026-09-counter-accounts.sql`, `2026-09-gst-exempt.sql`, `2026-09-cash-counts.sql` and `2026-08-split-payments.sql` | Dev | `npm run verify:db` |
 | A2 | Apply `supabase/2026-10-coffee-pass.sql` (safe to re-run) | Dev | `npm run verify:db` shows "CP-1 · coffee pass" all ✓ |
-| A3 | Deploy with the flag **off**. Nothing changes for anyone. | Dev | `/passes` returns 404 |
-| A4 | For online purchase: Razorpay keys and webhook already configured, as for online orders | Dev | `/passes` shows Buy, not "Buy at the counter" |
+| A3 | Deploy with the flag **off**. Nothing changes for anyone. | Dev | `/ritual` returns 404 |
+| A4 | For online purchase: Razorpay keys and webhook already configured, as for online orders | Dev | `/ritual` shows Buy, not "Buy at the counter" |
 | A5 | Role permissions reviewed: `pass_sell`, `pass_manage` | Owner | Owner → Staff → Permissions |
 | A6 | No new dependencies. No new secrets beyond the flag. | — | ✓ |
 
@@ -294,7 +301,7 @@ and `SurfaceLink`.
 | B2 | **Which drinks are eligible** (Owner → Passes) | none ticked |
 | B3 | **Daily cap** on the Weekly pass ("a coffee a day")? | off |
 | B4 | **GST treatment confirmed with the CA**: charged at sale (CP-D11), or pass marked GST-exempt | charged at sale |
-| B5 | Terms wording on `/passes` and the refund page (the defaults are CP-D15 and CP-D19) | as built |
+| B5 | Terms wording on `/ritual` and the refund page (the defaults are CP-D15 and CP-D19) | as built |
 | B6 | Switch the plans to **active**, then set `NEXT_PUBLIC_FLAG_COFFEE_PASS=true` and redeploy | inactive / off |
 
 ### C. Go-live checks (on the real counter)
@@ -318,9 +325,9 @@ parallel.
 | 1 | **CP-2** pure rules: `allocatePassDrinks`, `composePassBill`, `passExpiresAt`, `passState`, input validators | foundation | `lib/passes/rules.ts`, `lib/passes/types.ts`, `tests/coffeePassRules.test.ts` |
 | 1 | **CP-3** flag, permissions, types | foundation | `lib/flags.ts`, `.env.local.example`, `lib/permissions.ts`, `lib/types.ts` |
 | 1 | **CP-4** server helpers: load passes for a user, summaries, redeem / void RPC wrappers, 404 guard | foundation | `lib/passes/server.ts`, `lib/passes/api.ts` |
-| 2 | **CP-5** order pipeline (§7 changes to existing routes) | orders | `app/api/orders/**`, `lib/orders/amend.ts`, `lib/payments/reconcile.ts`, `lib/loyalty/ledger.ts`, `app/api/customers/lookup`, `app/api/menu`, `lib/reports/reconcile*.ts`, and their tests |
+| 2 | **CP-5** order pipeline (§7 changes to existing routes) | orders | `app/api/orders/**`, `lib/orders/amend.ts`, `lib/payments/reconcile.ts`, `app/api/customers/lookup`, `app/api/menu`, `lib/reports/reconcile*.ts`, and their tests |
 | 2 | **CP-6** pass APIs (§7 new routes) | pass-api | `app/api/passes/**`, `app/api/owner/passes/**`, and their tests |
-| 3 | **CP-7** customer screens | customer-ui | `app/passes`, `components/passes/**`, `components/checkout/**`, `components/cart/**`, `components/menu/**`, `app/account/**`, `components/account/**`, `app/order/**`, `app/page.tsx`, `app/refund-cancellation`, `components/legal/**` |
+| 3 | **CP-7** customer screens | customer-ui | `app/ritual`, `components/passes/**`, `components/checkout/**`, `components/cart/**`, `components/menu/**`, `app/account/**`, `components/account/**`, `app/order/**`, `app/page.tsx`, `app/refund-cancellation`, `components/legal/**` |
 | 3 | **CP-8** POS screens and prints | staff-ui | `app/staff/passes`, `components/staff/passes/**`, `components/staff/PosOrderEntry.tsx`, `lib/pos/loyalty.ts`, `lib/staff/staffNav.ts`, `lib/print/**`, `components/print/**`, `components/staff/Settle*` |
 | 3 | **CP-9** owner screens and reports | owner-ui | `app/owner/passes`, `components/owner/passes/**`, `components/owner/OwnerHeader.tsx`, `components/owner/PermissionMatrix.tsx`, `app/owner/reports` |
 | 4 | **CP-10** review, security pass, full CI, go-live sheet | lead | everything |
