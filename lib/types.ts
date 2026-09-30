@@ -143,6 +143,9 @@ export interface MenuItem {
   // migration); cleared when stock returns or a person toggles availability.
   // Optional so a row read before the migration still type-checks.
   stock_out_auto?: boolean;
+  // A HIOC Ritual pass can pay for this drink (2026-10-coffee-pass migration).
+  // Optional so a row read before the migration still type-checks; absent = no.
+  pass_eligible?: boolean;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
@@ -216,6 +219,15 @@ export interface Order {
   // 2026-09-pickup-reminder.sql: when staff last resent the "order ready"
   // WhatsApp. Optional — absent until the migration is applied.
   pickup_reminded_at?: string | null;
+  // 2026-10-coffee-pass.sql. 'coffee_pass' = the SALE of a pass (one line, no
+  // kitchen ticket); everything else is 'menu'. pass_discount_inr is what pass
+  // cups covered on this order, kept apart from discount_inr (coupon + points)
+  // so reports never count prepaid drinks as a marketing discount:
+  //   total_inr = subtotal_inr + tax_inr + packaging_inr - discount_inr - pass_discount_inr
+  // Optional so rows read before the migration (and older fixtures) compile;
+  // absent = 'menu' / 0.
+  order_kind?: 'menu' | 'coffee_pass';
+  pass_discount_inr?: number;
 }
 
 export interface OrderItemAddon {
@@ -241,6 +253,12 @@ export interface OrderItem {
   // GST-exempt snapshot taken at sale time (2026-09-gst-exempt); absent on
   // rows read before the migration = taxable.
   gst_exempt?: boolean;
+  // 2026-10-coffee-pass.sql: units of this line paid with a pass cup and the
+  // rupees they covered; coffee_pass_plan_id is set on the single line of a
+  // pass-sale order (menu_item_id is null there). Optional = 0 / null.
+  pass_drinks?: number;
+  pass_covered_inr?: number;
+  coffee_pass_plan_id?: string | null;
   addons: OrderItemAddon[];
   // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
   // is VOIDED, never deleted — kept for audit; excluded from totals server-side.
@@ -750,7 +768,12 @@ export type PermissionKey =
   | 'cash_expense'
   | 'attendance_edit'
   | 'attendance_approve'
-  | 'leave_approve';
+  | 'leave_approve'
+  // HIOC Ritual (2026-10-coffee-pass.sql): sell a pass at the counter (staff);
+  // extend a pass or give a cup back (manager). Plans and eligibility are
+  // owner-only and have no key.
+  | 'pass_sell'
+  | 'pass_manage';
 
 export type PermissionMinRole = 'staff' | 'manager';
 

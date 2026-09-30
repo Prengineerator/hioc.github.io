@@ -28,6 +28,8 @@ export const KNOWN_PERMISSION_KEYS: PermissionKey[] = [
   'attendance_edit',
   'attendance_approve',
   'leave_approve',
+  'pass_sell',
+  'pass_manage',
 ];
 
 // The D4 defaults — the source of truth for filling any key whose row is missing
@@ -60,6 +62,12 @@ export const DEFAULT_MIN_ROLE: Record<PermissionKey, PermissionMinRole> = {
   // punching: a missing seed row would fail closed to manager and stop the whole
   // team from being able to ask for a day off.
   leave_approve: 'manager',
+  // HIOC Ritual (2026-10-coffee-pass.sql). Selling a pass is routine counter
+  // work, so staff — the same bar as taking the order it rides on. Extending a
+  // pass or giving a cup back changes what the customer is owed, so manager.
+  // Plans and the eligible-drinks list are owner-only and need no key.
+  pass_sell: 'staff',
+  pass_manage: 'manager',
 };
 
 // Rank ladder for the min_role comparison. owner is handled before this is used

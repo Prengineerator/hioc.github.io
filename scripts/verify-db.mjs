@@ -1376,6 +1376,117 @@ async function checkInventory() {
 }
 
 // ---------------------------------------------------------------------------
+// Coffee Pass — prepaid plans sold and redeemed as drinks
+// (docs/COFFEE-PASS-SPEC.md, supabase/2026-10-coffee-pass.sql). Customer-facing
+// it is "HIOC Ritual"; the database names stay coffee_pass_*. Four service-role
+// tables, a derived-balance view, the columns added to orders / order_items /
+// menu_items, two permission keys, and the functions the money-adjacent writes
+// go through. Every probe here is a read or a call that cannot write: an empty
+// redemption is 'bad_input', a nil order is 'not_found'.
+// ---------------------------------------------------------------------------
+async function checkCoffeePass() {
+  heading('CP-1 · coffee pass tables, view, functions + lockdown', '2026-10-coffee-pass.sql');
+  const hint = 'apply supabase/2026-10-coffee-pass.sql';
+
+  for (const table of ['coffee_pass_plans', 'coffee_passes', 'coffee_pass_redemptions', 'coffee_pass_adjustments']) {
+    const r = await rest(`/${table}?select=id&limit=1`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    const rows = Array.isArray(r.body) ? r.body : [];
+    if (rows.length === 0) {
+      skip(`${table} is not readable by the anon key`, 'no row to look for yet');
+      continue;
+    }
+    const asAnon = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+
+  // The derived balance. Every column the app reads must be there.
+  const view = await rest('/v_coffee_pass_balances?select=id,user_id,plan_name,drinks_total,drinks_used,drinks_credited,drinks_remaining,used_today,state,expires_at&limit=1');
+  if (view.ok) {
+    pass('v_coffee_pass_balances exists', 'drinks_used / drinks_credited / drinks_remaining / used_today / state');
+    const asAnon = await rest('/v_coffee_pass_balances?select=id&limit=1', { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail('v_coffee_pass_balances is not readable by the anon key', 'the view is not security_invoker / the REVOKE is missing');
+    else pass('v_coffee_pass_balances is not readable by the anon key');
+  } else {
+    const kind = errKind(view);
+    fail('v_coffee_pass_balances exists', kind === 'no_table' || kind === 'no_column' ? hint : errText(view));
+  }
+
+  // Columns added to the existing tables.
+  for (const [table, col] of [
+    ['orders', 'order_kind'],
+    ['orders', 'pass_discount_inr'],
+    ['order_items', 'pass_drinks'],
+    ['order_items', 'pass_covered_inr'],
+    ['order_items', 'coffee_pass_plan_id'],
+    ['menu_items', 'pass_eligible'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' ? hint : errText(r));
+  }
+
+  // hasPermission() fails CLOSED to manager for a missing key, so an unseeded
+  // pass_sell would quietly stop staff from selling a pass.
+  const perms = await rest('/role_permissions?select=permission_key,min_role&permission_key=in.(pass_sell,pass_manage)');
+  if (perms.ok && Array.isArray(perms.body)) {
+    const have = new Set(perms.body.map((p) => p.permission_key));
+    for (const key of ['pass_sell', 'pass_manage']) {
+      if (have.has(key)) pass(`${key} permission is seeded`, `min role: ${perms.body.find((p) => p.permission_key === key).min_role}`);
+      else fail(`${key} permission is seeded`, hint);
+    }
+  } else {
+    fail('pass_sell / pass_manage permissions are seeded', errText(perms));
+  }
+
+  // Plans are seeded INACTIVE. Informational: nothing sells until the owner
+  // switches one on, so "no active plan" is the correct state before go-live.
+  const plans = await rest('/coffee_pass_plans?select=name,is_active');
+  if (plans.ok && Array.isArray(plans.body)) {
+    const active = plans.body.filter((p) => p.is_active).length;
+    if (plans.body.length === 0) fail('coffee pass plans are seeded', `${hint} — it inserts the two inactive plans`);
+    else pass('coffee pass plans are seeded', `${plans.body.length} plan(s), ${active} active${active === 0 ? ' — correct until the owner switches one on' : ''}`);
+  }
+
+  // Functions, probed with calls that write nothing. The service role gets the
+  // reason code; the anon key must be refused outright.
+  const nilUuid = '00000000-0000-0000-0000-000000000000';
+  const redeem = await rest('/rpc/coffee_pass_redeem', {
+    method: 'POST',
+    body: { p_user_id: nilUuid, p_order_id: nilUuid, p_allocations: [] },
+  });
+  if (redeem.ok && redeem.body === 'bad_input') pass('coffee_pass_redeem is installed', 'an empty allocation list returned bad_input');
+  else fail('coffee_pass_redeem is installed', redeem.ok ? `unexpected result ${JSON.stringify(redeem.body)}` : `${hint} — ${errText(redeem)}`);
+
+  const adjust = await rest('/rpc/coffee_pass_adjust', {
+    method: 'POST',
+    body: { p_pass_id: nilUuid, p_kind: 'extend', p_days: 1, p_drinks: null, p_reason: '', p_actor: null },
+  });
+  if (adjust.ok && adjust.body === 'bad_input') pass('coffee_pass_adjust is installed', 'a blank reason returned bad_input');
+  else fail('coffee_pass_adjust is installed', adjust.ok ? `unexpected result ${JSON.stringify(adjust.body)}` : `${hint} — ${errText(adjust)}`);
+
+  const voidRefund = await rest('/rpc/coffee_pass_void_for_refund', { method: 'POST', body: { p_order_id: nilUuid } });
+  if (voidRefund.ok && voidRefund.body === 'not_found') pass('coffee_pass_void_for_refund is installed', 'the nil order returned not_found');
+  else fail('coffee_pass_void_for_refund is installed', voidRefund.ok ? `unexpected result ${JSON.stringify(voidRefund.body)}` : `${hint} — ${errText(voidRefund)}`);
+
+  const restore = await rest('/rpc/coffee_pass_restore_after_failed_refund', { method: 'POST', body: { p_order_id: nilUuid } });
+  if (restore.ok && restore.body === 'not_found') pass('coffee_pass_restore_after_failed_refund is installed', 'the nil order returned not_found');
+  else fail('coffee_pass_restore_after_failed_refund is installed', restore.ok ? `unexpected result ${JSON.stringify(restore.body)}` : `${hint} — ${errText(restore)}`);
+
+  const anon = await rest('/rpc/coffee_pass_void_for_refund', { method: 'POST', body: { p_order_id: nilUuid }, key: ANON });
+  if (anon.ok) fail('coffee pass functions are not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
+  else pass('coffee pass functions are not callable by the anon key');
+}
+
+// ---------------------------------------------------------------------------
 // Phase 7 · SUG-1 — the "Help me choose" suggestion engine
 // (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §8 SUG-1 AC, supabase/2026-09-suggestion-engine.sql).
 // Five tables, RLS on, everything but customer_taste_profiles' self-read
@@ -1585,6 +1696,7 @@ async function main() {
   await checkSuggestionEngine();
   await checkCoffeyTraitsV2();
   await checkInventory();
+  await checkCoffeePass();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);
