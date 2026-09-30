@@ -9,7 +9,9 @@ export const dynamic = 'force-dynamic';
 
 // GET /api/owner/passes — owner only (Owner → Passes). What the page edits:
 //
-//   plans        EVERY plan, active or not, in the owner's sort_order (then price)
+//   plans        EVERY plan, active or not, in the owner's sort_order (then name).
+//                A plan has no price or cup value any more (CP-D24): both come back
+//                null, and the page shows worked examples instead.
 //   eligible_ids the menu items a pass can pay for (menu_items.pass_eligible)
 //   menu         every menu item for the picker: { id, name, category,
 //                is_available }, by category and then the menu's own order, so the
@@ -54,7 +56,7 @@ export async function GET() {
   return NextResponse.json({
     plans: ((plans.data ?? []) as unknown as Record<string, unknown>[])
       .map(toCoffeePassPlan)
-      .sort((a, b) => a.sort_order - b.sort_order || a.price_inr - b.price_inr || a.name.localeCompare(b.name)),
+      .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name)),
     eligible_ids: menuRows.filter((m) => m.pass_eligible === true).map((m) => m.id),
     menu: menuRows.map((m) => ({ id: m.id, name: m.name, category: m.category, is_available: m.is_available !== false })),
   });

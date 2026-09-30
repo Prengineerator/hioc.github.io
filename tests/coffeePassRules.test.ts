@@ -9,7 +9,12 @@ import {
   passRedeemMessage,
   passShortfallMessage,
   passState,
+  MAX_DRINK_LABEL_LENGTH,
+  PLAN_NO_PRICE_MESSAGE,
   planDiscountPercent,
+  ritualDrinkLabel,
+  ritualLineName,
+  ritualPriceFor,
   validateAdjustInput,
   validatePlanInput,
 } from '@/lib/passes/rules';
@@ -472,14 +477,13 @@ describe('parsePassDrinks', () => {
   });
 });
 
+// A plan is only the recipe (CP-D24): no price and no cup value.
 const WEEKLY = {
   name: 'Weekly Ritual',
   description: '7 cups for the price of 5 — valid 7 days',
   drinks_total: 7,
   drinks_paid: 5,
   validity_days: 7,
-  drink_value_inr: 150,
-  price_inr: 750,
   max_per_day: null,
   gst_exempt: false,
   is_active: false,
@@ -491,8 +495,8 @@ describe('validatePlanInput (create)', () => {
     expect(validatePlanInput({ ...WEEKLY }, { partial: false })).toEqual({ ok: true, value: WEEKLY });
   });
 
-  it('fills the defaults: price = drinks paid × cup value, no cap, GST charged, inactive', () => {
-    const r = validatePlanInput({ name: '  Monthly Ritual ', drinks_total: 7, drinks_paid: 6, validity_days: 30, drink_value_inr: 150 }, { partial: false });
+  it('fills the defaults: no description, no cap, GST charged, inactive, sort order 0', () => {
+    const r = validatePlanInput({ name: '  Monthly Ritual ', drinks_total: 7, drinks_paid: 6, validity_days: 30 }, { partial: false });
     expect(r).toEqual({
       ok: true,
       value: {
@@ -501,8 +505,6 @@ describe('validatePlanInput (create)', () => {
         drinks_total: 7,
         drinks_paid: 6,
         validity_days: 30,
-        drink_value_inr: 150,
-        price_inr: 900,
         max_per_day: null,
         gst_exempt: false,
         is_active: false,
@@ -511,16 +513,27 @@ describe('validatePlanInput (create)', () => {
     });
   });
 
+  it('never returns a price or a cup value: a plan has neither (CP-D24)', () => {
+    const r = validatePlanInput({ ...WEEKLY }, { partial: false });
+    expect(r.ok && Object.keys(r.value)).not.toContain('price_inr');
+    expect(r.ok && Object.keys(r.value)).not.toContain('drink_value_inr');
+  });
+
   it('ignores keys it does not know (a client cannot smuggle in an id or created_at)', () => {
     const r = validatePlanInput({ ...WEEKLY, id: 'x', created_at: 'y', user_id: 'z' }, { partial: false });
     expect(r).toEqual({ ok: true, value: WEEKLY });
   });
 
-  it.each(['name', 'drinks_total', 'drinks_paid', 'validity_days', 'drink_value_inr'])('needs %s', (key) => {
+  it.each(['name', 'drinks_total', 'drinks_paid', 'validity_days'])('needs %s', (key) => {
     const body: Record<string, unknown> = { ...WEEKLY };
     delete body[key];
     const r = validatePlanInput(body, { partial: false });
     expect(r).toEqual({ ok: false, error: `${key} is required.` });
+  });
+
+  it('does not ask for a price or a cup value any more', () => {
+    // Everything but the two legacy keys is enough.
+    expect(validatePlanInput({ name: 'Mini', drinks_total: 3, drinks_paid: 2, validity_days: 3 }, { partial: false }).ok).toBe(true);
   });
 
   it.each([
@@ -538,10 +551,6 @@ describe('validatePlanInput (create)', () => {
     ['more paid for than given', { drinks_total: 5, drinks_paid: 6 }],
     ['0 validity days', { validity_days: 0 }],
     ['366 validity days', { validity_days: 366 }],
-    ['a cup value of 0', { drink_value_inr: 0 }],
-    ['a cup value of 5001', { drink_value_inr: 5001 }],
-    ['a price of 0', { price_inr: 0 }],
-    ['a price of 100001', { price_inr: 100001 }],
     ['a daily cap of 0', { max_per_day: 0 }],
     ['a daily cap above the cups', { max_per_day: 8 }],
     ['a fractional daily cap', { max_per_day: 1.5 }],
@@ -554,15 +563,9 @@ describe('validatePlanInput (create)', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('accepts the bounds: 1 and 50 cups, 1 and 365 days, ₹1 and ₹100000, a cap equal to the cups', () => {
-    expect(validatePlanInput({ ...WEEKLY, drinks_total: 1, drinks_paid: 1, max_per_day: 1, validity_days: 1, drink_value_inr: 1, price_inr: 1 }, { partial: false }).ok).toBe(true);
-    expect(validatePlanInput({ ...WEEKLY, drinks_total: 50, drinks_paid: 50, max_per_day: 50, validity_days: 365, drink_value_inr: 5000, price_inr: 100000 }, { partial: false }).ok).toBe(true);
-  });
-
-  it('refuses a defaulted price that comes out above the maximum', () => {
-    const body: Record<string, unknown> = { ...WEEKLY, drinks_total: 50, drinks_paid: 50, drink_value_inr: 5000 };
-    delete body.price_inr;
-    expect(validatePlanInput(body, { partial: false }).ok).toBe(false);
+  it('accepts the bounds: 1 and 50 cups, 1 and 365 days, a cap equal to the cups', () => {
+    expect(validatePlanInput({ ...WEEKLY, drinks_total: 1, drinks_paid: 1, max_per_day: 1, validity_days: 1 }, { partial: false }).ok).toBe(true);
+    expect(validatePlanInput({ ...WEEKLY, drinks_total: 50, drinks_paid: 50, max_per_day: 50, validity_days: 365 }, { partial: false }).ok).toBe(true);
   });
 
   it('refuses a body that is not an object', () => {
@@ -572,9 +575,42 @@ describe('validatePlanInput (create)', () => {
   });
 });
 
+describe('validatePlanInput: a price or a cup value is refused (CP-D24)', () => {
+  it("says so in the owner's words", () => {
+    expect(PLAN_NO_PRICE_MESSAGE).toBe("A Ritual's price now follows the drink the customer picks — plans have no price.");
+  });
+
+  it.each([
+    ['price_inr', 750],
+    ['price_inr', 0],
+    ['price_inr', null],
+    ['drink_value_inr', 150],
+    ['drink_value_inr', null],
+    ['drink_value_inr', '150'],
+  ])('refuses %s = %j on create', (key, value) => {
+    expect(validatePlanInput({ ...WEEKLY, [key]: value }, { partial: false })).toEqual({ ok: false, error: PLAN_NO_PRICE_MESSAGE });
+  });
+
+  it.each([
+    ['price_inr', 800],
+    ['price_inr', null],
+    ['drink_value_inr', 120],
+  ])('refuses %s = %j on edit, even alone', (key, value) => {
+    expect(validatePlanInput({ [key]: value }, { partial: true })).toEqual({ ok: false, error: PLAN_NO_PRICE_MESSAGE });
+  });
+
+  it('refuses it even when everything else is also wrong, so a stale form hears this first', () => {
+    expect(validatePlanInput({ name: '', price_inr: 750 }, { partial: false })).toEqual({ ok: false, error: PLAN_NO_PRICE_MESSAGE });
+  });
+
+  it('an absent key is fine: undefined is not "sent"', () => {
+    expect(validatePlanInput({ ...WEEKLY, price_inr: undefined, drink_value_inr: undefined }, { partial: false }).ok).toBe(true);
+  });
+});
+
 describe('validatePlanInput (edit)', () => {
   it('validates only the keys present', () => {
-    expect(validatePlanInput({ price_inr: 800 }, { partial: true })).toEqual({ ok: true, value: { price_inr: 800 } });
+    expect(validatePlanInput({ validity_days: 10 }, { partial: true })).toEqual({ ok: true, value: { validity_days: 10 } });
     expect(validatePlanInput({ is_active: true, name: ' Weekly ' }, { partial: true })).toEqual({
       ok: true,
       value: { is_active: true, name: 'Weekly' },
@@ -586,7 +622,7 @@ describe('validatePlanInput (edit)', () => {
   });
 
   it('still bounds every key it is given', () => {
-    expect(validatePlanInput({ price_inr: 0 }, { partial: true }).ok).toBe(false);
+    expect(validatePlanInput({ drinks_paid: 0 }, { partial: true }).ok).toBe(false);
     expect(validatePlanInput({ name: '' }, { partial: true }).ok).toBe(false);
     expect(validatePlanInput({ validity_days: 400 }, { partial: true }).ok).toBe(false);
   });
@@ -606,6 +642,51 @@ describe('validatePlanInput (edit)', () => {
   it('refuses an edit that carries nothing it knows', () => {
     expect(validatePlanInput({}, { partial: true })).toEqual({ ok: false, error: 'Nothing to update.' });
     expect(validatePlanInput({ id: 'x' }, { partial: true }).ok).toBe(false);
+  });
+});
+
+describe('per-drink pricing (CP-D22, CP-D25)', () => {
+  it('ritualPriceFor: cups paid × the chosen size price (Weekly 5 ×, Monthly 6 ×)', () => {
+    expect(ritualPriceFor({ drinks_paid: 5 }, 120)).toBe(600); // Weekly, Cappuccino Large
+    expect(ritualPriceFor({ drinks_paid: 6 }, 140)).toBe(840); // Monthly, Latte Large
+    expect(ritualPriceFor({ drinks_paid: 5 }, 1)).toBe(5);
+    expect(ritualPriceFor({ drinks_paid: 1 }, 250)).toBe(250);
+  });
+
+  it('ritualPriceFor plus GST: spec §13 money examples', () => {
+    // 5% exclusive: 600 + 30 = 630, 840 + 42 = 882.
+    expect(computeBill(ritualPriceFor({ drinks_paid: 5 }, 120), EXCLUSIVE, 0, ritualPriceFor({ drinks_paid: 5 }, 120)).total_inr).toBe(630);
+    expect(computeBill(ritualPriceFor({ drinks_paid: 6 }, 140), EXCLUSIVE, 0, ritualPriceFor({ drinks_paid: 6 }, 140)).total_inr).toBe(882);
+  });
+
+  it('the saving is the same whichever drink is bought: paid ÷ given', () => {
+    // 5 × p of a 7 × p value is always 29% off, so the plan alone carries the discount.
+    for (const cup of [80, 120, 215]) {
+      expect(1 - ritualPriceFor({ drinks_paid: 5 }, cup) / (7 * cup)).toBeCloseTo(2 / 7, 10);
+    }
+    expect(planDiscountPercent({ drinks_total: 7, drinks_paid: 5 })).toBe(29);
+  });
+
+  it('ritualDrinkLabel: "Cappuccino · Large", just the drink without a size', () => {
+    expect(ritualDrinkLabel({ name: 'Cappuccino', size_label: 'Large' })).toBe('Cappuccino · Large');
+    expect(ritualDrinkLabel({ name: '  Lotus Biscoff Latte ', size_label: ' Extra Large ' })).toBe('Lotus Biscoff Latte · Extra Large');
+    expect(ritualDrinkLabel({ name: 'Cold Brew', size_label: '' })).toBe('Cold Brew');
+    expect(ritualDrinkLabel({ name: 'Cold Brew', size_label: '   ' })).toBe('Cold Brew');
+  });
+
+  it('ritualDrinkLabel never exceeds 80 characters (the issuing trigger drops a longer label)', () => {
+    const long = ritualDrinkLabel({ name: 'N'.repeat(100), size_label: 'Large' });
+    expect(long.length).toBe(MAX_DRINK_LABEL_LENGTH);
+    expect(long.endsWith('…')).toBe(true);
+    // exactly 80 is left alone
+    const exact = ritualDrinkLabel({ name: 'N'.repeat(72), size_label: 'Large' }); // 72 + 3 + 5
+    expect(exact).toBe(`${'N'.repeat(72)} · Large`);
+    expect(exact.length).toBe(80);
+  });
+
+  it('ritualLineName: "Weekly Ritual — Cappuccino (Large)", no brackets without a size', () => {
+    expect(ritualLineName({ name: 'Weekly Ritual' }, { name: 'Cappuccino', size_label: 'Large' })).toBe('Weekly Ritual — Cappuccino (Large)');
+    expect(ritualLineName({ name: 'Monthly Ritual' }, { name: 'Cold Brew', size_label: '' })).toBe('Monthly Ritual — Cold Brew');
   });
 });
 

@@ -10,13 +10,15 @@
 //          paid for yet, with Collect payment.
 //   right  the plans on sale, each with Sell.
 //
-// Selling is two steps, deliberately: Sell creates the sale ORDER (unpaid, one
-// line) after a confirm sheet, then the payment step is the SAME one Settle uses
+// Selling is three steps, deliberately (CP-D22): Sell opens the drink and size
+// picker, where the price is shown live (the plan's cups paid × the size's menu
+// price, plus GST); Continue opens a confirm sheet; confirming creates the sale
+// ORDER (unpaid, one line); then the payment step is the SAME one Settle uses
 // (SettlePaymentDialog: cash with change, UPI, card, a split) against that order.
 // The pass is issued by the database the moment the order is paid (CP-D6), so a
 // sale nobody pays for simply waits under "Unpaid Ritual sales" here and in
-// Settle. Nothing on this screen decides a rupee: the plan price comes from the
-// plan, the total charged from the order the server made.
+// Settle. Nothing on this screen decides a rupee: the price shown beforehand is a
+// preview, the total charged comes from the order the server made.
 //
 // Everything is hidden while the flag is off (the page guards it, every API
 // answers 404).
@@ -29,6 +31,7 @@ import { AdjustPassDialog, type AdjustKind } from '@/components/staff/passes/Adj
 import { PassCard } from '@/components/staff/passes/PassCard';
 import { PlanCard } from '@/components/staff/passes/PlanCard';
 import { SellConfirmDialog, type CreatedSale } from '@/components/staff/passes/SellConfirmDialog';
+import { SellDrinkDialog } from '@/components/staff/passes/SellDrinkDialog';
 import { useHolderLookup } from '@/components/staff/passes/useHolderLookup';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -40,14 +43,17 @@ import type { CustomerSuggestion } from '@/lib/customers/phoneSearch';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import type { CoffeePassPlan, PassSummary } from '@/lib/passes/types';
+import { NO_CHOICE, choiceLineName, type CompleteChoice, type DrinkChoice } from '@/lib/passes/ritualDrinks';
+import type { CoffeePassPlan, PassSummary, RitualDrink } from '@/lib/passes/types';
 import { shouldAutofillName } from '@/lib/pos/nameAutofill';
 import {
   MAX_SALE_NAME_LENGTH,
   saleActiveMessage,
   saleAttemptKey,
+  saleFingerprint,
   salePaidFallbackMessage,
   sellBlockedReason,
+  unpaidSaleFor,
   type HolderPass,
   type PlanGst,
   type RitualSale,
@@ -65,7 +71,7 @@ function toSettleOrder(order: OrderResponse): OrderWithItems {
 
 type PlansState =
   | { status: 'loading' }
-  | { status: 'ready'; plans: CoffeePassPlan[]; gst: PlanGst | null }
+  | { status: 'ready'; plans: CoffeePassPlan[]; gst: PlanGst | null; eligible: RitualDrink[] }
   | { status: 'error'; message: string };
 
 interface Notice {
@@ -155,13 +161,18 @@ export function RitualPassesScreen({
     try {
       const res = await fetch('/api/passes/plans', { cache: 'no-store' });
       const data = (await res.json().catch(() => null)) as
-        | { plans?: CoffeePassPlan[]; gst?: PlanGst; error?: string }
+        | { plans?: CoffeePassPlan[]; eligible?: RitualDrink[]; gst?: PlanGst; error?: string }
         | null;
       if (!res.ok || !data?.plans) {
         setPlans({ status: 'error', message: data?.error ?? 'Could not load the plans.' });
         return;
       }
-      setPlans({ status: 'ready', plans: data.plans, gst: data.gst ?? null });
+      setPlans({
+        status: 'ready',
+        plans: data.plans,
+        gst: data.gst ?? null,
+        eligible: Array.isArray(data.eligible) ? data.eligible : [],
+      });
     } catch {
       setPlans({ status: 'error', message: 'Could not reach the server. Check the connection and try again.' });
     }
@@ -174,11 +185,16 @@ export function RitualPassesScreen({
   const printDock = usePrintDock();
   const { autoPrint } = useCounterDefaults();
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [selling, setSelling] = useState<CoffeePassPlan | null>(null);
+  // Two steps before the sale exists: `choosing` (the drink and size picker, with
+  // what was chosen before when the confirm sheet sent the cashier back) and
+  // `selling` (the confirm sheet, for a complete choice).
+  const [choosing, setChoosing] = useState<{ plan: CoffeePassPlan; initial: DrinkChoice } | null>(null);
+  const [selling, setSelling] = useState<{ plan: CoffeePassPlan; choice: CompleteChoice } | null>(null);
   const [paying, setPaying] = useState<{ order: OrderWithItems; planName: string } | null>(null);
   const [collectingId, setCollectingId] = useState<string | null>(null);
   const [collectError, setCollectError] = useState<string | null>(null);
-  // One key per sale attempt (see SellConfirmDialog): kept until a sale exists.
+  // One key per sale attempt (see SellConfirmDialog): kept until a sale exists, and
+  // replaced when the customer, the plan or the drink and size changes.
   const attempt = useRef<{ fingerprint: string; key: string } | null>(null);
 
   const sellReason = sellBlockedReason({
@@ -194,9 +210,32 @@ export function RitualPassesScreen({
 
   function openSell(plan: CoffeePassPlan) {
     if (sellReason) return;
-    attempt.current = saleAttemptKey(attempt.current, `${lookupPhone}|${name.trim()}|${plan.id}`);
     setNotice(null);
-    setSelling(plan);
+    setChoosing({ plan, initial: NO_CHOICE });
+  }
+
+  /** The drink and size are chosen: the confirm sheet, with a key for exactly this sale. */
+  function continueToConfirm(plan: CoffeePassPlan, choice: CompleteChoice) {
+    attempt.current = saleAttemptKey(
+      attempt.current,
+      saleFingerprint({
+        phone: lookupPhone,
+        name,
+        planId: plan.id,
+        menuItemId: choice.drink.id,
+        variantId: choice.size.variant_id,
+      }),
+    );
+    setChoosing(null);
+    setSelling({ plan, choice });
+  }
+
+  /** Back from the confirm sheet to the picker, keeping the drink and size so a small change is one tap. */
+  function changeDrink() {
+    if (!selling) return;
+    const { plan, choice } = selling;
+    setSelling(null);
+    setChoosing({ plan, initial: { drinkId: choice.drink.id, variantId: choice.size.variant_id } });
   }
 
   /** A paid sale: say the Ritual is live (read back from the customer's own passes) and offer the receipt. */
@@ -214,11 +253,12 @@ export function RitualPassesScreen({
   );
 
   function handleCreated(sale: CreatedSale) {
-    const plan = selling;
+    const sold = selling;
     attempt.current = null; // a sale exists: the next one is a new attempt
     setSelling(null);
     const order = sale.order;
-    const planName = plan?.name ?? order.items[0]?.name_snapshot ?? PASS_PROGRAM_NAME;
+    // The sale line's own name: "Weekly Ritual — Cappuccino (Large)".
+    const planName = sold ? choiceLineName(sold.plan, sold.choice) : (order.items[0]?.name_snapshot ?? PASS_PROGRAM_NAME);
     if (order.payment_status === 'paid') {
       // A replayed sale that was already paid: nothing to collect.
       void announcePaid(order.id, planName);
@@ -558,7 +598,6 @@ export function RitualPassesScreen({
                 <PlanCard
                   key={plan.id}
                   plan={plan}
-                  gst={plans.gst}
                   sellBlocked={sellReason !== null}
                   blockedReasonId={SELL_REASON_ID}
                   onSell={openSell}
@@ -569,14 +608,28 @@ export function RitualPassesScreen({
         </section>
       </div>
 
+      {choosing && plans.status === 'ready' ? (
+        <SellDrinkDialog
+          key={choosing.plan.id}
+          plan={choosing.plan}
+          gst={plans.gst}
+          drinks={plans.eligible}
+          initial={choosing.initial}
+          onCancel={() => setChoosing(null)}
+          onContinue={(choice) => continueToConfirm(choosing.plan, choice)}
+        />
+      ) : null}
+
       {selling && plans.status === 'ready' ? (
         <SellConfirmDialog
-          plan={selling}
+          plan={selling.plan}
+          choice={selling.choice}
           gst={plans.gst}
           customerName={name}
           phone={lookupPhone}
           idempotencyKey={attempt.current?.key ?? ''}
-          unpaidSame={unpaidSales.find((s) => s.plan_name === selling.name) ?? null}
+          unpaidSame={unpaidSaleFor(unpaidSales, selling.plan, selling.choice)}
+          onChangeDrink={changeDrink}
           onCancel={() => setSelling(null)}
           onCreated={handleCreated}
         />

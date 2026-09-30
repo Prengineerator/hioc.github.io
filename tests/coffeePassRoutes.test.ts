@@ -28,6 +28,16 @@ const PLAN_ID = '00000000-0000-4000-8000-0000000000a1';
 const MONTHLY_ID = '00000000-0000-4000-8000-0000000000a2';
 const INACTIVE_ID = '00000000-0000-4000-8000-0000000000a3';
 const PASS_ID = '00000000-0000-4000-8000-0000000000b1';
+// The drinks a Ritual is bought for (per-drink pricing, spec §13).
+const CAPPUCCINO = '00000000-0000-4000-8000-0000000000e1';
+const CAPPUCCINO_S = '00000000-0000-4000-8000-0000000000f0'; // Small, ₹90
+const CAPPUCCINO_L = '00000000-0000-4000-8000-0000000000f1'; // Large, ₹120
+const LATTE = '00000000-0000-4000-8000-0000000000e2';
+const LATTE_L = '00000000-0000-4000-8000-0000000000f2'; // Large, ₹140
+const CROISSANT = '00000000-0000-4000-8000-0000000000e3'; // not pass_eligible
+const CROISSANT_R = '00000000-0000-4000-8000-0000000000f3';
+const WATER = '00000000-0000-4000-8000-0000000000e4'; // in-store only
+const WATER_R = '00000000-0000-4000-8000-0000000000f4';
 const PHONE = '+919876543210';
 const KEY = 'key-abcdefgh-0001';
 
@@ -128,6 +138,7 @@ const { loadPassSummaryById } = await import('@/lib/passes/server');
 // Fixtures
 // ---------------------------------------------------------------------------
 
+/** A plan is only the recipe now (CP-D24): no price, no cup value. */
 function plan(over: Row = {}): Row {
   return {
     id: PLAN_ID,
@@ -136,13 +147,50 @@ function plan(over: Row = {}): Row {
     drinks_total: 7,
     drinks_paid: 5,
     validity_days: 7,
-    drink_value_inr: 150,
-    price_inr: 750,
+    drink_value_inr: null,
+    price_inr: null,
     max_per_day: null,
     gst_exempt: false,
     is_active: true,
     sort_order: 10,
     ...over,
+  };
+}
+
+function menuItem(over: Row = {}): Row {
+  return {
+    name: 'Cappuccino',
+    description: '',
+    category: 'Coffee',
+    parent_category: 'Hot',
+    is_veg: true,
+    is_available: true,
+    sort_order: 1,
+    unavailable_until: null,
+    short_code: null,
+    in_store_only: false,
+    gst_exempt: false,
+    pass_eligible: true,
+    ...over,
+  };
+}
+
+/** The menu a Ritual is bought from: two eligible drinks with sizes, one that is not eligible, one that is in-store only. */
+function menuTables(): Record<string, Row[]> {
+  return {
+    menu_items: [
+      menuItem({ id: CAPPUCCINO }),
+      menuItem({ id: LATTE, name: 'Latte', sort_order: 2 }),
+      menuItem({ id: CROISSANT, name: 'Croissant', category: 'Eatery', pass_eligible: false }),
+      menuItem({ id: WATER, name: 'Water Bottle', category: 'In-store', in_store_only: true }),
+    ],
+    menu_item_variants: [
+      { id: CAPPUCCINO_L, menu_item_id: CAPPUCCINO, label: 'Large', price_inr: 120, sort_order: 10 },
+      { id: CAPPUCCINO_S, menu_item_id: CAPPUCCINO, label: 'Small', price_inr: 90, sort_order: 0 },
+      { id: LATTE_L, menu_item_id: LATTE, label: 'Large', price_inr: 140, sort_order: 0 },
+      { id: CROISSANT_R, menu_item_id: CROISSANT, label: 'Regular', price_inr: 80, sort_order: 0 },
+      { id: WATER_R, menu_item_id: WATER, label: 'Regular', price_inr: 20, sort_order: 0 },
+    ],
   };
 }
 
@@ -157,15 +205,17 @@ function balance(over: Row = {}): Row {
     drinks_used: 2,
     drinks_credited: 0,
     drinks_remaining: 5,
-    drink_value_inr: 150,
+    drink_value_inr: 120,
     max_per_day: null,
     used_today: 0,
-    price_inr: 750,
+    price_inr: 600,
     starts_at: '2026-10-05T04:30:00.000Z',
     expires_at: '2099-01-01T18:30:00.000Z',
     status: 'active',
     state: 'active',
     order_id: 'order-sale-1',
+    drink_menu_item_id: CAPPUCCINO,
+    drink_label: 'Cappuccino · Large',
     created_at: '2026-10-05T04:30:00.000Z',
     ...over,
   };
@@ -213,7 +263,7 @@ beforeEach(() => {
   state.rateOk = true;
   state.rateCalls = [];
   state.gatewayConfigured = true;
-  state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_rzp_1', amountInr: 788, keyId: 'rzp_test_key' };
+  state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_rzp_1', amountInr: 630, keyId: 'rzp_test_key' };
   state.intentCalls = [];
   state.counterCustomer = null;
   state.counterCalls = [];
@@ -271,19 +321,14 @@ describe('sign-in', () => {
 // ---------------------------------------------------------------------------
 
 describe('GET /api/passes/plans', () => {
-  const tables = () => ({
+  const tables = (): Record<string, Row[]> => ({
     coffee_pass_plans: [
-      plan({ id: MONTHLY_ID, name: 'Monthly Ritual', price_inr: 900, validity_days: 30, drinks_paid: 6, sort_order: 20 }),
+      plan({ id: MONTHLY_ID, name: 'Monthly Ritual', validity_days: 30, drinks_paid: 6, sort_order: 20 }),
       plan(),
-      plan({ id: '00000000-0000-4000-8000-0000000000a4', name: 'Mini Ritual', price_inr: 300, drinks_total: 3, drinks_paid: 2 }),
+      plan({ id: '00000000-0000-4000-8000-0000000000a4', name: 'Mini Ritual', drinks_total: 3, drinks_paid: 2 }),
       plan({ id: INACTIVE_ID, name: 'Secret Ritual', is_active: false, sort_order: 1 }),
     ],
-    menu_items: [
-      { id: 'm-3', name: 'Cold Brew', category: 'cold-brews', is_available: true, sort_order: 1, pass_eligible: true },
-      { id: 'm-2', name: 'Latte', category: 'coffee', is_available: false, sort_order: 2, pass_eligible: true },
-      { id: 'm-1', name: 'Cappuccino', category: 'coffee', is_available: true, sort_order: 1, pass_eligible: true },
-      { id: 'm-4', name: 'Croissant', category: 'bakes', is_available: true, sort_order: 1, pass_eligible: false },
-    ],
+    ...menuTables(),
   });
 
   it('is public: no session needed', async () => {
@@ -294,11 +339,11 @@ describe('GET /api/passes/plans', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns the active plans by sort_order then price, and never an inactive one', async () => {
+  it('returns the active plans by sort_order then name, and never an inactive one', async () => {
     freshAdmin(tables());
     const body = await (await plansRoute.GET()).json();
     expect(body.plans.map((p: Row) => p.name)).toEqual(['Mini Ritual', 'Weekly Ritual', 'Monthly Ritual']);
-    // The plan is the app's CoffeePassPlan shape.
+    // The plan is the app's CoffeePassPlan shape: the recipe, and NO price (CP-D24).
     expect(body.plans[1]).toEqual({
       id: PLAN_ID,
       name: 'Weekly Ritual',
@@ -306,8 +351,8 @@ describe('GET /api/passes/plans', () => {
       drinks_total: 7,
       drinks_paid: 5,
       validity_days: 7,
-      drink_value_inr: 150,
-      price_inr: 750,
+      drink_value_inr: null,
+      price_inr: null,
       max_per_day: null,
       gst_exempt: false,
       is_active: true,
@@ -315,14 +360,94 @@ describe('GET /api/passes/plans', () => {
     });
   });
 
-  it('lists only the eligible drinks, by category then the menu order, with availability', async () => {
+  it('lists the eligible drinks with their sizes on sale and each size\'s menu price, cheapest size first', async () => {
     freshAdmin(tables());
     const body = await (await plansRoute.GET()).json();
+    // Croissant is not eligible; the water bottle is in-store only (the website would refuse it).
     expect(body.eligible).toEqual([
-      { id: 'm-1', name: 'Cappuccino', category: 'coffee', is_available: true },
-      { id: 'm-2', name: 'Latte', category: 'coffee', is_available: false },
-      { id: 'm-3', name: 'Cold Brew', category: 'cold-brews', is_available: true },
+      {
+        id: CAPPUCCINO,
+        name: 'Cappuccino',
+        category: 'Coffee',
+        is_available: true,
+        sizes: [
+          { variant_id: CAPPUCCINO_S, label: 'Small', price_inr: 90 },
+          { variant_id: CAPPUCCINO_L, label: 'Large', price_inr: 120 },
+        ],
+      },
+      { id: LATTE, name: 'Latte', category: 'Coffee', is_available: true, sizes: [{ variant_id: LATTE_L, label: 'Large', price_inr: 140 }] },
     ]);
+  });
+
+  it('lists drinks by category then the menu order', async () => {
+    const t = tables();
+    t.menu_items.push(menuItem({ id: 'm-cold', name: 'Cold Brew', category: 'Cold Brews', sort_order: 1 }));
+    t.menu_item_variants.push({ id: 'v-cold', menu_item_id: 'm-cold', label: 'Regular', price_inr: 150, sort_order: 0 });
+    freshAdmin(t);
+    const body = await (await plansRoute.GET()).json();
+    expect(body.eligible.map((d: Row) => d.name)).toEqual(['Cappuccino', 'Latte', 'Cold Brew']);
+  });
+
+  it('keeps a drink that is off the menu today, flagged is_available: false (the page greys it out)', async () => {
+    const t = tables();
+    t.menu_items[1].is_available = false; // Latte 86'd
+    freshAdmin(t);
+    const body = await (await plansRoute.GET()).json();
+    expect(body.eligible.find((d: Row) => d.id === LATTE)).toMatchObject({ is_available: false, sizes: [{ label: 'Large', price_inr: 140 }] });
+    // A snooze counts too.
+    const snoozed = tables();
+    snoozed.menu_items[0].unavailable_until = new Date(Date.now() + 3_600_000).toISOString();
+    freshAdmin(snoozed);
+    expect((await (await plansRoute.GET()).json()).eligible[0]).toMatchObject({ id: CAPPUCCINO, is_available: false });
+  });
+
+  it("leaves out a size the owner has switched off (hidden_variant_labels), the same way the menu does", async () => {
+    freshAdmin(tables());
+    state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_variant_labels: ['Large'] };
+    const body = await (await plansRoute.GET()).json();
+    // Cappuccino keeps only Small; Latte's ONLY size is switched off, so the menu's safety rule keeps it.
+    expect(body.eligible.find((d: Row) => d.id === CAPPUCCINO).sizes).toEqual([{ variant_id: CAPPUCCINO_S, label: 'Small', price_inr: 90 }]);
+    expect(body.eligible.find((d: Row) => d.id === LATTE).sizes).toEqual([{ variant_id: LATTE_L, label: 'Large', price_inr: 140 }]);
+  });
+
+  it('a size switched off in just one category is still on sale in the others', async () => {
+    freshAdmin(tables());
+    state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_variant_labels: ['Small|Iced Coffee'] };
+    const sizes = (await (await plansRoute.GET()).json()).eligible.find((d: Row) => d.id === CAPPUCCINO).sizes;
+    expect(sizes.map((z: Row) => z.label)).toEqual(['Small', 'Large']);
+    state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_variant_labels: ['Small|Coffee'] };
+    const hidden = (await (await plansRoute.GET()).json()).eligible.find((d: Row) => d.id === CAPPUCCINO).sizes;
+    expect(hidden.map((z: Row) => z.label)).toEqual(['Large']);
+  });
+
+  it('leaves out a drink in a switched-off category', async () => {
+    freshAdmin(tables());
+    state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_categories: ['Coffee'] };
+    expect((await (await plansRoute.GET()).json()).eligible).toEqual([]);
+  });
+
+  it('omits a drink with no size on sale, and a size priced at ₹0', async () => {
+    const t = tables();
+    t.menu_item_variants = t.menu_item_variants.filter((v) => v.menu_item_id !== LATTE); // Latte has no size at all
+    t.menu_item_variants.push({ id: 'v-free', menu_item_id: CAPPUCCINO, label: 'Taster', price_inr: 0, sort_order: 20 });
+    freshAdmin(t);
+    const body = await (await plansRoute.GET()).json();
+    expect(body.eligible.map((d: Row) => d.id)).toEqual([CAPPUCCINO]);
+    expect(body.eligible[0].sizes.map((z: Row) => z.label)).toEqual(['Small', 'Large']); // no Taster
+  });
+
+  it("never lists an in-store-only drink (the website would refuse to sell it), even one that is eligible", async () => {
+    freshAdmin(tables());
+    const body = await (await plansRoute.GET()).json();
+    expect(body.eligible.map((d: Row) => d.id)).not.toContain(WATER);
+    expect(JSON.stringify(body)).not.toContain('Water Bottle');
+  });
+
+  it('reads only the eligible items from the menu', async () => {
+    const admin = freshAdmin(tables());
+    await plansRoute.GET();
+    const menuRead = admin.calls.find((c) => c.table === 'menu_items');
+    expect(menuRead?.filters).toEqual([{ op: 'eq', col: 'pass_eligible', val: true }]);
   });
 
   it('says whether online purchase is possible, from the gateway module', async () => {
@@ -389,6 +514,8 @@ describe('GET /api/passes/mine', () => {
 
     expect(body.passes).toHaveLength(1);
     expect(body.passes[0]).toMatchObject({ id: 'p-active', drinks_remaining: 5, state: 'active', plan_name: 'Weekly Ritual' });
+    // Per-drink pricing: the pass says which drink it was bought for (CP-D25).
+    expect(body.passes[0]).toMatchObject({ drink_label: 'Cappuccino · Large', drink_menu_item_id: CAPPUCCINO, drink_value_inr: 120 });
     expect(body.passes[0].history).toEqual([
       { order_id: 'o-2', order_number: 42, drinks: 1, covered_inr: 150, created_at: '2026-10-07T06:00:00.000Z', reversed: true },
       { order_id: 'o-1', order_number: 41, drinks: 1, covered_inr: 120, created_at: '2026-10-06T06:00:00.000Z', reversed: false },
@@ -467,12 +594,18 @@ describe('POST /api/passes/checkout', () => {
   const setup = (profile: Row | null = { id: CUSTOMER, name: 'Asha', phone: PHONE, phone_verified: true }) => {
     asCustomer();
     return freshAdmin({
-      coffee_pass_plans: [plan(), plan({ id: INACTIVE_ID, name: 'Secret Ritual', is_active: false })],
+      coffee_pass_plans: [
+        plan(),
+        plan({ id: MONTHLY_ID, name: 'Monthly Ritual', drinks_paid: 6, validity_days: 30, sort_order: 20 }),
+        plan({ id: INACTIVE_ID, name: 'Secret Ritual', is_active: false }),
+      ],
       profiles: profile ? [profile] : [],
+      ...menuTables(),
     });
   };
-  const checkout = (body: unknown = { plan_id: PLAN_ID }) =>
-    checkoutRoute.POST(jsonRequest('POST', '/api/passes/checkout', body));
+  /** Weekly, Cappuccino Large (₹120) unless told otherwise. */
+  const buy = (over: Row = {}) => ({ plan_id: PLAN_ID, menu_item_id: CAPPUCCINO, variant_id: CAPPUCCINO_L, ...over });
+  const checkout = (body: unknown = buy()) => checkoutRoute.POST(jsonRequest('POST', '/api/passes/checkout', body));
 
   it('creates the sale order and the Razorpay intent, and returns what the payment window needs', async () => {
     const admin = setup();
@@ -482,10 +615,10 @@ describe('POST /api/passes/checkout', () => {
     expect(body).toEqual({
       order_id: 'orders-1',
       order_number: expect.any(Number),
-      total_inr: 788, // 750 + 5% GST
-      payment: { gateway: 'razorpay', gatewayOrderId: 'order_rzp_1', amountInr: 788, keyId: 'rzp_test_key' },
+      total_inr: 630, // 5 × ₹120 = ₹600, + 5% GST
+      payment: { gateway: 'razorpay', gatewayOrderId: 'order_rzp_1', amountInr: 630, keyId: 'rzp_test_key' },
     });
-    expect(state.intentCalls).toEqual([['orders-1', 788]]);
+    expect(state.intentCalls).toEqual([['orders-1', 630]]);
 
     // The order: a coffee_pass sale, on the website, awaiting payment, owned by the session.
     expect(admin.tables.orders).toHaveLength(1);
@@ -500,25 +633,73 @@ describe('POST /api/passes/checkout', () => {
       created_by: null,
       customer_name: 'Asha',
       customer_phone: PHONE,
-      subtotal_inr: 750,
-      tax_inr: 38,
+      subtotal_inr: 600,
+      tax_inr: 30,
       packaging_inr: 0,
       discount_inr: 0,
-      total_inr: 788,
+      total_inr: 630,
     });
-    // ...with its one line, naming the plan.
+    // ...with its one line, naming the plan AND the drink.
     expect(admin.tables.order_items).toEqual([
       expect.objectContaining({
         order_id: 'orders-1',
         menu_item_id: null,
-        name_snapshot: 'Weekly Ritual',
+        name_snapshot: 'Weekly Ritual — Cappuccino (Large)',
         variant_label_snapshot: '7 cups · 7 days',
-        price_inr_snapshot: 750,
+        price_inr_snapshot: 600,
         quantity: 1,
-        line_total_inr: 750,
+        line_total_inr: 600,
         coffee_pass_plan_id: PLAN_ID,
       }),
     ]);
+  });
+
+  it('freezes the drink on the line\'s terms: the cup value is the size price, plus the drink id and label', async () => {
+    const admin = setup();
+    await checkout();
+    expect(admin.tables.order_items[0].coffee_pass_terms).toEqual({
+      plan_name: 'Weekly Ritual',
+      drinks_total: 7,
+      drink_value_inr: 120,
+      validity_days: 7,
+      max_per_day: null,
+      drink_menu_item_id: CAPPUCCINO,
+      drink_label: 'Cappuccino · Large',
+    });
+  });
+
+  it('prices Weekly at 5 × the chosen size and Monthly at 6 ×: Small ₹90 → ₹450, Latte Large ₹140 → Monthly ₹840 (+₹42 GST = ₹882)', async () => {
+    let admin = setup();
+    let body = await (await checkout(buy({ variant_id: CAPPUCCINO_S }))).json();
+    expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 450, tax_inr: 23, total_inr: 473 }); // 22.5 rounds up
+    expect(admin.tables.order_items[0]).toMatchObject({ name_snapshot: 'Weekly Ritual — Cappuccino (Small)', line_total_inr: 450 });
+    expect(admin.tables.order_items[0].coffee_pass_terms).toMatchObject({ drink_value_inr: 90, drink_label: 'Cappuccino · Small' });
+    expect(body.total_inr).toBe(473);
+
+    admin = setup();
+    state.intentCalls = [];
+    body = await (await checkout(buy({ plan_id: MONTHLY_ID, menu_item_id: LATTE, variant_id: LATTE_L }))).json();
+    expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 840, tax_inr: 42, total_inr: 882 });
+    expect(admin.tables.order_items[0]).toMatchObject({
+      name_snapshot: 'Monthly Ritual — Latte (Large)',
+      variant_label_snapshot: '7 cups · 30 days',
+      line_total_inr: 840,
+    });
+    expect(admin.tables.order_items[0].coffee_pass_terms).toMatchObject({
+      plan_name: 'Monthly Ritual',
+      validity_days: 30,
+      drink_value_inr: 140,
+      drink_menu_item_id: LATTE,
+    });
+    expect(state.intentCalls).toEqual([['orders-1', 882]]);
+    expect(body.total_inr).toBe(882);
+  });
+
+  it('prices from the MENU: a price or total in the body is ignored', async () => {
+    const admin = setup();
+    await checkout(buy({ price_inr: 1, total_inr: 1, drink_value_inr: 1, amount: 1 }));
+    expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 600, total_inr: 630 });
+    expect(admin.tables.order_items[0].coffee_pass_terms).toMatchObject({ drink_value_inr: 120 });
   });
 
   it('is limited to 10 attempts in 10 minutes per account (429), creating nothing', async () => {
@@ -534,15 +715,105 @@ describe('POST /api/passes/checkout', () => {
     setup();
     expect((await checkoutRoute.POST(jsonRequest('POST', '/api/passes/checkout', '{oops'))).status).toBe(400);
     expect((await checkout({})).status).toBe(400);
-    expect((await checkout({ plan_id: 'weekly' })).status).toBe(400);
-    expect((await checkout({ plan_id: 42 })).status).toBe(400);
+    expect((await checkout(buy({ plan_id: 'weekly' }))).status).toBe(400);
+    expect((await checkout(buy({ plan_id: 42 }))).status).toBe(400);
+  });
+
+  it('requires the drink and the size: a missing or invalid menu_item_id / variant_id is a 400, before anything is read or created', async () => {
+    const admin = setup();
+    const bad = [
+      buy({ menu_item_id: undefined }),
+      buy({ variant_id: undefined }),
+      buy({ menu_item_id: 'cappuccino' }),
+      buy({ variant_id: 'large' }),
+      buy({ menu_item_id: 42 }),
+      buy({ variant_id: null }),
+      { plan_id: PLAN_ID }, // the pre-§13 body
+    ];
+    for (const body of bad) expect((await checkout(body)).status).toBe(400);
+    const error = await (await checkout(buy({ menu_item_id: undefined }))).json();
+    expect(error.error).toBe('menu_item_id must be a drink id');
+    expect((await (await checkout(buy({ variant_id: 'x' }))).json()).error).toBe('variant_id must be a size id');
+    expect(admin.tables.orders ?? []).toEqual([]);
+    expect(admin.calls.some((c) => c.table === 'menu_items')).toBe(false);
+    expect(state.intentCalls).toEqual([]);
   });
 
   it('answers 404 for an inactive or unknown plan, and never says which exists', async () => {
     const admin = setup();
-    expect((await checkout({ plan_id: INACTIVE_ID })).status).toBe(404);
-    expect((await checkout({ plan_id: '00000000-0000-4000-8000-0000000000ff' })).status).toBe(404);
+    expect((await checkout(buy({ plan_id: INACTIVE_ID }))).status).toBe(404);
+    expect((await checkout(buy({ plan_id: '00000000-0000-4000-8000-0000000000ff' }))).status).toBe(404);
     expect(admin.tables.orders ?? []).toEqual([]);
+  });
+
+  describe('the drink must be sellable (400, nothing created)', () => {
+    it("a drink that isn't part of HIOC Ritual", async () => {
+      const admin = setup();
+      const res = await checkout(buy({ menu_item_id: CROISSANT, variant_id: CROISSANT_R }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("That drink isn't part of HIOC Ritual.");
+      expect(admin.tables.orders ?? []).toEqual([]);
+      expect(state.intentCalls).toEqual([]);
+    });
+
+    it('a drink that does not exist reads the same', async () => {
+      setup();
+      const res = await checkout(buy({ menu_item_id: '00000000-0000-4000-8000-00000000dead' }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("That drink isn't part of HIOC Ritual.");
+    });
+
+    it("a size that is not that drink's", async () => {
+      const admin = setup();
+      const res = await checkout(buy({ variant_id: LATTE_L }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain('no such variant');
+      expect(admin.tables.orders ?? []).toEqual([]);
+    });
+
+    it('a size the owner has switched off', async () => {
+      const admin = setup();
+      state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_variant_labels: ['Large'] };
+      const res = await checkout();
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("isn't available right now");
+      expect(admin.tables.orders ?? []).toEqual([]);
+      // The size still on sale sells.
+      expect((await checkout(buy({ variant_id: CAPPUCCINO_S }))).status).toBe(201);
+    });
+
+    it('a drink that is unavailable or in a switched-off category', async () => {
+      const admin = setup();
+      admin.tables.menu_items[0].is_available = false;
+      const res = await checkout();
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('"Cappuccino" is currently unavailable');
+
+      admin.tables.menu_items[0].is_available = true;
+      state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_categories: ['Coffee'] };
+      expect((await checkout()).status).toBe(400);
+      expect(admin.tables.orders ?? []).toEqual([]);
+    });
+
+    it('an in-store-only drink: the website refuses it as an order would', async () => {
+      const admin = setup();
+      admin.tables.menu_items[3].pass_eligible = true; // eligible, but only sold at the counter
+      const res = await checkout(buy({ menu_item_id: WATER, variant_id: WATER_R }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('Water Bottle is only available at the café counter');
+      expect(admin.tables.orders ?? []).toEqual([]);
+    });
+
+    it('answers 500 when the menu cannot be read, creating nothing', async () => {
+      const admin = freshAdmin(
+        { coffee_pass_plans: [plan()], profiles: [{ id: CUSTOMER, name: 'Asha', phone: PHONE }], ...menuTables() },
+        (c) => (c.table === 'menu_items' ? { message: 'menu down' } : null),
+      );
+      asCustomer();
+      const res = await checkout();
+      expect(res.status).toBe(500);
+      expect(admin.tables.orders ?? []).toEqual([]);
+    });
   });
 
   it('asks for a mobile number when the profile has none (400): the order needs one', async () => {
@@ -552,9 +823,9 @@ describe('POST /api/passes/checkout', () => {
     expect((await res.json()).error).toBe('Add your mobile number in your profile first');
     expect(admin.tables.orders ?? []).toEqual([]);
     // Also when there is no profile row at all, or the number is not a valid Indian mobile.
-    freshAdmin({ coffee_pass_plans: [plan()], profiles: [] });
+    freshAdmin({ coffee_pass_plans: [plan()], profiles: [], ...menuTables() });
     expect((await checkout()).status).toBe(400);
-    freshAdmin({ coffee_pass_plans: [plan()], profiles: [{ id: CUSTOMER, name: 'Asha', phone: '12345' }] });
+    freshAdmin({ coffee_pass_plans: [plan()], profiles: [{ id: CUSTOMER, name: 'Asha', phone: '12345' }], ...menuTables() });
     expect((await checkout()).status).toBe(400);
   });
 
@@ -606,7 +877,7 @@ describe('POST /api/passes/checkout', () => {
   it('answers 500 (and names the migration) when the order cannot be created on an old schema', async () => {
     setup();
     freshAdmin(
-      { coffee_pass_plans: [plan()], profiles: [{ id: CUSTOMER, name: 'Asha', phone: PHONE }] },
+      { coffee_pass_plans: [plan()], profiles: [{ id: CUSTOMER, name: 'Asha', phone: PHONE }], ...menuTables() },
       (c) => (c.table === 'orders' && c.op === 'insert' ? { code: '42703', message: 'column "order_kind" of relation "orders" does not exist' } : null),
     );
     const res = await checkout();
@@ -620,12 +891,21 @@ describe('POST /api/passes/checkout', () => {
     const admin = freshAdmin({
       coffee_pass_plans: [plan({ gst_exempt: true })],
       profiles: [{ id: CUSTOMER, name: 'Asha', phone: PHONE }],
+      ...menuTables(),
     });
-    state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_rzp_2', amountInr: 750, keyId: 'k' };
+    state.intent = { gateway: 'razorpay', gatewayOrderId: 'order_rzp_2', amountInr: 600, keyId: 'k' };
     const body = await (await checkout()).json();
-    expect(body.total_inr).toBe(750);
-    expect(admin.tables.orders[0]).toMatchObject({ tax_inr: 0, total_inr: 750 });
+    expect(body.total_inr).toBe(600);
+    expect(admin.tables.orders[0]).toMatchObject({ tax_inr: 0, total_inr: 600 });
     expect(admin.tables.order_items[0]).toMatchObject({ gst_exempt: true });
+  });
+
+  it('GST-inclusive store: the total is the price itself (₹600)', async () => {
+    const admin = setup();
+    state.settings = { ...FALLBACK_STORE_SETTINGS, gst_percent: 5, gst_inclusive: true };
+    const body = await (await checkout()).json();
+    expect(body.total_inr).toBe(600);
+    expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 600, tax_inr: 29, total_inr: 600 });
   });
 });
 
@@ -687,7 +967,7 @@ describe('GET /api/passes/holder', () => {
     expect(body.found).toBe(true);
     expect(body.name).toBe('Asha K');
     expect(body.passes).toHaveLength(1);
-    expect(body.passes[0]).toMatchObject({ id: 'p-live', drinks_remaining: 5, state: 'active' });
+    expect(body.passes[0]).toMatchObject({ id: 'p-live', drinks_remaining: 5, state: 'active', drink_label: 'Cappuccino · Large', drink_menu_item_id: CAPPUCCINO });
     expect(body.passes[0].history).toEqual([
       { order_id: 'o-1', order_number: 41, drinks: 2, covered_inr: 270, created_at: '2026-10-06T06:00:00.000Z', reversed: false },
     ]);
@@ -766,7 +1046,15 @@ describe('GET /api/passes/holder', () => {
 // ---------------------------------------------------------------------------
 
 describe('POST /api/passes/sell', () => {
-  const sellBody = (over: Row = {}) => ({ plan_id: PLAN_ID, customer_phone: '98765 43210', customer_name: ' Asha ', ...over });
+  // Weekly, Cappuccino Large (₹120) unless told otherwise.
+  const sellBody = (over: Row = {}) => ({
+    plan_id: PLAN_ID,
+    menu_item_id: CAPPUCCINO,
+    variant_id: CAPPUCCINO_L,
+    customer_phone: '98765 43210',
+    customer_name: ' Asha ',
+    ...over,
+  });
   const sell = (body: unknown = sellBody(), headers: Record<string, string> = { 'idempotency-key': KEY }) =>
     sellRoute.POST(jsonRequest('POST', '/api/passes/sell', body, headers));
   const setup = (extra: Record<string, Row[]> = {}, extraFail?: (c: Call) => DbError) => {
@@ -774,8 +1062,13 @@ describe('POST /api/passes/sell', () => {
     state.perms = { pass_sell: true };
     return freshAdmin(
       {
-        coffee_pass_plans: [plan(), plan({ id: INACTIVE_ID, name: 'Secret Ritual', is_active: false })],
+        coffee_pass_plans: [
+          plan(),
+          plan({ id: MONTHLY_ID, name: 'Monthly Ritual', drinks_paid: 6, validity_days: 30, sort_order: 20 }),
+          plan({ id: INACTIVE_ID, name: 'Secret Ritual', is_active: false }),
+        ],
         profiles: [{ id: ACCOUNT, name: 'Asha K', phone: PHONE, phone_verified: true }],
+        ...menuTables(),
         ...extra,
       },
       extraFail,
@@ -836,6 +1129,62 @@ describe('POST /api/passes/sell', () => {
       expect((await sell(sellBody({ plan_id: 'weekly' }))).status).toBe(400);
     });
 
+    it('requires the drink and the size: a missing or invalid menu_item_id / variant_id is a 400, without burning the key', async () => {
+      const admin = setup();
+      for (const over of [
+        { menu_item_id: undefined },
+        { variant_id: undefined },
+        { menu_item_id: 'cappuccino' },
+        { variant_id: 'large' },
+        { menu_item_id: 7 },
+        { variant_id: null },
+      ]) {
+        expect((await sell(sellBody(over))).status).toBe(400);
+      }
+      // the pre-§13 body
+      expect((await sell({ plan_id: PLAN_ID, customer_phone: '98765 43210', customer_name: 'Asha' })).status).toBe(400);
+      expect((await (await sell(sellBody({ menu_item_id: undefined }))).json()).error).toBe('menu_item_id must be a drink id');
+      expect((await (await sell(sellBody({ variant_id: 'x' }))).json()).error).toBe('variant_id must be a size id');
+      expect(admin.tables.orders ?? []).toEqual([]);
+      expect(admin.tables.idempotency_keys ?? []).toEqual([]);
+      expect(admin.calls.some((c) => c.table === 'menu_items')).toBe(false);
+    });
+
+    it('refuses a drink that is not sellable as a Ritual (400), creating nothing and leaving the key free', async () => {
+      const admin = setup();
+      const refused: [Row, string][] = [
+        [{ menu_item_id: CROISSANT, variant_id: CROISSANT_R }, "That drink isn't part of HIOC Ritual."],
+        [{ menu_item_id: '00000000-0000-4000-8000-00000000dead' }, "That drink isn't part of HIOC Ritual."],
+        [{ variant_id: LATTE_L }, '"Cappuccino" has no such variant'],
+      ];
+      for (const [over, message] of refused) {
+        const res = await sell(sellBody(over));
+        expect(res.status).toBe(400);
+        expect((await res.json()).error).toBe(message);
+      }
+      // a size switched off, and a drink that is 86'd
+      state.settings = { ...FALLBACK_STORE_SETTINGS, hidden_variant_labels: ['Large'] };
+      expect((await sell()).status).toBe(400);
+      state.settings = { ...FALLBACK_STORE_SETTINGS };
+      admin.tables.menu_items[0].is_available = false;
+      const gone = await sell();
+      expect(gone.status).toBe(400);
+      expect((await gone.json()).error).toBe('"Cappuccino" is currently unavailable');
+      expect(admin.tables.orders ?? []).toEqual([]);
+      expect(admin.tables.idempotency_keys ?? []).toEqual([]);
+      // ...so the same key still sells once the drink is back.
+      admin.tables.menu_items[0].is_available = true;
+      expect((await sell()).status).toBe(201);
+    });
+
+    it('lets the counter sell an in-store-only drink that is eligible (only the website refuses it)', async () => {
+      const admin = setup();
+      admin.tables.menu_items[3].pass_eligible = true;
+      const res = await sell(sellBody({ menu_item_id: WATER, variant_id: WATER_R }));
+      expect(res.status).toBe(201);
+      expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 100, total_inr: 105 }); // 5 × ₹20
+    });
+
     it('rejects a missing or invalid phone (400)', async () => {
       setup();
       expect((await sell(sellBody({ customer_phone: undefined }))).status).toBe(400);
@@ -880,13 +1229,21 @@ describe('POST /api/passes/sell', () => {
         customer_user_id: ACCOUNT, // derived from the phone, never from the body
         customer_name: 'Asha', // trimmed
         customer_phone: PHONE, // stored form
-        subtotal_inr: 750,
-        tax_inr: 38,
+        subtotal_inr: 600, // 5 × the ₹120 Cappuccino Large
+        tax_inr: 30,
         packaging_inr: 0,
-        total_inr: 788,
+        total_inr: 630,
       });
       expect(admin.tables.order_items).toEqual([
-        expect.objectContaining({ menu_item_id: null, name_snapshot: 'Weekly Ritual', quantity: 1, line_total_inr: 750, coffee_pass_plan_id: PLAN_ID }),
+        expect.objectContaining({
+          menu_item_id: null,
+          name_snapshot: 'Weekly Ritual — Cappuccino (Large)',
+          variant_label_snapshot: '7 cups · 7 days',
+          price_inr_snapshot: 600,
+          quantity: 1,
+          line_total_inr: 600,
+          coffee_pass_plan_id: PLAN_ID,
+        }),
       ]);
       expect(admin.tables.order_status_events).toEqual([
         expect.objectContaining({ to_status: 'accepted', actor_id: STAFF, actor_role: 'staff' }),
@@ -897,14 +1254,53 @@ describe('POST /api/passes/sell', () => {
         id: 'orders-1',
         order_kind: 'coffee_pass',
         payment_status: 'unpaid',
-        total_inr: 788,
-        items: [expect.objectContaining({ name_snapshot: 'Weekly Ritual', coffee_pass_plan_id: PLAN_ID, addons: [] })],
+        total_inr: 630,
+        items: [expect.objectContaining({ name_snapshot: 'Weekly Ritual — Cappuccino (Large)', coffee_pass_plan_id: PLAN_ID, addons: [] })],
       });
       expect(body.order).not.toHaveProperty('order_items');
       expect(body.customer).toEqual({ name: 'Asha K', created: false });
       expect(body).not.toHaveProperty('replayed');
       // The counter is not asked to open an account for a number that has one.
       expect(state.counterCalls).toEqual([]);
+    });
+
+    it('carries the chosen drink on the line\'s terms: cup value = the size price, plus the drink id and label', async () => {
+      const admin = setup();
+      await sell();
+      expect(admin.tables.order_items[0].coffee_pass_terms).toEqual({
+        plan_name: 'Weekly Ritual',
+        drinks_total: 7,
+        drink_value_inr: 120,
+        validity_days: 7,
+        max_per_day: null,
+        drink_menu_item_id: CAPPUCCINO,
+        drink_label: 'Cappuccino · Large',
+      });
+    });
+
+    it('prices Weekly at 5 × the chosen size and Monthly at 6 ×, GST on top', async () => {
+      let admin = setup();
+      await sell(sellBody({ variant_id: CAPPUCCINO_S }));
+      expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 450, total_inr: 473 }); // 5 × ₹90
+      expect(admin.tables.order_items[0].coffee_pass_terms).toMatchObject({ drink_value_inr: 90, drink_label: 'Cappuccino · Small' });
+
+      admin = setup();
+      const res = await sell(sellBody({ plan_id: MONTHLY_ID, menu_item_id: LATTE, variant_id: LATTE_L }), { 'idempotency-key': 'key-abcdefgh-0009' });
+      expect(res.status).toBe(201);
+      expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 840, tax_inr: 42, total_inr: 882 }); // 6 × ₹140
+      expect(admin.tables.order_items[0]).toMatchObject({
+        name_snapshot: 'Monthly Ritual — Latte (Large)',
+        variant_label_snapshot: '7 cups · 30 days',
+        line_total_inr: 840,
+      });
+      expect((await res.json()).order).toMatchObject({ total_inr: 882 });
+    });
+
+    it('prices from the MENU: a price or total in the body is ignored', async () => {
+      const admin = setup();
+      await sell(sellBody({ price_inr: 1, total_inr: 1, drink_value_inr: 1 }));
+      expect(admin.tables.orders[0]).toMatchObject({ subtotal_inr: 600, total_inr: 630 });
+      expect(admin.tables.order_items[0].coffee_pass_terms).toMatchObject({ drink_value_inr: 120 });
     });
 
     it('takes no payment and issues nothing itself: the pass is the database’s to issue once paid', async () => {

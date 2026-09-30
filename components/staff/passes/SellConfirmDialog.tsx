@@ -1,23 +1,31 @@
 'use client';
 
 // The confirm sheet before a HIOC Ritual is sold (POST /api/passes/sell): who it
-// is for, which plan, what it comes to. Confirming creates the sale ORDER, unpaid;
+// is for, which plan and drink, what it comes to. The drink and size were chosen
+// in the step before (SellDrinkDialog); "Change drink" goes back to it. Confirming
+// creates the sale ORDER, unpaid;
 // the payment step (the same one Settle uses) follows, and the pass is issued by
 // the database the moment that order is paid (CP-D6).
 //
 // The Idempotency-Key is made by the caller ONCE per sale attempt and handed in,
 // and every retry from this sheet reuses it: a lost response then returns the
 // first sale (`replayed`), never a second one. It is only replaced once a sale
-// exists or the customer/plan changes.
+// exists or the customer, plan, drink or size changes (saleFingerprint).
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
 import { formatIndianMobileDisplay } from '@/lib/phone';
-import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import {
+  choiceLabel,
+  ritualCoverLine,
+  ritualPriceLine,
+  ritualPriceQuote,
+  type CompleteChoice,
+} from '@/lib/passes/ritualDrinks';
 import type { CoffeePassPlan } from '@/lib/passes/types';
 import type { OrderResponse } from '@/lib/api/orders';
-import { planSummaryLabel, salePreview, type PlanGst, type RitualSale } from '@/lib/pos/ritual';
+import { planSummaryLabel, saleSummaryLine, type PlanGst, type RitualSale } from '@/lib/pos/ritual';
 
 export interface CreatedSale {
   order: OrderResponse;
@@ -28,28 +36,34 @@ export interface CreatedSale {
 
 export function SellConfirmDialog({
   plan,
+  choice,
   gst,
   customerName,
   phone,
   idempotencyKey,
   unpaidSame,
+  onChangeDrink,
   onCancel,
   onCreated,
 }: {
   plan: CoffeePassPlan;
+  /** The drink and size being sold. */
+  choice: CompleteChoice;
   gst: PlanGst | null;
   customerName: string;
   /** The 10-digit number. */
   phone: string;
   idempotencyKey: string;
-  /** An unpaid sale of this same plan already waiting for this number, if any. */
+  /** An unpaid sale of this same plan and drink already waiting for this number, if any. */
   unpaidSame: RitualSale | null;
+  /** Back to the drink picker, keeping what was chosen. */
+  onChangeDrink: () => void;
   onCancel: () => void;
   onCreated: (sale: CreatedSale) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const preview = salePreview(plan, gst);
+  const quote = ritualPriceQuote(plan, choice.size.price_inr, gst);
 
   async function confirm() {
     if (busy) return;
@@ -59,7 +73,13 @@ export function SellConfirmDialog({
       const res = await fetch('/api/passes/sell', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
-        body: JSON.stringify({ plan_id: plan.id, customer_phone: phone, customer_name: customerName.trim() }),
+        body: JSON.stringify({
+          plan_id: plan.id,
+          menu_item_id: choice.drink.id,
+          variant_id: choice.size.variant_id,
+          customer_phone: phone,
+          customer_name: customerName.trim(),
+        }),
       });
       const data = (await res.json().catch(() => null)) as
         | { order?: OrderResponse; customer?: { name?: string; created?: boolean }; replayed?: boolean; error?: string }
@@ -87,10 +107,13 @@ export function SellConfirmDialog({
       open
       onClose={busy ? () => {} : onCancel}
       title={`Sell ${plan.name}`}
-      subtitle={`${PASS_PROGRAM_NAME} · ${planSummaryLabel(plan)}`}
-      size="sm"
+      subtitle={saleSummaryLine(plan, choice, quote.totalInr)}
+      size="md"
       footer={
         <div className="flex flex-wrap justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onChangeDrink} disabled={busy}>
+            Change drink
+          </Button>
           <Button type="button" variant="ghost" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>
@@ -117,15 +140,18 @@ export function SellConfirmDialog({
             <span className="block text-xs font-normal text-muted">{planSummaryLabel(plan)}</span>
           </dd>
         </div>
+        <div className="flex items-start justify-between gap-4">
+          <dt className="text-muted">Drink</dt>
+          <dd className="text-right font-bold text-charcoal">
+            {choiceLabel(choice)}
+            <span className="block text-xs font-normal text-muted">{ritualCoverLine(choice.size.price_inr)}</span>
+          </dd>
+        </div>
         <div className="flex items-start justify-between gap-4 border-t border-line pt-3">
           <dt className="font-bold text-charcoal">Total</dt>
           <dd className="text-right">
-            <span className="font-mono text-xl font-bold tabular-nums text-tan-dark">₹{preview.total_inr}</span>
-            {preview.tax_inr > 0 ? (
-              <span className="block text-xs text-muted">
-                {gst?.inclusive ? 'includes' : '₹' + preview.subtotal_inr + ' +'} ₹{preview.tax_inr} GST
-              </span>
-            ) : null}
+            <span className="font-mono text-xl font-bold tabular-nums text-tan-dark">₹{quote.totalInr}</span>
+            <span className="block font-mono text-xs tabular-nums text-muted">{ritualPriceLine(quote)}</span>
           </dd>
         </div>
       </dl>
@@ -137,7 +163,7 @@ export function SellConfirmDialog({
 
       {unpaidSame ? (
         <p role="status" className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">
-          There is already an unpaid {plan.name}
+          There is already an unpaid {unpaidSame.plan_name || plan.name}
           {unpaidSame.order_number != null ? ` (#${unpaidSame.order_number})` : ''} for this number. Cancel and collect
           that one instead, unless this is a second Ritual.
         </p>

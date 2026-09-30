@@ -13,7 +13,14 @@
 
 import { cupsLabel, PASS_PROGRAM_NAME, PASS_SHORT_NAME } from '@/lib/passes/brand';
 import { MAX_PASS_DRINKS_PER_ORDER, planDiscountPercent } from '@/lib/passes/rules';
-import type { CoffeePassPlan, PassRedemptionEntry, PassShortfall, PassState, PassSummary } from '@/lib/passes/types';
+import type {
+  CoffeePassPlan,
+  PassRedemptionEntry,
+  PassShortfall,
+  PassState,
+  PassSummary,
+  RitualDrink,
+} from '@/lib/passes/types';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 
 // ---------------------------------------------------------------------------
@@ -22,9 +29,14 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 
 /** GET /api/passes/plans. */
 export interface RitualOffer {
+  /** The plans on sale. A plan has no price (CP-D24): what a customer pays depends on the drink they pick. */
   plans: CoffeePassPlan[];
-  /** The drinks a Ritual cup can pay for (the chips). */
-  eligible: { id: string; name: string; category: string; is_available: boolean }[];
+  /**
+   * The drinks a Ritual can be bought for, each with the sizes on sale and their
+   * menu prices (cheapest first). The Ritual's price is the plan's drinks_paid ×
+   * a size's price (ritualPriceFor); the chips and the drink picker both read this.
+   */
+  eligible: RitualDrink[];
   /** false = no Razorpay keys: the page says "Buy at the counter" instead of Buy. */
   online_purchase: boolean;
   gst: { percent: number; inclusive: boolean };
@@ -110,29 +122,10 @@ export function planHeadline(plan: Pick<CoffeePassPlan, 'drinks_total' | 'drinks
   return `${cupsLabel(total)}, prepaid`;
 }
 
-/** What one cup costs on this plan, in whole rupees (price over every cup you get). */
-export function planPerCupInr(plan: Pick<CoffeePassPlan, 'price_inr' | 'drinks_total'>): number {
-  if (plan.drinks_total <= 0) return plan.price_inr;
-  return Math.round(plan.price_inr / plan.drinks_total);
-}
-
 /** "Save 29%", or null when the plan is no cheaper than paying for every cup. */
 export function planSaveLabel(plan: Pick<CoffeePassPlan, 'drinks_total' | 'drinks_paid'>): string | null {
   const pct = planDiscountPercent(plan);
   return pct > 0 ? `Save ${pct}%` : null;
-}
-
-/**
- * "+ GST" when GST will be added on top of the price (the store prices
- * exclusive of GST and this plan is not marked GST-exempt), otherwise null: an
- * inclusive price or an exempt plan is the whole amount.
- */
-export function planGstNote(
-  plan: Pick<CoffeePassPlan, 'gst_exempt'>,
-  gst: { percent: number; inclusive: boolean } | null | undefined,
-): string | null {
-  if (!gst || gst.inclusive || plan.gst_exempt || !(gst.percent > 0)) return null;
-  return '+ GST';
 }
 
 /** True once at least one plan is on sale: what gates the menu chips and the checkout's "Save with" link. */
@@ -146,14 +139,12 @@ export function planValidityLabel(plan: Pick<CoffeePassPlan, 'validity_days'>): 
   return `Valid ${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
-/** What a cup covers, and what happens above it (CP-D2). */
-export function planCoverageLabel(plan: Pick<CoffeePassPlan, 'drink_value_inr'>): string {
-  return `Covers any ${PASS_SHORT_NAME} drink up to ₹${plan.drink_value_inr} — pricier drinks just pay the difference.`;
-}
-
-/** The Buy button's words ("Buy Weekly Ritual"). */
-export function planBuyLabel(plan: Pick<CoffeePassPlan, 'name'>): string {
-  return `Buy ${plan.name}`;
+/**
+ * The Buy button's words: "Buy Weekly Ritual", or with the total once a drink and
+ * size are chosen, "Buy Weekly Ritual · ₹630".
+ */
+export function planBuyLabel(plan: Pick<CoffeePassPlan, 'name'>, totalInr?: number | null): string {
+  return totalInr != null ? `Buy ${plan.name} · ₹${totalInr}` : `Buy ${plan.name}`;
 }
 
 /**
@@ -289,12 +280,16 @@ export function findPassForOrder<T extends { order_id: string }>(passes: readonl
   return passes.find((p) => p.order_id === orderId) ?? null;
 }
 
-/** "Your Weekly Ritual is ready — 7 cups, valid till Sun 5 Oct". */
+/**
+ * "Your Weekly Ritual is ready — Cappuccino · Large, 7 cups, valid till Sun 5 Oct".
+ * A pass with no drink on it (one from before per-drink pricing) leaves that part out.
+ */
 export function passReadyMessage(
-  pass: Pick<PassSummary, 'plan_name' | 'drinks_total' | 'expires_at'>,
+  pass: Pick<PassSummary, 'plan_name' | 'drink_label' | 'drinks_total' | 'expires_at'>,
 ): string {
   const till = passValidTill(pass.expires_at);
-  return `Your ${pass.plan_name} is ready — ${cupsLabel(pass.drinks_total)}${till ? `, ${till}` : ''}`;
+  const drink = (pass.drink_label ?? '').trim();
+  return `Your ${pass.plan_name} is ready — ${drink ? `${drink}, ` : ''}${cupsLabel(pass.drinks_total)}${till ? `, ${till}` : ''}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +313,17 @@ export function purchaseError(status: number, serverMessage?: string | null): { 
       // "Add your mobile number in your profile first" is the one 400 a customer can fix.
       if (/mobile number|phone/i.test(server)) {
         return { message: 'Add your mobile number in your profile first.', action: 'profile' };
+      }
+      // The drink and size go with every purchase (CP-D22). The page never sends
+      // an incomplete choice, so this only happens to a stale page.
+      if (/must be a (drink|size) id/i.test(server)) {
+        return { message: 'Pick a drink and a size first.', action: 'retry' };
+      }
+      // A drink the owner has since taken out, or a size that has gone off the menu
+      // between the page loading and the tap: the server names it, but its wording
+      // for a size ("has no such variant") is not for a customer.
+      if (/no such variant|isn't available right now|currently unavailable|does not exist/i.test(server)) {
+        return { message: "That drink or size isn't available right now — please pick another.", action: 'retry' };
       }
       return { message: server || 'That plan could not be bought. Please try again.', action: 'retry' };
     case 404:
@@ -360,6 +366,8 @@ export interface PassQuote {
   max_usable: number;
   shortfall: PassShortfall;
   message: string | null;
+  /** The account's usable passes, as the quote lists them: what names the row ("Cappuccino Ritual"). */
+  passes?: Pick<PassSummary, 'state' | 'drinks_remaining' | 'drink_label'>[];
 }
 
 /**
@@ -392,6 +400,20 @@ export function stepPassCups(current: number, delta: 1 | -1, maxUsable: number):
 export function passCupsToSend(quote: Pick<PassQuote, 'applied'> | null | undefined, stepper: number): number | undefined {
   if (!quote || quote.applied <= 0) return undefined;
   return quote.applied === stepper ? quote.applied : undefined;
+}
+
+/**
+ * What the checkout's Ritual row calls the Ritual (CP-D25): "Cappuccino Ritual"
+ * when every pass the customer can spend is for the same drink, otherwise just
+ * "HIOC Ritual" (two drinks, or a pass with no drink on it, from before per-drink
+ * pricing). Only the drink's name, not its size: the row is about the cups.
+ */
+export function passRowName(quote: Pick<PassQuote, 'passes'> | null | undefined): string {
+  const usable = usablePasses(quote?.passes ?? []);
+  if (usable.length === 0) return PASS_PROGRAM_NAME;
+  const names = new Set(usable.map((p) => (p.drink_label ?? '').split(' · ')[0].trim()));
+  const [only] = [...names];
+  return names.size === 1 && only ? `${only} ${PASS_SHORT_NAME}` : PASS_PROGRAM_NAME;
 }
 
 /**

@@ -27,6 +27,7 @@ import {
   passCupsToSend,
   passHelperLine,
   passRowMode,
+  passRowName,
   ritualBillLabel,
   ritualOnSale,
   stepPassCups,
@@ -886,7 +887,7 @@ export function CheckoutForm({
                     <p aria-live="polite" className="flex min-w-0 flex-1 basis-44 items-start gap-1.5">
                       <CupIcon className="mt-0.5" />
                       <span>
-                        {PASS_PROGRAM_NAME} — using{' '}
+                        {passRowName(passQuote)} — using{' '}
                         <span className="font-mono font-bold tabular-nums">{passApplied}</span> of{' '}
                         <span className="font-mono tabular-nums">{passQuote.available}</span>{' '}
                         {passQuote.available === 1 ? 'cup' : 'cups'}
@@ -934,7 +935,7 @@ export function CheckoutForm({
                 <p className="flex items-start gap-1.5 text-sm text-muted">
                   <CupIcon className="mt-0.5" />
                   <span>
-                    <span className="font-semibold text-charcoal">{PASS_PROGRAM_NAME}</span> —{' '}
+                    <span className="font-semibold text-charcoal">{passRowName(passQuote)}</span> —{' '}
                     {passHelper ??
                       `you have ${passQuote.available} ${passQuote.available === 1 ? 'cup' : 'cups'} left, but none can be used on this order.`}
                   </span>

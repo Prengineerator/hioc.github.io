@@ -56,8 +56,9 @@ function plan(over: Row = {}): Row {
     drinks_total: 7,
     drinks_paid: 5,
     validity_days: 7,
-    drink_value_inr: 150,
-    price_inr: 750,
+    // A plan is only the recipe (CP-D24): no price, no cup value.
+    drink_value_inr: null,
+    price_inr: null,
     max_per_day: null,
     gst_exempt: false,
     is_active: false,
@@ -143,9 +144,9 @@ describe('GET /api/owner/passes', () => {
     asOwner();
     freshAdmin({
       coffee_pass_plans: [
-        plan({ id: OTHER_PLAN, name: 'Monthly Ritual', price_inr: 900, sort_order: 20 }),
+        plan({ id: OTHER_PLAN, name: 'Monthly Ritual', drinks_paid: 6, validity_days: 30, sort_order: 20 }),
         plan(),
-        plan({ id: '00000000-0000-4000-8000-0000000000a3', name: 'Mini Ritual', price_inr: 300, is_active: true }),
+        plan({ id: '00000000-0000-4000-8000-0000000000a3', name: 'Mini Ritual', is_active: true }),
       ],
       menu_items: [
         { id: M3, name: 'Cold Brew', category: 'cold-brews', is_available: true, sort_order: 1, pass_eligible: true },
@@ -159,6 +160,8 @@ describe('GET /api/owner/passes', () => {
     const body = await res.json();
     expect(body.plans.map((p: Row) => p.name)).toEqual(['Mini Ritual', 'Weekly Ritual', 'Monthly Ritual']);
     expect(body.plans.map((p: Row) => p.is_active)).toEqual([true, false, false]); // inactive ones included
+    // No price and no cup value on a plan any more (CP-D24): both come back null.
+    for (const p of body.plans) expect(p).toMatchObject({ price_inr: null, drink_value_inr: null });
     expect(body.eligible_ids).toEqual([M1, M2, M3]);
     expect(body.menu).toEqual([
       { id: M4, name: 'Croissant', category: 'bakes', is_available: true },
@@ -183,7 +186,7 @@ describe('GET /api/owner/passes', () => {
 
 describe('POST /api/owner/passes/plans', () => {
   const create = (body: unknown) => plansRoute.POST(req('POST', '/api/owner/passes/plans', body));
-  const valid = { name: 'Fortnight Ritual', drinks_total: 7, drinks_paid: 5, validity_days: 14, drink_value_inr: 150 };
+  const valid = { name: 'Fortnight Ritual', drinks_total: 7, drinks_paid: 5, validity_days: 14 };
 
   it('rejects a body that is not JSON, and every invalid field (400), writing nothing', async () => {
     asOwner();
@@ -197,8 +200,6 @@ describe('POST /api/owner/passes/plans', () => {
       { ...valid, drinks_total: 51 },
       { ...valid, drinks_paid: 8 }, // more paid for than given
       { ...valid, validity_days: 366 },
-      { ...valid, drink_value_inr: 0 },
-      { ...valid, price_inr: 0 },
       { ...valid, max_per_day: 8 }, // more per day than the pass holds
       { ...valid, is_active: 'yes' },
       { ...valid, drinks_total: 7.5 },
@@ -210,7 +211,18 @@ describe('POST /api/owner/passes/plans', () => {
     expect(admin.calls).toEqual([]);
   });
 
-  it('creates an inactive plan priced at cups paid x cup value by default (201 { plan })', async () => {
+  it("refuses a price or a cup value (400 \"A Ritual's price now follows the drink the customer picks\"), writing nothing", async () => {
+    asOwner();
+    const admin = freshAdmin({});
+    for (const extra of [{ price_inr: 750 }, { price_inr: 0 }, { price_inr: null }, { drink_value_inr: 150 }, { price_inr: 750, drink_value_inr: 150 }]) {
+      const res = await create({ ...valid, ...extra });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("A Ritual's price now follows the drink the customer picks — plans have no price.");
+    }
+    expect(admin.calls).toEqual([]);
+  });
+
+  it('needs no price or cup value: creates an inactive plan with both columns left null (201 { plan })', async () => {
     asOwner();
     const admin = freshAdmin({});
     const res = await create(valid);
@@ -222,14 +234,16 @@ describe('POST /api/owner/passes/plans', () => {
         drinks_total: 7,
         drinks_paid: 5,
         validity_days: 14,
-        drink_value_inr: 150,
-        price_inr: 750, // 5 x 150
         max_per_day: null,
         gst_exempt: false,
         is_active: false, // nothing is sold until the owner switches it on
         sort_order: 0,
       }),
     ]);
+    // The insert never names either column: the database leaves them null.
+    const inserted = admin.calls.find((c) => c.op === 'insert')?.payload as Row;
+    expect(inserted).not.toHaveProperty('price_inr');
+    expect(inserted).not.toHaveProperty('drink_value_inr');
     const { plan: created } = await res.json();
     expect(created).toEqual({
       id: 'coffee_pass_plans-1',
@@ -238,8 +252,8 @@ describe('POST /api/owner/passes/plans', () => {
       drinks_total: 7,
       drinks_paid: 5,
       validity_days: 14,
-      drink_value_inr: 150,
-      price_inr: 750,
+      drink_value_inr: null,
+      price_inr: null,
       max_per_day: null,
       gst_exempt: false,
       is_active: false,
@@ -247,13 +261,13 @@ describe('POST /api/owner/passes/plans', () => {
     });
   });
 
-  it('keeps an explicit price, cap, exemption, activation and order', async () => {
+  it('keeps an explicit cap, exemption, activation, description and order', async () => {
     asOwner();
     const admin = freshAdmin({});
-    const res = await create({ ...valid, description: '  Two weeks  ', price_inr: 700, max_per_day: 1, gst_exempt: true, is_active: true, sort_order: 30 });
+    const res = await create({ ...valid, description: '  Two weeks  ', max_per_day: 1, gst_exempt: true, is_active: true, sort_order: 30 });
     expect(res.status).toBe(201);
     expect(admin.tables.coffee_pass_plans[0]).toMatchObject({
-      description: 'Two weeks', price_inr: 700, max_per_day: 1, gst_exempt: true, is_active: true, sort_order: 30,
+      description: 'Two weeks', max_per_day: 1, gst_exempt: true, is_active: true, sort_order: 30,
     });
   });
 
@@ -290,8 +304,8 @@ describe('PATCH /api/owner/passes/plans/[id]', () => {
   it('answers 404 for an id that is not a plan id and for a plan that does not exist', async () => {
     asOwner();
     freshAdmin({ coffee_pass_plans: [plan()] });
-    expect((await patch({ price_inr: 800 }, 'weekly')).status).toBe(404);
-    expect((await patch({ price_inr: 800 }, '00000000-0000-4000-8000-0000000000ff')).status).toBe(404);
+    expect((await patch({ validity_days: 10 }, 'weekly')).status).toBe(404);
+    expect((await patch({ validity_days: 10 }, '00000000-0000-4000-8000-0000000000ff')).status).toBe(404);
     expect(updates()).toEqual([]);
   });
 
@@ -299,8 +313,25 @@ describe('PATCH /api/owner/passes/plans/[id]', () => {
     asOwner();
     freshAdmin({ coffee_pass_plans: [plan()] });
     expect((await planRoute.PATCH(req('PATCH', `/api/owner/passes/plans/${PLAN_ID}`, '{oops'), { params: { id: PLAN_ID } })).status).toBe(400);
-    for (const bad of [{}, { unknown: 1 }, { name: '' }, { price_inr: -5 }, { drinks_total: 0 }, { is_active: 'yes' }, { max_per_day: 0 }]) {
+    for (const bad of [{}, { unknown: 1 }, { name: '' }, { validity_days: -5 }, { drinks_total: 0 }, { is_active: 'yes' }, { max_per_day: 0 }]) {
       expect((await patch(bad)).status).toBe(400);
+    }
+    expect(updates()).toEqual([]);
+  });
+
+  it("refuses a price or a cup value (400 \"A Ritual's price now follows the drink the customer picks\"), even alone or mixed with a valid edit", async () => {
+    asOwner();
+    freshAdmin({ coffee_pass_plans: [plan()] });
+    for (const bad of [
+      { price_inr: 800 },
+      { price_inr: null },
+      { drink_value_inr: 120 },
+      { price_inr: 800, is_active: true },
+      { name: 'Weekly', drink_value_inr: 120 },
+    ]) {
+      const res = await patch(bad);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe("A Ritual's price now follows the drink the customer picks — plans have no price.");
     }
     expect(updates()).toEqual([]);
   });
@@ -308,11 +339,13 @@ describe('PATCH /api/owner/passes/plans/[id]', () => {
   it('edits only the fields sent and returns the plan', async () => {
     asOwner();
     const admin = freshAdmin({ coffee_pass_plans: [plan()] });
-    const res = await patch({ price_inr: 800, is_active: true });
+    const res = await patch({ validity_days: 10, is_active: true });
     expect(res.status).toBe(200);
-    expect((await res.json()).plan).toEqual({ ...plan(), price_inr: 800, is_active: true });
-    expect(admin.tables.coffee_pass_plans[0]).toMatchObject({ price_inr: 800, is_active: true, drinks_total: 7, name: 'Weekly Ritual' });
-    expect(updates()[0].payload).toEqual({ price_inr: 800, is_active: true });
+    expect((await res.json()).plan).toEqual({ ...plan(), validity_days: 10, is_active: true });
+    expect(admin.tables.coffee_pass_plans[0]).toMatchObject({ validity_days: 10, is_active: true, drinks_total: 7, name: 'Weekly Ritual' });
+    expect(updates()[0].payload).toEqual({ validity_days: 10, is_active: true });
+    // ...and the plan stays priceless.
+    expect(admin.tables.coffee_pass_plans[0]).toMatchObject({ price_inr: null, drink_value_inr: null });
   });
 
   it('deactivates a plan, and clears a daily cap with null', async () => {
@@ -386,9 +419,9 @@ describe('PATCH /api/owner/passes/plans/[id]', () => {
   it('answers 500 for a failed write and names the migration when the schema is missing', async () => {
     asOwner();
     freshAdmin({ coffee_pass_plans: [plan()] }, (c) => (c.op === 'update' ? { message: 'db down' } : null));
-    expect((await patch({ price_inr: 800 })).status).toBe(500);
+    expect((await patch({ validity_days: 10 })).status).toBe(500);
     freshAdmin({ coffee_pass_plans: [plan()] }, (c) => (c.op === 'select' ? { code: '42P01', message: 'relation does not exist' } : null));
-    const res = await patch({ price_inr: 800 });
+    const res = await patch({ validity_days: 10 });
     expect(res.status).toBe(500);
     expect((await res.json()).error).toContain('2026-10-coffee-pass.sql');
   });

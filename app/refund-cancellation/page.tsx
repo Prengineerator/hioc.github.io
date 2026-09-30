@@ -99,7 +99,8 @@ export default function RefundPage() {
             <li>
               <strong>Buying:</strong> a {PASS_PROGRAM_NAME} belongs to the account of the mobile
               number it was bought with, and is ready as soon as payment is confirmed. The plan,
-              its number of cups, its validity and its price are shown before you pay.
+              your drink and size, the number of cups, the validity and the price are shown
+              before you pay.
             </li>
             <li>
               <strong>Validity:</strong> counted in calendar days in Indian Standard Time, starting
@@ -107,10 +108,13 @@ export default function RefundPage() {
               night, and ends at midnight after that.
             </li>
             <li>
-              <strong>Cup value and top-ups:</strong> each cup pays for one drink, up to the cup
-              value shown on the plan (the size and any add-ons count towards it). Only drinks
-              marked as covered can be paid with a cup. If a drink costs more than the cup value,
-              you pay the difference.
+              <strong>Price and top-ups:</strong> you choose a drink and size when you buy, and the
+              price is the cups you pay for times that size&apos;s menu price, with GST where it
+              applies. A later change to the menu price does not change a {PASS_PROGRAM_NAME} you
+              have already bought. Each cup pays for one drink, up to the price of the drink you
+              chose (the size and any add-ons count towards it). Only drinks marked as covered can
+              be paid with a cup. If a drink costs more than your drink&apos;s price, you pay the
+              difference.
             </li>
             <li>
               <strong>Sharing:</strong> the account holder&apos;s cups can be used for anyone in the

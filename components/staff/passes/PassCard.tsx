@@ -1,9 +1,11 @@
 'use client';
 
-// One HIOC Ritual a customer holds, as the counter sees it: the plan, the cups
-// left as dots (with the same thing in words, so colour is never the only
-// signal), how long it is good for (IST), its state, a collapsible history of
-// what it was spent on, and — for a manager — Extend and Give back a cup.
+// One HIOC Ritual a customer holds, as the counter sees it: the plan and the
+// drink it was bought for ("Weekly Ritual · Cappuccino · Large"), what a cup
+// covers, the cups left as dots (with the same thing in words, so colour is never
+// the only signal), how long it is good for (IST), its state, a collapsible
+// history of what it was spent on, and — for a manager — Extend and Give back a
+// cup.
 
 import { useId, useState } from 'react';
 import { Badge, type BadgeVariant } from '@/components/ui/Badge';
@@ -17,6 +19,7 @@ import {
   passValidityLabel,
   type HolderPass,
 } from '@/lib/pos/ritual';
+import { passCoverLine, passTitle } from '@/lib/passes/ritualDrinks';
 import type { PassState } from '@/lib/passes/types';
 
 const STATE_VARIANT: Record<PassState, BadgeVariant> = {
@@ -46,13 +49,19 @@ export function PassCard({
   // used-up and lapsed ones can, which is exactly when a manager needs to.
   const changeable = canManage && pass.status === 'active';
   const live = pass.state === 'active';
+  const cover = passCoverLine(pass);
 
   return (
     <li className="rounded-md border border-line bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-base font-bold text-charcoal">{pass.plan_name}</p>
+          <p className="text-base font-bold text-charcoal">{passTitle(pass)}</p>
           <p className="text-sm text-muted">{passValidityLabel(pass)}</p>
+          {cover ? (
+            <p className="text-sm text-charcoal">
+              Each cup covers up to <span className="font-mono font-bold tabular-nums">₹{pass.drink_value_inr}</span>
+            </p>
+          ) : null}
         </div>
         <Badge variant={STATE_VARIANT[pass.state]}>{passStateLabel(pass.state)}</Badge>
       </div>

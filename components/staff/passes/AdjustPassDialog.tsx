@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
+import { passTitle } from '@/lib/passes/ritualDrinks';
 import type { PassSummary } from '@/lib/passes/types';
 import {
   CREDIT_REASON_CHIPS,
@@ -71,8 +72,8 @@ export function AdjustPassDialog({
       onDone(
         data.pass,
         parsed.value.kind === 'extend'
-          ? `${pass.plan_name} extended by ${parsed.value.days} ${parsed.value.days === 1 ? 'day' : 'days'}.`
-          : `Gave back ${cupsLabel(parsed.value.drinks)} on ${pass.plan_name}.`,
+          ? `${passTitle(pass)} extended by ${parsed.value.days} ${parsed.value.days === 1 ? 'day' : 'days'}.`
+          : `Gave back ${cupsLabel(parsed.value.drinks)} on ${passTitle(pass)}.`,
       );
     } catch {
       setError('Could not reach the server. Check the connection and try again.');
@@ -85,7 +86,7 @@ export function AdjustPassDialog({
     <Modal
       open
       onClose={busy ? () => {} : onClose}
-      title={extend ? `Extend ${pass.plan_name}` : `Give back a cup · ${pass.plan_name}`}
+      title={extend ? `Extend ${passTitle(pass)}` : `Give back a cup · ${passTitle(pass)}`}
       subtitle={`${PASS_PROGRAM_NAME} · ${passValidityLabel(pass)}`}
       size="sm"
       footer={

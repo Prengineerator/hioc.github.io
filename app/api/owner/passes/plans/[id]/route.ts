@@ -15,9 +15,11 @@ type RouteParams = { params: { id: string } };
 // fields that change. Responds { plan }. 404 for an unknown plan.
 //
 // Edits never touch a pass already sold: a pass holds snapshots of its plan
-// (name, cups, cup value, price, daily cap), so changing a price or deactivating a
-// plan affects what is sold FROM NOW ON only. Deactivating (is_active: false) is
-// how a plan is retired: there is no delete.
+// (name, cups, the cup value and drink it was bought for, price, daily cap), so
+// changing the cups or deactivating a plan affects what is sold FROM NOW ON only.
+// Deactivating (is_active: false) is how a plan is retired: there is no delete.
+// A plan has no price or cup value any more (CP-D24): sending `price_inr` or
+// `drink_value_inr` is a 400.
 //
 // validatePlanInput checks a cross-field rule (cups paid for <= cups in the pass,
 // daily cap <= cups in the pass) only when BOTH sides are in the request, so an

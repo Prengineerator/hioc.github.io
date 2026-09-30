@@ -2,6 +2,7 @@ import { SurfaceLink } from '@/components/SurfaceLink';
 import { Badge } from '@/components/ui/Badge';
 import { Card } from '@/components/ui/Card';
 import { PassDots } from '@/components/passes/PassDots';
+import { passCoverLine, passTitle } from '@/lib/passes/ritualDrinks';
 import {
   passDailyLimitLabel,
   passHistoryRow,
@@ -12,8 +13,9 @@ import {
 } from '@/lib/passes/ui';
 
 /**
- * One pass in "Your Ritual": plan name, state, the cups as dots, the date it is
- * good till, and its history folded away. A pass that is no longer usable (used
+ * One pass in "Your Ritual": its title (plan and drink, "Weekly Ritual · Cappuccino ·
+ * Large"; just the plan for a pass from before per-drink pricing), state, what a cup
+ * covers, the cups as dots, the date it is good till, and its history folded away. A pass that is no longer usable (used
  * up, expired, refunded) stays in the list but is quieter, so the active one is
  * what the eye lands on.
  */
@@ -23,13 +25,20 @@ export function PassCard({ pass }: { pass: PassWithHistory }) {
   const validity = passValidityLine(pass);
   const dailyLimit = active ? passDailyLimitLabel(pass.max_per_day) : null;
   const rows = pass.history.map(passHistoryRow);
+  const cover = passCoverLine(pass);
 
   return (
     <Card padding="md" className={active ? '' : 'bg-surface/50'}>
       <div className="flex items-start justify-between gap-3">
-        <h3 className="text-base font-bold text-charcoal">{pass.plan_name}</h3>
+        <h3 className="text-base font-bold text-charcoal">{passTitle(pass)}</h3>
         <Badge variant={badge.tone}>{badge.label}</Badge>
       </div>
+
+      {cover ? (
+        <p className="mt-1 text-sm text-charcoal">
+          Each cup covers up to <span className="font-mono font-bold tabular-nums">₹{pass.drink_value_inr}</span>
+        </p>
+      ) : null}
 
       {pass.state === 'refunded' || pass.state === 'void' ? null : (
         <div className="mt-3">

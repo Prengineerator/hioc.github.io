@@ -27,7 +27,7 @@ type Row = Record<string, unknown>;
 /** The columns of v_coffee_pass_balances the screens read. */
 export const PASS_BALANCE_COLUMNS =
   'id, plan_id, plan_name, drinks_total, drinks_used, drinks_credited, drinks_remaining, drink_value_inr, ' +
-  'max_per_day, used_today, price_inr, starts_at, expires_at, status, state, order_id, created_at';
+  'max_per_day, used_today, price_inr, starts_at, expires_at, status, state, order_id, drink_menu_item_id, drink_label, created_at';
 
 export const PLAN_COLUMNS =
   'id, name, description, drinks_total, drinks_paid, validity_days, drink_value_inr, price_inr, max_per_day, gst_exempt, is_active, sort_order';
@@ -66,6 +66,8 @@ function toPassSummary(row: Row): PassSummary {
     status,
     state: PASS_STATES.has(String(row.state)) ? (row.state as PassSummary['state']) : 'expired',
     order_id: String(row.order_id),
+    drink_menu_item_id: typeof row.drink_menu_item_id === 'string' && row.drink_menu_item_id ? row.drink_menu_item_id : null,
+    drink_label: typeof row.drink_label === 'string' ? row.drink_label : '',
   };
 }
 
@@ -78,8 +80,9 @@ export function toCoffeePassPlan(row: Row): CoffeePassPlan {
     drinks_total: num(row.drinks_total),
     drinks_paid: num(row.drinks_paid),
     validity_days: num(row.validity_days),
-    drink_value_inr: num(row.drink_value_inr),
-    price_inr: num(row.price_inr),
+    // Both are null on every plan since per-drink pricing (CP-D24): never 0.
+    drink_value_inr: numOrNull(row.drink_value_inr),
+    price_inr: numOrNull(row.price_inr),
     max_per_day: numOrNull(row.max_per_day),
     gst_exempt: row.gst_exempt === true,
     is_active: row.is_active === true,

@@ -20,6 +20,7 @@ import type {
   PassRedeemCode,
   PassShortfall,
   PassState,
+  RitualCup,
   UsablePass,
 } from '@/lib/passes/types';
 
@@ -251,6 +252,39 @@ export function composePassBill(
 }
 
 // ---------------------------------------------------------------------------
+// Per-drink pricing (spec §13, CP-D22..D25)
+// ---------------------------------------------------------------------------
+//
+// Pure, and here rather than in lib/passes/sale.ts (which is server-only) so the
+// screens can show "Cappuccino L ₹120 → ₹600" with the SAME function the server
+// prices the sale with. sale.ts re-exports them.
+
+/** The longest drink label a pass stores (the issuing trigger drops a longer one). */
+export const MAX_DRINK_LABEL_LENGTH = 80;
+
+/** What a Ritual costs before GST: the cups paid for × the chosen size's menu price (CP-D22). Whole rupees. */
+export function ritualPriceFor(plan: Pick<CoffeePassPlan, 'drinks_paid'>, cupPriceInr: number): number {
+  return plan.drinks_paid * cupPriceInr;
+}
+
+/**
+ * "Cappuccino · Large": the drink as a pass remembers it (coffee_passes.drink_label,
+ * CP-D25). Without a size name it is just the drink. Clipped to 80 characters with
+ * an ellipsis, because the issuing trigger would otherwise drop the whole label.
+ */
+export function ritualDrinkLabel(cup: Pick<RitualCup, 'name' | 'size_label'>): string {
+  const size = cup.size_label.trim();
+  const label = size ? `${cup.name.trim()} · ${size}` : cup.name.trim();
+  return label.length > MAX_DRINK_LABEL_LENGTH ? `${label.slice(0, MAX_DRINK_LABEL_LENGTH - 1)}…` : label;
+}
+
+/** "Weekly Ritual — Cappuccino (Large)": the sale line's name, on the bill, receipt and order page. */
+export function ritualLineName(plan: Pick<CoffeePassPlan, 'name'>, cup: Pick<RitualCup, 'name' | 'size_label'>): string {
+  const size = cup.size_label.trim();
+  return `${plan.name} — ${cup.name.trim()}${size ? ` (${size})` : ''}`;
+}
+
+// ---------------------------------------------------------------------------
 // Input validation (manual, no zod: {ok, value} | {ok, error})
 // ---------------------------------------------------------------------------
 
@@ -268,8 +302,15 @@ export function parsePassDrinks(raw: unknown): Validated<number> {
   return { ok: true, value: raw };
 }
 
-/** The editable fields of a plan (coffee_pass_plans), bounds as in spec §5.1. */
-export type PlanInput = Omit<CoffeePassPlan, 'id'>;
+/**
+ * The editable fields of a plan (coffee_pass_plans), bounds as in spec §5.1. No
+ * price and no cup value: since per-drink pricing (CP-D22..D24) those follow the
+ * drink the customer picks, so a plan is only the recipe.
+ */
+export type PlanInput = Omit<CoffeePassPlan, 'id' | 'price_inr' | 'drink_value_inr'>;
+
+/** What the owner's plan form gets back if it still sends a price or a cup value (CP-D24). */
+export const PLAN_NO_PRICE_MESSAGE = "A Ritual's price now follows the drink the customer picks — plans have no price.";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -284,13 +325,17 @@ function intInRange(v: unknown, min: number, max: number): v is number {
  * plan and returns the normalised fields.
  *
  *   name 1..60 (trimmed) · description ≤ 500 · drinks_total 1..50 ·
- *   drinks_paid 1..drinks_total · validity_days 1..365 · drink_value_inr 1..5000 ·
- *   price_inr 1..100000 · max_per_day null or 1..drinks_total · gst_exempt,
- *   is_active booleans · sort_order an integer
+ *   drinks_paid 1..drinks_total · validity_days 1..365 · max_per_day null or
+ *   1..drinks_total · gst_exempt, is_active booleans · sort_order an integer
  *
- * Create needs name, drinks_total, drinks_paid, validity_days and
- * drink_value_inr. The rest default: no description, price = drinks_paid ×
- * drink_value (CP-D2), no daily cap, GST charged, inactive, sort_order 0. An
+ * `price_inr` and `drink_value_inr` are NOT accepted any more (CP-D24): the
+ * price is drinks_paid × the price of the size the customer chooses when buying,
+ * and the cup value is that same price, so a plan has neither. Sending either
+ * (even null) is refused with PLAN_NO_PRICE_MESSAGE rather than silently
+ * dropped, so a stale form or script finds out instead of believing it set one.
+ *
+ * Create needs name, drinks_total, drinks_paid and validity_days. The rest
+ * default: no description, no daily cap, GST charged, inactive, sort_order 0. An
  * edit checks only the keys present; a cross-field rule (drinks_paid ≤
  * drinks_total, max_per_day ≤ drinks_total) is checked when both sides are in
  * the request, so a route editing one of a pair re-checks it against the
@@ -305,8 +350,12 @@ export function validatePlanInput(
   const has = (k: string) => body[k] !== undefined;
   const out: Partial<PlanInput> = {};
 
+  // Before anything else, so the owner hears THIS and not some other complaint
+  // about a form that is out of date.
+  if (has('price_inr') || has('drink_value_inr')) return { ok: false, error: PLAN_NO_PRICE_MESSAGE };
+
   if (!partial) {
-    for (const k of ['name', 'drinks_total', 'drinks_paid', 'validity_days', 'drink_value_inr']) {
+    for (const k of ['name', 'drinks_total', 'drinks_paid', 'validity_days']) {
       if (!has(k)) return { ok: false, error: `${k} is required.` };
     }
   }
@@ -336,14 +385,6 @@ export function validatePlanInput(
   if (has('validity_days')) {
     if (!intInRange(body.validity_days, 1, 365)) return { ok: false, error: 'Validity must be a whole number of days from 1 to 365.' };
     out.validity_days = body.validity_days;
-  }
-  if (has('drink_value_inr')) {
-    if (!intInRange(body.drink_value_inr, 1, 5000)) return { ok: false, error: 'Cup value must be a whole number of rupees from 1 to 5000.' };
-    out.drink_value_inr = body.drink_value_inr;
-  }
-  if (has('price_inr')) {
-    if (!intInRange(body.price_inr, 1, 100000)) return { ok: false, error: 'Price must be a whole number of rupees from 1 to 100000.' };
-    out.price_inr = body.price_inr;
   }
   if (has('max_per_day')) {
     if (body.max_per_day !== null) {
@@ -377,23 +418,19 @@ export function validatePlanInput(
     return { ok: true, value: out };
   }
 
-  // Create: fill the defaults, then re-check what depends on them.
+  // Create: fill the defaults. (Every cross-field rule above already ran: create
+  // has all of its required keys, so both sides of each pair are present.)
   const full: PlanInput = {
     name: out.name as string,
     description: out.description ?? '',
     drinks_total: out.drinks_total as number,
     drinks_paid: out.drinks_paid as number,
     validity_days: out.validity_days as number,
-    drink_value_inr: out.drink_value_inr as number,
-    price_inr: out.price_inr ?? (out.drinks_paid as number) * (out.drink_value_inr as number),
     max_per_day: out.max_per_day ?? null,
     gst_exempt: out.gst_exempt ?? false,
     is_active: out.is_active ?? false,
     sort_order: out.sort_order ?? 0,
   };
-  if (full.price_inr < 1 || full.price_inr > 100000) {
-    return { ok: false, error: 'Price must be a whole number of rupees from 1 to 100000.' };
-  }
   return { ok: true, value: full };
 }
 
