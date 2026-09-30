@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({ db: null as unknown as FakeDb }));
 vi.mock('@/lib/supabase-server', () => ({ createAdminSupabaseClient: () => h.db.client }));
 vi.mock('@/lib/notifications/adapters', () => ({ whatsappAdapter: { send: vi.fn() } }));
 
-const { getOverview, getAudienceSummary, maskPhone } = await import('@/lib/marketing/server/overview');
+const { getOverview, getOverviewSummary, getAudienceSummary, maskPhone } = await import('@/lib/marketing/server/overview');
 const { optinUrl } = await import('@/lib/marketing/optin');
 const { listCosts, putCosts } = await import('@/lib/marketing/server/costs');
 
@@ -112,6 +112,21 @@ describe('overview: the headline numbers', () => {
     expect((await getOverview(NOW_SEND)).kpis).toMatchObject({ messages_sent_30d: 4, delivered_pct_30d: 75, read_pct_30d: 33.3 });
   });
 
+  // Meta's 131049 arrives AFTER it accepted the message; the webhook then moves the row sent → failed but keeps sent_at.
+  // Dropping those rows from the denominator made delivery look better than it is.
+  it('delivered% counts the messages that were sent and LATER failed in its denominator', async () => {
+    for (let i = 0; i < 6; i++) seedRecipient({ status: 'delivered' });
+    for (let i = 0; i < 2; i++) seedRecipient({ status: 'read' });
+    for (let i = 0; i < 4; i++) seedRecipient({ status: 'failed', sent_at: daysAgo(3), cost_inr: 0 }); // sent, then 131049
+    seedRecipient({ status: 'failed', sent_at: null, cost_inr: 0 }); // the sender failed it: nothing left
+    seedRecipient({ arm: 'holdout', status: 'holdout', sent_at: null, cost_inr: 0 });
+    const k = (await getOverview(NOW_SEND)).kpis;
+    // 8 delivered or read of the 12 that left → 66.7%, not 8/8 = 100%.
+    expect(k).toMatchObject({ messages_sent_30d: 12, delivered_pct_30d: 66.7, read_pct_30d: 25 });
+    // They cost nothing, so the spend is unchanged.
+    expect(k.month_spend_inr).toBeCloseTo(8 * 1.02);
+  });
+
   it('returning orders and revenue are treated recipients attributed in the last 30 days', async () => {
     seedRecipient({ status: 'delivered', converted_at: daysAgo(2), conversion_revenue_inr: 300 });
     seedRecipient({ status: 'delivered', converted_at: daysAgo(5), conversion_revenue_inr: 200 });
@@ -199,6 +214,98 @@ describe('overview: the weekly chart and drop alert', () => {
     for (const m of ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21']) week(m, 10);
     week('2026-09-28', 9);
     expect((await getOverview(NOW_SEND)).drop_alert).toMatchObject({ drop_pct: 10 });
+  });
+});
+
+// The /owner home card used to call the full overview (a year of orders, the whole ledger) on EVERY visit.
+describe('getOverviewSummary — what the /owner home card shows', () => {
+  function week(monday: string, customers: number) {
+    for (let i = 0; i < customers; i++) {
+      (db().tables.orders ??= []).push({
+        id: `w-${monday}-${i}`, created_at: `${monday}T08:00:00.000Z`, total_inr: 200, status: 'completed', user_id: `wk-${monday}-${i}`,
+        customer_user_id: null, customer_name: null, customer_phone: null,
+      });
+    }
+  }
+  const campaign = (id: string, status: string) =>
+    (db().tables.marketing_campaigns ??= []).push({ id, kind: 'manual', status, name: id, created_at: daysAgo(2) });
+
+  it('is exactly the five fields of the contract', async () => {
+    seedSettings(db(), { monthly_budget_inr: 500, enabled: true });
+    campaign('a', 'draft');
+    campaign('b', 'pending_approval');
+    campaign('c', 'approved');
+    campaign('d', 'completed');
+    seedRecipient({ sent_at: daysAgo(2), cost_inr: 1.02 });
+    seedRecipient({ sent_at: daysAgo(40), cost_inr: 1.02 }); // last month
+    for (const m of ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21']) week(m, 10);
+    week('2026-09-28', 5);
+
+    const s = await getOverviewSummary(NOW_SEND);
+
+    expect(Object.keys(s).sort()).toEqual(['drop_alert', 'enabled', 'month_budget_inr', 'month_spend_inr', 'pending_approvals']);
+    expect(s).toEqual({
+      enabled: true,
+      pending_approvals: 2,
+      month_spend_inr: 1.02,
+      month_budget_inr: 500,
+      drop_alert: { week_start: '2026-09-28', last_week_customers: 5, baseline_customers: 10, drop_pct: 50, drop_customers: 5 },
+    });
+  });
+
+  it('agrees with the full overview on every number they share', async () => {
+    seedSettings(db(), { monthly_budget_inr: 750 });
+    campaign('a', 'pending_approval');
+    seedRecipient({ sent_at: daysAgo(1), cost_inr: 1.02 });
+    for (const m of ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21']) week(m, 8);
+    week('2026-09-28', 4);
+    const [full, summary] = [await getOverview(NOW_SEND), await getOverviewSummary(NOW_SEND)];
+    expect(summary).toEqual({
+      enabled: full.enabled,
+      pending_approvals: full.pending_approvals,
+      month_spend_inr: full.kpis.month_spend_inr,
+      month_budget_inr: full.kpis.monthly_budget_inr,
+      drop_alert: full.drop_alert,
+    });
+    expect(summary.drop_alert).not.toBeNull();
+  });
+
+  it('is cheap: it needs none of the tables the full overview joins (consent, opt-outs, ledger, profiles, menu, history)', async () => {
+    seedSettings(db(), { monthly_budget_inr: 500 });
+    for (const t of ['marketing_consent', 'whatsapp_opt_outs', 'loyalty_transactions', 'profiles', 'menu_items', 'menu_item_variants', 'menu_item_costs', 'marketing_playbooks']) {
+      db().setMissing(t, true);
+    }
+    await expect(getOverview(NOW_SEND)).rejects.toMatchObject({ migration_missing: true });
+    await expect(getOverviewSummary(NOW_SEND)).resolves.toMatchObject({ enabled: true, month_budget_inr: 500 });
+  });
+
+  it('reads only about ten weeks of orders, never the year', async () => {
+    const seen: string[] = [];
+    const inner = db().client;
+    db().client = {
+      ...inner,
+      from: (t: string) => {
+        const q = inner.from(t) as { gte: (c: string, v: string) => unknown };
+        if (t !== 'orders') return q;
+        const gte = q.gte.bind(q);
+        return Object.assign(q, { gte: (c: string, v: string) => (seen.push(v), gte(c, v)) });
+      },
+    };
+    await getOverviewSummary(NOW_SEND);
+    expect(seen).toHaveLength(1);
+    const days = (NOW_SEND.getTime() - Date.parse(seen[0])) / 86_400_000;
+    expect(days).toBeGreaterThanOrEqual(63);
+    expect(days).toBeLessThanOrEqual(77);
+  });
+
+  it('with no settings row it says sending is OFF and uses the default budget; with no campaigns nothing waits', async () => {
+    db().tables.marketing_settings = [];
+    expect(await getOverviewSummary(NOW_SEND)).toEqual({ enabled: false, pending_approvals: 0, month_spend_inr: 0, month_budget_inr: 1000, drop_alert: null });
+  });
+
+  it('reports a missing migration as the typed error (the route answers 409; the card then renders nothing)', async () => {
+    db().setMissing('marketing_settings', true);
+    await expect(getOverviewSummary(NOW_SEND)).rejects.toMatchObject({ migration_missing: true });
   });
 });
 

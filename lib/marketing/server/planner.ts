@@ -15,8 +15,16 @@
 //
 // IDEMPOTENT. A campaign is unique per (playbook, IST day) in the database, so a retried
 // or double-fired run hits a unique violation on the campaign insert and skips that
-// playbook. The contacts a first run already put in a campaign are `in_flight` for the
-// second run in any case, so a re-run cannot double-message anyone.
+// playbook. That index only covers the SAME playbook; what keeps a re-run from messaging
+// someone through ANOTHER one is the eligibility rules: a contact a first run put in a
+// campaign is `in_flight` while their message is pending or queued, `too_soon` /
+// `monthly_cap` once it has left, and `in_holdout` if they were drawn into its control
+// group — and the sender re-checks the caps before every single message anyway. (The one
+// exception is a DRAFT, which does not count as in flight: nothing is going out from it,
+// and its send-time rules apply if it is approved later.)
+//
+// A campaign whose recipients fail to insert is removed again (insertCampaign), and the
+// failure is reported in the run result (`failed`), so the same day can be planned again.
 
 import 'server-only';
 import { randomUUID } from 'node:crypto';
@@ -44,6 +52,7 @@ import {
 } from './campaigns';
 import {
   assertOk,
+  isMigrationMissing,
   isMigrationMissingError,
   loadSettings,
   marketingAdmin,
@@ -123,27 +132,45 @@ export async function learnFromClosedCampaigns(
     learned += 1;
   }
 
-  for (const [key, delta] of add) {
-    const { data: current, error: readError } = await admin
-      .from('marketing_playbooks')
-      .select('observed_treated, observed_conversions')
-      .eq('key', key)
-      .maybeSingle();
-    if (readError || !current) {
-      console.error('marketing learning: playbook read failed', readError?.message ?? key);
-      continue;
-    }
-    const c = current as { observed_treated: number; observed_conversions: number };
-    const { error: writeError } = await admin
-      .from('marketing_playbooks')
-      .update({
-        observed_treated: (c.observed_treated ?? 0) + delta.treated,
-        observed_conversions: (c.observed_conversions ?? 0) + delta.conversions,
-      })
-      .eq('key', key);
-    if (writeError) console.error('marketing learning: playbook write failed', writeError.message);
-  }
+  for (const [key, delta] of add) await addObserved(admin, key, delta.treated, delta.conversions);
   return { campaigns: learned };
+}
+
+/**
+ * Adds to a playbook's learned counters. The addition happens IN the database
+ * (marketing_add_observed: `observed_x = observed_x + n`), because two overlapping runs that each read
+ * the counters, added their own campaigns and wrote them back would silently lose one run's samples.
+ *
+ * If the function is not there yet (code deployed before the migration was re-applied) the old
+ * read-modify-write is used instead: the racy path beats losing the sample outright, since the
+ * campaign has already been claimed as learned.
+ */
+async function addObserved(admin: Admin, key: PlaybookKey, treated: number, conversions: number): Promise<void> {
+  const { error } = await admin.rpc('marketing_add_observed', { p_key: key, p_treated: treated, p_conversions: conversions });
+  if (!error) return;
+  if (!isMigrationMissing(error)) {
+    console.error('marketing learning: playbook write failed', error.message);
+    return;
+  }
+
+  const { data: current, error: readError } = await admin
+    .from('marketing_playbooks')
+    .select('observed_treated, observed_conversions')
+    .eq('key', key)
+    .maybeSingle();
+  if (readError || !current) {
+    console.error('marketing learning: playbook read failed', readError?.message ?? key);
+    return;
+  }
+  const c = current as { observed_treated: number; observed_conversions: number };
+  const { error: writeError } = await admin
+    .from('marketing_playbooks')
+    .update({
+      observed_treated: (c.observed_treated ?? 0) + treated,
+      observed_conversions: (c.observed_conversions ?? 0) + conversions,
+    })
+    .eq('key', key);
+  if (writeError) console.error('marketing learning: playbook write failed', writeError.message);
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +291,7 @@ async function run(now: Date): Promise<PlanCronResult> {
 
   // 7
   const planned: PlanCronResult['planned'] = [];
+  const failed: NonNullable<PlanCronResult['failed']> = [];
   let budget = await remainingBudget(admin, snapshot.settings, now);
   for (const playbook of snapshot.playbooks) {
     if (playbook.mode === 'off') continue;
@@ -277,8 +305,9 @@ async function run(now: Date): Promise<PlanCronResult> {
       if (outcome.status === 'approved') budget -= outcome.treated * snapshot.settings.message_cost_inr;
     } catch (err) {
       if (isMigrationMissingError(err)) throw err;
-      // One playbook failing must not stop the others.
+      // One playbook failing must not stop the others — but it is reported, not just logged.
       console.error(`marketing planner: ${playbook.key} failed`, err);
+      failed.push({ key: playbook.key, error: err instanceof Error ? err.message : 'planning failed' });
     }
   }
 
@@ -291,6 +320,6 @@ async function run(now: Date): Promise<PlanCronResult> {
     }
   }
 
-  return { enabled: true, attributed, planned, expired };
+  return { enabled: true, attributed, planned, expired, ...(failed.length > 0 ? { failed } : {}) };
 }
 

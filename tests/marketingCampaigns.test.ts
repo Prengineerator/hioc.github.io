@@ -159,6 +159,48 @@ describe('manual campaigns', () => {
     expect(r.campaign.offer_text).toBe('a FREE Cold Coffee with any order above ₹200');
   });
 
+  it('one forgotten draft does not make every other campaign see "nobody is eligible" (drafts are not in flight)', async () => {
+    customers();
+    const first = await C.createManualDraft(manual({ name: 'Forgotten' }), 'owner-1', NOW_SEND);
+    expect(first.ok).toBe(true);
+    // The five eligible customers now have pending recipients in a DRAFT. They are still eligible for the next campaign…
+    const p = await C.previewManual(manual({ name: 'Second' }), NOW_SEND);
+    expect(p.eligible).toBe(5);
+    const second = await C.createManualDraft(manual({ name: 'Second' }), 'owner-1', NOW_SEND);
+    expect(second.ok).toBe(true);
+    // …while a campaign that is waiting for approval DOES hold its recipients.
+    const waiting = campaign((first as { ok: true; campaign: { id: string } }).campaign.id);
+    waiting.status = 'pending_approval';
+    expect((await C.previewManual(manual(), NOW_SEND)).eligible).toBe(0);
+  });
+
+  it('never picks a control-group member of a live campaign, for any audience filter (rule 8)', async () => {
+    customers();
+    seedCampaignRow({ id: 'live', kind: 'playbook', playbook_key: 'winback_1', status: 'sending', started_at: daysAgo(1), created_at: daysAgo(1) });
+    seedRec({ id: 'h', campaign_id: 'live', phone: phone(0), arm: 'holdout', status: 'holdout', created_at: daysAgo(1), reference_at: daysAgo(1) });
+    const snap = await (await import('@/lib/marketing/server/audience')).buildContacts(NOW_SEND);
+
+    expect(C.eligibleForManual(snap, {}).map((s) => s.phone)).not.toContain(phone(0));
+    expect(C.eligibleForManual(snap, { stages: ['lapsed_1'] }).map((s) => s.phone).sort()).toEqual([phone(1), phone(2)]);
+    // Once that window closes (attribution_days = 7) they are eligible again.
+    const later = new Date(NOW_SEND.getTime() + 7 * 24 * 60 * 60 * 1000 + 60_000);
+    const snapLater = await (await import('@/lib/marketing/server/audience')).buildContacts(later);
+    expect(C.eligibleForManual(snapLater, {}).map((s) => s.phone)).toContain(phone(0));
+  });
+
+  it('never picks staff: an unverified staff profile, or a staff_accounts number, is enough to exclude', async () => {
+    customers();
+    seedCustomer(db(), { phone: phone(40), optedIn: true, verified: false, orders: [[40, 300]] });
+    db().tables.profiles.push({ id: 'st1', phone: phone(40), phone_verified: false, role: 'staff' });
+    seedCustomer(db(), { phone: phone(41), optedIn: true, verified: false, orders: [[40, 300]] });
+    db().tables.staff_accounts = [{ user_id: 'st2', login_id: 'ravi', phone: phone(41), status: 'active' }];
+    const snap = await (await import('@/lib/marketing/server/audience')).buildContacts(NOW_SEND);
+    const phones = C.eligibleForManual(snap, {}).map((s) => s.phone);
+    expect(phones).not.toContain(phone(40));
+    expect(phones).not.toContain(phone(41));
+    expect(phones).toHaveLength(5);
+  });
+
   it('a 409-worthy state: the draft appears in the pending_approval list with rendered samples', async () => {
     customers();
     await C.createManualDraft(manual(), null, NOW_SEND);
@@ -299,6 +341,38 @@ describe('expireStale', () => {
   });
 });
 
+describe('expireStale — drafts', () => {
+  it('expires a DRAFT older than 7 days (recipients cancelled) and leaves a younger one, and other statuses, alone', async () => {
+    seedCampaignRow({ id: 'old-draft', status: 'draft', created_at: daysAgo(7.1) });
+    seedCampaignRow({ id: 'new-draft', status: 'draft', created_at: daysAgo(6.5) });
+    seedCampaignRow({ id: 'old-approved', status: 'approved', created_at: daysAgo(30) });
+    seedCampaignRow({ id: 'old-done', status: 'completed', created_at: daysAgo(30) });
+    seedRec({ id: 'rd-old', campaign_id: 'old-draft' });
+    seedRec({ id: 'rd-old-h', campaign_id: 'old-draft', arm: 'holdout', status: 'holdout' });
+    seedRec({ id: 'rd-new', campaign_id: 'new-draft' });
+    seedRec({ id: 'ra', campaign_id: 'old-approved', status: 'queued' });
+
+    expect(await C.expireStale(NOW_SEND)).toBe(1);
+
+    expect(campaign('old-draft').status).toBe('expired');
+    expect(campaign('new-draft').status).toBe('draft');
+    expect(campaign('old-approved').status).toBe('approved');
+    expect(campaign('old-done').status).toBe('completed');
+    expect(recipients((x) => x.id === 'rd-old')[0].status).toBe('cancelled');
+    expect(recipients((x) => x.id === 'rd-old-h')[0].status).toBe('holdout');
+    expect(recipients((x) => x.id === 'rd-new')[0].status).toBe('pending');
+    expect(recipients((x) => x.id === 'ra')[0].status).toBe('queued');
+  });
+
+  it('counts approvals and drafts together; an approval is still stale after 2 days, a draft only after 7', async () => {
+    seedCampaignRow({ id: 'pa', status: 'pending_approval', created_at: daysAgo(2.1) });
+    seedCampaignRow({ id: 'dr-3d', status: 'draft', created_at: daysAgo(3) });
+    seedCampaignRow({ id: 'dr-9d', status: 'draft', created_at: daysAgo(9) });
+    expect(await C.expireStale(NOW_SEND)).toBe(2);
+    expect([campaign('pa').status, campaign('dr-3d').status, campaign('dr-9d').status]).toEqual(['expired', 'draft', 'expired']);
+  });
+});
+
 describe('lists', () => {
   it('filters by status group', async () => {
     for (const [id, status] of [['a', 'draft'], ['b', 'pending_approval'], ['c', 'approved'], ['d', 'sending'], ['e', 'completed'], ['f', 'cancelled'], ['g', 'expired']] as const) {
@@ -433,6 +507,55 @@ describe('insertCampaign', () => {
     expect(a1).toHaveLength(6);
     expect(a1).toEqual(a2);
     expect(a1).not.toEqual(b);
+  });
+
+  describe('recipients that do not all land', () => {
+    const people = (n: number) => Array.from({ length: n }, (_, i) => ({ stats: stats(i), vars: {} }));
+
+    it('removes the campaign AND the rows that did land when a later chunk fails', async () => {
+      db().failNext('insert marketing_recipients', undefined, 1); // 600 rows = chunks of 500 + 100
+      const r = await C.insertCampaign(db().client as never, { ...base, id: 'half' }, people(600), 'pending', 10);
+      expect(r).toMatchObject({ ok: false, duplicate: false });
+      expect(rowsOf(db(), 'marketing_campaigns')).toEqual([]);
+      expect(recipients()).toEqual([]);
+    });
+
+    it('cancels the campaign (and its unsent rows) when even the delete fails', async () => {
+      db().failNext('insert marketing_recipients', undefined, 1);
+      db().failNext('delete marketing_campaigns');
+      const r = await C.insertCampaign(db().client as never, { ...base, id: 'stuck' }, people(600), 'pending', 10);
+      expect(r).toMatchObject({ ok: false });
+      expect(campaign('stuck').status).toBe('cancelled');
+      expect(recipients().every((x) => x.status === 'cancelled' || x.status === 'holdout')).toBe(true);
+    });
+
+    it('sets treated_count / holdout_count from the rows that actually landed, and reports those', async () => {
+      // A write that is acknowledged but stores fewer rows than it was given (only 3 of the 10 land).
+      const inner = db().client;
+      db().client = {
+        ...inner,
+        from: (t: string) => {
+          const q = inner.from(t) as { insert: (rows: unknown[]) => unknown };
+          if (t !== 'marketing_recipients') return q;
+          const insert = q.insert.bind(q);
+          return Object.assign(q, { insert: (rows: Row[]) => insert(rows.slice(0, 3)) });
+        },
+      };
+      const r = await C.insertCampaign(db().client as never, { ...base, id: 'short' }, people(10), 'pending', 20);
+      const landed = recipients();
+      expect(landed).toHaveLength(3);
+      expect(r).toMatchObject({ ok: true, treated: landed.filter((x) => x.arm === 'treatment').length, holdout: landed.filter((x) => x.arm === 'holdout').length });
+      expect(campaign('short')).toMatchObject({
+        treated_count: landed.filter((x) => x.arm === 'treatment').length,
+        holdout_count: landed.filter((x) => x.arm === 'holdout').length,
+      });
+    });
+
+    it('leaves the counts alone when every row landed (no needless write)', async () => {
+      await C.insertCampaign(db().client as never, { ...base, id: 'whole' }, people(10), 'pending', 20);
+      expect(campaign('whole')).toMatchObject({ treated_count: 8, holdout_count: 2 });
+      expect(db().log.filter((l) => l === 'update marketing_campaigns')).toEqual([]);
+    });
   });
 
   it('holds out round(N × pct / 100) — the same count the projection promised', async () => {

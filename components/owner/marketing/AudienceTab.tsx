@@ -12,7 +12,7 @@ import QRCode from 'qrcode';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { CAFE_NAME } from '@/lib/constants';
-import { normalizeIndianMobile, formatIndianMobileDisplay } from '@/lib/phone';
+import { normalizeIndianMobileHonouringPlus, formatIndianMobileDisplay } from '@/lib/phone';
 import {
   LIFECYCLE_STAGE_LABELS,
   type AudienceSummary,
@@ -323,7 +323,7 @@ function OptOutForm({ onDone }: { onDone: () => void }) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setMessage(null);
-    const n = normalizeIndianMobile(phone);
+    const n = normalizeIndianMobileHonouringPlus(phone);
     if (!n) {
       setMessage({ ok: false, text: 'Enter a valid 10-digit Indian mobile number.' });
       return;

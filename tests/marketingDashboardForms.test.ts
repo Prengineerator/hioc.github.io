@@ -473,6 +473,7 @@ describe('API failures', () => {
 
   it('builds the endpoints from spec §6', () => {
     expect(API.overview).toBe('/api/owner/marketing/overview');
+    expect(API.overviewSummary).toBe('/api/owner/marketing/overview?summary=1');
     expect(API.campaigns()).toBe('/api/owner/marketing/campaigns');
     expect(API.campaigns('pending_approval')).toBe('/api/owner/marketing/campaigns?status=pending_approval');
     expect(API.campaign('abc', 2)).toBe('/api/owner/marketing/campaigns/abc?page=2');

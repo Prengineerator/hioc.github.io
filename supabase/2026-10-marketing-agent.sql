@@ -36,6 +36,10 @@
 --   claim_marketing_recipients(p_limit)
 --                             atomic row-claim RPC so two overlapping sender runs can't
 --                             message the same recipient twice.
+--   marketing_add_observed(p_key, p_treated, p_conversions)
+--                             atomic `observed_x = observed_x + n` on a playbook's learned
+--                             counters, so two overlapping planner runs can't lose a sample
+--                             to a read-modify-write.
 --   pg_cron + pg_net          polls POST /api/cron/marketing-send every 5 minutes. Vercel
 --                             cron is daily-only on this plan, so sending is driven from
 --                             Postgres exactly as feedback requests are.
@@ -434,6 +438,35 @@ revoke all on function public.claim_marketing_recipients(int) from public, anon,
 grant execute on function public.claim_marketing_recipients(int) to service_role;
 
 -- ---------------------------------------------------------------------------
+-- SECTION 8b — marketing_add_observed: learning without lost updates
+-- ---------------------------------------------------------------------------
+-- The planner folds each finished campaign's results into its playbook's
+-- observed_treated / observed_conversions. Reading the two numbers, adding, and
+-- writing them back loses a run's samples when two runs overlap; the increment
+-- has to happen INSIDE the update, which Postgres serialises per row.
+--
+-- (Each campaign is still counted only once — the planner claims it first with a
+-- conditional UPDATE on projection->>'learned_at'; this function only makes the
+-- ADDITION atomic.)
+--
+-- SECURITY DEFINER for the same reason as the claim RPC above: without the
+-- REVOKE, PostgreSQL's default PUBLIC execute grant would let anon/authenticated
+-- call it through /rpc/marketing_add_observed and rewrite the agent's learned
+-- conversion rates. Revoke the default, grant only service_role.
+
+create or replace function public.marketing_add_observed(p_key text, p_treated int, p_conversions int)
+returns void
+language sql security definer set search_path = public as $$
+  update public.marketing_playbooks
+     set observed_treated = observed_treated + p_treated,
+         observed_conversions = observed_conversions + p_conversions
+   where key = p_key;
+$$;
+
+revoke all on function public.marketing_add_observed(text, int, int) from public, anon, authenticated;
+grant execute on function public.marketing_add_observed(text, int, int) to service_role;
+
+-- ---------------------------------------------------------------------------
 -- SECTION 9 — RLS: ON, NO POLICIES, and no table privileges for the API roles
 -- ---------------------------------------------------------------------------
 -- Every table here holds either a margin (menu_item_costs), customer phone
@@ -598,4 +631,10 @@ select cron.schedule(
 --    where routine_name = 'claim_marketing_recipients';
 --   -- expect service_role | EXECUTE (plus the owning role, postgres) and NO row for
 --   -- anon, authenticated or PUBLIC
+--
+--   -- the learning RPC exists and is locked down the same way:
+--   select grantee, privilege_type
+--     from information_schema.routine_privileges
+--    where routine_name = 'marketing_add_observed';
+--   -- expect service_role | EXECUTE (plus postgres) and NO row for anon, authenticated or PUBLIC
 -- ===========================================================================

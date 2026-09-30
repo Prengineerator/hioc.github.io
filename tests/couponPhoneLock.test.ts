@@ -111,6 +111,77 @@ describe('the phone lock', () => {
   });
 });
 
+// The message promises "show it at the counter", but /api/orders validates the coupon BEFORE createCounterCustomer opens
+// the customer's account, so a first-visit number has no VERIFIED profile yet and was refused. The counter ACTOR's typed
+// phone (CouponContext.counterPhone, set only by server code after getCounterActor() succeeded) is the second way in.
+describe('the counter: a first-visit customer with no account yet', () => {
+  const counter = (counterPhone: string | null | undefined, userId: string | null = null) => ({ ...ctx(userId), counterPhone });
+
+  it('a counter actor who typed the assigned phone can redeem it with NO account (userId null)', async () => {
+    expect(await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).toMatchObject({ ok: true, discountInr: 40 });
+  });
+
+  it('any spelling of the same mobile matches (the server normalises both sides)', async () => {
+    for (const typed of ['9876543210', '98765 43210', '+91 98765 43210', '919876543210']) {
+      expect((await validateAndComputeCoupon('WBK7M3QX', counter(typed))).ok).toBe(true);
+    }
+  });
+
+  it('a DIFFERENT typed phone is refused, with the lock message and no coupon row', async () => {
+    const r = await validateAndComputeCoupon('WBK7M3QX', counter('+919876543211'));
+    expect(r).toEqual({ ok: false, discountInr: 0, reason: LOCK_MESSAGE });
+    expect(r).not.toHaveProperty('coupon');
+  });
+
+  it('a foreign number with the same ten digits is not the Indian number the code was sent to', async () => {
+    h.db.tables.coupons = [coupon({ assigned_phone: '+916581234567' })];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter('+6581234567'))).reason).toBe(LOCK_MESSAGE);
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter('+916581234567'))).ok).toBe(true);
+    // The verified-profile path is '+'-aware too.
+    h.db.tables.profiles = [{ id: 'u-sg', phone: '+6581234567', phone_verified: true }];
+    expect((await validateAndComputeCoupon('WBK7M3QX', ctx('u-sg'))).reason).toBe(LOCK_MESSAGE);
+  });
+
+  it('no counterPhone (or an empty/garbage one) changes nothing: still refused', async () => {
+    for (const cp of [undefined, null, '', '   ', 'garbage']) {
+      expect((await validateAndComputeCoupon('WBK7M3QX', counter(cp))).reason).toBe(LOCK_MESSAGE);
+    }
+  });
+
+  it('the code is still single use: a second redemption is refused, whoever typed the number', async () => {
+    h.db.tables.orders = [{ id: 'o1', status: 'completed' }];
+    h.db.tables.coupon_redemptions = [{ id: 'cr', coupon_id: 'cp1', order_id: 'o1', user_id: null }];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).reason).toBe('This coupon has reached its usage limit');
+  });
+
+  it('…and the per-user limit of a phone-locked code is its redemption count (every redemption is the one holder\'s)', async () => {
+    h.db.tables.coupons = [coupon({ usage_limit: 0, per_user_limit: 1 })];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).ok).toBe(true);
+    h.db.tables.orders = [{ id: 'o1', status: 'completed' }, { id: 'o2', status: 'cancelled' }];
+    // A cancelled order's redemption does not burn it…
+    h.db.tables.coupon_redemptions = [{ id: 'c2', coupon_id: 'cp1', order_id: 'o2', user_id: null }];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).ok).toBe(true);
+    // …a live one does.
+    h.db.tables.coupon_redemptions = [{ id: 'c1', coupon_id: 'cp1', order_id: 'o1', user_id: null }];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).reason).toBe("You've already used this coupon the maximum number of times");
+  });
+
+  it('every other rule still applies to it (minimum order, active)', async () => {
+    expect((await validateAndComputeCoupon('WBK7M3QX', { ...counter(PHONE), subtotalInr: 50 })).reason).toBe('Minimum order of ₹100 required for this coupon');
+    h.db.tables.coupons = [coupon({ active: false })];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).reason).toBe('This coupon is no longer active');
+  });
+
+  it('an ORDINARY per-user-limited coupon still needs a login: counterPhone opens the phone lock only', async () => {
+    h.db.tables.coupons = [coupon({ assigned_phone: null, campaign_id: null })];
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter(PHONE))).reason).toBe('Log in to use this coupon');
+  });
+
+  it('a linked customer (verified phone) is unaffected, whatever counterPhone says', async () => {
+    expect((await validateAndComputeCoupon('WBK7M3QX', counter('+919999999999', 'u-me'))).ok).toBe(true);
+  });
+});
+
 describe('coupons that are NOT locked are unchanged', () => {
   it('a database without the column has assigned_phone undefined: no lock, and no profile lookup', async () => {
     const { assigned_phone: _a, campaign_id: _c, ...legacy } = coupon();
@@ -145,6 +216,17 @@ describe('POST /api/coupons/validate — the checkout endpoint', () => {
     expect(body).toMatchObject({ ok: false, reason: LOCK_MESSAGE });
     expect(body.coupon).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('9876543210');
+  });
+
+  it('a guest cannot vouch for a number: a phone in the request body changes nothing', async () => {
+    h.authUser = null;
+    const res = await validateRoute.POST(
+      new Request('http://t/api/coupons/validate', {
+        method: 'POST',
+        body: JSON.stringify({ code: 'WBK7M3QX', subtotal_inr: 400, customer_phone: PHONE, counterPhone: PHONE, counter_phone: PHONE }),
+      }),
+    );
+    expect(await res.json()).toMatchObject({ ok: false, reason: LOCK_MESSAGE });
   });
 });
 

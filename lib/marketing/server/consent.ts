@@ -26,6 +26,7 @@ import {
   assertOk,
   isMigrationMissingError,
   marketingAdmin,
+  phoneStorageForms,
   toE164,
   type Admin,
 } from './repo';
@@ -165,8 +166,13 @@ export async function recordOptIn(input: ConsentInput): Promise<ConsentResult> {
     );
     assertOk('marketing_consent write', ledgerError);
 
-    // 2. The shared opt-out table. The customer asked back in, so their old STOP must not keep blocking them.
-    await sideEffect('whatsapp_opt_outs delete', warnings, () => admin.from('whatsapp_opt_outs').delete().eq('phone', phone));
+    // 2. The shared opt-out table. The customer asked back in, so their old STOP must not keep blocking them —
+    //    in whichever spelling it was stored: older rows kept the number without its '+', or as the bare ten
+    //    digits, and the audience read treats all of those as the same opt-out (so leaving one behind would
+    //    keep a customer who said START blocked, silently). Only THIS number's spellings, never a neighbour's.
+    await sideEffect('whatsapp_opt_outs delete', warnings, () =>
+      admin.from('whatsapp_opt_outs').delete().in('phone', phoneStorageForms(phone)),
+    );
     // 3. The checkbox on their (verified) profile.
     await sideEffect('profiles mirror', warnings, () =>
       admin.from('profiles').update({ marketing_consent: true }).eq('phone', phone).eq('phone_verified', true),
@@ -279,8 +285,8 @@ export async function loadConsentState(admin: Admin, phoneInput: string): Promis
   const phone = toE164(phoneInput) ?? phoneInput;
   const [consent, optOut] = await Promise.all([
     admin.from('marketing_consent').select('status').eq('phone', phone).maybeSingle(),
-    // Both spellings: a legacy opt-out row can be stored without its '+'.
-    admin.from('whatsapp_opt_outs').select('phone').in('phone', [phone, phone.replace(/^\+/, '')]),
+    // Every spelling: a legacy opt-out row can be stored without its '+', or as the bare ten digits.
+    admin.from('whatsapp_opt_outs').select('phone').in('phone', phoneStorageForms(phone)),
   ]);
   assertOk('marketing_consent read', consent.error);
   assertOk('whatsapp_opt_outs read', optOut.error);

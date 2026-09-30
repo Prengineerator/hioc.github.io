@@ -26,7 +26,7 @@ import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { fetchValidOrdersSince } from '@/lib/analytics/queries';
 import { isMissingColumnError, type PostgrestLikeError } from '@/lib/api/postgrest';
-import { normalizeIndianMobile } from '@/lib/phone';
+import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
 import type { ExpiryRow } from '@/lib/loyalty/expiry';
 import type { FoodCostLine, FreeItemVariantInput } from '@/lib/marketing/economics';
 import {
@@ -170,15 +170,42 @@ export const IN_CHUNK = 100;
  * Any phone → the E.164 form the ledger, recipients and opt-outs use. Indian
  * mobiles in any recognisable form become '+91XXXXXXXXXX'; another international
  * number passes through only if it already is '+<7-14 digits>'. null otherwise.
+ *
+ * A '+' means the country code is stated, so only '+91…' is ever read as Indian. Without
+ * that rule '+6581234567' (Singapore) became '+916581234567': a foreign START would opt
+ * in — and clear the opt-out of — an unrelated Indian number, and a foreign STOP would
+ * opt one out. Input with no '+' is local entry and keeps the forgiving Indian reading.
  */
 export function toE164(input: string | null | undefined): string | null {
   if (typeof input !== 'string') return null;
   const trimmed = input.trim();
   if (trimmed === '') return null;
-  const indian = normalizeIndianMobile(trimmed);
+  const indian = normalizeIndianMobileHonouringPlus(trimmed);
   if (indian) return `+91${indian}`;
   const compact = trimmed.replace(/[\s\-().]/g, '');
   return /^\+[1-9][0-9]{7,14}$/.test(compact) ? compact : null;
+}
+
+/**
+ * Every spelling a phone may be stored under in whatsapp_opt_outs (the legacy feedback
+ * code and older rows kept it without the '+', or as the bare ten digits): the E.164
+ * itself, the same without its '+', and — for an Indian number only — the bare 10 digits.
+ * Always the SAME number; never a neighbour's.
+ *
+ * "Without its '+'" is skipped for a foreign number whose remaining digits would read as a
+ * bare Indian mobile: '6581234567' is the legacy spelling of the Indian +916581234567, and
+ * deleting it (on a Singapore customer's START) would remove somebody else's opt-out.
+ */
+export function phoneStorageForms(e164: string): string[] {
+  const noPlus = e164.replace(/^\+/, '');
+  const forms = new Set<string>([e164]);
+  if (/^\+91[6-9][0-9]{9}$/.test(e164)) {
+    forms.add(noPlus);
+    forms.add(e164.slice(3));
+  } else if (!/^[6-9][0-9]{9}$/.test(noPlus)) {
+    forms.add(noPlus);
+  }
+  return [...forms];
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +553,10 @@ export function toRecipientRow(raw: Record<string, unknown>): RecipientDbRow {
  * was never held out of anything — the campaign never ran — and counting it would
  * make the playbook treat them as "already handled" (a win-back stage is once per
  * lapse, so they would never be offered it).
+ *
+ * Every other holdout row IS kept, because eligibility rule 8 (in_holdout) keeps a live
+ * campaign's control group out of every other campaign while its window is open. Each
+ * entry carries its campaign's status so rules 7 and 8 can tell a draft from a live one.
  */
 export async function loadSendHistory(
   admin: Admin,
@@ -596,6 +627,7 @@ export async function loadSendHistory(
       sent_at: r.sent_at ?? null,
       read_at: r.read_at ?? null,
       reference_at: r.reference_at ?? null,
+      campaign_status: (campaign?.status as CampaignStatus | undefined) ?? null,
     };
     all.push(entry);
     const list = byPhone.get(r.phone);
@@ -673,6 +705,48 @@ export async function loadVerifiedProfiles(admin: Admin): Promise<ProfileLite[]>
       .order('id', { ascending: true })
       .range(from, to),
   );
+}
+
+/**
+ * The E.164 phone of every member of staff, however it is recorded. loadVerifiedProfiles alone
+ * misses them: staff sign in as <login_id>@hioc.in, so their profile phone is usually never
+ * verified. Two sources, unioned:
+ *
+ *   * every profile whose role is not 'customer' — verified or not, in any phone spelling;
+ *   * staff_accounts.phone, where the owner records the number when adding the person.
+ *
+ * A DEACTIVATED staff account still counts: an ex-colleague's number is not a marketing audience
+ * either. staff_accounts belongs to another migration, so its absence (table or column) degrades
+ * to "no such source" instead of failing the run; any other failure aborts, because guessing "no
+ * staff" is how a team member gets a discount offer.
+ */
+export async function loadStaffPhones(admin: Admin): Promise<Set<string>> {
+  const out = new Set<string>();
+  const add = (raw: string | null | undefined) => {
+    const phone = toE164(raw);
+    if (phone) out.add(phone);
+  };
+
+  const profiles = await pageAll<{ phone: string | null; role: string | null }>('profiles read', (from, to) =>
+    admin
+      .from('profiles')
+      .select('phone, role')
+      .neq('role', 'customer')
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+  // NULL role is a plain customer (SQL's `<>` already drops it; this keeps the rule explicit for any client).
+  for (const p of profiles) if (p.role && p.role !== 'customer') add(p.phone);
+
+  try {
+    const accounts = await pageAll<{ phone: string | null }>('staff_accounts read', (from, to) =>
+      admin.from('staff_accounts').select('phone').order('user_id', { ascending: true }).range(from, to),
+    );
+    for (const a of accounts) add(a.phone);
+  } catch (err) {
+    if (!isMigrationMissingError(err)) throw err;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

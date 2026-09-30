@@ -33,7 +33,9 @@ import {
   type TemplateValues,
 } from '@/lib/marketing/templates';
 import {
+  APPROVAL_EXPIRY_DAYS,
   CAMPAIGN_LIST_STATUSES,
+  DRAFT_EXPIRY_DAYS,
   MANUAL_PRIOR_PCT,
   RECIPIENT_PAGE_SIZE,
   TERMINAL_CAMPAIGN_STATUSES,
@@ -301,6 +303,26 @@ export type InsertCampaignResult =
 const RECIPIENT_INSERT_CHUNK = 500;
 
 /**
+ * Removes a campaign whose recipients did not all land; the FK cascades the ones that did. If even
+ * that delete fails, the campaign is CANCELLED instead (and its unsent rows with it), so at the very
+ * least nobody can approve it with a partial audience. Never throws: the caller is already reporting
+ * the failure that got us here.
+ */
+async function discardCampaign(admin: Admin, id: string): Promise<void> {
+  const { error } = await admin.from('marketing_campaigns').delete().eq('id', id);
+  if (!error) return;
+  console.error('marketing campaign: could not remove a half-made campaign — cancelling it', id, error.message);
+  const { error: cancelError } = await admin.from('marketing_campaigns').update({ status: 'cancelled' }).eq('id', id);
+  if (cancelError) console.error('marketing campaign: could not cancel a half-made campaign', id, cancelError.message);
+  const { error: rowsError } = await admin
+    .from('marketing_recipients')
+    .update({ status: 'cancelled' })
+    .eq('campaign_id', id)
+    .in('status', ['pending', 'queued']);
+  if (rowsError) console.error('marketing campaign: could not cancel the recipients of a half-made campaign', id, rowsError.message);
+}
+
+/**
  * Inserts a campaign and its recipients.
  *
  *   * The holdout is drawn here: `splitHoldout(N, holdout_pct)` people, chosen by a
@@ -313,8 +335,11 @@ const RECIPIENT_INSERT_CHUNK = 500;
  *
  * The campaign row goes in FIRST. A unique violation on (playbook_key, planned_for)
  * means today's run already happened: reported as `duplicate`, nothing else written.
- * If the recipients then fail to insert, the campaign is deleted (cascading), so a
- * half-made campaign can neither send nor block tomorrow's re-plan.
+ * If any recipient insert then fails, the campaign is deleted (cascading), so a
+ * half-made campaign can neither be approved with a partial audience nor hold the
+ * (playbook, day) slot that a re-run needs. Once every insert has succeeded the stored
+ * treated_count / holdout_count are set from the rows that actually landed, so the
+ * numbers an owner approves are the numbers that exist.
  *
  * A campaign born 'approved' (Auto) is inserted as 'pending_approval' and only flipped to
  * 'approved' once ALL its recipients are in. Otherwise the sender — which completes any
@@ -380,15 +405,29 @@ export async function insertCampaign(
     };
   });
 
+  let treatedLanded = 0;
+  let holdoutLanded = 0;
   try {
     for (const part of chunk(rows, RECIPIENT_INSERT_CHUNK)) {
-      const { error } = await admin.from('marketing_recipients').insert(part);
+      const { data, error } = await admin.from('marketing_recipients').insert(part).select('arm');
       assertOk('marketing_recipients write', error);
+      // The rows the write says it stored; a client that does not echo them back is taken at its acknowledged word.
+      for (const r of (Array.isArray(data) ? data : part) as { arm: string }[]) {
+        if (r.arm === 'holdout') holdoutLanded += 1;
+        else treatedLanded += 1;
+      }
     }
   } catch (err) {
-    // Best-effort cleanup; the FK cascades the recipients that did land.
-    await admin.from('marketing_campaigns').delete().eq('id', campaign.id);
+    await discardCampaign(admin, campaign.id);
     return { ok: false, duplicate: false, error: err instanceof Error ? err.message : 'recipients insert failed' };
+  }
+
+  if (treatedLanded !== treatedN || holdoutLanded !== holdoutN) {
+    const { error: countError } = await admin
+      .from('marketing_campaigns')
+      .update({ treated_count: treatedLanded, holdout_count: holdoutLanded })
+      .eq('id', campaign.id);
+    if (countError) console.error('marketing campaign: could not correct the recipient counts', campaign.id, countError.message);
   }
 
   let status: 'draft' | 'pending_approval' | 'approved' = campaign.status === 'approved' ? 'pending_approval' : campaign.status;
@@ -406,7 +445,7 @@ export async function insertCampaign(
       status = 'approved';
     }
   }
-  return { ok: true, treated: treatedN, holdout: holdoutN, status };
+  return { ok: true, treated: treatedLanded, holdout: holdoutLanded, status };
 }
 
 // ---------------------------------------------------------------------------
@@ -603,18 +642,26 @@ export async function cancelCampaign(id: string, now: Date = new Date()): Promis
 /**
  * Campaigns still awaiting approval after APPROVAL_EXPIRY_DAYS are expired, and their
  * unsent recipients cancelled: a two-day-old "send it" decision is a decision about a
- * customer list that has since changed. Returns how many were expired.
+ * customer list that has since changed. A forgotten manual DRAFT goes the same way after
+ * DRAFT_EXPIRY_DAYS (it is not a pending decision, so it gets longer): approved a month later
+ * it would message an audience that has long since changed. Returns how many campaigns were expired.
  */
 export async function expireStale(now: Date = new Date(), admin: Admin = marketingAdmin()): Promise<number> {
-  const cutoff = new Date(now.getTime() - 2 * DAY_MS).toISOString();
-  const { data, error } = await admin
-    .from('marketing_campaigns')
-    .update({ status: 'expired' })
-    .eq('status', 'pending_approval')
-    .lt('created_at', cutoff)
-    .select('id');
-  assertOk('marketing_campaigns write', error);
-  const ids = ((data ?? []) as { id: string }[]).map((r) => r.id);
+  const ids: string[] = [];
+  for (const [status, days] of [
+    ['pending_approval', APPROVAL_EXPIRY_DAYS],
+    ['draft', DRAFT_EXPIRY_DAYS],
+  ] as const) {
+    const cutoff = new Date(now.getTime() - days * DAY_MS).toISOString();
+    const { data, error } = await admin
+      .from('marketing_campaigns')
+      .update({ status: 'expired' })
+      .eq('status', status)
+      .lt('created_at', cutoff)
+      .select('id');
+    assertOk('marketing_campaigns write', error);
+    ids.push(...((data ?? []) as { id: string }[]).map((r) => r.id));
+  }
   for (const part of chunk(ids, IN_CHUNK)) {
     const { error: recipientsError } = await admin
       .from('marketing_recipients')

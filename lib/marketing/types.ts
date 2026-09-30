@@ -156,6 +156,8 @@ export const UNREAD_PAUSE_MAX_AGE_DAYS = 60;
 export const INSIGHT_EXPIRY_DAYS = 7;
 /** A campaign left in pending_approval this long is expired by the planner. */
 export const APPROVAL_EXPIRY_DAYS = 2;
+/** A manual DRAFT nobody approved is expired by the planner after this long (a draft is not a pending decision, so it gets longer). */
+export const DRAFT_EXPIRY_DAYS = 7;
 /** A 'sending' recipient claimed this long ago is marked failed/'interrupted', never re-sent. */
 export const STALE_SENDING_MINUTES = 15;
 /** Rows per page in CampaignDetail.recipients. */
@@ -747,7 +749,7 @@ export const SENT_STATUSES: readonly RecipientStatus[] = ['sent', 'delivered', '
 /** Statuses meaning the recipient is still in an open campaign's pipeline. */
 export const IN_FLIGHT_STATUSES: readonly RecipientStatus[] = ['pending', 'queued', 'sending'];
 
-/** Why a contact was (or would be) skipped. The first eight are spec §1.5 rules 1–8, in order. */
+/** Why a contact was (or would be) skipped. These are spec §1.5 rules 1–9, in order. */
 export const ELIGIBILITY_REASONS = [
   'not_opted_in', // 1 — no opted_in consent, or a whatsapp_opt_outs row exists
   'staff', // 2 — profile role is not 'customer'
@@ -755,8 +757,9 @@ export const ELIGIBILITY_REASONS = [
   'too_soon', // 4 — a marketing message in the last min_days_between days
   'monthly_cap', // 5 — max_per_30_days reached
   'unread_pause', // 6 — the last N messages all went unread
-  'in_flight', // 7 — already in another open campaign
-  'claimed_by_higher_priority', // 8 — a higher-priority playbook took this contact today
+  'in_flight', // 7 — already in another open campaign (a draft does not count)
+  'in_holdout', // 8 — a control-group member of a live campaign whose attribution window is open
+  'claimed_by_higher_priority', // 9 — a higher-priority playbook took this contact today
 ] as const;
 export type EligibilityReason = (typeof ELIGIBILITY_REASONS)[number];
 
@@ -771,6 +774,7 @@ export const SKIP_REASON_LABELS: Record<SkipReason, string> = {
   monthly_cap: 'Monthly message limit reached',
   unread_pause: 'Paused: last messages went unread',
   in_flight: 'Already in another campaign',
+  in_holdout: "In a control group — measuring a campaign's effect",
   claimed_by_higher_priority: 'Got a higher-priority message today',
   opted_out: 'Opted out before sending',
   not_configured: 'WhatsApp is not configured',
@@ -794,6 +798,12 @@ export interface SendHistoryEntry {
   read_at: string | null;
   /** sent_at for treated, the campaign start for holdout; null before then. */
   reference_at: string | null;
+  /**
+   * The status of the campaign this row belongs to, when the loader knows it (undefined/null
+   * otherwise, and then the row is treated as belonging to a live campaign). A DRAFT campaign's
+   * pending rows are not "in flight" and a cancelled/expired campaign's holdout never held anyone out.
+   */
+  campaign_status?: CampaignStatus | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,9 +1164,9 @@ export interface MarketingKpis {
   month_spend_inr: number;
   /** settings.monthly_budget_inr, echoed for the progress bar. */
   monthly_budget_inr: number;
-  /** Treated messages sent in the last 30 days. */
+  /** Treated messages that left in the last 30 days — including any Meta later reported as undelivered (those rows end up 'failed' but keep their sent_at). */
   messages_sent_30d: number;
-  /** delivered ÷ sent × 100 over 30 days. null while receipts are not flowing or nothing was sent. */
+  /** (delivered + read) ÷ messages_sent_30d × 100 over 30 days. null while receipts are not flowing or nothing was sent. */
   delivered_pct_30d: number | null;
   /** read ÷ delivered × 100. null under the same conditions. */
   read_pct_30d: number | null;
@@ -1188,6 +1198,25 @@ export interface MarketingOverview {
   insights: Insight[];
   /** The latest campaigns, newest first (about 8). */
   recent_campaigns: CampaignSummary[];
+}
+
+/**
+ * GET /api/owner/marketing/overview?summary=1 — the four numbers the /owner home card shows.
+ * The full overview joins a year of orders and the whole ledger; this one needs the settings, a
+ * campaign count, the month's spend and about ten weeks of orders, so it is cheap enough to load
+ * on every home-page visit.
+ */
+export interface MarketingOverviewSummary {
+  /** The kill switch: true = "Sending is ON". Same rule as MarketingOverview.enabled. */
+  enabled: boolean;
+  /** Campaigns in draft or pending_approval. */
+  pending_approvals: number;
+  /** Σ cost_inr of recipients sent in the current IST month, ₹ (MarketingKpis.month_spend_inr). */
+  month_spend_inr: number;
+  /** settings.monthly_budget_inr. */
+  month_budget_inr: number;
+  /** Same alert the full overview computes from the weekly series; null when there is no drop. */
+  drop_alert: DropAlert | null;
 }
 
 export interface ConsentEventRow {
@@ -1303,6 +1332,8 @@ export interface PlanCronResult {
   planned: { key: PlaybookKey; status: CampaignStatus; eligible: number }[];
   /** Campaigns expired after sitting unapproved. */
   expired: number;
+  /** Playbooks whose campaign could not be planned this run (its half-written rows were removed, so tomorrow — or a re-run — can try again). Absent when none failed. */
+  failed?: { key: PlaybookKey; error: string }[];
 }
 
 /** GET|POST /api/cron/marketing-send */

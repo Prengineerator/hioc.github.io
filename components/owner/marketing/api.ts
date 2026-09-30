@@ -116,6 +116,8 @@ export function isAborted(failure: ApiFailure): boolean {
 
 export const API = {
   overview: '/api/owner/marketing/overview',
+  /** The four numbers the /owner home card shows — cheap, unlike the full overview. */
+  overviewSummary: '/api/owner/marketing/overview?summary=1',
   audience: '/api/owner/marketing/audience',
   settings: '/api/owner/marketing/settings',
   playbooks: '/api/owner/marketing/playbooks',

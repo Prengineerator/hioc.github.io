@@ -18,6 +18,12 @@
 // The run stamps converted_order_id / converted_at / conversion_revenue_inr /
 // attributed_via, once (the UPDATE is guarded by `converted_at is null`, so a re-run or
 // two overlapping runs cannot stamp a recipient twice or move a stamp).
+//
+// One ORDER converts at most one recipient PER CAMPAIGN. Two recipients can reach the same
+// order (it matches one by account and another by the phone typed on it), and counting it for
+// both inflates the campaign's returns, revenue and lift. Candidates are handled oldest
+// reference_at first, so the earliest recipient keeps the order and a later one either finds
+// its own next order in the window or stays unconverted.
 
 import 'server-only';
 import { DAY_MS } from '@/lib/marketing/ist';
@@ -69,6 +75,8 @@ export function findConversion(
   ordersByPhone: ReadonlyMap<string, readonly OrderRow[]>,
   redeemedOrderIds: ReadonlyMap<string, readonly string[]>,
   ordersById: ReadonlyMap<string, OrderRow>,
+  /** Orders this candidate's campaign has already counted for someone else: they convert nobody else there. */
+  takenOrderIds: ReadonlySet<string> = new Set(),
 ): Conversion | null {
   const start = Date.parse(candidate.reference_at);
   if (!Number.isFinite(start)) return null;
@@ -76,7 +84,7 @@ export function findConversion(
   // (start, end] — an order in the same instant as the message is not a response to it.
   const inWindow = (o: OrderRow) => {
     const at = Date.parse(o.created_at);
-    return Number.isFinite(at) && at > start && at <= end;
+    return Number.isFinite(at) && at > start && at <= end && !takenOrderIds.has(o.id);
   };
   const earliest = (orders: readonly OrderRow[]) =>
     orders.reduce<OrderRow | null>((best, o) => (!best || Date.parse(o.created_at) < Date.parse(best.created_at) ? o : best), null);
@@ -156,9 +164,30 @@ export async function attributeRecipients(
     }
   }
 
+  // Orders each campaign has already counted — from earlier runs (stamped rows) and from this one.
+  const taken = new Map<string, Set<string>>();
+  const take = (campaignId: string, orderId: string) => {
+    const set = taken.get(campaignId);
+    if (set) set.add(orderId);
+    else taken.set(campaignId, new Set([orderId]));
+  };
+  for (const part of chunk([...new Set(candidates.map((c) => c.campaign_id))], IN_CHUNK)) {
+    const stamped = await pageAll<{ campaign_id: string; converted_order_id: string }>('marketing_recipients read', (from, to) =>
+      admin
+        .from('marketing_recipients')
+        .select('campaign_id, converted_order_id')
+        .in('campaign_id', part)
+        .not('converted_order_id', 'is', null)
+        .order('campaign_id', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    );
+    for (const r of stamped) take(r.campaign_id, r.converted_order_id);
+  }
+
   let attributed = 0;
   for (const c of candidates) {
-    const hit = findConversion(c, days, ordersByUser, ordersByPhone, redeemed, ordersById);
+    const hit = findConversion(c, days, ordersByUser, ordersByPhone, redeemed, ordersById, taken.get(c.campaign_id));
     if (!hit) continue;
     const { data, error } = await admin
       .from('marketing_recipients')
@@ -176,7 +205,10 @@ export async function attributeRecipients(
       console.error('marketing attribution: stamp failed', error.message);
       continue;
     }
-    if ((data ?? []).length > 0) attributed += 1;
+    if ((data ?? []).length > 0) {
+      attributed += 1;
+      take(c.campaign_id, hit.order.id);
+    }
   }
   return attributed;
 }

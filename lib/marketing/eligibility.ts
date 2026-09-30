@@ -4,14 +4,14 @@
 //
 // Two layers, deliberately separate:
 //   evaluateContact   is this PHONE messageable at all right now? (consent, staff,
-//                     number validity, frequency caps, fatigue, in-flight). Rules 1–7.
+//                     number validity, frequency caps, fatigue, in-flight, control group). Rules 1–8.
 //                     The same function runs again at SEND time with the plan-time
 //                     rules that can go stale (consent, number, caps) — because a
 //                     campaign can be approved days before it sends, and consent
 //                     withdrawn in between must win.
 //   assignPlaybooks   which playbook does each messageable contact belong to?
 //                     One agent message per contact per day, from the highest-priority
-//                     playbook they qualify for. Rule 8.
+//                     playbook they qualify for. Rule 9.
 
 import { DAY_MS } from './ist';
 import {
@@ -29,8 +29,11 @@ import type {
   SendHistoryEntry,
 } from './types';
 
-/** The settings the frequency/fatigue rules read. */
-export type EligibilitySettings = Pick<MarketingSettings, 'min_days_between' | 'max_per_30_days' | 'pause_after_unread'>;
+/** The settings the frequency/fatigue/control-group rules read (attribution_days: how long a holdout stays held out). */
+export type EligibilitySettings = Pick<
+  MarketingSettings,
+  'min_days_between' | 'max_per_30_days' | 'pause_after_unread' | 'attribution_days'
+>;
 
 export interface EligibilityContext {
   now: Date;
@@ -81,6 +84,25 @@ function sentMessages(history: readonly SendHistoryEntry[]): { entry: SendHistor
 }
 
 /**
+ * Is this contact in the control group of a campaign that is still being measured? True for
+ * a holdout row whose campaign is live (not cancelled/expired — it never ran — and not a
+ * draft, which nobody has approved) and whose attribution window is open: it has not
+ * started yet (reference_at null), or it started less than attribution_days ago.
+ *
+ * A campaign that COMPLETED without ever sending has no start time and never will, so its
+ * unstamped holdout has no window to protect; without that exception it would block the
+ * contact for good.
+ */
+function inOpenHoldout(e: SendHistoryEntry, nowMs: number, attributionDays: number): boolean {
+  if (e.status !== 'holdout') return false;
+  const c = e.campaign_status;
+  if (c === 'cancelled' || c === 'expired' || c === 'draft') return false;
+  if (!e.reference_at) return c !== 'completed';
+  const start = Date.parse(e.reference_at);
+  return Number.isFinite(start) && start + attributionDays * DAY_MS > nowMs;
+}
+
+/**
  * Is this contact messageable right now? Returns the FIRST rule that fails, in
  * spec order, or {eligible: true}.
  *
@@ -91,11 +113,18 @@ function sentMessages(history: readonly SendHistoryEntry[]): { entry: SendHistor
  *   5 monthly_cap    max_per_30_days or more were sent in the last 30 days
  *   6 unread_pause   the last N messages all reached sent/delivered but never read, and
  *                    the latest was under 60 days ago — OFF while receipts aren't flowing
- *   7 in_flight      already pending/queued/sending in another open campaign
+ *   7 in_flight      already pending/queued/sending in another open campaign — a DRAFT
+ *                    campaign's recipients do not count (nothing is going out, and one
+ *                    forgotten "all contacts" draft must not freeze the whole agent; the
+ *                    send-time rules protect the customer if it is approved later)
+ *   8 in_holdout     in the control group of a live campaign whose attribution window is
+ *                    open. Blocks EVERY playbook and manual campaign: messaging a control
+ *                    member contaminates the lift measurement and lets one order convert
+ *                    two campaigns' rows
  *
  * phase 'send' applies only rules 1, 3, 4, 5: the ones that can change between
  * approval and send. (Rule 2 and 6 are decisions about who to pick, not about
- * whether a picked message is still allowed; rule 7 would trip on the recipient's
+ * whether a picked message is still allowed; rules 7 and 8 would trip on the recipient's
  * own campaign.) Times compare strictly: a message sent exactly 7 days ago no
  * longer counts as "in the last 7 days".
  */
@@ -130,8 +159,15 @@ export function evaluateContact(
     if (allUnread && nowMs - lastN[0].at < UNREAD_PAUSE_MAX_AGE_DAYS * DAY_MS) return fail('unread_pause');
   }
 
-  const inFlight = history.some((e) => isInFlightStatus(e.status) && e.campaign_id !== ctx.ignore_campaign_id);
+  const inFlight = history.some(
+    (e) => isInFlightStatus(e.status) && e.campaign_status !== 'draft' && e.campaign_id !== ctx.ignore_campaign_id,
+  );
   if (inFlight) return fail('in_flight');
+
+  const heldOut = history.some(
+    (e) => e.campaign_id !== ctx.ignore_campaign_id && inOpenHoldout(e, nowMs, ctx.settings.attribution_days),
+  );
+  if (heldOut) return fail('in_holdout');
 
   return { eligible: true };
 }
@@ -232,7 +268,7 @@ export interface PlaybookAssignment {
   /**
    * Contacts that qualified for a playbook but were not assigned it: ineligible
    * under rules 1–7 (one entry per playbook they qualified for), or, when eligible,
-   * beaten by a higher-priority playbook (rule 8, claimed_by_higher_priority).
+   * beaten by a higher-priority playbook (rule 9, claimed_by_higher_priority).
    */
   skipped: SkippedContact[];
 }

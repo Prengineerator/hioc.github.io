@@ -441,6 +441,17 @@ describe('vip', () => {
     applyVip(pop);
     expect(pop[0].vip).toBe(false);
   });
+
+  it('the bar can be set over a sub-population: the rest are judged by that bar, and do not move it', () => {
+    // Five reachable customers (100…500) and two big spenders nobody can message (5000, 6000).
+    const all = [100, 200, 300, 400, 500, 5000, 6000].map((spend, i) => ({ ...stub(i), order_count: 4, total_spend_inr: spend }));
+    const reachable = (x: { total_spend_inr: number }) => x.total_spend_inr < 1000;
+    // Over everyone: ceil(7 × 0.2) = 2 → the bar is 5000, so no reachable customer is a VIP.
+    expect(applyVip(all).filter((x) => x.vip && reachable(x))).toEqual([]);
+    // Over the reachable five: ceil(5 × 0.2) = 1 → the bar is 500, and the 500 spender is a VIP.
+    const flagged = applyVip(all, reachable);
+    expect(flagged.filter((x) => x.vip && reachable(x)).map((x) => x.total_spend_inr)).toEqual([500]);
+  });
 });
 
 function stub(i: number): ContactStats {

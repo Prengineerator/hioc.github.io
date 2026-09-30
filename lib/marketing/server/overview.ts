@@ -8,10 +8,12 @@ import { DAY_MS, istMonthStart } from '@/lib/marketing/ist';
 import { optinUrl } from '@/lib/marketing/optin';
 import { detectDrop, weeklyActive } from '@/lib/marketing/segments';
 import {
+  DEFAULT_SETTINGS,
   INSIGHT_EXPIRY_DAYS,
   LIFECYCLE_STAGES,
   MIN_COST_COVERAGE_PCT,
   MIN_HOLDOUT_FOR_LIFT,
+  WEEKLY_ACTIVE_WEEKS,
 } from '@/lib/marketing/types';
 import type {
   AudienceSummary,
@@ -20,6 +22,7 @@ import type {
   LifecycleStage,
   MarketingKpis,
   MarketingOverview,
+  MarketingOverviewSummary,
   PlaybookKey,
 } from '@/lib/marketing/types';
 import { whatsappReminderHealth } from '@/lib/notifications/health';
@@ -28,6 +31,8 @@ import { loadAggregates, projectionOf, recentCampaigns } from './campaigns';
 import {
   assertOk,
   loadCampaignsByIds,
+  loadSettings,
+  loadValidOrders,
   marketingAdmin,
   pageAll,
   sumSpendSince,
@@ -147,7 +152,15 @@ interface SentRow {
   conversion_revenue_inr: number | string;
 }
 
-/** Treated recipients touched in the last 30 days: sent then, or converted then. */
+/**
+ * Treated recipients touched in the last 30 days: sent then, or converted then.
+ *
+ * `sent` is every treated row that LEFT in the window (sent_at set), the later-failed ones
+ * included. Meta reports 131049 ("not delivered to maintain ecosystem engagement") a while
+ * AFTER accepting the message, and the webhook then moves the row sent → failed while keeping
+ * its sent_at; a status filter of sent/delivered/read would quietly remove exactly the messages
+ * that did not arrive and make delivery look better than it is. (A failed row costs 0.)
+ */
 async function loadRecent30(admin: Admin, sinceIso: string): Promise<{ sent: SentRow[]; converted: SentRow[] }> {
   const cols = 'campaign_id, arm, status, cost_inr, converted_at, conversion_revenue_inr';
   const [sent, converted] = await Promise.all([
@@ -156,7 +169,7 @@ async function loadRecent30(admin: Admin, sinceIso: string): Promise<{ sent: Sen
         .from('marketing_recipients')
         .select(cols)
         .eq('arm', 'treatment')
-        .in('status', ['sent', 'delivered', 'read'])
+        .in('status', ['sent', 'delivered', 'read', 'failed'])
         .gte('sent_at', sinceIso)
         .order('sent_at', { ascending: true })
         .order('id', { ascending: true })
@@ -174,6 +187,34 @@ async function loadRecent30(admin: Admin, sinceIso: string): Promise<{ sent: Sen
     ),
   ]);
   return { sent, converted };
+}
+
+/**
+ * GET /overview?summary=1 — what the /owner home card shows: the kill switch, campaigns
+ * waiting for a decision, this month's spend against the budget, and the customer-drop alert.
+ * Four cheap reads instead of the whole snapshot: the settings, a count, a sum, and just the
+ * orders the weekly chart looks at (WEEKLY_ACTIVE_WEEKS complete weeks plus the week in progress
+ * fit inside one more week's margin). The alert is the same detectDrop over the same series the
+ * full overview shows, so the card and the Overview tab can never disagree.
+ */
+export async function getOverviewSummary(now: Date = new Date()): Promise<MarketingOverviewSummary> {
+  const admin = marketingAdmin();
+  const sinceOrders = new Date(now.getTime() - (WEEKLY_ACTIVE_WEEKS + 1) * 7 * DAY_MS).toISOString();
+  const [stored, monthSpend, pendingRes, orders] = await Promise.all([
+    loadSettings(admin),
+    sumSpendSince(admin, istMonthStart(now).toISOString()),
+    admin.from('marketing_campaigns').select('id', { count: 'exact', head: true }).in('status', ['draft', 'pending_approval']),
+    loadValidOrders(sinceOrders),
+  ]);
+  assertOk('marketing_campaigns count', pendingRes.error);
+  const settings = stored ?? DEFAULT_SETTINGS;
+  return {
+    enabled: stored !== null && stored.enabled,
+    pending_approvals: pendingRes.count ?? 0,
+    month_spend_inr: Math.round(monthSpend * 1000) / 1000,
+    month_budget_inr: settings.monthly_budget_inr,
+    drop_alert: detectDrop(weeklyActive(orders, now), settings.drop_alert_pct),
+  };
 }
 
 /** GET /overview. */

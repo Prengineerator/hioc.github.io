@@ -152,7 +152,7 @@ A contact is skipped, with a reason recorded, when any of these hold:
 5. `monthly_cap` — `max_per_30_days` (default 4) or more marketing messages were sent in the last 30 days.
 6. `unread_pause` — the last `pause_after_unread` (default 3) marketing messages all reached `sent`/`delivered` without `read`, and the latest was less than 60 days ago. **This rule is disabled automatically when read receipts aren't flowing** (no recipient has ever reached `delivered` or `read`). Otherwise everyone would be paused while `WHATSAPP_APP_SECRET` is unset.
 7. `in_flight` — the phone already has a `pending`/`queued`/`sending` recipient in another open campaign. Recipients of **draft** campaigns don't count, so a forgotten draft can't freeze the agent.
-8. `in_holdout` — the phone is in the holdout of a live campaign whose attribution window is still open. It blocks **every** playbook and manual campaign, because messaging a control-group member contaminates the lift measurement.
+8. `in_holdout` — the phone is in the holdout of a live campaign whose attribution window is still open (started less than `attribution_days` ago, or not started yet). It blocks **every** playbook and manual campaign, because messaging a control-group member contaminates the lift measurement. A cancelled or expired campaign never ran, an unapproved **draft** has held nobody out yet, and a campaign that completed without ever sending has no window: none of those block.
 9. `claimed_by_higher_priority` — a higher-priority playbook took this contact in today's run.
 
 Send-time re-checks cover rules 1, 3, 4 and 5. Consent can be withdrawn between approval and send, and it must win.
@@ -460,6 +460,19 @@ $$;
 revoke all on function public.claim_marketing_recipients(int) from public, anon, authenticated;
 grant execute on function public.claim_marketing_recipients(int) to service_role;
 
+-- 8b. Learning counters: add IN the database, so two overlapping planner runs can't lose a sample
+--     to a read-modify-write (each campaign is still counted once, via projection.learned_at).
+create or replace function public.marketing_add_observed(p_key text, p_treated int, p_conversions int)
+returns void
+language sql security definer set search_path = public as $$
+  update public.marketing_playbooks
+     set observed_treated = observed_treated + p_treated,
+         observed_conversions = observed_conversions + p_conversions
+   where key = p_key;
+$$;
+revoke all on function public.marketing_add_observed(text, int, int) from public, anon, authenticated;
+grant execute on function public.marketing_add_observed(text, int, int) to service_role;
+
 -- 9. RLS on + revoke for: menu_item_costs, marketing_settings, marketing_consent,
 --    marketing_consent_events, marketing_playbooks, marketing_campaigns, marketing_recipients.
 
@@ -537,7 +550,7 @@ Every owner route calls `getOwnerUser()` (401 otherwise), uses `createAdminSupab
 
 | Method & path | Body / query | Response |
 |---|---|---|
-| GET `/api/owner/marketing/overview` | — | `MarketingOverview` |
+| GET `/api/owner/marketing/overview` | `?summary=1` (optional) | `MarketingOverview`; with `?summary=1` the light `MarketingOverviewSummary` (`{ enabled, pending_approvals, month_spend_inr, month_budget_inr, drop_alert }`) for the `/owner` home card |
 | GET `/api/owner/marketing/audience` | — | `AudienceSummary` |
 | GET / PATCH `/api/owner/marketing/settings` | `Partial<MarketingSettings>` | `{ settings: MarketingSettings }` |
 | GET `/api/owner/marketing/playbooks` | — | `{ playbooks: PlaybookView[] }` |
@@ -551,7 +564,7 @@ Every owner route calls `getOwnerUser()` (401 otherwise), uses `createAdminSupab
 | POST `/api/owner/marketing/test-send` | `{ template, phone? }` (default: the owner's profile phone) | `{ ok, error?, provider_ref? }`. Rate limit `rateLimitOk('mkt-test:<uid>',5,3600)`. Sample var values. Not logged as a recipient |
 | GET / PUT `/api/owner/marketing/costs` | PUT `{ costs: {variant_id, cost_inr: number\|null}[] }` (null deletes; server looks up `menu_item_id`) | `{ items: CostRow[], default_food_cost_pct, coverage_pct, free_item_ranking: FreeItemCandidate[] }` |
 | POST `/api/owner/marketing/consent/opt-out` | `{ phone }` | `{ ok: true }` |
-| GET/POST `/api/cron/marketing-plan` | `CRON_SECRET` bearer | `{ enabled, attributed, planned: {key, status, eligible}[], expired }` |
+| GET/POST `/api/cron/marketing-plan` | `CRON_SECRET` bearer | `{ enabled, attributed, planned: {key, status, eligible}[], expired, failed?: {key, error}[] }` (`failed` only when a playbook's campaign could not be written; it is removed again so the day can be re-planned) |
 | GET/POST `/api/cron/marketing-send` | `CRON_SECRET` bearer | `{ enabled, outside_window?, budget_exhausted?, claimed, sent, skipped, failed, interrupted }` |
 | GET `/r/[token]` (page route, public) | — | stamps `clicked_at` (first click only), then 302 to `/menu`. An unknown token also goes to `/menu`. No PII in the URL |
 

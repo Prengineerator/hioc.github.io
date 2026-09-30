@@ -24,7 +24,7 @@ const daysAgo = (n: number) => new Date(NOW.getTime() - n * DAY).toISOString();
 
 const ctx = (over: Partial<EligibilityContext> = {}): EligibilityContext => ({
   now: NOW,
-  settings: { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 3 },
+  settings: { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 3, attribution_days: 7 },
   receipts_connected: true,
   ...over,
 });
@@ -131,11 +131,16 @@ describe('evaluateContact — rules 1–7 (spec §1.5)', () => {
   });
 
   it('4 too_soon follows the configured window', () => {
-    expect(evaluateContact(contact(), sentTo(3), ctx({ settings: { min_days_between: 2, max_per_30_days: 4, pause_after_unread: 3 } }))).toEqual({ eligible: true });
+    expect(evaluateContact(contact(), sentTo(3), ctx({ settings: { min_days_between: 2, max_per_30_days: 4, pause_after_unread: 3, attribution_days: 7 } }))).toEqual({ eligible: true });
   });
 
   it('only messages that actually left count: failed, skipped, holdout and cancelled do not', () => {
-    const hist = (['failed', 'skipped', 'holdout', 'cancelled'] as const).map((status) => entry({ ago: 1, status }));
+    // A holdout whose attribution window has CLOSED (reference 30 days ago) is just history, not a message that left.
+    // (An OPEN one is a different rule — 8 in_holdout, below.)
+    const hist = [
+      ...(['failed', 'skipped', 'cancelled'] as const).map((status) => entry({ ago: 1, status })),
+      entry({ ago: 30, status: 'holdout', arm: 'holdout' }),
+    ];
     expect(evaluateContact(contact(), hist, ctx())).toEqual({ eligible: true });
   });
 
@@ -151,7 +156,7 @@ describe('evaluateContact — rules 1–7 (spec §1.5)', () => {
   });
 
   it('5 monthly_cap follows the configured cap', () => {
-    const settings = { min_days_between: 1, max_per_30_days: 2, pause_after_unread: 0 };
+    const settings = { min_days_between: 1, max_per_30_days: 2, pause_after_unread: 0, attribution_days: 7 };
     expect(evaluateContact(contact(), sentTo(3, 10), ctx({ settings }))).toEqual({ eligible: false, reason: 'monthly_cap' });
     expect(evaluateContact(contact(), sentTo(3), ctx({ settings }))).toEqual({ eligible: true });
   });
@@ -195,12 +200,12 @@ describe('evaluateContact — rules 1–7 (spec §1.5)', () => {
     });
 
     it('pause_after_unread = 0 turns the rule off', () => {
-      const settings = { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 0 };
+      const settings = { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 0, attribution_days: 7 };
       expect(evaluateContact(contact(), unread(), ctx({ settings }))).toEqual({ eligible: true });
     });
 
     it('a smaller N pauses sooner', () => {
-      const settings = { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 1 };
+      const settings = { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 1, attribution_days: 7 };
       expect(evaluateContact(contact(), sentTo(9), ctx({ settings }))).toEqual({ eligible: false, reason: 'unread_pause' });
     });
 
@@ -220,6 +225,94 @@ describe('evaluateContact — rules 1–7 (spec §1.5)', () => {
     const own = entry({ status: 'sending', campaign_id: 'mine' });
     expect(evaluateContact(contact(), [own], ctx({ ignore_campaign_id: 'mine' }))).toEqual({ eligible: true });
     expect(evaluateContact(contact(), [own], ctx({ ignore_campaign_id: 'other' }))).toEqual({ eligible: false, reason: 'in_flight' });
+  });
+
+  // A forgotten "all contacts" draft has every recipient 'pending'. Counted as in flight, it froze the agent: nobody could be planned.
+  it('7 in_flight: a DRAFT campaign\'s recipients do not count — nothing is going out from a draft', () => {
+    for (const status of ['pending', 'queued', 'sending'] as const) {
+      expect(evaluateContact(contact(), [entry({ status, campaign_status: 'draft' })], ctx())).toEqual({ eligible: true });
+    }
+    // The same rows in a campaign that IS waiting for approval, or already approved, still block.
+    for (const campaign_status of ['pending_approval', 'approved', 'sending'] as const) {
+      expect(evaluateContact(contact(), [entry({ status: 'pending', campaign_status })], ctx())).toEqual({ eligible: false, reason: 'in_flight' });
+    }
+    // A row whose campaign is unknown is treated as live.
+    expect(evaluateContact(contact(), [entry({ status: 'pending' })], ctx())).toEqual({ eligible: false, reason: 'in_flight' });
+  });
+
+  // Holdout contamination: handledSince only blocks the SAME playbook and rule 7 ignored 'holdout' rows, so
+  // a control-group member could be messaged the next day by another playbook or a manual campaign, inside
+  // the attribution window — ruining the lift measurement and letting one order convert two campaigns' rows.
+  describe('8 in_holdout — a live campaign\'s control group is off limits to everything', () => {
+    const held = (over: Partial<SendHistoryEntry> & { ago?: number } = {}) =>
+      entry({ status: 'holdout', arm: 'holdout', ago: 2, playbook_key: 'points_balance', campaign_status: 'sending', ...over });
+
+    it('blocks the contact while the window is open, for a manual campaign (evaluateContact)…', () => {
+      expect(evaluateContact(contact(), [held()], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+      expect(evaluateContact(contact(), [held({ playbook_key: null })], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+    });
+
+    it('…and for every OTHER playbook (assignPlaybooks)', () => {
+      const c = contact(); // lapsed_1: qualifies for winback_1
+      const r = assignPlaybooks([{ stats: c, history: [held({ playbook_key: 'points_balance' })] }], ALL_RULES(), ctx());
+      expect(r.assigned.winback_1).toEqual([]);
+      expect(r.skipped).toEqual([{ phone: c.phone, playbook_key: 'winback_1', reason: 'in_holdout' }]);
+    });
+
+    it('window boundary: reference_at + attribution_days is strictly after now', () => {
+      // attribution_days is 7 in ctx().
+      expect(evaluateContact(contact(), [held({ ago: 6.9 })], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+      expect(evaluateContact(contact(), [held({ ago: 7 })], ctx())).toEqual({ eligible: true });
+      expect(evaluateContact(contact(), [held({ ago: 20 })], ctx())).toEqual({ eligible: true });
+    });
+
+    it('follows the configured attribution window', () => {
+      const short = ctx({ settings: { ...ctx().settings, attribution_days: 3 } });
+      expect(evaluateContact(contact(), [held({ ago: 5 })], short)).toEqual({ eligible: true });
+      expect(evaluateContact(contact(), [held({ ago: 5 })], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+    });
+
+    it('a campaign that has not started sending yet (reference_at null) already holds its control group out', () => {
+      const pending = held({ campaign_status: 'pending_approval', reference_at: null });
+      expect(evaluateContact(contact(), [pending], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+    });
+
+    it('a cancelled or expired campaign never ran: its holdout held nobody out', () => {
+      for (const campaign_status of ['cancelled', 'expired'] as const) {
+        expect(evaluateContact(contact(), [held({ campaign_status })], ctx())).toEqual({ eligible: true });
+        expect(evaluateContact(contact(), [held({ campaign_status, reference_at: null })], ctx())).toEqual({ eligible: true });
+      }
+    });
+
+    it('a campaign that COMPLETED without ever sending has no window to protect (it would block for good)', () => {
+      expect(evaluateContact(contact(), [held({ campaign_status: 'completed', reference_at: null })], ctx())).toEqual({ eligible: true });
+      // …but a completed campaign whose window is still open does.
+      expect(evaluateContact(contact(), [held({ campaign_status: 'completed', ago: 2 })], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+    });
+
+    it('an unapproved DRAFT holds nobody out yet (like rule 7, a forgotten draft must not freeze the agent)', () => {
+      expect(evaluateContact(contact(), [held({ campaign_status: 'draft', reference_at: null })], ctx())).toEqual({ eligible: true });
+    });
+
+    it('a row whose campaign status is unknown is treated as live', () => {
+      const unknown = held();
+      delete unknown.campaign_status;
+      expect(evaluateContact(contact(), [unknown], ctx())).toEqual({ eligible: false, reason: 'in_holdout' });
+    });
+
+    it('the contact\'s own campaign does not block itself (ignore_campaign_id)', () => {
+      const own = held({ campaign_id: 'mine' });
+      expect(evaluateContact(contact(), [own], ctx({ ignore_campaign_id: 'mine' }))).toEqual({ eligible: true });
+    });
+
+    it('comes after in_flight in the rule order, and a treated row of the same campaign is not a holdout', () => {
+      expect(evaluateContact(contact(), [held(), entry({ status: 'queued' })], ctx())).toEqual({ eligible: false, reason: 'in_flight' });
+      expect(evaluateContact(contact(), [entry({ ago: 12, status: 'delivered' })], ctx({ receipts_connected: false }))).toEqual({ eligible: true });
+    });
+
+    it('is a plan-time rule only: a holdout member\'s own campaign never sends to them, and send time does not re-check it', () => {
+      expect(evaluateContact(contact(), [held()], ctx(), { phase: 'send' })).toEqual({ eligible: true });
+    });
   });
 
   it('reports the FIRST failing rule, in spec order', () => {
@@ -506,7 +599,7 @@ describe('assignPlaybooks', () => {
 
   it('win-back one-per-episode carries through assignment: already messaged this lapse → not assigned, and no skip noise', () => {
     const c = contact();
-    const r = assignPlaybooks([pc(c, [entry({ ago: 10, playbook_key: 'winback_1' })])], ALL_RULES(), ctx({ receipts_connected: false, settings: { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 3 } }));
+    const r = assignPlaybooks([pc(c, [entry({ ago: 10, playbook_key: 'winback_1' })])], ALL_RULES(), ctx({ receipts_connected: false, settings: { min_days_between: 7, max_per_30_days: 4, pause_after_unread: 3, attribution_days: 7 } }));
     expect(r.assigned.winback_1).toEqual([]);
     expect(r.skipped).toEqual([]);
   });

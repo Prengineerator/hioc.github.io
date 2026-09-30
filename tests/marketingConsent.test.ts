@@ -101,6 +101,90 @@ describe('recordOptIn', () => {
   });
 });
 
+describe('START clears every stored spelling of THIS number\'s opt-out', () => {
+  it('the E.164, the same without its plus, and the bare ten digits — older rows kept those', async () => {
+    h.db.tables.whatsapp_opt_outs = [
+      { phone: '+919876543210', source: 'stop_keyword' },
+      { phone: '919876543210', source: 'legacy' },
+      { phone: '9876543210', source: 'legacy' },
+    ];
+    await recordOptIn({ phone: PHONE, source: 'whatsapp_keyword' });
+    expect(rowsOf(h.db, 'whatsapp_opt_outs')).toEqual([]);
+  });
+
+  it('leaves a neighbour alone: only the exact same number is cleared', async () => {
+    h.db.tables.whatsapp_opt_outs = [
+      { phone: '9876543210', source: 'legacy' },
+      { phone: '9876543211', source: 'legacy' }, // one digit off
+      { phone: '+919876543211', source: 'stop_keyword' },
+      { phone: '919876543212', source: 'legacy' },
+    ];
+    await recordOptIn({ phone: PHONE, source: 'whatsapp_keyword' });
+    expect(rowsOf(h.db, 'whatsapp_opt_outs').map((r) => r.phone).sort()).toEqual(['+919876543211', '919876543212', '9876543211']);
+  });
+
+  it('the plan-time audience read and the send-time read agree about a legacy bare-digit opt-out', async () => {
+    h.db.tables.marketing_consent = [{ phone: PHONE, status: 'opted_in' }];
+    h.db.tables.whatsapp_opt_outs = [{ phone: '9876543210', source: 'legacy' }];
+    // Blocked while it stands…
+    expect((await loadConsentState(h.db.client as never, PHONE)).opt_out_listed).toBe(true);
+    // …and gone after START.
+    await recordOptIn({ phone: PHONE, source: 'whatsapp_keyword' });
+    expect((await loadConsentState(h.db.client as never, PHONE)).opt_out_listed).toBe(false);
+  });
+});
+
+// CONSENT LEAK: a foreign number whose digits are ten long and start 6–9 used to be read as the
+// Indian mobile with the same digits, so its START/STOP moved an unrelated Indian customer's consent.
+describe('a foreign number is never an Indian customer', () => {
+  const SG = '+6581234567';
+  const IN = '+916581234567'; // the Indian number that shares Singapore's ten digits
+
+  beforeEach(() => {
+    h.db.tables.profiles = [{ id: 'u-in', phone: IN, phone_verified: true, marketing_consent: false, role: 'customer' }];
+    h.db.tables.marketing_consent = [{ phone: IN, user_id: 'u-in', status: 'opted_out', source: 'stop_keyword', withdrawn_at: '2026-09-01T00:00:00.000Z' }];
+    h.db.tables.whatsapp_opt_outs = [
+      { phone: IN, source: 'stop_keyword' },
+      { phone: '6581234567', source: 'legacy' }, // the Indian number's legacy bare spelling
+    ];
+  });
+
+  it('START from +65… opts in +65… and does not touch the Indian number\'s ledger, opt-outs or profile', async () => {
+    const r = await recordOptIn({ phone: SG, source: 'whatsapp_keyword', now: NOW_SEND });
+
+    expect(r).toMatchObject({ ok: true, changed: true });
+    const ledger = rowsOf(h.db, 'marketing_consent');
+    expect(ledger.find((l) => l.phone === SG)).toMatchObject({ status: 'opted_in', source: 'whatsapp_keyword' });
+    expect(ledger.find((l) => l.phone === IN)).toMatchObject({ status: 'opted_out', source: 'stop_keyword', withdrawn_at: '2026-09-01T00:00:00.000Z' });
+    // Both of the Indian number's opt-out rows survive.
+    expect(rowsOf(h.db, 'whatsapp_opt_outs').map((x) => x.phone).sort()).toEqual(['+916581234567', '6581234567']);
+    // The Indian customer's checkbox was not flipped, and no event names their number.
+    expect(rowsOf(h.db, 'profiles', (p) => p.id === 'u-in')[0].marketing_consent).toBe(false);
+    expect(rowsOf(h.db, 'marketing_consent_events').map((e) => e.phone)).toEqual([SG]);
+  });
+
+  it('STOP from +65… opts out +65… and leaves the Indian customer opted in, queued and checked', async () => {
+    h.db.tables.marketing_consent = [{ phone: IN, user_id: 'u-in', status: 'opted_in', source: 'profile' }];
+    h.db.tables.whatsapp_opt_outs = [];
+    h.db.tables.profiles[0].marketing_consent = true;
+    h.db.tables.marketing_recipients = [{ id: 'r-in', phone: IN, status: 'queued', campaign_id: 'c1' }];
+
+    await recordOptOut({ phone: SG, source: 'stop_keyword', now: NOW_SEND });
+
+    expect(rowsOf(h.db, 'marketing_consent').find((l) => l.phone === IN)).toMatchObject({ status: 'opted_in' });
+    expect(rowsOf(h.db, 'whatsapp_opt_outs').map((x) => x.phone)).toEqual([SG]);
+    expect(rowsOf(h.db, 'profiles', (p) => p.id === 'u-in')[0].marketing_consent).toBe(true);
+    expect(rowsOf(h.db, 'marketing_recipients', (x) => x.id === 'r-in')[0].status).toBe('queued');
+  });
+
+  it('the send-time consent read of the Indian number is not answered by the foreign number\'s rows', async () => {
+    h.db.tables.marketing_consent = [{ phone: SG, status: 'opted_in' }];
+    h.db.tables.whatsapp_opt_outs = [];
+    expect(await loadConsentState(h.db.client as never, IN)).toEqual({ opted_in: false, opt_out_listed: false });
+    expect(await loadConsentState(h.db.client as never, SG)).toEqual({ opted_in: true, opt_out_listed: false });
+  });
+});
+
 describe('meta_resume', () => {
   it('is NOT consent to us when there is no earlier opt-in of ours', async () => {
     const r = await recordOptIn({ phone: PHONE, source: 'meta_resume' });

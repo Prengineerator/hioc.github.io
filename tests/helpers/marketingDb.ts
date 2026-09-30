@@ -3,7 +3,10 @@
 // campaigns) end to end without a network. Unlike tests/helpers/fakeAdmin.ts (select /
 // insert / update only) it also supports upsert, delete, range paging, count, `not`, json
 // paths (`projection->>learned_at`), one-level `!inner` embeds (order_items → orders),
-// unique constraints (23505), missing tables (42P01) / columns (42703, PGRST204) and rpc.
+// unique constraints (23505), missing tables (42P01) / columns (42703, PGRST204) and rpc
+// (claim_marketing_recipients, marketing_add_observed). Deleting a campaign cascades to its
+// recipients, as the foreign key does. failNext / beforeNext inject a failure, or another
+// writer's change, at an exact operation.
 //
 // It is NOT a query planner: it implements exactly the operators the engine uses, and it
 // throws on an operator it does not know, so a new query shows up as a loud test failure
@@ -42,6 +45,12 @@ export interface FakeDb {
   setMissing(table: string, missing: boolean): void;
   /** Inject an error for the NEXT matching operation, e.g. failNext('update marketing_recipients'); `skip` lets that many matching operations through first. */
   failNext(op: string, error?: PgError, skip?: number): void;
+  /**
+   * Run `fn` immediately BEFORE the next matching operation executes ('update marketing_playbooks',
+   * 'rpc marketing_add_observed', …), once. It is how a test says "another run's write lands right
+   * here": between a read-modify-write's read and its write, or just ahead of an atomic increment.
+   */
+  beforeNext(op: string, fn: () => void): void;
 }
 
 const PATH_SPLIT = /->>?/;
@@ -84,6 +93,12 @@ export function makeMarketingDb(opts: FakeDbOptions = {}): FakeDb {
   const missing = new Set(opts.missing ?? []);
   const log: string[] = [];
   const failures: { op: string; error: PgError; skip: number }[] = [];
+  const hooks: { op: string; fn: () => void }[] = [];
+  /** Fires (and removes) the first hook registered for `op`. */
+  const runHook = (op: string) => {
+    const i = hooks.findIndex((h) => h.op === op);
+    if (i >= 0) hooks.splice(i, 1)[0].fn();
+  };
   let clockMs = opts.startMs ?? Date.parse('2026-10-05T06:00:00.000Z');
   let idCounter = 0;
 
@@ -163,6 +178,7 @@ export function makeMarketingDb(opts: FakeDbOptions = {}): FakeDb {
     };
 
     function exec(): { data: unknown; error: PgError | null; count?: number | null } {
+      runHook(`${op} ${table}`);
       const injected = failureFor();
       if (injected) return { data: null, error: injected };
 
@@ -241,6 +257,11 @@ export function makeMarketingDb(opts: FakeDbOptions = {}): FakeDb {
       const before = store(table).length;
       tables[table] = store(table).filter((r) => !doomed.has(r));
       const removed = before - tables[table].length;
+      // marketing_recipients.campaign_id is `on delete cascade`: a campaign takes its recipients with it.
+      if (table === 'marketing_campaigns' && removed > 0) {
+        const gone = new Set([...doomed].map((c) => c.id));
+        tables.marketing_recipients = store('marketing_recipients').filter((r) => !gone.has(r.campaign_id));
+      }
       return { data: returning ? [] : null, error: null, count: removed };
     }
 
@@ -325,6 +346,9 @@ export function makeMarketingDb(opts: FakeDbOptions = {}): FakeDb {
     failNext: (op, error = { code: 'XX000', message: 'injected failure' }, skip = 0) => {
       failures.push({ op, error, skip });
     },
+    beforeNext: (op, fn) => {
+      hooks.push({ op, fn });
+    },
     client: {
       from,
       rpc: async (name: string, args: Row = {}) => {
@@ -332,11 +356,28 @@ export function makeMarketingDb(opts: FakeDbOptions = {}): FakeDb {
           if (missing.has('marketing_recipients')) return { data: null, error: { code: '42P01', message: 'relation does not exist' } };
           return { data: claimMarketingRecipients(db, Number(args.p_limit) || 0), error: null };
         }
+        if (name === 'marketing_add_observed') {
+          runHook('rpc marketing_add_observed');
+          if (missing.has('marketing_playbooks')) return { data: null, error: { code: '42P01', message: 'relation does not exist' } };
+          if (missing.has('marketing_add_observed')) return { data: null, error: { code: 'PGRST202', message: `Could not find the function public.${name}` } };
+          marketingAddObserved(db, String(args.p_key), Number(args.p_treated) || 0, Number(args.p_conversions) || 0);
+          log.push('rpc marketing_add_observed');
+          return { data: null, error: null };
+        }
         return { data: null, error: { code: 'PGRST202', message: `Could not find the function public.${name}` } };
       },
     },
   };
   return db;
+}
+
+/** The SQL function of the same name, in memory: `observed_x = observed_x + n` on ONE row, with no read in between. */
+export function marketingAddObserved(db: FakeDb, key: string, treated: number, conversions: number): void {
+  for (const row of db.tables.marketing_playbooks ?? []) {
+    if (row.key !== key) continue;
+    row.observed_treated = Number(row.observed_treated ?? 0) + treated;
+    row.observed_conversions = Number(row.observed_conversions ?? 0) + conversions;
+  }
 }
 
 /** The SQL function of the same name, in memory: oldest queued rows of approved/sending campaigns, by campaign priority. */

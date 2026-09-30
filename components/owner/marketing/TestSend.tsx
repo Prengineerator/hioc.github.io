@@ -9,7 +9,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { normalizeIndianMobile } from '@/lib/phone';
+import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
 import { parseTemplate } from '@/lib/marketing/parse';
 import type { TestSendBody, TestSendResult } from '@/lib/marketing/types';
 import { API, requestJson } from './api';
@@ -29,7 +29,7 @@ export function TestSend({ template, allowHeadline = false }: { template: Templa
     }
     let to: string | undefined;
     if (phone.trim() !== '') {
-      const n = normalizeIndianMobile(phone);
+      const n = normalizeIndianMobileHonouringPlus(phone);
       if (!n) {
         setResult({ ok: false, text: 'That does not look like an Indian mobile number. Leave it empty to use the number on your own profile.' });
         return;

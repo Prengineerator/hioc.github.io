@@ -138,9 +138,9 @@ describe('label maps cover every enum member', () => {
     expect(GUARDRAIL_FLAGS).toHaveLength(6);
   });
 
-  it('skip reasons: the eight spec §1.5 rules, in order, plus the ones the sender adds', () => {
+  it('skip reasons: the nine spec §1.5 rules, in order, plus the ones the sender adds', () => {
     expect([...ELIGIBILITY_REASONS]).toEqual([
-      'not_opted_in', 'staff', 'invalid_phone', 'too_soon', 'monthly_cap', 'unread_pause', 'in_flight', 'claimed_by_higher_priority',
+      'not_opted_in', 'staff', 'invalid_phone', 'too_soon', 'monthly_cap', 'unread_pause', 'in_flight', 'in_holdout', 'claimed_by_higher_priority',
     ]);
     for (const r of ELIGIBILITY_REASONS) expect(SKIP_REASON_LABELS[r]).toBeTruthy();
     expect(SKIP_REASON_LABELS.opted_out).toBeTruthy();

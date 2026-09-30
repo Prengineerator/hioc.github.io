@@ -11,7 +11,7 @@
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
-import { normalizeIndianMobile } from '@/lib/phone';
+import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
 import type { Coupon } from '@/lib/types';
 
 // Marketing coupons (docs/MARKETING-AGENT-SPEC.md §1.7) are issued to ONE phone.
@@ -23,6 +23,19 @@ export interface CouponContext {
   userId: string | null;
   itemIds: string[];
   categories: string[];
+  /**
+   * The customer phone a COUNTER ACTOR (staff session or enrolled device operator) typed for the
+   * order, already normalised. Set ONLY by server code that has just established the caller is an
+   * authenticated counter actor (POST /api/orders and /api/orders/quote when getCounterActor() is
+   * non-null) — never from a customer web session and never straight from a request body on a
+   * customer path, or anyone could "type" the number a forwarded code was sent to.
+   *
+   * It exists for the first-visit customer: a marketing code is locked to a phone, and the account
+   * that would prove it (a VERIFIED profile phone) does not exist until the counter order itself
+   * opens it — but the message promised "show it at the counter". A staffer looking at the
+   * customer, with the number in the POS, is that proof.
+   */
+  counterPhone?: string | null;
 }
 
 export interface CouponResult {
@@ -70,13 +83,16 @@ export async function validateAndComputeCoupon(
   // the assigned one. Unverified does not count: profiles.phone is free text a customer types
   // into their own account, so an unverified match proves nothing (lib/loyalty/customerLink.ts).
   // A database without the column returns `assigned_phone` undefined — no lock, as before.
+  let heldViaCounterPhone = false;
   if (coupon.assigned_phone) {
     const locked = await redeemerHoldsAssignedPhone(admin, ctx.userId, coupon.assigned_phone);
     if (locked === 'error') {
       return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again' };
     }
     if (!locked) {
-      return { ok: false, discountInr: 0, reason: PHONE_LOCK_REASON };
+      // Second way in: the counter actor typed exactly the assigned number (see CouponContext.counterPhone).
+      heldViaCounterPhone = counterPhoneMatches(ctx.counterPhone, coupon.assigned_phone);
+      if (!heldViaCounterPhone) return { ok: false, discountInr: 0, reason: PHONE_LOCK_REASON };
     }
   }
 
@@ -140,16 +156,21 @@ export async function validateAndComputeCoupon(
 
   // Per-user limit (0 = unlimited). A coupon that's per-user-limited requires
   // a logged-in user to enforce — guests can't be identified across orders.
+  //
+  // The exception is a phone-locked code redeemed by its phone at the counter with no account yet:
+  // its one holder is the phone, so EVERY redemption of it is that holder's and the per-user count
+  // is simply the coupon's redemption count. (Refusing here would send the first-visit customer
+  // away with "Log in", the very thing the counter route exists to avoid.)
   if (coupon.per_user_limit > 0) {
-    if (!ctx.userId) {
+    if (!ctx.userId && !heldViaCounterPhone) {
       return { ok: false, discountInr: 0, reason: 'Log in to use this coupon', coupon };
     }
-    const { count, error: userUsageError } = await admin
+    let userUsage = admin
       .from('coupon_redemptions')
       .select('id, orders!inner(status)', { count: 'exact', head: true })
-      .eq('coupon_id', coupon.id)
-      .eq('user_id', ctx.userId)
-      .not('orders.status', 'in', '("cancelled","rejected")');
+      .eq('coupon_id', coupon.id);
+    if (ctx.userId) userUsage = userUsage.eq('user_id', ctx.userId);
+    const { count, error: userUsageError } = await userUsage.not('orders.status', 'in', '("cancelled","rejected")');
     if (userUsageError) {
       console.error('validateAndComputeCoupon: per-user count failed', userUsageError);
       return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };
@@ -209,7 +230,16 @@ async function redeemerHoldsAssignedPhone(
   }
   const profile = data as { phone: string | null; phone_verified: boolean | null } | null;
   if (!profile || profile.phone_verified !== true || !profile.phone) return false;
-  const mine = normalizeIndianMobile(profile.phone);
-  const assigned = normalizeIndianMobile(assignedPhone);
+  // '+'-aware: a verified '+6581234567' is not the Indian 6581234567 the code was sent to.
+  const mine = normalizeIndianMobileHonouringPlus(profile.phone);
+  const assigned = normalizeIndianMobileHonouringPlus(assignedPhone);
   return mine !== null && assigned !== null && mine === assigned;
+}
+
+/** Did a counter actor type exactly the phone this code is locked to? False for no phone or any mismatch. */
+function counterPhoneMatches(counterPhone: string | null | undefined, assignedPhone: string): boolean {
+  if (!counterPhone) return false;
+  const typed = normalizeIndianMobileHonouringPlus(counterPhone);
+  const assigned = normalizeIndianMobileHonouringPlus(assignedPhone);
+  return typed !== null && assigned !== null && typed === assigned;
 }

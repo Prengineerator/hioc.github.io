@@ -8,7 +8,7 @@
 // rule would nag the second group and miss the first, so the lapse threshold is
 // derived from each customer's own median gap between visits.
 
-import { normalizeIndianMobile } from '@/lib/phone';
+import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
 import type { ExpiryRow } from '@/lib/loyalty/expiry';
 import { expiringWithin, expiryDateFor, pointsBalance } from './points';
 import { firstName } from './templates';
@@ -250,9 +250,17 @@ export function vipThreshold(contacts: readonly Pick<ContactStats, 'order_count'
   return spends[k - 1];
 }
 
-/** Returns the contacts with `vip` set from the whole population's spend distribution. */
-export function applyVip(contacts: readonly ContactStats[]): ContactStats[] {
-  const threshold = vipThreshold(contacts);
+/**
+ * Returns the contacts with `vip` set from the population's spend distribution. `inPopulation`
+ * says whose spend sets the bar (default: everyone given); the flag itself is then decided by
+ * that bar for every contact. The server passes "messageable" (opted in, not opted out, not
+ * staff) so the top 20% means the top 20% of the people a campaign can reach (spec §1.1).
+ */
+export function applyVip(
+  contacts: readonly ContactStats[],
+  inPopulation: (c: ContactStats) => boolean = () => true,
+): ContactStats[] {
+  const threshold = vipThreshold(contacts.filter(inPopulation));
   return contacts.map((c) => ({
     ...c,
     vip: threshold !== null && c.order_count >= VIP_MIN_ORDERS && c.total_spend_inr >= threshold,
@@ -295,7 +303,7 @@ export interface WeeklyOrderInput {
 export function customerKey(o: Pick<WeeklyOrderInput, 'user_id' | 'customer_user_id' | 'customer_phone'>): string | null {
   const account = o.user_id || o.customer_user_id;
   if (account) return `u:${account}`;
-  const phone = o.customer_phone ? normalizeIndianMobile(o.customer_phone) : null;
+  const phone = o.customer_phone ? normalizeIndianMobileHonouringPlus(o.customer_phone) : null;
   return phone ? `p:${phone}` : null;
 }
 

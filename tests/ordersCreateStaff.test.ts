@@ -31,6 +31,8 @@ const state: {
   menuRows: Record<string, unknown>[];
   orderInsert?: Record<string, unknown>;
   eventRow?: Record<string, unknown>;
+  /** What the route handed validateAndComputeCoupon (the coupon itself is stubbed to refuse). */
+  couponCtx?: Record<string, unknown>;
 } = { actor: null, sessionUser: null, tableRow: null, menuRows: [] };
 
 vi.mock('@/lib/supabase-server', () => ({
@@ -114,12 +116,22 @@ vi.mock('@/lib/store/settings', () => ({
 }));
 
 vi.mock('@/lib/notifications/engine', () => ({ sendBillNotification: vi.fn(() => Promise.resolve()) }));
-vi.mock('@/lib/promotions/coupons', () => ({ validateAndComputeCoupon: () => Promise.resolve({ ok: false }) }));
+vi.mock('@/lib/promotions/coupons', () => ({
+  validateAndComputeCoupon: (_code: string, ctx: Record<string, unknown>) => {
+    state.couponCtx = ctx;
+    return Promise.resolve({ ok: false });
+  },
+}));
 vi.mock('@/lib/loyalty/ledger', () => ({
   quoteRedemption: () => Promise.resolve({ ok: false }),
   redeemForOrder: () => Promise.resolve(),
 }));
 vi.mock('@/lib/payments/gateway', () => ({ createPaymentIntent: () => Promise.resolve(null) }));
+// No counter customer is opened or looked up here (the admin stub has no .limit()): a phone typed at the counter just finds no account.
+vi.mock('@/lib/loyalty/customerLink', () => ({
+  findVerifiedCustomerByPhone: () => Promise.resolve(null),
+  createCounterCustomer: () => Promise.resolve(null),
+}));
 
 const { POST } = await import('@/app/api/orders/route');
 const { sendBillNotification } = await import('@/lib/notifications/engine');
@@ -140,6 +152,7 @@ beforeEach(() => {
   state.sessionUser = null;
   state.orderInsert = undefined;
   state.eventRow = undefined;
+  state.couponCtx = undefined;
   state.tableRow = { id: TABLE_ID, label: 'T1', is_active: true };
   state.menuRows = [
     {
@@ -321,3 +334,44 @@ describe('POST /api/orders — staff walk-in takeaway (FND3-3)', () => {
   });
 });
 
+
+// A marketing coupon is locked to the phone it was sent to. A first-visit customer has no VERIFIED account when the
+// counter validates the code (createCounterCustomer runs after), so the route may pass the phone the STAFFER typed
+// as `counterPhone` — and only then. A customer's own request must never be able to set it.
+describe('POST /api/orders — who may vouch for a coupon\'s phone (CouponContext.counterPhone)', () => {
+  const withCoupon = (extra: Record<string, unknown>) =>
+    req({ coupon_code: 'WBK7M3QX', pickup_slot_label: 'ASAP', items: oneLatte, ...extra });
+
+  it('a counter actor\'s typed phone is handed to the coupon check, normalised', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+    state.sessionUser = { id: 'staff-1' };
+    const res = await POST(withCoupon({ customer_phone: '98765 43210' }));
+    expect(res.status).toBe(400); // the stubbed coupon refuses; all that matters is what it was asked
+    expect(state.couponCtx?.counterPhone).toBe('+919876543210');
+    // The account the order would be attributed to is still the LINKED customer's (none here), never the staffer's.
+    expect(state.couponCtx?.userId).toBeNull();
+  });
+
+  it('a counter order with no phone typed passes none', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+    state.sessionUser = { id: 'staff-1' };
+    await POST(withCoupon({ order_type: 'dine_in', table_id: TABLE_ID }));
+    expect(state.couponCtx?.counterPhone).toBeNull();
+  });
+
+  it('a typed foreign number is never read as the Indian number with the same digits', async () => {
+    state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+    state.sessionUser = { id: 'staff-1' };
+    await POST(withCoupon({ customer_phone: '+6581234567' }));
+    expect(state.couponCtx?.counterPhone).toBeNull();
+  });
+
+  it('a customer web session never sets it — not from customer_phone, not from a body field named counterPhone', async () => {
+    state.sessionUser = { id: 'cust-1' };
+    // (9000000000 is the verified number the stubbed phone check accepts; the point is what ELSE the body claims.)
+    await POST(withCoupon({ customer_name: 'Asha', customer_phone: '9000000000', counterPhone: '+919876543210', counter_phone: '+919876543210' }));
+    expect(state.couponCtx).toBeDefined();
+    expect(state.couponCtx?.counterPhone).toBeNull();
+    expect(state.couponCtx?.userId).toBe('cust-1');
+  });
+});

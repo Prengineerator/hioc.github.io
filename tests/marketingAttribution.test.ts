@@ -173,6 +173,69 @@ describe('the holdout', () => {
   });
 });
 
+// Two recipients can reach the same order — it matches one by account and the other by the phone typed on it — and
+// counting it for both inflates the campaign's returns, revenue and lift.
+describe('one order converts at most one recipient per campaign', () => {
+  const both = () => {
+    // A is reached by the order's account, B by the phone typed on the very same order.
+    const a = recipient({ id: 'A', phone: '+919111111111', user_id: 'u1', reference_at: daysAgo(4) });
+    const b = recipient({ id: 'B', phone: '+919222222222', user_id: null, reference_at: daysAgo(3) });
+    order({ id: 'shared', user_id: 'u1', customer_phone: '+919222222222', created_at: daysAgo(2), total_inr: 400 });
+    return { a, b };
+  };
+
+  it('the recipient with the earlier reference_at keeps the order; the other is not converted by it', async () => {
+    both();
+    expect(await attributeRecipients(NOW_SEND, SETTINGS)).toBe(1);
+    expect(rec('A')).toMatchObject({ converted_order_id: 'shared', conversion_revenue_inr: 400, attributed_via: 'order' });
+    expect(rec('B').converted_order_id ?? null).toBeNull();
+    expect(rec('B').converted_at ?? null).toBeNull();
+    expect(rowsOf(db(), 'marketing_recipients', (r) => r.converted_order_id === 'shared')).toHaveLength(1);
+  });
+
+  it('the loser still converts on an order of its own, if it has one in its window', async () => {
+    both();
+    order({ id: 'own', customer_phone: '+919222222222', created_at: daysAgo(1), total_inr: 150 });
+    expect(await attributeRecipients(NOW_SEND, SETTINGS)).toBe(2);
+    expect(rec('A').converted_order_id).toBe('shared');
+    expect(rec('B')).toMatchObject({ converted_order_id: 'own', conversion_revenue_inr: 150 });
+  });
+
+  it('an order stamped by an EARLIER run is already taken when a later run looks at the other recipient', async () => {
+    const { a } = both();
+    Object.assign(a, { converted_order_id: 'shared', converted_at: daysAgo(2), conversion_revenue_inr: 400, attributed_via: 'order' });
+    expect(await attributeRecipients(NOW_SEND, SETTINGS)).toBe(0);
+    expect(rec('B').converted_order_id ?? null).toBeNull();
+  });
+
+  it('a coupon redemption is taken too: the order the earlier recipient\'s coupon redeemed cannot also convert the next', async () => {
+    recipient({ id: 'A', phone: '+919111111111', coupon_id: 'cp-a', reference_at: daysAgo(4) });
+    recipient({ id: 'B', phone: '+919222222222', reference_at: daysAgo(3) });
+    order({ id: 'shared', customer_phone: '+919222222222', created_at: daysAgo(2) });
+    db().tables.coupon_redemptions = [{ id: 'cr', coupon_id: 'cp-a', order_id: 'shared' }];
+    await attributeRecipients(NOW_SEND, SETTINGS);
+    expect(rec('A')).toMatchObject({ converted_order_id: 'shared', attributed_via: 'coupon' });
+    expect(rec('B').converted_order_id ?? null).toBeNull();
+  });
+
+  it('only WITHIN a campaign: two campaigns may each count the same order', async () => {
+    recipient({ id: 'A', campaign_id: 'c1', phone: '+919111111111', user_id: 'u1', reference_at: daysAgo(4) });
+    recipient({ id: 'B', campaign_id: 'c2', phone: '+919222222222', reference_at: daysAgo(3) });
+    order({ id: 'shared', user_id: 'u1', customer_phone: '+919222222222', created_at: daysAgo(2) });
+    expect(await attributeRecipients(NOW_SEND, SETTINGS)).toBe(2);
+    expect(rec('A').converted_order_id).toBe('shared');
+    expect(rec('B').converted_order_id).toBe('shared');
+  });
+
+  it('holds across the arms of a campaign too (a treated and a holdout recipient cannot both claim it)', async () => {
+    recipient({ id: 'A', phone: '+919111111111', user_id: 'u1', reference_at: daysAgo(4) });
+    recipient({ id: 'H', phone: '+919222222222', arm: 'holdout', status: 'holdout', reference_at: daysAgo(3) });
+    order({ id: 'shared', user_id: 'u1', customer_phone: '+919222222222', created_at: daysAgo(2) });
+    expect(await attributeRecipients(NOW_SEND, SETTINGS)).toBe(1);
+    expect(rec('H').converted_order_id ?? null).toBeNull();
+  });
+});
+
 describe('stamping', () => {
   it('stamps once: a second run finds nothing left to do and never moves the stamp', async () => {
     const r = recipient();
@@ -224,6 +287,14 @@ describe('findConversion (pure)', () => {
     const cand = { phone: PHONE, user_id: null, arm: 'treatment' as const, coupon_id: null, reference_at: '2026-10-01T00:00:00.000Z' };
     expect(findConversion(cand, 7, byUser, byPhone, new Map(), byId)).toBeNull();
     expect(findConversion({ ...cand, reference_at: 'nonsense' }, 7, byUser, byPhone, new Map(), byId)).toBeNull();
+  });
+
+  it('skips orders its campaign has already counted for someone else', () => {
+    const list = [o('a', '2026-10-02T00:00:00.000Z'), o('b', '2026-10-03T00:00:00.000Z')];
+    const { byUser, byPhone, byId } = index(list);
+    const cand = { phone: PHONE, user_id: null, arm: 'treatment' as const, coupon_id: null, reference_at: '2026-10-01T00:00:00.000Z' };
+    expect(findConversion(cand, 7, byUser, byPhone, new Map(), byId, new Set(['a']))?.order.id).toBe('b');
+    expect(findConversion(cand, 7, byUser, byPhone, new Map(), byId, new Set(['a', 'b']))).toBeNull();
   });
 
   it('picks the earliest in-window order, not the first in the list', () => {

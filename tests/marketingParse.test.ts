@@ -758,6 +758,23 @@ describe('parity with the migration', () => {
     expect(fn).toContain('for update of r2 skip locked');
   });
 
+  // The planner used to read the counters, add its campaign and write the sum back: two overlapping runs lost samples.
+  it('marketing_add_observed increments in SQL, returns nothing, and is locked to service_role like the claim RPC', () => {
+    expect(sql).toContain('create or replace function public.marketing_add_observed(p_key text, p_treated int, p_conversions int)');
+    const start = sql.indexOf('create or replace function public.marketing_add_observed');
+    const fn = sql.slice(start, sql.indexOf('revoke all on function public.marketing_add_observed', start));
+    expect(fn).toContain('returns void');
+    expect(fn).toContain('language sql security definer set search_path = public');
+    expect(fn).toContain('update public.marketing_playbooks');
+    expect(fn).toContain('observed_treated = observed_treated + p_treated');
+    expect(fn).toContain('observed_conversions = observed_conversions + p_conversions');
+    expect(fn).toContain('where key = p_key');
+    // Not a read-modify-write: nothing is selected first.
+    expect(fn).not.toMatch(/\bselect\b/i);
+    expect(sql).toContain('revoke all on function public.marketing_add_observed(text, int, int) from public, anon, authenticated');
+    expect(sql).toContain('grant execute on function public.marketing_add_observed(text, int, int) to service_role');
+  });
+
   it("schedules the send poll under the documented job name and URL", () => {
     expect(sql).toContain("'marketing-send-poll'");
     expect(sql).toContain("'https://hioc.in/api/cron/marketing-send'");

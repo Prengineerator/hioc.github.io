@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   rateCalls: [] as [string, number, number][],
   send: vi.fn(),
   getOverview: vi.fn(),
+  getOverviewSummary: vi.fn(),
   getAudienceSummary: vi.fn(),
   listPlaybookViews: vi.fn(),
   patchPlaybook: vi.fn(),
@@ -36,7 +37,7 @@ vi.mock('@/lib/api/rateLimit', () => ({
   },
 }));
 vi.mock('@/lib/notifications/adapters', () => ({ whatsappAdapter: { send: h.send } }));
-vi.mock('@/lib/marketing/server/overview', () => ({ getOverview: h.getOverview, getAudienceSummary: h.getAudienceSummary }));
+vi.mock('@/lib/marketing/server/overview', () => ({ getOverview: h.getOverview, getOverviewSummary: h.getOverviewSummary, getAudienceSummary: h.getAudienceSummary }));
 vi.mock('@/lib/marketing/server/playbooks', () => ({ listPlaybookViews: h.listPlaybookViews, patchPlaybook: h.patchPlaybook }));
 vi.mock('@/lib/marketing/server/costs', () => ({ listCosts: h.listCosts, putCosts: h.putCosts }));
 vi.mock('@/lib/marketing/server/campaigns', () => ({
@@ -83,7 +84,7 @@ beforeEach(() => {
   h.owner = { id: 'owner-1' };
   h.rateAllowed = true;
   h.rateCalls = [];
-  for (const fn of [h.send, h.getOverview, h.getAudienceSummary, h.listPlaybookViews, h.patchPlaybook, h.listCampaigns, h.createManualDraft, h.previewManual, h.getCampaignDetail, h.approveCampaign, h.cancelCampaign, h.listCosts, h.putCosts]) {
+  for (const fn of [h.send, h.getOverview, h.getOverviewSummary, h.getAudienceSummary, h.listPlaybookViews, h.patchPlaybook, h.listCampaigns, h.createManualDraft, h.previewManual, h.getCampaignDetail, h.approveCampaign, h.cancelCampaign, h.listCosts, h.putCosts]) {
     fn.mockReset();
   }
   h.send.mockResolvedValue({ ok: true, providerRef: 'wamid.T', error: '' });
@@ -96,7 +97,7 @@ beforeEach(() => {
 
 type Call = () => Promise<Response>;
 const ALL_ROUTES: [string, Call][] = [
-  ['GET overview', () => overview.GET()],
+  ['GET overview', () => overview.GET(new Request(url('overview')))],
   ['GET audience', () => audience.GET()],
   ['GET settings', () => settings.GET()],
   ['PATCH settings', () => settings.PATCH(json({ enabled: true }, 'PATCH'))],
@@ -120,7 +121,7 @@ describe('every owner route', () => {
     const res = await call();
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'Unauthorized' });
-    for (const fn of [h.getOverview, h.getAudienceSummary, h.listPlaybookViews, h.patchPlaybook, h.listCampaigns, h.createManualDraft, h.previewManual, h.getCampaignDetail, h.approveCampaign, h.cancelCampaign, h.listCosts, h.putCosts, h.send]) {
+    for (const fn of [h.getOverview, h.getOverviewSummary, h.getAudienceSummary, h.listPlaybookViews, h.patchPlaybook, h.listCampaigns, h.createManualDraft, h.previewManual, h.getCampaignDetail, h.approveCampaign, h.cancelCampaign, h.listCosts, h.putCosts, h.send]) {
       expect(fn).not.toHaveBeenCalled();
     }
     expect(h.db.log).toEqual([]);
@@ -130,7 +131,7 @@ describe('every owner route', () => {
     throw new MigrationMissingError('test');
   };
   const engineThrows: [string, Call, () => void][] = [
-    ['GET overview', () => overview.GET(), () => h.getOverview.mockImplementation(missing)],
+    ['GET overview', () => overview.GET(new Request(url('overview'))), () => h.getOverview.mockImplementation(missing)],
     ['GET audience', () => audience.GET(), () => h.getAudienceSummary.mockImplementation(missing)],
     ['GET playbooks', () => playbooks.GET(), () => h.listPlaybookViews.mockImplementation(missing)],
     ['PATCH playbooks/[key]', () => playbookKey.PATCH(json({ mode: 'review' }, 'PATCH'), params({ key: 'winback_1' })), () => h.patchPlaybook.mockImplementation(missing)],
@@ -155,7 +156,7 @@ describe('every owner route', () => {
 
   it('answers a bare 500 (no internals) for any other failure', async () => {
     h.getOverview.mockRejectedValue(new Error('connection to db:5432 refused'));
-    const res = await overview.GET();
+    const res = await overview.GET(new Request(url('overview')));
     expect(res.status).toBe(500);
     expect(JSON.stringify(await res.json())).not.toMatch(/5432|refused/);
   });
@@ -165,8 +166,49 @@ describe('overview and audience', () => {
   it('return the read models untouched', async () => {
     h.getOverview.mockResolvedValue({ enabled: true, kpis: {} });
     h.getAudienceSummary.mockResolvedValue({ total_customers: 3 });
-    expect(await (await overview.GET()).json()).toEqual({ enabled: true, kpis: {} });
+    expect(await (await overview.GET(new Request(url('overview')))).json()).toEqual({ enabled: true, kpis: {} });
     expect(await (await audience.GET()).json()).toEqual({ total_customers: 3 });
+  });
+
+  // The /owner home card calls ?summary=1 on every visit; it must never pay for the full overview.
+  describe('GET overview?summary=1 — the light read the /owner home card uses', () => {
+    const SUMMARY = { enabled: true, pending_approvals: 2, month_spend_inr: 12.5, month_budget_inr: 1000, drop_alert: null };
+
+    it('answers the summary and never builds the full overview', async () => {
+      h.getOverviewSummary.mockResolvedValue(SUMMARY);
+      const res = await overview.GET(new Request(url('overview?summary=1')));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual(SUMMARY);
+      expect(h.getOverviewSummary).toHaveBeenCalledTimes(1);
+      expect(h.getOverview).not.toHaveBeenCalled();
+    });
+
+    it('without the flag (or with anything but 1) it is the full overview, unchanged', async () => {
+      h.getOverview.mockResolvedValue({ enabled: true, kpis: {} });
+      for (const q of ['overview', 'overview?summary=0', 'overview?summary=true', 'overview?other=1']) {
+        expect(await (await overview.GET(new Request(url(q)))).json()).toEqual({ enabled: true, kpis: {} });
+      }
+      expect(h.getOverviewSummary).not.toHaveBeenCalled();
+    });
+
+    it('is owner-only like the rest (401, nothing computed)', async () => {
+      h.owner = null;
+      expect((await overview.GET(new Request(url('overview?summary=1')))).status).toBe(401);
+      expect(h.getOverviewSummary).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 migration_missing, and a bare 500 for anything else', async () => {
+      h.getOverviewSummary.mockImplementation(() => {
+        throw new MigrationMissingError('test');
+      });
+      const res = await overview.GET(new Request(url('overview?summary=1')));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'migration_missing' });
+      h.getOverviewSummary.mockRejectedValue(new Error('connection to db:5432 refused'));
+      const boom = await overview.GET(new Request(url('overview?summary=1')));
+      expect(boom.status).toBe(500);
+      expect(JSON.stringify(await boom.json())).not.toMatch(/5432|refused/);
+    });
   });
 });
 

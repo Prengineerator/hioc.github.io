@@ -5,6 +5,10 @@
 // against the budget, and a customer-drop alert — with one link into
 // /owner/marketing.
 //
+// It reads the SUMMARY (?summary=1: settings, a campaign count, the month's spend and ten
+// weeks of orders), not the full overview: this card loads on every /owner visit, and the full
+// overview joins a year of orders and the whole points ledger.
+//
 // It is a courtesy, never a blocker: while loading, and on ANY failure (the
 // migration not applied yet, a network blip, a 500), it renders nothing at all. The
 // Overview must not grow a red error box because an optional feature isn't
@@ -14,25 +18,32 @@
 import { useEffect, useState } from 'react';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card } from '@/components/owner/dashboard';
-import type { MarketingOverview } from '@/lib/marketing/types';
+import type { MarketingOverviewSummary } from '@/lib/marketing/types';
 import { API, requestJson } from './api';
 import { formatPercent, inr } from './format';
 import { Pill, ProgressBar } from './ui';
 
+/** The one request this card makes: the light summary, never the full overview. */
+export function fetchMarketingSummary(signal?: AbortSignal) {
+  return requestJson<MarketingOverviewSummary>(API.overviewSummary, { signal });
+}
+
 export function OwnerMarketingCard() {
-  const [data, setData] = useState<MarketingOverview | null>(null);
+  const [data, setData] = useState<MarketingOverviewSummary | null>(null);
 
   useEffect(() => {
     const ac = new AbortController();
-    requestJson<MarketingOverview>(API.overview, { signal: ac.signal }).then((r) => {
+    fetchMarketingSummary(ac.signal).then((r) => {
       if (!ac.signal.aborted && r.ok) setData(r.data);
     });
     return () => ac.abort();
   }, []);
 
   if (!data) return null;
+  return <OwnerMarketingCardBody data={data} />;
+}
 
-  const { kpis } = data;
+export function OwnerMarketingCardBody({ data }: { data: MarketingOverviewSummary }) {
   const drop = data.drop_alert;
   return (
     <Card title="Marketing">
@@ -45,13 +56,13 @@ export function OwnerMarketingCard() {
         <div>
           <p className="text-xs uppercase tracking-wide text-muted">WhatsApp spend this month</p>
           <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-charcoal">
-            {inr(kpis.month_spend_inr)} <span className="text-sm font-normal text-muted">of {inr(kpis.monthly_budget_inr)}</span>
+            {inr(data.month_spend_inr)} <span className="text-sm font-normal text-muted">of {inr(data.month_budget_inr)}</span>
           </p>
           <ProgressBar
-            value={kpis.month_spend_inr}
-            max={kpis.monthly_budget_inr}
+            value={data.month_spend_inr}
+            max={data.month_budget_inr}
             label="Spent this month against the monthly budget"
-            valueText={`${inr(kpis.month_spend_inr)} of ${inr(kpis.monthly_budget_inr)}`}
+            valueText={`${inr(data.month_spend_inr)} of ${inr(data.month_budget_inr)}`}
           />
         </div>
         <div>

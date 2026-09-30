@@ -8,7 +8,7 @@
 
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { project } from '@/lib/marketing/economics';
 import {
   DEFAULT_SETTINGS,
@@ -20,6 +20,7 @@ import {
   type CampaignSummary,
   type CostsResponse,
   type MarketingOverview,
+  type MarketingOverviewSummary,
   type PlaybookView,
   type WeeklyPoint,
 } from '@/lib/marketing/types';
@@ -38,7 +39,7 @@ import { WeeklyChart } from '@/components/owner/marketing/WeeklyChart';
 import { ErrorNote, Kpi, MigrationMissing, Notice, Pill, ProgressBar, ResourceGate, Segmented } from '@/components/owner/marketing/ui';
 import { emptyWizard } from '@/components/owner/marketing/wizard';
 import { OptInCard } from '@/components/marketing/OptInCard';
-import { OwnerMarketingCard } from '@/components/owner/marketing/OwnerMarketingCard';
+import { OwnerMarketingCard, OwnerMarketingCardBody, fetchMarketingSummary } from '@/components/owner/marketing/OwnerMarketingCard';
 
 const html = (el: ReactElement) => renderToStaticMarkup(el);
 const noop = () => undefined;
@@ -556,5 +557,61 @@ describe('quiet components', () => {
     expect(html(createElement(OptInCard))).toBe('');
     expect(html(createElement(OwnerMarketingCard))).toBe('');
     vi.unstubAllGlobals();
+  });
+});
+
+// The /owner home card used to call the FULL overview (a year of orders plus the whole ledger) on every visit.
+describe('the /owner home card reads only the summary', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('asks for GET /api/owner/marketing/overview?summary=1 — and for nothing else', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ enabled: true, pending_approvals: 1, month_spend_inr: 5, month_budget_inr: 100, drop_alert: null }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await fetchMarketingSummary();
+    expect(r.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/owner/marketing/overview?summary=1');
+  });
+
+  const summaryData = (over: Partial<MarketingOverviewSummary> = {}): MarketingOverviewSummary => ({
+    enabled: true,
+    pending_approvals: 3,
+    month_spend_inr: 212,
+    month_budget_inr: 1000,
+    drop_alert: null,
+    ...over,
+  });
+
+  it('renders the four numbers from the summary alone', () => {
+    const out = html(createElement(OwnerMarketingCardBody, { data: summaryData() }));
+    expect(out).toContain('Waiting for your OK');
+    expect(out).toContain('campaigns to review');
+    expect(out).toContain('₹212');
+    expect(out).toContain('of ₹1,000');
+    expect(out).toContain('Sending is ON');
+    expect(out).toContain('No drop in customers');
+    expect(out).toContain('/owner/marketing?tab=approvals');
+  });
+
+  it('shows the drop alert and the OFF switch when they apply', () => {
+    const out = html(
+      createElement(OwnerMarketingCardBody, {
+        data: summaryData({
+          enabled: false,
+          pending_approvals: 0,
+          drop_alert: { week_start: '2026-09-21', last_week_customers: 18, baseline_customers: 24, drop_pct: 25, drop_customers: 6 },
+        }),
+      }),
+    );
+    expect(out).toContain('Sending is OFF');
+    expect(out).toContain('nothing to approve');
+    expect(out).toContain('Down');
+    expect(out).toContain('18 ordered, against about 24 a week before');
+    expect(out).toContain('Open marketing');
   });
 });

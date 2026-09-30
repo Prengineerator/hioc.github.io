@@ -157,6 +157,101 @@ describe('who is left out', () => {
     expect(recipients((r) => r.campaign_id === planned[0].id).map((r) => r.phone).sort()).toEqual([phone(0), phone(1), phone(2)]);
   });
 
+  // Staff sign in as <login_id>@hioc.in, so their profile phone is usually NEVER verified — and the audience only
+  // reads verified profiles. The number lives on the unverified profile and in staff_accounts.phone.
+  it('skips staff whose profile phone is unverified, or who are known only by staff_accounts.phone — any spelling', async () => {
+    lapsed(2);
+    // An unverified staff profile with the number in the bare ten-digit spelling, and an opt-in on file.
+    seedCustomer(db(), { phone: phone(70), orders: [[35, 400]], optedIn: true, verified: false }, NOW_PLAN);
+    db().tables.profiles.push({ id: 'st-1', phone: phone(70).slice(3), phone_verified: false, role: 'staff' });
+    // A second one recorded only on staff_accounts, with an order under the same number.
+    seedCustomer(db(), { phone: phone(71), orders: [[35, 400]], optedIn: true, verified: false }, NOW_PLAN);
+    db().tables.staff_accounts = [{ user_id: 'st-2', login_id: 'meena', phone: `0${phone(71).slice(3)}`, status: 'active' }];
+    // A manager with a VERIFIED profile is excluded too, as before.
+    seedCustomer(db(), { phone: phone(72), orders: [[35, 400]], optedIn: true, role: 'manager' }, NOW_PLAN);
+
+    await runDailyPlan(NOW_PLAN);
+
+    expect(recipients().map((r) => r.phone).sort()).toEqual([phone(0), phone(1)]);
+  });
+
+  it('a database without staff_accounts still plans (the profiles source alone)', async () => {
+    lapsed(2);
+    db().setMissing('staff_accounts', true);
+    expect((await runDailyPlan(NOW_PLAN)).planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 2 }]);
+  });
+
+  // HOLDOUT CONTAMINATION: handledSince only blocked the SAME playbook, so a control-group member could be
+  // messaged the next day by ANOTHER playbook, inside the attribution window.
+  describe('a live campaign\'s control group is off limits to every other campaign (rule 8)', () => {
+    const yesterdaysCampaign = (over: Row = {}): Row => ({
+      id: 'yday', kind: 'playbook', playbook_key: 'points_balance', planned_for: '2026-10-04', status: 'sending',
+      started_at: daysAgo(1, NOW_PLAN), created_at: daysAgo(1, NOW_PLAN), ...over,
+    });
+    const heldOut = (phoneNo: string, over: Row = {}): Row => ({
+      id: `hold-${phoneNo.slice(-2)}`, campaign_id: 'yday', phone: phoneNo, arm: 'holdout', status: 'holdout',
+      created_at: daysAgo(1, NOW_PLAN), reference_at: daysAgo(1, NOW_PLAN), ...over,
+    });
+
+    it('a holdout member of yesterday\'s points campaign is not planned by win-back today', async () => {
+      lapsed(3); // phone(0..2) all qualify for winback_1
+      db().tables.marketing_campaigns = [yesterdaysCampaign()];
+      db().tables.marketing_recipients = [heldOut(phone(0))];
+
+      const result = await runDailyPlan(NOW_PLAN);
+
+      expect(result.planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 2 }]);
+      const planned = campaigns((c) => c.playbook_key === 'winback_1');
+      expect(recipients((r) => r.campaign_id === planned[0].id).map((r) => r.phone).sort()).toEqual([phone(1), phone(2)]);
+    });
+
+    it('…but only while the attribution window is open: a week later they are fair game again', async () => {
+      lapsed(3);
+      db().tables.marketing_campaigns = [yesterdaysCampaign({ started_at: daysAgo(8, NOW_PLAN), created_at: daysAgo(8, NOW_PLAN) })];
+      db().tables.marketing_recipients = [heldOut(phone(0), { created_at: daysAgo(8, NOW_PLAN), reference_at: daysAgo(8, NOW_PLAN) })];
+      expect((await runDailyPlan(NOW_PLAN)).planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 3 }]);
+    });
+
+    it('a holdout of a campaign waiting for approval (not started, no reference_at) is protected too', async () => {
+      lapsed(3);
+      db().tables.marketing_campaigns = [yesterdaysCampaign({ status: 'pending_approval', started_at: null })];
+      db().tables.marketing_recipients = [heldOut(phone(0), { reference_at: null })];
+      expect((await runDailyPlan(NOW_PLAN)).planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 2 }]);
+    });
+
+    it('a holdout of a CANCELLED campaign held nobody out', async () => {
+      lapsed(3);
+      db().tables.marketing_campaigns = [yesterdaysCampaign({ status: 'cancelled' })];
+      db().tables.marketing_recipients = [heldOut(phone(0))];
+      expect((await runDailyPlan(NOW_PLAN)).planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 3 }]);
+    });
+  });
+
+  // A manual "all contacts" draft has every recipient 'pending'. Counted as in flight, one forgotten draft silently
+  // stopped the agent planning anything.
+  it('a forgotten DRAFT does not freeze the agent: its recipients are not "in flight"', async () => {
+    lapsed(5);
+    db().tables.marketing_campaigns = [{ id: 'draft', kind: 'manual', playbook_key: null, status: 'draft', created_at: daysAgo(3, NOW_PLAN) }];
+    db().tables.marketing_recipients = [0, 1, 2, 3, 4].map((i) => ({
+      id: `d${i}`, campaign_id: 'draft', phone: phone(i), arm: 'treatment', status: 'pending', created_at: daysAgo(3, NOW_PLAN),
+    }));
+
+    const result = await runDailyPlan(NOW_PLAN);
+
+    expect(result.planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 5 }]);
+    // The draft itself is untouched (it is only three days old).
+    expect(campaigns((c) => c.id === 'draft')[0].status).toBe('draft');
+  });
+
+  it('…while a campaign that IS waiting for approval still keeps its recipients in flight', async () => {
+    lapsed(5);
+    db().tables.marketing_campaigns = [{ id: 'waiting', kind: 'manual', playbook_key: null, status: 'pending_approval', created_at: daysAgo(1, NOW_PLAN) }];
+    db().tables.marketing_recipients = [0, 1, 2, 3, 4].map((i) => ({
+      id: `w${i}`, campaign_id: 'waiting', phone: phone(i), arm: 'treatment', status: 'pending', created_at: daysAgo(1, NOW_PLAN),
+    }));
+    expect((await runDailyPlan(NOW_PLAN)).planned).toEqual([]);
+  });
+
   it('gives a customer to the HIGHEST-priority playbook only, once a day', async () => {
     seedPlaybooks(db(), { winback_1: 'review', points_expiring: 'review' });
     // Lapsed (winback_1) AND holding points that expire in 2 days (points_expiring, priority 1).
@@ -231,8 +326,8 @@ describe('Auto vs Review, and the guardrails', () => {
   it('if the final approve cannot be written the campaign waits in Approvals — never half-sent', async () => {
     seedPlaybooks(db(), { winback_1: 'auto' });
     lapsed(20);
-    // (The first update is the expiry sweep; the second is the final approve.)
-    db().failNext('update marketing_campaigns', undefined, 1);
+    // (The first two updates are the expiry sweep — approvals, then drafts; the third is the final approve.)
+    db().failNext('update marketing_campaigns', undefined, 2);
     const result = await runDailyPlan(NOW_PLAN);
     expect(result.planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 20 }]);
     expect(campaigns()[0].status).toBe('pending_approval');
@@ -369,6 +464,60 @@ describe('idempotence', () => {
     // The retry works.
     expect((await runDailyPlan(NOW_PLAN)).planned).toHaveLength(1);
   });
+
+  // PARTIAL INSERT: a failure after some recipients landed left a campaign whose treated_count was larger than the
+  // rows that exist, and its (playbook, day) slot blocked the re-plan.
+  describe('a recipient insert that fails partway', () => {
+    it('deletes the campaign with the rows that did land, REPORTS the failure in the run result, and the same day can be planned again', async () => {
+      lapsed(600); // two insert chunks of 500
+      db().failNext('insert marketing_recipients', undefined, 1); // the second chunk fails
+
+      const result = await runDailyPlan(NOW_PLAN);
+
+      expect(result.planned).toEqual([]);
+      expect(result.failed).toEqual([{ key: 'winback_1', error: expect.stringContaining('marketing_recipients write') }]);
+      expect(campaigns()).toEqual([]);
+      expect(recipients()).toEqual([]); // the first chunk went with the campaign
+
+      // Nothing is stuck: the very next run plans the whole audience, with counts that match its rows.
+      const retry = await runDailyPlan(NOW_PLAN);
+      expect(retry.planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 600 }]);
+      expect(retry.failed).toBeUndefined();
+      const [c] = campaigns();
+      expect(recipients()).toHaveLength(600);
+      expect(c.treated_count).toBe(recipients((r) => r.arm === 'treatment').length);
+      expect(c.holdout_count).toBe(recipients((r) => r.arm === 'holdout').length);
+    });
+
+    it('if even the delete fails, the campaign is CANCELLED so nobody can approve a partial audience', async () => {
+      lapsed(5);
+      db().failNext('insert marketing_recipients');
+      db().failNext('delete marketing_campaigns');
+
+      const result = await runDailyPlan(NOW_PLAN);
+
+      expect(result.failed).toHaveLength(1);
+      expect(campaigns()).toHaveLength(1);
+      expect(campaigns()[0].status).toBe('cancelled');
+    });
+
+    it('a playbook that plans fine reports no failures at all (the field is absent, not empty)', async () => {
+      lapsed(5);
+      expect(await runDailyPlan(NOW_PLAN)).not.toHaveProperty('failed');
+    });
+
+    it('one playbook failing does not stop the next', async () => {
+      seedPlaybooks(db(), { winback_1: 'review', points_balance: 'review' });
+      lapsed(5);
+      seedCustomer(db(), { phone: phone(90), orders: [[10, 400]], optedIn: true, points: [[5, 200]] }, NOW_PLAN);
+      db().failNext('insert marketing_recipients'); // the first campaign planned (by priority) fails
+
+      const result = await runDailyPlan(NOW_PLAN);
+
+      expect(result.failed).toHaveLength(1);
+      expect(result.planned).toHaveLength(1);
+    });
+  });
 });
 
 describe('with the kill switch OFF', () => {
@@ -411,24 +560,32 @@ describe('with the kill switch OFF', () => {
 });
 
 describe('expiring stale approvals', () => {
-  it('expires only pending_approval campaigns older than two days, cancelling their unsent recipients', async () => {
+  it('expires pending_approval campaigns older than two days and DRAFTS older than seven, cancelling their unsent recipients', async () => {
     db().tables.marketing_campaigns = [
       { id: 'a', kind: 'manual', status: 'pending_approval', created_at: daysAgo(2.5, NOW_PLAN) },
       { id: 'b', kind: 'manual', status: 'pending_approval', created_at: daysAgo(1.9, NOW_PLAN) },
-      { id: 'c', kind: 'manual', status: 'draft', created_at: daysAgo(30, NOW_PLAN) },
+      // A draft is not a pending decision: 3 days old it is still fine, 8 days old it is stale.
+      { id: 'c', kind: 'manual', status: 'draft', created_at: daysAgo(8, NOW_PLAN) },
+      { id: 'c2', kind: 'manual', status: 'draft', created_at: daysAgo(3, NOW_PLAN) },
       { id: 'd', kind: 'manual', status: 'approved', created_at: daysAgo(30, NOW_PLAN) },
     ];
     db().tables.marketing_recipients = [
       { id: 'ra', campaign_id: 'a', phone: phone(1), status: 'pending', arm: 'treatment', created_at: daysAgo(2.5, NOW_PLAN) },
       { id: 'rh', campaign_id: 'a', phone: phone(2), status: 'holdout', arm: 'holdout', created_at: daysAgo(2.5, NOW_PLAN) },
       { id: 'rb', campaign_id: 'b', phone: phone(3), status: 'pending', arm: 'treatment', created_at: daysAgo(1.9, NOW_PLAN) },
+      { id: 'rc', campaign_id: 'c', phone: phone(4), status: 'pending', arm: 'treatment', created_at: daysAgo(8, NOW_PLAN) },
+      { id: 'rc2', campaign_id: 'c2', phone: phone(5), status: 'pending', arm: 'treatment', created_at: daysAgo(3, NOW_PLAN) },
     ];
     const result = await runDailyPlan(NOW_PLAN);
-    expect(result.expired).toBe(1);
-    expect(campaigns().map((c) => [c.id, c.status])).toEqual([['a', 'expired'], ['b', 'pending_approval'], ['c', 'draft'], ['d', 'approved']]);
+    expect(result.expired).toBe(2);
+    expect(campaigns().map((c) => [c.id, c.status])).toEqual([
+      ['a', 'expired'], ['b', 'pending_approval'], ['c', 'expired'], ['c2', 'draft'], ['d', 'approved'],
+    ]);
     expect(recipients((r) => r.id === 'ra')[0].status).toBe('cancelled');
     expect(recipients((r) => r.id === 'rh')[0].status).toBe('holdout');
     expect(recipients((r) => r.id === 'rb')[0].status).toBe('pending');
+    expect(recipients((r) => r.id === 'rc')[0].status).toBe('cancelled');
+    expect(recipients((r) => r.id === 'rc2')[0].status).toBe('pending');
   });
 
   it('a holdout of an expired campaign does not count as "handled": the customer can be offered the stage later', async () => {
@@ -516,6 +673,53 @@ describe('learning from finished campaigns', () => {
     // Running again — the same night, or every night after — never counts it twice.
     await learnFromClosedCampaigns(db().client as never, new Date(NOW_PLAN.getTime() + DAY), settings);
     expect(pb()).toMatchObject({ observed_treated: 10, observed_conversions: 3 });
+  });
+
+  describe('the counters are added to IN the database (marketing_add_observed), not read, added and written back', () => {
+    const pb = () => rowsOf(db(), 'marketing_playbooks', (r) => r.key === 'winback_1')[0];
+    const closed = () => finished({}, Array.from({ length: 10 }, (_, i) => sentRow(i, i < 3)));
+
+    it('goes through the RPC and never overwrites the counters with a value it read earlier', async () => {
+      closed();
+      db().log.length = 0;
+      await learnFromClosedCampaigns(db().client as never, NOW_PLAN, settings);
+      expect(db().log).toContain('rpc marketing_add_observed');
+      expect(db().log).not.toContain('update marketing_playbooks');
+      expect(pb()).toMatchObject({ observed_treated: 10, observed_conversions: 3 });
+    });
+
+    // LOST UPDATE: two overlapping runs each read the counters, added their own campaign and wrote the sum back,
+    // so the later write erased the earlier run's samples.
+    it('keeps a concurrent run\'s increment that lands just before this run\'s write', async () => {
+      closed();
+      // "Another planner run folds in its own campaign (4 sent, 1 converted)" right before this run writes.
+      const otherRun = () => {
+        pb().observed_treated = Number(pb().observed_treated) + 4;
+        pb().observed_conversions = Number(pb().observed_conversions) + 1;
+      };
+      db().beforeNext('update marketing_playbooks', otherRun); // the old read-modify-write's write
+      db().beforeNext('rpc marketing_add_observed', otherRun); // the atomic increment
+
+      await learnFromClosedCampaigns(db().client as never, NOW_PLAN, settings);
+
+      expect(pb()).toMatchObject({ observed_treated: 14, observed_conversions: 4 });
+    });
+
+    it('still learns on a database whose migration has not been re-applied yet (function missing): the old path, rather than losing the sample', async () => {
+      closed();
+      db().setMissing('marketing_add_observed', true);
+      const r = await learnFromClosedCampaigns(db().client as never, NOW_PLAN, settings);
+      expect(r.campaigns).toBe(1);
+      expect(pb()).toMatchObject({ observed_treated: 10, observed_conversions: 3 });
+    });
+
+    it('a failing RPC is logged, never thrown — the planner run goes on', async () => {
+      closed();
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      db().client.rpc = async () => ({ data: null, error: { code: 'XX000', message: 'boom' } });
+      await expect(learnFromClosedCampaigns(db().client as never, NOW_PLAN, settings)).resolves.toEqual({ campaigns: 1 });
+      expect(err).toHaveBeenCalledWith('marketing learning: playbook write failed', 'boom');
+    });
   });
 
   it('waits until the attribution window has closed (last send + attribution_days + 1)', async () => {

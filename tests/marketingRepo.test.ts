@@ -79,6 +79,46 @@ describe('toE164', () => {
   ])('%s → %s', (input, out) => expect(R.toE164(input)).toBe(out));
 
   it.each(['', '   ', 'abc', '12345', '5876543210', null, undefined])('%j is not a phone', (input) => expect(R.toE164(input as string)).toBeNull());
+
+  // CONSENT LEAK: normalizeIndianMobile was applied before the '+' was looked at, so a foreign
+  // E.164 number of ten digits starting 6–9 was read as an Indian mobile. A Singapore customer's
+  // START would then opt in (and delete the opt-out of) an unrelated Indian number.
+  describe('a "+" states the country: only +91 is ever Indian', () => {
+    it.each([
+      ['+6581234567', '+6581234567'], // Singapore: was '+916581234567'
+      ['+6421234567', '+6421234567'], // New Zealand: was '+916421234567'
+      ['+65 8123 4567', '+6581234567'],
+      ['+919812345678', '+919812345678'],
+      ['+91 98123-45678', '+919812345678'],
+    ])('%s → %s', (input, out) => expect(R.toE164(input)).toBe(out));
+
+    it.each(['9812345678', '09812345678', '919812345678', '098123 45678'])('local entry %s keeps the forgiving Indian reading', (input) => {
+      expect(R.toE164(input)).toBe('+919812345678');
+    });
+
+    it('a foreign number never collides with the Indian number that shares its digits', () => {
+      expect(R.toE164('+6581234567')).not.toBe(R.toE164('+916581234567'));
+      expect(R.toE164('+916581234567')).toBe('+916581234567');
+    });
+
+    it('an unusable "+" input is still not a phone', () => {
+      expect(R.toE164('+0123456789')).toBeNull();
+      expect(R.toE164('+12')).toBeNull();
+    });
+  });
+});
+
+describe('phoneStorageForms — every spelling of THIS number in whatsapp_opt_outs', () => {
+  it('an Indian number: E.164, without the plus, and the bare ten digits', () => {
+    expect(R.phoneStorageForms('+919876543210').sort()).toEqual(['+919876543210', '919876543210', '9876543210'].sort());
+  });
+
+  it('a foreign number never claims a bare 10-digit Indian spelling that is really somebody else\'s', () => {
+    // '6581234567' is the bare form of the INDIAN +916581234567, not of Singapore's +6581234567.
+    expect(R.phoneStorageForms('+6581234567')).toEqual(['+6581234567']);
+    // A foreign number whose digits cannot be an Indian bare number keeps its plain no-plus spelling.
+    expect(R.phoneStorageForms('+14155550123').sort()).toEqual(['+14155550123', '14155550123'].sort());
+  });
 });
 
 describe('pageAll', () => {
@@ -188,6 +228,28 @@ describe('send history', () => {
     expect(all[0]).toEqual(expect.objectContaining({ sent_at: null, read_at: null, reference_at: null }));
   });
 
+  it('carries each entry\'s campaign status, so eligibility can tell a draft from a live campaign', async () => {
+    h.db.tables.marketing_campaigns = [
+      { id: 'draft', playbook_key: null, status: 'draft', created_at: daysAgo(3) },
+      { id: 'live', playbook_key: 'winback_1', status: 'sending', created_at: daysAgo(3) },
+    ];
+    h.db.tables.marketing_recipients = [
+      { id: '1', campaign_id: 'draft', phone: '+919111111111', arm: 'treatment', status: 'pending', created_at: daysAgo(3) },
+      { id: '2', campaign_id: 'live', phone: '+919111111111', arm: 'holdout', status: 'holdout', created_at: daysAgo(3), reference_at: daysAgo(3) },
+    ];
+    const { byPhone } = await R.loadSendHistory(admin(), NOW_SEND);
+    expect(byPhone.get('+919111111111')!.map((e) => [e.campaign_id, e.campaign_status])).toEqual([['draft', 'draft'], ['live', 'sending']]);
+  });
+
+  it('keeps the holdout rows of live campaigns — eligibility rule 8 needs them', async () => {
+    campaigns();
+    h.db.tables.marketing_recipients = [
+      { id: '1', campaign_id: 'live', phone: '+919111111111', arm: 'holdout', status: 'holdout', created_at: daysAgo(3), reference_at: daysAgo(3) },
+    ];
+    const { byPhone } = await R.loadSendHistory(admin(), NOW_SEND);
+    expect(byPhone.get('+919111111111')![0]).toMatchObject({ arm: 'holdout', status: 'holdout', reference_at: daysAgo(3) });
+  });
+
   it('drops a HOLDOUT of a cancelled or expired campaign — nobody was held out of anything', async () => {
     campaigns();
     h.db.tables.marketing_recipients = [
@@ -238,6 +300,41 @@ describe('opt-outs and profiles', () => {
       { id: 'b', phone: '+919222222222', phone_verified: false, role: 'customer' },
     ];
     expect((await R.loadVerifiedProfiles(admin())).map((p) => p.id)).toEqual(['a']);
+  });
+});
+
+describe('loadStaffPhones — every way a member of staff\'s number is recorded', () => {
+  it('takes every non-customer profile, verified or not, in any spelling, plus staff_accounts.phone', async () => {
+    h.db.tables.profiles = [
+      { id: 'owner', phone: '+919111111111', phone_verified: true, role: 'owner' },
+      { id: 'mgr', phone: '9222222222', phone_verified: false, role: 'manager' }, // unverified, bare spelling
+      { id: 'staff', phone: '+91 93333-33333', phone_verified: false, role: 'staff' },
+      { id: 'cust', phone: '+919444444444', phone_verified: true, role: 'customer' },
+      { id: 'nophone', phone: null, phone_verified: false, role: 'staff' },
+    ];
+    h.db.tables.staff_accounts = [
+      { user_id: 'staff', login_id: 'ravi', phone: '09555555555', status: 'active' },
+      { user_id: 'gone', login_id: 'old', phone: '+919666666666', status: 'deactivated' },
+      { user_id: 'blank', login_id: 'blank', phone: '', status: 'active' },
+    ];
+    const set = await R.loadStaffPhones(admin());
+    expect([...set].sort()).toEqual(['+919111111111', '+919222222222', '+919333333333', '+919555555555', '+919666666666']);
+  });
+
+  it('degrades to profiles alone when staff_accounts (another migration) is missing — table or column', async () => {
+    h.db.tables.profiles = [{ id: 'mgr', phone: '+919222222222', phone_verified: false, role: 'manager' }];
+    h.db.setMissing('staff_accounts', true);
+    expect([...(await R.loadStaffPhones(admin()))]).toEqual(['+919222222222']);
+    h.db.setMissing('staff_accounts', false);
+    h.db.failNext('select staff_accounts', { code: '42703', message: 'column staff_accounts.phone does not exist' });
+    expect([...(await R.loadStaffPhones(admin()))]).toEqual(['+919222222222']);
+  });
+
+  it('aborts on any other failure: guessing "no staff" is how a team member gets an offer', async () => {
+    h.db.failNext('select staff_accounts');
+    await expect(R.loadStaffPhones(admin())).rejects.toThrow('staff_accounts read');
+    h.db.failNext('select profiles');
+    await expect(R.loadStaffPhones(admin())).rejects.toThrow('profiles read');
   });
 });
 
