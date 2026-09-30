@@ -258,7 +258,8 @@ function field(obj: unknown, ...keys: string[]): unknown {
   return undefined;
 }
 
-const MAX_LINES = 60;
+/** Lines in one request or recipe (the recipe book checks the same limit). */
+export const MAX_LINES = 60;
 
 /** "Request stock" lines: at least one, each a known-shaped id and qty > 0,
  * no item twice. */

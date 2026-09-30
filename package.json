@@ -12,7 +12,10 @@
     "verify:db": "node scripts/verify-db.mjs",
     "verify:notifications": "node scripts/verify-notifications.mjs",
     "eval:suggest": "tsx scripts/eval-suggest.mjs",
-    "import:petpooja": "tsx scripts/import-petpooja.ts"
+    "import:petpooja": "tsx scripts/import-petpooja.ts",
+    "inventory:check": "tsx scripts/inventory/check.ts",
+    "inventory:build": "tsx scripts/inventory/build-seed.ts",
+    "inventory:snapshot": "node scripts/inventory/snapshot-menu.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.4.0",

@@ -296,8 +296,9 @@ export async function loadAssignees(admin: SupabaseClient): Promise<PersonRef[]>
  * it logs and returns, and can never fail the transition: the order is
  * already complete and the customer already has their food. Idempotent in the
  * database (one 'sale' movement per order and item), so a retried completion
- * takes nothing twice. A no-op with the flag off, before the migration, or
- * when nothing on the order has a recipe.
+ * takes nothing twice. Voided lines (order_items.voided) are left out: a line
+ * that was voided was never made, so its recipe uses no stock. A no-op with
+ * the flag off, before the migration, or when nothing on the order has a recipe.
  */
 export async function consumeStockForOrder(orderId: string, actorId: string | null): Promise<void> {
   if (!flags.inventory) return;
@@ -306,7 +307,8 @@ export async function consumeStockForOrder(orderId: string, actorId: string | nu
     const { data: lines, error: linesError } = await admin
       .from('order_items')
       .select('menu_item_id, variant_label_snapshot, quantity, order_item_addons(addon_option_id)')
-      .eq('order_id', orderId);
+      .eq('order_id', orderId)
+      .eq('voided', false);
     if (linesError) {
       console.error('consumeStockForOrder: order lines lookup failed', linesError);
       return;

@@ -143,6 +143,8 @@ code cannot guess them.
 
 ### B. Information the owner must supply
 
+> B1 and B2 are now kept as data — see [INVENTORY-RECIPE-BOOK.md](INVENTORY-RECIPE-BOOK.md) (the chef agent fills them in from the owner's recipe basics).
+
 **B1 — Stock item list.** One row per ingredient or packaging item you want to track:
 
 | Name | Unit (g / kg / ml / l / pcs / pack) | Category | Low at | Usually request | Perishable (expiry date required)? |
