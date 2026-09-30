@@ -56,6 +56,7 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | INV-D18 | Auto-hide is **on by default** and a manager can switch it off on the Stock tab. Switching it off puts back everything it hid, at once. |
 | INV-D19 | **Add-ons** (extra shot, oat milk) have their own recipes: what one add-on uses per serving it is added to. An add-on on a line of 2 is used twice. Add-ons are not auto-hidden. |
 | INV-D20 | When a request is assigned, the **picker is emailed** at their personal email (staff accounts), with the items and a link to the Stock screen. No email when a manager assigns it to themselves. The manager sees whether it went. WhatsApp is not used, because a business-initiated WhatsApp message needs a Meta-approved template. |
+| INV-D21 | An add-on's recipe can be **scoped to a menu item, and to one of its sizes**: sugar on a Latte Extra Large is not sugar on an Espresso. For an order line (item M, size S) and add-on O the most specific scope that has lines is used: **M + S, else M (all sizes), else O's general lines**. The winner **replaces** the others; they are never added. A line whose menu item was deleted uses only the general lines. Sizes go by label (INV-D11). The POS editor edits only the general lines; per-item and per-size amounts come from the recipe book ([INVENTORY-RECIPE-BOOK.md](INVENTORY-RECIPE-BOOK.md)) and the Recipes tab only says they exist. |
 
 ## Data: `supabase/2026-10-inventory.sql`
 
@@ -67,7 +68,8 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | `inventory_batches` | what is on the shelf: `qty_received`, `qty_remaining`, `expiry_date`, source (receive / count) |
 | `inventory_movements` | the ledger: receive / sale / waste / count, signed `qty_delta`, sale `shortfall`, who, why, which order/request/batch. One sale row per (order, item), enforced by a unique index. |
 | `recipe_lines` | (menu item, size label or '' for the base, stock item, qty per serving) |
-| `addon_recipe_lines` | (add-on option, stock item, qty per serving) |
+| `addon_recipe_lines` | (add-on option, stock item, qty per serving), plus a scope from `2026-10-inventory-addon-scopes.sql`: `menu_item_id` (null = general) and `size_label` (`''` = all sizes of that item). Unique per (option, item scope, size, stock item). |
+| `inventory_recipe_book` | one row: the whole recipe book document (service-role only), see [INVENTORY-RECIPE-BOOK.md](INVENTORY-RECIPE-BOOK.md) |
 | `menu_items.stock_out_auto` | the item is hidden because of stock (not by a person) |
 | `store_settings.stock_auto_hide` | the auto-hide switch (default on) |
 
@@ -75,7 +77,9 @@ Status of a request: `requested → assigned → picked → received`. It can be
 never disagree with the expiry warnings. Every write that touches more than one
 row goes through a database function (`inventory_create_request`,
 `inventory_pick`, `inventory_receive`, `inventory_apply_sale`,
-`inventory_adjust`, `inventory_set_recipe`, `inventory_set_addon_recipe`). Each
+`inventory_adjust`, `inventory_set_recipe`, `inventory_set_addon_recipe` (an add-on's
+general lines only), `inventory_set_addon_recipe_scopes` (every scope, for the
+recipe-book seed)). Each
 function that changes stock or recipes ends by calling
 `inventory_refresh_availability`, which hides and restores menu items. Each function takes the row lock
 and re-checks status, so two phones racing the same request can't both win. All
@@ -97,6 +101,7 @@ explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated
 | INV-9 assignment email | `lib/inventory/notify.ts`, called from the assign action |
 | INV-10 auto-hide | `inventory_refresh_availability` (migration), `app/api/inventory/settings`, the Stock-tab panel, `app/api/menu/[id]` (manual toggle clears the mark), "Out of stock" label in `components/staff/MenuItemTable.tsx` |
 | INV-11 add-on recipes | `addon_recipe_lines`, `app/api/inventory/addon-recipes/[optionId]`, the Recipes tab's Add-ons list |
+| INV-12 add-on recipe scopes | `supabase/2026-10-inventory-addon-scopes.sql`, `addonRecipeFor` in `lib/inventory/rules.ts`, `consumeStockForOrder`, `scripts/inventory/pg-smoke.sh` (real-Postgres smoke test), `checkInventory` in `scripts/verify-db.mjs` |
 | Tests | `tests/inventoryRules.test.ts`, `tests/inventoryRoutes.test.ts`, `tests/inventoryConsume.test.ts`, `tests/inventoryNotify.test.ts`, `tests/menuStockOutAuto.test.ts`, `tests/staffNav.test.ts`, `tests/orderStatusRoute.test.ts` |
 
 ## API
@@ -111,9 +116,9 @@ explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated
 | `POST /api/inventory/requests` | any counter actor | "Request stock": `{lines:[{itemId, qty}], note?}` |
 | `PATCH /api/inventory/requests/[id]` | per INV-D2–D5 | `{action:'assign'\|'pick'\|'receive'\|'cancel', …}` |
 | `POST /api/inventory/receipts` | manager / owner, on the POS | delivery with no request |
-| `GET /api/inventory/recipes` | any counter actor | menu + sizes, stock items, recipe lines, `canEdit` |
+| `GET /api/inventory/recipes` | any counter actor | menu + sizes, stock items, recipe lines, add-on general lines, `addonScopedCounts` (per add-on, how many per-item / per-size lines it also has), `canEdit` |
 | `PUT /api/inventory/recipes/[menuItemId]` | `menu_edit`, on the POS | replace one menu item's recipe: `{lines:[{sizeLabel, itemId, qty}]}` |
-| `PUT /api/inventory/addon-recipes/[optionId]` | `menu_edit`, on the POS | replace one add-on's recipe |
+| `PUT /api/inventory/addon-recipes/[optionId]` | `menu_edit`, on the POS | replace one add-on's general recipe (its per-item / per-size lines are left alone) |
 | `PATCH /api/inventory/settings` | manager / owner | `{autoHide: boolean}` |
 
 Every route returns 404 while the flag is off. Errors raised by the database
@@ -134,6 +139,7 @@ code cannot guess them.
 | A1 | Supabase is on Postgres **13 or later** (the functions use `trim_scale`; Supabase is on 15) | Dev | `select version();` | ☐ |
 | A2 | Earlier migrations applied: `schema.sql` (menu_items, menu_item_variants, orders, order_items), `2026-08-pos-devices.sql` (POS surface), `2026-09-staff-accounts.sql` | Dev | `npm run verify:db` passes its existing checks | ☐ |
 | A3 | Apply **`supabase/2026-10-inventory.sql`** in the Supabase SQL editor. It is safe to re-run. | Dev | `npm run verify:db`: the "INV-1 · inventory" section is all ✓ | ☐ |
+| A3b | Apply **`supabase/2026-10-inventory-addon-scopes.sql`** after A3 (per-item / per-size add-on recipes, and the recipe book's table). Safe to re-run. Once both are applied, either file can be re-run at any time, in any order: `2026-10-inventory.sql`'s add-on editor function also replaces only the general lines, so it never wipes a scope. | Dev | `npm run verify:db`: the "INV-12 · add-on recipe scopes" section is all ✓ | ☐ |
 | A4 | At least **one enrolled POS device** (`docs/POS-DEVICE-SETUP.md`). Receiving is refused anywhere else. | Owner + Dev | The counter shows the POS nav (Live orders · Orders · New order · Menu) | ☐ |
 | A5 | `role_permissions.menu_edit` is set to who should edit recipes (default: staff and up) | Owner | Owner → Settings → Permissions | ☐ |
 | A6 | Team roles are right in the owner portal: who is **manager** (assigns, counts, writes off, direct deliveries) and who is **staff** | Owner | Owner → Staff | ☐ |
@@ -142,6 +148,8 @@ code cannot guess them.
 | A9 | For assignment emails: email sending already configured (`RESEND_API_KEY`, `RESEND_FROM` / `RESEND_FROM_STAFF`, as for payslips), and each staffer's **personal email** filled in on Owner → Staff. Without it the assignment still works; the manager is told the email didn't go. | Owner + Dev | Owner → Staff shows a personal email per person | ☐ |
 
 ### B. Information the owner must supply
+
+> B1 and B2 are now kept as data — see [INVENTORY-RECIPE-BOOK.md](INVENTORY-RECIPE-BOOK.md) (the chef agent fills them in from the owner's recipe basics).
 
 **B1 — Stock item list.** One row per ingredient or packaging item you want to track:
 

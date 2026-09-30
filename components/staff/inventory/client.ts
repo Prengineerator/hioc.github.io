@@ -28,7 +28,11 @@ export interface RecipesPayload {
   items: { id: string; name: string; unit: string; isActive: boolean }[];
   /** sizeLabel '' = the base recipe. */
   lines: { menuItemId: string; sizeLabel: string; itemId: string; qty: number }[];
+  /** An add-on's GENERAL lines (any item, any size) — all the editor edits. */
   addonLines: { optionId: string; itemId: string; qty: number }[];
+  /** Per add-on option: how many per-item / per-size lines it also has (set by
+   * the recipe book; read-only here). Options with none are absent. */
+  addonScopedCounts: Record<string, number>;
   canEdit: boolean;
 }
 

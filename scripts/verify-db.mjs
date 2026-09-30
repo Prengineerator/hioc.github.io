@@ -37,6 +37,7 @@
 //   refuse to pass on unproven ground rather than on proven-good ground.
 // ===========================================================================
 
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -1331,7 +1332,10 @@ async function checkCashCounts() {
 // Inventory — stock items, requests, POS-verified receiving, recipes
 // (docs/INVENTORY-SPEC.md, supabase/2026-10-inventory.sql). Six service-role
 // tables and the functions every multi-row write goes through. The functions
-// are probed with calls that cannot write: an empty sale for the nil order.
+// are probed with calls that cannot write: an empty sale for the nil order,
+// and a recipe replace on an add-on that does not exist. A second section
+// covers supabase/2026-10-inventory-addon-scopes.sql (per-item / per-size
+// add-on recipes and the recipe book's own table).
 // ---------------------------------------------------------------------------
 async function checkInventory() {
   heading('INV-1 · inventory tables, functions + lockdown', '2026-10-inventory.sql');
@@ -1373,6 +1377,49 @@ async function checkInventory() {
   const anon = await rest('/rpc/inventory_apply_sale', { method: 'POST', body: noop, key: ANON });
   if (anon.ok) fail('inventory functions are not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
   else pass('inventory functions are not callable by the anon key');
+
+  // ── Add-on recipe scopes + the recipe book's table
+  // (supabase/2026-10-inventory-addon-scopes.sql, docs/INVENTORY-RECIPE-BOOK.md)
+  heading('INV-12 · add-on recipe scopes + recipe book', '2026-10-inventory-addon-scopes.sql');
+  const scopesHint = 'apply supabase/2026-10-inventory-addon-scopes.sql';
+
+  const scopeCols = await rest('/addon_recipe_lines?select=menu_item_id,size_label&limit=1');
+  if (scopeCols.ok) pass('addon_recipe_lines.menu_item_id + size_label exist');
+  else fail('addon_recipe_lines.menu_item_id + size_label exist', errKind(scopeCols) === 'no_column' ? scopesHint : errText(scopeCols));
+
+  // Single-row table: it is empty until a recipe-book seed is applied, so the
+  // anon probe below leans on the REVOKE (permission denied even when empty).
+  const book = await rest('/inventory_recipe_book?select=id&limit=1');
+  if (!book.ok) {
+    const kind = errKind(book);
+    fail('inventory_recipe_book exists', kind === 'no_table' || kind === 'no_column' ? scopesHint : errText(book));
+  } else {
+    pass('inventory_recipe_book exists');
+    const bookAnon = await rest('/inventory_recipe_book?select=id&limit=1', { key: ANON });
+    const leaked = bookAnon.ok && Array.isArray(bookAnon.body) && bookAnon.body.length > 0;
+    const denied = !bookAnon.ok && (bookAnon.body?.code === '42501' || bookAnon.status === 401 || bookAnon.status === 403);
+    if (leaked) fail('inventory_recipe_book is not readable by the anon key', 'RLS is off or a policy was added — the recipes are private');
+    else if (denied) pass('inventory_recipe_book is not readable by the anon key', 'permission denied');
+    else if (bookAnon.ok && Array.isArray(book.body) && book.body.length > 0) pass('inventory_recipe_book is not readable by the anon key', 'RLS hides the saved book');
+    else skip('inventory_recipe_book is not readable by the anon key', `no saved book to look for yet, and anon's answer was unclear: ${bookAnon.ok ? 'an empty list' : errText(bookAnon)}`);
+  }
+
+  // A call on an add-on that does not exist writes nothing: the service role
+  // must reach the function's own refusal, and anon must not reach it at all.
+  const ghost = { p_option_id: randomUUID(), p_actor: null, p_lines: [] };
+  const scopeSvc = await rest('/rpc/inventory_set_addon_recipe_scopes', { method: 'POST', body: ghost });
+  if (!scopeSvc.ok && errKind(scopeSvc) === 'raised' && /add-on not found/i.test(errText(scopeSvc))) {
+    pass('inventory_set_addon_recipe_scopes is installed', 'an unknown add-on was refused');
+  } else {
+    fail('inventory_set_addon_recipe_scopes is installed', scopeSvc.ok ? `unexpected result ${JSON.stringify(scopeSvc.body)}` : `${scopesHint} — ${errText(scopeSvc)}`);
+  }
+  const scopeAnon = await rest('/rpc/inventory_set_addon_recipe_scopes', { method: 'POST', body: ghost, key: ANON });
+  // Reaching 'add-on not found' (or succeeding) means the function ran as anon.
+  if (scopeAnon.ok || errKind(scopeAnon) === 'raised') {
+    fail('inventory_set_addon_recipe_scopes is not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
+  } else {
+    pass('inventory_set_addon_recipe_scopes is not callable by the anon key');
+  }
 }
 
 // ---------------------------------------------------------------------------

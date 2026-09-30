@@ -258,7 +258,8 @@ function field(obj: unknown, ...keys: string[]): unknown {
   return undefined;
 }
 
-const MAX_LINES = 60;
+/** Lines in one request or recipe (the recipe book checks the same limit). */
+export const MAX_LINES = 60;
 
 /** "Request stock" lines: at least one, each a known-shaped id and qty > 0,
  * no item twice. */
@@ -377,6 +378,12 @@ export interface RecipeLineLike {
 
 export interface AddonRecipeLineLike {
   addon_option_id: string;
+  /** Scope (supabase/2026-10-inventory-addon-scopes.sql). Absent or null = a
+   * general line: used for any menu item and size. */
+  menu_item_id?: string | null;
+  /** With a menu_item_id: '' (or absent) = every size of that item; else one
+   * size's label ("Large"), matched by label like RecipeLineLike.size_label. */
+  size_label?: string;
   item_id: string;
   qty: number;
 }
@@ -405,10 +412,46 @@ export function recipeFor(lines: RecipeLineLike[], menuItemId: string, sizeLabel
   return forItem.filter((l) => l.size_label === '');
 }
 
+/**
+ * What one unit of add-on `optionId` uses when added to (menu item, size). An
+ * add-on's usage depends on what it is added to — sugar in a Latte Extra Large
+ * is not sugar in an Espresso — so its lines have a scope, and the most
+ * specific scope that has any lines wins:
+ *
+ *   1. the lines for this menu item AND this size, else
+ *   2. the lines for this menu item (size_label ''), else
+ *   3. the general lines (no menu item).
+ *
+ * The winner REPLACES the less specific scopes; they are never summed, the
+ * same "own recipe replaces the base one" rule as recipeFor. Nothing matching
+ * (no general lines and no scope for this item) uses nothing. An order line
+ * whose menu item is gone (null) can only use the general lines.
+ */
+export function addonRecipeFor(
+  lines: AddonRecipeLineLike[],
+  optionId: string,
+  menuItemId: string | null,
+  sizeLabel: string | null,
+): AddonRecipeLineLike[] {
+  const forOption = lines.filter((l) => l.addon_option_id === optionId);
+  if (menuItemId) {
+    const forItem = forOption.filter((l) => l.menu_item_id === menuItemId);
+    const label = (sizeLabel ?? '').trim();
+    if (label) {
+      const own = forItem.filter((l) => l.size_label === label);
+      if (own.length > 0) return own;
+    }
+    const anySize = forItem.filter((l) => !l.size_label);
+    if (anySize.length > 0) return anySize;
+  }
+  return forOption.filter((l) => !l.menu_item_id);
+}
+
 /** Total ingredient usage for an order's lines, per stock item: each line's
- * recipe plus each of its add-ons' recipes, × the line quantity (add-ons are
- * priced per unit, lib/orders/lines.ts). Lines with no menu item (deleted
- * since) or no recipe use nothing. */
+ * recipe plus each of its add-ons' recipes (addonRecipeFor: scoped to the
+ * line's item and size), × the line quantity (add-ons are priced per unit,
+ * lib/orders/lines.ts). Lines with no menu item (deleted since) or no recipe
+ * use nothing of their own. */
 export function orderUsage(
   orderLines: OrderLineLike[],
   recipeLines: RecipeLineLike[],
@@ -424,7 +467,9 @@ export function orderUsage(
     }
     for (const optionId of line.addon_option_ids ?? []) {
       if (!optionId) continue;
-      for (const r of addonLines) if (r.addon_option_id === optionId) add(r.item_id, Number(r.qty) * units);
+      for (const r of addonRecipeFor(addonLines, optionId, line.menu_item_id, line.variant_label)) {
+        add(r.item_id, Number(r.qty) * units);
+      }
     }
   }
   for (const [id, q] of usage) if (q <= 0) usage.delete(id);
