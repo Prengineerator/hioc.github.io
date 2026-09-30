@@ -2,7 +2,9 @@
 
 Status: **BUILDING** (2026-09-30). The recipe book is the source of truth for the
 stock-item list and for every menu item's and add-on's recipe. A script checks it
-against the live menu and compiles it to one SQL file that loads it into Supabase.
+against the live menu and compiles it. The compiled book is loaded into Supabase by a
+database function, `inventory_apply_book`, called either from a generated SQL file or
+over REST by `npm run inventory:apply`.
 The tables and flow it feeds are in [`INVENTORY-SPEC.md`](INVENTORY-SPEC.md). This
 file replaces requirement-sheet items B1 (stock item list) and B2 (recipes) there.
 
@@ -11,8 +13,9 @@ file replaces requirement-sheet items B1 (stock item list) and B2 (recipes) ther
  (Item_Addon_Recipe.csv)                                ├─► recipe book ──► npm run inventory:check
  owner's basics ──► chef agent ─────────────────────────┘   (private JSON)          │
                                                                                     ▼
-             Supabase ◄── <book>/seed.sql ◄───────────────────────── npm run inventory:build
-      (recipes applied + the whole book saved in inventory_recipe_book;
+             Supabase ◄── inventory_apply_book() ◄─┬─ npm run inventory:apply   (one REST call)
+      (recipes applied + the whole book             └─ <book>/seed.sql ◄── npm run inventory:build
+       saved in inventory_recipe_book;                  (`select inventory_apply_book(…)`, SQL editor)
        npm run inventory:pull brings the book back on any machine)
 ```
 
@@ -40,7 +43,7 @@ recipe quantities into a commit message, PR or issue.
 | `…/book/petpooja/aliases.json` | Petpooja name → live menu item or add-on, for names the automatic matcher can't match. | no |
 | `…/book/petpooja/materials.json` | Petpooja raw material → stock item (name, category, expiry). | no |
 | `…/book/import-report.md` | Written by the importer: what matched, and what is **still missing**. | no |
-| `…/book/seed.sql` | **Generated.** Never edit it by hand. | no |
+| `…/book/seed.sql` | **Generated.** One `select inventory_apply_book(…)` around the compiled book. Never edit it by hand. | no |
 
 ### `stock-items.json`
 
@@ -193,6 +196,8 @@ npm run inventory:build                       # <book>/seed.sql: save the book +
 npm run inventory:build -- --include-drafts   # also drafts (preview/test databases only)
 npm run inventory:build -- --save-only        # only save the book to the database (no recipe changes)
 npm run inventory:build -- --dry-run          # same SQL, but it ends by raising, so nothing is saved
+npm run inventory:apply -- --dry-run          # the same thing over REST, no SQL editor: everything runs, then rolls back
+npm run inventory:apply -- --yes              # ... and for real: one request, one transaction (needs the service-role key)
 npm run inventory:pull                        # database → book directory (needs the service-role key)
 npm run inventory:snapshot                    # refresh menu-snapshot.json from the live menu
 ```
@@ -207,22 +212,58 @@ The output goes to the git-ignored book directory:
 
 An `--out` path elsewhere in the repository is refused unless `--force-out` is passed, so that recipe quantities cannot land in a committed file.
 
+### `inventory:apply`
+
+`seed.sql` is several hundred KB, too big to paste into the Supabase SQL editor, and a checkout has no direct database connection: only the REST API and the service-role key. `inventory:apply` makes the same call as `seed.sql` over REST: `POST /rest/v1/rpc/inventory_apply_book`, in **one request and one transaction**, so it applies completely or not at all.
+
+```
+npm run inventory:apply -- --dry-run          # check it: every step runs in the database, then rolls back
+npm run inventory:apply -- --yes              # apply it
+npm run inventory:apply -- --save-only --yes  # only save the book (allowed while the book has validation errors)
+npm run inventory:apply                       # no flag: prints what WOULD be applied and where, sends nothing, exits 2
+```
+
+- **Flags.** `--book <dir>`, `--include-drafts` (preview/test databases only), `--save-only`, `--dry-run`, `--yes` (required for a real apply), `--help`.
+- **Validation.** The book is checked and compiled exactly as `inventory:build` does. Errors refuse the run, except with `--save-only`, which shows them as warnings, as `inventory:build --save-only` does.
+- **Settings.** `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`, from the environment or `.env.local` (the environment wins). The key is only sent as the request's `apikey` / `Authorization` headers and is never printed. The **target host** and the payload size are printed before anything is sent, so check them.
+- **Answers.**
+  - Success: prints the function's result (`{ "saved": true, "stock_items": n, "recipes": n, "addon_recipes": n, "save_only": false }`) and `Applied.`. Exit 0.
+  - A dry run: the server ends it with an error whose message starts `DRY RUN OK`. That is the pass. It is printed with `Dry run passed; nothing was saved.`. Exit 0.
+  - Any other refusal, such as a guard below or a bad key: PostgREST's message, details and hint are printed. Nothing was saved. Exit 1.
+  - The function does not exist: `apply supabase/2026-10-inventory-apply-book.sql first`. Exit 1. (Right after applying the migration, PostgREST may need a moment; `notify pgrst, 'reload schema';` forces it.)
+  - Exit 2: bad arguments, or no `--yes`.
+
 ## What the generated SQL does
 
-This is one `do $$ … $$` block, so it applies completely or not at all. It is safe to re-run. It needs `2026-10-inventory.sql` and `2026-10-inventory-addon-scopes.sql`.
+The logic is the database function `inventory_apply_book(p_payload jsonb, p_doc jsonb, p_dry_run boolean default false)` in `supabase/2026-10-inventory-apply-book.sql`. `seed.sql` is a header comment and one statement, `select inventory_apply_book(<payload>, <book>, false)`, with the compiled payload and the book document as JSON literals. `inventory:apply` sends the same three arguments over REST. Either way the call is one transaction, so it applies completely or not at all. It is safe to re-run. It needs `2026-10-inventory.sql`, `2026-10-inventory-addon-scopes.sql` and `2026-10-inventory-apply-book.sql`.
 
-1. **Saves the book.** It stores the whole book document in `inventory_recipe_book`, the single row that `inventory:pull` reads back.
-2. **Auto-hide guard.** If no stock has ever been received, it sets `store_settings.stock_auto_hide = false`. Otherwise, every recipe item would read "0 on hand" and vanish from the live menu. This happens at the database level, whatever the app flag says. Switch auto-hide back on (Stock tab) **after** the opening stock is received.
-3. **Unit guard.** It refuses to run if a stock item already exists live with a different unit.
-4. **Stock items.** It adds new ones and updates existing ones, matched by name regardless of case. It never changes a unit, and never overwrites a live par or reorder level with 0.
-5. **Existence guard.** It refuses to run if any menu item or add-on option id in the book is missing live.
-6. **Recipes.** Each recipe in the file replaces that item's whole recipe through `inventory_set_recipe`, so the size-label check applies. Each add-on replaces all of its scopes through `inventory_set_addon_recipe_scopes`. Items and add-ons not in the file are left alone.
+The function is service-role only (`revoke execute … from public, anon, authenticated`). It returns `{ saved, stock_items, recipes, addon_recipes, save_only }`. Its steps are:
+
+0. **Saves the book.** It stores the whole book document in `inventory_recipe_book`, the single row that `inventory:pull` reads back. A missing document is refused. If the payload is `null` (`--save-only`) this is all it does: steps 1 to 5 are skipped and no stock item, recipe or setting is touched. A payload that is not an object with `stock_items`, `recipes` and `addon_recipes` lists is refused up front.
+1. **Auto-hide guard.** If no stock has ever been received, it sets `store_settings.stock_auto_hide = false`. Otherwise, every recipe item would read "0 on hand" and vanish from the live menu. This happens at the database level, whatever the app flag says. Switch auto-hide back on (Stock tab) **after** the opening stock is received.
+2. **Unit guard.** It refuses to run if a stock item already exists live with a different unit.
+3. **Stock items.** It adds new ones and updates existing ones, matched by name regardless of case. It never changes a unit, and never overwrites a live par or reorder level with 0.
+4. **Existence guard.** It refuses to run if any menu item, add-on option, or menu item named by an add-on scope is missing live.
+5. **Recipes.** Each recipe in the payload replaces that item's whole recipe through `inventory_set_recipe`, so the size-label check applies. Each add-on replaces all of its scopes through `inventory_set_addon_recipe_scopes`. Items and add-ons not in the payload are left alone.
+
+With `p_dry_run` (`--dry-run`) every step runs, and then the function raises `DRY RUN OK (nothing was saved): <result>`, which rolls all of it back. The guards are real, so a dry run that passes means the real call would not be refused.
 
 ## Deploy
 
-1. Apply `supabase/2026-10-inventory-addon-scopes.sql` once. It is a migration and is committed.
-2. Check that everything to be tracked is `confirmed` and that `npm run inventory:check` shows no errors.
-3. Run `npm run inventory:build`, then apply `<book>/seed.sql` in the Supabase SQL editor, or ask Claude to apply it. Run the verify queries at the foot of the file.
+1. Apply the three migrations, in this order, in the Supabase SQL editor. Each is idempotent and committed:
+   - `supabase/2026-10-inventory.sql`
+   - `supabase/2026-10-inventory-addon-scopes.sql`
+   - `supabase/2026-10-inventory-apply-book.sql` (the `inventory_apply_book` function)
+2. Check that everything to be tracked is `confirmed` and that `npm run inventory:check` shows no errors. Refresh the menu snapshot (`npm run inventory:snapshot`) if the menu has changed.
+3. Apply the book, either way:
+   - **Over REST** (works from a checkout, with `SUPABASE_SERVICE_ROLE_KEY` set):
+     ```
+     npm run inventory:apply -- --dry-run     # everything runs, then rolls back: "DRY RUN OK"
+     npm run inventory:apply -- --yes         # applies for real
+     ```
+   - **In the SQL editor**: run `npm run inventory:build`, then paste `<book>/seed.sql`, or ask Claude to apply it. (`seed.sql` is large; if the editor will not take it, use the REST way.)
+
+   Run the verify queries at the foot of `seed.sql` afterwards.
 4. Continue with the go-live steps in `INVENTORY-SPEC.md` §C: opening stock (C4), the walk-through (C5), the flag (C6), then switch auto-hide on.
 
 A recipe edited later on the POS is **overwritten** the next time the seed is applied. Tell the chef agent about the change so the book stays the source of truth. The POS editor edits only an add-on's general recipe. Its per-item and per-size amounts come from the book.

@@ -8,8 +8,11 @@
 //   npm run inventory:build -- --out <path>       # see --help for the default
 //   npm run inventory:build -- --book <dir>       # a book kept elsewhere
 //
-// The seed SQL holds the café's recipe quantities, so it goes in the git-ignored
-// book folder by default, never in supabase/. Refuses to write while
+// The seed SQL is one `select inventory_apply_book(...)` (the logic is the
+// database function in supabase/2026-10-inventory-apply-book.sql, which must be
+// applied first). Too big for the SQL editor? `npm run inventory:apply` makes the
+// same call over REST. It holds the café's recipe quantities, so it goes in the
+// git-ignored book folder by default, never in supabase/. Refuses to write while
 // `npm run inventory:check` has errors (except --save-only, see --help).
 // Exit 1: errors or an unreadable book file. Exit 2: bad arguments, or an --out
 // path that is refused.
@@ -43,7 +46,8 @@ const USAGE = [
   '                    while the book has validation errors: they are printed as warnings and the',
   '                    book is saved as it is. Only a book of the wrong SHAPE (a file that is not an',
   '                    object with its lists) is refused. Cannot be combined with --include-drafts.',
-  '  --dry-run         same SQL, but it ends by raising an exception so nothing is saved.',
+  '  --dry-run         same SQL, but the call is made with p_dry_run: it ends by raising an exception',
+  '                    so nothing is saved.',
   '                    Writes <book>/seed.dry-run.sql (with --save-only: <book>/save-only.dry-run.sql)',
   '  --out <path>      write the SQL here instead. A path inside the repository but outside the book',
   '                    folder (and outside the OS temp folder) is refused unless --force-out is given:',
@@ -124,6 +128,7 @@ function main(): number {
       if (errors.length > MAX_ERRORS_PRINTED) console.log(`    …and ${errors.length - MAX_ERRORS_PRINTED} more`);
     }
     if (dryRun) console.log('  DRY RUN: run it in the SQL editor to check it; it ends with an exception so nothing is saved.');
+    console.log('  Needs supabase/2026-10-inventory-apply-book.sql applied first. Or: npm run inventory:apply -- --save-only');
     if (warnings.length > 0) console.log(`  ${warnings.length} warning${warnings.length === 1 ? '' : 's'} — see npm run inventory:check`);
     return 0;
   }
@@ -144,6 +149,7 @@ function main(): number {
     console.log('  NOTE: this file has DRAFT recipes in it — apply it to a preview/test database only, and do not commit it.');
   }
   if (dryRun) console.log('  DRY RUN: run it in the SQL editor to see what would happen; it ends with an exception so nothing is saved.');
+  console.log('  Needs supabase/2026-10-inventory-apply-book.sql applied first. Too big for the SQL editor? npm run inventory:apply -- --dry-run, then --yes');
   if (warnings.length > 0) console.log(`  ${warnings.length} warning${warnings.length === 1 ? '' : 's'} — see npm run inventory:check`);
   return 0;
 }

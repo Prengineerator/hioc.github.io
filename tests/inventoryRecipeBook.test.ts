@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bookCounts,
+  buildApplyRequest,
   compileRecipeBook,
   formatIssue,
   fromBookDocument,
@@ -898,18 +899,89 @@ describe('toBookDocument / fromBookDocument', () => {
   });
 });
 
+describe('buildApplyRequest', () => {
+  const payload = (): SeedPayload => compileRecipeBook(makeBook(), { includeDrafts: true });
+  const doc = (): BookDocument => toBookDocument(makeBook());
+
+  it("is the function's three arguments by name: the payload, the book and the dry-run flag", () => {
+    const p = payload();
+    const d = doc();
+    const request = buildApplyRequest(p, d, { dryRun: false });
+    expect(request).toEqual({ p_payload: p, p_doc: d, p_dry_run: false });
+    expect(Object.keys(request).sort()).toEqual(['p_doc', 'p_dry_run', 'p_payload']);
+    // The pieces are the ones passed in, not copies of them.
+    expect(request.p_payload).toBe(p);
+    expect(request.p_doc).toBe(d);
+  });
+
+  it('is not a dry run unless asked (the options are optional)', () => {
+    expect(buildApplyRequest(payload(), doc()).p_dry_run).toBe(false);
+    expect(buildApplyRequest(payload(), doc(), {}).p_dry_run).toBe(false);
+    expect(buildApplyRequest(payload(), doc(), { dryRun: true }).p_dry_run).toBe(true);
+  });
+
+  it('takes a null payload to only save the book, and sends it as JSON null', () => {
+    const request = buildApplyRequest(null, doc(), { dryRun: true });
+    expect(request).toEqual({ p_payload: null, p_doc: doc(), p_dry_run: true });
+    const wire = JSON.parse(JSON.stringify(request));
+    expect(wire.p_payload).toBeNull();
+    expect('p_payload' in wire).toBe(true);
+  });
+
+  it('survives JSON: what PostgREST parses is the payload and the book document', () => {
+    const p = payload();
+    const book = { ...makeBook(), petpooja: { aliases: { items: { Latte: LATTE } } } };
+    latte(book).notes = 'a note only the book keeps';
+    const d = toBookDocument(book);
+    const wire = JSON.parse(JSON.stringify(buildApplyRequest(p, d, { dryRun: true })));
+    expect(wire).toEqual({ p_payload: JSON.parse(JSON.stringify(p)), p_doc: JSON.parse(JSON.stringify(d)), p_dry_run: true });
+    expect(fromBookDocument(wire.p_doc).recipeFiles).toEqual(book.recipeFiles);
+  });
+
+  it('checks the shape of the document, even when only saving', () => {
+    expect(() => buildApplyRequest(payload(), { version: 2 } as never)).toThrow(/version 1/);
+    expect(() => buildApplyRequest(null, { version: 1 } as never)).toThrow(/stock_items/);
+    expect(() => buildApplyRequest(null, { version: 1, stock_items: { items: [] }, recipe_files: [{ path: '../x.json', file: {} }], addon_recipes: { options: [] } } as never)).toThrow(/recipes\/<name>\.json/);
+  });
+
+  it('checks the payload has its three lists (a missing one is not the same as an empty one)', () => {
+    for (const missing of ['stock_items', 'recipes', 'addon_recipes'] as const) {
+      const p = payload() as unknown as Record<string, unknown>;
+      delete p[missing];
+      expect(() => buildApplyRequest(p as never, doc()), missing).toThrow(/needs stock_items, recipes and addon_recipes lists/);
+    }
+    expect(() => buildApplyRequest({ stock_items: [], recipes: {}, addon_recipes: [] } as never, doc())).toThrow(/lists/);
+    expect(() => buildApplyRequest({ stock_items: [], recipes: [], addon_recipes: [] }, doc())).not.toThrow();
+  });
+
+  it('does not judge the book: a document with validation errors is sent as it is', () => {
+    const book = makeBook();
+    latte(book).sizes.Large[0].ingredient = 'Nothing';
+    expect(validateRecipeBook(book).errors).not.toEqual([]);
+    expect(() => buildApplyRequest(null, toBookDocument(book))).not.toThrow();
+  });
+
+  it('needs no SQL quoting, so the tags that the seed SQL refuses are fine here', () => {
+    const p = payload();
+    p.stock_items[0].name = 'Has $book$ and $doc$ and $seed$ in it';
+    expect(JSON.parse(JSON.stringify(buildApplyRequest(p, doc()))).p_payload.stock_items[0].name).toBe('Has $book$ and $doc$ and $seed$ in it');
+  });
+});
+
 describe('renderSeedSql', () => {
   const payload = (): SeedPayload => compileRecipeBook(makeBook(), { includeDrafts: true });
   const bookDocument = (): BookDocument => toBookDocument(makeBook());
   const meta = () => ({ includeDrafts: false, snapshotCapturedAt: '2026-09-30T14:40:34.856Z', bookDocument: bookDocument() });
   const bookJson = (sql: string) => sql.match(/\$book\$([\s\S]*?)\$book\$::jsonb/)![1];
   const docJson = (sql: string) => sql.match(/\$doc\$([\s\S]*?)\$doc\$::jsonb/)![1];
+  /** The lines that are not comments or blank: the SQL itself. */
+  const statement = (sql: string) => sql.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('--'));
 
   it('starts with the fixed header, with the counts and mode filled in', () => {
     const p = payload();
     expect(seedCounts(p)).toEqual({ stockItems: 6, recipes: 2, recipeLines: 7, addonRecipes: 1, addonLines: 1, addonScopedLines: 0 });
     const sql = renderSeedSql(p, meta());
-    expect(sql.split('\n').slice(0, 16).join('\n')).toBe(
+    expect(sql.split('\n').slice(0, 17).join('\n')).toBe(
       [
         '-- ===========================================================================',
         '-- GENERATED by `npm run inventory:build` from the recipe book — DO NOT EDIT.',
@@ -918,15 +990,16 @@ describe('renderSeedSql', () => {
         '-- Stock items: 6 · Menu-item recipes: 2 (7 lines) · Add-on recipes: 1 (1 lines, 0 scoped)',
         '-- Saved book: 6 stock items · 2 recipe files (2 items) · 2 add-on options — drafts and notes included',
         '-- Menu snapshot: 2026-09-30T14:40:34.856Z',
-        '-- Needs supabase/2026-10-inventory.sql and supabase/2026-10-inventory-addon-scopes.sql.',
-        '-- One DO block: all or nothing. Safe to re-run: the book is saved whole; stock items',
-        '-- are matched by name (unit never changed; a par/reorder of 0 in the book leaves',
-        '-- the live value alone); each listed recipe is replaced whole; menu items and',
-        '-- add-ons not listed here are left as they are.',
+        '-- Needs supabase/2026-10-inventory.sql, supabase/2026-10-inventory-addon-scopes.sql and supabase/2026-10-inventory-apply-book.sql.',
+        '-- One statement, one transaction: all or nothing. Safe to re-run: the book is saved',
+        '-- whole; stock items are matched by name (unit never changed; a par/reorder of 0 in',
+        '-- the book leaves the live value alone); each listed recipe is replaced whole; menu',
+        '-- items and add-ons not listed here are left as they are.',
+        '-- Until stock has been received it also turns store_settings.stock_auto_hide off',
+        '-- (auto-hide would hide every recipe item at 0 on hand): switch it back on after the',
+        '-- opening stock is in.',
+        '-- Too large for the SQL editor? `npm run inventory:apply` makes the same call over REST.',
         '-- ===========================================================================',
-        'do $seed$',
-        'declare',
-        '  v_doc   jsonb := $doc$' + JSON.stringify(bookDocument()) + '$doc$::jsonb;',
       ].join('\n'),
     );
   });
@@ -935,76 +1008,42 @@ describe('renderSeedSql', () => {
     expect(renderSeedSql(payload(), { ...meta(), includeDrafts: true })).toContain('-- Mode: confirmed + DRAFT recipes (preview/test databases only)\n');
   });
 
-  it('carries the guards and the by-name upsert', () => {
+  it('is one call of inventory_apply_book: the payload, the book, false', () => {
+    const p = payload();
+    const sql = renderSeedSql(p, meta());
+    expect(statement(sql)).toEqual([
+      'select inventory_apply_book(',
+      `  $book$${JSON.stringify(p)}$book$::jsonb,`,
+      `  $doc$${JSON.stringify(bookDocument())}$doc$::jsonb,`,
+      '  false',
+      ');',
+    ]);
+  });
+
+  it('carries none of the seed logic any more: that is the function in 2026-10-inventory-apply-book.sql', () => {
     const sql = renderSeedSql(payload(), meta());
-    expect(sql).toContain('on conflict ((lower(trim(name)))) do update');
-    expect(sql).toContain('if not exists (select 1 from inventory_batches) then');
-    expect(sql).toContain('update store_settings set stock_auto_hide = false where is_singleton and stock_auto_hide;');
-    expect(sql).toContain("raise exception 'inventory seed: unit differs from the live stock item: %', v_bad;");
-    expect(sql).toContain("raise exception 'inventory seed: menu items not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;");
-    expect(sql).toContain("raise exception 'inventory seed: add-on options not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;");
-    expect(sql).toContain('perform inventory_set_recipe(r.id, null, v_lines);');
+    for (const gone of ['do $seed$', 'declare', 'v_book', 'v_doc', 'insert into', 'update store_settings', 'inventory_set_recipe', 'inventory_set_addon_recipe', 'on conflict', 'raise ', 'jsonb_to_recordset']) {
+      expect(sql, gone).not.toContain(gone);
+    }
+  });
+
+  it('writes compact JSON: one line each for the payload and the book', () => {
+    const p = payload();
+    const sql = renderSeedSql(p, meta());
+    expect(bookJson(sql)).toBe(JSON.stringify(p));
+    expect(bookJson(sql)).not.toContain('\n');
+    expect(docJson(sql)).not.toContain('\n');
+  });
+
+  it('ends with the Verify block', () => {
+    const sql = renderSeedSql(payload(), meta());
+    expect(sql).toContain('-- Verify:\n');
     expect(sql).toContain('-- >= 6\n');
+    expect(sql).toContain('--   select stock_auto_hide from store_settings where is_singleton;      -- false until opening stock is received');
     expect(sql.endsWith('-- ---------------------------------------------------------------------------\n')).toBe(true);
   });
 
-  it('numbers its steps 0 to 5 in the contract order', () => {
-    const sql = renderSeedSql(payload(), meta());
-    const at = ['-- 0. The book', '-- 1. Before any stock', '-- 2. Units lock', '-- 3. Stock items:', '-- 4. Every menu item', '-- 5. Recipes,'].map((step) => sql.indexOf(step));
-    expect(at.every((n) => n > 0)).toBe(true);
-    expect([...at].sort((a, b) => a - b)).toEqual(at);
-  });
-
-  it("saves the whole book first (step 0), before the auto-hide guard and any change", () => {
-    const sql = renderSeedSql(payload(), meta());
-    const insert = sql.indexOf('insert into inventory_recipe_book (id, book, saved_at) values (true, v_doc, now())');
-    expect(insert).toBeGreaterThan(0);
-    expect(sql).toContain('  on conflict (id) do update set book = excluded.book, saved_at = excluded.saved_at;');
-    expect(insert).toBeLessThan(sql.indexOf('if not exists (select 1 from inventory_batches)'));
-    expect(insert).toBeLessThan(sql.indexOf('insert into inventory_items'));
-    expect(insert).toBeLessThan(sql.indexOf('perform inventory_set_recipe'));
-  });
-
-  it('loads add-on recipes through the scopes function, with the item and size on every line', () => {
-    const sql = renderSeedSql(payload(), meta());
-    expect(sql).toContain('perform inventory_set_addon_recipe_scopes(r.id, null, v_lines);');
-    expect(sql).not.toContain('perform inventory_set_addon_recipe(');
-    expect(sql).toContain(
-      [
-        "  for r in select * from jsonb_to_recordset(v_book->'addon_recipes') x(id uuid, name text, lines jsonb) loop",
-        '    select count(*), count(i.id),',
-        "           coalesce(jsonb_agg(jsonb_build_object('menu_item_id', l.menu_item_id, 'size_label', l.size_label, 'item_id', i.id, 'qty', l.qty))",
-        "                      filter (where i.id is not null), '[]'::jsonb)",
-        '      into v_total, v_found, v_lines',
-        '      from jsonb_to_recordset(r.lines) l(menu_item_id uuid, size_label text, ingredient text, qty numeric)',
-        '      left join inventory_items i on lower(trim(i.name)) = lower(trim(l.ingredient));',
-        '    if v_found <> v_total then',
-        `      raise exception 'inventory seed: a line of "%" names a stock item that does not exist', r.name;`,
-        '    end if;',
-        '    perform inventory_set_addon_recipe_scopes(r.id, null, v_lines);',
-        '  end loop;',
-      ].join('\n'),
-    );
-  });
-
-  it('refuses to run when a scoped menu item is not live, before any recipe is written', () => {
-    const sql = renderSeedSql(payload(), meta());
-    const guard = [
-      "  select string_agg(distinct format('%s (%s)', x.name, l.menu_item_id), '; ') into v_bad",
-      "    from jsonb_to_recordset(v_book->'addon_recipes') x(name text, lines jsonb),",
-      '         jsonb_to_recordset(x.lines) l(menu_item_id uuid)',
-      '   where l.menu_item_id is not null',
-      '     and not exists (select 1 from menu_items m where m.id = l.menu_item_id);',
-      '  if v_bad is not null then',
-      "    raise exception 'inventory seed: add-on scopes name menu items not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;",
-      '  end if;',
-    ].join('\n');
-    expect(sql).toContain(guard);
-    expect(sql.indexOf(guard)).toBeLessThan(sql.indexOf('perform inventory_set_recipe'));
-    expect(sql.indexOf(guard)).toBeGreaterThan(sql.indexOf("add-on options not found live"));
-  });
-
-  it('embeds scoped add-on lines in the payload with their menu_item_id, ready for the SQL', () => {
+  it('embeds scoped add-on lines in the payload with their menu_item_id, ready for the function', () => {
     const book = makeBook();
     book.addonRecipes.options[0].scopes = [{ menu_item_id: LATTE, menu_item: 'Latte', size_label: 'Large', lines: [{ ingredient: 'Oat milk', qty: 200 }] }];
     const p = compileRecipeBook(book, { includeDrafts: true });
@@ -1020,10 +1059,10 @@ describe('renderSeedSql', () => {
     const p = payload();
     const sql = renderSeedSql(p, meta());
     expect(JSON.parse(bookJson(sql))).toEqual(p);
-    // Quoting tags appear exactly once each way round.
+    // Quoting tags appear exactly once each way round; $seed$ is not used at all.
     expect(sql.match(/\$book\$/g)).toHaveLength(2);
     expect(sql.match(/\$doc\$/g)).toHaveLength(2);
-    expect(sql.match(/\$seed\$/g)).toHaveLength(2);
+    expect(sql).not.toContain('$seed$');
   });
 
   it('embeds the whole book as a second JSON literal that parses back to the document', () => {
@@ -1050,20 +1089,16 @@ describe('renderSeedSql', () => {
     expect(sql).toContain('-- Saved book: 0 stock items · 0 recipe files (0 items) · 0 add-on options');
   });
 
-  it('ends with a notice normally, and with the DRY RUN exception when dryRun is set', () => {
+  it('passes p_dry_run = true, and says so in the header, when dryRun is set; otherwise it is identical', () => {
     const normal = renderSeedSql(payload(), meta());
-    expect(normal).toContain("raise notice 'inventory seed: % stock items, % menu-item recipes, % add-on recipes',");
     expect(normal).not.toContain('DRY RUN');
+    expect(normal).toContain('\n  false\n);\n');
 
     const dry = renderSeedSql(payload(), { ...meta(), dryRun: true });
     expect(dry).toContain('-- DRY RUN: ends by raising an exception so nothing is saved.\n');
-    expect(dry).toContain(
-      "  raise exception 'DRY RUN OK (nothing was saved): % stock items, % menu-item recipes, % add-on recipes',\n" +
-        "    jsonb_array_length(v_book->'stock_items'), jsonb_array_length(v_book->'recipes'), jsonb_array_length(v_book->'addon_recipes');\nend\n$seed$;",
-    );
-    expect(dry).not.toContain('raise notice');
-    // Everything else is the same as the real thing (step 0 is inside the block that rolls back).
-    expect(dry.replace('-- DRY RUN: ends by raising an exception so nothing is saved.\n', '').replace(/raise exception 'DRY RUN OK \(nothing was saved\)/, "raise notice 'inventory seed")).toBe(normal);
+    expect(dry).toContain('\n  true\n);\n');
+    expect(dry).not.toContain('\n  false\n);');
+    expect(dry.replace('-- DRY RUN: ends by raising an exception so nothing is saved.\n', '').replace('\n  true\n);\n', '\n  false\n);\n')).toBe(normal);
   });
 
   it('refuses a payload or a document that contains a quoting tag', () => {
@@ -1083,9 +1118,10 @@ describe('renderSeedSql', () => {
     expect(() => renderSeedSql(q, meta())).toThrow(/\$seed\$/);
   });
 
-  it('refuses a document that is not a book document', () => {
+  it('refuses a document that is not a book document, and a payload without its three lists', () => {
     expect(() => renderSeedSql(payload(), { ...meta(), bookDocument: { version: 2 } as never })).toThrow(/version 1/);
     expect(() => renderSaveOnlySql({ version: 1 } as never, { snapshotCapturedAt: 'x' })).toThrow(/stock_items/);
+    expect(() => renderSeedSql({ stock_items: [], recipes: [] } as never, meta())).toThrow(/needs stock_items, recipes and addon_recipes lists/);
   });
 
   it('keeps quotes, backslashes and non-ASCII in names intact', () => {
@@ -1103,6 +1139,7 @@ describe('renderSeedSql', () => {
   it('keeps a stray newline in the snapshot time out of the header comment', () => {
     const sql = renderSeedSql(payload(), { ...meta(), snapshotCapturedAt: '2026-09-30\nselect 1;' });
     expect(sql).toContain('-- Menu snapshot: 2026-09-30 select 1;\n');
+    expect(statement(sql)).toHaveLength(5);
   });
 });
 
@@ -1110,24 +1147,21 @@ describe('renderSaveOnlySql', () => {
   const doc = (): BookDocument => toBookDocument({ ...makeBook(), petpooja: { materials: { Milk: { name: 'Full-cream milk' } } } });
   const meta = { snapshotCapturedAt: '2026-09-30T14:40:34.856Z' };
   const docJson = (sql: string) => sql.match(/\$doc\$([\s\S]*?)\$doc\$::jsonb/)![1];
+  const statement = (sql: string) => sql.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('--'));
 
-  it('is a DO block with only the save step: no stock item, recipe or setting is touched', () => {
-    const sql = renderSaveOnlySql(doc(), meta);
+  it('is one call with a null payload: it only saves the book', () => {
+    const d = doc();
+    const sql = renderSaveOnlySql(d, meta);
+    expect(statement(sql)).toEqual(['select inventory_apply_book(', '  null,', `  $doc$${JSON.stringify(d)}$doc$::jsonb,`, '  false', ');']);
     expect(sql).toContain('-- SAVE ONLY: stores the book; changes no stock items or recipes.');
-    expect(sql).toContain('insert into inventory_recipe_book (id, book, saved_at) values (true, v_doc, now())');
-    expect(sql).toContain('on conflict (id) do update set book = excluded.book, saved_at = excluded.saved_at;');
-    expect(sql).toContain('-- Needs supabase/2026-10-inventory.sql and supabase/2026-10-inventory-addon-scopes.sql.');
+    expect(sql).toContain('-- Needs supabase/2026-10-inventory.sql, supabase/2026-10-inventory-addon-scopes.sql and supabase/2026-10-inventory-apply-book.sql.');
     expect(sql).toContain('-- Saved book: 6 stock items · 2 recipe files (2 items) · 2 add-on options');
-    expect(sql).toContain("raise notice 'inventory seed: book saved (% stock items, % recipe files, % add-on options)',");
-    expect(sql).toContain("jsonb_array_length(v_doc->'stock_items'->'items'), jsonb_array_length(v_doc->'recipe_files'), jsonb_array_length(v_doc->'addon_recipes'->'options');");
-    // Nothing of the seed's other steps.
-    for (const not of ['v_book', 'inventory_items', 'inventory_set_recipe', 'inventory_set_addon_recipe', 'store_settings', 'inventory_batches', '$book$', 'menu_items']) {
+    // Nothing of the seed's other steps, and no payload.
+    for (const not of ['v_book', 'inventory_items', 'inventory_set_recipe', 'inventory_set_addon_recipe', 'store_settings', 'inventory_batches', '$book$', '$seed$', 'menu_items', 'insert into', 'raise ']) {
       expect(sql, not).not.toContain(not);
     }
-    expect(sql.match(/\$seed\$/g)).toHaveLength(2);
     expect(sql.match(/\$doc\$/g)).toHaveLength(2);
-    // The only statements are the declaration, the insert and the notice.
-    expect(sql.match(/^ {2}(insert|update|delete|perform|select|raise)\b/gm)).toEqual(['  insert', '  raise']);
+    expect(sql.endsWith('-- ---------------------------------------------------------------------------\n')).toBe(true);
   });
 
   it('embeds the whole document, drafts, notes and Petpooja files included', () => {
@@ -1144,12 +1178,12 @@ describe('renderSaveOnlySql', () => {
     expect(() => renderSaveOnlySql({ version: 1, stock_items: {}, recipe_files: [], addon_recipes: { options: [] } } as never, meta)).toThrow(/stock_items/);
   });
 
-  it('ends with the DRY RUN exception when dryRun is set, and is otherwise identical', () => {
+  it('passes p_dry_run = true, and says so in the header, when dryRun is set; otherwise it is identical', () => {
     const normal = renderSaveOnlySql(doc(), meta);
     const dry = renderSaveOnlySql(doc(), { ...meta, dryRun: true });
+    expect(normal).not.toContain('DRY RUN');
     expect(dry).toContain('-- DRY RUN: ends by raising an exception so nothing is saved.\n');
-    expect(dry).toContain("raise exception 'DRY RUN OK (nothing was saved): % stock items, % recipe files, % add-on options',");
-    expect(dry).not.toContain('raise notice');
-    expect(dry.replace('-- DRY RUN: ends by raising an exception so nothing is saved.\n', '').replace(/raise exception 'DRY RUN OK \(nothing was saved\): /, "raise notice 'inventory seed: book saved (").replace('add-on options\',', 'add-on options)\',')).toBe(normal);
+    expect(dry).toContain('\n  true\n);\n');
+    expect(dry.replace('-- DRY RUN: ends by raising an exception so nothing is saved.\n', '').replace('\n  true\n);\n', '\n  false\n);\n')).toBe(normal);
   });
 });

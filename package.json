@@ -15,6 +15,7 @@
     "import:petpooja": "tsx scripts/import-petpooja.ts",
     "inventory:check": "tsx scripts/inventory/check.ts",
     "inventory:build": "tsx scripts/inventory/build-seed.ts",
+    "inventory:apply": "node scripts/inventory/apply.mjs",
     "inventory:snapshot": "node scripts/inventory/snapshot-menu.mjs",
     "inventory:pull": "node scripts/inventory/pull.mjs",
     "inventory:import-petpooja": "tsx scripts/inventory/import-petpooja-recipes.ts"

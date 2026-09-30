@@ -1,8 +1,9 @@
 // The recipe book — the inventory setup as data (docs/INVENTORY-RECIPE-BOOK.md).
 // Stock items and every menu item's and add-on's recipe live as JSON in
 // data/inventory/. This file checks that data against the live menu snapshot,
-// compiles it, and renders the one idempotent SQL file that loads it into
-// Supabase (scripts/inventory/*).
+// compiles it, and builds what loads it into Supabase (scripts/inventory/*): the
+// arguments of the database function inventory_apply_book (buildApplyRequest,
+// sent by `npm run inventory:apply`) or the same call as an idempotent SQL file.
 //
 // Pure (no I/O, no clock): the files are read by lib/inventory/recipeBookFs.ts,
 // so every rule here is unit-tested (tests/inventoryRecipeBook.test.ts) and the
@@ -801,18 +802,53 @@ export function bookCounts(doc: BookDocument): BookCounts {
   };
 }
 
-// ── Seed SQL ────────────────────────────────────────────────────────────────
+// ── The apply request and the seed SQL ──────────────────────────────────────
+//
+// The seed's logic lives in the database function inventory_apply_book
+// (supabase/2026-10-inventory-apply-book.sql). Both ways of running it take the
+// same two JSON documents: `npm run inventory:apply` sends them over REST
+// (buildApplyRequest), and <book>/seed.sql is a `select inventory_apply_book(…)`
+// around them (renderSeedSql / renderSaveOnlySql) for the SQL editor and psql.
+
+/** The body of the PostgREST call `POST /rest/v1/rpc/inventory_apply_book`: the
+ * function's three arguments by name. */
+export interface ApplyRequest {
+  /** The compiled book, or null to only save the book. */
+  p_payload: SeedPayload | null;
+  /** The whole book, drafts and notes included. */
+  p_doc: BookDocument;
+  p_dry_run: boolean;
+}
+
+function assertPayloadShape(payload: SeedPayload): void {
+  if (!Array.isArray(payload?.stock_items) || !Array.isArray(payload.recipes) || !Array.isArray(payload.addon_recipes)) {
+    throw new Error('inventory: the seed payload needs stock_items, recipes and addon_recipes lists');
+  }
+}
+
+/**
+ * The arguments of inventory_apply_book, checked for shape: the book document
+ * (`parseBookDocument`) and, unless it is null (save only), the payload's three
+ * lists. Pure. The names, quantities and notes are not judged here:
+ * `validateRecipeBook` does that before anything is compiled.
+ */
+export function buildApplyRequest(payload: SeedPayload | null, doc: BookDocument, { dryRun = false }: { dryRun?: boolean } = {}): ApplyRequest {
+  if (payload !== null) assertPayloadShape(payload);
+  return { p_payload: payload, p_doc: parseBookDocument(doc), p_dry_run: dryRun };
+}
 
 export interface SeedMeta {
   includeDrafts: boolean;
   snapshotCapturedAt: string;
   /** The whole book, saved by step 0 (drafts and notes included). */
   bookDocument: BookDocument;
-  /** End with an exception, so the whole DO block rolls back and nothing is saved. */
+  /** Call the function with p_dry_run, so it ends with an exception and nothing is saved. */
   dryRun?: boolean;
 }
 
-/** The quoting tags of the generated SQL, none of which may appear in the data. */
+/** The quoting tags of the generated SQL, none of which may appear in the data.
+ * `$seed$` belonged to the DO block of earlier seeds; it stays refused so that a
+ * file is never ambiguous with one of them. */
 const QUOTING_TAGS = ['$seed$', '$book$', '$doc$'] as const;
 
 function assertNoQuotingTags(json: string): void {
@@ -826,35 +862,26 @@ function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
-const NEEDS_LINE = '-- Needs supabase/2026-10-inventory.sql and supabase/2026-10-inventory-addon-scopes.sql.';
-
-/** Step 0 of the seed, and the whole of a save-only file. */
-const SAVE_BOOK_STEP = `  -- 0. The book's permanent home (docs/INVENTORY-RECIPE-BOOK.md): drafts and
-  --    notes included, so \`npm run inventory:pull\` can restore it anywhere.
-  insert into inventory_recipe_book (id, book, saved_at) values (true, v_doc, now())
-  on conflict (id) do update set book = excluded.book, saved_at = excluded.saved_at;`;
+const NEEDS_LINE =
+  '-- Needs supabase/2026-10-inventory.sql, supabase/2026-10-inventory-addon-scopes.sql and supabase/2026-10-inventory-apply-book.sql.';
 
 /**
- * One `do` block: all or nothing, safe to re-run. The payload and the book
- * document travel as dollar-quoted JSON literals, so nothing in them needs SQL
+ * One statement: `select inventory_apply_book(<payload>, <book>, <dry run>)`.
+ * The function is one transaction, so it applies completely or not at all, and
+ * it is safe to re-run. The payload and the book document travel as
+ * dollar-quoted JSON literals (compact), so nothing in them needs SQL
  * escaping — but the quoting tags must not appear inside them.
  */
 export function renderSeedSql(payload: SeedPayload, meta: SeedMeta): string {
-  if (!Array.isArray(payload.stock_items) || !Array.isArray(payload.recipes) || !Array.isArray(payload.addon_recipes)) {
-    throw new Error('inventory: the seed payload needs stock_items, recipes and addon_recipes lists');
-  }
-  const doc = parseBookDocument(meta.bookDocument);
-  const json = JSON.stringify(payload, null, 2);
-  const docJson = JSON.stringify(doc);
+  const { p_payload, p_doc } = buildApplyRequest(payload, meta.bookDocument, { dryRun: meta.dryRun });
+  const json = JSON.stringify(p_payload);
+  const docJson = JSON.stringify(p_doc);
   assertNoQuotingTags(json);
   assertNoQuotingTags(docJson);
 
   const c = seedCounts(payload);
-  const b = bookCounts(doc);
+  const b = bookCounts(p_doc);
   const mode = meta.includeDrafts ? 'confirmed + DRAFT recipes (preview/test databases only)' : 'confirmed recipes only';
-  const finish = meta.dryRun
-    ? `raise exception 'DRY RUN OK (nothing was saved): % stock items, % menu-item recipes, % add-on recipes',`
-    : `raise notice 'inventory seed: % stock items, % menu-item recipes, % add-on recipes',`;
 
   return `-- ===========================================================================
 -- GENERATED by \`npm run inventory:build\` from the recipe book — DO NOT EDIT.
@@ -864,107 +891,20 @@ ${meta.dryRun ? '-- DRY RUN: ends by raising an exception so nothing is saved.\n
 -- Saved book: ${b.stockItems} stock items · ${b.recipeFiles} recipe files (${b.recipeEntries} items) · ${b.addonOptions} add-on options — drafts and notes included
 -- Menu snapshot: ${oneLine(meta.snapshotCapturedAt)}
 ${NEEDS_LINE}
--- One DO block: all or nothing. Safe to re-run: the book is saved whole; stock items
--- are matched by name (unit never changed; a par/reorder of 0 in the book leaves
--- the live value alone); each listed recipe is replaced whole; menu items and
--- add-ons not listed here are left as they are.
+-- One statement, one transaction: all or nothing. Safe to re-run: the book is saved
+-- whole; stock items are matched by name (unit never changed; a par/reorder of 0 in
+-- the book leaves the live value alone); each listed recipe is replaced whole; menu
+-- items and add-ons not listed here are left as they are.
+-- Until stock has been received it also turns store_settings.stock_auto_hide off
+-- (auto-hide would hide every recipe item at 0 on hand): switch it back on after the
+-- opening stock is in.
+-- Too large for the SQL editor? \`npm run inventory:apply\` makes the same call over REST.
 -- ===========================================================================
-do $seed$
-declare
-  v_doc   jsonb := $doc$${docJson}$doc$::jsonb;
-  v_book  jsonb := $book$${json}$book$::jsonb;
-  v_bad   text;
-  v_lines jsonb;
-  v_total int;
-  v_found int;
-  r       record;
-begin
-${SAVE_BOOK_STEP}
-
-  -- 1. Before any stock has been received, every recipe would read "0 on hand"
-  --    and auto-hide would pull those items off the live menu (INV-D16) — even
-  --    with the app flag off. Keep it off until the opening stock is in.
-  if not exists (select 1 from inventory_batches) then
-    update store_settings set stock_auto_hide = false where is_singleton and stock_auto_hide;
-  end if;
-
-  -- 2. Units lock once an item is used (INV-D15): never silently change one.
-  select string_agg(format('%s (live %s, book %s)', i.name, i.unit, s.unit), '; ')
-    into v_bad
-    from jsonb_to_recordset(v_book->'stock_items') s(name text, unit text)
-    join inventory_items i on lower(trim(i.name)) = lower(trim(s.name))
-   where i.unit <> s.unit;
-  if v_bad is not null then
-    raise exception 'inventory seed: unit differs from the live stock item: %', v_bad;
-  end if;
-
-  -- 3. Stock items: add new ones, update existing ones (matched by name).
-  insert into inventory_items (name, unit, category, par_level, reorder_qty, tracks_expiry)
-  select trim(s.name), s.unit, s.category, s.par_level, s.reorder_qty, s.tracks_expiry
-    from jsonb_to_recordset(v_book->'stock_items')
-         s(name text, unit text, category text, par_level numeric, reorder_qty numeric, tracks_expiry boolean)
-  on conflict ((lower(trim(name)))) do update
-     set category      = case when excluded.category <> '' then excluded.category else inventory_items.category end,
-         par_level     = case when excluded.par_level > 0 then excluded.par_level else inventory_items.par_level end,
-         reorder_qty   = case when excluded.reorder_qty > 0 then excluded.reorder_qty else inventory_items.reorder_qty end,
-         tracks_expiry = excluded.tracks_expiry,
-         is_active     = true,
-         updated_at    = now();
-
-  -- 4. Every menu item and add-on in the book must exist live (add-on scopes
-  --    name menu items too).
-  select string_agg(format('%s (%s)', x.name, x.id), '; ') into v_bad
-    from jsonb_to_recordset(v_book->'recipes') x(id uuid, name text)
-   where not exists (select 1 from menu_items m where m.id = x.id);
-  if v_bad is not null then
-    raise exception 'inventory seed: menu items not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;
-  end if;
-  select string_agg(format('%s (%s)', x.name, x.id), '; ') into v_bad
-    from jsonb_to_recordset(v_book->'addon_recipes') x(id uuid, name text)
-   where not exists (select 1 from addon_options o where o.id = x.id);
-  if v_bad is not null then
-    raise exception 'inventory seed: add-on options not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;
-  end if;
-  select string_agg(distinct format('%s (%s)', x.name, l.menu_item_id), '; ') into v_bad
-    from jsonb_to_recordset(v_book->'addon_recipes') x(name text, lines jsonb),
-         jsonb_to_recordset(x.lines) l(menu_item_id uuid)
-   where l.menu_item_id is not null
-     and not exists (select 1 from menu_items m where m.id = l.menu_item_id);
-  if v_bad is not null then
-    raise exception 'inventory seed: add-on scopes name menu items not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;
-  end if;
-
-  -- 5. Recipes, through the same functions the POS editor uses.
-  for r in select * from jsonb_to_recordset(v_book->'recipes') x(id uuid, name text, lines jsonb) loop
-    select count(*), count(i.id),
-           coalesce(jsonb_agg(jsonb_build_object('size_label', l.size_label, 'item_id', i.id, 'qty', l.qty))
-                      filter (where i.id is not null), '[]'::jsonb)
-      into v_total, v_found, v_lines
-      from jsonb_to_recordset(r.lines) l(size_label text, ingredient text, qty numeric)
-      left join inventory_items i on lower(trim(i.name)) = lower(trim(l.ingredient));
-    if v_found <> v_total then
-      raise exception 'inventory seed: a line of "%" names a stock item that does not exist', r.name;
-    end if;
-    perform inventory_set_recipe(r.id, null, v_lines);
-  end loop;
-
-  for r in select * from jsonb_to_recordset(v_book->'addon_recipes') x(id uuid, name text, lines jsonb) loop
-    select count(*), count(i.id),
-           coalesce(jsonb_agg(jsonb_build_object('menu_item_id', l.menu_item_id, 'size_label', l.size_label, 'item_id', i.id, 'qty', l.qty))
-                      filter (where i.id is not null), '[]'::jsonb)
-      into v_total, v_found, v_lines
-      from jsonb_to_recordset(r.lines) l(menu_item_id uuid, size_label text, ingredient text, qty numeric)
-      left join inventory_items i on lower(trim(i.name)) = lower(trim(l.ingredient));
-    if v_found <> v_total then
-      raise exception 'inventory seed: a line of "%" names a stock item that does not exist', r.name;
-    end if;
-    perform inventory_set_addon_recipe_scopes(r.id, null, v_lines);
-  end loop;
-
-  ${finish}
-    jsonb_array_length(v_book->'stock_items'), jsonb_array_length(v_book->'recipes'), jsonb_array_length(v_book->'addon_recipes');
-end
-$seed$;
+select inventory_apply_book(
+  $book$${json}$book$::jsonb,
+  $doc$${docJson}$doc$::jsonb,
+  ${meta.dryRun ? 'true' : 'false'}
+);
 
 -- ---------------------------------------------------------------------------
 -- Verify:
@@ -983,23 +923,21 @@ $seed$;
 
 export interface SaveOnlyMeta {
   snapshotCapturedAt: string;
-  /** End with an exception, so nothing is saved. */
+  /** Call the function with p_dry_run, so it ends with an exception and nothing is saved. */
   dryRun?: boolean;
 }
 
 /**
- * The seed's step 0 on its own: one `do` block that saves the book and touches
- * no stock items or recipes. The book is stored as it is — it does not have to
- * pass `validateRecipeBook` — only its shape is checked (`parseBookDocument`).
+ * The seed's step 0 on its own: `select inventory_apply_book(null, <book>, …)`,
+ * which saves the book and touches no stock items or recipes. The book is stored
+ * as it is — it does not have to pass `validateRecipeBook` — only its shape is
+ * checked (`parseBookDocument`).
  */
 export function renderSaveOnlySql(doc: BookDocument, meta: SaveOnlyMeta): string {
-  const parsed = parseBookDocument(doc);
-  const docJson = JSON.stringify(parsed);
+  const { p_doc } = buildApplyRequest(null, doc, { dryRun: meta.dryRun });
+  const docJson = JSON.stringify(p_doc);
   assertNoQuotingTags(docJson);
-  const b = bookCounts(parsed);
-  const finish = meta.dryRun
-    ? `raise exception 'DRY RUN OK (nothing was saved): % stock items, % recipe files, % add-on options',`
-    : `raise notice 'inventory seed: book saved (% stock items, % recipe files, % add-on options)',`;
+  const b = bookCounts(p_doc);
 
   return `-- ===========================================================================
 -- GENERATED by \`npm run inventory:build -- --save-only\` from the recipe book — DO NOT EDIT.
@@ -1008,18 +946,13 @@ export function renderSaveOnlySql(doc: BookDocument, meta: SaveOnlyMeta): string
 ${meta.dryRun ? '-- DRY RUN: ends by raising an exception so nothing is saved.\n' : ''}-- Saved book: ${b.stockItems} stock items · ${b.recipeFiles} recipe files (${b.recipeEntries} items) · ${b.addonOptions} add-on options — drafts and notes included
 -- Menu snapshot: ${oneLine(meta.snapshotCapturedAt)}
 ${NEEDS_LINE}
--- One DO block. Safe to re-run: it replaces the saved book.
+-- One statement. Safe to re-run: it replaces the saved book.
 -- ===========================================================================
-do $seed$
-declare
-  v_doc jsonb := $doc$${docJson}$doc$::jsonb;
-begin
-${SAVE_BOOK_STEP}
-
-  ${finish}
-    jsonb_array_length(v_doc->'stock_items'->'items'), jsonb_array_length(v_doc->'recipe_files'), jsonb_array_length(v_doc->'addon_recipes'->'options');
-end
-$seed$;
+select inventory_apply_book(
+  null,
+  $doc$${docJson}$doc$::jsonb,
+  ${meta.dryRun ? 'true' : 'false'}
+);
 
 -- ---------------------------------------------------------------------------
 -- Verify:
