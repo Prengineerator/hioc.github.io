@@ -407,6 +407,15 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['Discounts (INR)', (d) => d.discountInr],
   ['Settle discounts (INR)', (d) => d.settleDiscountInr],
   ['Net sales (INR)', (d) => d.netSalesInr],
+  // HIOC Ritual (CP-D21), for the accountant. Ritual sales are already inside
+  // Gross sales (the money came in when the Ritual was sold). What a redeemed cup
+  // covered is NOT a discount (it was prepaid), so it sits in its own columns
+  // rather than in Discounts. Always present, zero when unused, so the sheet's
+  // columns never shift with the feature flag.
+  ['HIOC Ritual sales', (d) => d.passSales.count],
+  ['HIOC Ritual sales (INR)', (d) => d.passSales.inr],
+  ['Ritual cups served', (d) => d.passRedemptions.drinks],
+  ['Ritual cups covered (INR)', (d) => d.passRedemptions.inr],
   ['Unpaid orders', (d) => d.unpaidOrders],
   ['Unpaid (INR)', (d) => d.unpaidInr],
   ['Cash received (INR)', (d) => d.received.cash],
