@@ -637,34 +637,34 @@ describe('buildTicketDoc — receipt customer notes', () => {
 });
 
 describe('buildTicketDoc — receipt loyalty points', () => {
-  it('shows a "Points earned" row when present, omits it otherwise', () => {
+  it('shows a "Beanies earned" row when present, omits it otherwise', () => {
     const withPoints = buildTicketDoc(order({ points_earned: 5 }), 'receipt');
-    expect(rowBlocks(withPoints).find((r) => r.left === 'Points earned')?.right).toBe('5');
+    expect(rowBlocks(withPoints).find((r) => r.left === 'Beanies earned')?.right).toBe('5');
 
     const withoutPoints = buildTicketDoc(order({ points_earned: 0 }), 'receipt');
-    expect(allText(withoutPoints)).not.toContain('Points earned');
+    expect(allText(withoutPoints)).not.toContain('Beanies earned');
 
     const nullPoints = buildTicketDoc(order({ points_earned: null }), 'receipt');
-    expect(allText(nullPoints)).not.toContain('Points earned');
+    expect(allText(nullPoints)).not.toContain('Beanies earned');
   });
 
-  it('shows "Points redeemed" only when points were redeemed on this order', () => {
+  it('shows "Beanies redeemed" only when Beanies were redeemed on this order', () => {
     const withRedeemed = buildTicketDoc(order({ points_redeemed: 40 }), 'receipt');
-    expect(rowBlocks(withRedeemed).find((r) => r.left === 'Points redeemed')?.right).toBe('40');
+    expect(rowBlocks(withRedeemed).find((r) => r.left === 'Beanies redeemed')?.right).toBe('40');
 
     const noneRedeemed = buildTicketDoc(order({ points_redeemed: null }), 'receipt');
-    expect(allText(noneRedeemed)).not.toContain('Points redeemed');
+    expect(allText(noneRedeemed)).not.toContain('Beanies redeemed');
   });
 
-  it('shows "Points balance" whenever it is known, even when nothing was earned/redeemed on this order', () => {
+  it('shows "Beanies balance" whenever it is known, even when nothing was earned/redeemed on this order', () => {
     const withBalance = buildTicketDoc(
       order({ points_earned: null, points_redeemed: null, points_balance: 210 }),
       'receipt',
     );
-    expect(rowBlocks(withBalance).find((r) => r.left === 'Points balance')?.right).toBe('210');
+    expect(rowBlocks(withBalance).find((r) => r.left === 'Beanies balance')?.right).toBe('210');
 
     const noBalance = buildTicketDoc(order({ points_balance: null }), 'receipt');
-    expect(allText(noBalance)).not.toContain('Points balance');
+    expect(allText(noBalance)).not.toContain('Beanies balance');
   });
 
   it('shows nothing loyalty-related, and no extra divider, for a guest order with no linked account', () => {
@@ -672,17 +672,17 @@ describe('buildTicketDoc — receipt loyalty points', () => {
       order({ points_earned: null, points_redeemed: null, points_balance: null }),
       'receipt',
     );
-    expect(allText(guest)).not.toContain('Points earned');
-    expect(allText(guest)).not.toContain('Points redeemed');
-    expect(allText(guest)).not.toContain('Points balance');
+    expect(allText(guest)).not.toContain('Beanies earned');
+    expect(allText(guest)).not.toContain('Beanies redeemed');
+    expect(allText(guest)).not.toContain('Beanies balance');
   });
 
   it('groups all present points rows together, behind their own divider, right before the FSSAI footer', () => {
     const withAll = buildTicketDoc(order({ points_earned: 5, points_redeemed: 40, points_balance: 210 }), 'receipt');
     const kinds = withAll.blocks.map((b) => (b.kind === 'row' ? `row:${b.left}` : b.kind));
-    const redeemedIdx = kinds.indexOf('row:Points redeemed');
-    expect(kinds[redeemedIdx + 1]).toBe('row:Points earned');
-    expect(kinds[redeemedIdx + 2]).toBe('row:Points balance');
+    const redeemedIdx = kinds.indexOf('row:Beanies redeemed');
+    expect(kinds[redeemedIdx + 1]).toBe('row:Beanies earned');
+    expect(kinds[redeemedIdx + 2]).toBe('row:Beanies balance');
     expect(kinds[redeemedIdx + 3]).toBe('divider');
     const fssaiIdx = textBlocks(withAll).findIndex((b) => b.text.startsWith('FSSAI'));
     expect(fssaiIdx).toBeGreaterThan(-1);

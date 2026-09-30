@@ -10,6 +10,8 @@
 // money; it does not compute it (POST /api/orders/quote is authoritative, and
 // POST /api/orders re-derives it all again at submit).
 
+import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
+
 /**
  * What the customer lookup (GET /api/customers/lookup) says about a number.
  *
@@ -56,10 +58,10 @@ export interface Feedback {
   text: string;
 }
 
-/** "1 point" / "240 points" — the plural is the only decision here. */
+/** "1 Beanie" / "240 Beanies" — the plural is the only decision here. */
 export function formatPoints(points: number): string {
   const n = Number.isFinite(points) ? Math.max(0, Math.trunc(points)) : 0;
-  return `${n} ${n === 1 ? 'point' : 'points'}`;
+  return beaniesLabel(n);
 }
 
 /**
@@ -75,7 +77,7 @@ export function describeCustomer(lookup: CustomerLookup | null): Feedback | null
   if (!lookup.found) {
     // POS-ACC: placing the order opens the account (POST /api/orders), so the
     // staffer can tell the customer they are earning from this order on.
-    return { ok: false, text: 'New customer — this order opens their HIOC account and earns points.' };
+    return { ok: false, text: `New customer — this order opens their HIOC account and earns ${LOYALTY_UNIT.many}.` };
   }
   const name = lookup.name.trim() || 'Account';
   if (lookup.source === 'account') {
@@ -146,5 +148,5 @@ export function pointsFeedback(result: QuotedDiscount | null | undefined): Feedb
   if (result.ok) {
     return { ok: true, text: `${formatPoints(result.points ?? 0)} — ₹${result.discountInr ?? 0} off` };
   }
-  return { ok: false, text: result.reason ?? 'Those points could not be redeemed.' };
+  return { ok: false, text: result.reason ?? `Those ${LOYALTY_UNIT.many} could not be redeemed.` };
 }

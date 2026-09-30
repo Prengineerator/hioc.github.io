@@ -16,6 +16,7 @@ import { createClient } from '@/lib/supabase';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
+import { LOYALTY_UNIT, beaniesUnit } from '@/lib/loyalty/brand';
 
 // Takeaway + dine-in for Phase-1. Both are pickup-at-counter flows (dine-in
 // just means eating in), so they share the same checkout. 'delivery' stays out
@@ -316,7 +317,7 @@ export function CheckoutForm({
   async function applyPoints() {
     const pts = parseInt(pointsInput, 10);
     if (!Number.isFinite(pts) || pts <= 0) {
-      setPointsError('Enter a valid number of points.');
+      setPointsError(`Enter a valid number of ${LOYALTY_UNIT.many}.`);
       return;
     }
     setPointsBusy(true);
@@ -327,7 +328,7 @@ export function CheckoutForm({
       setPointsError(null);
     } else {
       setPointsApplied(null);
-      setPointsError(data?.points?.reason ?? 'Points could not be redeemed.');
+      setPointsError(data?.points?.reason ?? `${LOYALTY_UNIT.many} could not be redeemed.`);
       await refreshQuote(couponApplied ?? '', 0);
     }
     setPointsBusy(false);
@@ -778,19 +779,19 @@ export function CheckoutForm({
                     <div className="flex items-center gap-1.5">
                       <StarIcon />
                       <label htmlFor="points" className="text-sm font-semibold text-charcoal">
-                        Redeem points
+                        Redeem {LOYALTY_UNIT.many}
                       </label>
                     </div>
                     {balance !== null ? (
                       <span className="rounded-full border border-tan/50 bg-cream px-2 py-0.5 text-xs font-semibold text-tan-dark">
-                        Balance: <span className="font-mono tabular-nums">{balance}</span> pts
+                        Balance: <span className="font-mono tabular-nums">{balance}</span> {beaniesUnit(balance)}
                       </span>
                     ) : null}
                   </div>
                   {pointsApplied ? (
                     <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
                       <span>
-                        <span className="font-mono tabular-nums">{pointsApplied}</span> pts applied · You save{' '}
+                        <span className="font-mono tabular-nums">{pointsApplied}</span> {beaniesUnit(pointsApplied)} applied · You save{' '}
                         <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>
                       </span>
                       <button type="button" onClick={removePoints} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
@@ -843,7 +844,7 @@ export function CheckoutForm({
               <BillRow label={`Coupon (${couponApplied})`} value={-couponDiscountInr} tone="success" />
             ) : null}
             {pointsDiscountInr > 0 ? (
-              <BillRow label={`Points (${pointsApplied} pts)`} value={-pointsDiscountInr} tone="success" />
+              <BillRow label={`${LOYALTY_UNIT.many} redeemed (${pointsApplied})`} value={-pointsDiscountInr} tone="success" />
             ) : null}
             <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
               <span className="font-bold text-charcoal">Total</span>

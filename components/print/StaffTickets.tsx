@@ -18,6 +18,7 @@ import {
 import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
 import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -433,10 +434,10 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
                 customer account (getStaffPrintOrder resolves all three
                 best-effort from the ledger); a guest order leaves them null
                 and none of these rows (or this whole block) render. */}
-            {redeemed > 0 ? <BillRow label="Points redeemed" value={String(redeemed)} /> : null}
-            {points > 0 ? <BillRow label="Points earned" value={String(points)} /> : null}
+            {redeemed > 0 ? <BillRow label={`${LOYALTY_UNIT.many} redeemed`} value={String(redeemed)} /> : null}
+            {points > 0 ? <BillRow label={`${LOYALTY_UNIT.many} earned`} value={String(points)} /> : null}
             {order.points_balance !== null && order.points_balance !== undefined ? (
-              <BillRow label="Points balance" value={String(order.points_balance)} />
+              <BillRow label={`${LOYALTY_UNIT.many} balance`} value={String(order.points_balance)} />
             ) : null}
           </div>
           <Divider />

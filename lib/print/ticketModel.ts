@@ -24,6 +24,7 @@ import {
   formatIstDateShort,
 } from '@/lib/print/labels';
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 
 // Thermal code pages (the ones ESC/POS printers actually ship with) have no
 // ₹ glyph — it prints as a mangled box or a wrong currency sign depending on
@@ -371,13 +372,13 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   // (or the divider around them) print.
   const pointsRows: TicketBlock[] = [];
   if (redeemed > 0) {
-    pointsRows.push({ kind: 'row', left: 'Points redeemed', right: String(redeemed) });
+    pointsRows.push({ kind: 'row', left: `${LOYALTY_UNIT.many} redeemed`, right: String(redeemed) });
   }
   if (points > 0) {
-    pointsRows.push({ kind: 'row', left: 'Points earned', right: String(points) });
+    pointsRows.push({ kind: 'row', left: `${LOYALTY_UNIT.many} earned`, right: String(points) });
   }
   if (order.points_balance !== null && order.points_balance !== undefined) {
-    pointsRows.push({ kind: 'row', left: 'Points balance', right: String(order.points_balance) });
+    pointsRows.push({ kind: 'row', left: `${LOYALTY_UNIT.many} balance`, right: String(order.points_balance) });
   }
   if (pointsRows.length > 0) {
     blocks.push(...pointsRows);

@@ -46,15 +46,15 @@ describe('loyaltyUserIdFor — whose account an order belongs to (D4-3)', () => 
 
 describe('formatPoints', () => {
   it('pluralises', () => {
-    expect(formatPoints(0)).toBe('0 points');
-    expect(formatPoints(1)).toBe('1 point');
-    expect(formatPoints(240)).toBe('240 points');
+    expect(formatPoints(0)).toBe('0 Beanies');
+    expect(formatPoints(1)).toBe('1 Beanie');
+    expect(formatPoints(240)).toBe('240 Beanies');
   });
 
   it('never shows a negative or fractional balance', () => {
-    expect(formatPoints(-5)).toBe('0 points');
-    expect(formatPoints(12.7)).toBe('12 points');
-    expect(formatPoints(Number.NaN)).toBe('0 points');
+    expect(formatPoints(-5)).toBe('0 Beanies');
+    expect(formatPoints(12.7)).toBe('12 Beanies');
+    expect(formatPoints(Number.NaN)).toBe('0 Beanies');
   });
 });
 
@@ -69,7 +69,7 @@ describe('describeCustomer', () => {
         order_count: 3,
         last_order_at: '2026-09-20T10:00:00Z',
       }),
-    ).toEqual({ ok: true, text: 'Asha · 240 points' });
+    ).toEqual({ ok: true, text: 'Asha · 240 Beanies' });
   });
 
   it('stays confirmable when the account has no name saved', () => {
@@ -82,10 +82,10 @@ describe('describeCustomer', () => {
         order_count: 0,
         last_order_at: null,
       })?.text,
-    ).toBe('Account · 0 points');
+    ).toBe('Account · 0 Beanies');
   });
 
-  it('names a no-account order-history match without claiming any points', () => {
+  it('names a no-account order-history match without claiming any Beanies', () => {
     const note = describeCustomer({
       found: true,
       source: 'order_history',
@@ -111,6 +111,7 @@ describe('describeCustomer', () => {
     const note = describeCustomer({ found: false });
     expect(note?.ok).toBe(false);
     expect(note?.text).toContain('opens their HIOC account');
+    expect(note?.text).toContain('earns Beanies');
   });
 
   it('says nothing at all before a lookup has happened', () => {
@@ -218,7 +219,7 @@ describe('hasOrderHistory', () => {
 });
 
 describe('customerChip', () => {
-  it('shows the points balance for a verified account', () => {
+  it('shows the Beanies balance for a verified account', () => {
     expect(
       customerChip({
         found: true,
@@ -228,7 +229,7 @@ describe('customerChip', () => {
         order_count: 3,
         last_order_at: null,
       }),
-    ).toBe('HIOC account · 240 points');
+    ).toBe('HIOC account · 240 Beanies');
   });
 
   it('shows an order count (singular/plural) for an order-history match', () => {
@@ -318,21 +319,21 @@ describe('couponFeedback / pointsFeedback — the server speaks, we render', () 
       ok: false,
       text: 'This coupon has expired',
     });
-    expect(pointsFeedback({ ok: false, reason: 'You only have 40 points available' })).toEqual({
+    expect(pointsFeedback({ ok: false, reason: 'You only have 40 Beanies available' })).toEqual({
       ok: false,
-      text: 'You only have 40 points available',
+      text: 'You only have 40 Beanies available',
     });
   });
 
   it('falls back to a neutral message only when the server gave no reason', () => {
     expect(couponFeedback({ ok: false })?.text).toBe('This coupon is not valid for this order.');
-    expect(pointsFeedback({ ok: false })?.text).toBe('Those points could not be redeemed.');
+    expect(pointsFeedback({ ok: false })?.text).toBe('Those Beanies could not be redeemed.');
   });
 
   it('reports the accepted discount with the amount the server quoted', () => {
     expect(couponFeedback({ ok: true, discountInr: 50 })?.text).toBe('Coupon applied — ₹50 off');
     expect(pointsFeedback({ ok: true, points: 100, discountInr: 10 })?.text).toBe(
-      '100 points — ₹10 off',
+      '100 Beanies — ₹10 off',
     );
   });
 

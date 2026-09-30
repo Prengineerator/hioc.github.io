@@ -177,7 +177,7 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
           <dl className="grid grid-cols-2 gap-y-1 text-sm">
             <Row k="Gross sales" v={inr(t.grossSalesInr)} />
             <Row k="of which GST" v={inr(t.taxInr)} />
-            <Row k="Discounts (coupons, points)" v={inr(t.discountInr)} />
+            <Row k="Discounts (coupons, Beanies)" v={inr(t.discountInr)} />
             <Row k="Settle discounts" v={`− ${inr(t.settleDiscountInr)}`} />
             <Row k="Net sales" v={inr(t.netSalesInr)} strong />
             <Row k="Cancelled / rejected" v={String(t.cancelled)} />

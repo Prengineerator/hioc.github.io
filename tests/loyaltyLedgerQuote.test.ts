@@ -68,13 +68,42 @@ describe('quoteRedemption — knownBalance', () => {
     const quote = await quoteRedemption('user-1', 500, 1000, 200);
     expect(state.balanceCalls).toBe(0);
     expect(quote.ok).toBe(false);
-    expect(quote.reason).toContain('200 points available');
+    expect(quote.reason).toContain('200 Beanies available');
   });
 
   it('a knownBalance of 0 is honored, not treated as "unknown" (falsy-but-valid)', async () => {
     const quote = await quoteRedemption('user-1', 10, 1000, 0);
     expect(state.balanceCalls).toBe(0);
     expect(quote.ok).toBe(false);
-    expect(quote.reason).toContain('0 points available');
+    expect(quote.reason).toContain('0 Beanies available');
+  });
+});
+
+describe('quoteRedemption — reasons speak in Beanies', () => {
+  it('asks a signed-out caller to log in to redeem Beanies', async () => {
+    const quote = await quoteRedemption('', 50, 1000);
+    expect(quote).toMatchObject({ ok: false, reason: 'Log in to redeem Beanies' });
+  });
+
+  it('names the unit when the amount is not a valid count', async () => {
+    const quote = await quoteRedemption('user-1', 0, 1000);
+    expect(quote.reason).toBe('Enter a valid number of Beanies to redeem');
+  });
+
+  it('states the minimum with the right singular/plural', async () => {
+    state.config = { min_redeem_points: 20, inr_per_point: 1, max_redeem_pct: 100 };
+    expect((await quoteRedemption('user-1', 5, 1000)).reason).toBe('Minimum 20 Beanies required to redeem');
+    state.config = { min_redeem_points: 1, inr_per_point: 1, max_redeem_pct: 100 };
+    state.txRows = [{ points: 0 }];
+    expect((await quoteRedemption('user-1', 5, 1000)).reason).toBe('You only have 0 Beanies available');
+    state.txRows = [{ points: 1 }];
+    expect((await quoteRedemption('user-1', 5, 1000)).reason).toBe('You only have 1 Beanie available');
+  });
+
+  it('explains the bill cap without saying "points"', async () => {
+    state.config = { min_redeem_points: 1, inr_per_point: 1, max_redeem_pct: 10 };
+    const quote = await quoteRedemption('user-1', 150, 1000);
+    expect(quote.reason).toBe('Redeeming Beanies is capped at 10% of the bill (₹100)');
+    expect(quote.reason).not.toMatch(/point/i);
   });
 });

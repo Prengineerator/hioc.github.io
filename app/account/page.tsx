@@ -41,7 +41,7 @@ const SECTIONS = [
   {
     href: '/rewards',
     title: 'Rewards',
-    body: 'Your points balance, how to earn, and redeem history.',
+    body: 'Your Beanies balance, how to earn, and redeem history.',
   },
   {
     href: '/account/profile',

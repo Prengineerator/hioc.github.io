@@ -60,6 +60,7 @@ import {
   type QuotedDiscount,
 } from '@/lib/pos/loyalty';
 import { shouldAutofillName } from '@/lib/pos/nameAutofill';
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
@@ -1658,7 +1659,7 @@ export function PosOrderEntry({
             {!isAddMode && cart.length > 0 ? (
               <div className="flex flex-col gap-2 rounded-md border border-line px-3 py-2">
                 <p className="text-xs font-bold uppercase tracking-wide text-muted">
-                  Coupon &amp; points
+                  Coupon &amp; {LOYALTY_UNIT.many}
                 </p>
 
                 <div className="flex gap-2">
@@ -1702,8 +1703,8 @@ export function PosOrderEntry({
                       value={pointsInput}
                       onChange={(e) => setPointsInput(e.target.value.replace(/[^0-9]/g, ''))}
                       inputMode="numeric"
-                      aria-label="Points to redeem"
-                      placeholder="Points to redeem"
+                      aria-label={`${LOYALTY_UNIT.many} to redeem`}
+                      placeholder={`${LOYALTY_UNIT.many} to redeem`}
                       className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan"
                     />
                     {pointsNote ? (
@@ -1715,8 +1716,8 @@ export function PosOrderEntry({
                 ) : (
                   <p className="text-xs text-muted">
                     {customer?.found
-                      ? 'No points on this account yet.'
-                      : 'Add the customer’s phone to use their points.'}
+                      ? `No ${LOYALTY_UNIT.many} on this account yet.`
+                      : `Add the customer’s phone to use their ${LOYALTY_UNIT.many}.`}
                   </p>
                 )}
               </div>
@@ -1993,7 +1994,7 @@ function PosPlacementConfirmation({
 
       {accountCreated ? (
         <p className="mt-1 text-xs font-bold text-green-700">
-          HIOC account opened for this number — points are added once the order is completed.
+          HIOC account opened for this number — {LOYALTY_UNIT.many} are added once the order is completed.
         </p>
       ) : null}
       {note ? <p className="mt-1 text-xs font-bold text-red-700">{note}</p> : null}
