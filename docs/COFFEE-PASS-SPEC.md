@@ -58,7 +58,7 @@ Defaults chosen by the lead. Every number is an owner setting, not a code consta
 | CP-D8 | **Online purchase needs Razorpay.** There is no "reserve a pass, pay at the counter". If the gateway is not configured, `/ritual` says "Buy at the counter" instead of showing Buy. |
 | CP-D9 | **Redemption happens on a normal order.** The request says how many pass drinks to use (`pass_drinks`). The **server** chooses which lines and which passes. It covers the **most expensive eligible units first** and uses the **soonest-expiring pass first**. It stops at the drinks left, the daily cap and the eligible units in the cart. |
 | CP-D10 | **Default use.** On the website the checkout pre-selects the maximum usable, and the customer can lower it. At the POS it starts at **0**, and the staffer asks the customer and taps "Use pass". The staffer is not the pass holder. |
-| CP-D11 | **Money and GST.** GST on a pass is charged **when it is sold**, following the store's GST settings like any item (unless the plan is marked GST-exempt). On a redeemed drink, the **covered amount is taken out of the taxable base**, so tax is never charged twice. A top-up is taxed normally. See §6 worked examples. **The owner must confirm this treatment with their CA (§9 B4).** |
+| CP-D11 | **Money and GST.** GST on a pass is charged **when it is sold**, following the store's GST settings like any item (unless the plan is marked GST-exempt). On a redeemed drink, the **covered amount is taken out of the taxable base**, so tax is never charged twice. A top-up is taxed normally. See §6 worked examples. **Decided by the owner on 30 Sep 2026: 5% GST when a Ritual is sold, 0% on redeemed cups** (§9 B4). |
 | CP-D12 | **The pass is applied first, then coupon, then points.** A coupon is computed on `subtotal − pass cover`. Points apply to what is left after that. Nothing can take the bill below zero. |
 | CP-D13 | **No loyalty points on a pass purchase.** A pass is already the discount. A redeemed drink earns points only on what the customer actually paid. This follows naturally, because points are earned on `total_inr`. |
 | CP-D14 | **Credits return automatically** when an order that used them is rejected, cancelled, expired unpaid, or **fully** refunded, or when a redeemed line is voided. A database trigger does this, so no route can forget. A partial refund returns no drinks. A manager can return one by hand (CP-D16). |
@@ -300,7 +300,7 @@ and `SurfaceLink`.
 | B1 | **Drink value and prices** per plan | ₹150 → ₹750 weekly, ₹900 for 30 days |
 | B2 | **Which drinks are eligible** (Owner → Passes) | none ticked |
 | B3 | **Daily cap** on the Weekly pass ("a coffee a day")? | off |
-| B4 | **GST treatment confirmed with the CA**: charged at sale (CP-D11), or pass marked GST-exempt | charged at sale |
+| B4 | **GST treatment**: charged at sale (CP-D11), or pass marked GST-exempt | **Decided 30 Sep 2026:** 5% at sale (₹750 + ₹38 = ₹788 weekly; ₹900 + ₹45 = ₹945 monthly with the store's exclusive GST), 0% on redeemed cups |
 | B5 | Terms wording on `/ritual` and the refund page (the defaults are CP-D15 and CP-D19) | as built |
 | B6 | Switch the plans to **active**, then set `NEXT_PUBLIC_FLAG_COFFEE_PASS=true` and redeploy | inactive / off |
 
