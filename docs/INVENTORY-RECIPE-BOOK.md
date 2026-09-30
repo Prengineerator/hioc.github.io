@@ -192,7 +192,15 @@ npm run inventory:pull                        # database → book directory (nee
 npm run inventory:snapshot                    # refresh menu-snapshot.json from the live menu
 ```
 
-`inventory:build` refuses to write while `inventory:check` has errors.
+`inventory:build` refuses to write while `inventory:check` has errors. The exception is `--save-only`, which saves the book as it is: the errors are shown as warnings, and only a book of the wrong shape is refused.
+
+The output goes to the git-ignored book directory:
+- `seed.sql`
+- `seed.dry-run.sql`
+- `save-only.sql`
+- `save-only.dry-run.sql`
+
+An `--out` path elsewhere in the repository is refused unless `--force-out` is passed, so that recipe quantities cannot land in a committed file.
 
 ## What the generated SQL does
 

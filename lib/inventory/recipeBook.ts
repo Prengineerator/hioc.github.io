@@ -79,6 +79,19 @@ export interface RecipeFile {
   items: RecipeItemEntry[];
 }
 
+/** An add-on amount that applies to one menu item, or to one size of it. The
+ * most specific scope with lines wins: item + size, then item (all sizes), then
+ * the option's general `lines`. */
+export interface AddonScopeEntry {
+  /** A menu item in the snapshot. */
+  menu_item_id: string;
+  /** The item's name, kept for people to read. */
+  menu_item: string;
+  /** One of the item's size labels exactly, or '' for all its sizes. */
+  size_label: string;
+  lines: RecipeLineEntry[];
+}
+
 export interface AddonRecipeEntry {
   addon_option_id: string;
   group: string;
@@ -86,8 +99,10 @@ export interface AddonRecipeEntry {
   status: RecipeStatus;
   source: RecipeSource;
   notes?: string;
-  /** What one serving the add-on is added to uses. */
+  /** The general recipe: what one serving the add-on is added to uses. */
   lines: RecipeLineEntry[];
+  /** Per-item / per-size amounts that replace `lines` where they apply. */
+  scopes?: AddonScopeEntry[];
 }
 export interface AddonRecipesFile {
   options: AddonRecipeEntry[];
@@ -122,12 +137,110 @@ export interface MenuSnapshot {
   addon_options: SnapshotAddonOption[];
 }
 
+/** The Petpooja importer's own inputs (`petpooja/aliases.json`, `petpooja/materials.json`).
+ * Their shape belongs to the importer; the book only carries them so they are
+ * saved with it. The Petpooja CSV is not part of the book. */
+export interface BookPetpooja {
+  aliases?: unknown;
+  materials?: unknown;
+}
+
 export interface RecipeBook {
   snapshot: MenuSnapshot;
   stockItems: StockItemsFile;
-  /** `path` is relative to data/inventory/ ("recipes/hot.json"), in file-name order. */
+  /** `path` is relative to the book folder ("recipes/hot.json"), in file-name order. */
   recipeFiles: { path: string; file: RecipeFile }[];
   addonRecipes: AddonRecipesFile;
+  /** Absent when the book folder has no petpooja/aliases.json or materials.json. */
+  petpooja?: BookPetpooja;
+}
+
+// ── The book as one document (what the database saves) ──────────────────────
+
+/** Every file of the book, as one JSON document: what `inventory_recipe_book`
+ * stores and `npm run inventory:pull` writes back out. The menu snapshot is not
+ * in it (it is public and committed). */
+export interface BookDocument {
+  version: 1;
+  stock_items: StockItemsFile;
+  /** `path` is relative to the book folder ("recipes/hot.json"). */
+  recipe_files: { path: string; file: RecipeFile }[];
+  addon_recipes: AddonRecipesFile;
+  petpooja?: BookPetpooja;
+}
+
+/** A recipe file's path in the document: one .json file directly in recipes/.
+ * The path is written to disk by `inventory:pull`, so nothing else is accepted. */
+const RECIPE_FILE_PATH = /^recipes\/[^/\\\0]+\.json$/;
+
+/**
+ * The book as its saved document. `extras.petpooja` (else `book.petpooja`) is
+ * included only when it has an aliases or a materials file. The pieces are
+ * shared with the book, not copied.
+ */
+export function toBookDocument(book: RecipeBook, extras: { petpooja?: BookPetpooja } = {}): BookDocument {
+  const doc: BookDocument = {
+    version: 1,
+    stock_items: book.stockItems,
+    recipe_files: book.recipeFiles.map(({ path, file }) => ({ path, file })),
+    addon_recipes: book.addonRecipes,
+  };
+  const source = extras.petpooja ?? book.petpooja;
+  if (source && (source.aliases !== undefined || source.materials !== undefined)) {
+    const petpooja: BookPetpooja = {};
+    if (source.aliases !== undefined) petpooja.aliases = source.aliases;
+    if (source.materials !== undefined) petpooja.materials = source.materials;
+    doc.petpooja = petpooja;
+  }
+  return doc;
+}
+
+/**
+ * Checks that `doc` is a book document — version 1, the three parts in their
+ * shapes, and safe recipe-file paths — and returns it typed. The quantities and
+ * names are not checked here (`validateRecipeBook` does that, against the
+ * snapshot): a saved draft with mistakes must still come back. Throws an Error
+ * that says what is wrong.
+ */
+export function parseBookDocument(doc: unknown): BookDocument {
+  if (!isObject(doc)) throw new Error('inventory: the saved book is not an object');
+  if (doc.version !== 1) throw new Error(`inventory: the saved book is version ${JSON.stringify(doc.version)}, but this tool reads version 1 — update the repo`);
+
+  const stock = doc.stock_items;
+  if (!isObject(stock) || !Array.isArray(stock.items)) throw new Error("inventory: the saved book's `stock_items` must be an object with an `items` list");
+
+  const files = doc.recipe_files;
+  if (!Array.isArray(files)) throw new Error("inventory: the saved book's `recipe_files` must be a list");
+  const seen = new Set<string>();
+  files.forEach((entry: unknown, index: number) => {
+    if (!isObject(entry) || typeof entry.path !== 'string' || !isObject(entry.file)) {
+      throw new Error(`inventory: the saved book's recipe file #${index + 1} must be { path, file }`);
+    }
+    if (!RECIPE_FILE_PATH.test(entry.path)) {
+      throw new Error(`inventory: the saved book's recipe file path ${quote(entry.path)} must look like "recipes/<name>.json"`);
+    }
+    if (seen.has(entry.path)) throw new Error(`inventory: the saved book lists ${entry.path} twice`);
+    seen.add(entry.path);
+  });
+
+  const addons = doc.addon_recipes;
+  if (!isObject(addons) || !Array.isArray(addons.options)) throw new Error("inventory: the saved book's `addon_recipes` must be an object with an `options` list");
+
+  if (doc.petpooja !== undefined && !isObject(doc.petpooja)) throw new Error("inventory: the saved book's `petpooja` must be an object");
+
+  return doc as unknown as BookDocument;
+}
+
+/** The book's files from a saved document (no snapshot: that is committed). */
+export function fromBookDocument(doc: unknown): Omit<RecipeBook, 'snapshot'> {
+  const parsed = parseBookDocument(doc);
+  const book: Omit<RecipeBook, 'snapshot'> = {
+    stockItems: parsed.stock_items,
+    recipeFiles: parsed.recipe_files.map(({ path, file }) => ({ path, file })),
+    addonRecipes: parsed.addon_recipes,
+  };
+  if (parsed.petpooja) book.petpooja = parsed.petpooja;
+  return book;
 }
 
 // ── Validation ──────────────────────────────────────────────────────────────
@@ -417,11 +530,6 @@ export function validateRecipeBook(book: RecipeBook): Validation {
         if (listed[1] !== option.option.trim()) warn(where, `option ${quote(listed[1])} differs from the live name ${quote(option.option)} — renamed? update it`);
       }
       const status = checkStatusAndSource(raw, where);
-      // The contract's per-item / per-size add-on amounts (`scopes`) are not
-      // compiled or loaded yet: refuse them rather than drop them silently.
-      if (Array.isArray(raw.scopes) ? raw.scopes.length > 0 : raw.scopes !== undefined) {
-        error(where, '`scopes` (per-item / per-size amounts) are not supported by these tools yet, so they would be left out of the seed');
-      }
       if (id) {
         if (optionStatus.has(id)) error(where, `addon_option_id is listed twice — first at ${optionWhere.get(id)}`);
         else {
@@ -432,8 +540,57 @@ export function validateRecipeBook(book: RecipeBook): Validation {
 
       const count = raw.lines === undefined ? 0 : checkLines(raw.lines, where, '`lines`');
       if (count > MAX_LINES) error(where, `${count} lines — at most ${MAX_LINES} per add-on`);
-      if (status === 'skip' && count > 0) error(where, 'status is skip, so lines must be empty');
-      if ((status === 'draft' || status === 'confirmed') && count === 0) error(where, `no lines (status is ${status})`);
+
+      // Scopes: amounts for one item, or one size of it, that beat the general lines.
+      let scopeCount = 0;
+      let scopeLineCount = 0;
+      if (raw.scopes !== undefined) {
+        if (!Array.isArray(raw.scopes)) {
+          error(where, '`scopes` must be a list of { menu_item_id, menu_item, size_label, lines }');
+        } else {
+          scopeCount = raw.scopes.length;
+          const seenScopes = new Map<string, string>(); // "item id, size label" → where its first scope is
+          raw.scopes.forEach((rawScope: unknown, scopeIndex: number) => {
+            if (!isObject(rawScope)) return error(`${where} › scope #${scopeIndex + 1}`, 'is not an object');
+            const itemId = typeof rawScope.menu_item_id === 'string' ? rawScope.menu_item_id : '';
+            const scopeItem = snapshotItems.get(itemId);
+            const listedName = typeof rawScope.menu_item === 'string' ? rawScope.menu_item.trim() : '';
+            const sizeLabel = rawScope.size_label;
+            const scopeName = scopeItem?.name ?? (listedName || `#${scopeIndex + 1}`);
+            const scopeWhere = `${where} › scope ${scopeName} › ${typeof sizeLabel === 'string' && sizeLabel !== '' ? sizeLabel : 'all sizes'}`;
+
+            if (!scopeItem) {
+              error(scopeWhere, itemId ? `menu_item_id ${quote(itemId)} is not in the menu snapshot` : 'menu_item_id is missing');
+            } else {
+              if (listedName !== scopeItem.name.trim()) {
+                warn(scopeWhere, `menu_item ${quote(listedName)} differs from the live name ${quote(scopeItem.name)} — renamed? update it`);
+              }
+              if (option && !scopeItem.addon_groups.includes(option.group)) {
+                warn(scopeWhere, `${scopeItem.name} does not offer the add-on group ${quote(option.group)}, so this option can't be ordered on it and the scope never applies`);
+              }
+            }
+            if (typeof sizeLabel !== 'string') {
+              error(scopeWhere, 'size_label must be one of the item\'s size labels, or "" for all its sizes');
+            } else if (sizeLabel !== '' && scopeItem && !scopeItem.sizes.some((s) => s.label === sizeLabel)) {
+              error(scopeWhere, `size_label ${quote(sizeLabel)} is not a size of ${scopeItem.name} (sizes: ${scopeItem.sizes.map((s) => s.label).join(', ')}) — use "" for all sizes`);
+            }
+            if (itemId && typeof sizeLabel === 'string') {
+              const key = `${itemId}\u0000${sizeLabel}`;
+              const first = seenScopes.get(key);
+              if (first) error(scopeWhere, `scope is listed twice for this item and size — first at ${first}`);
+              else seenScopes.set(key, scopeWhere);
+            }
+
+            const lines = checkLines(rawScope.lines, scopeWhere, '`lines`');
+            scopeLineCount += lines;
+            if (Array.isArray(rawScope.lines) && lines === 0) error(scopeWhere, 'scope has no lines — add some or remove the scope');
+            if (lines > MAX_LINES) error(scopeWhere, `${lines} lines — at most ${MAX_LINES} per scope`);
+          });
+        }
+      }
+
+      if (status === 'skip' && (count > 0 || scopeCount > 0)) error(where, 'status is skip, so lines and scopes must be empty');
+      if ((status === 'draft' || status === 'confirmed') && count === 0 && scopeLineCount === 0) error(where, `no lines (status is ${status})`);
     });
   }
 
@@ -496,11 +653,21 @@ export interface SeedRecipe {
   name: string;
   lines: SeedRecipeLine[];
 }
+export interface SeedAddonLine {
+  /** null = the option's general recipe; else the menu item this line is scoped to. */
+  menu_item_id: string | null;
+  /** '' = all sizes of the scoped item (or the general recipe); else that size's label. */
+  size_label: string;
+  ingredient: string;
+  qty: number;
+}
 export interface SeedAddonRecipe {
   id: string;
   /** "Group › Option" */
   name: string;
-  lines: { ingredient: string; qty: number }[];
+  /** General lines first, then scopes: items in snapshot order, an item's
+   * all-sizes scope before its sizes, sizes in snapshot order. */
+  lines: SeedAddonLine[];
 }
 export interface SeedPayload {
   stock_items: SeedStockItem[];
@@ -553,11 +720,24 @@ export function compileRecipeBook(book: RecipeBook, { includeDrafts }: { include
   for (const option of book.snapshot.addon_options) {
     const entry = options.get(option.id);
     if (!entry || !deployed(entry.status)) continue;
-    addonRecipes.push({
-      id: option.id,
-      name: `${option.group} › ${option.option}`,
-      lines: (entry.lines ?? []).map((l) => ({ ingredient: canonical(l.ingredient), qty: l.qty })),
-    });
+    const lines: SeedAddonLine[] = (entry.lines ?? []).map((l) => ({ menu_item_id: null, size_label: '', ingredient: canonical(l.ingredient), qty: l.qty }));
+
+    const scopes = new Map<string, AddonScopeEntry>();
+    for (const scope of entry.scopes ?? []) scopes.set(scopeKey(scope.menu_item_id, scope.size_label), scope);
+    // Walked in snapshot order, so the SQL does not depend on the order they were written in.
+    // A scope is taken out once emitted, so a repeated size label cannot emit it twice.
+    if (scopes.size > 0) {
+      for (const item of book.snapshot.items) {
+        for (const label of ['', ...item.sizes.map((s) => s.label)]) {
+          const key = scopeKey(item.id, label);
+          const scope = scopes.get(key);
+          if (!scope) continue;
+          scopes.delete(key);
+          for (const l of scope.lines) lines.push({ menu_item_id: item.id, size_label: label, ingredient: canonical(l.ingredient), qty: l.qty });
+        }
+      }
+    }
+    addonRecipes.push({ id: option.id, name: `${option.group} › ${option.option}`, lines });
   }
 
   const stockItems: SeedStockItem[] = book.stockItems.items
@@ -574,21 +754,50 @@ export function compileRecipeBook(book: RecipeBook, { includeDrafts }: { include
   return { stock_items: stockItems, recipes, addon_recipes: addonRecipes };
 }
 
+function scopeKey(menuItemId: string, sizeLabel: string): string {
+  return `${menuItemId}\u0000${sizeLabel}`;
+}
+
 export interface SeedCounts {
   stockItems: number;
   recipes: number;
   recipeLines: number;
   addonRecipes: number;
+  /** All add-on lines, general and scoped. */
   addonLines: number;
+  /** Of `addonLines`, the ones inside a per-item / per-size scope. */
+  addonScopedLines: number;
 }
 
 export function seedCounts(payload: SeedPayload): SeedCounts {
+  const addonLines = payload.addon_recipes.flatMap((r) => r.lines);
   return {
     stockItems: payload.stock_items.length,
     recipes: payload.recipes.length,
     recipeLines: payload.recipes.reduce((n, r) => n + r.lines.length, 0),
     addonRecipes: payload.addon_recipes.length,
-    addonLines: payload.addon_recipes.reduce((n, r) => n + r.lines.length, 0),
+    addonLines: addonLines.length,
+    addonScopedLines: addonLines.filter((l) => l.menu_item_id !== null).length,
+  };
+}
+
+/** What the book document holds, for the SQL header and the script's summary. */
+export interface BookCounts {
+  stockItems: number;
+  recipeFiles: number;
+  /** Menu-item recipe entries across all recipe files, whatever their status. */
+  recipeEntries: number;
+  addonOptions: number;
+  petpooja: boolean;
+}
+
+export function bookCounts(doc: BookDocument): BookCounts {
+  return {
+    stockItems: doc.stock_items.items.length,
+    recipeFiles: doc.recipe_files.length,
+    recipeEntries: doc.recipe_files.reduce((n, f) => n + (Array.isArray(f.file.items) ? f.file.items.length : 0), 0),
+    addonOptions: doc.addon_recipes.options.length,
+    petpooja: doc.petpooja !== undefined,
   };
 }
 
@@ -597,44 +806,72 @@ export function seedCounts(payload: SeedPayload): SeedCounts {
 export interface SeedMeta {
   includeDrafts: boolean;
   snapshotCapturedAt: string;
+  /** The whole book, saved by step 0 (drafts and notes included). */
+  bookDocument: BookDocument;
   /** End with an exception, so the whole DO block rolls back and nothing is saved. */
   dryRun?: boolean;
 }
 
+/** The quoting tags of the generated SQL, none of which may appear in the data. */
+const QUOTING_TAGS = ['$seed$', '$book$', '$doc$'] as const;
+
+function assertNoQuotingTags(json: string): void {
+  if (QUOTING_TAGS.some((tag) => json.includes(tag))) {
+    throw new Error(`inventory: a name or note in the recipe book contains ${QUOTING_TAGS.map((t) => `"${t}"`).join(', ')}, which the seed SQL uses as quoting`);
+  }
+}
+
+/** The one-line, comment-safe form of a header value. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+const NEEDS_LINE = '-- Needs supabase/2026-10-inventory.sql and supabase/2026-10-inventory-addon-scopes.sql.';
+
+/** Step 0 of the seed, and the whole of a save-only file. */
+const SAVE_BOOK_STEP = `  -- 0. The book's permanent home (docs/INVENTORY-RECIPE-BOOK.md): drafts and
+  --    notes included, so \`npm run inventory:pull\` can restore it anywhere.
+  insert into inventory_recipe_book (id, book, saved_at) values (true, v_doc, now())
+  on conflict (id) do update set book = excluded.book, saved_at = excluded.saved_at;`;
+
 /**
- * One `do` block: all or nothing, safe to re-run. The payload travels as a
- * dollar-quoted JSON literal, so nothing in it needs SQL escaping — but the
- * quoting tags must not appear inside it.
+ * One `do` block: all or nothing, safe to re-run. The payload and the book
+ * document travel as dollar-quoted JSON literals, so nothing in them needs SQL
+ * escaping — but the quoting tags must not appear inside them.
  */
 export function renderSeedSql(payload: SeedPayload, meta: SeedMeta): string {
   if (!Array.isArray(payload.stock_items) || !Array.isArray(payload.recipes) || !Array.isArray(payload.addon_recipes)) {
     throw new Error('inventory: the seed payload needs stock_items, recipes and addon_recipes lists');
   }
+  const doc = parseBookDocument(meta.bookDocument);
   const json = JSON.stringify(payload, null, 2);
-  if (json.includes('$book$') || json.includes('$seed$')) {
-    throw new Error('inventory: a name in the recipe book contains "$book$" or "$seed$", which the seed SQL uses as quoting');
-  }
+  const docJson = JSON.stringify(doc);
+  assertNoQuotingTags(json);
+  assertNoQuotingTags(docJson);
 
   const c = seedCounts(payload);
+  const b = bookCounts(doc);
   const mode = meta.includeDrafts ? 'confirmed + DRAFT recipes (preview/test databases only)' : 'confirmed recipes only';
-  const captured = meta.snapshotCapturedAt.replace(/\s+/g, ' ').trim();
   const finish = meta.dryRun
     ? `raise exception 'DRY RUN OK (nothing was saved): % stock items, % menu-item recipes, % add-on recipes',`
     : `raise notice 'inventory seed: % stock items, % menu-item recipes, % add-on recipes',`;
 
   return `-- ===========================================================================
--- GENERATED by \`npm run inventory:build\` from data/inventory/ — DO NOT EDIT.
+-- GENERATED by \`npm run inventory:build\` from the recipe book — DO NOT EDIT.
 -- Contract, house defaults and deploy steps: docs/INVENTORY-RECIPE-BOOK.md.
 -- Mode: ${mode}
-${meta.dryRun ? '-- DRY RUN: ends by raising an exception so nothing is saved.\n' : ''}-- Stock items: ${c.stockItems} · Menu-item recipes: ${c.recipes} (${c.recipeLines} lines) · Add-on recipes: ${c.addonRecipes} (${c.addonLines} lines)
--- Menu snapshot: ${captured}
--- Needs supabase/2026-10-inventory.sql. One DO block: all or nothing. Safe to re-run:
--- stock items are matched by name (unit never changed; a par/reorder of 0 in the
--- book leaves the live value alone); each listed recipe is replaced whole;
--- menu items and add-ons not listed here are left as they are.
+${meta.dryRun ? '-- DRY RUN: ends by raising an exception so nothing is saved.\n' : ''}-- Stock items: ${c.stockItems} · Menu-item recipes: ${c.recipes} (${c.recipeLines} lines) · Add-on recipes: ${c.addonRecipes} (${c.addonLines} lines, ${c.addonScopedLines} scoped)
+-- Saved book: ${b.stockItems} stock items · ${b.recipeFiles} recipe files (${b.recipeEntries} items) · ${b.addonOptions} add-on options — drafts and notes included
+-- Menu snapshot: ${oneLine(meta.snapshotCapturedAt)}
+${NEEDS_LINE}
+-- One DO block: all or nothing. Safe to re-run: the book is saved whole; stock items
+-- are matched by name (unit never changed; a par/reorder of 0 in the book leaves
+-- the live value alone); each listed recipe is replaced whole; menu items and
+-- add-ons not listed here are left as they are.
 -- ===========================================================================
 do $seed$
 declare
+  v_doc   jsonb := $doc$${docJson}$doc$::jsonb;
   v_book  jsonb := $book$${json}$book$::jsonb;
   v_bad   text;
   v_lines jsonb;
@@ -642,6 +879,8 @@ declare
   v_found int;
   r       record;
 begin
+${SAVE_BOOK_STEP}
+
   -- 1. Before any stock has been received, every recipe would read "0 on hand"
   --    and auto-hide would pull those items off the live menu (INV-D16) — even
   --    with the app flag off. Keep it off until the opening stock is in.
@@ -672,7 +911,8 @@ begin
          is_active     = true,
          updated_at    = now();
 
-  -- 4. Every menu item and add-on in the book must exist live.
+  -- 4. Every menu item and add-on in the book must exist live (add-on scopes
+  --    name menu items too).
   select string_agg(format('%s (%s)', x.name, x.id), '; ') into v_bad
     from jsonb_to_recordset(v_book->'recipes') x(id uuid, name text)
    where not exists (select 1 from menu_items m where m.id = x.id);
@@ -684,6 +924,14 @@ begin
    where not exists (select 1 from addon_options o where o.id = x.id);
   if v_bad is not null then
     raise exception 'inventory seed: add-on options not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;
+  end if;
+  select string_agg(distinct format('%s (%s)', x.name, l.menu_item_id), '; ') into v_bad
+    from jsonb_to_recordset(v_book->'addon_recipes') x(name text, lines jsonb),
+         jsonb_to_recordset(x.lines) l(menu_item_id uuid)
+   where l.menu_item_id is not null
+     and not exists (select 1 from menu_items m where m.id = l.menu_item_id);
+  if v_bad is not null then
+    raise exception 'inventory seed: add-on scopes name menu items not found live — refresh data/inventory/menu-snapshot.json: %', v_bad;
   end if;
 
   -- 5. Recipes, through the same functions the POS editor uses.
@@ -702,15 +950,15 @@ begin
 
   for r in select * from jsonb_to_recordset(v_book->'addon_recipes') x(id uuid, name text, lines jsonb) loop
     select count(*), count(i.id),
-           coalesce(jsonb_agg(jsonb_build_object('item_id', i.id, 'qty', l.qty))
+           coalesce(jsonb_agg(jsonb_build_object('menu_item_id', l.menu_item_id, 'size_label', l.size_label, 'item_id', i.id, 'qty', l.qty))
                       filter (where i.id is not null), '[]'::jsonb)
       into v_total, v_found, v_lines
-      from jsonb_to_recordset(r.lines) l(ingredient text, qty numeric)
+      from jsonb_to_recordset(r.lines) l(menu_item_id uuid, size_label text, ingredient text, qty numeric)
       left join inventory_items i on lower(trim(i.name)) = lower(trim(l.ingredient));
     if v_found <> v_total then
       raise exception 'inventory seed: a line of "%" names a stock item that does not exist', r.name;
     end if;
-    perform inventory_set_addon_recipe(r.id, null, v_lines);
+    perform inventory_set_addon_recipe_scopes(r.id, null, v_lines);
   end loop;
 
   ${finish}
@@ -720,6 +968,8 @@ $seed$;
 
 -- ---------------------------------------------------------------------------
 -- Verify:
+--   select saved_at, jsonb_array_length(book->'recipe_files') as recipe_files
+--     from inventory_recipe_book;                                       -- the book is saved
 --   select count(*) from inventory_items;                               -- >= ${c.stockItems}
 --   select count(distinct menu_item_id) from recipe_lines;              -- >= ${c.recipes}
 --   select count(distinct addon_option_id) from addon_recipe_lines;     -- >= ${c.addonRecipes}
@@ -727,6 +977,54 @@ $seed$;
 --   select m.name, rl.size_label, i.name, rl.qty, i.unit
 --     from recipe_lines rl join menu_items m on m.id = rl.menu_item_id
 --     join inventory_items i on i.id = rl.item_id order by 1, 2, 3;
+-- ---------------------------------------------------------------------------
+`;
+}
+
+export interface SaveOnlyMeta {
+  snapshotCapturedAt: string;
+  /** End with an exception, so nothing is saved. */
+  dryRun?: boolean;
+}
+
+/**
+ * The seed's step 0 on its own: one `do` block that saves the book and touches
+ * no stock items or recipes. The book is stored as it is — it does not have to
+ * pass `validateRecipeBook` — only its shape is checked (`parseBookDocument`).
+ */
+export function renderSaveOnlySql(doc: BookDocument, meta: SaveOnlyMeta): string {
+  const parsed = parseBookDocument(doc);
+  const docJson = JSON.stringify(parsed);
+  assertNoQuotingTags(docJson);
+  const b = bookCounts(parsed);
+  const finish = meta.dryRun
+    ? `raise exception 'DRY RUN OK (nothing was saved): % stock items, % recipe files, % add-on options',`
+    : `raise notice 'inventory seed: book saved (% stock items, % recipe files, % add-on options)',`;
+
+  return `-- ===========================================================================
+-- GENERATED by \`npm run inventory:build -- --save-only\` from the recipe book — DO NOT EDIT.
+-- SAVE ONLY: stores the book; changes no stock items or recipes.
+-- Contract and deploy steps: docs/INVENTORY-RECIPE-BOOK.md.
+${meta.dryRun ? '-- DRY RUN: ends by raising an exception so nothing is saved.\n' : ''}-- Saved book: ${b.stockItems} stock items · ${b.recipeFiles} recipe files (${b.recipeEntries} items) · ${b.addonOptions} add-on options — drafts and notes included
+-- Menu snapshot: ${oneLine(meta.snapshotCapturedAt)}
+${NEEDS_LINE}
+-- One DO block. Safe to re-run: it replaces the saved book.
+-- ===========================================================================
+do $seed$
+declare
+  v_doc jsonb := $doc$${docJson}$doc$::jsonb;
+begin
+${SAVE_BOOK_STEP}
+
+  ${finish}
+    jsonb_array_length(v_doc->'stock_items'->'items'), jsonb_array_length(v_doc->'recipe_files'), jsonb_array_length(v_doc->'addon_recipes'->'options');
+end
+$seed$;
+
+-- ---------------------------------------------------------------------------
+-- Verify:
+--   select saved_at, jsonb_array_length(book->'recipe_files') as recipe_files
+--     from inventory_recipe_book;
 -- ---------------------------------------------------------------------------
 `;
 }
