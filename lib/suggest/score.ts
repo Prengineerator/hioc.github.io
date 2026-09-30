@@ -65,8 +65,16 @@ export interface ScoredSubject {
 // ---------------------------------------------------------------------------
 // mood term (§4.2): the MEAN over [mood, secondaryMood] of moodFit().
 //
-// moodFit is `mood_fit[m] / 3` when Jev's graded fit is on the row. Rows tagged
-// before Coffey have no mood_fit, and v1's rule for them ("1 if the mood key ∈
+// moodFit is BLENDED when Jev's graded fit is on the row:
+//   (1 − CHARACTER_SHARE)·clamp01(mood_fit[m] / 3) + CHARACTER_SHARE·moodCharacter(m).
+// Why: a mood's top grade can be shared by most of the menu — on the live menu 81
+// of 117 items have `celebrate` fit 3 (a dessert café) — so `mood_fit / 3` alone
+// ties them and the deterministic ranker returns the same three items for every
+// "celebrate" request. moodCharacter is how strongly the item has the trait that
+// DEFINES that feeling (a real treat for celebrate, a hot low-refreshment cup for
+// cosy, …), so it breaks the tie without overriding Jev's grade (COFFEY-SPEC §4.2).
+//
+// Rows tagged before Coffey have no mood_fit, and v1's rule for them ("1 if the mood key ∈
 // moods, plus an all-or-nothing trait bonus") scored a thick Oreo shake exactly
 // like an iced americano for "cool me down" — the 2026-09-29 baseline eval hit
 // 0% on cool and celebrate, and popularity decided every tie. So the legacy fit
@@ -117,10 +125,60 @@ function traitGrade(mood: Mood, traits: MenuItemTraits, profile: TasteProfile | 
   }
 }
 
+/** How much of a graded moodFit comes from the mood's defining traits (§4.2). */
+export const CHARACTER_SHARE = 0.25;
+
+/**
+ * How strongly the item has the trait that DEFINES `mood`, in [0,1] (§4.2). It
+ * reads the v2 fields (0–3 fields as x/3); when any v2 field the mood's formula
+ * needs is null/undefined it falls back to traitGrade, so a partly-tagged row is
+ * still graded rather than scored 0. Exported for tests.
+ */
+export function moodCharacter(mood: Mood, traits: MenuItemTraits, profile: TasteProfile | null = null): number {
+  const { indulgence, novelty, refreshment, intensity } = traits;
+  const hot = traits.temperature === 'hot' ? 1 : 0;
+  switch (mood) {
+    case 'celebrate':
+      if (!isFiniteNumber(indulgence) || !isFiniteNumber(novelty)) break;
+      return clamp01(0.6 * (indulgence / 3) + 0.25 * (novelty / 3) + 0.15 * (traits.kind === 'dessert' ? 1 : 0));
+    case 'comfort':
+      if (!isFiniteNumber(indulgence) || !isFiniteNumber(novelty)) break;
+      return clamp01(
+        0.5 * (indulgence / 3) + 0.3 * (1 - novelty / 3) + 0.2 * (COMFORT_BY_BODY[traits.body] ?? 0),
+      );
+    case 'cosy':
+      if (!isFiniteNumber(refreshment)) break;
+      return clamp01(
+        0.5 * hot + 0.3 * (1 - refreshment / 3) + 0.2 * (hot ? (COSY_BY_BODY[traits.body] ?? 0) : 0),
+      );
+    case 'boost':
+      if (!isFiniteNumber(intensity)) break;
+      return clamp01(0.7 * (BOOST_BY_CAFFEINE[traits.caffeine] ?? 0) + 0.3 * (intensity / 3));
+    case 'focus':
+      return clamp01(traitGrade('focus', traits, profile)); // no v2 dependency
+    case 'unwind':
+      if (!isFiniteNumber(intensity)) break;
+      return clamp01(0.7 * traitGrade('unwind', traits, profile) + 0.3 * (1 - intensity / 3));
+    case 'cool':
+      if (!isFiniteNumber(refreshment)) break;
+      return clamp01(0.7 * (refreshment / 3) + 0.3 * (traits.temperature === 'iced' ? 1 : 0));
+    case 'surprise': {
+      if (!isFiniteNumber(novelty)) break;
+      const known = profile?.topItems.some((t) => t.menu_item_id === traits.menu_item_id) ?? false;
+      return clamp01(0.7 * (novelty / 3) + 0.3 * (known ? 0 : 1));
+    }
+  }
+  return clamp01(traitGrade(mood, traits, profile));
+}
+
 /** How well the item fits ONE feeling, in [0,1] (§4.2). */
 export function moodFit(traits: MenuItemTraits, mood: Mood, profile: TasteProfile | null = null): number {
   const graded = traits.mood_fit?.[mood];
-  if (isFiniteNumber(graded)) return clamp01(graded / 3);
+  if (isFiniteNumber(graded)) {
+    return clamp01(
+      (1 - CHARACTER_SHARE) * clamp01(graded / 3) + CHARACTER_SHARE * moodCharacter(mood, traits, profile),
+    );
+  }
   const member = traits.moods.includes(mood) ? 1 : 0;
   return clamp01(0.5 * member + 0.5 * traitGrade(mood, traits, profile));
 }

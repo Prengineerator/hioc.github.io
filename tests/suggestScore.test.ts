@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { filterCandidates } from '@/lib/suggest/filter';
 import { withInputDefaults } from '@/lib/suggest/inputs';
 import {
+  CHARACTER_SHARE,
   DAYPART_WEIGHT,
   MOOD_WEIGHT,
   NOTE_WEIGHT,
@@ -11,6 +12,7 @@ import {
   RECENT_ITEM_PENALTY,
   buildShortlist,
   daypartScore,
+  moodCharacter,
   moodFit,
   noteAffinity,
   preferenceFits,
@@ -275,33 +277,186 @@ describe('scoreCandidates', () => {
 // ---------------------------------------------------------------------------
 
 describe('moodFit — Jev graded fit', () => {
-  it('is mood_fit[m] / 3 when the row carries it', () => {
-    expect(moodFit(traitsOf({ mood_fit: { cool: 3 } }), 'cool')).toBe(1);
-    expect(moodFit(traitsOf({ mood_fit: { cool: 1.5 } }), 'cool')).toBe(0.5);
+  // These rows carry no v2 fields, so moodCharacter falls back to traitGrade; the
+  // default row is hot, so its 'cool' character is 0 and moodFit is 0.75 · (grade / 3).
+  it('is 0.75 · mood_fit[m] / 3 (+ 0.25 · character) when the row carries it', () => {
+    expect(moodFit(traitsOf({ mood_fit: { cool: 3 } }), 'cool')).toBeCloseTo(0.75, 10);
+    expect(moodFit(traitsOf({ mood_fit: { cool: 1.5 } }), 'cool')).toBeCloseTo(0.375, 10);
     expect(moodFit(traitsOf({ mood_fit: { cool: 0 } }), 'cool')).toBe(0);
-    expect(moodFit(traitsOf({ mood_fit: { cool: 2.4 } }), 'cool')).toBeCloseTo(0.8, 10);
+    expect(moodFit(traitsOf({ mood_fit: { cool: 2.4 } }), 'cool')).toBeCloseTo(0.6, 10);
   });
 
   it('trusts the grade over the legacy `moods` tag and the item\'s own traits', () => {
     // Tagged cool and iced-light, but Jev graded it 0 for cool: the grade wins.
+    // What is left is only the character share (iced + light → traitGrade 1).
     const traits = traitsOf({ moods: ['cool'], temperature: 'iced', body: 'light', mood_fit: { cool: 0 } });
-    expect(moodFit(traits, 'cool')).toBe(0);
+    expect(moodFit(traits, 'cool')).toBeCloseTo(CHARACTER_SHARE * 1, 10);
   });
 
   it('clamps a grade outside 0–3', () => {
-    expect(moodFit(traitsOf({ mood_fit: { cool: 9 } }), 'cool')).toBe(1);
-    expect(moodFit(traitsOf({ mood_fit: { cool: -2 } }), 'cool')).toBe(0);
+    expect(moodFit(traitsOf({ mood_fit: { cool: 9 } }), 'cool')).toBeCloseTo(0.75, 10); // as grade 3
+    expect(moodFit(traitsOf({ mood_fit: { cool: -2 } }), 'cool')).toBe(0); // as grade 0
   });
 
   it('falls back to the graded legacy fit for a mood the row does not grade, even if it grades others', () => {
     const traits = traitsOf({ temperature: 'iced', body: 'light', moods: [], mood_fit: { boost: 3 } });
-    expect(moodFit(traits, 'boost')).toBe(1); // graded
+    expect(moodFit(traits, 'boost')).toBeCloseTo(0.75 + 0.25 * 0.6, 10); // graded; character = traitGrade (medium caffeine)
     expect(moodFit(traits, 'cool')).toBeCloseTo(0.5, 10); // legacy: 0.5·0 + 0.5·1
   });
 
   it('ignores a non-numeric grade', () => {
     const traits = traitsOf({ moods: ['boost'], caffeine: 'high', mood_fit: { boost: Number.NaN } });
     expect(moodFit(traits, 'boost')).toBe(1); // legacy: 0.5·1 + 0.5·1
+  });
+});
+
+describe('moodCharacter — the trait that DEFINES the feeling (§4.2 character tie-break)', () => {
+  const v2 = (over: Partial<MenuItemTraits> = {}) => makeTraitsV2({ menu_item_id: 'x', ...over, sweetness_level: over.sweetness_level ?? 5 });
+
+  it('CHARACTER_SHARE is 0.25', () => {
+    expect(CHARACTER_SHARE).toBe(0.25);
+  });
+
+  it('celebrate: 0.6·indulgence/3 + 0.25·novelty/3 + 0.15·[dessert]', () => {
+    expect(moodCharacter('celebrate', v2({ indulgence: 3, novelty: 2, kind: 'dessert' }))).toBeCloseTo(0.6 + 0.25 * (2 / 3) + 0.15, 10);
+    expect(moodCharacter('celebrate', v2({ indulgence: 2, novelty: 0, kind: 'drink' }))).toBeCloseTo(0.4, 10);
+    expect(moodCharacter('celebrate', v2({ indulgence: 3, novelty: 3, kind: 'dessert' }))).toBeCloseTo(1, 10);
+  });
+
+  it('comfort: 0.5·indulgence/3 + 0.3·(1 − novelty/3) + 0.2·COMFORT_BY_BODY[body]', () => {
+    expect(moodCharacter('comfort', v2({ indulgence: 3, novelty: 0, body: 'rich' }))).toBeCloseTo(1, 10);
+    expect(moodCharacter('comfort', v2({ indulgence: 0, novelty: 3, body: 'light' }))).toBe(0);
+    expect(moodCharacter('comfort', v2({ indulgence: 3, novelty: 3, body: 'medium' }))).toBeCloseTo(0.5 + 0.1, 10);
+  });
+
+  it('cosy: 0.5·[hot] + 0.3·(1 − refreshment/3) + 0.2·(hot ? COSY_BY_BODY[body] : 0)', () => {
+    expect(moodCharacter('cosy', v2({ temperature: 'hot', refreshment: 0, body: 'rich' }))).toBeCloseTo(1, 10);
+    expect(moodCharacter('cosy', v2({ temperature: 'hot', refreshment: 3, body: 'light' }))).toBeCloseTo(0.5 + 0.2 * 0.4, 10);
+    // Cold: neither the heat share nor the body share, only the low-refreshment one.
+    expect(moodCharacter('cosy', v2({ temperature: 'iced', refreshment: 0, body: 'rich' }))).toBeCloseTo(0.3, 10);
+  });
+
+  it('boost: 0.7·BOOST_BY_CAFFEINE[caffeine] + 0.3·intensity/3', () => {
+    expect(moodCharacter('boost', v2({ caffeine: 'high', intensity: 3 }))).toBeCloseTo(1, 10);
+    expect(moodCharacter('boost', v2({ caffeine: 'medium', intensity: 0 }))).toBeCloseTo(0.42, 10);
+    expect(moodCharacter('boost', v2({ caffeine: 'none', intensity: 3 }))).toBeCloseTo(0.3, 10);
+  });
+
+  it('focus is traitGrade, whatever the v2 fields say', () => {
+    const t = v2({ caffeine: 'high', sweetness_level: 1, body: 'medium', intensity: null });
+    expect(moodCharacter('focus', t)).toBeCloseTo(1, 10);
+    expect(moodCharacter('focus', makeTraits({ menu_item_id: 'x', caffeine: 'none' }))).toBe(0);
+  });
+
+  it('unwind: 0.7·traitGrade + 0.3·(1 − intensity/3)', () => {
+    expect(moodCharacter('unwind', v2({ caffeine: 'none', temperature: 'hot', intensity: 0 }))).toBeCloseTo(1, 10);
+    expect(moodCharacter('unwind', v2({ caffeine: 'low', temperature: 'iced', intensity: 3 }))).toBeCloseTo(0.7 * 0.7 * 0.8, 10);
+  });
+
+  it('cool: 0.7·refreshment/3 + 0.3·[iced]', () => {
+    expect(moodCharacter('cool', v2({ refreshment: 3, temperature: 'iced' }))).toBeCloseTo(1, 10);
+    expect(moodCharacter('cool', v2({ refreshment: 3, temperature: 'hot' }))).toBeCloseTo(0.7, 10);
+    expect(moodCharacter('cool', v2({ refreshment: 0, temperature: 'iced' }))).toBeCloseTo(0.3, 10);
+  });
+
+  it('surprise: 0.7·novelty/3 + 0.3·[not one of the customer\'s top items]', () => {
+    const t = v2({ menu_item_id: 'x', novelty: 3 });
+    expect(moodCharacter('surprise', t, null)).toBeCloseTo(1, 10); // a guest: everything is novel
+    const own = fullProfile({ topItems: [{ menu_item_id: 'x', count: 5, lastOrderedAt: '2026-09-01T00:00:00Z' }] });
+    expect(moodCharacter('surprise', t, own)).toBeCloseTo(0.7, 10);
+    const other = fullProfile({ topItems: [{ menu_item_id: 'y', count: 5, lastOrderedAt: '2026-09-01T00:00:00Z' }] });
+    expect(moodCharacter('surprise', t, other)).toBeCloseTo(1, 10);
+  });
+
+  it('falls back to traitGrade when a v2 field the formula needs is missing', () => {
+    // Dessert with no indulgence: traitGrade('celebrate') = 1 for a dessert.
+    const dessert = makeTraits({ menu_item_id: 'x', kind: 'dessert', novelty: 3 });
+    expect(moodCharacter('celebrate', dessert)).toBe(1);
+    // Iced light drink, refreshment null: traitGrade('cool') = 1 (iced, light).
+    const iced = makeTraits({ menu_item_id: 'x', temperature: 'iced', body: 'light', refreshment: null });
+    expect(moodCharacter('cool', iced)).toBe(1);
+    // Comfort needs indulgence AND novelty: one of the two is not enough.
+    const half = makeTraits({ menu_item_id: 'x', body: 'rich', indulgence: 0 });
+    expect(moodCharacter('comfort', half)).toBe(1); // traitGrade: rich body → 1
+    // Boost with no intensity: traitGrade = BOOST_BY_CAFFEINE.
+    expect(moodCharacter('boost', makeTraits({ menu_item_id: 'x', caffeine: 'low' }))).toBeCloseTo(0.3, 10);
+    // Unwind with no intensity: traitGrade = 0.7 · ... (not blended).
+    expect(moodCharacter('unwind', makeTraits({ menu_item_id: 'x', caffeine: 'none', temperature: 'iced' }))).toBeCloseTo(0.8, 10);
+  });
+
+  it('stays in [0,1]', () => {
+    for (const mood of MOODS) {
+      for (const n of [0, 3]) {
+        const t = v2({ indulgence: n, novelty: n, refreshment: n, intensity: n });
+        const c = moodCharacter(mood, t);
+        expect(c, `${mood} ${n}`).toBeGreaterThanOrEqual(0);
+        expect(c, `${mood} ${n}`).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+});
+
+describe('moodFit — graded fit blended with character (§4.2)', () => {
+  const v2 = (over: Partial<MenuItemTraits> = {}) => makeTraitsV2({ menu_item_id: 'x', ...over, sweetness_level: over.sweetness_level ?? 5 });
+
+  it('fit 3 with character 1 gives 1.0', () => {
+    const t = v2({ kind: 'dessert', indulgence: 3, novelty: 3, mood_fit: { celebrate: 3 } });
+    expect(moodCharacter('celebrate', t)).toBeCloseTo(1, 10);
+    expect(moodFit(t, 'celebrate')).toBeCloseTo(1, 10);
+  });
+
+  it('fit 3 with character 0 gives 0.75', () => {
+    const t = v2({ kind: 'drink', indulgence: 0, novelty: 0, mood_fit: { celebrate: 3 } });
+    expect(moodCharacter('celebrate', t)).toBe(0);
+    expect(moodFit(t, 'celebrate')).toBeCloseTo(0.75, 10);
+  });
+
+  it('is (1 − share)·clamp01(fit/3) + share·character in between', () => {
+    const t = v2({ kind: 'drink', indulgence: 2, novelty: 0, mood_fit: { celebrate: 1.5 } });
+    expect(moodFit(t, 'celebrate')).toBeCloseTo(0.75 * 0.5 + 0.25 * 0.4, 10);
+  });
+
+  it('legacy rows (no mood_fit) score exactly as before', () => {
+    // v2 fields present but no grade for the mood: the legacy 0.5·member + 0.5·g(m).
+    const t = v2({ kind: 'dessert', moods: ['celebrate'], indulgence: 0, novelty: 0, mood_fit: {} });
+    expect(moodFit(t, 'celebrate')).toBeCloseTo(0.5 + 0.5 * 1, 10);
+    const drink = v2({ kind: 'drink', moods: [], sweetness_level: 5, mood_fit: undefined });
+    expect(moodFit(drink, 'celebrate')).toBeCloseTo(0.5 * (5 / 10), 10);
+    expect(moodFit(traitsOf({ caffeine: 'high', moods: ['boost'] }), 'boost')).toBeCloseTo(1, 10);
+  });
+});
+
+describe('the character tie-break in the ranking (§4.2)', () => {
+  it('two items at celebrate fit 3: the dessert with indulgence 3 / novelty 2 outscores the drink with indulgence 2 / novelty 0', () => {
+    const inputs = makeInputs({ mood: 'celebrate' });
+    const dessert = makeTraitsV2({
+      menu_item_id: 'z-dessert', sweetness_level: 5, kind: 'dessert', indulgence: 3, novelty: 2, mood_fit: { celebrate: 3 },
+    });
+    const drink = makeTraitsV2({
+      menu_item_id: 'a-drink', sweetness_level: 5, kind: 'drink', indulgence: 2, novelty: 0, mood_fit: { celebrate: 3 },
+    });
+    // The premise: Jev's grade alone ties them.
+    expect(dessert.mood_fit?.celebrate).toBe(drink.mood_fit?.celebrate);
+
+    const scored = scoreCandidates({
+      // The drink's id sorts first, so an id tie-break would pick IT: the dessert
+      // can only win on score.
+      candidates: [
+        { item: makeMenuItem({ id: 'a-drink', name: 'Drink', priceInr: 120 }), traits: drink },
+        { item: makeMenuItem({ id: 'z-dessert', name: 'Dessert', priceInr: 120 }), traits: dessert },
+      ],
+      inputs,
+      profile: null,
+      daypart: 'afternoon',
+      popularity: new Map(),
+      recentItemIds: [],
+    });
+    expect(scored.map((c) => c.menuItemId)).toEqual(['z-dessert', 'a-drink']);
+    const [top, next] = scored;
+    expect(top.score).toBeGreaterThan(next.score);
+    const charDessert = 0.6 + 0.25 * (2 / 3) + 0.15;
+    const charDrink = 0.6 * (2 / 3);
+    expect(top.score - next.score).toBeCloseTo(MOOD_WEIGHT * CHARACTER_SHARE * (charDessert - charDrink), 10);
   });
 });
 
@@ -514,16 +669,21 @@ describe('the mood term in the ranking', () => {
     const s = (t: MenuItemTraits) => scoreOne(t, inputs).score;
     expect(s(both)).toBeGreaterThan(s(one));
     expect(s(one)).toBeGreaterThan(s(neither));
-    // Exactly half way: (1 + 0) / 2 of the mood weight.
-    expect(s(both) - s(one)).toBeCloseTo(MOOD_WEIGHT * 0.5, 10);
-    expect(s(one) - s(neither)).toBeCloseTo(MOOD_WEIGHT * 0.5, 10);
+    // Half way in the grade: (1 + 0) / 2 of the 0.75 grade share of the mood
+    // weight. The character share adds nothing to the gap here — these rows have no
+    // v2 fields, so it is traitGrade of a medium-caffeine hot drink: boost 0.6,
+    // cool 0 — and only shifts every row by the same amount per feeling.
+    // both = (0.9 + 0.75) / 2, one = (0.9 + 0) / 2, neither = (0.15 + 0) / 2.
+    expect(s(both) - s(one)).toBeCloseTo(MOOD_WEIGHT * 0.375, 10);
+    expect(s(one) - s(neither)).toBeCloseTo(MOOD_WEIGHT * 0.375, 10);
   });
 
   it('a single feeling is not averaged with anything', () => {
     const traits = traitsOf({ mood_fit: { boost: 3, cool: 0 } });
     const alone = scoreOne(traits, makeInputs({ mood: 'boost' })).score;
     const paired = scoreOne(traits, makeInputs({ mood: 'boost', secondaryMood: 'cool' })).score;
-    expect(alone - paired).toBeCloseTo(MOOD_WEIGHT * 0.5, 10);
+    // alone: boost 0.9; paired: (0.9 + cool 0) / 2 = 0.45.
+    expect(alone - paired).toBeCloseTo(MOOD_WEIGHT * 0.45, 10);
   });
 
   it('scores a mood-tagged item higher than an otherwise-identical item without the mood', () => {
