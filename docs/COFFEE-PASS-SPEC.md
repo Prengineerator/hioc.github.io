@@ -1,6 +1,6 @@
 # HIOC Ritual: prepaid coffee plans, sold and redeemed on the website and at the POS
 
-**Version:** 1.0 · **Date:** 2026-09-30 · **Status:** approved plan, build in progress
+**Version:** 1.1 · **Date:** 2026-09-30 · **Status:** BUILT behind the flag (as-built notes in §12)
 **Flag:** `NEXT_PUBLIC_FLAG_COFFEE_PASS` (default **off**) · **Migration:** `supabase/2026-10-coffee-pass.sql`
 **Ticket prefix:** `CP-` · **Decision prefix:** `CP-D`
 
@@ -351,3 +351,46 @@ insufficient cases. The migration has run on a clean Postgres 16 with the scenar
 4. **A pass and menu items in one cart** ("buy the pass and have the first coffee now").
 5. **Redeem on items added to a running tab.**
 6. Pass lines in the owner **email digest**.
+
+## 12. As built (v1, 2026-09-30)
+
+Built in four waves: the lead (Opus) planned and reviewed, and Sonnet agents implemented each ticket
+against this spec. Everything is behind `NEXT_PUBLIC_FLAG_COFFEE_PASS` (default off).
+
+| Area | Where |
+|---|---|
+| Migration (verified on Postgres 16 against every repo migration, with a 156-assertion scenario suite and a two-session race) | `supabase/2026-10-coffee-pass.sql` |
+| Rules, brand, server helpers | `lib/passes/{rules,brand,types,server,api,sale,summary,ui,ownerUi}.ts`, `lib/orders/passPricing.ts` |
+| Order pipeline | `app/api/orders/**`, `lib/orders/amend.ts`, `lib/payments/reconcile.ts`, `app/api/customers/lookup`, `app/api/menu`, `lib/reports/reconcile*.ts` |
+| Pass APIs | `app/api/passes/**`, `app/api/owner/passes/**` |
+| Customer | `/ritual` (`app/ritual`, `components/passes/**`), checkout row, bill rows, menu chip, account link, home teaser, legal sections |
+| Counter | `/staff/passes`, the New order Ritual row, settle and payment bill rows, board and KOT exclusions, receipt rows |
+| Owner | `/owner/passes`, report rows and CSV columns |
+
+**Differences from the plan, decided during review:**
+
+- **Pre-fill.** The quote returns `max_usable` so the web checkout can pre-fill the stepper (CP-D10).
+  `lib/payments/gateway.ts` gained `isGatewayConfigured()`.
+- **Void rolled back.** If the amend route loses its version race it un-voids the line. The void
+  trigger then marks the cups spent again, but only the reversal the void made. A cancel's or a
+  refund's reversal is never undone.
+- **No counter fallback for online Ritual purchases.** `POST /api/payments/[orderId]/status` refuses
+  `switch_to_counter` for a pass sale (409). Retry still works.
+- **Sale order shape.** A pass sale is stored as `order_type 'takeaway'`, with an empty pickup label,
+  `pickup_code` null and packaging 0.
+- **Rate limit.** The holder lookup shares the customer lookup's rate-limit key: 120 per 10 minutes
+  across both.
+- **Report CSV** gains four columns after Net sales: Ritual sales, Ritual sales (INR), cups served,
+  and cups covered (INR).
+- **Copy.** Customer-facing copy never says "Coffee Pass" or "pass". It says **HIOC Ritual** and
+  **cups**. Loyalty is **Beanies**.
+
+**Known limits in v1 (backlog):**
+
+- Table-QR orders cannot use a Ritual. The QR pad sends no `items` or `pass_drinks`.
+- The cart drawer's total does not show discounts. This was already true for coupons and Beanies.
+- The owner's eligible-drinks picker has no prices, so it cannot warn when a drink always needs a
+  top-up.
+- The shared `ToggleSwitch` is 24 px tall, below the 44 px tap target. A primitive fix will cover
+  every screen.
+- `GET /api/passes/mine` keeps an abandoned checkout in `pending` for 60 minutes.
