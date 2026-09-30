@@ -12,10 +12,13 @@ export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: { optionId: string } };
 
-// PUT /api/inventory/addon-recipes/[optionId] — replace one add-on's recipe:
-// what an extra shot or an oat-milk swap uses, per serving it is added to.
+// PUT /api/inventory/addon-recipes/[optionId] — replace one add-on's GENERAL
+// recipe: what an extra shot or an oat-milk swap uses, per serving it is added
+// to, on any item. Only the general lines change: the amounts for a specific
+// item or size that the recipe book set (2026-10-inventory-addon-scopes.sql)
+// are left alone, because this editor cannot show them.
 // Same gate as item recipes and the menu: 'menu_edit', on the POS.
-// Body: { lines: [{ itemId, qty }] } — an empty list clears it.
+// Body: { lines: [{ itemId, qty }] } — an empty list clears the general recipe.
 export async function PUT(request: Request, { params }: RouteParams) {
   const gate = await requireInventoryActor();
   if ('response' in gate) return gate.response;

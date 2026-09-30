@@ -28,7 +28,7 @@ function relaunchCandidates(n: string): string[] {
  * sides of every comparison go through this, so quote-character drift
  * between the POS export and the menu snapshot (curly vs straight
  * apostrophe) and stray hyphenation never block an otherwise-exact match. */
-function normalize(s: string): string {
+export function normalize(s: string): string {
   return s
     .toLowerCase()
     .replace(/[’'\-+.`]/g, ' ')

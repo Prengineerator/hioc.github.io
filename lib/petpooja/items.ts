@@ -11,7 +11,7 @@
 // export writes '[N]'.
 const MARKER_RE = / \[n\]$/i;
 
-function extractTrailingParens(s: string): { rest: string; inside: string } {
+export function extractTrailingParens(s: string): { rest: string; inside: string } {
   if (!s.endsWith(')')) return { rest: s, inside: '' };
   let depth = 0;
   for (let i = s.length - 1; i >= 0; i--) {

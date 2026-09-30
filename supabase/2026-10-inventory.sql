@@ -652,9 +652,23 @@ begin
   return v_count;
 end $$;
 
--- Replace an add-on option's recipe (what one extra shot / oat-milk swap uses
--- per serving it is added to).
+-- Replace an add-on option's GENERAL recipe (what one extra shot / oat-milk
+-- swap uses per serving it is added to, whatever it is added to).
 -- p_lines: [{ "item_id": uuid, "qty": number }, ...]
+--
+-- General lines only. supabase/2026-10-inventory-addon-scopes.sql adds a scope
+-- to addon_recipe_lines (menu_item_id, size_label): the recipe book's lines for
+-- one item or one size. The POS editor cannot show those, so saving from it
+-- must leave them alone. This file and that one can be applied again in either
+-- order, so this function has to be right on a database where the scopes
+-- migration has not run yet AND on one where it has: menu_item_id is read
+-- through to_jsonb (a missing key reads as null, i.e. "general", where naming
+-- the column would fail to plan before the migration), the same trick
+-- inventory_refresh_availability uses for hidden_variant_labels. The INSERT
+-- names no scope column, so the defaults apply (menu_item_id null, size_label
+-- ''): a general line, before and after. The scopes file redefines this function
+-- with the column named outright (it exists there): the two behave the same,
+-- so whichever file ran last, an editor save never touches a scoped line.
 create or replace function inventory_set_addon_recipe(p_option_id uuid, p_actor uuid, p_lines jsonb)
 returns integer
 language plpgsql
@@ -667,7 +681,9 @@ begin
   if not found then
     raise exception 'inventory: add-on not found';
   end if;
-  delete from addon_recipe_lines where addon_option_id = p_option_id;
+  delete from addon_recipe_lines l
+   where l.addon_option_id = p_option_id
+     and (to_jsonb(l) ->> 'menu_item_id') is null;
   insert into addon_recipe_lines (addon_option_id, item_id, qty, updated_by)
   select p_option_id, (e->>'item_id')::uuid, (e->>'qty')::numeric, p_actor
     from jsonb_array_elements(coalesce(p_lines, '[]'::jsonb)) e;

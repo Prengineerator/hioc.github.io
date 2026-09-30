@@ -1,0 +1,3088 @@
+{
+  "_comment": "Snapshot of the LIVE menu (Supabase project 'Hioc Coffee'). Recipes in data/inventory/recipes/ must reference these ids and size labels exactly. Refresh with `npm run inventory:snapshot` (needs service-role env) or ask the chef agent. Do not hand-edit.",
+  "captured_at": "2026-09-30T14:40:34.856281+00:00",
+  "items": [
+    {
+      "id": "38093105-1e98-539a-8de4-a25d591d9d21",
+      "name": "Mixed Berry Cheesecake",
+      "category": "Cheesecakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [],
+      "description": "Mixed Berry Cheesecake is a creamy cheesecake topped with a tangy mixed-berry compote."
+    },
+    {
+      "id": "c4401762-0346-5cdd-b9fc-76c8d79270c7",
+      "name": "Mango Cheesecake",
+      "category": "Cheesecakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [],
+      "description": "Mango Cheesecake is a creamy cheesecake topped with ripe, sweet mango."
+    },
+    {
+      "id": "fb7220bf-8264-5c2d-ad3f-1c01fd9ad77a",
+      "name": "Biscoff Cheesecake",
+      "category": "Cheesecakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [],
+      "description": "Biscoff Cheesecake is a creamy cheesecake with a Lotus Biscoff biscuit base and a caramelised Biscoff topping."
+    },
+    {
+      "id": "1fc90f31-a68c-5dd1-9d1f-b7cc7a33f4de",
+      "name": "Oreo Cheesecake",
+      "category": "Cheesecakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [],
+      "description": "Oreo Cheesecake is a creamy cheesecake packed with crushed Oreo cookies on a chocolate-cookie base."
+    },
+    {
+      "id": "45d0e742-6fe6-5f97-b248-051818526783",
+      "name": "Newyork Style Cheesecake",
+      "category": "Cheesecakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [],
+      "description": "New York Style Cheesecake is a classic dense, creamy baked cheesecake on a biscuit base."
+    },
+    {
+      "id": "9ad6f3de-8a49-5108-a69e-390b77802277",
+      "name": "Hioc's Signature Tiramisu",
+      "category": "Cheesecakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [],
+      "description": "Hioc's Signature Tiramisu layers coffee-soaked sponge with light mascarpone cream and a dusting of cocoa."
+    },
+    {
+      "id": "e999c389-d63a-5b41-b53d-1bfc8ebb10ab",
+      "name": "Signature Iced Brew",
+      "category": "Cold Brews",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 175
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Signature Iced Brew is a meticulously brewed cold coffee, steeped for 18-24 hours to extract a rich, smooth flavor. Served over ice, it delivers a refreshingly bold and naturally sweet coffee experience without the bitterness."
+    },
+    {
+      "id": "672bb1a8-90ef-5036-bbd7-932a0020e728",
+      "name": "Vanilla Creme Cold Brew",
+      "category": "Cold Brews",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Yes, For Me",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Vanilla Crème Cold Brew is a smooth, rich cold brew coffee, steeped for 18-24 hours and infused with a hint of vanilla, topped with a creamy, velvety finish for a refreshing and indulgent experience."
+    },
+    {
+      "id": "4f728165-d097-5915-b7ac-07eaad3230ce",
+      "name": "Toffee Nut Cold Brew",
+      "category": "Cold Brews",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Yes, For Me",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Toffee Nut Cold Brew is a smooth, rich cold brew coffee, steeped for 18-24 hours, infused with the sweet flavors of caramel and a hint of hazelnut, topped with a creamy finish for a deliciously nutty and indulgent experience."
+    },
+    {
+      "id": "b71cfccb-8411-529d-a9a2-2d96c3ddfd7e",
+      "name": "Choco Chip Cupcake",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 65
+        }
+      ],
+      "addon_groups": [],
+      "description": "Choco Chip Cupcake is a soft cupcake studded with chocolate chips and topped with chocolate frosting."
+    },
+    {
+      "id": "76fa2c63-0891-50ec-a150-001610c0ebeb",
+      "name": "White Garland Cupcake",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 65
+        }
+      ],
+      "addon_groups": [],
+      "description": "White Garland Cupcake is a red velvet cupcake topped with creamy white chocolate."
+    },
+    {
+      "id": "2af80ea0-0da7-5b73-aa07-675440a2d495",
+      "name": "Oreo Heaven Cupcake",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 80
+        }
+      ],
+      "addon_groups": [],
+      "description": "Oreo Heaven Cupcake is a soft cupcake with crushed Oreo cookies, topped with creamy frosting and Oreo crumbs."
+    },
+    {
+      "id": "b78d7739-5b4b-5c92-8899-31b3fbd4188e",
+      "name": "Choco Truffle Slice",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 125
+        }
+      ],
+      "addon_groups": [],
+      "description": "Choco Truffle Slice is a rich chocolate cake layered with smooth chocolate truffle ganache."
+    },
+    {
+      "id": "67cecf0d-fb45-5667-8700-9448a1c70956",
+      "name": "White Truffle Slice",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 95
+        }
+      ],
+      "addon_groups": [
+        "Yes, For Me"
+      ],
+      "description": "White Truffle Slice is a soft sponge layered with creamy white chocolate truffle."
+    },
+    {
+      "id": "3dfb0931-0bd1-5d85-a927-5f9a0a31f906",
+      "name": "Biscoff Eclair",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 55
+        }
+      ],
+      "addon_groups": [],
+      "description": "Biscoff Éclair is a light choux pastry filled with Biscoff cream and topped with Biscoff spread and crumbs."
+    },
+    {
+      "id": "b7107776-719d-57aa-b4ce-eda4f8c8c47a",
+      "name": "Death By Chocolate Brownie",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles"
+      ],
+      "description": "Death By Chocolate Brownie is a dense, fudgy chocolate brownie loaded with extra chocolate."
+    },
+    {
+      "id": "6d4fcd95-2a9d-5e5b-90b6-69d2a438289f",
+      "name": "Cinnamon Roll",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 65
+        }
+      ],
+      "addon_groups": [],
+      "description": "Cinnamon Roll is a soft, swirled pastry filled with cinnamon sugar and finished with a sweet glaze."
+    },
+    {
+      "id": "ecaefe68-e97a-5e97-8bbe-5f45a3004de2",
+      "name": "Blueberry Blast Slice",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 95
+        }
+      ],
+      "addon_groups": [],
+      "description": "Blueberry Blast Slice is a soft cake slice bursting with sweet blueberry filling and topping."
+    },
+    {
+      "id": "34f85c73-2e63-51d2-8008-74533dc51d0b",
+      "name": "Choco Chunk Soft Cookie",
+      "category": "Cup Cakes",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 95
+        }
+      ],
+      "addon_groups": [],
+      "description": "Choco Chunk Soft Cookie is a thick, chewy cookie loaded with chunks of chocolate."
+    },
+    {
+      "id": "5042d811-d96c-56d8-b53b-6296974778c3",
+      "name": "Garlic Bread Toast",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Dips"
+      ],
+      "description": "Garlic Bread Toast is crisp toasted bread spread with garlic butter, served with your choice of dip."
+    },
+    {
+      "id": "7a673ffa-4d0b-5c52-b054-a46d5dbd651e",
+      "name": "Butter Croissant",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Mini",
+          "price_inr": 65
+        },
+        {
+          "label": "Large",
+          "price_inr": 110
+        }
+      ],
+      "addon_groups": [],
+      "description": "Butter Croissant is a golden, flaky, all-butter croissant, lightly crisp outside and soft inside."
+    },
+    {
+      "id": "e44a902b-cd3a-57c2-891f-8e26549f0af5",
+      "name": "Nutella Almond Croissant",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Mini",
+          "price_inr": 85
+        },
+        {
+          "label": "Large",
+          "price_inr": 155
+        }
+      ],
+      "addon_groups": [],
+      "description": "Nutella Almond Croissant is a flaky croissant filled with Nutella and finished with crunchy almond slivers."
+    },
+    {
+      "id": "9368c670-e5ff-5d54-9320-f0e5189e82da",
+      "name": "Baked Cheese Nachos",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Dips"
+      ],
+      "description": "Baked Cheese Nachos are crunchy tortilla chips baked under melted cheese, served with your choice of dip."
+    },
+    {
+      "id": "c5d8ec6e-17d3-5526-8f1c-10e6aef17a06",
+      "name": "Flaky Almond Croissant",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles"
+      ],
+      "description": "Flaky Almond Croissant is a buttery croissant filled with almond cream and topped with toasted almond flakes."
+    },
+    {
+      "id": "195ed89b-03f0-4548-a592-61e2f2a6dbc4",
+      "name": "Indo-Cottage Sandwich",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "White Bread",
+          "price_inr": 155
+        },
+        {
+          "label": "Focaccia Bread",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [],
+      "description": "Indo-Cottage Sandwich is spiced Indian-style cottage cheese (paneer) on your choice of white bread or focaccia."
+    },
+    {
+      "id": "bf9f2ac0-fbaa-4bd1-9116-f0ca840b2ab2",
+      "name": "Cheesy Mushroom Sandwich",
+      "category": "Eatery",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "White Bread",
+          "price_inr": 145
+        },
+        {
+          "label": "Focaccia Bread",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [],
+      "description": "Cheesy Mushroom Sandwich is sautéed mushrooms and melted cheese on your choice of white bread or focaccia."
+    },
+    {
+      "id": "ca1cf378-9fd9-4ecf-aca5-cf60900810ea",
+      "name": "Water Bottle",
+      "category": "In-store",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "500 ml",
+          "price_inr": 10
+        },
+        {
+          "label": "1000 ml",
+          "price_inr": 20
+        },
+        {
+          "label": "Premium 1000 ml",
+          "price_inr": 50
+        }
+      ],
+      "addon_groups": [],
+      "description": "Packaged drinking water"
+    },
+    {
+      "id": "579e4ab9-f402-5c6c-99ce-9f2d4683c981",
+      "name": "Cinnamon Iced Cappucino",
+      "category": "Monthly Drops",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 180
+        }
+      ],
+      "addon_groups": [],
+      "description": "Cinnamon Iced Cappuccino blends bold espresso and frothy milk over ice with a warm touch of cinnamon."
+    },
+    {
+      "id": "e15fadf8-2a8b-51ce-9213-1cb129206810",
+      "name": "Spiced Orange Blast Iced",
+      "category": "Monthly Drops",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 150
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 170
+        }
+      ],
+      "addon_groups": [],
+      "description": "Spiced Orange Blast is a refreshing iced drink that blends zesty orange with warm spices, bringing a burst of sunshine and comfort in every sip"
+    },
+    {
+      "id": "6fe202ed-aa9a-5533-bb47-be893c3de808",
+      "name": "Strawberry Iced Cappucino",
+      "category": "Monthly Drops",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 175
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [],
+      "description": "Cool down with our signature Strawberry Iced Cappuccino – a dreamy mix of bold espresso and juicy strawberry, crafted with love just for you."
+    },
+    {
+      "id": "55735eec-d169-51c6-b644-563d96194dc6",
+      "name": "Tiramisu Latte",
+      "category": "Monthly Drops",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [],
+      "description": "Tiramisu Latte is a hot espresso latte with the flavours of tiramisu — creamy mascarpone notes and a dusting of cocoa."
+    },
+    {
+      "id": "be790e9b-6e7c-52c2-a6b8-a59515f32623",
+      "name": "Tripple Choco",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 60
+        },
+        {
+          "label": "L",
+          "price_inr": 110
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Triple Choco Waffle is a decadent treat featuring a soft vanilla waffle base, generously topped with creamy milk chocolate and artfully drizzled with rich dark and silky white liquid chocolate for the ultimate chocolate lover's delight."
+    },
+    {
+      "id": "d36ff0fc-1b31-5443-bf09-09730718d3a7",
+      "name": "Choco-Chips",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 65
+        },
+        {
+          "label": "L",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Choco-Chips Waffle is a chocolate lover's dream with a rich chocolate waffle base, topped with smooth milk chocolate, sprinkled with dark and white chocolate chips, and finished with a drizzle of dark chocolate."
+    },
+    {
+      "id": "c4c7a9fa-b903-5f6d-94ee-f00f954432f0",
+      "name": "Dark Fantasy",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 60
+        },
+        {
+          "label": "L",
+          "price_inr": 110
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Dark Fantasy Waffle is an indulgent delight with a rich chocolate waffle base, topped with luscious dark chocolate and sprinkled with crunchy dark chocolate chips for an intense chocolate experience."
+    },
+    {
+      "id": "dc622403-ce78-576a-99b4-513107fdc8dc",
+      "name": "White Garland",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 65
+        },
+        {
+          "label": "L",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "White Garland Waffle is a heavenly creation with a vibrant red velvet waffle base, topped with creamy white chocolate and adorned with delicate white chocolate chips for a perfectly elegant treat."
+    },
+    {
+      "id": "249b79d2-36c9-55d0-9b7c-6c45822ca44e",
+      "name": "Signature Choco",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 55
+        },
+        {
+          "label": "L",
+          "price_inr": 100
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Signature Choco Waffle is a classic indulgence featuring a soft vanilla waffle base, topped with smooth milk chocolate and finished with a rich drizzle of dark chocolate."
+    },
+    {
+      "id": "cae51448-75c4-5c5f-bc88-68272a861a05",
+      "name": "Almond Honey",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 60
+        },
+        {
+          "label": "L",
+          "price_inr": 110
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Almond Honey Waffle is a delightful combination of a soft vanilla and almond waffle base, topped with sweet, golden honey and garnished with crunchy almond slivers for a perfect balance of sweetness and crunch."
+    },
+    {
+      "id": "748d9739-c8a7-54af-be21-d59684ce5d3c",
+      "name": "Black Forest",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 70
+        },
+        {
+          "label": "L",
+          "price_inr": 125
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Black Forest Waffle features a soft vanilla waffle base, topped with rich dark chocolate, sprinkled with dark chocolate chips, and finished with a drizzle of silky white chocolate for a perfect balance of flavors."
+    },
+    {
+      "id": "5131e1d2-1284-556d-8390-1a560dae0f0e",
+      "name": "Oreo-Heaven",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 80
+        },
+        {
+          "label": "L",
+          "price_inr": 135
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Oreo-Heaven Waffle is a dreamy treat with a vanilla and Oreo-infused waffle base, topped with smooth white chocolate, finished with crushed Oreo pieces, and drizzled with rich dark chocolate for the ultimate indulgence."
+    },
+    {
+      "id": "40337109-bd1e-558d-9c22-a0d9f6f55a19",
+      "name": "Cinoffle",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 80
+        },
+        {
+          "label": "L",
+          "price_inr": 135
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Cinoffle Waffle combines a warm vanilla and cinnamon-infused waffle base, topped with smooth white chocolate, garnished with a sprinkle of cinnamon, and finished with a drizzle of rich dark chocolate for a cozy, flavorful treat."
+    },
+    {
+      "id": "15be1217-ead5-5846-a9bd-8276abbc120c",
+      "name": "Krazy Kit-kat",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 80
+        },
+        {
+          "label": "L",
+          "price_inr": 135
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Krazy Kitkat Waffle features a soft vanilla waffle base, topped with smooth milk chocolate, loaded with crunchy KitKat chunks, and finished with a drizzle of creamy milk chocolate for the perfect combination of sweetness and crunch."
+    },
+    {
+      "id": "4a71d039-b9bf-5fcd-a32e-d17ad6d4a7db",
+      "name": "Butterscotch",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 70
+        },
+        {
+          "label": "L",
+          "price_inr": 125
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Butterscotch Waffle is a delightful treat with a soft vanilla waffle base, topped with smooth white chocolate, finished with crunchy caramel bits, and drizzled with rich caramel for a perfect balance of sweetness and texture."
+    },
+    {
+      "id": "18c3e9df-c86d-534b-9c35-3cd7d220274e",
+      "name": "Nutella",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 80
+        },
+        {
+          "label": "L",
+          "price_inr": 135
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Nutella Waffle features a soft vanilla waffle base, topped with creamy Nutella, and finished with a rich drizzle of both dark and milk chocolate for a perfectly indulgent treat."
+    },
+    {
+      "id": "f42d53fc-d07e-5349-9bfa-72bd8ff99c2c",
+      "name": "Nutella-Almond",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 85
+        },
+        {
+          "label": "L",
+          "price_inr": 145
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Nutella-Almond Waffle features a soft vanilla and almond-infused waffle base, topped with creamy Nutella and finished with crunchy almond slivers for a delightful balance of smooth and nutty flavors."
+    },
+    {
+      "id": "d45ad8ff-942f-5f7c-b72c-7357fb414d91",
+      "name": "Nutella-Hazelnut",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "B",
+          "price_inr": 85
+        },
+        {
+          "label": "L",
+          "price_inr": 145
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Nutella-Hazelnut Waffle features a soft vanilla and hazelnut-infused waffle base, topped with creamy Nutella and finished with crunchy hazelnuts for a perfect blend of smooth chocolate and nutty texture."
+    },
+    {
+      "id": "a8e7f035-cd2a-58fd-a107-3ff71f11021c",
+      "name": "Lotus Biscoff Waffle",
+      "category": "Stick Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Biscuit",
+          "price_inr": 85
+        },
+        {
+          "label": "Lolly",
+          "price_inr": 145
+        }
+      ],
+      "addon_groups": [],
+      "description": "Lotus Biscoff Waffle is a soft vanilla waffle topped with Biscoff spread and crushed Lotus Biscoff biscuits."
+    },
+    {
+      "id": "997a0e1b-ce6e-57f6-bd18-4cb1297a35fb",
+      "name": "Signature Cream Stuffed",
+      "category": "Stuffed Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 105
+        }
+      ],
+      "addon_groups": [
+        "Ice Cream Packaging",
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Signature Cream Stuffed is a vanilla waffle filled with vanilla ice cream and finished with a milk chocolate topping."
+    },
+    {
+      "id": "1e194a7f-e1a0-59c4-afcc-4e7f98a4b8b7",
+      "name": "Choco-Chip Stuffed",
+      "category": "Stuffed Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Ice Cream Packaging",
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Choco-Chip Stuffed is a warm waffle stuffed with chocolate and sprinkled with chocolate chips."
+    },
+    {
+      "id": "97d17ad1-fcc8-54d5-a7b1-56a76eb51b8e",
+      "name": "Devils Own Stuffed",
+      "category": "Stuffed Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 130
+        }
+      ],
+      "addon_groups": [
+        "Ice Cream Packaging",
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Devils Own Stuffed is a chocolate waffle filled with chocolate ice cream, topped with dark and milk chocolate and a crunch of chocolate chips."
+    },
+    {
+      "id": "e1867ee3-3273-5dfd-8afe-eac9ded3810e",
+      "name": "Nutella Stuffed",
+      "category": "Stuffed Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 155
+        }
+      ],
+      "addon_groups": [
+        "Ice Cream Packaging",
+        "Add On Waffles",
+        "Base- Add On"
+      ],
+      "description": "Nutella Stuffed is a warm waffle stuffed with creamy Nutella."
+    },
+    {
+      "id": "b8d80339-e92d-5327-916b-1547135f5fd4",
+      "name": "Biscoff Stuffed",
+      "category": "Stuffed Waffles",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 155
+        }
+      ],
+      "addon_groups": [
+        "Ice Cream Packaging",
+        "Add On Waffles",
+        "Base- Add On"
+      ],
+      "description": "Biscoff Stuffed is a warm waffle stuffed with creamy Biscoff spread and finished with Biscoff crumbs."
+    },
+    {
+      "id": "c2d5a340-9af4-5194-8902-6b8e3306cdab",
+      "name": "90's Sundae",
+      "category": "Sundae",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 115
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 130
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On"
+      ],
+      "description": "90's Sundae is vanilla ice cream topped with chopped vanilla waffle, milk chocolate and dark chocolate chips, garnished with dark chocolate."
+    },
+    {
+      "id": "209a2c0d-f01c-52b8-8098-546102be0971",
+      "name": "Devil's Fantasy",
+      "category": "Sundae",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 135
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 150
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On"
+      ],
+      "description": "Devil's Fantasy is chocolate ice cream with a dark chocolate topping and dark chocolate chips."
+    },
+    {
+      "id": "c7d39e7f-16cb-54ec-a702-d239fc411ab5",
+      "name": "Tripple Choco Chips",
+      "category": "Waffle Chips",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 45
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Tripple Choco Chips are crisp waffle chips topped with milk chocolate and drizzled with dark and white chocolate."
+    },
+    {
+      "id": "90c15567-0b9e-5e68-a88a-082a8888ae4e",
+      "name": "Choco-Chip Chips",
+      "category": "Waffle Chips",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 55
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Choco-Chip Chips are crisp waffle chips topped with milk chocolate and dark and white chocolate chips."
+    },
+    {
+      "id": "e49a16df-62cd-5ee9-8ce1-823b56c23934",
+      "name": "Black Forest Chips",
+      "category": "Waffle Chips",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 60
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Black Forest Chips are crisp waffle chips topped with rich dark chocolate, dark chocolate chips and a drizzle of white chocolate."
+    },
+    {
+      "id": "5d5943b1-7364-50aa-8863-34ff94a2e2d3",
+      "name": "Valentino Chips",
+      "category": "Waffle Chips",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 65
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Valentino Chips are crisp red velvet waffle chips with a white chocolate drizzle and white chocolate chips."
+    },
+    {
+      "id": "b00c3c01-97d0-5cd6-837a-62da3eaaa625",
+      "name": "Crumble Chips",
+      "category": "Waffle Chips",
+      "parent_category": "",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 70
+        }
+      ],
+      "addon_groups": [
+        "Add On Waffles",
+        "Base- Add On",
+        "Whipped Cream_add"
+      ],
+      "description": "Crumble Chips are crisp waffle chips topped with chocolate and crunchy cookie crumble."
+    },
+    {
+      "id": "1af9bf90-8cf9-5a52-be1a-7ee64c853d32",
+      "name": "Hioc's Signature Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Hioc Signature Crème is a velvety, creamy cold coffee crafted from our bold Signature Espresso."
+    },
+    {
+      "id": "233ee806-30a4-5de5-bd5c-0cdfeda68edc",
+      "name": "Hazelnut Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 200
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 225
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Hazelnut Crème is a velvety, creamy cold coffee infused with the rich flavor of roasted hazelnuts, topped with a smooth, creamy whip."
+    },
+    {
+      "id": "01f78b80-e545-5814-b50d-34b84d650d63",
+      "name": "Caramel Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 200
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 225
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Caramel Crème is a rich, creamy cold coffee blended with sweet caramel, topped with a smooth, creamy whip."
+    },
+    {
+      "id": "91c95277-9b4c-550d-9918-43e3279567ff",
+      "name": "Mocha Chip Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 230
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 270
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Chocochip Crème is a indulgent cold coffee with a perfect blend of chocolate chips, finished with a creamy, smooth whip."
+    },
+    {
+      "id": "badf3141-306c-5e55-893d-82fa8619b6a4",
+      "name": "Caramel Chip Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 245
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 280
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Caramel Chip Crème is a delicious cold coffee with a perfect mix of caramel and crunchy caramel chips, topped with a creamy, smooth whip."
+    },
+    {
+      "id": "dfaad0d0-f894-5fb6-b939-1614b2ab095f",
+      "name": "Cookie Crumble Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 245
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 280
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Cookie Crème is a dreamy cold coffee, infused with crushed cookies for a sweet, crunchy texture, and topped with a generous swirl of velvety, creamy whip."
+    },
+    {
+      "id": "707b512a-23b8-5f11-b6c5-852f1440e5e6",
+      "name": "Lotus Biscoff Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 280
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 310
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Lotus Biscoff Crème is a rich cold coffee infused with the distinctive flavor of Lotus Biscoff biscuits, topped with a smooth, creamy whip for the perfect indulgence."
+    },
+    {
+      "id": "c3ebd4ab-b29d-5864-a65f-aeef5e75057e",
+      "name": "Rose Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 200
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 225
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Rose Crème is a delicate cold coffee infused with the subtle floral essence of rose, topped with a silky, creamy whip for a refreshing and elegant treat."
+    },
+    {
+      "id": "23756787-4f76-5c04-b165-5a9d557ca06d",
+      "name": "Brookie Creme",
+      "category": "Creme Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 275
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 305
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Yes, For Me",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_choose"
+      ],
+      "description": "Brookie Crème is a luscious cold coffee blended with the perfect mix of brownie and cookie crumbles, topped with a creamy, smooth whip for a rich, indulgent experience."
+    },
+    {
+      "id": "980e1bf4-1c43-595f-86eb-6f4e28806a44",
+      "name": "Blueberry Cheesecake Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 220
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 245
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Blueberry Cheesecake Crème is a rich, creamy blend with the tangy sweetness of blueberry cheesecake, finished with a smooth, velvety whip for the ultimate indulgence."
+    },
+    {
+      "id": "a7018a27-9df6-5c8a-8f85-fc3030d98f16",
+      "name": "Strawberry Cheesecake Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 215
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 240
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Strawberry Cheesecake Crème is a creamy, indulgent blend with the sweet and tangy flavors of strawberry cheesecake, topped with a smooth, velvety whip for a luscious treat."
+    },
+    {
+      "id": "a97a21d8-6530-5fad-83a2-8e791fb692ce",
+      "name": "Fruity Strawberry Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Strawberry Crème is a creamy cold drink infused with the fresh, sweet flavor of strawberries, topped with a smooth, velvety whip for a refreshing indulgence.\""
+    },
+    {
+      "id": "62869eb0-9080-5867-a363-d50b216fb01e",
+      "name": "Fruity Mango Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Mango Crème is a rich, creamy blend with the tropical sweetness of ripe mangoes, topped with a smooth, velvety whip for a refreshing and indulgent treat."
+    },
+    {
+      "id": "0d34483d-4697-5f4d-a1ed-7a1bcfe74575",
+      "name": "Oreo Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Oreo Crème is a rich, velvety blend of crushed Oreo cookies and decadent chocolate, creating a creamy, irresistible treat."
+    },
+    {
+      "id": "d15ca93e-96d7-5cd2-8fac-c8994a2e71bd",
+      "name": "Signature Chocolate Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 175
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Signature Chocolate Crème is a luxurious, creamy blend of rich chocolate, creating the perfect indulgent treat."
+    },
+    {
+      "id": "f7d1a343-e449-5537-94e9-f50da014ef90",
+      "name": "Krazy Kitkat Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 195
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 225
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Krazy Kitkat Crème is a fun, creamy blend with crunchy KitKat pieces and smooth chocolate, delivering an irresistible, indulgent treat."
+    },
+    {
+      "id": "d3541394-10ce-5ad8-96f5-e90c5b575903",
+      "name": "Matcha Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 225
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 250
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Matcha Crème is a velvety, creamy blend of finely ground green tea leaves, offering a rich, earthy flavor balanced with a smooth, indulgent texture for a refreshing and unique treat."
+    },
+    {
+      "id": "8359091c-8876-5b64-84b4-17cb11b392c2",
+      "name": "Minion Creme (Nutella-Banana)",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 205
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 235
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Minion Crème is a playful, creamy blend of rich Nutella and sweet banana, creating a deliciously smooth treat that's both indulgent and fun."
+    },
+    {
+      "id": "06b169ba-5220-5b18-93f8-2fe38f170a3e",
+      "name": "White Garland Creme",
+      "category": "Creme Non-Coffee",
+      "parent_category": "Creme",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 205
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 235
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "White Garland Crème is a creamy red velvet shake."
+    },
+    {
+      "id": "3dd077ea-b036-58f0-9a3b-dab3746e894c",
+      "name": "Espresso",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 70
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 105
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Espresso is a meticulously extracted, full-bodied coffee with a rich crema, delivering an intense aroma, deep complexity, and a smooth, lingering finish."
+    },
+    {
+      "id": "fe41487c-d443-5467-9007-fa4f1a292be6",
+      "name": "Americano",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 100
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "An Americano is a smooth and balanced coffee, made by blending rich espresso with hot water for a bold yet mellow flavor."
+    },
+    {
+      "id": "1e25a1e5-beaf-5603-9774-b742a56c75a2",
+      "name": "Long Black",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 100
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 115
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Long Black is a rich and aromatic coffee, made by pouring smooth espresso over hot water to preserve its crema and bold flavor."
+    },
+    {
+      "id": "0b2c8ba9-5d0f-5738-91f6-a7f59a49e82f",
+      "name": "Macchiato",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 110
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 125
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A macchiato is a bold espresso lightly marked with a touch of velvety milk, delivering a rich, intense flavor with a smooth finish. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "0b5dfda3-043c-5880-bb2a-c68508da02f8",
+      "name": "Cappucino",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 120
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 145
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Cappucino is a harmonious blend of rich espresso, velvety steamed milk, and silky micro-foam for a perfectly balanced indulgence. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "0b398e3e-a5b6-5e22-97f3-4a9852293ba2",
+      "name": "Latte",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 140
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 160
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Latte is a luxurious blend of rich espresso and velvety steamed milk, topped with a silky microfoam for a smooth, balanced taste. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "f10da810-119d-5015-b6a4-83751c3dedd2",
+      "name": "Signature Mocha",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 145
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 175
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Signature Mocha is a decadent blend of rich espresso, velvety steamed milk, and luxurious chocolate, topped with a silky layer of foam for a perfect balance of sweetness and depth. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "fe0ca015-9a8e-5cd2-bd1b-c4f0db7b4787",
+      "name": "Flat White",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Flat White is a meticulously crafted coffee with a rich espresso base, seamlessly blended with velvety microfoam for a smooth, intense flavor experience. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "dd1b2f19-315f-5178-b3a2-17ed49ea0bf8",
+      "name": "Vietnamese Latte",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Vietnamese Latte is a rich and indulgent blend of robust espresso, sweetened condensed milk, and velvety steamed milk, offering a perfect harmony of creamy sweetness and bold flavor. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "37bf6600-5d07-5fa9-8a54-0e2c88bbdd03",
+      "name": "Lotus Biscoff Latte",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 180
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Lotus Biscoff Latte with spread is a decadent fusion of smooth espresso, creamy steamed milk, and a generous swirl of Biscoff spread, topped with crushed cookies for an irresistible, indulgent experience. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "94c5bb54-ea27-57e8-8d7f-67f177600e8e",
+      "name": "Honey Cinnamon",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Honey Cinnamon Latte blends rich espresso with velvety steamed milk, enhanced by the warmth of honey and a sprinkle of aromatic cinnamon for a comforting, sweet-spiced treat. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "ccadd141-90c7-5f9e-bf16-0527fe847bc4",
+      "name": "Rose Latte",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Rose Latte is a delicate fusion of smooth espresso, steamed milk, and aromatic rose syrup, creating a fragrant and subtly floral flavor experience. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "bf7f32a3-5801-54b1-ad09-da08b45fc57c",
+      "name": "White Mocha",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A White Mocha is a luxurious blend of rich espresso, velvety steamed milk, and sweet white chocolate, creating a creamy and indulgent coffee experience. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "9486c7b3-8f4d-5feb-b4c3-a7b137b23b1a",
+      "name": "Nutella Mocha",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 145
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 175
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Add On Condiments",
+        "Add A Slider"
+      ],
+      "description": "A Nutella Mocha is a decadent blend of rich espresso, velvety steamed milk, Nutella Spread, topped with a silky layer of foam for a perfect balance of sweetness and depth. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "eec6b983-0d81-5530-a972-54a30d9273ff",
+      "name": "Affogato",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 120
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 145
+        }
+      ],
+      "addon_groups": [],
+      "description": "Affogato is a shot of hot espresso poured over a scoop of vanilla ice cream — bittersweet, creamy and indulgent."
+    },
+    {
+      "id": "a99b65e6-eb86-4f6a-92e8-a87fcf1fcb7d",
+      "name": "Hot Chocolate + Mocha Combo",
+      "category": "Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Regular",
+          "price_inr": 270
+        }
+      ],
+      "addon_groups": [],
+      "description": "Our Signature Hot Chocolate and Signature Mocha together as a combo — 10% off (₹300 → ₹270)."
+    },
+    {
+      "id": "79a02128-f81c-5615-9db7-bfd6a98eb873",
+      "name": "Matcha Latte",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Matcha Latte combines finely ground matcha green tea with smooth steamed milk, offering a vibrant, earthy flavor and a creamy, soothing finish. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "e784a84a-7fac-58a9-afc4-84cc28d4165c",
+      "name": "Chai Latte",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 140
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 160
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Chai Latte is a warming blend of spiced chai tea and creamy steamed milk, offering a perfect balance of bold spices and smooth, comforting flavor. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "a4fd6d6f-bcfb-5e7a-bc34-5317e15676c7",
+      "name": "Pistachio Latte",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Pistachio Latte is a creamy blend of steamed milk and pistachio syrup, offering a smooth, nutty flavor with a rich, indulgent finish. Note: Please be aware that micro-foam may not retain its texture as effectively during transit in a sealed takeaway cup. The delicate foam, created by incorporating air, can gradually dissipate over time."
+    },
+    {
+      "id": "145e4b28-3a3c-581d-962a-7e46178e57d7",
+      "name": "Signature Hot Chocolate",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Hot Chocolate",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Signature Hot Chocolate is a rich and indulgent blend of smooth milk and premium chocolate, topped with velvety foam for a comforting, luxurious treat."
+    },
+    {
+      "id": "dc447588-fcea-557e-9325-dac7ed3e3667",
+      "name": "Hazelnut Hot Chocolate",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [
+        "ADD ON Milk",
+        "Add On Syrup",
+        "Hot Chocolate",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "A Hazelnut Hot Chocolate is a luxurious blend of rich chocolate, creamy milk, and the sweet, nutty crunch of Hazelnuts, creating a comforting and indulgent treat."
+    },
+    {
+      "id": "6863df71-8f1a-56d9-888f-b62a74771a7e",
+      "name": "Ginger Orange Honey Tea",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 75
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 95
+        },
+        {
+          "label": "Mini(For Store)",
+          "price_inr": 40
+        }
+      ],
+      "addon_groups": [
+        "Add A Slider"
+      ],
+      "description": "Ginger Orange Honey Tea is a warming, spicy orange-and-ginger drink sweetened with honey, served with a tea bag on top."
+    },
+    {
+      "id": "0a81ba65-bd20-51c7-bca5-09bf10a51248",
+      "name": "Cinnamon Hot Chocolate",
+      "category": "Hot Non-Coffee",
+      "parent_category": "Hot",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [],
+      "description": "Cinnamon Hot Chocolate is our rich hot chocolate warmed with aromatic cinnamon for a cosy, spiced treat."
+    },
+    {
+      "id": "f1828980-8045-5908-9c78-7cfea73cdd15",
+      "name": "On The Rocks",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 130
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 150
+        }
+      ],
+      "addon_groups": [
+        "Specialized Brews",
+        "Specialized Brews(on The Rocks)",
+        "Sugar",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "On the Rocks Espresso is a bold and smooth coffee served over chilled cubes for a crisp and invigorating experience."
+    },
+    {
+      "id": "df78b99a-ef7d-58ae-9c7f-b6a6bc65bbb2",
+      "name": "Americano Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 175
+        }
+      ],
+      "addon_groups": [
+        "Specialized Brews",
+        "Sugar",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Iced Americano is a classic espresso blended with chilled water, delivering a refreshing and light coffee flavor with a cooling edge."
+    },
+    {
+      "id": "32a41b58-fb6e-51c5-bb5f-8aa53d65f22d",
+      "name": "Long Black Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 175
+        }
+      ],
+      "addon_groups": [
+        "Specialized Brews",
+        "Sugar",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Iced Long Black is a rich and full-bodied coffee combined with chilled water, offering a robust and refreshing drink."
+    },
+    {
+      "id": "754498a2-fe7e-5c4c-a2e9-b3f868b7592f",
+      "name": "Cappucino Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 185
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Iced Cappuccino blends velvety espresso with frothy milk and a cool layer of ice, creating a creamy twist on the classic cappuccino."
+    },
+    {
+      "id": "fe5ee148-2d0f-52c4-9398-7c4e5bee6dee",
+      "name": "Latte Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 175
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 195
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Iced Latte is a smooth espresso paired with creamy chilled milk and complemented by ice for a perfectly balanced coffee."
+    },
+    {
+      "id": "cef3e25c-3466-5405-97fe-c0cd7f0d09f0",
+      "name": "Vietnamese Latte Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 190
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 220
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Iced Vietnamese Latte combines bold espresso with sweet condensed milk, finished with a touch of ice for a creamy and indulgent treat."
+    },
+    {
+      "id": "3b5a1702-44ef-5bc6-8751-eefcfe988686",
+      "name": "Signature Mocha Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 190
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Iced Signature Mocha is a decadent mix of rich espresso and smooth chocolate, balanced with creamy milk and served with ice for a luxurious coffee moment."
+    },
+    {
+      "id": "087ee0d3-0c36-5e34-a49e-8ccd93840338",
+      "name": "Cranberry Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 180
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Cranberry Coffee is a unique fusion of bold coffee and tangy cranberry, paired with ice for a refreshing, fruity twist."
+    },
+    {
+      "id": "7c245809-e627-54af-9004-ad6925da16d4",
+      "name": "Valencia Orange Iced",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 180
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 205
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Valencia Orange Coffee is a vibrant blend of espresso and zesty Valencia orange, complemented by ice for a refreshing, citrusy experience."
+    },
+    {
+      "id": "64298bb6-6389-5e70-82d7-a465426c822c",
+      "name": "Nutella Iced Mocha",
+      "category": "Iced Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 225
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 245
+        }
+      ],
+      "addon_groups": [
+        "Sugar",
+        "ADD ON Milk",
+        "Upgrade To Cold Brew",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Nutella Mocha is a decadent espresso combined with creamy Nutella and smooth chocolate, finished with a touch of ice for a rich indulgence."
+    },
+    {
+      "id": "0678dd62-081a-5a29-8e47-9d7a07c75907",
+      "name": "Berry Lemonata Iced",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 145
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 160
+        }
+      ],
+      "addon_groups": [
+        "Specialized Brews",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Berry Lemonata is a chilled, fresh lemonade blended with mixed berries for a tangy, fruity cooler."
+    },
+    {
+      "id": "8f61bbf8-99fd-5dc4-a24d-1845c6376867",
+      "name": "Choco Berry Iced",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 155
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 175
+        }
+      ],
+      "addon_groups": [
+        "Specialized Brews",
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Choco Berry is a light, mocktail-style iced drink of strawberry and white chocolate syrup with a fresh squeeze of lemon."
+    },
+    {
+      "id": "18116abe-2624-5c1b-9f9c-7d2085e45847",
+      "name": "Sunrise Iced",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Sunrise is a bright iced cooler of Valencia orange juice topped with a cranberry cream froth — tangy, fruity and refreshing."
+    },
+    {
+      "id": "5ccfe87f-cdfc-525f-8c71-ce0c8f1dafe2",
+      "name": "Raspberry Cream Iced",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 185
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 215
+        }
+      ],
+      "addon_groups": [
+        "Add On Syrup",
+        "Yes, For Me",
+        "Add On Condiments",
+        "Ice",
+        "Add A Slider",
+        "Whipped Cream_add"
+      ],
+      "description": "Raspberry Cream is an iced cooler of cranberry juice topped with cranberry cream and a little fizz."
+    },
+    {
+      "id": "b85ee516-8313-5c4a-81e2-36513926b69d",
+      "name": "Matcha Latte Iced",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 165
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 190
+        }
+      ],
+      "addon_groups": [],
+      "description": "Iced Matcha Latte combines finely ground matcha green tea with cold milk over ice for a smooth, earthy, refreshing drink."
+    },
+    {
+      "id": "6b111aba-e2b1-506e-abf4-3acba7a9bacd",
+      "name": "Blueberry Iced Matcha",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 200
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 225
+        }
+      ],
+      "addon_groups": [],
+      "description": "Blueberry Iced Matcha layers earthy matcha green tea with milk and sweet blueberry over ice."
+    },
+    {
+      "id": "22538b29-1ab1-5cad-b0f1-edd5f1b994ef",
+      "name": "Mango Iced Matcha",
+      "category": "Iced Non-Coffee",
+      "parent_category": "Iced Drinks",
+      "is_available": true,
+      "sizes": [
+        {
+          "label": "Large",
+          "price_inr": 200
+        },
+        {
+          "label": "Extra Large",
+          "price_inr": 225
+        }
+      ],
+      "addon_groups": [],
+      "description": "Mango Iced Matcha layers earthy matcha green tea with milk and ripe mango over ice for a tropical twist."
+    }
+  ],
+  "addon_options": [
+    {
+      "id": "e032ce4a-9788-502c-9251-e0cedaa58ba5",
+      "group": "Specialized Brews",
+      "group_label": "Upgrade to Specialized Brew",
+      "option": "Sparkling Water(green Apple)",
+      "price_inr": 30
+    },
+    {
+      "id": "0e1ed4d8-db91-5ce1-adfb-56dc3b3f8e1d",
+      "group": "Specialized Brews",
+      "group_label": "Upgrade to Specialized Brew",
+      "option": "Sparkling Water(peach)",
+      "price_inr": 30
+    },
+    {
+      "id": "f7488b1e-5b28-591c-a698-d4e00d5618c9",
+      "group": "Specialized Brews",
+      "group_label": "Upgrade to Specialized Brew",
+      "option": "Sparkling Water(lime And Lemon)",
+      "price_inr": 30
+    },
+    {
+      "id": "23321d47-a437-5760-b950-355ab2946e16",
+      "group": "Specialized Brews",
+      "group_label": "Upgrade to Specialized Brew",
+      "option": "Tonic Water",
+      "price_inr": 30
+    },
+    {
+      "id": "170478b2-09d5-5dcd-8af9-60b16afe294c",
+      "group": "Specialized Brews",
+      "group_label": "Upgrade to Specialized Brew",
+      "option": "Coconut Water",
+      "price_inr": 30
+    },
+    {
+      "id": "25c049cc-6068-55cf-bbbc-07124f4418b5",
+      "group": "Specialized Brews",
+      "group_label": "Upgrade to Specialized Brew",
+      "option": "Still Water",
+      "price_inr": 0
+    },
+    {
+      "id": "9e73b732-85e6-5227-ab60-94b8f11e30a4",
+      "group": "Specialized Brews(on The Rocks)",
+      "group_label": "Specialized Brew",
+      "option": "Tonic Water (espresso & Tonic)",
+      "price_inr": 60
+    },
+    {
+      "id": "39e6f414-091d-5ab8-820c-e68561be7c4a",
+      "group": "Specialized Brews(on The Rocks)",
+      "group_label": "Specialized Brew",
+      "option": "Ginger Ale",
+      "price_inr": 60
+    },
+    {
+      "id": "db5d20f5-de68-5b3e-8e86-20771421d3cf",
+      "group": "Specialized Brews(on The Rocks)",
+      "group_label": "Specialized Brew",
+      "option": "Diet Coke",
+      "price_inr": 25
+    },
+    {
+      "id": "ba2854ac-9468-5218-bbf3-bfe8f1579984",
+      "group": "Sugar",
+      "group_label": "Choice of Sugar",
+      "option": "Stevia (sugarfree)",
+      "price_inr": 10
+    },
+    {
+      "id": "4e7a3eb6-eadf-53ec-ae72-925a692b79e6",
+      "group": "Sugar",
+      "group_label": "Choice of Sugar",
+      "option": "Brown Sugar",
+      "price_inr": 0
+    },
+    {
+      "id": "4c05b91c-2228-5c9f-8064-a5f8ab96448a",
+      "group": "Sugar",
+      "group_label": "Choice of Sugar",
+      "option": "No Sugar",
+      "price_inr": 0
+    },
+    {
+      "id": "8178c159-676d-5d7d-a0e2-b6d562813b1e",
+      "group": "Sugar",
+      "group_label": "Choice of Sugar",
+      "option": "Normal",
+      "price_inr": 0
+    },
+    {
+      "id": "31f45211-131b-58ca-a6c3-c000a9c2a40a",
+      "group": "ADD ON Milk",
+      "group_label": "Choose Milk",
+      "option": "Almond",
+      "price_inr": 45
+    },
+    {
+      "id": "6755ed84-d972-55c0-bdcd-19ff3b6cf705",
+      "group": "ADD ON Milk",
+      "group_label": "Choose Milk",
+      "option": "Oat",
+      "price_inr": 40
+    },
+    {
+      "id": "0bdc3d27-aec2-5aab-a7ad-c5efed9119fe",
+      "group": "ADD ON Milk",
+      "group_label": "Choose Milk",
+      "option": "Soy Milk",
+      "price_inr": 40
+    },
+    {
+      "id": "5fd9771f-34ae-55e2-bd02-f806f30f16a6",
+      "group": "ADD ON Milk",
+      "group_label": "Choose Milk",
+      "option": "Lactose Free",
+      "price_inr": 35
+    },
+    {
+      "id": "f2e6093d-3dbf-5e3b-ac3c-7b7e3d850c7d",
+      "group": "ADD ON Milk",
+      "group_label": "Choose Milk",
+      "option": "Coconut Milk (new)",
+      "price_inr": 50
+    },
+    {
+      "id": "88232dff-d26a-509d-a456-13f7cb88f3df",
+      "group": "Upgrade To Cold Brew",
+      "group_label": "Upgrade to Cold Brew",
+      "option": "Espresso Brew",
+      "price_inr": 0
+    },
+    {
+      "id": "0c4d0695-8105-55cb-8a9f-d05e29a88581",
+      "group": "Upgrade To Cold Brew",
+      "group_label": "Upgrade to Cold Brew",
+      "option": "Signature Cold Brew",
+      "price_inr": 20
+    },
+    {
+      "id": "257c7af4-1b91-5910-8ef9-470a3a508534",
+      "group": "Add On Syrup",
+      "group_label": "Add a Syrup",
+      "option": "Salted Caramel (newly Launched)",
+      "price_inr": 35
+    },
+    {
+      "id": "381a9068-aaf8-5f19-b458-b1a46389529f",
+      "group": "Add On Syrup",
+      "group_label": "Add a Syrup",
+      "option": "Vanilla",
+      "price_inr": 35
+    },
+    {
+      "id": "0afc708d-b168-5f8e-ba34-608f0fe68407",
+      "group": "Add On Syrup",
+      "group_label": "Add a Syrup",
+      "option": "Hazelnut",
+      "price_inr": 35
+    },
+    {
+      "id": "fd6f65ae-358c-5ecc-851c-ac32a0f59a55",
+      "group": "Add On Syrup",
+      "group_label": "Add a Syrup",
+      "option": "Caramel",
+      "price_inr": 35
+    },
+    {
+      "id": "a176fe4e-2784-52ea-8dc1-741a03b91cd5",
+      "group": "Hot Chocolate",
+      "group_label": "Add Extras",
+      "option": "Nuts: Hazelnuts",
+      "price_inr": 15
+    },
+    {
+      "id": "1b4fd172-9f29-53c1-baac-92e77b4c5d73",
+      "group": "Hot Chocolate",
+      "group_label": "Add Extras",
+      "option": "Nuts: Almonds",
+      "price_inr": 15
+    },
+    {
+      "id": "d800323e-67f2-53a5-a631-959975366414",
+      "group": "Hot Chocolate",
+      "group_label": "Add Extras",
+      "option": "Marshmallow (5pcs)",
+      "price_inr": 20
+    },
+    {
+      "id": "dce1325b-867a-5e90-914a-2d2360124ceb",
+      "group": "Yes, For Me",
+      "group_label": "Treat Yourself",
+      "option": "Ice Cream - Chocolate",
+      "price_inr": 45
+    },
+    {
+      "id": "357c42c9-ab8e-5074-bbe7-06320262df5b",
+      "group": "Yes, For Me",
+      "group_label": "Treat Yourself",
+      "option": "Ice Cream - Vanilla",
+      "price_inr": 35
+    },
+    {
+      "id": "09f88539-2771-56fc-9f57-22812361eb2a",
+      "group": "Yes, For Me",
+      "group_label": "Treat Yourself",
+      "option": "Nutella",
+      "price_inr": 45
+    },
+    {
+      "id": "e7c80276-c15a-57e4-9b57-77ad9ab190d1",
+      "group": "Ice Cream Packaging",
+      "group_label": "Ice Cream Packaging",
+      "option": "Assemble It By You",
+      "price_inr": 0
+    },
+    {
+      "id": "c0b14c7c-67b5-5dbc-bd0f-90c6f0b2f5c9",
+      "group": "Ice Cream Packaging",
+      "group_label": "Ice Cream Packaging",
+      "option": "Assemble It Myself",
+      "price_inr": 0
+    },
+    {
+      "id": "e54ac0b1-0372-5830-9729-b50d22559926",
+      "group": "Add On Condiments",
+      "group_label": "Add Condiments",
+      "option": "Chocolate Sauce",
+      "price_inr": 30
+    },
+    {
+      "id": "2e989100-a286-5aff-8f48-bd99c80b4dc5",
+      "group": "Add On Condiments",
+      "group_label": "Add Condiments",
+      "option": "Caramel Sauce",
+      "price_inr": 30
+    },
+    {
+      "id": "d452468a-1417-579a-9d77-b7069cc5a1a3",
+      "group": "Add On Condiments",
+      "group_label": "Add Condiments",
+      "option": "Espresso Shot",
+      "price_inr": 40
+    },
+    {
+      "id": "50e2d030-06be-54c9-93ed-5daa02b53e0b",
+      "group": "Add On Condiments",
+      "group_label": "Add Condiments",
+      "option": "Whipped Cream",
+      "price_inr": 45
+    },
+    {
+      "id": "da063565-4022-5503-9236-2288ef3114bd",
+      "group": "Add On Waffles",
+      "group_label": "Add Toppings",
+      "option": "Caramel Syrup",
+      "price_inr": 30
+    },
+    {
+      "id": "43f41866-3745-5921-af02-608570cfd0d3",
+      "group": "Add On Waffles",
+      "group_label": "Add Toppings",
+      "option": "Nutella",
+      "price_inr": 45
+    },
+    {
+      "id": "f888fded-70e3-5034-ac6d-c38c2402f6af",
+      "group": "Add On Waffles",
+      "group_label": "Add Toppings",
+      "option": "Chocochips(white)",
+      "price_inr": 10
+    },
+    {
+      "id": "0840221f-7b70-50b8-8626-b3da46d87f45",
+      "group": "Add On Waffles",
+      "group_label": "Add Toppings",
+      "option": "Chocochips(dark)",
+      "price_inr": 10
+    },
+    {
+      "id": "009ad374-252f-5500-8393-9df03de0526d",
+      "group": "Add On Waffles",
+      "group_label": "Add Toppings",
+      "option": "Icecream(chocolate)",
+      "price_inr": 30
+    },
+    {
+      "id": "c9c98747-98d1-5632-859d-688d89a8f2ee",
+      "group": "Add On Waffles",
+      "group_label": "Add Toppings",
+      "option": "Icecream(vanilla)",
+      "price_inr": 20
+    },
+    {
+      "id": "4e6df873-4129-5898-98b1-2c45a577a624",
+      "group": "Dips",
+      "group_label": "Choice of Dip",
+      "option": "Cheese Dip",
+      "price_inr": 20
+    },
+    {
+      "id": "f9ca09e5-74be-5678-b515-6249f828ebd5",
+      "group": "Dips",
+      "group_label": "Choice of Dip",
+      "option": "Peri Peri Dip",
+      "price_inr": 15
+    },
+    {
+      "id": "07fe4890-aa06-5a73-948a-7a3d35c6602e",
+      "group": "Dips",
+      "group_label": "Choice of Dip",
+      "option": "Tandoori Dip",
+      "price_inr": 15
+    },
+    {
+      "id": "03fa0d1c-6d1a-5e4a-8ff8-5e1f58508c81",
+      "group": "Ice",
+      "group_label": "Ice Level",
+      "option": "Only Ice - Maxxx Ice",
+      "price_inr": 10
+    },
+    {
+      "id": "702134bb-7524-57b8-a39f-2be92b9c4175",
+      "group": "Ice",
+      "group_label": "Ice Level",
+      "option": "No Ice",
+      "price_inr": 30
+    },
+    {
+      "id": "abd25c8e-fad1-53b3-9be5-21edfe83b7f3",
+      "group": "Ice",
+      "group_label": "Ice Level",
+      "option": "Less Ice",
+      "price_inr": 10
+    },
+    {
+      "id": "b18e0a05-8891-58a8-8baf-024313a978bb",
+      "group": "Ice",
+      "group_label": "Ice Level",
+      "option": "Normal Ice",
+      "price_inr": 0
+    },
+    {
+      "id": "0bd24796-6163-58e6-8b62-436c9e5a720e",
+      "group": "Add A Slider",
+      "group_label": "Add a Side",
+      "option": "Nutella Almond Croissant (large)",
+      "price_inr": 195
+    },
+    {
+      "id": "fce0fdc3-076f-5722-aead-96fcad02f7ce",
+      "group": "Add A Slider",
+      "group_label": "Add a Side",
+      "option": "Cheesy Garlic Toast",
+      "price_inr": 150
+    },
+    {
+      "id": "385b91e6-0c8f-59b9-9848-21d26b503980",
+      "group": "Add A Slider",
+      "group_label": "Add a Side",
+      "option": "Butter Croissant (large)",
+      "price_inr": 140
+    },
+    {
+      "id": "4a21759d-777a-5fb0-a4de-67eff27eacac",
+      "group": "Base- Add On",
+      "group_label": "Add Toppings",
+      "option": "Red Velvet",
+      "price_inr": 10
+    },
+    {
+      "id": "b421c248-f5d4-5267-845e-951294bffc9b",
+      "group": "Base- Add On",
+      "group_label": "Add Toppings",
+      "option": "Hazelnut",
+      "price_inr": 25
+    },
+    {
+      "id": "4d5d0d94-68e9-5233-abf7-3e17b0e8f6a0",
+      "group": "Base- Add On",
+      "group_label": "Add Toppings",
+      "option": "Almond",
+      "price_inr": 15
+    },
+    {
+      "id": "f83fa3d3-295c-5f30-a26c-d39da8650dee",
+      "group": "Whipped Cream_choose",
+      "group_label": "Whipped Cream",
+      "option": "No Whipped Cream",
+      "price_inr": 0
+    },
+    {
+      "id": "d1df661f-8f74-55ad-b7fb-4a4a27846eb7",
+      "group": "Whipped Cream_choose",
+      "group_label": "Whipped Cream",
+      "option": "Default",
+      "price_inr": 0
+    },
+    {
+      "id": "3f22db43-9322-5ef3-9d31-968d37b973e1",
+      "group": "Whipped Cream_add",
+      "group_label": "Whipped Cream",
+      "option": "Add On Whipped Cream",
+      "price_inr": 45
+    },
+    {
+      "id": "269ff9b0-14a8-5a1c-bd51-77407bdbcc83",
+      "group": "Whipped Cream_add",
+      "group_label": "Whipped Cream",
+      "option": "No Whipped Cream",
+      "price_inr": 0
+    },
+    {
+      "id": "47a8c37b-04c6-5556-b95b-871e9d97f6bb",
+      "group": "Croissant",
+      "group_label": "Add a Croissant",
+      "option": "Croissant",
+      "price_inr": 65
+    }
+  ]
+}

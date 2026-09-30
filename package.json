@@ -12,7 +12,13 @@
     "verify:db": "node scripts/verify-db.mjs",
     "verify:notifications": "node scripts/verify-notifications.mjs",
     "eval:suggest": "tsx scripts/eval-suggest.mjs",
-    "import:petpooja": "tsx scripts/import-petpooja.ts"
+    "import:petpooja": "tsx scripts/import-petpooja.ts",
+    "inventory:check": "tsx scripts/inventory/check.ts",
+    "inventory:build": "tsx scripts/inventory/build-seed.ts",
+    "inventory:apply": "node scripts/inventory/apply.mjs",
+    "inventory:snapshot": "node scripts/inventory/snapshot-menu.mjs",
+    "inventory:pull": "node scripts/inventory/pull.mjs",
+    "inventory:import-petpooja": "tsx scripts/inventory/import-petpooja-recipes.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.4.0",

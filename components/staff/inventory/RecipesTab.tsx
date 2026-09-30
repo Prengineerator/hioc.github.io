@@ -4,6 +4,8 @@
 // and each add-on — uses from stock; taken off automatically when an order
 // completes. A size can have its own recipe, which replaces the base one for
 // that size (sizes go by label: saving a menu item re-creates its size rows).
+// An add-on's recipe here is its general one; amounts the recipe book set for
+// a specific item or size are only flagged (read-only), never edited here.
 // Everyone can read recipes; editing follows the menu's own rule: the
 // 'menu_edit' permission, on the POS.
 
@@ -35,11 +37,15 @@ export function RecipesTab({ data, reload }: { data: RecipesPayload; reload: () 
     return m;
   }, [data.lines, data.addonLines]);
 
+  // Add-ons only: lines the recipe book set for a specific item or size.
+  const scopedFor = (id: string) => (mode === 'addons' ? data.addonScopedCounts[id] ?? 0 : 0);
+  const hasRecipe = (id: string) => counts.has(id) || scopedFor(id) > 0;
+
   const entries =
     mode === 'menu'
       ? data.menu.map((m) => ({ id: m.id, name: m.name, sub: m.category }))
       : data.addons.map((a) => ({ id: a.id, name: a.name, sub: a.group }));
-  const missing = entries.filter((e) => !counts.has(e.id)).length;
+  const missing = entries.filter((e) => !hasRecipe(e.id)).length;
   const q = query.trim().toLowerCase();
   const visible = entries.filter((e) => !q || e.name.toLowerCase().includes(q) || e.sub.toLowerCase().includes(q));
 
@@ -87,8 +93,13 @@ export function RecipesTab({ data, reload }: { data: RecipesPayload; reload: () 
                   <span className="font-semibold text-charcoal">{e.name}</span>
                   <span className="block text-xs text-muted">{e.sub}</span>
                 </span>
-                {counts.has(e.id) ? (
-                  <span className="text-xs text-green-800">{counts.get(e.id)} line(s)</span>
+                {hasRecipe(e.id) ? (
+                  <span className="text-right">
+                    {counts.has(e.id) ? <span className="block text-xs text-green-800">{counts.get(e.id)} line(s)</span> : null}
+                    {scopedFor(e.id) > 0 ? (
+                      <span className="block text-xs text-muted">{counts.has(e.id) ? '+ ' : ''}item/size amounts</span>
+                    ) : null}
+                  </span>
                 ) : (
                   <span className="text-xs text-amber-800">No recipe</span>
                 )}
@@ -121,6 +132,11 @@ export function RecipesTab({ data, reload }: { data: RecipesPayload; reload: () 
             title={`${addon.name} (${addon.group})`}
             sizes={[]}
             hint="Per serving it is added to — ordered twice, it is used twice."
+            note={
+              scopedFor(addon.id) > 0
+                ? 'Also has amounts for specific items/sizes (from the recipe book). Saving here changes only this general recipe.'
+                : undefined
+            }
             initial={data.addonLines.filter((l) => l.optionId === addon.id).map((l) => ({ section: BASE, itemId: l.itemId, qty: l.qty }))}
             url={`/api/inventory/addon-recipes/${addon.id}`}
             toBody={(sections) => (sections[BASE] ?? []).filter((l) => l.itemId).map((l) => ({ itemId: l.itemId, qty: Number(l.qty) }))}
@@ -141,6 +157,7 @@ function RecipeEditor({
   title,
   sizes,
   hint,
+  note,
   initial,
   url,
   toBody,
@@ -151,6 +168,8 @@ function RecipeEditor({
   /** Size labels this item has; empty for an add-on or a one-size item. */
   sizes: string[];
   hint?: string;
+  /** A read-only heads-up shown under the hint. */
+  note?: string;
   initial: { section: string; itemId: string; qty: number }[];
   url: string;
   toBody: (sections: Record<string, Line[]>) => unknown[];
@@ -288,6 +307,7 @@ function RecipeEditor({
     <div>
       <h3 className="text-lg font-bold text-charcoal">{title}</h3>
       <p className="text-sm text-muted">{hint ?? 'Quantities are for ONE serving, in each ingredient’s own unit.'}</p>
+      {note ? <p className="mt-2 rounded-md bg-[#f6efe9] px-3 py-2 text-xs text-charcoal">{note}</p> : null}
       {section(BASE, splitSizes.length ? 'Every size' : 'Recipe', splitSizes.length ? 'Used by any size without its own recipe.' : 'What one serving uses.')}
       {splitSizes.map((s) => section(s, `${s} only`, `Replaces the base recipe for ${s}.`))}
       {editable && sizesWithout.length > 0 ? (

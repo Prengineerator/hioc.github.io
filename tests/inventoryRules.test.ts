@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addonRecipeFor,
   canAssign,
   canCancel,
   canPick,
@@ -256,6 +257,13 @@ describe('recipes', () => {
     expect(Object.fromEntries(usage)).toEqual({ milk: 0.95, beans: 81, 'oat-milk': 0.2 });
   });
 
+  it('an add-on with no scoped lines uses its general recipe for any item, size, or deleted item', () => {
+    expect(addonRecipeFor(addons, 'extra-shot', 'latte', 'Large').map((l) => l.qty)).toEqual([9]);
+    expect(addonRecipeFor(addons, 'extra-shot', 'mocha', null).map((l) => l.qty)).toEqual([9]);
+    expect(addonRecipeFor(addons, 'extra-shot', null, null).map((l) => l.qty)).toEqual([9]);
+    expect(addonRecipeFor(addons, 'unknown-option', 'latte', 'Large')).toEqual([]);
+  });
+
   it('validates the editor’s lines against the item’s sizes', () => {
     const sizes = new Set(['Regular', 'Large']);
     expect(parseRecipeLines([], isId, sizes)).toEqual({ ok: true, lines: [] });
@@ -295,6 +303,91 @@ describe('recipes', () => {
     expect(parseAddonRecipeLines([{ itemId: 'id-beans', qty: 9 }, { itemId: 'id-beans', qty: 1 }], isId).ok).toBe(false);
     expect(parseAddonRecipeLines([{ itemId: 'nope', qty: 9 }], isId).ok).toBe(false);
     expect(parseAddonRecipeLines('x', isId).ok).toBe(false);
+  });
+});
+
+describe('add-on recipe scopes', () => {
+  // Sugar: 20 g in general, 10 g on an Espresso (every size), 25 g on a Latte
+  // Extra Large, and — to see which lines replace which — a second ingredient
+  // on the Latte Extra Large scope only.
+  const sugar = [
+    { addon_option_id: 'sugar', menu_item_id: null, size_label: '', item_id: 'sugar-g', qty: 20 },
+    { addon_option_id: 'sugar', menu_item_id: 'espresso', size_label: '', item_id: 'sugar-g', qty: 10 },
+    { addon_option_id: 'sugar', menu_item_id: 'latte', size_label: 'Extra Large', item_id: 'sugar-g', qty: 25 },
+    { addon_option_id: 'sugar', menu_item_id: 'latte', size_label: 'Extra Large', item_id: 'stirrer', qty: 1 },
+    { addon_option_id: 'oat', item_id: 'oat-milk', qty: 200 }, // no scope fields at all: a row read before the migration
+  ];
+  const qtys = (rows: { item_id: string; qty: number }[]) => Object.fromEntries(rows.map((r) => [r.item_id, r.qty]));
+
+  it('item + size beats item, which beats general — the winner replaces, never adds', () => {
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'latte', 'Extra Large'))).toEqual({ 'sugar-g': 25, stirrer: 1 });
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'espresso', 'Regular'))).toEqual({ 'sugar-g': 10 });
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'espresso', null))).toEqual({ 'sugar-g': 10 });
+    // An item-wide scope also beats a size-scope of ANOTHER item.
+    const both = [
+      ...sugar,
+      { addon_option_id: 'sugar', menu_item_id: 'latte', size_label: '', item_id: 'sugar-g', qty: 15 },
+    ];
+    expect(qtys(addonRecipeFor(both, 'sugar', 'latte', 'Extra Large'))).toEqual({ 'sugar-g': 25, stirrer: 1 });
+    expect(qtys(addonRecipeFor(both, 'sugar', 'latte', 'Large'))).toEqual({ 'sugar-g': 15 });
+  });
+
+  it('a size scope does not leak to the item’s other sizes', () => {
+    // Latte Large has no scope of its own and the Latte has no item-wide one:
+    // it falls all the way back to general, not to the Extra Large lines.
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'latte', 'Large'))).toEqual({ 'sugar-g': 20 });
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'latte', null))).toEqual({ 'sugar-g': 20 });
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'latte', 'extra large'))).toEqual({ 'sugar-g': 20 }); // exact case, as recipeFor
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'latte', ' Extra Large '))).toEqual({ 'sugar-g': 25, stirrer: 1 }); // trimmed
+  });
+
+  it('an item scope does not leak to other items', () => {
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'mocha', 'Regular'))).toEqual({ 'sugar-g': 20 });
+    expect(qtys(addonRecipeFor(sugar, 'sugar', 'espresso', 'Extra Large'))).toEqual({ 'sugar-g': 10 });
+  });
+
+  it('a menu item that has been deleted sees only the general lines', () => {
+    expect(qtys(addonRecipeFor(sugar, 'sugar', null, 'Extra Large'))).toEqual({ 'sugar-g': 20 });
+  });
+
+  it('with no general lines and no scope for the item, it uses nothing', () => {
+    const scopedOnly = sugar.filter((l) => l.addon_option_id === 'sugar' && l.menu_item_id);
+    expect(addonRecipeFor(scopedOnly, 'sugar', 'mocha', 'Regular')).toEqual([]);
+    expect(addonRecipeFor(scopedOnly, 'sugar', null, null)).toEqual([]);
+    expect(qtys(addonRecipeFor(scopedOnly, 'sugar', 'espresso', 'Regular'))).toEqual({ 'sugar-g': 10 });
+  });
+
+  it('lines without scope fields (before the migration) are general', () => {
+    expect(qtys(addonRecipeFor(sugar, 'oat', 'latte', 'Extra Large'))).toEqual({ 'oat-milk': 200 });
+  });
+
+  it('orderUsage picks each line’s add-on scope, × the line quantity, on top of the base recipe', () => {
+    const recipe = [
+      { menu_item_id: 'latte', size_label: '', item_id: 'milk', qty: 200 },
+      { menu_item_id: 'latte', size_label: 'Extra Large', item_id: 'milk', qty: 330 },
+      { menu_item_id: 'espresso', size_label: '', item_id: 'beans', qty: 9 },
+    ];
+    const usage = orderUsage(
+      [
+        // 2 × Latte Extra Large with sugar: the size scope (25 g + a stirrer) each.
+        { menu_item_id: 'latte', variant_label: 'Extra Large', quantity: 2, addon_option_ids: ['sugar'] },
+        // Latte Large with sugar and oat milk: sugar falls back to general (20 g).
+        { menu_item_id: 'latte', variant_label: 'Large', quantity: 1, addon_option_ids: ['sugar', 'oat'] },
+        // 3 × Espresso with sugar: the item scope (10 g) each.
+        { menu_item_id: 'espresso', variant_label: 'Regular', quantity: 3, addon_option_ids: ['sugar'] },
+        // Its menu item was deleted: general sugar only, once per unit.
+        { menu_item_id: null, variant_label: 'Extra Large', quantity: 2, addon_option_ids: ['sugar'] },
+      ],
+      recipe,
+      sugar,
+    );
+    expect(Object.fromEntries(usage)).toEqual({
+      milk: 2 * 330 + 200,
+      beans: 27,
+      'sugar-g': 2 * 25 + 20 + 3 * 10 + 2 * 20,
+      stirrer: 2,
+      'oat-milk': 200,
+    });
   });
 });
 
