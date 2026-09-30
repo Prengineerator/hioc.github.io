@@ -151,8 +151,9 @@ A contact is skipped, with a reason recorded, when any of these hold:
 4. `too_soon` — any marketing message (any campaign) was sent to this phone in the last `min_days_between` days (default 7).
 5. `monthly_cap` — `max_per_30_days` (default 4) or more marketing messages were sent in the last 30 days.
 6. `unread_pause` — the last `pause_after_unread` (default 3) marketing messages all reached `sent`/`delivered` without `read`, and the latest was less than 60 days ago. **This rule is disabled automatically when read receipts aren't flowing** (no recipient has ever reached `delivered` or `read`). Otherwise everyone would be paused while `WHATSAPP_APP_SECRET` is unset.
-7. `in_flight` — the phone already has a `pending`/`queued`/`sending` recipient in another open campaign.
-8. `claimed_by_higher_priority` — a higher-priority playbook took this contact in today's run.
+7. `in_flight` — the phone already has a `pending`/`queued`/`sending` recipient in another open campaign. Recipients of **draft** campaigns don't count, so a forgotten draft can't freeze the agent.
+8. `in_holdout` — the phone is in the holdout of a live campaign whose attribution window is still open. It blocks **every** playbook and manual campaign, because messaging a control-group member contaminates the lift measurement.
+9. `claimed_by_higher_priority` — a higher-priority playbook took this contact in today's run.
 
 Send-time re-checks cover rules 1, 3, 4 and 5. Consent can be withdrawn between approval and send, and it must win.
 
@@ -649,7 +650,7 @@ Gated by `flags.marketing` (`NEXT_PUBLIC_FLAG_MARKETING`, default **false**). Wh
 Also:
 - An `OwnerHeader` link "Marketing" after Promotions, when the flag is on.
 - An `/owner` overview card (flag on): pending approvals, month spend / budget and the drop alert, linking to `/owner/marketing`.
-- The customer opt-in card on `/order-confirmation/[orderId]` (§2), shown only when the flag is on.
+- The customer opt-in card on `/order/[id]` (§2), shown only when the flag is on. `/order-confirmation/[orderId]` redirects there.
 
 ---
 
@@ -661,7 +662,7 @@ The Sonnet engineers build in three slices. Each slice lands with `npx tsc --noE
 |---|---|---|
 | **S1 — Foundation** | Migration (§3); `lib/marketing/*` pure modules + types incl. API response shapes (§4, §6); `lib/flags.ts` `marketing`; `verify-db` `checkMarketingAgent` (columns; anon sees 0 rows of `menu_item_costs` + `marketing_consent`); unit tests for segments, points, economics, eligibility, offers, templates, parse | `supabase/2026-10-marketing-agent.sql`, `lib/marketing/*.ts`, `lib/flags.ts`, `scripts/verify-db.mjs`, `tests/marketing*.test.ts`, `.env.local.example` |
 | **S2 — Engine & APIs** | `lib/marketing/server/*`; adapter `templateName`; coupon phone-lock + hide campaign coupons; account/me consent sync; webhook changes; crons; owner APIs; `/r/[token]`; `vercel.json`; route + server tests | `lib/marketing/server/**`, `lib/notifications/adapters.ts`, `lib/promotions/coupons.ts`, `app/api/coupons/route.ts`, `app/api/account/me/route.ts`, `app/api/webhooks/whatsapp/route.ts`, `app/api/owner/marketing/**`, `app/api/cron/marketing-*/**`, `app/r/[token]/**`, `vercel.json`, `tests/marketing*Route.test.ts` etc. |
-| **S3 — Dashboard & docs** | `/owner/marketing` + components; nav link; `/owner` card; order-confirmation opt-in card; `docs/WHATSAPP-MARKETING-TEMPLATES.md`; `docs/MARKETING-AGENT-SETUP.md` (owner runbook) | `app/owner/marketing/**`, `components/owner/marketing/**`, `components/owner/OwnerHeader.tsx`, `app/owner/page.tsx`, `app/order-confirmation/[orderId]/**`, `components/marketing/**`, `docs/WHATSAPP-MARKETING-TEMPLATES.md`, `docs/MARKETING-AGENT-SETUP.md` |
+| **S3 — Dashboard & docs** | `/owner/marketing` + components; nav link; `/owner` card; order-page opt-in card; `docs/WHATSAPP-MARKETING-TEMPLATES.md`; `docs/MARKETING-AGENT-SETUP.md` (owner runbook) | `app/owner/marketing/**`, `components/owner/marketing/**`, `components/owner/OwnerHeader.tsx`, `app/owner/page.tsx`, `app/order/[id]/page.tsx`, `components/marketing/**`, `docs/WHATSAPP-MARKETING-TEMPLATES.md`, `docs/MARKETING-AGENT-SETUP.md` |
 
 S2 and S3 run in parallel after S1. The contract between them is `lib/marketing/types.ts` plus §6.
 
@@ -694,7 +695,28 @@ These steps are also in `docs/MARKETING-AGENT-SETUP.md`.
 7. Playbooks: **Send test to my phone** for each, then set `points_expiring` and `winback_1` to **Review**.
 8. Turn **Sending ON**. Approve the first campaigns by hand for a week or two, then move proven playbooks to **Auto**.
 
-## 10. Out of scope (next)
+## 10. Decisions made during the build (2026-09-30)
+
+These were adopted after review. Where they differ from the sections above, **this list wins**.
+
+| # | Decision | Why |
+|---|---|---|
+| B1 | Phone normalisation treats a `+`-prefixed number as Indian **only** when it starts with `+91`. | `+6581234567` (Singapore) was being read as an Indian mobile. A foreign START could have opted in, or cleared the opt-out of, an unrelated Indian number. |
+| B2 | Rule 8 `in_holdout` (§1.5) blocks holdout members of open windows from everything. | Keeps the lift measurement honest and stops one order converting two rows. |
+| B3 | Drafts don't count as in flight, and drafts expire after 7 days. `pending_approval` still expires after 2 days. | A forgotten draft for "everyone" silently stopped all planning. |
+| B4 | The verified profile phone is the **only** link from a phone to an account. The consent row's `user_id` is never used as a fallback, and one order converts at most one recipient per campaign. | A recycled number must not inherit someone else's orders, points or name. |
+| B5 | Staff are excluded by any non-customer profile phone (verified or not) plus `staff_accounts.phone`. | Staff sign in with login IDs. Their profile phone is usually unverified. |
+| B6 | Deliverability = (delivered + read) ÷ every treated row with `sent_at`, **including** later-failed ones. | 131049 arrives asynchronously after `sent`. Leaving those rows out overstated reach and understated break-even. |
+| B7 | VIP = top 20% by spend among **messageable** contacts with ≥ 3 orders. | This is the §1.1 intent. |
+| B8 | Learned counters are incremented atomically via the `marketing_add_observed` RPC. A planner insert that fails partway deletes its campaign, so the day can be re-planned. | Prevents lost updates and stranded campaigns. |
+| B9 | At the counter, a phone-locked coupon also passes when an **authenticated counter actor** typed the matching phone (`CouponContext.counterPhone`, never set from a customer session). | A first-visit customer has no verified account yet, but the message promises "show it at the counter". |
+| B10 | Test-send goes only to the owner's own phone or a number that has opted in itself. | A test is still a marketing message, and consent isn't the owner's to waive. |
+| B11 | The sender claims in chunks of 10 (≤ 50 per run) and re-reads budget, cap and window before each chunk. It stops starting chunks after 35 s. | Overlapping runs can't overshoot the budget, and a timeout strands at most one chunk. |
+| B12 | Attribution scans `attribution_days + 3` days back; an order counts only inside (`reference_at`, `reference_at + attribution_days`]. | One missed nightly run doesn't lose the tail of a window. |
+| B13 | The `/owner` home card uses `GET /api/owner/marketing/overview?summary=1` (`MarketingOverviewSummary`). | The full overview reads 365 days of orders and is too heavy for every home-page visit. |
+| B14 | The kill switch saves on its own, behind a confirm dialog. Auto mode asks for confirmation when first enabled. | Turning sending off must never depend on other fields being valid. |
+
+## 11. Out of scope (next)
 
 - Staff-recorded counter consent on the POS
 - Birthday/anniversary playbook (DOB exists in `profiles`)
