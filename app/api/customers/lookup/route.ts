@@ -7,6 +7,8 @@ import { normalizeIndianMobile } from '@/lib/phone';
 import { findVerifiedCustomerByPhone, orderMatchFilter } from '@/lib/loyalty/customerLink';
 import { getBalance } from '@/lib/loyalty/ledger';
 import { legacyCustomerByPhone, legacyOrderStatsForPhone } from '@/lib/legacy/history';
+import { flags } from '@/lib/flags';
+import { loadUsablePassSummaries } from '@/lib/passes/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +22,13 @@ export const dynamic = 'force-dynamic';
 // staffer actually opens it). A counter tablet is the least-protected screen
 // in the building and is often visible to whoever is standing at it; the POS
 // has no use for more than this, so it never receives it and cannot leak it.
+//
+// HIOC Ritual (docs/COFFEE-PASS-SPEC.md §7): with the feature on, an account also
+// answers with `passes` — the usable ones only (active, in date, cups left),
+// soonest-expiring first, so the counter can offer "Use pass" and show what is
+// left. Summaries carry plan name, cups and dates, never a user id. Without an
+// account there is nothing to show, and with the feature off the field is
+// absent altogether.
 //
 // The name is not decoration: it is the confirmation step VAL-2 requires before
 // a linkage takes effect, so a mistyped digit is caught by a human rather than
@@ -76,7 +85,7 @@ export async function GET(request: Request) {
     // single indexed round trip (ordered, capped at 1 row of data) answers
     // both without a second query. The legacy stats query runs alongside it,
     // not after — one round trip either way pays for both.
-    const [{ data, count, error }, legacyStats] = await Promise.all([
+    const [{ data, count, error }, legacyStats, passes] = await Promise.all([
       admin
         .from('orders')
         .select('created_at', { count: 'exact' })
@@ -84,6 +93,8 @@ export async function GET(request: Request) {
         .order('created_at', { ascending: false })
         .limit(1),
       legacyOrderStatsForPhone(admin, phoneE164),
+      // Never throws: a pass problem shows as "no passes", not a failed lookup.
+      flags.coffeePass ? loadUsablePassSummaries(admin, account.userId) : Promise.resolve(null),
     ]);
     if (error) console.error('customers/lookup: order-history count failed', error);
 
@@ -94,6 +105,7 @@ export async function GET(request: Request) {
       points_balance: await getBalance(account.userId),
       order_count: (count ?? 0) + legacyStats.count,
       last_order_at: laterOf(data?.[0]?.created_at ?? null, legacyStats.lastOrderAt),
+      ...(passes ? { passes } : {}),
     });
   }
 

@@ -81,9 +81,13 @@ export async function captureGatewayPayment(params: {
     })
     .eq('id', payment.id);
 
+  // `*` rather than a column list because order_kind (HIOC Ritual,
+  // 2026-10-coffee-pass.sql) does not exist before that migration, and a select
+  // naming an unknown column would make every capture fail to find its order —
+  // AFTER the payment row above was already marked paid. Absent = a menu order.
   const { data: current, error: orderReadError } = await admin
     .from('orders')
-    .select('id, status, version, payment_status')
+    .select('*')
     .eq('id', payment.order_id)
     .maybeSingle();
 
@@ -93,7 +97,13 @@ export async function captureGatewayPayment(params: {
   }
 
   const from = current.status as Order['status'];
-  const shouldAdvance = from === 'placed' && canTransition(from, 'received', 'system').ok;
+  // The SALE of a HIOC Ritual pass has no kitchen queue to enter: it is not
+  // advanced placed → received. Setting payment_status = 'paid' below is what
+  // matters: a database trigger issues the pass, completes the order and logs its
+  // own status event (spec §5.5), so nothing here writes a status, an event or a
+  // broadcast for it.
+  const isPassSale = current.order_kind === 'coffee_pass';
+  const shouldAdvance = !isPassSale && from === 'placed' && canTransition(from, 'received', 'system').ok;
 
   const patch: Record<string, unknown> = { payment_status: 'paid', payment_method: method };
   if (shouldAdvance) {
@@ -130,12 +140,17 @@ export async function captureGatewayPayment(params: {
       reason: 'Payment captured',
     });
     await broadcastOrderEvent(payment.order_id, 'received');
+  }
 
+  if (shouldAdvance || isPassSale) {
     // The order confirmation (bill) was held back at placement while payment
     // was pending (app/api/orders/route.ts). This is the one place an online
     // order becomes confirmed — the version-guarded 'placed' → 'received' step
     // above succeeds exactly once, whichever of verify/webhook/poll gets here
-    // first — so it is sent here. Reloaded with its lines for the item count.
+    // first — so it is sent here. A pass sale has no such step, but its
+    // customer still gets the bill for what they paid, sent here for the same
+    // reason (the payments row above is only ever marked paid once). Reloaded
+    // with its lines for the item count.
     // Best-effort: a failed send must never undo a captured payment.
     try {
       const { data: full } = await admin

@@ -657,7 +657,7 @@ create trigger trg_coffee_pass_return_on_order
   execute function public.coffee_pass_return_on_order();
 
 -- 4. AFTER: a redeemed line that is voided (running-tab void) gives its
---    drinks back.
+--    drinks back; a void that is rolled back takes them again.
 create or replace function public.coffee_pass_return_on_void()
 returns trigger
 language plpgsql
@@ -669,6 +669,15 @@ begin
     update public.coffee_pass_redemptions
        set reversed_at = now(), reversed_reason = 'Line voided'
      where order_item_id = new.id and reversed_at is null;
+  elsif old.voided and not new.voided then
+    -- The void was rolled back: the amend route voids the line first and
+    -- un-voids it when its version-guarded total update loses a race. The line
+    -- is back on the bill with its pass cover, so the cups it spent are spent
+    -- again. Only the reversal the void made is undone, never one a cancel or
+    -- refund made.
+    update public.coffee_pass_redemptions
+       set reversed_at = null, reversed_reason = null
+     where order_item_id = new.id and reversed_reason = 'Line voided';
   end if;
   return null;
 end $$;

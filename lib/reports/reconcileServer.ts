@@ -12,6 +12,7 @@ import {
   type CashDayRow,
   type CashMovementRow,
   type PaidOrderRow,
+  type PassLineRow,
   type PaymentPartRow,
   type RefundRow,
   type Report,
@@ -41,6 +42,9 @@ function isMissingRelation(err: unknown): boolean {
 }
 
 const SALE_COLUMNS = 'id, created_at, status, payment_status, total_inr, subtotal_inr, tax_inr, discount_inr';
+// HIOC Ritual (2026-10-coffee-pass.sql): what kind of order it is and what pass
+// cups covered on it. Read only where the migration has been applied.
+const SALE_PASS_COLUMNS = 'order_kind, pass_discount_inr';
 const PAID_COLUMNS = 'id, payment_method, total_inr, subtotal_inr, paid_at';
 
 export async function loadReport(admin: SupabaseClient, from: string, to: string): Promise<Report> {
@@ -48,20 +52,22 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
 
   // Settle discounts and tips arrived with a later migration; read without
   // them on a database that doesn't have them yet.
-  const withOptional = async <T>(base: string, extra: string, run: (cols: string) => Promise<T[]>): Promise<T[]> => {
-    try {
-      return await run(`${base}, ${extra}`);
-    } catch (err) {
-      if (isMissingColumnError(err as { code?: string; message?: string })) return run(base);
-      throw err;
-    }
-  };
+  const withOptional = async <T>(base: string, extra: string, run: (cols: string) => Promise<T[]>): Promise<T[]> =>
+    withColumnTiers([`${base}, ${extra}`, base], run);
 
   const [orders, parts, paidOrders, refunds, movements, cashDays] = await Promise.all([
-    withOptional<SaleOrderRow>(SALE_COLUMNS, 'settle_discount_inr', (cols) =>
-      fetchAll<SaleOrderRow>((a, b) =>
-        admin.from('orders').select(cols).gte('created_at', startIso).lt('created_at', endIso).order('created_at').range(a, b) as unknown as PromiseLike<PageResult<SaleOrderRow>>,
-      ),
+    // Newest columns first, falling back a migration at a time: with the pass
+    // columns, then with just the settle discount, then the base.
+    withColumnTiers<SaleOrderRow>(
+      [
+        `${SALE_COLUMNS}, settle_discount_inr, ${SALE_PASS_COLUMNS}`,
+        `${SALE_COLUMNS}, settle_discount_inr`,
+        SALE_COLUMNS,
+      ],
+      (cols) =>
+        fetchAll<SaleOrderRow>((a, b) =>
+          admin.from('orders').select(cols).gte('created_at', startIso).lt('created_at', endIso).order('created_at').range(a, b) as unknown as PromiseLike<PageResult<SaleOrderRow>>,
+        ),
     ),
     fetchAll<PaymentPartRow>((a, b) =>
       admin
@@ -129,5 +135,45 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
     for (const r of (data ?? []) as { order_id: string }[]) ordersWithParts.add(r.order_id);
   }
 
-  return buildReport({ from, to, orders, parts, paidOrders, ordersWithParts, refunds, movements, cashDays });
+  const passLines = await loadPassLines(admin, orders);
+
+  return buildReport({ from, to, orders, parts, paidOrders, ordersWithParts, refunds, movements, cashDays, passLines });
+}
+
+/**
+ * Tries each column list in turn (newest migration first) and returns the first
+ * the database accepts: a select naming a column that is not there is refused
+ * outright, so a deploy ahead of its migration reads what it can.
+ */
+async function withColumnTiers<T>(tiers: string[], run: (cols: string) => Promise<T[]>): Promise<T[]> {
+  for (let i = 0; i < tiers.length; i++) {
+    try {
+      return await run(tiers[i]);
+    } catch (err) {
+      if (i < tiers.length - 1 && isMissingColumnError(err as { code?: string; message?: string })) continue;
+      throw err;
+    }
+  }
+  return [];
+}
+
+/**
+ * The cups each order that used a pass spent, from its lines that were not
+ * voided. Asked only about orders whose pass_discount_inr says they used one, so
+ * a database without the migration (where no order does) makes no query at all.
+ */
+async function loadPassLines(admin: SupabaseClient, orders: SaleOrderRow[]): Promise<PassLineRow[]> {
+  const ids = orders.filter((o) => (o.pass_discount_inr ?? 0) > 0).map((o) => o.id);
+  const out: PassLineRow[] = [];
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const { data, error } = await admin
+      .from('order_items')
+      .select('order_id, pass_drinks')
+      .in('order_id', ids.slice(i, i + IN_CHUNK))
+      .eq('voided', false)
+      .gt('pass_drinks', 0);
+    if (error) throw new Error(`loadReport: pass lines check failed: ${error.message}`);
+    out.push(...((data ?? []) as PassLineRow[]));
+  }
+  return out;
 }

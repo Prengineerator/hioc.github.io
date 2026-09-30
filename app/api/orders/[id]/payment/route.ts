@@ -15,6 +15,7 @@ import {
   type PaymentPart,
 } from '@/lib/orders/payments';
 import { runAfterResponse } from '@/lib/api/background';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, PaymentMethod, PaymentStatus } from '@/lib/types';
@@ -163,6 +164,25 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     return errorResponse(
       409,
       'This order was paid online — its payment is managed by the gateway and can only change via a refund.',
+    );
+  }
+
+  // The SALE of a HIOC Ritual pass is what issued the pass the moment it turned
+  // 'paid' (a database trigger does it, CP-D6). Moving it off 'paid' from here
+  // would leave a live pass behind an order that says the customer never paid
+  // for it, so the way back is the refund, which voids the pass first (CP-D15).
+  // Re-recording HOW it was paid while it stays paid (cash → UPI, a corrected
+  // split) is an ordinary re-settle and is fine. `order_kind` is absent before
+  // 2026-10-coffee-pass.sql (existing is select('*')), which reads as a menu
+  // order, so this is inert there.
+  if (
+    existing.order_kind === 'coffee_pass' &&
+    existing.payment_status === 'paid' &&
+    paymentStatus !== 'paid'
+  ) {
+    return errorResponse(
+      409,
+      `A ${PASS_PROGRAM_NAME} has been issued for this sale — refund it instead.`,
     );
   }
 

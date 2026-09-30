@@ -6,6 +6,8 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isUuid } from '@/lib/api/constants';
 import { createGatewayRefund } from '@/lib/payments/gateway';
 import { reverseForOrder } from '@/lib/loyalty/ledger';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { restorePassAfterFailedRefund, voidPassForRefund } from '@/lib/passes/server';
 import { readIdempotencyKey } from '@/lib/orders/idempotency';
 import {
   tenderBalances,
@@ -25,9 +27,12 @@ type RouteParams = { params: { id: string } };
 // recent captured payment, writes a `refunds` row EITHER WAY (processed or
 // failed — a failed gateway call is logged, never silently dropped per the
 // FND-2 AC), and sets orders.payment_status to 'refunded' (fully) or
-// 'partially_refunded'. Any points earned/redeemed on the order are clawed
+// 'partially_refunded'. Any Beanies earned/redeemed on the order are clawed
 // back (FND-4 edge case). Body: { amount_inr?: number, reason: string } —
 // amount_inr omitted = full refund of whatever remains unrefunded.
+//
+// HIOC Ritual (CP-D15): refunding the SALE of a pass voids the pass BEFORE any
+// money moves, and only if no cup has been used. See voidPassBeforeMoney below.
 // PIN-3: gated by getCounterActor() — classic session first, unchanged; an
 // enrolled-device PIN operator only when there is no session at all.
 // roleHint = actor.role: hasPermission() would otherwise re-derive the role
@@ -65,9 +70,13 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
   }
 
+  // `*` rather than a column list because order_kind (HIOC Ritual,
+  // 2026-10-coffee-pass.sql) does not exist before that migration, and a select
+  // naming an unknown column would fail every refund on such a database; here
+  // it is simply absent, which reads as an ordinary menu order.
   const { data: order, error: orderError } = await admin
     .from('orders')
-    .select('id, payment_status, payment_method, total_inr, subtotal_inr')
+    .select('*')
     .eq('id', id)
     .maybeSingle();
   if (orderError) return errorResponse(500, 'Failed to load order');
@@ -91,8 +100,9 @@ export async function POST(request: Request, { params }: RouteParams) {
   // payments row — those are written only by the gateway paths. Until now this
   // returned 409 and a walk-in customer simply could not be refunded in-system,
   // even though the staff UI offered the button. Route it to the counter path.
+  const isPassSale = order.order_kind === 'coffee_pass';
   if (!payment || !payment.gateway_payment_id) {
-    return counterRefund(admin, id, order as CounterOrder, body, reason, user.id, idempotencyKey);
+    return counterRefund(admin, id, order as CounterOrder, body, reason, user.id, idempotencyKey, isPassSale);
   }
 
   const { data: priorRefunds, error: priorError } = await admin
@@ -127,6 +137,12 @@ export async function POST(request: Request, { params }: RouteParams) {
     return errorResponse(400, `amount_inr exceeds the refundable balance (₹${refundable})`);
   }
 
+  // Every check that could refuse this refund has passed, so this is the moment
+  // to void the pass: any earlier and a bad amount would leave a voided pass
+  // and no refund.
+  const passVoid = await voidPassBeforeMoney(admin, id, isPassSale);
+  if (!passVoid.ok) return passVoid.response;
+
   const gatewayResult = await createGatewayRefund(payment.gateway_payment_id, amountInr, {
     reason,
     hioc_order_id: id,
@@ -141,6 +157,8 @@ export async function POST(request: Request, { params }: RouteParams) {
       status: 'failed',
       created_by: user.id,
     });
+    // The money did not move, so the pass this call voided is good again.
+    if (passVoid.voidedHere) await restorePassAfterFailedRefund(admin, id);
     return errorResponse(
       502,
       'Refund failed at the payment gateway — it has been logged; please retry.',
@@ -182,15 +200,60 @@ export async function POST(request: Request, { params }: RouteParams) {
     console.error('order payment_status update after refund failed', updateError);
   }
 
-  // Claw back points ONLY on a FULL refund (H8). reverseForOrder reverses the
+  // Claw back Beanies ONLY on a FULL refund (H8). reverseForOrder reverses the
   // order's ENTIRE earn+redeem, so running it on a partial refund would wrongly
-  // wipe all earned points (e.g. a ₹10 refund on a ₹1000 order). A partial
+  // wipe all earned Beanies (e.g. a ₹10 refund on a ₹1000 order). A partial
   // refund leaves loyalty untouched.
   if (newPaymentStatus === 'refunded') {
     await reverseForOrder(id);
   }
 
   return NextResponse.json({ refund: refundRow, order: updatedOrder });
+}
+
+/**
+ * CP-D15 — before a refund on the SALE of a HIOC Ritual pass moves money, void
+ * the pass. Any refund on a pass sale cancels the pass (so a sale paid in two
+ * tenders can be refunded one tender at a time), and a pass with a cup already
+ * used cannot be refunded in the app at all.
+ *
+ *   'used'      a cup was spent: 409, nothing moves
+ *   'ok'        THIS call voided it: `voidedHere`, so if the money step then
+ *               fails the caller must give the pass back
+ *   'already'   an earlier refund voided it: carry on
+ *   'not_found' no pass was ever issued for this sale (it was refunded before
+ *               the trigger ran, or predates the feature): carry on
+ *   'error'     the call itself failed: 503, nothing moves, because refunding
+ *               without knowing whether cups were spent could pay back a pass
+ *               that has been drunk
+ *
+ * Not gated on the feature flag: a sale made while it was on is still refunded
+ * correctly after it is switched off. An order that is not a pass sale skips
+ * all of this (`isPassSale` false), which is every order before the feature.
+ */
+async function voidPassBeforeMoney(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  orderId: string,
+  isPassSale: boolean,
+): Promise<{ ok: true; voidedHere: boolean } | { ok: false; response: NextResponse }> {
+  if (!isPassSale) return { ok: true, voidedHere: false };
+  const code = await voidPassForRefund(admin, orderId);
+  switch (code) {
+    case 'used':
+      return {
+        ok: false,
+        response: errorResponse(409, `This ${PASS_PROGRAM_NAME} has already been used — it can't be refunded.`),
+      };
+    case 'error':
+      return {
+        ok: false,
+        response: errorResponse(503, `${PASS_PROGRAM_NAME} is temporarily unavailable — please try the refund again.`),
+      };
+    case 'ok':
+      return { ok: true, voidedHere: true };
+    default: // 'already' | 'not_found'
+      return { ok: true, voidedHere: false };
+  }
 }
 
 type CounterOrder = {
@@ -245,6 +308,7 @@ async function counterRefund(
   reason: string,
   userId: string,
   idempotencyKey: string | null,
+  isPassSale: boolean,
 ) {
   // What was actually taken, per tender. POS4-1 orders have parts; anything
   // older is a single tender for the whole total.
@@ -280,6 +344,12 @@ async function counterRefund(
     return errorResponse(status, validated.error);
   }
 
+  // Recording the refund IS the money step at the counter (the cash leaves the
+  // drawer / the terminal reverses), so the pass is voided just before it, once
+  // the tender and amount have been accepted (CP-D15).
+  const passVoid = await voidPassBeforeMoney(admin, id, isPassSale);
+  if (!passVoid.ok) return passVoid.response;
+
   const { data: refundRow, error: refundError } = await admin
     .from('refunds')
     .insert({
@@ -308,6 +378,8 @@ async function counterRefund(
     // Nothing has moved in our records yet, so this one IS fatal — unlike the
     // gateway path, where the money had already left before the insert.
     console.error('counter refund insert failed', refundError);
+    // No refund was recorded, so the pass this call voided is good again.
+    if (passVoid.voidedHere) await restorePassAfterFailedRefund(admin, id);
     return errorResponse(
       500,
       'Could not record the refund — is supabase/2026-08-counter-refunds.sql applied?',
@@ -328,7 +400,7 @@ async function counterRefund(
   if (updateError) console.error('order payment_status update after counter refund failed', updateError);
 
   // Same rule as the gateway path (H8): a PARTIAL refund leaves loyalty alone,
-  // because reverseForOrder reverses the order's entire earn+redeem.
+  // because reverseForOrder reverses the order's entire earn+redeem (Beanies).
   if (newPaymentStatus === 'refunded') {
     await reverseForOrder(id);
   }

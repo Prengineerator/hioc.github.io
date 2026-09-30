@@ -139,15 +139,39 @@ export async function loadPassSummaries(
 }
 
 /**
- * The passes a customer can spend RIGHT NOW: active, in date, with cups left,
- * soonest-expiring first. The database decides `state` with its own clock; `now`
- * is checked as well so a pass that expired in the last moment is never offered.
+ * One pass by id, with its balance, whoever holds it (the caller has already
+ * decided the actor may see it: a manager adjusting it). Null when there is no
+ * such pass or the read failed.
  */
-export async function loadUsablePasses(
+export async function loadPassSummaryById(admin: SupabaseClient, passId: string): Promise<PassSummary | null> {
+  try {
+    const { data, error } = await admin.from(VIEW).select(PASS_BALANCE_COLUMNS).eq('id', passId).maybeSingle();
+    if (error) {
+      logFailure('loading a pass', error);
+      return null;
+    }
+    return data ? toPassSummary(data as unknown as Row) : null;
+  } catch (error) {
+    logFailure('loading a pass', error);
+    return null;
+  }
+}
+
+/**
+ * The passes a customer can spend RIGHT NOW, with their full summaries (plan
+ * name, expiry, cups left): active, in date, with cups left, soonest-expiring
+ * first. The database decides `state` with its own clock; `now` is checked as
+ * well so a pass that expired in the last moment is never offered.
+ *
+ * This is the one query behind both what the allocator spends
+ * (loadUsablePasses) and what a screen shows the customer (the quote's `pass`
+ * block, the counter's customer lookup), so the two can never disagree.
+ */
+export async function loadUsablePassSummaries(
   admin: SupabaseClient,
   userId: string,
   now: Date = new Date(),
-): Promise<UsablePass[]> {
+): Promise<PassSummary[]> {
   try {
     const { data, error } = await admin
       .from(VIEW)
@@ -161,19 +185,32 @@ export async function loadUsablePasses(
     }
     return ((data ?? []) as unknown as Row[])
       .map(toPassSummary)
-      .filter((p) => p.drinks_remaining > 0 && Date.parse(p.expires_at) > now.getTime())
-      .map((p) => ({
-        id: p.id,
-        drinks_remaining: p.drinks_remaining,
-        drink_value_inr: p.drink_value_inr,
-        expires_at: p.expires_at,
-        max_per_day: p.max_per_day,
-        used_today: p.used_today,
-      }));
+      .filter((p) => p.drinks_remaining > 0 && Date.parse(p.expires_at) > now.getTime());
   } catch (error) {
     logFailure('loading usable passes', error);
     return [];
   }
+}
+
+/** What the allocator needs to know about a pass (lib/passes/rules.ts allocatePassDrinks). */
+export function toUsablePass(p: PassSummary): UsablePass {
+  return {
+    id: p.id,
+    drinks_remaining: p.drinks_remaining,
+    drink_value_inr: p.drink_value_inr,
+    expires_at: p.expires_at,
+    max_per_day: p.max_per_day,
+    used_today: p.used_today,
+  };
+}
+
+/** The passes a customer can spend right now, in the shape the allocator takes. */
+export async function loadUsablePasses(
+  admin: SupabaseClient,
+  userId: string,
+  now: Date = new Date(),
+): Promise<UsablePass[]> {
+  return (await loadUsablePassSummaries(admin, userId, now)).map(toUsablePass);
 }
 
 /**

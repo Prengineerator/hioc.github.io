@@ -17,8 +17,17 @@
 // already-stored discount to the new (smaller) subtotal so the total can never go
 // negative. Full coupon/points RE-QUALIFICATION on void (the spec's edge case:
 // "if the coupon no longer qualifies, drop it") is a deferred follow-up.
+//
+// HIOC Ritual (docs/COFFEE-PASS-SPEC.md §6): a line a pass cup paid for carries
+// the rupees it covered (`pass_covered_inr`), so the pass cover of the order is
+// re-derived here from the lines that REMAIN, and the coupon/points discount is
+// clamped to what is left after it (subtotal - pass cover), exactly as at
+// creation. The database gives the cups themselves back when a redeemed line is
+// voided (trg_coffee_pass_return_on_void), so this only has to get the bill
+// right.
 
-import { computeBill, type BillBreakdown } from '@/lib/store/hours';
+import type { BillBreakdown } from '@/lib/store/hours';
+import { composePassBill } from '@/lib/passes/rules';
 import type { OrderStatus, OrderType, StoreSettings } from '@/lib/types';
 
 // Only the fields the recompute needs from an order line — keeps this callable
@@ -29,6 +38,8 @@ export interface RecomputeLine {
   line_total_inr: number;
   /** The line's GST-exempt snapshot (2026-09-gst-exempt); absent = taxable. */
   gst_exempt?: boolean;
+  /** Rupees of this line a HIOC Ritual cup paid for (2026-10-coffee-pass.sql); absent = 0. */
+  pass_covered_inr?: number;
 }
 
 export interface RecomputeInput {
@@ -41,19 +52,25 @@ export interface RecomputeInput {
 /**
  * Recomputes an order's authoritative totals from its REMAINING (non-voided)
  * lines after a correction, returning the persisted bill shape
- * ({ subtotal_inr, tax_inr, packaging_inr, discount_inr, total_inr }).
+ * ({ subtotal_inr, tax_inr, packaging_inr, discount_inr, total_inr }) plus
+ * `pass_discount_inr` (what HIOC Ritual cups still cover).
  *
  * - subtotal = Σ `line_total_inr` over non-voided items
+ * - pass cover = Σ `pass_covered_inr` over non-voided items; the part of it on
+ *   GST-liable lines leaves the taxable base (CP-D11)
  * - GST on the non-voided lines that aren't GST-exempt (their snapshot)
- * - discount = min(stored discount, new subtotal)  ← v1 clamp (D8)
- * - GST/packaging via computeBill; dine-in forces packaging 0 (decision D5)
+ * - discount = min(stored discount, new subtotal - pass cover)  ← v1 clamp (D8)
+ * - GST/packaging via composePassBill (= computeBill with no pass); dine-in
+ *   forces packaging 0 (decision D5)
+ *
+ * With no pass cover anywhere this is byte-for-byte the recompute it always was.
  */
 export function recomputeOrderTotals({
   items,
   settings,
   orderType,
   discountInr,
-}: RecomputeInput): BillBreakdown {
+}: RecomputeInput): BillBreakdown & { pass_discount_inr: number } {
   const remaining = items.filter((item) => !item.voided);
   const subtotalInr = remaining.reduce((sum, item) => sum + item.line_total_inr, 0);
   // GST only on the lines that weren't GST-exempt when sold — the snapshot,
@@ -62,11 +79,25 @@ export function recomputeOrderTotals({
     .filter((item) => item.gst_exempt !== true)
     .reduce((sum, item) => sum + item.line_total_inr, 0);
 
-  // Clamp the stored discount to the new subtotal so the total never goes
-  // negative when lines are removed (v1: no coupon/points re-qualification, D8).
-  const discount = Math.min(Math.max(0, discountInr), subtotalInr);
+  // What the cups still cover: a voided line's cover goes with it (the database
+  // has already returned its cups), a kept line's stays. Never more than the
+  // line itself was worth, so a bad row can't push the bill below zero.
+  const covered = (item: RecomputeLine) => Math.min(Math.max(0, item.pass_covered_inr ?? 0), item.line_total_inr);
+  const passCoveredInr = remaining.reduce((sum, item) => sum + covered(item), 0);
+  const passCoveredTaxableInr = remaining
+    .filter((item) => item.gst_exempt !== true)
+    .reduce((sum, item) => sum + covered(item), 0);
 
-  const bill = computeBill(subtotalInr, settings, discount, taxableSubtotalInr);
+  // Clamp the stored discount to what is left after the pass so the total never
+  // goes negative when lines are removed (v1: no coupon/points re-qualification,
+  // D8). The coupon and Beanies were computed on subtotal - pass cover at
+  // creation (CP-D12), so this is the same ceiling they were under then.
+  const discount = Math.min(Math.max(0, discountInr), Math.max(0, subtotalInr - passCoveredInr));
+
+  const bill = composePassBill(
+    { subtotalInr, taxableSubtotalInr, discountInr: discount, passCoveredInr, passCoveredTaxableInr },
+    settings,
+  );
 
   // Dine-in never carries a packaging charge (D5): drop it from the total and
   // zero the line, regardless of the store's packaging setting. Mirrors the
