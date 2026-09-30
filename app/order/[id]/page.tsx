@@ -20,6 +20,11 @@ import { formatIstTime } from '@/lib/store/hours';
 import { CUSTOMER_PROGRESS, isTerminal } from '@/lib/orders/stateMachine';
 import { useOrderRealtime, type RealtimeConnection } from '@/lib/realtime/hooks';
 import { Spinner } from '@/components/ui/Spinner';
+import { buttonVariants } from '@/components/ui/Button';
+import { SurfaceLink } from '@/components/SurfaceLink';
+import { RitualChip } from '@/components/passes/RitualChip';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/lib/passes/ui';
 import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
@@ -266,7 +271,10 @@ export default function OrderStatusPage() {
   const cancelled = order.status === 'cancelled';
   const negative = rejected || cancelled;
   const awaitingPayment = order.status === 'placed'; // gated on online payment (PAY-1)
-  const allowCounter = canPayAtCounter(order); // issue-1: web guests never see this offered
+  // The SALE of a HIOC Ritual, not a menu order: no kitchen, no pickup, and it
+  // cannot be switched to pay-at-counter (the server refuses it).
+  const isPassSale = isPassSaleOrder(order);
+  const allowCounter = canPayAtCounter(order) && !isPassSale; // issue-1: web guests never see this offered
   const displayedPaymentError =
     paymentActionError ||
     (flagDismissed ? '' : paymentFlagMessage(searchParams.get('payment'), allowCounter));
@@ -297,8 +305,10 @@ export default function OrderStatusPage() {
         <div className="mt-6 rounded-md border border-tan bg-surface p-6 text-center">
           <h2 className="text-lg font-bold text-charcoal">Waiting on payment</h2>
           <p className="mt-2 text-sm text-charcoal">
-            Your order will join the kitchen queue as soon as payment is confirmed — this
-            updates automatically, usually within a few seconds.
+            {isPassSale
+              ? `Your ${PASS_PROGRAM_NAME} will be ready as soon as payment is confirmed`
+              : 'Your order will join the kitchen queue as soon as payment is confirmed'}{' '}
+            — this updates automatically, usually within a few seconds.
           </p>
           {displayedPaymentError ? (
             <p className="mt-3 text-sm font-semibold text-red-700">{displayedPaymentError}</p>
@@ -339,6 +349,8 @@ export default function OrderStatusPage() {
             Sorry for the inconvenience.
           </p>
         </div>
+      ) : isPassSale ? (
+        <PassSaleNote paymentStatus={order.payment_status} />
       ) : (
         <>
           {STATUS_HEADLINE[order.status] ? (
@@ -398,6 +410,9 @@ export default function OrderStatusPage() {
                   {item.name_snapshot}
                   {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''} ×{' '}
                   {item.quantity}
+                  {!item.voided && item.pass_drinks && item.pass_drinks > 0 ? (
+                    <RitualChip className="ml-2 align-middle">{ritualTagLabel(item.pass_drinks)}</RitualChip>
+                  ) : null}
                 </span>
                 <span className="shrink-0 font-mono font-bold tabular-nums">₹{item.line_total_inr}</span>
               </div>
@@ -425,20 +440,23 @@ export default function OrderStatusPage() {
         ) : null}
       </div>
 
-      {!awaitingPayment ? (
+      {!awaitingPayment && !isPassSale ? (
         <p className="mt-6 text-center text-sm text-charcoal">
           Pickup: <span className="font-bold">{order.pickup_slot_label || order.pickup_time}</span>
         </p>
       ) : null}
-      {/* Guest orders carry no phone — don't promise messages to nobody. */}
-      <p className="mt-1 text-center text-sm italic text-muted">
-        {order.customer_phone
-          ? <>We&apos;ll message you on {order.customer_phone} as your order progresses.</>
-          : 'Keep this page open — it updates live as your order progresses.'}
-      </p>
+      {/* Guest orders carry no phone — don't promise messages to nobody. A Ritual
+          purchase has no progress to message about. */}
+      {isPassSale ? null : (
+        <p className="mt-1 text-center text-sm italic text-muted">
+          {order.customer_phone
+            ? <>We&apos;ll message you on {order.customer_phone} as your order progresses.</>
+            : 'Keep this page open — it updates live as your order progresses.'}
+        </p>
+      )}
 
       {/* Self-cancel — only before staff accept the order (F1). */}
-      {order.status === 'received' ? (
+      {order.status === 'received' && !isPassSale ? (
         <div className="mt-6 text-center">
           <button
             type="button"
@@ -491,11 +509,15 @@ function PaymentBadge({ order }: { order: OrderWithItems }) {
 function BillRows({ order }: { order: OrderWithItems }) {
   const total = order.total_inr ?? order.subtotal_inr;
   const discountLabel = order.coupon_code ? `Discount (${order.coupon_code})` : 'Discount';
+  // HIOC Ritual: total = subtotal + tax + packaging - discount - Ritual. The
+  // Ritual comes before the coupon, the order they were applied in (CP-D12).
+  const passBill = orderPassBill(order);
   return (
     <div className="mt-4 flex flex-col gap-1 border-t border-line pt-4 text-sm">
       <Row label="Subtotal" value={order.subtotal_inr} />
       {order.tax_inr > 0 ? <Row label="GST" value={order.tax_inr} /> : null}
       {order.packaging_inr > 0 ? <Row label="Packaging" value={order.packaging_inr} /> : null}
+      {passBill ? <Row label={passBill.label} value={-passBill.discountInr} tone="success" /> : null}
       {order.discount_inr > 0 ? <Row label={discountLabel} value={-order.discount_inr} /> : null}
       <div className="mt-1 flex items-center justify-between border-t border-line pt-2">
         <span className="font-bold text-charcoal">Total</span>
@@ -505,11 +527,30 @@ function BillRows({ order }: { order: OrderWithItems }) {
   );
 }
 
-function Row({ label, value }: { label: string; value: number }) {
+// `tone="success"` is the green a discount that is in effect gets in the
+// checkout's bill (CheckoutForm), so the Ritual reads the same on both.
+function Row({ label, value, tone }: { label: string; value: number; tone?: 'success' }) {
+  const toneClass = tone === 'success' ? 'font-bold text-green-700' : 'text-charcoal';
   return (
-    <div className="flex items-center justify-between text-charcoal">
+    <div className={'flex items-center justify-between ' + toneClass}>
       <span>{label}</span>
-      <span className="font-mono tabular-nums">₹{value}</span>
+      <span className="font-mono tabular-nums">{value < 0 ? `-₹${Math.abs(value)}` : `₹${value}`}</span>
+    </div>
+  );
+}
+
+// What a Ritual purchase shows in place of the kitchen progress and the pickup
+// code: whether the Ritual is active yet, and where to find it.
+function PassSaleNote({ paymentStatus }: { paymentStatus: string }) {
+  const note = passSaleNote(paymentStatus);
+  return (
+    <div aria-live="polite" className="mt-6 rounded-md bg-surface px-4 py-4 text-center text-charcoal">
+      <p className="font-semibold">{note.text}</p>
+      {note.link ? (
+        <SurfaceLink href="/ritual" className={buttonVariants({ className: 'mt-3' })}>
+          View my {PASS_PROGRAM_NAME}
+        </SurfaceLink>
+      ) : null}
     </div>
   );
 }

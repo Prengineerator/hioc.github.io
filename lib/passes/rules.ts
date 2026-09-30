@@ -430,15 +430,15 @@ export function passRedeemMessage(code: PassRedeemCode): string {
     case 'ok':
       return `Your ${PASS_PROGRAM_NAME} cups have been applied.`;
     case 'not_owner':
-      return `That ${PASS_PROGRAM_NAME} pass is not on your account.`;
+      return `That ${PASS_PROGRAM_NAME} is not on your account.`;
     case 'inactive':
-      return `That ${PASS_PROGRAM_NAME} pass is no longer active.`;
+      return `That ${PASS_PROGRAM_NAME} is no longer active.`;
     case 'expired':
-      return `Your ${PASS_PROGRAM_NAME} pass has expired.`;
+      return `Your ${PASS_PROGRAM_NAME} has expired.`;
     case 'insufficient':
-      return `Your ${PASS_PROGRAM_NAME} pass does not have enough cups left.`;
+      return `Your ${PASS_PROGRAM_NAME} does not have enough cups left.`;
     case 'daily_limit':
-      return `You have reached today's limit on your ${PASS_PROGRAM_NAME} pass.`;
+      return `You have reached today's limit on your ${PASS_PROGRAM_NAME}.`;
     case 'bad_input':
       return `We could not apply your ${PASS_PROGRAM_NAME} cups to this order.`;
   }
@@ -457,15 +457,15 @@ export function passShortfallMessage(
     case 'no_pass':
       return `You have no ${PASS_PROGRAM_NAME} cups to use right now.`;
     case 'no_eligible_items':
-      return `Nothing in this order can be paid with a ${PASS_PROGRAM_NAME} pass.`;
+      return `Nothing in this order can be paid with ${PASS_PROGRAM_NAME} cups.`;
     case 'daily_limit':
       return r.applied > 0
-        ? `Your ${PASS_PROGRAM_NAME} pass has a daily limit, so ${cupsLabel(r.applied)} can be used today.`
-        : `You have already used today's limit on your ${PASS_PROGRAM_NAME} pass.`;
+        ? `Your ${PASS_PROGRAM_NAME} has a daily limit, so ${cupsLabel(r.applied)} can be used today.`
+        : `You have already used today's limit on your ${PASS_PROGRAM_NAME}.`;
     case 'not_enough_drinks':
       return r.eligible_units < r.requested && r.available >= r.requested
-        ? `Only ${cupsLabel(r.eligible_units)} in this order can use your ${PASS_PROGRAM_NAME} pass.`
-        : `You have ${cupsLabel(r.available)} left on your ${PASS_PROGRAM_NAME} pass, so ${cupsLabel(r.applied)} can be used.`;
+        ? `Only ${cupsLabel(r.eligible_units)} in this order can use your ${PASS_PROGRAM_NAME}.`
+        : `You have ${cupsLabel(r.available)} left on your ${PASS_PROGRAM_NAME}, so ${cupsLabel(r.applied)} can be used.`;
   }
 }
 

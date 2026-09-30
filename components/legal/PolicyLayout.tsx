@@ -15,15 +15,18 @@ const POLICIES = [
 
 export function PolicyLayout({
   title,
+  updated = BUSINESS.lastUpdated,
   children,
 }: {
   title: string;
+  /** The "Last updated" date; defaults to the site-wide one. */
+  updated?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="mx-auto max-w-3xl px-4 py-12">
       <h1 className="text-3xl font-bold text-charcoal">{title}</h1>
-      <p className="mt-1 text-sm text-muted">Last updated: {BUSINESS.lastUpdated}</p>
+      <p className="mt-1 text-sm text-muted">Last updated: {updated}</p>
 
       <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 border-b border-line pb-4 text-sm">
         {POLICIES.map((p) => (
@@ -53,9 +56,19 @@ export function PolicyLayout({
 }
 
 // A section heading used inside policy bodies.
-export function PolicySection({ heading, children }: { heading: string; children: React.ReactNode }) {
+// `id` makes the section linkable (e.g. /refund-cancellation#hioc-ritual); the
+// scroll margin keeps its heading clear of the sticky site header.
+export function PolicySection({
+  heading,
+  id,
+  children,
+}: {
+  heading: string;
+  id?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="flex flex-col gap-2">
+    <section id={id} className="flex scroll-mt-24 flex-col gap-2">
       <h2 className="mt-2 text-lg font-semibold text-charcoal">{heading}</h2>
       {children}
     </section>

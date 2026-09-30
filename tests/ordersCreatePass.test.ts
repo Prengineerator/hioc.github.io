@@ -462,7 +462,7 @@ describe('POST /api/orders — HIOC Ritual refusals', () => {
     const res = await POST(req(web({ items: [line('capp', 3)], pass_drinks: 3 })));
     expect(res.status).toBe(400);
     const { error } = (await res.json()) as { error: string };
-    expect(error).toContain('You have 2 cups left on your HIOC Ritual pass, so 2 cups can be used.');
+    expect(error).toContain('You have 2 cups left on your HIOC Ritual, so 2 cups can be used.');
     expect(state.orderInsert).toBeUndefined();
     expect(passesServer.redeemPassDrinks).not.toHaveBeenCalled();
   });
@@ -470,7 +470,7 @@ describe('POST /api/orders — HIOC Ritual refusals', () => {
   it('400s when nothing in the cart is eligible', async () => {
     const res = await POST(req(web({ items: [line('sandwich')], pass_drinks: 1 })));
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/Nothing in this order can be paid with a HIOC Ritual pass/);
+    expect(((await res.json()) as { error: string }).error).toMatch(/Nothing in this order can be paid with HIOC Ritual cups/);
     expect(state.orderInsert).toBeUndefined();
   });
 

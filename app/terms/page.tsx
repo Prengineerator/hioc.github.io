@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS } from '@/lib/legal';
+import { BUSINESS, RITUAL_POLICY_UPDATED } from '@/lib/legal';
+import { flags } from '@/lib/flags';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 
 export const metadata: Metadata = { title: 'Terms & Conditions' };
 
 export default function TermsPage() {
   return (
-    <PolicyLayout title="Terms & Conditions">
+    <PolicyLayout title="Terms & Conditions" updated={flags.coffeePass ? RITUAL_POLICY_UPDATED : undefined}>
       <p>
         These Terms &amp; Conditions (&ldquo;Terms&rdquo;) govern your use of the {BUSINESS.name}{' '}
         website and order-ahead service, operated by {BUSINESS.legalName}. By placing an order or
@@ -55,6 +57,14 @@ export default function TermsPage() {
           compliant third-party gateway; {BUSINESS.name} does not store your card or UPI
           credentials. Failed or incomplete online payments will not place an order into our queue.
         </p>
+        {/* HIOC Ritual: shown only while the feature is on. */}
+        {flags.coffeePass ? (
+          <p>
+            You may also buy a {PASS_PROGRAM_NAME} prepaid coffee plan. How it is bought, how long it
+            lasts, what a cup covers and when it can be refunded are set out in section 7 of our{' '}
+            <a href="/refund-cancellation#hioc-ritual" className="text-tan-dark hover:underline">Refund &amp; Cancellation Policy</a>.
+          </p>
+        ) : null}
       </PolicySection>
 
       <PolicySection heading="6. Pickup">

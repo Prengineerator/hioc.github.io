@@ -7,6 +7,7 @@ import { buttonVariants } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { flags } from '@/lib/flags';
 import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
+import { RitualTeaser } from '@/components/passes/RitualTeaser';
 // Owned by the promotions engineer (components/promotions/**); imported
 // here (not built here) since it's already self-contained (fetches its own
 // data, handles empty/error states, per-session dismiss) — mounting it is
@@ -25,6 +26,8 @@ export default function HomePage() {
       <AnnouncementBanner />
       <HeroSection />
       <MeetCoffey />
+      {/* HIOC Ritual teaser: renders nothing until the feature is on and a plan is on sale. */}
+      {flags.coffeePass ? <RitualTeaser /> : null}
       <CategoryTeaser />
       <VisitStrip />
       <AboutTeaser />

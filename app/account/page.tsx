@@ -25,6 +25,7 @@ import {
 import { Spinner } from '@/components/ui/Spinner';
 import { TasteProfileCard } from '@/components/account/TasteProfileCard';
 import { flags } from '@/lib/flags';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { OrderResponse } from '@/lib/api/orders';
 
 const SECTIONS = [
@@ -43,6 +44,16 @@ const SECTIONS = [
     title: 'Rewards',
     body: 'Your Beanies balance, how to earn, and redeem history.',
   },
+  // HIOC Ritual (docs/COFFEE-PASS-SPEC.md): only while the feature is on.
+  ...(flags.coffeePass
+    ? [
+        {
+          href: '/ritual',
+          title: PASS_PROGRAM_NAME,
+          body: 'Your prepaid cups, when they run out, and plans to save on your daily coffee.',
+        },
+      ]
+    : []),
   {
     href: '/account/profile',
     title: 'Profile',

@@ -14,12 +14,19 @@ import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 import type { ResolvedQrTable } from '@/lib/tables/resolveTableByToken';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 
 // Dine-in bill preview (QR-1). Always calls the quote endpoint with
 // order_type='dine_in' so packaging shows as ₹0 — the client NEVER computes
 // money; POST /api/orders re-derives everything authoritatively at submit.
+//
+// `pass_discount_inr` is what a HIOC Ritual covered (docs/COFFEE-PASS-SPEC.md):
+// this pad asks for no cups (a table-QR diner is not signed in to a Ritual), so
+// it is 0 here today, but the bill reads it the same way as every other bill so
+// a covered amount can never be left out of what is shown.
+type QuotedBill = BillBreakdown & { pass_discount_inr?: number };
 interface QuoteResponse {
-  bill: BillBreakdown;
+  bill: QuotedBill;
 }
 
 export function QrCheckout({
@@ -51,7 +58,7 @@ export function QrCheckout({
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
-  const [bill, setBill] = useState<BillBreakdown | null>(null);
+  const [bill, setBill] = useState<QuotedBill | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
@@ -128,7 +135,7 @@ export function QrCheckout({
 
   const storeAcceptingOrders = !openState || openState.acceptingOrders;
 
-  const displayBill: BillBreakdown = bill ?? {
+  const displayBill: QuotedBill = bill ?? {
     subtotal_inr: totalPrice,
     tax_inr: 0,
     packaging_inr: 0,
@@ -411,6 +418,9 @@ export function QrCheckout({
       <div className="mb-4 rounded-md border border-line px-4 py-3 text-sm text-charcoal">
         <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
         {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
+        {(displayBill.pass_discount_inr ?? 0) > 0 ? (
+          <BillRow label={PASS_PROGRAM_NAME} value={-(displayBill.pass_discount_inr ?? 0)} />
+        ) : null}
         {displayBill.discount_inr > 0 ? (
           <BillRow label="Discount" value={-displayBill.discount_inr} />
         ) : null}

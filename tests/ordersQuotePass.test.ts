@@ -242,7 +242,7 @@ describe('POST /api/orders/quote — items and HIOC Ritual cups', () => {
     state.passes = [pass({ drinks_remaining: 1 })];
     const body = await (await POST(req({ items: [line('capp', 3)], pass_drinks: 3 }))).json();
     expect(body.pass).toMatchObject({ requested: 3, applied: 1, shortfall: 'not_enough_drinks' });
-    expect(body.pass.message).toContain('1 cup left on your HIOC Ritual pass');
+    expect(body.pass.message).toContain('1 cup left on your HIOC Ritual');
     expect(body.bill.pass_discount_inr).toBe(120); // it previews what WOULD apply
   });
 

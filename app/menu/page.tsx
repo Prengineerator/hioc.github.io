@@ -18,6 +18,8 @@ import { CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { flags } from '@/lib/flags';
 import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
+import { useRitualOffer } from '@/components/passes/useRitualOffer';
+import { ritualOnSale } from '@/lib/passes/ui';
 import type { MenuItem } from '@/lib/types';
 
 const DEFAULT_CATEGORY = CUSTOMER_MENU_CATEGORIES[0].slug;
@@ -66,6 +68,11 @@ function MenuPageContent() {
   const category: string = isMenuCategory(categoryParam)
     ? categoryParam
     : DEFAULT_CATEGORY;
+
+  // HIOC Ritual: the "Ritual" chip on eligible drinks shows only while a plan is
+  // on sale. One shared read of the public plans (nothing per item), and none at
+  // all while the feature is off.
+  const showRitual = ritualOnSale(useRitualOffer().offer);
 
   const [items, setItems] = useState<MenuItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -288,7 +295,7 @@ function MenuPageContent() {
                 </p>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
                   {searchResults.map((item) => (
-                    <MenuItemCard key={item.id} item={item} />
+                    <MenuItemCard key={item.id} item={item} showRitual={showRitual} />
                   ))}
                 </div>
               </>
@@ -321,7 +328,7 @@ function MenuPageContent() {
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
               {items.map((item) => (
-                <MenuItemCard key={item.id} item={item} />
+                <MenuItemCard key={item.id} item={item} showRitual={showRitual} />
               ))}
             </div>
           )}

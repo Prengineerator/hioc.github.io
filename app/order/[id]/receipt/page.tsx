@@ -9,6 +9,10 @@ import { CAFE_NAME, CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
 import { hasBill } from '@/lib/orders/paymentStatusUI';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
+import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/lib/passes/ui';
+import { RitualChip } from '@/components/passes/RitualChip';
+import { SurfaceLink } from '@/components/SurfaceLink';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -92,6 +96,10 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
 
   const total = order.total_inr ?? order.subtotal_inr;
   const discountLabel = order.coupon_code ? `Discount (${order.coupon_code})` : 'Discount';
+  // HIOC Ritual: cups that paid for drinks on this bill, and — for the SALE of a
+  // Ritual — no type/pickup rows, since nothing is collected.
+  const passBill = orderPassBill(order);
+  const isPassSale = isPassSaleOrder(order);
 
   return (
     <div className="mx-auto max-w-sm px-4 py-8 text-charcoal print:py-0 print:text-black">
@@ -127,9 +135,13 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           <MetaRow label="Date" value={formatIstDateTime(order.created_at)} />
           <MetaRow label="Customer" value={order.customer_name} />
           <MetaRow label="Phone" value={order.customer_phone} mono />
-          <MetaRow label="Type" value={ORDER_TYPE_LABEL[order.order_type] ?? order.order_type} />
-          <MetaRow label="Pickup" value={order.pickup_slot_label || order.pickup_time} />
-          {order.pickup_code ? <MetaRow label="Pickup code" value={order.pickup_code} mono /> : null}
+          {isPassSale ? null : (
+            <>
+              <MetaRow label="Type" value={ORDER_TYPE_LABEL[order.order_type] ?? order.order_type} />
+              <MetaRow label="Pickup" value={order.pickup_slot_label || order.pickup_time} />
+              {order.pickup_code ? <MetaRow label="Pickup code" value={order.pickup_code} mono /> : null}
+            </>
+          )}
         </div>
 
         <Divider />
@@ -142,6 +154,11 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
                 <span>
                   {item.quantity} × {item.name_snapshot}
                   {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+                  {!item.voided && item.pass_drinks && item.pass_drinks > 0 ? (
+                    <RitualChip className="ml-2 align-middle print:border-black print:text-black">
+                      {ritualTagLabel(item.pass_drinks)}
+                    </RitualChip>
+                  ) : null}
                 </span>
                 <span className="shrink-0 font-mono font-bold tabular-nums">₹{item.line_total_inr}</span>
               </div>
@@ -166,6 +183,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           <BillRow label="Subtotal" value={`₹${order.subtotal_inr}`} />
           {order.tax_inr > 0 ? <BillRow label="GST" value={`₹${order.tax_inr}`} /> : null}
           {order.packaging_inr > 0 ? <BillRow label="Packaging" value={`₹${order.packaging_inr}`} /> : null}
+          {passBill ? <BillRow label={passBill.label} value={`-₹${passBill.discountInr}`} /> : null}
           {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`-₹${order.discount_inr}`} /> : null}
           <div className="mt-1 flex items-center justify-between border-t border-[#c9c9c9] pt-1 text-sm font-bold">
             <span>Total</span>
@@ -188,6 +206,15 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           Thank you for your order! · {CAFE_NAME}
         </p>
       </div>
+
+      {isPassSale ? (
+        <p className="mt-4 text-center text-sm text-charcoal print:hidden">
+          {passSaleNote(order.payment_status).text}{' '}
+          <SurfaceLink href="/ritual" className="font-semibold text-tan-dark hover:underline">
+            View my {PASS_PROGRAM_NAME}
+          </SurfaceLink>
+        </p>
+      ) : null}
     </div>
   );
 }
