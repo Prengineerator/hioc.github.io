@@ -19,6 +19,7 @@ import {
 import { afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
+import { indianE164HonouringPlus } from '@/lib/phone';
 
 export const dynamic = 'force-dynamic';
 
@@ -216,6 +217,9 @@ export async function POST(request: Request) {
       userId,
       itemIds,
       categories: cats,
+      // Same rule as POST /api/orders: the typed phone counts only when a counter actor typed it.
+      // `linked` is null for a first-visit number, which is exactly when this matters.
+      counterPhone: isStaff ? indianE164HonouringPlus(customer_phone) : null,
     });
     if (couponResult.ok) {
       couponDiscountInr = Math.min(couponResult.discountInr, payableAfterPass);

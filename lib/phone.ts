@@ -43,3 +43,34 @@ export function formatIndianMobileDisplay(phone: string | null | undefined): str
   if (!normalized) return null;
   return `+91 ${normalized.slice(0, 5)} ${normalized.slice(5)}`;
 }
+
+/**
+ * normalizeIndianMobile for input that may already carry a country code. A leading
+ * '+' says the caller SPECIFIED the country, so only '+91…' can be an Indian mobile:
+ * '+6581234567' is a Singapore number, not the Indian 6581234567 that a blind
+ * "strip everything but the digits" would turn it into. Without a '+' the input is
+ * local entry and gets today's forgiving treatment ('9812345678', '09812345678',
+ * '919812345678').
+ *
+ * Marketing consent is keyed by phone, so a foreign number read as Indian would opt in
+ * (or out) an unrelated Indian customer. Use this — never normalizeIndianMobile —
+ * wherever the input can be a stored/E.164 phone rather than something a customer
+ * typed into an Indian-only field.
+ *
+ * Returns the bare 10 digits, or null (foreign '+' number, or not a valid mobile).
+ */
+export function normalizeIndianMobileHonouringPlus(input: string): string | null {
+  const compact = input.trim().replace(/[\s\-().]/g, '');
+  if (compact.startsWith('+') && !compact.startsWith('+91')) return null;
+  return normalizeIndianMobile(compact);
+}
+
+/**
+ * A typed phone → '+91XXXXXXXXXX', '+'-aware (see normalizeIndianMobileHonouringPlus), or null
+ * for anything that is not text or not an Indian mobile.
+ */
+export function indianE164HonouringPlus(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
+  const n = normalizeIndianMobileHonouringPlus(input);
+  return n ? `+91${n}` : null;
+}

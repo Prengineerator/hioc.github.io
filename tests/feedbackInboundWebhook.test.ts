@@ -321,6 +321,10 @@ describe('POST /api/webhooks/whatsapp — STOP / opt-out', () => {
     expect(db.optOuts).toEqual([{ phone: '+919876543210', source: 'stop_keyword' }]);
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(db.messages.filter((m) => m.direction === 'out')).toHaveLength(1);
+    // STOP now ends offers as well as feedback messages (marketing consent), and says so.
+    expect(sendMock.mock.calls[0][0].body).toBe(
+      "You're unsubscribed from HIOC offers and feedback messages. You'll still get updates about orders you place. Reply START any time to opt back in.",
+    );
   });
 
   it('UNSUBSCRIBE also opts out', async () => {

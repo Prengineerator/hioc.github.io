@@ -94,6 +94,15 @@ export const flags = {
   // off), the checkout and POS pass rows, and the owner Passes screen. Read on
   // the server too (every route guards on it), so NEXT_PUBLIC_ on purpose.
   coffeePass: boolEnv(process.env.NEXT_PUBLIC_FLAG_COFFEE_PASS, false),
+  // Marketing agent (docs/MARKETING-AGENT-SPEC.md): /owner/marketing, the nav link
+  // and /owner card, the customer WhatsApp opt-in card on the order confirmation,
+  // and the nightly planner. Default OFF: nothing here may run before the migration
+  // (supabase/2026-10-marketing-agent.sql) is applied, the WhatsApp templates are
+  // approved and the owner has entered product costs. Even with this ON nothing is
+  // SENT until the owner also switches Sending ON inside /owner/marketing (the
+  // kill switch, default off). NEXT_PUBLIC_ because the nav, the owner page and the
+  // order-confirmation card all decide client-side whether to render.
+  marketing: boolEnv(process.env.NEXT_PUBLIC_FLAG_MARKETING, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

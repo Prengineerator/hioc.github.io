@@ -1634,6 +1634,189 @@ async function checkSuggestionEngine() {
 }
 
 // ---------------------------------------------------------------------------
+// MKT-1 — the marketing agent (docs/MARKETING-AGENT-SPEC.md §3,
+// supabase/2026-10-marketing-agent.sql).
+//
+// Two things the mocked test suite cannot see:
+//   * the schema is really there — every column the engine reads/writes, and the
+//     coupons columns that lock a code to a phone (a missing one fails the send
+//     with a PostgREST error the cron swallows, so the agent would look "on" and
+//     do nothing);
+//   * the two tables that must never leak — menu_item_costs (the cafe's margins)
+//     and marketing_consent (customer phone numbers + who opted in) — return
+//     NOTHING to the anon key, which ships to every browser.
+//
+// The anon check needs a PLANTED row, for the reason checkAnonSurface spells out:
+// RLS with no policy answers 200 with an empty array, so reading an empty table
+// proves nothing. marketing_consent has no foreign key that matters (phone is the
+// key, user_id is nullable), so a sentinel phone plants cleanly. menu_item_costs
+// is keyed by an existing menu_item_variants row (FK), so the probe borrows a
+// variant that has no cost yet, plants a cost of 0 on it, and removes exactly that
+// row again — nothing is planted if every variant already has a real cost or the
+// menu is empty, and the probe then says SKIPPED rather than passing.
+// ---------------------------------------------------------------------------
+async function checkMarketingAgent() {
+  heading('MKT-1 · marketing agent tables + lockdown', '2026-10-marketing-agent.sql');
+  const hint = 'apply supabase/2026-10-marketing-agent.sql';
+
+  const tables = [
+    ['menu_item_costs', 'variant_id,menu_item_id,cost_inr,updated_at,updated_by'],
+    [
+      'marketing_settings',
+      'is_singleton,enabled,monthly_budget_inr,message_cost_inr,send_window_start_hour,send_window_end_hour,' +
+        'daily_send_cap,min_days_between,max_per_30_days,holdout_pct,attribution_days,min_margin_pct,' +
+        'default_food_cost_pct,drop_alert_pct,pause_after_unread,whatsapp_business_number,updated_at,updated_by',
+    ],
+    ['marketing_consent', 'phone,user_id,status,source,consented_at,withdrawn_at,updated_at'],
+    ['marketing_consent_events', 'id,phone,user_id,action,source,actor,created_at'],
+    [
+      'marketing_playbooks',
+      'key,mode,priority,params,offer,template,prior_conversion_pct,observed_treated,observed_conversions,last_planned_at,updated_at,updated_by',
+    ],
+    [
+      'marketing_campaigns',
+      'id,kind,playbook_key,name,status,planned_for,send_after,audience,offer,template,projection,guardrail_flags,' +
+        'priority,treated_count,holdout_count,started_at,completed_at,approved_by,approved_at,created_by,created_at,updated_at',
+    ],
+    [
+      'marketing_recipients',
+      'id,campaign_id,phone,user_id,first_name,arm,status,skip_reason,vars,coupon_id,coupon_code,click_token,provider_ref,' +
+        'error,error_code,cost_inr,attempts,claimed_at,sent_at,delivered_at,read_at,clicked_at,reference_at,' +
+        'converted_order_id,converted_at,conversion_revenue_inr,attributed_via,created_at',
+    ],
+    ['coupons', 'campaign_id,assigned_phone'],
+  ];
+
+  let allExist = true;
+  for (const [table, columns] of tables) {
+    const res = await rest(`/${table}?select=${columns}&limit=1`);
+    if (res.ok) {
+      pass(`${table} has every marketing column`);
+    } else {
+      const kind = errKind(res);
+      if (table !== 'coupons') allExist = false;
+      fail(
+        `${table} has every marketing column`,
+        kind === 'no_table' || kind === 'no_column' ? `${hint} — ${errText(res)}` : `${kind}: ${errText(res)}`,
+      );
+    }
+  }
+  if (!allExist) {
+    skip('menu_item_costs is not readable by the anon key', 'a marketing table is missing — apply the migration first');
+    skip('marketing_consent is not readable by the anon key', 'a marketing table is missing — apply the migration first');
+    return;
+  }
+
+  // Seeds the engine assumes: the settings singleton (kill switch off) and the
+  // five playbooks. Absent = the migration ran only partly.
+  const settings = await rest('/marketing_settings?select=enabled&is_singleton=eq.true');
+  const settingsRows = Array.isArray(settings.body) ? settings.body : [];
+  if (settingsRows.length === 1) pass('marketing_settings singleton exists', `Sending is ${settingsRows[0].enabled ? 'ON' : 'OFF'}`);
+  else fail('marketing_settings singleton exists', `${settingsRows.length} row(s) — re-run ${hint}`);
+
+  const books = await rest('/marketing_playbooks?select=key');
+  const keys = new Set(Array.isArray(books.body) ? books.body.map((r) => r.key) : []);
+  const wanted = ['points_expiring', 'points_balance', 'winback_1', 'winback_2', 'winback_3'];
+  const missing = wanted.filter((k) => !keys.has(k));
+  if (missing.length === 0) pass('the five playbooks are seeded');
+  else fail('the five playbooks are seeded', `missing: ${missing.join(', ')} — re-run ${hint}`);
+
+  // --- marketing_consent: plant a sentinel opt-out, confirm anon cannot see it.
+  // The phone is a fake E.164 number (passes the table's CHECK, cannot be a real
+  // customer's) derived from this run's id so it cannot collide.
+  const sentinelPhone = `+1000000${String(parseInt(RUN_ID.slice(-6), 36) % 10_000_000).padStart(7, '0')}`;
+  const planted = await rest('/marketing_consent', {
+    method: 'POST',
+    prefer: 'return=representation',
+    body: { phone: sentinelPhone, status: 'opted_out', source: SENTINEL },
+  });
+  if (!planted.ok) {
+    skip('marketing_consent is not readable by the anon key', `could not plant a probe row (${errText(planted)})`);
+  } else {
+    const q = `/marketing_consent?select=phone&phone=eq.${encodeURIComponent(sentinelPhone)}`;
+    const asService = await rest(q);
+    const serviceRows = Array.isArray(asService.body) ? asService.body.length : 0;
+    const asAnon = await rest(q, { key: ANON });
+    const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : -1;
+    if (serviceRows !== 1) {
+      fail('marketing_consent is not readable by the anon key', `probe row not visible even to the service role (${serviceRows} rows) — result would be meaningless`);
+    } else if (!asAnon.ok) {
+      pass('marketing_consent is not readable by the anon key', `anon was refused outright (${errText(asAnon)})`);
+    } else if (anonRows === 0) {
+      pass('marketing_consent is not readable by the anon key', 'service role sees the planted row, anon sees 0');
+    } else {
+      fail('marketing_consent is readable by the anon key', `anon read back ${anonRows} row(s) — customer phone numbers and consent are exposed`);
+    }
+
+    const removed = await rest(`/marketing_consent?phone=eq.${encodeURIComponent(sentinelPhone)}`, { method: 'DELETE' });
+    const left = await rest(q);
+    const leftRows = Array.isArray(left.body) ? left.body.length : -1;
+    if (removed.ok && leftRows === 0) pass('probe row removed from marketing_consent', 're-queried: 0 rows remain');
+    else fail('probe row removed from marketing_consent', `DELETE the row with phone = '${sentinelPhone}' BY HAND`);
+  }
+
+  // --- menu_item_costs: plant a cost on a variant that has none.
+  const variants = await rest('/menu_item_variants?select=id,menu_item_id&limit=200');
+  const costs = await rest('/menu_item_costs?select=variant_id');
+  const costed = new Set(Array.isArray(costs.body) ? costs.body.map((r) => r.variant_id) : []);
+  const target = (Array.isArray(variants.body) ? variants.body : []).find((v) => !costed.has(v.id));
+  if (!target) {
+    skip('menu_item_costs is not readable by the anon key', 'no menu variant without a cost to plant a probe row on');
+  } else {
+    const planted = await rest('/menu_item_costs', {
+      method: 'POST',
+      prefer: 'return=representation',
+      body: { variant_id: target.id, menu_item_id: target.menu_item_id, cost_inr: 0 },
+    });
+    if (!planted.ok) {
+      skip('menu_item_costs is not readable by the anon key', `could not plant a probe row (${errText(planted)})`);
+    } else {
+      const q = `/menu_item_costs?select=variant_id&variant_id=eq.${target.id}`;
+      const asService = await rest(q);
+      const serviceRows = Array.isArray(asService.body) ? asService.body.length : 0;
+      const asAnon = await rest(q, { key: ANON });
+      const anonRows = Array.isArray(asAnon.body) ? asAnon.body.length : -1;
+      if (serviceRows !== 1) {
+        fail('menu_item_costs is not readable by the anon key', `probe row not visible even to the service role (${serviceRows} rows) — result would be meaningless`);
+      } else if (!asAnon.ok) {
+        pass('menu_item_costs is not readable by the anon key', `anon was refused outright (${errText(asAnon)})`);
+      } else if (anonRows === 0) {
+        pass('menu_item_costs is not readable by the anon key', 'service role sees the planted row, anon sees 0');
+      } else {
+        fail('menu_item_costs is readable by the anon key', `anon read back ${anonRows} row(s) — the cafe's margins are public`);
+      }
+
+      const removed = await rest(`/menu_item_costs?variant_id=eq.${target.id}`, { method: 'DELETE' });
+      const left = await rest(q);
+      const leftRows = Array.isArray(left.body) ? left.body.length : -1;
+      if (removed.ok && leftRows === 0) pass('probe row removed from menu_item_costs', 're-queried: 0 rows remain');
+      else fail('probe row removed from menu_item_costs', `DELETE the cost row for variant ${target.id} BY HAND`);
+    }
+  }
+
+  // The costs must also not have leaked onto the PUBLIC menu tables: a
+  // `cost_inr` column on menu_items / menu_item_variants would publish margins
+  // to anyone (spec trap 1). Selecting it must fail with no_column.
+  for (const table of ['menu_items', 'menu_item_variants']) {
+    const r = await rest(`/${table}?select=cost_inr&limit=1`, { key: ANON });
+    if (!r.ok && errKind(r) === 'no_column') pass(`${table} has no cost column`, 'costs live only in menu_item_costs');
+    else if (r.ok) fail(`${table} has a cost column`, 'the cafe margins are on a publicly readable table — REMOVE IT');
+    else pass(`${table} has no cost column`, `anon select of cost_inr was refused (${errText(r)})`);
+  }
+
+  // The claim RPC: callable by the service role (claims nothing when asked for
+  // 0), and NOT by anon — it returns customer phone numbers and would let a
+  // stranger steal queued sends.
+  const svc = await rest('/rpc/claim_marketing_recipients', { method: 'POST', body: { p_limit: 0 } });
+  if (svc.ok && Array.isArray(svc.body) && svc.body.length === 0) pass('claim_marketing_recipients is installed', 'a no-op claim returned 0 rows');
+  else fail('claim_marketing_recipients is installed', svc.ok ? `unexpected result ${JSON.stringify(svc.body)}` : `${hint} — ${errText(svc)}`);
+
+  const anon = await rest('/rpc/claim_marketing_recipients', { method: 'POST', body: { p_limit: 0 }, key: ANON });
+  if (anon.ok) fail('claim_marketing_recipients is not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
+  else pass('claim_marketing_recipients is not callable by the anon key');
+}
+
+// ---------------------------------------------------------------------------
 // Coffey v2 — traits v2 (docs/COFFEY-SPEC.md §3.1, supabase/2026-10-coffey-traits-v2.sql).
 //
 // READ-ONLY. Every request below is a GET: nothing is written, planted or
@@ -1744,6 +1927,7 @@ async function main() {
   await checkCoffeyTraitsV2();
   await checkInventory();
   await checkCoffeePass();
+  await checkMarketingAgent();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

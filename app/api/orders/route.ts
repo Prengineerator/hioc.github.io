@@ -6,7 +6,7 @@ import { isOrderStatus, isOrderType, isUuid, ORDER_STATUSES } from '@/lib/api/co
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { istDateIso, startOfTodayIstIso } from '@/lib/api/date';
 import { istDayRange } from '@/lib/cash/date';
-import { normalizeIndianMobile } from '@/lib/phone';
+import { indianE164HonouringPlus, normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import { flags } from '@/lib/flags';
 import { evaluatePhoneVerification } from '@/lib/orders/phoneVerification';
@@ -555,6 +555,11 @@ export async function POST(request: Request) {
       userId: loyaltyUserId,
       itemIds: resolvedLines.map((l) => l.menu_item_id),
       categories,
+      // Only an authenticated counter actor may vouch for a phone: a marketing code is locked to the
+      // number it was sent to, and this order validates it BEFORE createCounterCustomer opens the
+      // account that would prove it. On every customer path (web, guest, table QR) it is left out,
+      // however the request body reads. '+'-aware: a typed '+65…' must not become an Indian number.
+      counterPhone: isStaff && phoneProvided ? indianE164HonouringPlus(customer_phone) : null,
     });
     if (!couponResult.ok) {
       return errorResponse(400, couponResult.reason ?? 'Coupon is not valid for this order');
