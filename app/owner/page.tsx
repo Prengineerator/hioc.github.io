@@ -23,6 +23,7 @@ import { loadReport } from '@/lib/reports/reconcileServer';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getFeedbackSummary } from '@/lib/feedback/summary';
+import { flags } from '@/lib/flags';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import {
   Card,
@@ -42,6 +43,7 @@ import {
 } from '@/components/owner/ChannelAnalytics';
 import { CustomerTypeSplit, RecentOrdersCard } from '@/components/owner/RecentOrders';
 import { LiveOps } from '@/components/owner/LiveOps';
+import { OwnerMarketingCard } from '@/components/owner/marketing/OwnerMarketingCard';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -128,6 +130,11 @@ export default async function OwnerOverviewPage() {
           />
         </Card>
       ) : null}
+
+      {/* Marketing agent: what needs a decision today (approvals, spend, a customer
+          drop). Flag-gated, and the card renders nothing at all if the feature isn't
+          set up or its API fails, so it can never break or clutter this page. */}
+      {flags.marketing ? <OwnerMarketingCard /> : null}
 
       {/* Live ops + the revenue trend straight under the glance cards: they
           answer "how is today going?" — the rest is deeper analysis. */}

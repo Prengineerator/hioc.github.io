@@ -210,3 +210,7 @@ they sit next to the Supabase database in `ap-northeast-2`.
   `profiles` role (a logged-in customer is not enough)
 - `supabase/schema.sql` — database schema + Row Level Security policies
 - `supabase/seed.sql` — starting menu data (see above)
+- `docs/**` — specs and runbooks. The WhatsApp marketing agent: design in
+  `docs/MARKETING-AGENT-SPEC.md`, the owner's go-live runbook in
+  `docs/MARKETING-AGENT-SETUP.md`, and the four WhatsApp templates to submit in
+  `docs/WHATSAPP-MARKETING-TEMPLATES.md`
