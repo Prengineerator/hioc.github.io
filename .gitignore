@@ -47,3 +47,11 @@ yarn-error.log*
 /petpooja-*.md
 /*.xlsx
 /*.csv
+
+# Inventory recipe book (scripts/inventory/build-seed.ts): the --dry-run build
+# writes here by default. Scratch output, never committed.
+/scripts/inventory/.dry-run.sql
+
+# Inventory recipe book: the cafe's recipes are private (this repo is public).
+# Permanent home is the inventory_recipe_book table; see docs/INVENTORY-RECIPE-BOOK.md.
+/data/inventory/book/

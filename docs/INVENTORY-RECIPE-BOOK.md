@@ -1,38 +1,53 @@
 # Recipe book: the inventory setup as data
 
-Status: **DRAFT DATA** (2026-09-30). The recipe book is the source of truth for the
-stock-item list and for every menu item's and add-on's recipe. It is plain JSON in
-`data/inventory/`. A script checks it against the live menu and compiles it to one
-SQL file that loads it into Supabase. The tables and flow it feeds are in
-[`INVENTORY-SPEC.md`](INVENTORY-SPEC.md). This file replaces requirement-sheet items
-B1 (stock item list) and B2 (recipes) there.
+Status: **BUILDING** (2026-09-30). The recipe book is the source of truth for the
+stock-item list and for every menu item's and add-on's recipe. A script checks it
+against the live menu and compiles it to one SQL file that loads it into Supabase.
+The tables and flow it feeds are in [`INVENTORY-SPEC.md`](INVENTORY-SPEC.md). This
+file replaces requirement-sheet items B1 (stock item list) and B2 (recipes) there.
 
 ```
- owner says the basics ──► chef agent ──► data/inventory/*.json ──► npm run inventory:check
- ("Latte large: double                     (stock items,              (errors, coverage)
-  shot, 220 ml milk")                        recipes, add-ons)                │
-                                                                              ▼
-                              Supabase ◄── supabase/2026-10-inventory-seed.sql ◄── npm run inventory:build
-                          (applied by hand         (generated, idempotent)
-                           or the deploy step)
+ Petpooja export ──► npm run inventory:import-petpooja ─┐
+ (Item_Addon_Recipe.csv)                                ├─► recipe book ──► npm run inventory:check
+ owner's basics ──► chef agent ─────────────────────────┘   (private JSON)          │
+                                                                                    ▼
+             Supabase ◄── <book>/seed.sql ◄───────────────────────── npm run inventory:build
+      (recipes applied + the whole book saved in inventory_recipe_book;
+       npm run inventory:pull brings the book back on any machine)
 ```
+
+## The recipes stay private
+
+The GitHub repository is **public**, but the café's recipes are not. The tools, this
+document, the chef agent and the menu snapshot (menu data is already public on the
+site) are committed. **Everything that contains a quantity is git-ignored**: the
+recipe book, the Petpooja export and the generated SQL. The book's permanent home is
+the database. Every seed saves the whole book (drafts and notes too) in the
+service-role-only table `inventory_recipe_book`, and `inventory:pull` restores it
+into a fresh checkout. Never commit a file from the book directory, and never paste
+recipe quantities into a commit message, PR or issue.
 
 ## Files
 
-| Path | What | Who edits |
+| Path | What | Committed? |
 |---|---|---|
-| `data/inventory/menu-snapshot.json` | The **live** menu: item ids, names, categories, size labels, add-on groups; add-on option ids. Recipes are checked against it. | `npm run inventory:snapshot` only |
-| `data/inventory/stock-items.json` | Every ingredient and packaging item that stock is kept of. | chef agent |
-| `data/inventory/recipes/<slug>.json` | Menu-item recipes, one file per menu section. | chef agent |
-| `data/inventory/addon-recipes.json` | Add-on option recipes. | chef agent |
-| `supabase/2026-10-inventory-seed.sql` | **Generated.** Never edit by hand. | `npm run inventory:build` |
+| `data/inventory/menu-snapshot.json` | The **live** menu: item ids, names, categories, size labels, add-on groups; add-on option ids. Recipes are checked against it. Refresh it with `inventory:snapshot`. | yes |
+| `data/inventory/book/` | **The book**: the default book directory. Override it with `INVENTORY_BOOK_DIR` or `--book <dir>`. | **no** (git-ignored) |
+| `…/book/stock-items.json` | Every ingredient and packaging item that stock is kept of. | no |
+| `…/book/recipes/<slug>.json` | Menu-item recipes, one file per menu section. | no |
+| `…/book/addon-recipes.json` | Add-on recipes, including the per-item and per-size amounts. | no |
+| `…/book/petpooja/Item_Addon_Recipe.csv` | The Petpooja "Item Addon Recipe" export. | no |
+| `…/book/petpooja/aliases.json` | Petpooja name → live menu item or add-on, for names the automatic matcher can't match. | no |
+| `…/book/petpooja/materials.json` | Petpooja raw material → stock item (name, category, expiry). | no |
+| `…/book/import-report.md` | Written by the importer: what matched, and what is **still missing**. | no |
+| `…/book/seed.sql` | **Generated.** Never edit it by hand. | no |
 
 ### `stock-items.json`
 
 ```json
 {
   "items": [
-    { "name": "Espresso beans", "unit": "g", "category": "Coffee",
+    { "name": "Coffee beans", "unit": "g", "category": "Coffee",
       "tracks_expiry": false, "par_level": 0, "reorder_qty": 0,
       "standalone": false, "notes": "" }
   ]
@@ -40,114 +55,167 @@ B1 (stock item list) and B2 (recipes) there.
 ```
 
 - `name`: 1–80 characters and unique regardless of case. Recipes refer to stock items by this exact name.
-- `unit`: one of `g kg ml l pcs pack`. Every quantity of the item, in recipes and in stock, is in this unit. **It locks** once the item is used live (INV-D15), so choose the unit a recipe is naturally written in: `g` for solids, `ml` for liquids, `pcs` for countables.
+- `unit`: one of `g kg ml l pcs pack`. Every quantity of the item, in recipes and in stock, is in this unit. **It locks** once the item is used live (INV-D15).
+  - **Petpooja's unit wins** for anything imported from it: `gm` becomes `g` (milk is weighed in grams there), `pcs` stays `pcs`.
+  - For new items: `g` for solids, `ml` for liquids, `pcs` for countables.
 - `category`: one of `Coffee`, `Dairy & Alternatives`, `Syrups & Sauces`, `Powders & Mixes`, `Chocolate & Spreads`, `Toppings & Inclusions`, `Fruit & Purees`, `Frozen`, `Bakery`, `Savoury`, `Beverages`, `Packaging`.
 - `tracks_expiry`: `true` means receiving the item needs an expiry date (dairy, bakery, fruit, anything that spoils within weeks).
-- `par_level` / `reorder_qty`: "low at" and "usually request". `0` means not set; the owner fills them in.
-- `standalone`: `true` loads the item even when no recipe uses it (cleaning supplies, for example). By default, only items that a deployed recipe uses are loaded.
+- `par_level` / `reorder_qty`: "low at" and "usually request". `0` means not set in the book, and the value on the live item is left alone.
+- `standalone`: `true` loads the item even when no recipe uses it. By default, only items that a deployed recipe uses are loaded.
 
 ### `recipes/<slug>.json`
 
 ```json
 {
-  "categories": ["Coffee"],
+  "categories": ["Coffee", "Hot Non-Coffee"],
   "items": [
     {
       "menu_item_id": "0b398e3e-…",
       "menu_item": "Latte",
-      "status": "draft",
-      "source": "chef-default",
-      "notes": "Large = 12 oz cup, double shot. XL = 16 oz, triple shot.",
+      "status": "confirmed",
+      "source": "petpooja",
+      "notes": "",
       "base": [],
       "sizes": {
-        "Large":       [ { "ingredient": "Espresso beans", "qty": 18 }, { "ingredient": "Full-cream milk", "qty": 240 } ],
-        "Extra Large": [ { "ingredient": "Espresso beans", "qty": 27 }, { "ingredient": "Full-cream milk", "qty": 330 } ]
+        "Large":       [ { "ingredient": "Coffee beans", "qty": 18 }, { "ingredient": "Milk", "qty": 240 } ],
+        "Extra Large": [ { "ingredient": "Coffee beans", "qty": 27 }, { "ingredient": "Milk", "qty": 330 } ]
       }
     }
   ]
 }
 ```
 
-- `categories`: the menu categories (as in the snapshot) this file covers. Each snapshot category belongs to exactly one file.
+- `categories`: the snapshot categories this file covers. Each category belongs to exactly one file. The importer uses these files:
+
+  | File | Categories |
+  |---|---|
+  | `hot.json` | Coffee, Hot Non-Coffee |
+  | `iced.json` | Iced Coffee, Iced Non-Coffee, Cold Brews, Monthly Drops |
+  | `creme.json` | Creme Coffee, Creme Non-Coffee, Sundae |
+  | `waffles.json` | Stick Waffles, Stuffed Waffles, Waffle Chips |
+  | `bakery-eatery.json` | Cup Cakes, Cheesecakes, Eatery, In-store |
+  | `other.json` | any future category |
+
 - `menu_item_id` must be in the snapshot. `menu_item` is the item's name, kept for people to read.
 - `status`:
   - `draft`: proposed, not yet approved by the owner. **Not deployed** unless `--include-drafts` is passed.
-  - `confirmed`: the owner approved it. It is deployed.
-  - `skip`: deliberately uses no stock. `base` and `sizes` must be empty.
-- `source`: `owner` (the owner said it), `chef-default` (the chef agent's industry-standard guess), or `pos` (read back from the live recipe).
-- **One serving, in each stock item's own unit** (INV-D11). The quantity is the amount used, not the amount bought: for example 18 g of beans, not "1 shot".
-- `base` is the recipe for every size. A key in `sizes` is a size label exactly as in the snapshot ("Extra Large", "B", "Focaccia Bread"), and a size's list **replaces** `base` for that size; it is not added to it. Rules of thumb:
-  - An item with one size uses `base` only.
-  - An item whose sizes differ gives every size its own full list, and `base` is `[]`.
+  - `confirmed`: deployed.
+  - `skip`: deliberately uses no stock, so `base` and `sizes` must be empty.
+- `source`: `petpooja` (imported from the café's Petpooja inventory setup), `owner` (the owner said it), `chef-default` (the chef agent's estimate), or `pos` (read back from the live recipe).
+- **One serving, in each stock item's own unit** (INV-D11).
+- `base` is the recipe for every size. A key in `sizes` is a size label exactly as in the snapshot ("Extra Large", "B", "Focaccia Bread"), and a size's list **replaces** `base` for that size.
   - Every size of a `draft` or `confirmed` item must end up with a non-empty recipe.
-- Each ingredient appears at most once per size (or once in base). `qty` is greater than 0, at most 999999, with at most 3 decimals. At most 60 lines per item across base and sizes, the same as the POS editor.
+- Each ingredient appears at most once per list. `qty` is greater than 0, at most 999999, with at most 3 decimals. At most 60 lines per item across base and sizes.
 
 ### `addon-recipes.json`
+
+An add-on's recipe can depend on the drink and size it is added to: sugar in a Latte
+Extra Large is not sugar in an Espresso. So each option has a general recipe plus
+optional **scopes**. The most specific one that has lines wins:
+
+**item + size → item (all sizes) → general.**
 
 ```json
 {
   "options": [
-    { "addon_option_id": "6755ed84-…", "group": "ADD ON Milk", "option": "Oat",
-      "status": "draft", "source": "chef-default", "notes": "",
-      "lines": [ { "ingredient": "Oat milk", "qty": 240 } ] }
+    { "addon_option_id": "8178c159-…", "group": "Sugar", "option": "Normal",
+      "status": "confirmed", "source": "petpooja", "notes": "",
+      "lines": [ { "ingredient": "Sugar", "qty": 20 } ],
+      "scopes": [
+        { "menu_item_id": "0b398e3e-…", "menu_item": "Latte", "size_label": "Extra Large",
+          "lines": [ { "ingredient": "Sugar", "qty": 25 } ] },
+        { "menu_item_id": "3dd077ea-…", "menu_item": "Espresso", "size_label": "",
+          "lines": [ { "ingredient": "Sugar", "qty": 10 } ] }
+      ] }
   ]
 }
 ```
 
-An add-on's lines are what it uses **per serving it is added to** (INV-D19). A line of two lattes with an extra shot uses the add-on twice. `status` works the same as for menu items: "No Ice", "No Sugar" and "Assemble It By You" are `skip`.
+- `lines` is the general recipe, used per serving the add-on is added to (INV-D19).
+- `scopes` is optional:
+  - Each scope names a snapshot item and either one of its size labels or `""` (all its sizes).
+  - The pair `(menu_item_id, size_label)` appears at most once per option.
+  - Scope lines follow the same line rules as recipe lines.
+- `status` works the same as for menu items. A `draft` or `confirmed` option needs at least one line somewhere. A `skip` option has no lines and no scopes: "No Ice", "No Sugar" and "Assemble It By You" are `skip`.
+
+## Importing from Petpooja
+
+```
+npm run inventory:import-petpooja [-- --csv <path>]   # default <book>/petpooja/Item_Addon_Recipe.csv
+```
+
+- **Rows.**
+  - The ID column is hex-encoded ASCII: `itemId#variationId` for an item row, and `itemId#variationId#addonId` for an add-on row. An add-on row belongs to the item row whose ID prefixes it, which gives the menu item and size without parsing the name.
+  - Item names read `Name [n] (Size)`. The trailing parenthesis is a size only if it is one of the matched item's live size labels. In `Dusky Dawn (nutella)` it is part of the name.
+- **Matching an item.**
+  1. `petpooja/aliases.json` (`"items": { "<Petpooja name>": "<menu item id>" | null }`, where null means "not on the menu, ignore").
+  2. The existing matcher from the order-history import (`lib/petpooja/match.ts`: `ITEM_ALIASES`, the "… Waffle" suffix and plural rules). It has no fuzzy matching, because a wrong match is worse than none.
+- **Matching an add-on.** By add-on group plus option name, normalised the same way, against the snapshot. `aliases.json` `"addons": { "<Group>|<Option>": "<option id>" | null }` covers renames.
+- **Raw materials.**
+  - Each raw material maps to a stock item through `petpooja/materials.json` (`"<Petpooja name>": { "name", "category", "tracks_expiry" }`). Several Petpooja names may map to one stock item, which merges obvious duplicates such as "RedVelvet Flour" and "Red Velvet Flour". Merged names must share a unit.
+  - An unmapped material is added with an empty category, so `inventory:check` fails until it is filled in.
+  - Two lines of one recipe that land on the same stock item are summed.
+  - A line with a blank quantity is dropped and reported.
+- **Add-ons.**
+  - Every (item, size) recipe of an option is gathered. Entries with no lines are ignored: Petpooja simply had none set.
+  - The most common line-set becomes the general `lines`.
+  - An item whose sizes all differ from the general recipe in the same way gets an item scope. Otherwise only the sizes that differ get size scopes.
+- **What it writes.**
+  - Recipes: `status: confirmed, source: petpooja`. It never overwrites an item or option whose `source` is `owner` or `pos`. It does replace `chef-default` drafts and earlier `petpooja` imports.
+  - `import-report.md`: what matched; Petpooja items that are not on the menu; **live items and sizes with no Petpooja recipe (what is still missing)**; add-ons it could not match; unit conflicts; blank quantities; unmapped or merged materials.
+- **Idempotent.** The same inputs give byte-identical files.
 
 ## House defaults for `chef-default` drafts
 
-Drafts follow these defaults so that one agent's Latte matches another's Mocha. The owner overrides them item by item, and an override is recorded in `notes`.
+When the owner or Petpooja leaves something out, the chef agent drafts it. The first choice is always to **copy the proportions of the closest item that has a Petpooja recipe**, for example a Monthly Drops iced cappuccino from Cappucino Iced. The defaults below apply only where no such item exists:
 
 | Thing | Default |
 |---|---|
 | Cup sizes | Large = 12 oz (350 ml) · Extra Large = 16 oz (470 ml) |
-| Espresso | single shot 9 g of beans · a Large milk drink has a double (18 g) · an Extra Large has a triple (27 g) · the "Espresso" item: Large = double, Extra Large = triple |
-| Cold brew | 25 g coarse beans for a Large serve, 35 g for an Extra Large (the steep's yield already counted) |
-| Milk | the space left in the cup after shots, sauce and foam. Iced drinks leave about 30 % of the cup for ice. |
-| Syrup / sauce | 15 ml for a Large, 20 ml for an Extra Large. A drizzle garnish is 10 ml. |
-| Powders | matcha 3 g / 4 g · cocoa or chocolate powder 20 g / 28 g · chai premix 20 g / 28 g (Large / Extra Large) |
-| Creme (blended) | the base powder or ice-cream plus milk, blended. Ice cream 60 g a scoop. Whipped cream topping 30 g. |
-| Ice cream | one scoop = 60 g, stocked in `g` |
-| Sugar | the "Normal" sugar add-on = 10 g white sugar · Brown = 10 g brown sugar · Stevia = 1 sachet (`pcs`) |
-| Ice | **not tracked** (made on site). Ice-level add-ons are `skip`. |
-| Waffles | batter premix in `g`: stick waffle B = 60 g, L = 110 g · a stuffed waffle = 120 g · a waffle-chips serve = 70 g |
-| Bought-in bakes | croissants, cupcakes, cheesecake slices, brownies and cookies are counted in `pcs`, not built from flour |
-| Packaging | each drink uses its cup, lid and (for iced or creme drinks) a straw; takeaway food uses its box. Cups: `Hot cup 12 oz`, `Hot cup 16 oz`, `Hot cup lid`, `Cold cup 12 oz`, `Cold cup 16 oz`, `Cold cup dome lid`, `Straw`. |
+| Espresso | a single shot is 9 g of beans · Large milk drink = double · Extra Large = triple |
+| Syrup / sauce | 15 g Large, 20 g Extra Large; a drizzle is 10 g |
+| Ice cream | a scoop is 60 g |
+| Ice | **not tracked** (made on site) |
+| Bought-in bakes | counted in `pcs` |
+| Packaging | follow the Petpooja pattern for the same kind of item (cup + lid + straw, plate + spoon + napkin, box …) |
 
 ## Commands
 
 ```
-npm run inventory:check                    # validate, and print coverage by section
-npm run inventory:build                    # write supabase/2026-10-inventory-seed.sql (confirmed only)
-npm run inventory:build -- --include-drafts   # also drafts, for a preview/test database
-npm run inventory:snapshot                 # refresh menu-snapshot.json from the live menu
+npm run inventory:import-petpooja             # Petpooja export → book (+ import-report.md)
+npm run inventory:check                       # validate; coverage by section
+npm run inventory:build                       # <book>/seed.sql: save the book + apply confirmed recipes
+npm run inventory:build -- --include-drafts   # also drafts (preview/test databases only)
+npm run inventory:build -- --save-only        # only save the book to the database (no recipe changes)
+npm run inventory:build -- --dry-run          # same SQL, but it ends by raising, so nothing is saved
+npm run inventory:pull                        # database → book directory (needs the service-role key)
+npm run inventory:snapshot                    # refresh menu-snapshot.json from the live menu
 ```
 
 `inventory:build` refuses to write while `inventory:check` has errors.
 
 ## What the generated SQL does
 
-This is one `do $$ … $$` block, so it applies completely or not at all. It is safe to re-run.
+This is one `do $$ … $$` block, so it applies completely or not at all. It is safe to re-run. It needs `2026-10-inventory.sql` and `2026-10-inventory-addon-scopes.sql`.
 
-1. **Auto-hide guard.** If no stock has ever been received (`inventory_batches` is empty), it sets `store_settings.stock_auto_hide = false`. Otherwise, every item with a recipe would read "0 on hand" and disappear from the live menu (INV-D16). This happens at the database level, whether the app flag is on or off. Switch auto-hide back on (Stock tab) **after** the opening stock is received.
-2. **Unit guard.** It refuses to run if a stock item already exists live with a different unit.
-3. **Stock items.** It adds new stock items and updates existing ones, matched by name regardless of case. The unit is never changed.
-4. **Existence guard.** It refuses to run if any menu item or add-on option id in the book is missing live. Refresh the snapshot in that case.
-5. **Recipes.** Each recipe in the file replaces that menu item's or add-on's whole recipe, through `inventory_set_recipe` / `inventory_set_addon_recipe`, so the size-label check applies. Items not in the file are left alone.
+1. **Saves the book.** It stores the whole book document in `inventory_recipe_book`, the single row that `inventory:pull` reads back.
+2. **Auto-hide guard.** If no stock has ever been received, it sets `store_settings.stock_auto_hide = false`. Otherwise, every recipe item would read "0 on hand" and vanish from the live menu. This happens at the database level, whatever the app flag says. Switch auto-hide back on (Stock tab) **after** the opening stock is received.
+3. **Unit guard.** It refuses to run if a stock item already exists live with a different unit.
+4. **Stock items.** It adds new ones and updates existing ones, matched by name regardless of case. It never changes a unit, and never overwrites a live par or reorder level with 0.
+5. **Existence guard.** It refuses to run if any menu item or add-on option id in the book is missing live.
+6. **Recipes.** Each recipe in the file replaces that item's whole recipe through `inventory_set_recipe`, so the size-label check applies. Each add-on replaces all of its scopes through `inventory_set_addon_recipe_scopes`. Items and add-ons not in the file are left alone.
 
 ## Deploy
 
-1. Every item the owner wants tracked is `confirmed`, and `npm run inventory:check` shows no errors.
-2. Run `npm run inventory:build`, then commit the data and the generated SQL together.
-3. Apply `supabase/2026-10-inventory-seed.sql` in the Supabase SQL editor, or ask Claude to apply it. Then run the verify queries at the foot of the file.
-4. Continue with the go-live steps in `INVENTORY-SPEC.md` §C: receive the opening stock (C4), run the walk-through (C5), switch the flag on (C6), then switch auto-hide on.
+1. Apply `supabase/2026-10-inventory-addon-scopes.sql` once. It is a migration and is committed.
+2. Check that everything to be tracked is `confirmed` and that `npm run inventory:check` shows no errors.
+3. Run `npm run inventory:build`, then apply `<book>/seed.sql` in the Supabase SQL editor, or ask Claude to apply it. Run the verify queries at the foot of the file.
+4. Continue with the go-live steps in `INVENTORY-SPEC.md` §C: opening stock (C4), the walk-through (C5), the flag (C6), then switch auto-hide on.
 
-A recipe edited later on the POS is **overwritten** the next time the seed is applied. Tell the chef agent about the change so the book stays the source of truth.
+A recipe edited later on the POS is **overwritten** the next time the seed is applied. Tell the chef agent about the change so the book stays the source of truth. The POS editor edits only an add-on's general recipe. Its per-item and per-size amounts come from the book.
 
 ## Known limits of recipes (from the engine)
 
-- **Milk swaps add, they don't swap.** "Oat" on a latte uses the add-on's oat milk **and** the base recipe's dairy milk (add-on recipes are only added). Until the engine supports substitutions, dairy milk will read slightly low against the shelf on days with many swaps. A count corrects it.
-- **Combos** (for example "Hot Chocolate + Mocha Combo") need their full recipe written out. The engine does not expand one menu item into others.
+- **Milk swaps add, they don't swap.** "Oat" on a latte uses the add-on's oat milk **and** the base recipe's dairy milk. A count corrects the drift.
+- **Combos** need their full recipe written out.
 - **Per-size auto-hide is not supported.** See INVENTORY-SPEC "Known limits".
