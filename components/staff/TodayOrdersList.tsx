@@ -11,6 +11,8 @@
 
 import { useMemo, useState } from 'react';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
+import { Badge } from '@/components/ui/Badge';
+import { RITUAL_SALE_LABEL, isRitualSale } from '@/lib/pos/ritual';
 import { amountDueInr, isPaymentDue } from '@/lib/orders/staffPayment';
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 import { PAYMENT_METHODS, receivedByMethod, totalReceived } from '@/lib/orders/paymentTotals';
@@ -246,8 +248,12 @@ export function TodayOrdersList({
             const due = isPaymentDue(o);
             const closedUnsold = CLOSED_UNSOLD.has(o.status);
             const itemCount = o.items.filter((i) => !i.voided).reduce((n, i) => n + i.quantity, 0);
-            const where =
-              o.order_type === 'dine_in'
+            // HIOC Ritual: the sale of a pass has no table, token or pickup — it is
+            // labelled by what it is instead of the 'Takeaway' the schema files it under.
+            const ritual = isRitualSale(o);
+            const where = ritual
+              ? RITUAL_SALE_LABEL
+              : o.order_type === 'dine_in'
                 ? o.table_label
                   ? `Table ${o.table_label}`
                   : 'Dine-in'
@@ -277,11 +283,13 @@ export function TodayOrdersList({
                       {o.customer_name || where}
                       <span className="text-muted">
                         {' '}
-                        · {where} · {itemCount} item{itemCount === 1 ? '' : 's'}
+                        · {where}
+                        {ritual ? '' : ` · ${itemCount} item${itemCount === 1 ? '' : 's'}`}
                       </span>
                     </span>
                   </span>
                   <span className="flex items-center gap-2">
+                    {ritual ? <Badge variant="tan">{RITUAL_SALE_LABEL}</Badge> : null}
                     <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
                       {STATUS_LABELS[o.status] ?? o.status}
                     </span>

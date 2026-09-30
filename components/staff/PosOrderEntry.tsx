@@ -35,6 +35,7 @@ import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentM
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
+import { SurfaceLink } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 import { createClient } from '@/lib/supabase';
 import { isSimpleItem, parseQuickAddInput, resolveQuickAdd } from '@/lib/pos/quickAdd';
@@ -43,7 +44,7 @@ import { CustomerSuggestionList, useCustomerNameSuggestions, useCustomerSuggesti
 import type { CustomerSuggestion } from '@/lib/customers/phoneSearch';
 import { pushRecent, readRecents } from '@/lib/pos/recents';
 import { computeCartKey } from '@/lib/cart/cartKey';
-import { cartTaxableSubtotal, type CartItem } from '@/lib/cart/CartContext';
+import type { CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { normalizeIndianMobile } from '@/lib/phone';
@@ -55,12 +56,26 @@ import {
   describeCustomer,
   hasOrderHistory,
   parsePointsInput,
+  passFeedback,
   pointsFeedback,
   type CustomerLookup,
   type QuotedDiscount,
+  type QuotedPass,
 } from '@/lib/pos/loyalty';
+import {
+  clampCups,
+  freeBillPaidAs,
+  orderConflictAction,
+  ritualApproved,
+  ritualBillRow,
+  ritualIdleHint,
+  ritualStepperMax,
+  ritualSummary,
+  type PosBill,
+} from '@/lib/pos/ritual';
 import { shouldAutofillName } from '@/lib/pos/nameAutofill';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
+import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
 import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
@@ -78,7 +93,6 @@ import {
 } from '@/lib/staff/confirmation';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
-import type { BillBreakdown } from '@/lib/store/hours';
 import type { MenuItem, OrderType } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
@@ -141,6 +155,29 @@ function newIdempotencyKey(): string {
 // same-origin iframe (see the print queue below): no tab, no focus change,
 // nothing for a pop-up blocker to have an opinion about.
 
+/**
+ * The cart in the order-items shape POST /api/orders, /amend and /quote all take,
+ * so the bill is priced from exactly what will be placed.
+ */
+function orderItemsOf(cart: readonly CartItem[]) {
+  return cart.map((i) => ({
+    menu_item_id: i.menuItemId,
+    variant_id: i.variantId,
+    quantity: i.qty,
+    addon_option_ids: i.addons.map((a) => a.optionId),
+    special_instructions: i.specialInstructions,
+  }));
+}
+
+/** What POST /api/orders/quote answers (the parts this screen reads). */
+interface QuoteResponse {
+  bill?: PosBill;
+  coupon?: QuotedDiscount | null;
+  points?: QuotedDiscount | null;
+  /** HIOC Ritual: null when the feature is off or no account is known for the phone. */
+  pass?: QuotedPass | null;
+}
+
 interface StaffTable {
   id: string;
   label: string;
@@ -192,8 +229,8 @@ export function PosOrderEntry({
   const [custEmail, setCustEmail] = useState('');
   const [contactError, setContactError] = useState<string | null>(null);
   // POS-5 — phone-first name autofill. `custNameRef` mirrors `custName` for
-  // the autofill effect below (same ref-mirror pattern as `cartRef`), so it
-  // can read the field's CURRENT value without depending on it and re-running
+  // the autofill effect below, so it can read the field's CURRENT value without
+  // depending on it and re-running
   // every keystroke. `custNameUserEdited` is the guard shouldAutofillName()
   // (lib/pos/nameAutofill.ts) reads: true the instant the cashier types into
   // the field by hand, reset to false right after an autofill (or a reset).
@@ -223,8 +260,20 @@ export function PosOrderEntry({
   const [pointsInput, setPointsInput] = useState('');
   const [quotedCoupon, setQuotedCoupon] = useState<QuotedDiscount | null>(null);
   const [quotedPoints, setQuotedPoints] = useState<QuotedDiscount | null>(null);
+  // HIOC Ritual (CP-D10): how many cups the staffer has asked the customer about.
+  // It starts at 0 and is only ever raised by a tap — the person at the counter
+  // is not necessarily the pass holder, so nothing here is pre-selected. Like a
+  // coupon, what is SENT is only what the latest quote approved (placeOrder).
+  const [passCups, setPassCups] = useState(0);
+  const [quotedPass, setQuotedPass] = useState<QuotedPass | null>(null);
+  // Bumped after the server says something changed under us (a 409 from
+  // POST /api/orders): re-quote and look the customer up again.
+  const [refreshTick, setRefreshTick] = useState(0);
+  // The server's own reason when the cart could not be priced at all (an item
+  // switched off, an add-on gone): shown instead of a bill that never arrives.
+  const [quoteError, setQuoteError] = useState<string | null>(null);
 
-  const [bill, setBill] = useState<BillBreakdown | null>(null);
+  const [bill, setBill] = useState<PosBill | null>(null);
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
   const [pendingQty, setPendingQty] = useState(1); // qty carried from "3*latte" into the modal
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -269,8 +318,6 @@ export function PosOrderEntry({
   // than creating a duplicate.
   const idempotencyKey = useRef(newIdempotencyKey());
   const barRef = useRef<HTMLInputElement>(null); // command bar, for sticky refocus
-  const cartRef = useRef(cart);
-  cartRef.current = cart;
 
   // Seed recents from localStorage once on mount (client-only).
   useEffect(() => {
@@ -571,7 +618,8 @@ export function PosOrderEntry({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [lookupPhone, isAddMode]);
+    // refreshTick: a 409 means the customer's passes may have changed, so look again.
+  }, [lookupPhone, isAddMode, refreshTick]);
 
   // A number that stops matching an account can't keep its points quoted.
   useEffect(() => {
@@ -580,6 +628,24 @@ export function PosOrderEntry({
       setQuotedPoints(null);
     }
   }, [customer]);
+
+  // HIOC Ritual: the customer's usable passes (only with the feature on), and
+  // the most cups this cart can use. The cups asked for belong to ONE person: a
+  // different number starts again at 0, and a customer with nothing usable can
+  // never keep cups quoted.
+  const ritual = useMemo(
+    () => (flags.coffeePass && customer?.found ? ritualSummary(customer.passes) : null),
+    [customer],
+  );
+  const ritualMax = ritualStepperMax(quotedPass, ritual?.cupsLeft ?? 0);
+  useEffect(() => {
+    setPassCups(0);
+    setQuotedPass(null);
+  }, [lookupPhone]);
+  useEffect(() => {
+    // Never above what the cart can use now (an item removed, a cup spent elsewhere).
+    setPassCups((c) => (c > ritualMax ? ritualMax : c));
+  }, [ritualMax]);
 
   // A number that stops matching a lookup can't keep offering a "Last
   // orders" list for the PREVIOUS number — clear the cache and close the
@@ -687,10 +753,14 @@ export function PosOrderEntry({
   const [billStale, setBillStale] = useState(false);
 
   useEffect(() => {
-    if (subtotal <= 0) {
+    if (cart.length === 0 || subtotal <= 0) {
       setBill(null);
       setQuotedCoupon(null);
       setQuotedPoints(null);
+      setQuotedPass(null);
+      setQuoteError(null);
+      // An emptied cart forgets the cups asked for: the next order asks again.
+      setPassCups(0);
       setBillStale(false);
       return;
     }
@@ -698,38 +768,52 @@ export function PosOrderEntry({
     setBillStale(true);
     // Small debounce so rapid qty taps don't fire a burst of quotes.
     const t = setTimeout(() => {
+      // The cart goes to the server as order items, exactly as placeOrder sends
+      // it: the server prices it itself (and, with HIOC Ritual cups asked for,
+      // decides which drinks they pay for), so this screen never computes a rupee.
       fetch('/api/orders/quote', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          subtotal_inr: subtotal,
-          taxable_subtotal_inr: cartTaxableSubtotal(cartRef.current),
+          items: orderItemsOf(cart),
           order_type: orderType,
-          item_ids: cartRef.current.map((i) => i.menuItemId),
+          pass_drinks: passCups,
           ...(couponCode ? { coupon_code: couponCode } : {}),
           ...(redeemPoints > 0 ? { redeem_points: redeemPoints } : {}),
           ...(lookupPhone ? { customer_phone: lookupPhone } : {}),
         }),
       })
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data: { bill?: BillBreakdown; coupon?: QuotedDiscount | null; points?: QuotedDiscount | null } | null) => {
-          if (cancelled || !data?.bill) return;
+        .then(async (res) => {
+          if (res.ok) return { data: (await res.json()) as QuoteResponse | null, error: null };
+          const failure = (await res.json().catch(() => null)) as { error?: string } | null;
+          return { data: null, error: failure?.error ?? null };
+        })
+        .then(({ data, error }) => {
+          if (cancelled) return;
+          if (!data?.bill) {
+            // A failed quote leaves `billStale` true on purpose: the panel keeps
+            // saying "re-pricing" rather than offering to charge a total nobody
+            // re-confirmed. The server's reason (if it gave one) is shown so the
+            // staffer is not left staring at a bill that never arrives.
+            setQuoteError(error);
+            return;
+          }
           setBill(data.bill);
           setQuotedCoupon(couponCode ? (data.coupon ?? null) : null);
           setQuotedPoints(redeemPoints > 0 ? (data.points ?? null) : null);
+          setQuotedPass(data.pass ?? null);
+          setQuoteError(null);
           // Only now do the numbers on screen describe the cart on screen.
           setBillStale(false);
         })
-        // A failed quote leaves `billStale` true on purpose: the panel keeps
-        // saying "re-pricing" rather than offering to charge a total nobody
-        // re-confirmed.
         .catch(() => {});
     }, 250);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [subtotal, orderType, couponCode, redeemPoints, lookupPhone]);
+    // refreshTick: a 409 from the order POST asks for a fresh quote.
+  }, [cart, subtotal, orderType, couponCode, redeemPoints, passCups, lookupPhone, refreshTick]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
   const addLine = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
@@ -876,6 +960,13 @@ export function PosOrderEntry({
     // validator will reject them — after the cash is already in the drawer.
     // Creating the order UNPAID (parts === null) quotes nothing, so it is safe.
     if (parts && billStale) return;
+    // ...except with HIOC Ritual cups asked for: whether they apply is decided by
+    // the quote, so an order placed while it is still in flight could go out
+    // without the cups the screen was showing. Wait for the quote to land.
+    if (!parts && passCups > 0 && billStale) {
+      setSubmitError(`${PASS_PROGRAM_NAME} is still being priced — wait a moment, then try again.`);
+      return;
+    }
 
     // The contact as it was at placement — resetForNextOrder() clears these
     // fields before the confirmation is built.
@@ -889,13 +980,7 @@ export function PosOrderEntry({
 
     try {
       const body: Record<string, unknown> = {
-        items: cart.map((i) => ({
-          menu_item_id: i.menuItemId,
-          variant_id: i.variantId,
-          quantity: i.qty,
-          addon_option_ids: i.addons.map((a) => a.optionId),
-          special_instructions: i.specialInstructions,
-        })),
+        items: orderItemsOf(cart),
       };
       if (orderType === 'dine_in') {
         body.order_type = 'dine_in';
@@ -916,6 +1001,11 @@ export function PosOrderEntry({
       // phone above — this client never names it.
       if (couponCode && quotedCoupon?.ok) body.coupon_code = couponCode;
       if (redeemPoints > 0 && quotedPoints?.ok) body.redeem_points = redeemPoints;
+      // Same rule for HIOC Ritual cups (CP-D10): only the count the latest quote
+      // approved in full. POST /api/orders answers 400 when fewer can be applied
+      // than were asked for, so an unapproved count would fail the order at the till.
+      const passApproved = ritualApproved(quotedPass, passCups);
+      if (passApproved) body.pass_drinks = passCups;
 
       // POS4-2: one key per attempted order, generated BEFORE the request and
       // reused if this submit is retried — that's what makes a replay
@@ -930,11 +1020,29 @@ export function PosOrderEntry({
       if (res.status !== 201) {
         const data = await res.json().catch(() => ({}));
         setSubmitError(data.error ?? 'Could not place the order. Please try again.');
+        // The Ritual (or a coupon, or Beanies) changed between the quote and the
+        // order: the server rolled the order back. Price the cart again and look
+        // the customer up again, so the screen shows what is true now, and — since
+        // the old idempotency key was claimed by an order that no longer exists —
+        // start the next attempt on a fresh one.
+        const after = orderConflictAction(res.status, data.error, passApproved);
+        if (after.rotateKey) idempotencyKey.current = newIdempotencyKey();
+        if (after.requote) {
+          setBillStale(true);
+          setRefreshTick((n) => n + 1);
+        }
         return;
       }
 
       const { order, customer_account_created: accountCreated } = (await res.json()) as {
-        order: { id: string; order_number: number; total_inr: number | null; subtotal_inr: number };
+        order: {
+          id: string;
+          order_number: number;
+          total_inr: number | null;
+          subtotal_inr: number;
+          payment_status?: string;
+          order_kind?: string;
+        };
         customer_account_created?: boolean;
       };
       const numberLabel = formatOrderNumber(order.order_number);
@@ -946,7 +1054,11 @@ export function PosOrderEntry({
       let changeDue = 0;
       let settled = false;
       let note: string | null = null;
-      if (parts) {
+      // A bill brought to ₹0 (Ritual cups, a full coupon) is created already paid:
+      // there is nothing to record, and nothing to collect.
+      const createdPaid = order.payment_status === 'paid';
+      if (createdPaid) settled = true;
+      if (parts && !createdPaid) {
         const payRes = await fetch(`/api/orders/${order.id}/payment`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -976,14 +1088,19 @@ export function PosOrderEntry({
       // no bill to print (the plan already says so) and, unlike the old pop-up
       // path, nothing here needs to happen inside the staffer's tap. Success is
       // silent; a job that doesn't report back within 10s raises the chip.
-      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled }));
+      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled, orderKind: order.order_kind }));
 
       resetForNextOrder();
       setConfirmation({
         orderId: order.id,
         numberLabel,
         totalInr,
-        paidAs: settled && parts ? describePaymentParts(parts) : null,
+        paidAs:
+          settled && parts && !createdPaid
+            ? describePaymentParts(parts)
+            : createdPaid
+              ? freeBillPaidAs(quotedPass?.applied ?? 0)
+              : null,
         changeDueInr: changeDue,
         // A bill only exists once the money is taken (BILL-1 fires on 'paid'),
         // so an unpaid or failed settle has nothing to report yet.
@@ -1052,13 +1169,7 @@ export function PosOrderEntry({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           op: 'add',
-          items: cart.map((i) => ({
-            menu_item_id: i.menuItemId,
-            variant_id: i.variantId,
-            quantity: i.qty,
-            addon_option_ids: i.addons.map((a) => a.optionId),
-            special_instructions: i.specialInstructions,
-          })),
+          items: orderItemsOf(cart),
         }),
       });
 
@@ -1116,6 +1227,10 @@ export function PosOrderEntry({
     setPointsInput('');
     setQuotedCoupon(null);
     setQuotedPoints(null);
+    // Nor the last one's Ritual cups.
+    setPassCups(0);
+    setQuotedPass(null);
+    setQuoteError(null);
     // POS-5 — a blank name field for the next customer is not "hand-typed",
     // and their "Last orders" (if any) belong to a number not yet entered.
     custNameUserEdited.current = false;
@@ -1149,6 +1264,14 @@ export function PosOrderEntry({
   const couponNote = couponFeedback(quotedCoupon);
   const pointsNote = pointsFeedback(quotedPoints);
   const pointsAvailable = canRedeemPoints(customer);
+  // HIOC Ritual: what the quote says about the cups asked for, the row the cups
+  // take on the bill, and — for a customer with no usable pass — the way to sell one.
+  // Only once the quote answers the cups now on the stepper (a tap raises the
+  // count a moment before its verdict lands; the old verdict must not linger).
+  const passNote = quotedPass && quotedPass.requested === passCups ? passFeedback(quotedPass) : null;
+  const passIdleHint = ritualIdleHint(quotedPass, passCups);
+  const ritualRow = ritualBillRow(bill, quotedPass?.applied ?? passCups);
+  const canOfferRitual = flags.coffeePass && customer?.found === true && !ritual;
 
   return (
     <div className="mx-auto max-w-[1600px] px-4 py-4 pb-28 lg:pb-4">
@@ -1458,6 +1581,9 @@ export function PosOrderEntry({
                 {bill && bill.discount_inr > 0 ? (
                   <BillRow label="Discount" value={-bill.discount_inr} />
                 ) : null}
+                {/* HIOC Ritual: what the cups cover, the server's own figure, kept
+                    apart from the coupon/Beanies discount above. */}
+                {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}
                 <div className="mt-1 flex items-center justify-between border-t border-line pt-1">
                   <span className="font-bold">{isAddMode ? 'Adding' : 'Total'}</span>
                   <span className="font-bold text-tan-dark">
@@ -1467,6 +1593,13 @@ export function PosOrderEntry({
                 {isAddMode ? (
                   <p className="mt-1 text-xs text-muted">
                     The order&rsquo;s new total is recalculated when you add.
+                  </p>
+                ) : null}
+                {/* The cart could not be priced (an item switched off, an option
+                    gone): the server's reason, so the total is not just "Calculating…". */}
+                {quoteError ? (
+                  <p role="alert" className="mt-1 text-xs font-bold text-red-700">
+                    {quoteError}
                   </p>
                 ) : null}
               </div>
@@ -1662,6 +1795,79 @@ export function PosOrderEntry({
                   Coupon &amp; {LOYALTY_UNIT.many}
                 </p>
 
+                {/* HIOC Ritual (CP-D10): the customer's cups, asked about — never
+                    pre-selected, because the person at the counter is not
+                    necessarily the pass holder. Applied first, before the coupon
+                    below (CP-D12); every rupee it covers comes from the quote. */}
+                {ritual ? (
+                  <div className="flex flex-col gap-2 rounded-md bg-surface px-3 py-2">
+                    <p className="text-xs font-bold text-charcoal">{ritual.label}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {passCups === 0 ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          disabled={ritualMax < 1}
+                          onClick={() => setPassCups(clampCups(1, ritualMax))}
+                        >
+                          Use Ritual
+                        </Button>
+                      ) : null}
+                      <div role="group" aria-label={`${PASS_PROGRAM_NAME} cups to use`} className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          aria-label="Use one cup fewer"
+                          disabled={passCups <= 0}
+                          onClick={() => setPassCups((c) => clampCups(c - 1, ritualMax))}
+                          className="flex h-11 w-11 items-center justify-center rounded-full bg-charcoal text-lg text-cream active:scale-95 disabled:opacity-40"
+                        >
+                          &minus;
+                        </button>
+                        <span className="min-w-[1.5rem] text-center font-mono text-sm font-bold tabular-nums text-charcoal">
+                          {passCups}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Use one cup more"
+                          disabled={passCups >= ritualMax}
+                          onClick={() => setPassCups((c) => clampCups(c + 1, ritualMax))}
+                          className="flex h-11 w-11 items-center justify-center rounded-full bg-tan-dark text-lg text-cream active:scale-95 disabled:opacity-40"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <span className="text-xs text-muted">
+                        {passCups === 0 ? 'Ask the customer how many' : cupsLabel(passCups)}
+                      </span>
+                    </div>
+                    {/* aria-live: the quote's verdict arrives a moment after the tap. */}
+                    <div aria-live="polite">
+                      {passNote ? (
+                        <p className={'text-xs ' + (passNote.ok ? 'font-bold text-green-700' : 'text-red-700')}>
+                          {passNote.text}
+                        </p>
+                      ) : passIdleHint ? (
+                        <p className="text-xs text-muted">{passIdleHint}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : canOfferRitual ? (
+                  // Found, but no usable Ritual: the way to sell one. That screen
+                  // takes over this one, so a cart in progress is confirmed away.
+                  <SurfaceLink
+                    href={`/staff/passes?phone=${lookupPhone}`}
+                    onClick={(e) => {
+                      if (!window.confirm('Selling a Ritual opens another screen and clears this order. Continue?')) {
+                        e.preventDefault();
+                      }
+                    }}
+                    className="inline-flex min-h-[44px] items-center text-sm font-bold text-tan-dark underline"
+                  >
+                    Sell a Ritual &rarr;
+                  </SurfaceLink>
+                ) : null}
+
                 <div className="flex gap-2">
                   <input
                     value={couponInput}
@@ -1766,6 +1972,7 @@ export function PosOrderEntry({
                   // a settle for the wrong total.
                   stale={billStale}
                   bill={bill}
+                  passCups={quotedPass?.applied ?? 0}
                   orderType={orderType}
                   tableLabel={selectedTableLabel}
                   itemCount={totalItems}
@@ -1853,6 +2060,7 @@ export function PosOrderEntry({
       {paymentOpen && !paymentDocked ? (
         <PosPaymentModal
           bill={bill}
+          passCups={quotedPass?.applied ?? 0}
           orderType={orderType}
           tableLabel={selectedTableLabel}
           itemCount={totalItems}

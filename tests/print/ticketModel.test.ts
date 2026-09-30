@@ -836,3 +836,174 @@ describe('buildTicketDoc — KOT split by counter', () => {
     expect(cuts).toBe(3); // two between slips + the end-of-ticket cut
   });
 });
+
+// HIOC Ritual (docs/COFFEE-PASS-SPEC.md §8): the receipt gets the cups' cover as
+// its own row after Discount, "(Ritual ×N)" under a line the cups paid for, and a
+// pass SALE says how long the pass is valid. Components/print/StaffTickets.tsx's
+// ReceiptTicket mirrors all of it (tests/print/staffTicketsRitual.test.ts).
+describe('buildTicketDoc — HIOC Ritual on the receipt', () => {
+  // Spec §6 example B: Lotus Biscoff Latte XL ₹215 + Cappuccino L ₹120, 2 cups → −₹270, ₹3 GST, ₹68.
+  const coveredOrder = (overrides: Partial<StaffPrintOrder> = {}) =>
+    order({
+      subtotal_inr: 335,
+      tax_inr: 3,
+      total_inr: 68,
+      pass_discount_inr: 270,
+      items: [
+        item({ id: 'a', name_snapshot: 'Lotus Biscoff Latte', variant_label_snapshot: 'XL', quantity: 1, price_inr_snapshot: 215, line_total_inr: 215, pass_drinks: 1, pass_covered_inr: 150 }),
+        item({ id: 'b', name_snapshot: 'Cappuccino', variant_label_snapshot: 'L', quantity: 1, price_inr_snapshot: 120, line_total_inr: 120, pass_drinks: 1, pass_covered_inr: 120 }),
+      ],
+      ...overrides,
+    });
+
+  it('prints "HIOC Ritual (2 cups)" with what the cups covered, in parentheses like a discount', () => {
+    const rows = rowBlocks(buildTicketDoc(coveredOrder(), 'receipt'));
+    const ritual = rows.find((r) => r.left.startsWith('HIOC Ritual'));
+    expect(ritual?.left).toBe('HIOC Ritual (2 cups)');
+    expect(ritual?.right).toBe('(Rs. 270.00)');
+  });
+
+  it('sits right after Discount and before GST, so the rows read top to bottom like the bill identity', () => {
+    const rows = rowBlocks(buildTicketDoc(coveredOrder({ discount_inr: 20, coupon_code: 'WELCOME10', total_inr: 48 }), 'receipt'));
+    const lefts = rows.map((r) => r.left);
+    expect(lefts.indexOf('Sub Total')).toBeLessThan(lefts.indexOf('Discount (WELCOME10)'));
+    expect(lefts.indexOf('Discount (WELCOME10)')).toBeLessThan(lefts.indexOf('HIOC Ritual (2 cups)'));
+    expect(lefts.indexOf('HIOC Ritual (2 cups)')).toBeLessThan(lefts.indexOf('GST'));
+    expect(lefts.indexOf('GST')).toBeLessThan(lefts.indexOf('Grand Total'));
+  });
+
+  it('is a separate row from the coupon/Beanies discount, which keeps its own figure', () => {
+    const rows = rowBlocks(buildTicketDoc(coveredOrder({ discount_inr: 20 }), 'receipt'));
+    expect(rows.find((r) => r.left === 'Discount')?.right).toBe('(Rs. 20.00)');
+    expect(rows.find((r) => r.left.startsWith('HIOC Ritual'))?.right).toBe('(Rs. 270.00)');
+  });
+
+  it('names the programme alone when the lines do not say how many cups', () => {
+    const rows = rowBlocks(buildTicketDoc(order({ pass_discount_inr: 120, items: [item()] }), 'receipt'));
+    expect(rows.find((r) => r.left.startsWith('HIOC Ritual'))?.left).toBe('HIOC Ritual');
+  });
+
+  it.each([
+    ['no cover', { pass_discount_inr: 0 }],
+    ['the column absent (a row read before the migration)', {}],
+  ])('prints no Ritual row with %s', (_label, overrides) => {
+    const doc = buildTicketDoc(order(overrides), 'receipt');
+    expect(allText(doc)).not.toContain('HIOC Ritual');
+  });
+
+  it('marks each covered line "(Ritual ×N)", indented under its item, and only those lines', () => {
+    const doc = buildTicketDoc(
+      coveredOrder({
+        items: [
+          item({ id: 'a', name_snapshot: 'Cappuccino', quantity: 3, price_inr_snapshot: 120, line_total_inr: 360, pass_drinks: 2, pass_covered_inr: 240 }),
+          item({ id: 'b', name_snapshot: 'Sandwich', quantity: 1, price_inr_snapshot: 180, line_total_inr: 180 }),
+        ],
+      }),
+      'receipt',
+    );
+    const notes = textBlocks(doc).filter((b) => b.text.includes('Ritual'));
+    expect(notes).toHaveLength(1);
+    expect(notes[0].text).toBe('(Ritual ×2)');
+    expect(notes[0].indent).toBe(4);
+    // It follows its own item's row, not the sandwich's.
+    const idx = doc.blocks.indexOf(notes[0]);
+    const before = doc.blocks[idx - 1];
+    expect(before.kind).toBe('columns');
+    expect(before.kind === 'columns' && before.columns[1].text).toContain('Cappuccino');
+  });
+
+  it('does not print the cups of a voided line', () => {
+    const doc = buildTicketDoc(
+      coveredOrder({
+        pass_discount_inr: 120,
+        items: [
+          item({ id: 'a', name_snapshot: 'Cappuccino', pass_drinks: 1, pass_covered_inr: 120, quantity: 1, line_total_inr: 120 }),
+          item({ id: 'b', name_snapshot: 'Latte', pass_drinks: 1, pass_covered_inr: 130, quantity: 1, line_total_inr: 130, voided: true }),
+        ],
+      }),
+      'receipt',
+    );
+    expect(textBlocks(doc).filter((b) => b.text.includes('(Ritual'))).toHaveLength(1);
+    expect(rowBlocks(doc).find((r) => r.left.startsWith('HIOC Ritual'))?.left).toBe('HIOC Ritual (1 cup)');
+  });
+
+  it('keeps the receipt free of a ₹ glyph and a middle dot on the thermal path', () => {
+    const doc = buildTicketDoc(coveredOrder(), 'receipt');
+    expect(allText(doc)).not.toContain('₹');
+    expect(allText(doc)).not.toContain('·');
+  });
+
+  it('renders to ESC/POS bytes without error, "×" becoming a plain "x"', () => {
+    const bytes = renderEscPos(buildTicketDoc(coveredOrder(), 'receipt'), { paperWidthMm: 80, cut: true });
+    const text = Buffer.from(bytes).toString('latin1');
+    expect(text).toContain('(Ritual x1)');
+    expect(text).toContain('HIOC Ritual (2 cups)');
+  });
+});
+
+describe('buildTicketDoc — the receipt of a HIOC Ritual sale', () => {
+  const sale = (overrides: Partial<StaffPrintOrder> = {}) =>
+    order({
+      order_kind: 'coffee_pass',
+      order_type: 'takeaway',
+      table_label: '',
+      pickup_code: null,
+      subtotal_inr: 750,
+      tax_inr: 38,
+      total_inr: 788,
+      payment_status: 'paid',
+      payment_method: 'cash',
+      items: [
+        item({
+          id: 'plan-line',
+          menu_item_id: null,
+          name_snapshot: 'Weekly Ritual',
+          variant_label_snapshot: '7 cups · 7 days',
+          quantity: 1,
+          price_inr_snapshot: 750,
+          line_total_inr: 750,
+          coffee_pass_plan_id: 'plan-1',
+        }),
+      ],
+      // The pass the sale issued: bought Monday 28 Sep 2026 → last valid day Sunday 4 Oct.
+      pass_sale: { expires_at: '2026-10-04T18:30:00.000Z', drinks_total: 7 },
+      ...overrides,
+    });
+
+  it('says "Valid till" under the plan line', () => {
+    const doc = buildTicketDoc(sale(), 'receipt');
+    const valid = textBlocks(doc).find((b) => b.text.startsWith('Valid till'));
+    expect(valid?.text).toBe('Valid till Sun 4 Oct 2026');
+    expect(valid?.indent).toBe(4);
+    const idx = doc.blocks.indexOf(valid!);
+    const line = doc.blocks[idx - 1];
+    expect(line.kind === 'columns' && line.columns[1].text).toBe('Weekly Ritual (7 cups · 7 days)');
+  });
+
+  it('prints the sale’s total and the payment as any receipt does', () => {
+    const doc = buildTicketDoc(sale(), 'receipt');
+    const rows = rowBlocks(doc);
+    expect(rows.find((r) => r.left === 'Sub Total')?.right).toBe('Rs. 750.00');
+    expect(rows.find((r) => r.left === 'GST')?.right).toBe('Rs. 38.00');
+    expect(rows.find((r) => r.left === 'Grand Total')?.right).toBe('Rs. 788.00');
+    expect(allText(doc)).toContain('Paid via Cash');
+  });
+
+  it('leaves the line off when the pass is not known yet (unpaid sale, or the lookup failed)', () => {
+    expect(allText(buildTicketDoc(sale({ pass_sale: null }), 'receipt'))).not.toContain('Valid till');
+    expect(allText(buildTicketDoc(sale({ pass_sale: undefined }), 'receipt'))).not.toContain('Valid till');
+    expect(allText(buildTicketDoc(sale({ pass_sale: { expires_at: 'garbage', drinks_total: 7 } }), 'receipt'))).not.toContain(
+      'Valid till',
+    );
+  });
+
+  it('only a sale says "Valid till": an ordinary order never does, even if a pass rode along', () => {
+    const menuOrder = order({ pass_sale: { expires_at: '2026-10-04T18:30:00.000Z', drinks_total: 7 } });
+    expect(allText(buildTicketDoc(menuOrder, 'receipt'))).not.toContain('Valid till');
+  });
+
+  it('shows no Beanies row for a sale that earned none (CP-D13)', () => {
+    const doc = buildTicketDoc(sale({ points_earned: null, points_redeemed: null, points_balance: null }), 'receipt');
+    expect(allText(doc)).not.toContain('earned');
+  });
+});

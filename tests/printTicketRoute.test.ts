@@ -51,6 +51,32 @@ describe('GET /api/print/ticket/[id]/[type]', () => {
     expect(res.status).toBe(404);
   });
 
+  // HIOC Ritual: the sale of a pass is a payment, not food. It has no kitchen
+  // ticket or pickup token; its receipt prints as usual.
+  describe('a HIOC Ritual sale', () => {
+    beforeEach(() => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
+      state.order = { id: 'order-1', order_kind: 'coffee_pass' };
+    });
+
+    it.each(['kot', 'token'])('refuses the %s with a 409 and a reason, not a phantom ticket', async (type) => {
+      const res = await GET(new Request('https://x'), ctx(type));
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toMatch(/no kitchen ticket/i);
+    });
+
+    it('still serves its receipt', async () => {
+      const res = await GET(new Request('https://x'), ctx('receipt'));
+      expect(res.status).toBe(200);
+      expect((await res.json()).doc).toEqual({ order: state.order, type: 'receipt' });
+    });
+
+    it('leaves the KOT of an ordinary order alone', async () => {
+      state.order = { id: 'order-1', order_kind: 'menu' };
+      expect((await GET(new Request('https://x'), ctx('kot'))).status).toBe(200);
+    });
+  });
+
   it('404s when the order does not exist', async () => {
     state.actor = { user: { id: 'staff-1' }, role: 'staff', via: 'session' };
     state.order = null;

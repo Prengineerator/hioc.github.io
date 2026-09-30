@@ -31,7 +31,19 @@ export type StaffPrintOrder = OrderWithCoupon & {
   // A KOT of only the lines added to a running order (lib/print/kotAddition):
   // headed "ADDED ITEMS" so the kitchen doesn't read it as a new order.
   kot_addition?: boolean;
+  // HIOC Ritual: for the SALE of a pass (order_kind 'coffee_pass') the pass that
+  // sale issued, so the receipt can say "Valid till …". Null until the sale is
+  // paid (the pass is issued then), when the lookup failed, or for any other
+  // order; the receipt just leaves the line off.
+  pass_sale?: PassSaleInfo | null;
 };
+
+/** What the receipt of a pass sale reads from the pass it issued (coffee_passes). */
+export interface PassSaleInfo {
+  /** The instant validity ends: the start of the day after the last valid IST day. */
+  expires_at: string;
+  drinks_total: number;
+}
 
 // PRN-8: an order's 'earn' row (lib/loyalty/ledger.ts earnForOrder) is only
 // written when the order transitions to 'completed', but the receipt
@@ -93,6 +105,26 @@ async function fetchItemCategories(menuItemIds: string[]): Promise<Record<string
   }
 }
 
+// The pass a HIOC Ritual sale issued (coffee_passes.order_id is unique) — best-effort
+// like everything else here: any failure, or a sale not yet paid, yields null and
+// the receipt prints without its "Valid till" line rather than failing the print.
+async function fetchPassSale(orderId: string): Promise<PassSaleInfo | null> {
+  try {
+    const admin = createAdminSupabaseClient();
+    const { data, error } = await admin
+      .from('coffee_passes')
+      .select('expires_at, drinks_total')
+      .eq('order_id', orderId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as { expires_at?: string | null; drinks_total?: number | null };
+    if (!row.expires_at) return null;
+    return { expires_at: row.expires_at, drinks_total: row.drinks_total ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchLoyaltyTransactions(orderId: string): Promise<{ type: string; points: number }[] | null> {
   try {
     const admin = createAdminSupabaseClient();
@@ -133,8 +165,9 @@ async function fetchLoyaltyTransactions(orderId: string): Promise<{ type: string
  * parallel (printing must stay fast and must never fail because the loyalty
  * ledger is unavailable) — a missing/empty ledger, a lookup failure, or an
  * unlinked guest order just omits that field (the receipt prints nothing for
- * it) rather than failing or slowing down the print. Returns null when the
- * id doesn't resolve so the page can 404.
+ * it) rather than failing or slowing down the print. A HIOC Ritual sale also
+ * loads the pass it issued (`pass_sale`), best-effort in the same way. Returns
+ * null when the id doesn't resolve so the page can 404.
  */
 export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | null> {
   const order = await getOrderWithCoupon(id);
@@ -146,7 +179,7 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
 
   const menuItemIds = [...new Set(order.items.map((i) => i.menu_item_id).filter((v): v is string => Boolean(v)))];
 
-  const [rows, config, ledgerBalance, cashier_name, kot_routing, kot_categories] = await Promise.all([
+  const [rows, config, ledgerBalance, cashier_name, kot_routing, kot_categories, pass_sale] = await Promise.all([
     fetchLoyaltyTransactions(id),
     getLoyaltyConfig().catch(() => null),
     loyaltyUserId
@@ -155,6 +188,7 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
     resolveCashierName(order.created_by),
     fetchKotRouting(),
     fetchItemCategories(menuItemIds),
+    order.order_kind === 'coffee_pass' ? fetchPassSale(id) : Promise.resolve(null),
   ]);
 
   const earnRows = (rows ?? []).filter((r) => r.type === 'earn');
@@ -174,7 +208,10 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
     loyaltyUserId &&
     config &&
     order.payment_status === 'paid' &&
-    !NEVER_EARNS.has(order.status)
+    !NEVER_EARNS.has(order.status) &&
+    // CP-D13: buying a pass earns no Beanies (the pass is already the discount),
+    // and earnForOrder is never called for one, so nothing may be projected.
+    order.order_kind !== 'coffee_pass'
   ) {
     const amountInr = order.total_inr ?? order.subtotal_inr ?? 0;
     const projected = computeEarnedPoints(amountInr, config);
@@ -189,5 +226,5 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
   // is 0 whenever an 'earn' row already exists, so this never double-counts.
   const points_balance: number | null = ledgerBalance !== null ? ledgerBalance + projectedEarn : null;
 
-  return { ...order, points_earned, points_redeemed, points_balance, cashier_name, kot_routing, kot_categories };
+  return { ...order, points_earned, points_redeemed, points_balance, cashier_name, kot_routing, kot_categories, pass_sale };
 }

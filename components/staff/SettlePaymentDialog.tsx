@@ -15,6 +15,7 @@ import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
 import { PosPaymentPanel, type SettleAdjustmentInput } from '@/components/staff/PosPaymentModal';
 import { describeOrderPayment } from '@/lib/orders/settleList';
+import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, type PosBill } from '@/lib/pos/ritual';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { PaymentPart } from '@/lib/orders/payments';
 import type { Order, OrderItem } from '@/lib/types';
@@ -39,14 +40,23 @@ export function SettlePaymentDialog({
   const [error, setError] = useState<string | null>(null);
 
   const total = order.total_inr ?? order.subtotal_inr;
-  const bill = {
+  const bill: PosBill = {
     subtotal_inr: order.subtotal_inr,
     tax_inr: order.tax_inr ?? 0,
     packaging_inr: order.packaging_inr ?? 0,
     discount_inr: order.discount_inr ?? 0,
+    // HIOC Ritual cups already spent on this bill (absent before the migration = 0).
+    pass_discount_inr: order.pass_discount_inr ?? 0,
     total_inr: total,
   };
   const itemCount = order.items.filter((i) => !i.voided).reduce((n, i) => n + i.quantity, 0);
+  // The sale of a pass isn't a food order: say what it is, and name the plan, in
+  // place of the "Takeaway · 1 item" header a menu order gets.
+  const ritualSale = isRitualSale(order);
+  const saleLine = order.items.find((i) => !i.voided);
+  const saleDetail = saleLine
+    ? [saleLine.name_snapshot, saleLine.variant_label_snapshot].filter(Boolean).join(' · ')
+    : undefined;
 
   async function submit(parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) {
     if (!parts || submitting) return;
@@ -74,10 +84,14 @@ export function SettlePaymentDialog({
     }
   }
 
-  const title =
-    intent === 'change'
-      ? `Change payment · #${formatOrderNumber(order.order_number)}`
-      : `Settle #${formatOrderNumber(order.order_number)}`;
+  const number = formatOrderNumber(order.order_number);
+  const title = ritualSale
+    ? intent === 'change'
+      ? `Change payment · ${RITUAL_SALE_LABEL} #${number}`
+      : `Collect payment · ${RITUAL_SALE_LABEL} #${number}`
+    : intent === 'change'
+      ? `Change payment · #${number}`
+      : `Settle #${number}`;
 
   return (
     <Modal open onClose={submitting ? () => {} : onClose} title={title}>
@@ -90,6 +104,9 @@ export function SettlePaymentDialog({
       <PosPaymentPanel
         mode="settle"
         bill={bill}
+        passCups={cupsOnOrder(order.items)}
+        contextLabel={ritualSale ? RITUAL_SALE_LABEL : undefined}
+        contextDetail={ritualSale ? saleDetail : undefined}
         orderType={order.order_type}
         tableLabel={order.table_label || null}
         itemCount={itemCount}

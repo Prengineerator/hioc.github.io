@@ -13,7 +13,10 @@ import {
   formatPoints,
   hasOrderHistory,
   parsePointsInput,
+  passFeedback,
   pointsFeedback,
+  type CustomerLookup,
+  type QuotedPass,
 } from '@/lib/pos/loyalty';
 
 describe('loyaltyUserIdFor — whose account an order belongs to (D4-3)', () => {
@@ -340,5 +343,70 @@ describe('couponFeedback / pointsFeedback — the server speaks, we render', () 
   it('says nothing when nothing was quoted', () => {
     expect(couponFeedback(null)).toBeNull();
     expect(pointsFeedback(undefined)).toBeNull();
+  });
+});
+
+// HIOC Ritual: the same rule for cups. The server's `pass` block is judged, not
+// re-judged here; the stepper starts at 0 (CP-D10), so nothing is said until a
+// cup has been asked for.
+describe('passFeedback — the quote speaks, we render', () => {
+  const quoted = (overrides: Partial<QuotedPass> = {}): QuotedPass => ({
+    requested: 2,
+    applied: 2,
+    discount_inr: 270,
+    eligible_units: 3,
+    available: 5,
+    max_usable: 3,
+    shortfall: null,
+    message: null,
+    ...overrides,
+  });
+
+  it('confirms the cups applied with the rupees the server says they cover', () => {
+    expect(passFeedback(quoted())).toEqual({ ok: true, text: 'HIOC Ritual: 2 cups — ₹270 covered' });
+    expect(passFeedback(quoted({ requested: 1, applied: 1, discount_inr: 120 }))).toEqual({
+      ok: true,
+      text: 'HIOC Ritual: 1 cup — ₹120 covered',
+    });
+  });
+
+  it("shows the server's reason verbatim when fewer cups were applied than asked for", () => {
+    const message = 'You have 1 cup left on your HIOC Ritual pass, so 1 cup can be used.';
+    expect(passFeedback(quoted({ requested: 2, applied: 1, discount_inr: 120, shortfall: 'not_enough_drinks', message }))).toEqual({
+      ok: false,
+      text: message,
+    });
+  });
+
+  it('falls back to a neutral message only when the server gave no reason', () => {
+    expect(passFeedback(quoted({ requested: 2, applied: 0, discount_inr: 0, shortfall: 'no_pass', message: null }))).toEqual({
+      ok: false,
+      text: 'HIOC Ritual could not be applied to this order.',
+    });
+  });
+
+  it('says nothing until a cup has been asked for, or when nothing was quoted', () => {
+    expect(passFeedback(quoted({ requested: 0, applied: 0, discount_inr: 0 }))).toBeNull();
+    expect(passFeedback(null)).toBeNull();
+    expect(passFeedback(undefined)).toBeNull();
+  });
+});
+
+describe('CustomerLookup carries the usable passes', () => {
+  it('lets an account answer with passes, and the other sources without', () => {
+    const account: CustomerLookup = {
+      found: true,
+      source: 'account',
+      name: 'Asha',
+      points_balance: 40,
+      order_count: 3,
+      last_order_at: null,
+      passes: [],
+    };
+    const history: CustomerLookup = { found: true, source: 'order_history', name: 'Ravi', order_count: 1, last_order_at: null };
+    // The presence of `passes` changes nothing about who the customer is.
+    expect(describeCustomer(account)?.text).toBe('Asha · 40 Beanies');
+    expect(customerChip(account)).toBe('HIOC account · 40 Beanies');
+    expect(describeCustomer(history)?.ok).toBe(true);
   });
 });

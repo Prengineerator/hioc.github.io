@@ -21,6 +21,7 @@ import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
 import { canEditMenu, canTakeOrders, type StaffSurface } from '@/lib/staff/surfaceRules';
+import { kitchenOrders } from '@/lib/pos/ritual';
 
 const CHIME_INTERVAL_MS = 5000;
 
@@ -151,8 +152,9 @@ export function StaffShell({
     try {
       const res = await fetch('/api/orders?status=received', { cache: 'no-store' });
       if (!res.ok) return;
-      const data = (await res.json()) as { orders?: { id: string }[] };
-      const received = new Set((data.orders ?? []).map((o) => o.id));
+      const data = (await res.json()) as { orders?: { id: string; order_kind?: string }[] };
+      // A HIOC Ritual sale is never a kitchen order, so it never rings the alarm.
+      const received = new Set(kitchenOrders(data.orders ?? []).map((o) => o.id));
       setNewIds((current) => nextNewOrderIds(previousReceived.current, received, current));
       previousReceived.current = received;
     } catch {

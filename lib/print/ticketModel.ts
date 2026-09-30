@@ -25,6 +25,7 @@ import {
 } from '@/lib/print/labels';
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
+import { cupsOnOrder, ritualBillLabel, validTillLabel } from '@/lib/pos/ritual';
 
 // Thermal code pages (the ones ESC/POS printers actually ship with) have no
 // ₹ glyph — it prints as a mangled box or a wrong currency sign depending on
@@ -159,6 +160,26 @@ function itemColumns(cells: { no: string; name: string; qty: string; price: stri
 // `indent`, lib/print/ticketDoc.ts) to sit directly under it, on every
 // wrapped line, not just the first.
 const ITEM_COLUMN_INDENT = 4;
+
+/**
+ * "(Ritual ×2)" under a receipt line that HIOC Ritual cups paid for, or null when
+ * none did. `pass_drinks` is absent on rows read before supabase/2026-10-coffee-pass.sql.
+ * Shared with the HTML ticket through this module so the two cannot word it apart.
+ */
+export function passCoveredNote(item: { pass_drinks?: number | null }): string | null {
+  const cups = Math.trunc(item.pass_drinks ?? 0);
+  return cups > 0 ? `(Ritual ×${cups})` : null;
+}
+
+/**
+ * "Valid till Mon 5 Oct 2026" for the receipt of a pass SALE, or null when the
+ * pass isn't known (the sale is unpaid, so nothing has been issued yet, or the
+ * best-effort lookup in getStaffPrintOrder failed).
+ */
+export function passValidTillText(order: { pass_sale?: { expires_at: string } | null }): string | null {
+  const day = validTillLabel(order.pass_sale?.expires_at, { year: true });
+  return day ? `Valid till ${day}` : null;
+}
 
 // --- KOT-1 — Kitchen Order Ticket -------------------------------------------
 // Mirrors components/print/StaffTickets.tsx `KotTicket`. Qty × name (variant)
@@ -304,6 +325,11 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   });
   blocks.push({ kind: 'divider' });
 
+  // HIOC Ritual (docs/COFFEE-PASS-SPEC.md §8): the day a pass SALE stays valid
+  // to (known once the sale is paid and the pass exists), and the cups a menu
+  // order paid with a pass. Both mirror ReceiptTicket (HTML).
+  const validTill = order.order_kind === 'coffee_pass' ? passValidTillText(order) : null;
+
   activeItems.forEach((item, index) => {
     blocks.push({
       kind: 'columns',
@@ -318,6 +344,13 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
     for (const line of addonsLines(item.addons, { withPrice: true, itemQuantity: item.quantity })) {
       blocks.push({ kind: 'text', text: line, indent: ITEM_COLUMN_INDENT });
     }
+    const coveredNote = passCoveredNote(item);
+    if (coveredNote) {
+      blocks.push({ kind: 'text', text: coveredNote, indent: ITEM_COLUMN_INDENT });
+    }
+    if (validTill) {
+      blocks.push({ kind: 'text', text: validTill, indent: ITEM_COLUMN_INDENT });
+    }
     if (item.special_instructions) {
       blocks.push({ kind: 'text', text: `Note: ${item.special_instructions}`, indent: ITEM_COLUMN_INDENT });
     }
@@ -328,6 +361,16 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   blocks.push({ kind: 'row', left: 'Sub Total', right: formatMoney(order.subtotal_inr) });
   if (order.discount_inr > 0) {
     blocks.push({ kind: 'row', left: discountLabel, right: `(${formatMoney(order.discount_inr)})` });
+  }
+  // What HIOC Ritual cups covered, kept apart from the coupon/Beanies discount
+  // above (total = subtotal + tax + packaging - discount - pass cover).
+  const passCovered = order.pass_discount_inr ?? 0;
+  if (passCovered > 0) {
+    blocks.push({
+      kind: 'row',
+      left: ritualBillLabel(cupsOnOrder(activeItems)),
+      right: `(${formatMoney(passCovered)})`,
+    });
   }
   if (order.tax_inr > 0) {
     blocks.push({ kind: 'row', left: 'GST', right: formatMoney(order.tax_inr) });

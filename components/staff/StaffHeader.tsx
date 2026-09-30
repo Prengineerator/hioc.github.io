@@ -97,6 +97,7 @@ export function StaffHeader({
     staffPos: flags.staffPos,
     attendance: flags.attendance,
     inventory: flags.inventory,
+    coffeePass: flags.coffeePass,
     canManageCash: role === 'manager' || role === 'owner',
   });
   const primary = shell.counterMode ? nav.primary.filter((t) => COUNTER_MODE_HREFS.includes(t.href)) : nav.primary;

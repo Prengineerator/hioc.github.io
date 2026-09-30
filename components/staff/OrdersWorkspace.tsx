@@ -31,6 +31,7 @@ import { PICKUP_REMINDER_COOLDOWN_SEC, formatCountdown } from '@/lib/notificatio
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { useStaffShell } from '@/components/staff/StaffShell';
 import { isAppPaymentMethod } from '@/lib/orders/payments';
+import { kitchenOrders } from '@/lib/pos/ritual';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 
@@ -84,7 +85,8 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
       const next: OrderWithItems[] = data.orders ?? [];
       setOrders(next);
 
-      const received = new Set(next.filter((o) => o.status === 'received').map((o) => o.id));
+      // A HIOC Ritual sale is never a kitchen order, so it never rings the alert.
+      const received = new Set(kitchenOrders(next).filter((o) => o.status === 'received').map((o) => o.id));
       if (prevReceivedRef.current) {
         const prev = prevReceivedRef.current;
         setNewOrderIds((cur) => {
@@ -517,7 +519,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
             const { order, intent } = paying;
             setPaying(null);
             if (intent === 'settle') {
-              const jobs = settlePrintPlan(autoPrint).map((type) => ({ orderId: order.id, type }));
+              const jobs = settlePrintPlan(autoPrint, { orderKind: order.order_kind }).map((type) => ({ orderId: order.id, type }));
               if (jobs.length > 0) printDock.enqueue(jobs);
             }
             showToast(

@@ -74,6 +74,73 @@ describe('staffNav — staff website', () => {
   });
 });
 
+// HIOC Ritual (docs/COFFEE-PASS-SPEC.md CP-D20): "Ritual passes" lives under More,
+// behind its flag, for anyone who can take orders (selling a pass is taking an
+// order); the page and the API check the sell / manage permissions themselves.
+describe('staffNav — Ritual passes', () => {
+  it('is absent by default and while the flag is off', () => {
+    const off = staffNav({ surface: 'pos', canTakeOrders: true, ...flags });
+    expect(labels(off.more)).not.toContain('Ritual passes');
+    const explicitOff = staffNav({ surface: 'pos', canTakeOrders: true, ...flags, coffeePass: false });
+    expect(labels(explicitOff.more)).not.toContain('Ritual passes');
+  });
+
+  it('leads the More menu on the counter when the flag is on', () => {
+    const nav = staffNav({ surface: 'pos', canTakeOrders: true, ...flags, coffeePass: true });
+    expect(labels(nav.more)).toEqual(['Ritual passes', 'Cash', 'Expenses', 'Attendance', 'Leave', 'Menu', 'Settings']);
+    expect(nav.more.find((t) => t.label === 'Ritual passes')?.href).toBe('/staff/passes');
+    // Not a primary tab: the counter's all-day tabs are unchanged.
+    expect(labels(nav.primary)).toEqual(['Live orders', 'Orders', 'Settle', 'New order', 'Tables']);
+  });
+
+  it('shows for anyone who can take orders on the staff website, and hides otherwise', () => {
+    const allowed = staffNav({ surface: 'web', canTakeOrders: true, ...flags, coffeePass: true });
+    expect(labels(allowed.more)).toContain('Ritual passes');
+    // Web ordering switched off: selling is refused (CP-D20), so the entry is not offered.
+    const blocked = staffNav({ surface: 'web', canTakeOrders: false, ...flags, coffeePass: true });
+    expect(labels(blocked.more)).not.toContain('Ritual passes');
+  });
+
+  it('does not depend on the cash, attendance or stock flags', () => {
+    const nav = staffNav({
+      surface: 'pos',
+      canTakeOrders: true,
+      staffPos: false,
+      attendance: false,
+      inventory: false,
+      coffeePass: true,
+    });
+    expect(labels(nav.more)).toEqual(['Ritual passes', 'Menu', 'Settings']);
+  });
+
+  it('sits with Stock and Cash in / out when everything is on', () => {
+    const nav = staffNav({
+      surface: 'pos',
+      canTakeOrders: true,
+      ...flags,
+      inventory: true,
+      canManageCash: true,
+      coffeePass: true,
+    });
+    expect(labels(nav.more)).toEqual([
+      'Ritual passes',
+      'Cash',
+      'Expenses',
+      'Cash in / out',
+      'Attendance',
+      'Leave',
+      'Stock',
+      'Menu',
+      'Settings',
+    ]);
+  });
+
+  it('lights up on its own page only', () => {
+    expect(isActiveTab('/staff/passes', '/staff/passes')).toBe(true);
+    expect(isActiveTab('/staff/orders', '/staff/passes')).toBe(false);
+  });
+});
+
 describe('isActiveTab', () => {
   it('matches only the exact path, so Orders is not lit on New order', () => {
     expect(isActiveTab('/staff/orders', '/staff/orders')).toBe(true);

@@ -17,6 +17,7 @@ import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { canRemind } from '@/lib/orders/quickActions';
 import { PickupReminderButton } from '@/components/staff/PickupReminderButton';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
+import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, ritualBillRow } from '@/lib/pos/ritual';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { canChangePayment, describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
@@ -175,8 +176,13 @@ export function OrderDetailModal({
   const codeMatches = enteredCode.length > 0 && enteredCode === (order.pickup_code ?? '');
   const codeMismatch = enteredCode.length > 0 && !codeMatches;
 
-  const next = PRIMARY_NEXT[order.status];
-  const isNew = order.status === 'received';
+  // HIOC Ritual: the SALE of a pass is a payment, not food. It has no kitchen
+  // steps (no accept/reject, prep, ready, handover, KOT or token — the status API
+  // refuses them too), so this view keeps only what applies to money: payment,
+  // receipt and refund, plus cancelling it while it is still unpaid.
+  const ritualSale = isRitualSale(order);
+  const next = ritualSale ? undefined : PRIMARY_NEXT[order.status];
+  const isNew = !ritualSale && order.status === 'received';
   const isActive = ['received', 'accepted', 'preparing', 'ready'].includes(order.status);
   const canRefund = Boolean(onRefund) && REFUNDABLE_PAYMENT_STATUSES.includes(order.payment_status);
 
@@ -187,7 +193,7 @@ export function OrderDetailModal({
   const isOpen = OPEN_STATUSES.includes(order.status);
   // A line is voidable when the order is open and unpaid (POS-4). The /amend
   // route re-checks this + the manager permission; the button is a convenience.
-  const canVoidLine = Boolean(onVoid) && isOpen && !isPaid;
+  const canVoidLine = Boolean(onVoid) && isOpen && !isPaid && !ritualSale;
   // Voided lines survive for audit but drop out of the checklist denominator.
   const activeItems = order.items.filter((i) => !i.voided);
   const voidTarget = voidItemId ? order.items.find((i) => i.id === voidItemId) : undefined;
@@ -206,7 +212,8 @@ export function OrderDetailModal({
   const openPrint = (type: 'kot' | 'receipt' | 'token') => {
     onPrint(order.id, type);
   };
-  const canPrintToken = order.order_type === 'takeaway' && Boolean(order.pickup_code);
+  const canPrintToken = !ritualSale && order.order_type === 'takeaway' && Boolean(order.pickup_code);
+  const ritualRow = ritualBillRow(order, cupsOnOrder(order.items));
 
   // POS4-3 + DEV-3 — the same three-way resolution the POS uses, through the
   // same hook, so settling from the queue prints exactly what settling from the
@@ -246,7 +253,7 @@ export function OrderDetailModal({
       setAppError('Not recorded — check the booking ID and try again.');
       return;
     }
-    for (const type of settlePrintPlan(autoPrint)) openPrint(type);
+    for (const type of settlePrintPlan(autoPrint, { orderKind: order.order_kind })) openPrint(type);
     setMode('view');
   };
 
@@ -286,7 +293,7 @@ export function OrderDetailModal({
       setMode('appRef');
       return;
     }
-    for (const type of settlePrintPlan(autoPrint)) openPrint(type);
+    for (const type of settlePrintPlan(autoPrint, { orderKind: order.order_kind })) openPrint(type);
     setDrawerNote(null);
     void openDrawerIfCash([{ method }], { orderId: order.id }).then((err) => {
       if (err) setDrawerNote(err);
@@ -409,7 +416,7 @@ export function OrderDetailModal({
           <div>
             <h2 className="text-xl font-bold text-charcoal">#{formatOrderNumber(order.order_number)}</h2>
             <p className="text-xs text-muted">
-              {STATUS_LABELS[order.status]} · {order.order_type}
+              {STATUS_LABELS[order.status]} · {ritualSale ? RITUAL_SALE_LABEL : order.order_type}
               {isDineIn && order.table_label ? ` · ${order.table_label}` : ''} · placed{' '}
               {formatIstTime(new Date(order.created_at))}
             </p>
@@ -422,21 +429,23 @@ export function OrderDetailModal({
           {order.customer_phone ? (
             <a href={`tel:${order.customer_phone}`} className="text-tan-dark hover:underline">{order.customer_phone}</a>
           ) : null}
-          {isDineIn ? (
+          {ritualSale ? null : isDineIn ? (
             order.table_label ? <p className="mt-1 text-xs text-muted">Table: {order.table_label}</p> : null
           ) : (
             <p className="mt-1 text-xs text-muted">Pickup: {order.pickup_slot_label || order.pickup_time}</p>
           )}
-          {!isDineIn && order.pickup_code ? <p className="text-xs text-muted">Code: {order.pickup_code}</p> : null}
-          {order.promised_ready_at ? (
+          {!ritualSale && !isDineIn && order.pickup_code ? <p className="text-xs text-muted">Code: {order.pickup_code}</p> : null}
+          {!ritualSale && order.promised_ready_at ? (
             <p className="text-xs text-muted">ETA: ~{formatIstTime(new Date(order.promised_ready_at))}</p>
           ) : null}
-          <p className="text-xs text-muted">
-            Elapsed{' '}
-            <ElapsedTime since={order.created_at} className="font-bold" warnAfterMin={10} dangerAfterMin={20} />
-            {' '}· in {STATUS_LABELS[order.status]}{' '}
-            <ElapsedTime since={order.updated_at} />
-          </p>
+          {ritualSale ? null : (
+            <p className="text-xs text-muted">
+              Elapsed{' '}
+              <ElapsedTime since={order.created_at} className="font-bold" warnAfterMin={10} dangerAfterMin={20} />
+              {' '}· in {STATUS_LABELS[order.status]}{' '}
+              <ElapsedTime since={order.updated_at} />
+            </p>
+          )}
         </div>
 
         {checklistMode ? (
@@ -465,6 +474,12 @@ export function OrderDetailModal({
                 {item.voided ? (
                   <p className="text-xs font-bold text-red-600">
                     Voided{item.void_reason ? ` — ${item.void_reason}` : ''}
+                  </p>
+                ) : null}
+                {/* HIOC Ritual cups that paid for part of this line. */}
+                {!item.voided && (item.pass_drinks ?? 0) > 0 ? (
+                  <p className="text-xs font-bold text-tan-dark">
+                    Ritual ×{item.pass_drinks} · ₹{item.pass_covered_inr ?? 0} covered
                   </p>
                 ) : null}
                 {item.addons.length > 0 ? (
@@ -504,7 +519,15 @@ export function OrderDetailModal({
           })}
         </ul>
 
-        <div className="mt-3 flex justify-between border-t border-line pt-2 text-sm">
+        {/* What HIOC Ritual cups covered, ahead of the total they came off (the
+            server's own figure — the bill's other rows live on the receipt). */}
+        {ritualRow ? (
+          <div className="mt-3 flex justify-between border-t border-line pt-2 text-sm text-charcoal">
+            <span>{ritualRow.label}</span>
+            <span className="font-mono tabular-nums">-₹{Math.abs(ritualRow.value)}</span>
+          </div>
+        ) : null}
+        <div className={'flex justify-between text-sm ' + (ritualRow ? 'pt-1' : 'mt-3 border-t border-line pt-2')}>
           <span className="font-bold text-charcoal">Total</span>
           <span className="font-bold text-tan-dark">₹{order.total_inr ?? order.subtotal_inr}</span>
         </div>
@@ -514,13 +537,16 @@ export function OrderDetailModal({
             actions and never blocks them. KOT is available for any order (reprint
             is the same route); receipt/token open the 80mm print page. */}
         <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
-          <button
-            type="button"
-            onClick={() => openPrint('kot')}
-            className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
-          >
-            Print KOT
-          </button>
+          {/* No kitchen ticket for the sale of a HIOC Ritual — only a receipt. */}
+          {ritualSale ? null : (
+            <button
+              type="button"
+              onClick={() => openPrint('kot')}
+              className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
+            >
+              Print KOT
+            </button>
+          )}
           <button
             type="button"
             onClick={() => openPrint('receipt')}
@@ -663,6 +689,12 @@ export function OrderDetailModal({
                   ))}
                 </div>
               </>
+            ) : null}
+
+            {ritualSale ? (
+              <p className="mt-2 rounded-md bg-surface px-3 py-2 text-xs font-bold text-charcoal">
+                Refunding cancels the pass. A Ritual that has already been used can’t be refunded.
+              </p>
             ) : null}
 
             <label className="mt-3 block text-xs font-bold text-charcoal">Amount (₹)</label>
@@ -910,7 +942,22 @@ export function OrderDetailModal({
                 onRemind={() => onRemind(order)}
               />
             ) : null}
-            {isActive && !isNew && order.status !== 'ready' ? (
+            {ritualSale ? (
+              // The one status move the API allows on a pass sale: cancelling it
+              // while nothing has been paid. A paid one is refunded instead.
+              isSettleable(order) ? (
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Cancel this ${RITUAL_SALE_LABEL}? The customer hasn’t paid for it yet.`)) {
+                      onTransition(order, 'cancelled', { reason: 'Cancelled by staff' });
+                    }
+                  }}
+                  className="min-h-[44px] rounded-md border border-line py-2 text-sm font-bold text-muted hover:text-red-700"
+                >
+                  Cancel sale
+                </button>
+              ) : null
+            ) : isActive && !isNew && order.status !== 'ready' ? (
               <button onClick={() => onTransition(order, 'cancelled', { reason: 'Cancelled by staff' })} className="rounded-md border border-line py-2 text-sm font-bold text-muted hover:text-red-700">
                 Cancel order
               </button>
