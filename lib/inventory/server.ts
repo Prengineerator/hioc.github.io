@@ -9,6 +9,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { flags } from '@/lib/flags';
 import { istBusinessDate } from '@/lib/cash/date';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { fetchAll, type PageResult } from '@/lib/reports/reconcileServer';
 import {
   expiryState,
   orderUsage,
@@ -70,33 +71,77 @@ export interface InventoryItemView extends StockSummary {
 export const ITEM_COLUMNS =
   'id, name, unit, category, par_level, reorder_qty, tracks_expiry, is_active, shortfall_since_count, last_counted_at';
 
+/** The one method `selectAll` needs from a Supabase query builder. */
+interface RangeableQuery {
+  range(from: number, to: number): PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>;
+}
+
+export type SelectAllResult<T> =
+  | { data: T[]; error: null }
+  | { data: null; error: { code?: string; message?: string } };
+
+/**
+ * Every row of a query, however many there are. PostgREST answers at most
+ * 1,000 rows per request (the project's "max rows") and says nothing when it
+ * cuts a list short, so an unpaged `.select()` on a table that can outgrow
+ * that silently loses its tail: the recipe editor would open half a recipe and
+ * saving it would delete the rest. The paging loop is fetchAll (also used by
+ * the reports); this only fits it to a query and hands back the same
+ * `{ data, error }` shape as one Supabase call, so callers keep their
+ * `if (res.error)` checks. A page that fails fails the whole read — never a
+ * partial list.
+ *
+ * `build` is called once per page and must ORDER BY something unique (the
+ * primary key last, if nothing else is): offset paging over an unordered or
+ * tied sort can repeat or skip rows between pages.
+ */
+export async function selectAll<T>(build: () => RangeableQuery): Promise<SelectAllResult<T>> {
+  try {
+    const data = await fetchAll<T>((from, to) => build().range(from, to) as PromiseLike<PageResult<T>>);
+    return { data, error: null };
+  } catch (err) {
+    console.error('inventory: paged read failed', err);
+    const e = err as { code?: string; message?: string };
+    return { data: null, error: { code: e?.code, message: e?.message } };
+  }
+}
+
 /** Every stock item with its live batches and where it stands. */
 export async function loadInventoryItems(
   admin: SupabaseClient,
   today: string = istBusinessDate(),
 ): Promise<{ items: InventoryItemView[]; error: boolean }> {
+  // All three grow without a fixed limit (a batch per delivery, a request per
+  // top-up), so they are paged (selectAll), not read in one go.
   const [itemsRes, batchesRes, openRes] = await Promise.all([
-    admin.from('inventory_items').select(ITEM_COLUMNS).order('name'),
-    admin
-      .from('inventory_batches')
-      .select('id, item_id, qty_received, qty_remaining, expiry_date, received_at, source')
-      .gt('qty_remaining', 0)
-      .order('expiry_date', { ascending: true, nullsFirst: false }),
-    admin
-      .from('stock_requests')
-      .select('request_number, status, stock_request_lines(item_id)')
-      .in('status', OPEN_REQUEST_STATUSES as string[]),
+    selectAll<InventoryItemRow>(() => admin.from('inventory_items').select(ITEM_COLUMNS).order('name').order('id')),
+    selectAll<Record<string, unknown>>(() =>
+      admin
+        .from('inventory_batches')
+        .select('id, item_id, qty_received, qty_remaining, expiry_date, received_at, source')
+        .gt('qty_remaining', 0)
+        .order('expiry_date', { ascending: true, nullsFirst: false })
+        .order('id'),
+    ),
+    selectAll<{ request_number: number; status: string; stock_request_lines: { item_id: string }[] | null }>(() =>
+      admin
+        .from('stock_requests')
+        .select('request_number, status, stock_request_lines(item_id)')
+        .in('status', OPEN_REQUEST_STATUSES as string[])
+        .order('created_at', { ascending: true })
+        .order('id'),
+    ),
   ]);
   if (itemsRes.error || batchesRes.error) return { items: [], error: true };
 
   const batchesByItem = new Map<string, Record<string, unknown>[]>();
-  for (const b of (batchesRes.data ?? []) as Record<string, unknown>[]) {
+  for (const b of batchesRes.data ?? []) {
     const list = batchesByItem.get(b.item_id as string) ?? [];
     list.push(b);
     batchesByItem.set(b.item_id as string, list);
   }
   const openByItem = new Map<string, number[]>();
-  for (const r of (openRes.data ?? []) as { request_number: number; stock_request_lines: { item_id: string }[] | null }[]) {
+  for (const r of openRes.data ?? []) {
     for (const l of r.stock_request_lines ?? []) {
       const list = openByItem.get(l.item_id) ?? [];
       list.push(r.request_number);
@@ -104,7 +149,7 @@ export async function loadInventoryItems(
     }
   }
 
-  const items = ((itemsRes.data ?? []) as InventoryItemRow[]).map((row) => {
+  const items = (itemsRes.data ?? []).map((row) => {
     const rawBatches = batchesByItem.get(row.id) ?? [];
     const batches: BatchView[] = rawBatches.map((b) => ({
       id: b.id as string,
@@ -207,14 +252,20 @@ type RequestRow = {
 
 const RECENT_CLOSED_LIMIT = 30;
 
-/** Open requests (all of them) plus the most recent closed ones. */
+/**
+ * Open requests (all of them, paged: nothing caps how many stay open) plus the
+ * most recent closed ones (a fixed 30, so one plain query).
+ */
 export async function loadStockRequests(admin: SupabaseClient): Promise<{ requests: StockRequestView[]; error: boolean }> {
   const [openRes, closedRes] = await Promise.all([
-    admin
-      .from('stock_requests')
-      .select(REQUEST_SELECT)
-      .in('status', OPEN_REQUEST_STATUSES as string[])
-      .order('created_at', { ascending: true }),
+    selectAll<RequestRow>(() =>
+      admin
+        .from('stock_requests')
+        .select(REQUEST_SELECT)
+        .in('status', OPEN_REQUEST_STATUSES as string[])
+        .order('created_at', { ascending: true })
+        .order('id'),
+    ),
     admin
       .from('stock_requests')
       .select(REQUEST_SELECT)
@@ -223,7 +274,7 @@ export async function loadStockRequests(admin: SupabaseClient): Promise<{ reques
       .limit(RECENT_CLOSED_LIMIT),
   ]);
   if (openRes.error || closedRes.error) return { requests: [], error: true };
-  const rows = [...((openRes.data ?? []) as unknown as RequestRow[]), ...((closedRes.data ?? []) as unknown as RequestRow[])];
+  const rows = [...(openRes.data ?? []), ...((closedRes.data ?? []) as unknown as RequestRow[])];
 
   const ids = rows.flatMap((r) => [r.requested_by, r.assigned_to, r.picked_by, r.received_by]).filter((v): v is string => Boolean(v));
   const names = await getStaffDisplayNames(admin, [...new Set(ids)]);

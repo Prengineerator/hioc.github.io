@@ -44,9 +44,13 @@
 -- recipes are not: like the inventory tables it is service-role only (RLS on,
 -- no policies, explicit REVOKE).
 --
--- Idempotent: safe to re-run. Order matters once: re-running
--- 2026-10-inventory.sql AFTER this file puts the old inventory_set_addon_recipe
--- (which deletes every scope) back, so re-run this file after it.
+-- Idempotent: safe to re-run. The order of the two files no longer matters
+-- once both have been applied: 2026-10-inventory.sql also replaces only an
+-- add-on's general lines (it reads menu_item_id through to_jsonb, so it works
+-- with or without this file's columns), so re-running it AFTER this file no
+-- longer brings back a version that deletes every scope. Apply this file after
+-- 2026-10-inventory.sql the first time (it adds columns to that file's table);
+-- after that, either can be re-run at any point, in any order.
 -- ===========================================================================
 
 -- ── Scope columns ───────────────────────────────────────────────────────────

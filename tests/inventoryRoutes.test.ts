@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // that each write goes through its atomic database function with the right
 // arguments, and that the recipe editor is sent an add-on's GENERAL lines
 // only (the recipe book's per-item / per-size lines are counted, not sent).
-// The Supabase admin client is a small in-memory fake.
+// The Supabase admin client is a small in-memory fake. It behaves like
+// PostgREST where that matters: it supports .range(), and it answers at most
+// MAX_ROWS rows to any one request (Supabase's default "max rows"), so a read
+// that forgets to page comes back short, as it would against the real API.
 
 const MANAGER = '00000000-0000-4000-8000-000000000001';
 const ASHA = '00000000-0000-4000-8000-000000000002'; // requester
@@ -34,6 +37,8 @@ const state: {
   rpcResult: { data: unknown; error: { message: string; code?: string } | null };
   updates: { table: string; patch: Row; filters: [string, string, unknown][] }[];
   menuEdit: boolean;
+  /** Make the ranged read of `table` that starts at row `from` fail (a later page). */
+  failRange: { table: string; from: number } | null;
 } = {
   flag: true,
   actor: null,
@@ -46,7 +51,11 @@ const state: {
   rpcResult: { data: null, error: null },
   updates: [],
   menuEdit: true,
+  failRange: null,
 };
+
+/** PostgREST's default cap on the rows one request returns. */
+const MAX_ROWS = 1000;
 
 vi.mock('@/lib/flags', () => ({
   flags: new Proxy({}, { get: (_t, key) => (key === 'inventory' ? state.flag : true) }),
@@ -73,8 +82,10 @@ function makeAdmin() {
     from: (table: string) => {
       const filters: [string, string, unknown][] = [];
       let patch: Row | null = null;
+      let ordered = false;
+      let window: [number, number] | null = null;
       const rows = (): Row[] => {
-        if (table === 'stock_requests') return state.request ? [state.request] : [];
+        if (table === 'stock_requests') return state.tables.stock_requests ?? (state.request ? [state.request] : []);
         if (table === 'inventory_items') return state.items;
         if (table === 'profiles') return state.profiles;
         return state.tables[table] ?? [];
@@ -95,8 +106,18 @@ function makeAdmin() {
         );
       const chain: Record<string, unknown> = {
         select: () => chain,
-        order: () => chain,
+        order: () => {
+          ordered = true;
+          return chain;
+        },
         limit: () => chain,
+        // Offset paging repeats or skips rows unless the sort is fixed, so a
+        // .range() with no .order() is a bug the fake refuses to serve.
+        range: (from: number, to: number) => {
+          if (!ordered) throw new Error(`fake admin: ${table} .range() without .order() would page unstably`);
+          window = [from, to];
+          return chain;
+        },
         gt: () => chain,
         eq: (col: string, val: unknown) => {
           filters.push(['eq', col, val]);
@@ -131,7 +152,13 @@ function makeAdmin() {
         },
         then: (resolve: (v: unknown) => void) => {
           if (patch) state.updates.push({ table, patch, filters: [...filters] });
-          resolve({ data: matching(), error: null });
+          if (state.failRange && state.failRange.table === table && window?.[0] === state.failRange.from) {
+            resolve({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } });
+            return;
+          }
+          // No .range(): the whole answer, cut at MAX_ROWS like PostgREST.
+          const [from, to] = window ?? [0, MAX_ROWS - 1];
+          resolve({ data: matching().slice(from, Math.min(to + 1, from + MAX_ROWS)), error: null });
         },
       };
       return chain;
@@ -146,6 +173,7 @@ const receiptsRoute = await import('@/app/api/inventory/receipts/route');
 const settingsRoute = await import('@/app/api/inventory/settings/route');
 const addonRoute = await import('@/app/api/inventory/addon-recipes/[optionId]/route');
 const recipesRoute = await import('@/app/api/inventory/recipes/route');
+const itemsRoute = await import('@/app/api/inventory/items/route');
 
 const as = (id: string, role = 'staff') => ({ user: { id }, role, via: 'session' });
 
@@ -167,6 +195,7 @@ beforeEach(() => {
     { id: CUPS, name: 'Cups', tracks_expiry: false, is_active: true },
   ];
   state.tables = {};
+  state.failRange = null;
   state.profiles = [
     { id: MANAGER, name: 'Boss', role: 'manager' },
     { id: ASHA, name: 'Asha', role: 'staff' },
@@ -504,5 +533,205 @@ describe('GET /api/inventory/recipes — add-on scopes', () => {
     const body = await (await recipesRoute.GET()).json();
     expect(body.addonScopedCounts).toEqual({});
     expect(body.addonLines).toHaveLength(2);
+  });
+});
+
+// PostgREST returns at most 1,000 rows per request and does not say so, so every
+// read that can outgrow that is paged. The fake above cuts an unpaged answer at
+// MAX_ROWS exactly as PostgREST does: these fail if a read forgets to page. The
+// real recipe book alone is well past 1,000 recipe_lines (~86 items x up to 2
+// sizes x ~8-12 lines) and ~370 add-on lines.
+describe('reads past the 1,000-row cap', () => {
+  const id = (prefix: string, n: number) => `${prefix}-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+  describe('GET /api/inventory/recipes', () => {
+    const OPTIONS = [id('a0000001', 1), id('a0000001', 2), id('a0000001', 3)];
+    const LINES = 2345;
+    const GENERAL = 1000; // an exact multiple of the page size: the last page is empty
+    const SCOPED = 1501;
+    const ITEMS = 1234;
+
+    beforeEach(() => {
+      state.actor = as(ASHA);
+      state.device = { id: DEVICE };
+      state.items = Array.from({ length: ITEMS }, (_, i) => ({
+        id: id('b0000001', i),
+        name: `Item ${i}`,
+        unit: 'g',
+        is_active: true,
+      }));
+      state.tables = {
+        menu_items: [{ id: id('c0000001', 1), name: 'Latte', category: 'Coffee', sort_order: 1, menu_item_variants: [] }],
+        addon_groups: [
+          {
+            id: 'g1',
+            display_name: 'Extras',
+            sort_order: 1,
+            addon_options: OPTIONS.map((o, i) => ({ id: o, name: `Option ${i}`, sort_order: i })),
+          },
+        ],
+        recipe_lines: Array.from({ length: LINES }, (_, i) => ({
+          id: id('d0000001', i),
+          menu_item_id: id('c0000001', i % 86),
+          size_label: i % 2 ? 'Large' : '',
+          item_id: id('b0000001', i),
+          qty: '1.500',
+        })),
+        addon_recipe_lines: [
+          ...Array.from({ length: GENERAL }, (_, i) => ({
+            id: id('e0000001', i),
+            addon_option_id: OPTIONS[i % 3],
+            item_id: id('b0000001', i),
+            qty: '2.000',
+            menu_item_id: null,
+            size_label: '',
+          })),
+          ...Array.from({ length: SCOPED }, (_, i) => ({
+            id: id('e0000002', i),
+            addon_option_id: OPTIONS[i % 3],
+            item_id: id('b0000001', i),
+            qty: '3.000',
+            menu_item_id: id('c0000001', i % 86),
+            size_label: '',
+          })),
+        ],
+      };
+    });
+
+    it('returns every recipe line, add-on line and stock item, not the first 1,000 of each', async () => {
+      const res = await recipesRoute.GET();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+
+      expect(body.lines).toHaveLength(LINES);
+      // No line twice, none dropped: each (item, size, ingredient) is there once.
+      expect(new Set(body.lines.map((l: { itemId: string }) => l.itemId)).size).toBe(LINES);
+      expect(body.lines[LINES - 1]).toEqual({
+        menuItemId: id('c0000001', (LINES - 1) % 86),
+        sizeLabel: (LINES - 1) % 2 ? 'Large' : '',
+        itemId: id('b0000001', LINES - 1),
+        qty: 1.5,
+      });
+
+      expect(body.addonLines).toHaveLength(GENERAL);
+      expect(new Set(body.addonLines.map((l: { itemId: string }) => l.itemId)).size).toBe(GENERAL);
+
+      // The scoped-count query is paged too: the counts add up to every scoped line.
+      const counted = Object.values(body.addonScopedCounts as Record<string, number>).reduce((a, b) => a + b, 0);
+      expect(counted).toBe(SCOPED);
+      expect(body.addonScopedCounts).toEqual({ [OPTIONS[0]]: 501, [OPTIONS[1]]: 500, [OPTIONS[2]]: 500 });
+
+      expect(body.items).toHaveLength(ITEMS);
+      expect(body.items[ITEMS - 1]).toMatchObject({ id: id('b0000001', ITEMS - 1), name: `Item ${ITEMS - 1}`, unit: 'g', isActive: true });
+    });
+
+    it('fails outright when a later page fails, rather than sending a partial recipe book', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        state.failRange = { table: 'recipe_lines', from: 1000 };
+        const res = await recipesRoute.GET();
+        expect(res.status).toBe(500);
+        expect((await res.json()).error).toMatch(/^Could not load recipes/);
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe('GET /api/inventory/items — the Stock tab', () => {
+    it('returns every item, every live batch and every open request', async () => {
+      state.actor = as(ASHA);
+      const ITEMS = 1300;
+      const BATCHES = 2100;
+      const OPEN = 1050;
+      const itemId = (i: number) => id('b0000002', i);
+      state.items = Array.from({ length: ITEMS }, (_, i) => ({
+        id: itemId(i),
+        name: `Item ${i}`,
+        unit: 'g',
+        category: 'Dry',
+        par_level: 0,
+        reorder_qty: 0,
+        tracks_expiry: false,
+        is_active: true,
+        shortfall_since_count: 0,
+        last_counted_at: null,
+      }));
+      state.request = null;
+      state.tables = {
+        inventory_batches: Array.from({ length: BATCHES }, (_, i) => ({
+          id: id('f0000001', i),
+          item_id: itemId(i % ITEMS), // items 0..799 have two batches, the rest one
+          qty_received: 10,
+          qty_remaining: 5,
+          expiry_date: null,
+          received_at: '2026-09-01T00:00:00Z',
+          source: 'receive',
+        })),
+        stock_requests: Array.from({ length: OPEN }, (_, i) => ({
+          id: id('f0000002', i),
+          request_number: i + 1,
+          status: 'requested',
+          stock_request_lines: [{ item_id: itemId(0) }],
+        })),
+      };
+
+      const res = await itemsRoute.GET();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.items).toHaveLength(ITEMS);
+      const batches = body.items.reduce((n: number, i: { batches: unknown[] }) => n + i.batches.length, 0);
+      expect(batches).toBe(BATCHES);
+      expect(body.items[0].batches).toHaveLength(2);
+      expect(body.items[0].onHand).toBe(10);
+      expect(body.items[ITEMS - 1].batches).toHaveLength(1);
+      expect(body.items[0].openRequestNumbers).toHaveLength(OPEN);
+    });
+
+    it('says it could not load stock when a later page of the items fails', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        state.actor = as(ASHA);
+        state.items = Array.from({ length: 1500 }, (_, i) => ({ id: id('b0000003', i), name: `Item ${i}` }));
+        state.failRange = { table: 'inventory_items', from: 1000 };
+        const res = await itemsRoute.GET();
+        expect(res.status).toBe(500);
+        expect((await res.json()).error).toMatch(/^Could not load stock/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  describe('GET /api/inventory/requests', () => {
+    it('returns every open request, however many there are', async () => {
+      state.actor = as(ASHA);
+      const OPEN = 1050;
+      state.tables = {
+        stock_requests: Array.from({ length: OPEN }, (_, i) => ({
+          id: id('f0000003', i),
+          request_number: i + 1,
+          status: 'requested',
+          note: '',
+          requested_by: ASHA,
+          assigned_to: null,
+          picked_by: null,
+          received_by: null,
+          created_at: '2026-09-01T00:00:00Z',
+          assigned_at: null,
+          picked_at: null,
+          received_at: null,
+          has_discrepancy: false,
+          cancel_reason: '',
+          stock_request_lines: [],
+        })),
+      };
+      const res = await requestsRoute.GET();
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.requests).toHaveLength(OPEN);
+      expect(body.requests[OPEN - 1].number).toBe(OPEN);
+    });
   });
 });

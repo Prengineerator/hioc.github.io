@@ -28,12 +28,18 @@
 #      supabase/2026-10-inventory-addon-scopes.sql are applied with
 #      ON_ERROR_STOP=1, each TWICE (a fresh apply and a re-run): those must
 #      apply cleanly. (Not in the tolerant pass, so nothing can be half-applied
-#      there and hidden.) Never re-run 2026-10-inventory.sql after the scopes
-#      file: it would put back the old inventory_set_addon_recipe.
+#      there and hidden.) Between the two files the POS add-on editor's
+#      function is exercised on the OLD schema (no scope columns yet).
 #   4. Loads the live menu from data/inventory/menu-snapshot.json (item and
 #      add-on option ids exactly; groups by name with generated ids).
 #   5. Runs SQL assertions for the add-on scope migration (inside one
 #      transaction that is rolled back, so they leave nothing behind).
+#      Then (5b) the two migrations are applied in the other order: the older
+#      2026-10-inventory.sql AGAIN, after the scopes file, and the scopes file
+#      after that, each with ON_ERROR_STOP=1. After each, the POS editor's
+#      inventory_set_addon_recipe must still replace only an add-on's general
+#      lines and leave its per-item / per-size lines intact (its own
+#      rolled-back transaction). The two files can be re-applied in any order.
 #   6. With --seed <file.sql>: applies that seed twice with ON_ERROR_STOP=1
 #      and prints what it loaded. The harness assumes nothing about the seed's
 #      content, only that re-applying it changes no row counts.
@@ -182,6 +188,41 @@ apply_strict() { # <label> <file>
   bad "$1" "$out"; return 1
 }
 
+# Every assertion script is one transaction that is rolled back at the end and
+# records PASS/FAIL in smoke.results instead of aborting, so one run reports
+# every broken guarantee. smoke_preamble opens it, smoke_report closes it: the
+# report is tuples-only, one PASS|FAIL|name|detail line per assertion.
+smoke_preamble() {
+  cat <<'SQL'
+begin;
+create schema smoke;
+create table smoke.results (id serial primary key, name text not null, ok boolean not null, detail text not null default '');
+create function smoke.expect(p_name text, p_ok boolean, p_detail text default '') returns void
+  language sql as $$ insert into smoke.results (name, ok, detail) values (p_name, coalesce(p_ok, false), coalesce(p_detail, '')) $$;
+SQL
+}
+smoke_report() {
+  cat <<'SQL'
+select case when ok then 'PASS' else 'FAIL' end || '|' || name || '|' || detail from smoke.results order by id;
+rollback;
+SQL
+}
+# Runs an assertion script and reports each of its lines. <prefix> is put
+# before every assertion's name (may be empty); more arguments go to psql.
+run_assertions() { # <prefix> <file> [psql args...]
+  local prefix="$1" file="$2" out rc verdict name detail n_checked=0
+  shift 2
+  out="$(psql_db -At -v ON_ERROR_STOP=1 "$@" -f "$file" 2>&1)"; rc=$?
+  if [ $rc -ne 0 ]; then bad "${prefix}the assertion script could not run" "$out"; return 1; fi
+  while IFS='|' read -r verdict name detail; do
+    case "$verdict" in
+      PASS) ok "${prefix}${name}"; n_checked=$((n_checked + 1)) ;;
+      FAIL) bad "${prefix}${name}" "$detail"; n_checked=$((n_checked + 1)) ;;
+    esac
+  done <<< "$out"
+  [ "$n_checked" -gt 0 ] || bad "${prefix}the assertion script reported no results" "$out"
+}
+
 # ── [1/6] Start Postgres ─────────────────────────────────────────────────────
 step "1/6" "Starting a private Postgres ($("$PGBIN/postgres" --version | awk '{print $3}'))"
 if ! run_as_pg "$PGBIN/initdb" -D "$DATA" -U postgres -A trust -E UTF8 --locale=C --no-sync >"$BASE/initdb.log" 2>&1; then
@@ -267,6 +308,48 @@ for line in "${TOL_SUMMARY[@]+"${TOL_SUMMARY[@]}"}"; do [ -n "$line" ] && info "
 STRICT_OK=1
 apply_strict "supabase/2026-10-inventory.sql applies cleanly (fresh)" supabase/2026-10-inventory.sql || STRICT_OK=0
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-10-inventory.sql re-applies cleanly (idempotent)" supabase/2026-10-inventory.sql || STRICT_OK=0; }
+
+# The POS add-on editor's function as 2026-10-inventory.sql leaves it BEFORE the
+# scopes migration exists: its delete reads menu_item_id through to_jsonb (the
+# column is not there yet) and its insert names no scope column. Run on the old
+# schema, in a transaction that is rolled back.
+if [ $STRICT_OK = 1 ]; then
+  { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/pre-scopes.sql"
+do $$
+declare
+  v_group uuid; v_opt uuid; v_a uuid; v_b uuid; v_n int; v_rows int; v_qty numeric;
+begin
+  perform smoke.expect('before the scopes migration: addon_recipe_lines has no menu_item_id or size_label yet',
+    not exists (select 1 from information_schema.columns
+                 where table_schema = 'public' and table_name = 'addon_recipe_lines' and column_name in ('menu_item_id', 'size_label')));
+  insert into addon_groups (name, display_name, selection_type, min_select, max_select, sort_order)
+    values ('Smoke pre-scopes group', 'Smoke', 'single', 0, 1, 0) returning id into v_group;
+  insert into addon_options (addon_group_id, name, price_inr, sort_order) values (v_group, 'Smoke pre-scopes option', 0, 0) returning id into v_opt;
+  insert into inventory_items (name, unit, tracks_expiry) values ('Smoke pre A', 'g', false) returning id into v_a;
+  insert into inventory_items (name, unit, tracks_expiry) values ('Smoke pre B', 'g', false) returning id into v_b;
+
+  v_n := inventory_set_addon_recipe(v_opt, null, jsonb_build_array(
+    jsonb_build_object('item_id', v_a, 'qty', 5), jsonb_build_object('item_id', v_b, 'qty', 2)));
+  select count(*) into v_rows from addon_recipe_lines where addon_option_id = v_opt;
+  perform smoke.expect('before the scopes migration: inventory_set_addon_recipe saves an add-on recipe',
+    v_n = 2 and v_rows = 2, format('returned %s, %s rows', v_n, v_rows));
+
+  v_n := inventory_set_addon_recipe(v_opt, null, jsonb_build_array(jsonb_build_object('item_id', v_a, 'qty', 7)));
+  select count(*), max(qty) into v_rows, v_qty from addon_recipe_lines where addon_option_id = v_opt;
+  perform smoke.expect('before the scopes migration: ...saving again replaces it',
+    v_n = 1 and v_rows = 1 and v_qty = 7, format('returned %s, %s rows, qty %s', v_n, v_rows, v_qty));
+
+  v_n := inventory_set_addon_recipe(v_opt, null, '[]'::jsonb);
+  select count(*) into v_rows from addon_recipe_lines where addon_option_id = v_opt;
+  perform smoke.expect('before the scopes migration: ...and an empty list clears it', v_n = 0 and v_rows = 0, format('returned %s, %s rows', v_n, v_rows));
+exception when others then
+  perform smoke.expect('before the scopes migration: inventory_set_addon_recipe works on the old schema', false, sqlerrm);
+end $$;
+SQL
+  info "the POS editor's function on the old schema (before the scopes migration):"
+  run_assertions "" "$BASE/pre-scopes.sql"
+fi
+
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-10-inventory-addon-scopes.sql applies cleanly (fresh)" supabase/2026-10-inventory-addon-scopes.sql || STRICT_OK=0; }
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-10-inventory-addon-scopes.sql re-applies cleanly (idempotent)" supabase/2026-10-inventory-addon-scopes.sql || STRICT_OK=0; }
 
@@ -723,21 +806,96 @@ end $$;
 select case when ok then 'PASS' else 'FAIL' end || '|' || name || '|' || detail from smoke.results order by id;
 rollback;
 SQL
-  out="$(psql_db -At -v ON_ERROR_STOP=1 -f "$BASE/asserts.sql" 2>&1)"; rc=$?
-  if [ $rc -ne 0 ]; then
-    bad "the assertion script could not run" "$out"
-  else
-    n_checked=0
-    while IFS='|' read -r verdict name detail; do
-      case "$verdict" in
-        PASS) ok "$name"; n_checked=$((n_checked + 1)) ;;
-        FAIL) bad "$name" "$detail"; n_checked=$((n_checked + 1)) ;;
-      esac
-    done <<< "$out"
-    [ "$n_checked" -gt 0 ] || bad "the assertion script reported no results" "$out"
-  fi
+  run_assertions "" "$BASE/asserts.sql"
 else
   step "5/6" "Assertions — skipped (the migrations or the menu did not load)"
+fi
+
+# ── [5b/6] The two migrations in the other order ─────────────────────────────
+# 2026-10-inventory.sql is older than the scopes file and says it is safe to
+# re-run: it must not undo the scopes file. Applied again AFTER it, the POS
+# editor's function must still replace only the general lines. Then the scopes
+# file goes over it again, and the same checks run (in each state the installed
+# body is the one just applied, so the check is not passing on the other's).
+if [ $STRICT_OK = 1 ]; then
+  step "5b/6" "Order independence: 2026-10-inventory.sql again AFTER the scopes migration, then the scopes file again"
+  { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/order.sql"
+select set_config('smoke.marker', :'marker', true);
+-- The scoped lines of an add-on, one comparable string.
+create function smoke.scoped(p_option uuid) returns text language sql as $$
+  select string_agg(format('%s|%s|%s|%s', menu_item_id, size_label, item_id, qty), ',' order by menu_item_id, size_label, item_id)
+    from addon_recipe_lines where addon_option_id = p_option and menu_item_id is not null $$;
+create function smoke.general(p_option uuid) returns text language sql as $$
+  select coalesce(string_agg(format('%s|%s', item_id, qty), ',' order by item_id), '')
+    from addon_recipe_lines where addon_option_id = p_option and menu_item_id is null $$;
+
+do $$
+declare
+  v_marker text := current_setting('smoke.marker');
+  v_group uuid; v_opt uuid; v_item uuid; v_sugar uuid; v_stirrer uuid; v_cups uuid;
+  v_def text; v_n int; v_before text;
+begin
+  insert into inventory_items (name, unit, tracks_expiry) values ('Smoke order sugar', 'g', false) returning id into v_sugar;
+  insert into inventory_items (name, unit, tracks_expiry) values ('Smoke order stirrer', 'pcs', false) returning id into v_stirrer;
+  insert into inventory_items (name, unit, tracks_expiry) values ('Smoke order cups', 'pcs', false) returning id into v_cups;
+  insert into menu_items (name, category) values ('Smoke order item', 'Smoke') returning id into v_item;
+  insert into menu_item_variants (menu_item_id, label, price_inr) values (v_item, 'Big', 1), (v_item, 'Small', 1);
+  insert into addon_groups (name, display_name, selection_type, min_select, max_select, sort_order)
+    values ('Smoke order group', 'Smoke', 'single', 0, 1, 0) returning id into v_group;
+  insert into addon_options (addon_group_id, name, price_inr, sort_order) values (v_group, 'Smoke order option', 0, 0) returning id into v_opt;
+
+  -- Which body is installed: the one the file just applied put there.
+  v_def := pg_get_functiondef('inventory_set_addon_recipe(uuid, uuid, jsonb)'::regprocedure);
+  perform smoke.expect('inventory_set_addon_recipe is the version the file just applied (its body has "' || v_marker || '")',
+    position(v_marker in v_def) > 0, 'a different body is installed');
+  perform smoke.expect('there is still exactly one inventory_set_addon_recipe and one inventory_set_addon_recipe_scopes',
+    (select count(*) from pg_proc where proname = 'inventory_set_addon_recipe') = 1
+    and (select count(*) from pg_proc where proname = 'inventory_set_addon_recipe_scopes') = 1);
+
+  -- A recipe with all three scopes, the recipe book's way.
+  perform inventory_set_addon_recipe_scopes(v_opt, null, jsonb_build_array(
+    jsonb_build_object('item_id', v_sugar, 'qty', 20),
+    jsonb_build_object('menu_item_id', v_item, 'size_label', '', 'item_id', v_sugar, 'qty', 15),
+    jsonb_build_object('menu_item_id', v_item, 'size_label', 'Big', 'item_id', v_sugar, 'qty', 25),
+    jsonb_build_object('menu_item_id', v_item, 'size_label', 'Small', 'item_id', v_cups, 'qty', 1)));
+  v_before := smoke.scoped(v_opt);
+  perform smoke.expect('fixture: the add-on has a general line and three scoped ones',
+    v_before is not null and smoke.general(v_opt) = format('%s|20.000', v_sugar) and (select count(*) from addon_recipe_lines where addon_option_id = v_opt) = 4,
+    v_before);
+
+  -- The POS editor saves the add-on.
+  v_n := inventory_set_addon_recipe(v_opt, null, jsonb_build_array(jsonb_build_object('item_id', v_stirrer, 'qty', 3)));
+  perform smoke.expect('POS editor: saving replaces the general lines',
+    v_n = 1 and smoke.general(v_opt) = format('%s|3.000', v_stirrer), format('returned %s; general is now [%s]', v_n, smoke.general(v_opt)));
+  perform smoke.expect('POS editor: ...and leaves every per-item and per-size line intact',
+    smoke.scoped(v_opt) = v_before, format('before [%s] after [%s]', v_before, smoke.scoped(v_opt)));
+
+  v_n := inventory_set_addon_recipe(v_opt, null, '[]'::jsonb);
+  perform smoke.expect('POS editor: an empty list clears only the general line',
+    v_n = 0 and smoke.general(v_opt) = '' and smoke.scoped(v_opt) = v_before, format('returned %s; general [%s]', v_n, smoke.general(v_opt)));
+
+  -- The ingredient that is scoped can come back as a general line beside the scoped ones.
+  v_n := inventory_set_addon_recipe(v_opt, null, jsonb_build_array(jsonb_build_object('item_id', v_sugar, 'qty', 9)));
+  perform smoke.expect('POS editor: the same ingredient as a general line beside its scoped lines',
+    v_n = 1 and smoke.general(v_opt) = format('%s|9.000', v_sugar) and smoke.scoped(v_opt) = v_before);
+
+  -- Still locked down.
+  perform smoke.expect('lock-down: only the service role may run inventory_set_addon_recipe',
+    has_function_privilege('service_role', 'inventory_set_addon_recipe(uuid, uuid, jsonb)', 'execute')
+    and not has_function_privilege('anon', 'inventory_set_addon_recipe(uuid, uuid, jsonb)', 'execute')
+    and not has_function_privilege('authenticated', 'inventory_set_addon_recipe(uuid, uuid, jsonb)', 'execute'));
+exception when others then
+  perform smoke.expect('order independence: the POS editor keeps the scoped lines', false, sqlerrm);
+end $$;
+SQL
+  if apply_strict "supabase/2026-10-inventory.sql re-applies cleanly AFTER the scopes migration" supabase/2026-10-inventory.sql; then
+    run_assertions "after 2026-10-inventory.sql again: " "$BASE/order.sql" -v marker=to_jsonb
+  fi
+  if apply_strict "supabase/2026-10-inventory-addon-scopes.sql re-applies cleanly after that" supabase/2026-10-inventory-addon-scopes.sql; then
+    run_assertions "after the scopes file again: " "$BASE/order.sql" -v marker='and menu_item_id is null'
+  fi
+else
+  step "5b/6" "Order independence — skipped (a migration failed)"
 fi
 
 # ── [6/6] Optional: a recipe-book seed ───────────────────────────────────────
