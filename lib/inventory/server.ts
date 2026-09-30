@@ -23,7 +23,8 @@ import {
   type StockSummary,
 } from '@/lib/inventory/rules';
 
-export const INVENTORY_MIGRATION_HINT = 'is supabase/2026-10-inventory.sql applied?';
+export const INVENTORY_MIGRATION_HINT =
+  'are supabase/2026-10-inventory.sql and supabase/2026-10-inventory-addon-scopes.sql applied?';
 
 export const INVENTORY_OFF_MESSAGE = 'Inventory is not switched on for this environment.';
 
@@ -297,8 +298,10 @@ export async function loadAssignees(admin: SupabaseClient): Promise<PersonRef[]>
  * already complete and the customer already has their food. Idempotent in the
  * database (one 'sale' movement per order and item), so a retried completion
  * takes nothing twice. Voided lines (order_items.voided) are left out: a line
- * that was voided was never made, so its recipe uses no stock. A no-op with
- * the flag off, before the migration, or when nothing on the order has a recipe.
+ * that was voided was never made, so its recipe uses no stock. An add-on's
+ * usage is the recipe for the line's menu item and size when it has one (see
+ * addonRecipeFor), else its general recipe. A no-op with the flag off, before
+ * the migration, or when nothing on the order has a recipe.
  */
 export async function consumeStockForOrder(orderId: string, actorId: string | null): Promise<void> {
   if (!flags.inventory) return;
@@ -334,7 +337,10 @@ export async function consumeStockForOrder(orderId: string, actorId: string | nu
         ? admin.from('recipe_lines').select('menu_item_id, size_label, item_id, qty').in('menu_item_id', menuIds)
         : Promise.resolve({ data: [], error: null }),
       optionIds.length
-        ? admin.from('addon_recipe_lines').select('addon_option_id, item_id, qty').in('addon_option_id', optionIds)
+        ? admin
+            .from('addon_recipe_lines')
+            .select('addon_option_id, item_id, qty, menu_item_id, size_label')
+            .in('addon_option_id', optionIds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     if (recipeRes.error || addonRes.error) {

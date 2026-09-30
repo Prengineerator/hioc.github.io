@@ -13,12 +13,17 @@ export const dynamic = 'force-dynamic';
 // editor's whole world in one read: every menu item with its sizes, every
 // add-on, every stock item, and every recipe line (items and add-ons). `canEdit` mirrors the PUT gate — the
 // same one as the menu itself: the 'menu_edit' permission, on the POS.
+// An add-on's lines here are its GENERAL ones only (no menu item): that is
+// what the editor edits and what PUT addon-recipes replaces. The per-item /
+// per-size lines the recipe book adds (2026-10-inventory-addon-scopes.sql)
+// are not sent — `addonScopedCounts` only says how many an add-on has, so the
+// screen can say they exist.
 export async function GET() {
   const gate = await requireInventoryActor();
   if ('response' in gate) return gate.response;
 
   const admin = createAdminSupabaseClient();
-  const [menuRes, itemsRes, linesRes, addonsRes, addonLinesRes, surface, mayEdit] = await Promise.all([
+  const [menuRes, itemsRes, linesRes, addonsRes, addonLinesRes, addonScopedRes, surface, mayEdit] = await Promise.all([
     admin
       .from('menu_items')
       .select('id, name, category, sort_order, menu_item_variants(id, label, sort_order)')
@@ -30,11 +35,12 @@ export async function GET() {
       .from('addon_groups')
       .select('id, display_name, sort_order, addon_options(id, name, sort_order)')
       .order('sort_order'),
-    admin.from('addon_recipe_lines').select('addon_option_id, item_id, qty'),
+    admin.from('addon_recipe_lines').select('addon_option_id, item_id, qty').is('menu_item_id', null),
+    admin.from('addon_recipe_lines').select('addon_option_id').not('menu_item_id', 'is', null),
     getStaffSurface(),
     hasPermission(gate.actor.user, 'menu_edit', gate.actor.role),
   ]);
-  if (menuRes.error || itemsRes.error || linesRes.error || addonsRes.error || addonLinesRes.error) {
+  if (menuRes.error || itemsRes.error || linesRes.error || addonsRes.error || addonLinesRes.error || addonScopedRes.error) {
     return errorResponse(500, `Could not load recipes — ${INVENTORY_MIGRATION_HINT}`);
   }
 
@@ -77,5 +83,10 @@ export async function GET() {
     qty: Number(l.qty),
   }));
 
-  return NextResponse.json({ menu, addons, items, lines, addonLines, canEdit: mayEdit && canEditMenu(surface) });
+  const addonScopedCounts: Record<string, number> = {};
+  for (const l of (addonScopedRes.data ?? []) as { addon_option_id: string }[]) {
+    addonScopedCounts[l.addon_option_id] = (addonScopedCounts[l.addon_option_id] ?? 0) + 1;
+  }
+
+  return NextResponse.json({ menu, addons, items, lines, addonLines, addonScopedCounts, canEdit: mayEdit && canEditMenu(surface) });
 }

@@ -6,7 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // pick = assignee, receive = at the POS by someone other than the picker),
 // that expiry dates are demanded before anything reaches the database, and
 // that each write goes through its atomic database function with the right
-// arguments. The Supabase admin client is a small in-memory fake.
+// arguments, and that the recipe editor is sent an add-on's GENERAL lines
+// only (the recipe book's per-item / per-size lines are counted, not sent).
+// The Supabase admin client is a small in-memory fake.
 
 const MANAGER = '00000000-0000-4000-8000-000000000001';
 const ASHA = '00000000-0000-4000-8000-000000000002'; // requester
@@ -26,6 +28,8 @@ const state: {
   request: Row | null;
   items: Row[];
   profiles: Row[];
+  /** Any other table the routes read (menu_items, recipe_lines, …). */
+  tables: Record<string, Row[]>;
   rpcCalls: { name: string; args: Row }[];
   rpcResult: { data: unknown; error: { message: string; code?: string } | null };
   updates: { table: string; patch: Row; filters: [string, string, unknown][] }[];
@@ -37,6 +41,7 @@ const state: {
   request: null,
   items: [],
   profiles: [],
+  tables: {},
   rpcCalls: [],
   rpcResult: { data: null, error: null },
   updates: [],
@@ -72,12 +77,20 @@ function makeAdmin() {
         if (table === 'stock_requests') return state.request ? [state.request] : [];
         if (table === 'inventory_items') return state.items;
         if (table === 'profiles') return state.profiles;
-        return [];
+        return state.tables[table] ?? [];
       };
       const matching = () =>
         rows().filter((r) =>
           filters.every(([op, col, val]) =>
-            op === 'eq' ? r[col] === val : op === 'in' ? (val as unknown[]).includes(r[col]) : true,
+            op === 'eq'
+              ? r[col] === val
+              : op === 'in'
+                ? (val as unknown[]).includes(r[col])
+                : op === 'is-null'
+                  ? r[col] === null || r[col] === undefined
+                  : op === 'not-null'
+                    ? r[col] !== null && r[col] !== undefined
+                    : true,
           ),
         );
       const chain: Record<string, unknown> = {
@@ -91,6 +104,17 @@ function makeAdmin() {
         },
         in: (col: string, val: unknown[]) => {
           filters.push(['in', col, val]);
+          return chain;
+        },
+        // .is(col, null) and .not(col, 'is', null) — the only forms the routes use.
+        is: (col: string, val: unknown) => {
+          if (val !== null) throw new Error('fake admin: .is() is only faked for null');
+          filters.push(['is-null', col, val]);
+          return chain;
+        },
+        not: (col: string, op: string, val: unknown) => {
+          if (op !== 'is' || val !== null) throw new Error('fake admin: .not() is only faked for is null');
+          filters.push(['not-null', col, val]);
           return chain;
         },
         update: (p: Row) => {
@@ -121,6 +145,7 @@ const requestRoute = await import('@/app/api/inventory/requests/[id]/route');
 const receiptsRoute = await import('@/app/api/inventory/receipts/route');
 const settingsRoute = await import('@/app/api/inventory/settings/route');
 const addonRoute = await import('@/app/api/inventory/addon-recipes/[optionId]/route');
+const recipesRoute = await import('@/app/api/inventory/recipes/route');
 
 const as = (id: string, role = 'staff') => ({ user: { id }, role, via: 'session' });
 
@@ -141,6 +166,7 @@ beforeEach(() => {
     { id: MILK, name: 'Milk', tracks_expiry: true, is_active: true },
     { id: CUPS, name: 'Cups', tracks_expiry: false, is_active: true },
   ];
+  state.tables = {};
   state.profiles = [
     { id: MANAGER, name: 'Boss', role: 'manager' },
     { id: ASHA, name: 'Asha', role: 'staff' },
@@ -422,5 +448,61 @@ describe('PUT /api/inventory/addon-recipes/[optionId]', () => {
       name: 'inventory_set_addon_recipe',
       args: { p_option_id: OPTION, p_actor: ASHA, p_lines: [{ item_id: CUPS, qty: 1 }] },
     });
+  });
+});
+
+describe('GET /api/inventory/recipes — add-on scopes', () => {
+  const LATTE = '00000000-0000-4000-8000-0000000000c1';
+  const ESPRESSO = '00000000-0000-4000-8000-0000000000c2';
+  const SUGAR = '00000000-0000-4000-8000-0000000000e2'; // has a general recipe and two scoped ones
+  const OAT = '00000000-0000-4000-8000-0000000000e3'; // scoped lines only
+  const DECAF = '00000000-0000-4000-8000-0000000000e4'; // general recipe only
+
+  beforeEach(() => {
+    state.actor = as(ASHA);
+    state.device = { id: DEVICE };
+    state.tables = {
+      menu_items: [{ id: LATTE, name: 'Latte', category: 'Coffee', sort_order: 1, menu_item_variants: [{ id: 'v1', label: 'Large ', sort_order: 1 }] }],
+      recipe_lines: [{ menu_item_id: LATTE, size_label: '', item_id: MILK, qty: '200.000' }],
+      addon_groups: [
+        {
+          id: 'g1',
+          display_name: 'Extras',
+          sort_order: 1,
+          addon_options: [
+            { id: SUGAR, name: 'Sugar', sort_order: 1 },
+            { id: OAT, name: 'Oat', sort_order: 2 },
+            { id: DECAF, name: 'Decaf', sort_order: 3 },
+          ],
+        },
+      ],
+      addon_recipe_lines: [
+        { addon_option_id: SUGAR, item_id: CUPS, qty: '20.000', menu_item_id: null, size_label: '' },
+        { addon_option_id: SUGAR, item_id: CUPS, qty: '25.000', menu_item_id: LATTE, size_label: 'Large' },
+        { addon_option_id: SUGAR, item_id: CUPS, qty: '10.000', menu_item_id: ESPRESSO, size_label: '' },
+        { addon_option_id: OAT, item_id: MILK, qty: '200.000', menu_item_id: LATTE, size_label: '' },
+        { addon_option_id: DECAF, item_id: MILK, qty: '5.000', menu_item_id: null, size_label: '' },
+      ],
+    };
+  });
+
+  it('sends the editor only the general add-on lines, and counts the scoped ones per add-on', async () => {
+    const res = await recipesRoute.GET();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.addonLines).toEqual([
+      { optionId: SUGAR, itemId: CUPS, qty: 20 },
+      { optionId: DECAF, itemId: MILK, qty: 5 },
+    ]);
+    expect(body.addonScopedCounts).toEqual({ [SUGAR]: 2, [OAT]: 1 });
+    expect(body.addons.map((a: { id: string }) => a.id)).toEqual([SUGAR, OAT, DECAF]);
+    expect(body.lines).toEqual([{ menuItemId: LATTE, sizeLabel: '', itemId: MILK, qty: 200 }]);
+  });
+
+  it('has no scoped counts when the recipe book set none', async () => {
+    state.tables.addon_recipe_lines = (state.tables.addon_recipe_lines as Row[]).filter((l) => l.menu_item_id === null);
+    const body = await (await recipesRoute.GET()).json();
+    expect(body.addonScopedCounts).toEqual({});
+    expect(body.addonLines).toHaveLength(2);
   });
 });
