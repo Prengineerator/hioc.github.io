@@ -474,6 +474,10 @@ export interface Coupon {
   is_auto: boolean;
   active: boolean;
   created_at: string;
+  // Marketing agent (supabase/2026-10-marketing-agent.sql). Absent on a database
+  // that has not applied it, so both are optional: undefined = no campaign, no lock.
+  campaign_id?: string | null; // the marketing campaign that issued this per-recipient code
+  assigned_phone?: string | null; // E.164; only that phone's VERIFIED account may redeem it
 }
 
 export interface CouponRedemption {

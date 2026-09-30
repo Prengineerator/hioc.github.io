@@ -1372,3 +1372,19 @@ export interface CouponFields {
 /** Length and alphabet of recipients.click_token (base64url). */
 export const CLICK_TOKEN_LENGTH = 12;
 export const CLICK_TOKEN_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+// ---------------------------------------------------------------------------
+// Public opt-in link (S2 → S3)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/marketing/optin — public, no auth, cached for 5 minutes. Carries ONLY the
+ * wa.me link a customer taps to opt in (they send START and the webhook records it),
+ * never any other setting. `available` is true only when the marketing flag is on AND the
+ * owner has entered a WhatsApp business number; otherwise `wa_link` is null.
+ */
+export interface PublicOptinResponse {
+  available: boolean;
+  /** https://wa.me/<digits>?text=START, or null when not available. */
+  wa_link: string | null;
+}

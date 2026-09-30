@@ -11,7 +11,9 @@
 -- account toggle start writing to them the moment the new code is live.
 --
 -- Pieces:
---   menu_item_costs           product cost (COGS) per menu VARIANT. Owner-only. A
+--   marketing_set_updated_at  this file's own updated_at trigger function (the shared
+--                             set_updated_at() may not exist on this database).
+--   menu_item_costs          product cost (COGS) per menu VARIANT. Owner-only. A
 --                             cost NEVER lives on menu_items / menu_item_variants:
 --                             both are publicly readable (the menu), so a cost
 --                             column there would publish the cafe's margins to
@@ -51,6 +53,27 @@
 -- and the route rejects it — see the Verify section for how to spot that.
 -- ---------------------------------------------------------------------------
 -- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- SECTION 0 — a LOCAL updated_at trigger function
+-- ---------------------------------------------------------------------------
+-- The four triggers below could not simply reuse the repo's set_updated_at():
+-- that function is only defined in the attendance migrations (feature-flagged OFF,
+-- possibly never applied in production), so pointing a trigger at it would fail
+-- here with "function set_updated_at() does not exist" and abort the whole file.
+-- This one is defined right here, so the migration is self-contained. The shared
+-- set_updated_at() is deliberately left alone.
+
+create or replace function public.marketing_set_updated_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end
+$$;
 
 -- ---------------------------------------------------------------------------
 -- SECTION 1 — menu_item_costs: product cost per variant (owner-only)
@@ -106,7 +129,7 @@ on conflict do nothing;
 drop trigger if exists trg_marketing_settings_updated_at on public.marketing_settings;
 create trigger trg_marketing_settings_updated_at
   before update on public.marketing_settings
-  for each row execute function set_updated_at();
+  for each row execute function public.marketing_set_updated_at();
 
 -- ---------------------------------------------------------------------------
 -- SECTION 3 — consent ledger + audit log
@@ -132,7 +155,7 @@ create index if not exists idx_marketing_consent_status
 drop trigger if exists trg_marketing_consent_updated_at on public.marketing_consent;
 create trigger trg_marketing_consent_updated_at
   before update on public.marketing_consent
-  for each row execute function set_updated_at();
+  for each row execute function public.marketing_set_updated_at();
 
 create table if not exists public.marketing_consent_events (
   id         uuid primary key default gen_random_uuid(),
@@ -229,7 +252,7 @@ create table if not exists public.marketing_playbooks (
 drop trigger if exists trg_marketing_playbooks_updated_at on public.marketing_playbooks;
 create trigger trg_marketing_playbooks_updated_at
   before update on public.marketing_playbooks
-  for each row execute function set_updated_at();
+  for each row execute function public.marketing_set_updated_at();
 
 -- ON CONFLICT DO NOTHING: re-running never overwrites what the owner tuned.
 insert into public.marketing_playbooks (key, mode, priority, params, offer, template, prior_conversion_pct) values
@@ -304,7 +327,7 @@ create index if not exists idx_marketing_campaigns_status
 drop trigger if exists trg_marketing_campaigns_updated_at on public.marketing_campaigns;
 create trigger trg_marketing_campaigns_updated_at
   before update on public.marketing_campaigns
-  for each row execute function set_updated_at();
+  for each row execute function public.marketing_set_updated_at();
 
 -- ---------------------------------------------------------------------------
 -- SECTION 6 — marketing_recipients

@@ -29,6 +29,10 @@
     {
       "path": "/api/cron/owner-reports",
       "schedule": "30 2 * * *"
+    },
+    {
+      "path": "/api/cron/marketing-plan",
+      "schedule": "15 4 * * *"
     }
   ]
 }

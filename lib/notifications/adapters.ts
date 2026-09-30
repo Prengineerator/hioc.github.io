@@ -32,6 +32,14 @@ export interface SendInput {
   // parsed by lib/feedback/payload.ts); a dynamic URL button carries `text`,
   // which Meta appends to the template's configured URL suffix.
   templateButtons?: { index: number; payload?: string; text?: string }[];
+  // Marketing (docs/MARKETING-AGENT-SPEC.md F1): the owner maps Meta templates
+  // in the dashboard, so the template name cannot come from the fixed event →
+  // env-var map above. When `templateName` is set the WhatsApp adapter sends THAT
+  // template (language: templateLang → WHATSAPP_TPL_LANG → 'en') instead of the
+  // event's, and sends it as a template whenever `templateVars` is present, with
+  // or without an `event`. Unset, everything behaves exactly as it always has.
+  templateName?: string;
+  templateLang?: string;
   subject?: string; // email only
   html?: string; // email only (falls back to <pre>body</pre>)
   from?: string; // email only: overrides RESEND_FROM (e.g. staff mail from RESEND_FROM_STAFF)
@@ -197,11 +205,22 @@ async function describeAvailableTemplates(
  * when `event` + `templateVars` are provided we send `type: 'template'`; without
  * them (e.g. a reply inside the 24h window) we fall back to free text. Never
  * throws. Language via WHATSAPP_TPL_LANG (default 'en').
+ *
+ * `templateName` (marketing) overrides the event's template: see SendInput.
  */
 export const whatsappAdapter: NotificationAdapter = {
   name: 'whatsapp',
   channel: 'whatsapp',
-  async send({ to, body, event, templateVars, headerImageUrl, templateButtons }: SendInput): Promise<SendResult> {
+  async send({
+    to,
+    body,
+    event,
+    templateVars,
+    headerImageUrl,
+    templateButtons,
+    templateName,
+    templateLang,
+  }: SendInput): Promise<SendResult> {
     const token = process.env.WHATSAPP_TOKEN;
     const phoneId = process.env.WHATSAPP_PHONE_ID;
     const version = process.env.WHATSAPP_API_VERSION ?? 'v21.0';
@@ -209,8 +228,17 @@ export const whatsappAdapter: NotificationAdapter = {
       return { ok: false, providerRef: '', error: 'whatsapp credentials missing' };
     }
     const digits = to.replace(/^\+/, ''); // Cloud API expects digits without '+'
+    // Which template, in which language. An explicit templateName wins over the
+    // event map (marketing); otherwise it is the event's, resolved exactly as before.
+    const isTemplateSend = Boolean((event || templateName) && templateVars);
+    const resolvedName = templateName ? templateName : event ? whatsappTemplateName(event) : '';
+    const resolvedLang = templateName
+      ? templateLang || process.env.WHATSAPP_TPL_LANG || 'en'
+      : event
+        ? whatsappTemplateLang(event)
+        : '';
     let payload: Record<string, unknown>;
-    if (event && templateVars) {
+    if (isTemplateSend && templateVars) {
       // Build the template components. An image header (e.g. the bill logo) is
       // included only when a URL is supplied AND the approved template declares
       // an image header — otherwise Meta rejects the send.
@@ -248,8 +276,8 @@ export const whatsappAdapter: NotificationAdapter = {
         to: digits,
         type: 'template',
         template: {
-          name: whatsappTemplateName(event),
-          language: { code: whatsappTemplateLang(event) },
+          name: resolvedName,
+          language: { code: resolvedLang },
           components,
         },
       };
@@ -286,9 +314,8 @@ export const whatsappAdapter: NotificationAdapter = {
       // realistically approved under, and SAY which one worked. The candidate
       // list is tiny and only ever runs after a failure that was already fatal,
       // so the cost is bounded and the alternative is a message nobody gets.
-      const isTemplateSend = Boolean(event && templateVars);
       if (isTemplateSend && data.error?.code === 132001) {
-        const tried = whatsappTemplateLang(event!);
+        const tried = resolvedLang;
         const candidates = ['en', 'en_US', 'en_GB'].filter((c) => c !== tried);
 
         for (const code of candidates) {
@@ -302,8 +329,11 @@ export const whatsappAdapter: NotificationAdapter = {
             // Without this line the next deploy silently pays the retry cost
             // forever and nobody learns the real value.
             console.warn(
-              `[notify] template '${whatsappTemplateName(event!)}' is not approved in '${tried}' but IS in '${code}'. ` +
-                `Set ${event === 'bill' ? 'WHATSAPP_TPL_BILL_LANG' : `WHATSAPP_TPL_${String(event).toUpperCase()}_LANG`}=${code} to stop retrying.`,
+              templateName
+                ? `[notify] template '${resolvedName}' is not approved in '${tried}' but IS in '${code}'. ` +
+                    `Set the template's language to '${code}' in the marketing settings to stop retrying.`
+                : `[notify] template '${whatsappTemplateName(event!)}' is not approved in '${tried}' but IS in '${code}'. ` +
+                    `Set ${event === 'bill' ? 'WHATSAPP_TPL_BILL_LANG' : `WHATSAPP_TPL_${String(event).toUpperCase()}_LANG`}=${code} to stop retrying.`,
             );
             return { ok: true, providerRef: attempt.data.messages?.[0]?.id ?? '', error: '' };
           }

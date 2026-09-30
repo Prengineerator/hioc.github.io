@@ -7,6 +7,7 @@ import { normalizeIndianMobile } from '@/lib/phone';
 import { verifiedEmailOf } from '@/lib/account/history';
 import { checkoutPrefill } from '@/lib/account/prefill';
 import { parseIsoDate } from '@/lib/legacy/account';
+import { recordOptIn, recordOptOut } from '@/lib/marketing/server/consent';
 import type { OrderType } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -228,5 +229,26 @@ export async function PATCH(request: Request) {
     return errorResponse(500, 'Failed to update profile');
   }
 
-  return NextResponse.json(shapeMe(updated as ProfileRow));
+  const profile = updated as ProfileRow;
+
+  // Marketing consent ledger (docs/MARKETING-AGENT-SPEC.md §2). The profile checkbox is
+  // the customer's own opt-in/out, so once the profile holds a VERIFIED phone the same
+  // choice is recorded against that phone — with its source and an audit event — because
+  // the ledger, not the checkbox, is what the marketing agent reads. An unverified phone
+  // is not a number we can message, so it records nothing here.
+  //
+  // The profile update above has ALREADY succeeded and is the customer's request. A
+  // ledger failure (marketing migration not applied, a transient error) is logged and
+  // must never fail it.
+  if (typeof updates.marketing_consent === 'boolean' && profile.phone_verified && profile.phone) {
+    try {
+      const input = { phone: profile.phone, userId: user.id, source: 'profile' as const, actor: user.id };
+      const result = updates.marketing_consent ? await recordOptIn(input) : await recordOptOut(input);
+      if (!result.ok) console.error('account/me: consent ledger not updated', result.error);
+    } catch (err) {
+      console.error('account/me: consent ledger threw', err);
+    }
+  }
+
+  return NextResponse.json(shapeMe(profile));
 }
