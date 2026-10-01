@@ -1,7 +1,9 @@
 # Inventory: stock requests, verified receiving at the POS, expiry dates and recipes
 
 Status: **BUILT** (2026-09-26; add-on recipes, auto-hide and assignment emails added the same day). Branch `claude/cool-bohr-13yrnx`. Dark behind
-`NEXT_PUBLIC_FLAG_INVENTORY` (default off) until the requirement sheet below is done.
+`NEXT_PUBLIC_FLAG_INVENTORY` (default off) until the requirement sheet below is done. Sales
+take stock off only once `NEXT_PUBLIC_FLAG_INVENTORY_SALES` is on as well (default off), so the
+Stock screen can go live first for set-up.
 
 ## Why
 
@@ -197,16 +199,21 @@ delivery, on the POS), one line per batch.
 
 | # | Step | Who | Done |
 |---|---|---|---|
-| C1 | Switch the flag on **in a preview deployment** first: `NEXT_PUBLIC_FLAG_INVENTORY=true` | Dev | ☐ |
+| C1 | Switch the Stock screen on: `NEXT_PUBLIC_FLAG_INVENTORY=true` (preview first if you like, then production) and redeploy. Leave `NEXT_PUBLIC_FLAG_INVENTORY_SALES` **unset**: sales don't touch stock yet, and the Stock tab says so. | Dev | ☐ |
 | C2 | Add the stock items from B1 (Stock → Add item, as a manager) | Manager | ☐ |
 | C3 | Enter the recipes from B2 (Stock → Recipes, **on the POS**) | Staff with `menu_edit` | ☐ |
 | C4 | Receive the opening stock from B3 (Stock → Receive delivery, on the POS) | Manager | ☐ |
-| C5 | Run the acceptance walk-through (D) end to end | Owner + one staffer | ☐ |
-| C6 | Switch the flag on in **production** and redeploy (a `NEXT_PUBLIC_` flag is baked in at build) | Dev | ☐ |
+| C5 | Run the acceptance walk-through (D). Steps 6, 7, 10 and 11 need sales deduction, so run them in a preview with `NEXT_PUBLIC_FLAG_INVENTORY_SALES=true`. | Owner + one staffer | ☐ |
+| C6 | **Flag-off day:** count the shelves at closing, then set `NEXT_PUBLIC_FLAG_INVENTORY_SALES=true` in **production** and redeploy (a `NEXT_PUBLIC_` flag is baked in at build). From then on every completed order takes its recipe usage off stock. | Dev | ☐ |
 | C7 | For the first week, look at "Needs attention" daily. A "Count needed" usually means a recipe quantity is off. | Manager | ☐ |
 
-Do C2–C4 **before** C6. With the flag on and no opening stock, every completed
-order records a shortfall and every item reads "Count needed".
+Do C2–C4 **before** C6. With sales deduction on and no opening stock, every
+completed order records a shortfall and every item reads "Count needed".
+
+Auto-hide (an item leaves the menu when an ingredient runs short) works from
+the stock records whether or not sales deduction is on. Keep it switched off on
+the Stock tab during set-up, so an item whose recipe is entered before its
+stock doesn't disappear from the menu; switch it on at C6.
 
 ### D. Acceptance walk-through
 
@@ -224,7 +231,10 @@ order records a shortfall and every item reads "Count needed".
 
 ### E. Rollback
 
-Unset `NEXT_PUBLIC_FLAG_INVENTORY` and redeploy. The Stock tab disappears, the
+To stop sales touching stock but keep the Stock screen, unset
+`NEXT_PUBLIC_FLAG_INVENTORY_SALES` and redeploy.
+
+To switch everything off, unset `NEXT_PUBLIC_FLAG_INVENTORY` and redeploy. The Stock tab disappears, the
 APIs return 404, and completed orders stop touching stock. The tables stay, so
 nothing is lost. Nothing else in the app reads them.
 
