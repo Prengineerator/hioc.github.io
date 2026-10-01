@@ -174,9 +174,12 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           showToast(d.error ?? 'Could not update order');
         } else if (o.status === 'received' && to === 'accepted') {
           // A website order's KOT goes out on Accept — its placement, as far as
-          // the kitchen is concerned. Only once the server has taken the move: a
-          // 409'd accept is not an order the kitchen should start.
-          const jobs = acceptPrintPlan(autoPrint, { orderKind: o.order_kind }).map((type) => ({ orderId: o.id, type }));
+          // the kitchen is concerned — and so does the receipt of one already
+          // paid online. Only once the server has taken the move: a 409'd
+          // accept is not an order the kitchen should start.
+          const jobs = acceptPrintPlan(autoPrint, { paid: o.payment_status === 'paid', orderKind: o.order_kind }).map(
+            (type) => ({ orderId: o.id, type }),
+          );
           if (jobs.length > 0) enqueuePrint(jobs);
         }
       } catch {

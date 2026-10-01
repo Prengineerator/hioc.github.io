@@ -50,7 +50,7 @@ const AUTO_PRINT_FIELDS: {
     key: 'auto_print_bill',
     flag: 'bill',
     label: 'Print the customer’s bill automatically',
-    hint: 'The paper receipt. Prints when the order is settled. Most customers get their bill on WhatsApp, which is why this stays off — turn it on if you want paper handed over on every sale.',
+    hint: 'The paper receipt. Prints when the order is settled, or when a website order that was paid online is accepted. Most customers get their bill on WhatsApp, which is why this stays off — turn it on if you want paper handed over on every sale.',
   },
 ];
 

@@ -63,20 +63,29 @@ describe('placementPrintPlan', () => {
 
 describe('acceptPrintPlan', () => {
   it('prints the KOT when a website order is accepted, like a counter order at placement', () => {
-    expect(acceptPrintPlan({ kot: true, bill: false })).toEqual(['kot']);
-    expect(acceptPrintPlan({ kot: true, bill: false }, { orderKind: 'menu' })).toEqual(['kot']);
+    expect(acceptPrintPlan({ kot: true, bill: false }, { paid: false })).toEqual(['kot']);
+    expect(acceptPrintPlan({ kot: true, bill: false }, { paid: false, orderKind: 'menu' })).toEqual(['kot']);
   });
 
   it('follows the same KOT switch as the POS', () => {
-    expect(acceptPrintPlan({ kot: false, bill: true })).toEqual([]);
+    expect(acceptPrintPlan({ kot: false, bill: true }, { paid: false })).toEqual([]);
   });
 
-  it('never prints the receipt — accepting is not settling', () => {
-    expect(acceptPrintPlan({ kot: true, bill: true })).toEqual(['kot']);
+  it('prints the receipt, after the KOT, for an order already paid online', () => {
+    expect(acceptPrintPlan({ kot: true, bill: true }, { paid: true })).toEqual(['kot', 'receipt']);
+    expect(acceptPrintPlan({ kot: false, bill: true }, { paid: true })).toEqual(['receipt']);
   });
 
-  it('prints nothing for a pass sale', () => {
-    expect(acceptPrintPlan({ kot: true, bill: true }, { orderKind: 'coffee_pass' })).toEqual([]);
+  it('follows the same bill switch as the POS for a prepaid order', () => {
+    expect(acceptPrintPlan({ kot: true, bill: false }, { paid: true })).toEqual(['kot']);
+  });
+
+  it('leaves a pay-at-counter order its receipt for when it is settled', () => {
+    expect(acceptPrintPlan({ kot: true, bill: true }, { paid: false })).toEqual(['kot']);
+  });
+
+  it('never sends a pass sale to the kitchen', () => {
+    expect(acceptPrintPlan({ kot: true, bill: true }, { paid: false, orderKind: 'coffee_pass' })).toEqual([]);
   });
 });
 
