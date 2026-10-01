@@ -44,7 +44,7 @@ const AUTO_PRINT_FIELDS: {
     key: 'auto_print_kot',
     flag: 'kot',
     label: 'Print the kitchen ticket automatically',
-    hint: 'The kitchen’s copy of the order (KOT). Prints the moment an order is placed, so the pass gets it without anyone carrying a slip over. Leave this on unless the kitchen works off the screen.',
+    hint: 'The kitchen’s copy of the order (KOT). Prints the moment an order is placed at the counter, or a website order is accepted, so the pass gets it without anyone carrying a slip over. Leave this on unless the kitchen works off the screen.',
   },
   {
     key: 'auto_print_bill',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTO_PRINT_DEFAULTS,
+  acceptPrintPlan,
   placementPrintPlan,
   printUrl,
   printsKot,
@@ -57,6 +58,25 @@ describe('placementPrintPlan', () => {
     // "Collect later" has taken no money — a receipt would be paper for a bill
     // nobody paid.
     expect(placementPrintPlan({ kot: true, bill: true }, { settled: false })).toEqual(['kot']);
+  });
+});
+
+describe('acceptPrintPlan', () => {
+  it('prints the KOT when a website order is accepted, like a counter order at placement', () => {
+    expect(acceptPrintPlan({ kot: true, bill: false })).toEqual(['kot']);
+    expect(acceptPrintPlan({ kot: true, bill: false }, { orderKind: 'menu' })).toEqual(['kot']);
+  });
+
+  it('follows the same KOT switch as the POS', () => {
+    expect(acceptPrintPlan({ kot: false, bill: true })).toEqual([]);
+  });
+
+  it('never prints the receipt — accepting is not settling', () => {
+    expect(acceptPrintPlan({ kot: true, bill: true })).toEqual(['kot']);
+  });
+
+  it('prints nothing for a pass sale', () => {
+    expect(acceptPrintPlan({ kot: true, bill: true }, { orderKind: 'coffee_pass' })).toEqual([]);
   });
 });
 

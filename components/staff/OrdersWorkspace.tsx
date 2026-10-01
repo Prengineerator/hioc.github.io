@@ -19,7 +19,7 @@ import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import { describeOrderPayment } from '@/lib/orders/settleList';
-import { settlePrintPlan } from '@/lib/staff/autoPrint';
+import { acceptPrintPlan, settlePrintPlan } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
 import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
@@ -71,6 +71,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   // the failure chip have to outlive the modal: closing an order used to cancel
   // an in-flight print silently and wipe the shift's failure tally.
   const printDock = usePrintDock();
+  const { enqueue: enqueuePrint } = printDock;
   const { autoPrint } = useCounterDefaults();
   // The full payment step for one order (split, cash change, change payment).
   const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
@@ -171,6 +172,12 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           showToast(d.error ?? 'Could not update order');
+        } else if (o.status === 'received' && to === 'accepted') {
+          // A website order's KOT goes out on Accept — its placement, as far as
+          // the kitchen is concerned. Only once the server has taken the move: a
+          // 409'd accept is not an order the kitchen should start.
+          const jobs = acceptPrintPlan(autoPrint, { orderKind: o.order_kind }).map((type) => ({ orderId: o.id, type }));
+          if (jobs.length > 0) enqueuePrint(jobs);
         }
       } catch {
         showToast('Could not update order — check the connection');
@@ -187,7 +194,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         });
       }
     },
-    [fetchOrders, refreshNewOrders],
+    [fetchOrders, refreshNewOrders, autoPrint, enqueuePrint],
   );
 
   // The corner button and "⋯" menu on a card. A one-tap move goes straight to
