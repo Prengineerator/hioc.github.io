@@ -75,6 +75,18 @@ export function placementPrintPlan(
 }
 
 /**
+ * What to print when staff ACCEPT a website order. A counter order is created
+ * already accepted and gets its KOT at placement (above); a web order waits in
+ * 'received' until someone accepts it, and that tap is the moment the kitchen
+ * should start — so it is this order's placement as far as the KOT goes. Same
+ * switch, same pass-sale rule. No receipt: a web order's bill goes out when it
+ * is paid, not when the kitchen takes it.
+ */
+export function acceptPrintPlan(settings: AutoPrintSettings, opts: { orderKind?: string | null } = {}): PrintType[] {
+  return printsFor(settings.kot ? ['kot'] : [], opts.orderKind);
+}
+
+/**
  * What to print when an already-placed order is SETTLED from the order detail.
  * No KOT: the kitchen got its ticket when the order was placed, and a second one
  * at payment time reads as a second order on the rail.
