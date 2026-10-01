@@ -83,6 +83,12 @@ export const flags = {
   // /api/inventory routes, and the completion hook — so it is read on the
   // server too, hence NEXT_PUBLIC_.
   inventory: boolEnv(process.env.NEXT_PUBLIC_FLAG_INVENTORY, false),
+  // Inventory, sales side: whether a completed order takes its recipe usage
+  // off stock. Needs `inventory` on too. Default OFF, so the Stock screen can
+  // go live first and the team can enter items, opening counts and recipes
+  // while sales leave stock alone; switched on ("flag-off day") once the
+  // shelves and recipes are in. Shown on the Stock tab, hence NEXT_PUBLIC_.
+  inventorySales: boolEnv(process.env.NEXT_PUBLIC_FLAG_INVENTORY_SALES, false),
   // HIOC Ritual — prepaid coffee passes (docs/COFFEE-PASS-SPEC.md): two plans
   // (7 cups for the price of 5 for a week, 7 for 6 over 30 days) sold on the
   // website and at the POS, and redeemed on either. Default OFF: the plans are

@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state: {
   flag: boolean;
+  salesFlag: boolean;
   orderLines: unknown[];
   recipe: unknown[];
   addonRecipe: unknown[];
@@ -17,10 +18,10 @@ const state: {
   /** [table, columns] of every .select(), so a test can see what was asked for. */
   selects: [string, string][];
   throwOnFrom: boolean;
-} = { flag: true, orderLines: [], recipe: [], addonRecipe: [], recipeError: null, rpc: [], selects: [], throwOnFrom: false };
+} = { flag: true, salesFlag: true, orderLines: [], recipe: [], addonRecipe: [], recipeError: null, rpc: [], selects: [], throwOnFrom: false };
 
 vi.mock('@/lib/flags', () => ({
-  flags: new Proxy({}, { get: (_t, key) => (key === 'inventory' ? state.flag : true) }),
+  flags: new Proxy({}, { get: (_t, key) => (key === 'inventory' ? state.flag : key === 'inventorySales' ? state.salesFlag : true) }),
 }));
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
@@ -60,6 +61,7 @@ const { consumeStockForOrder } = await import('@/lib/inventory/server');
 
 beforeEach(() => {
   state.flag = true;
+  state.salesFlag = true;
   state.orderLines = [
     { order_id: 'order-1', voided: false, menu_item_id: 'latte', variant_label_snapshot: 'Large', quantity: 2, order_item_addons: [{ addon_option_id: 'shot' }] },
     { order_id: 'order-1', voided: false, menu_item_id: 'latte', variant_label_snapshot: 'Regular', quantity: 1, order_item_addons: [] },
@@ -82,6 +84,13 @@ describe('consumeStockForOrder', () => {
     state.flag = false;
     await consumeStockForOrder('order-1', 'staff-1');
     expect(state.rpc).toEqual([]);
+  });
+
+  it('does nothing while sales deduction is off, even with the Stock screen on', async () => {
+    state.salesFlag = false;
+    await consumeStockForOrder('order-1', 'staff-1');
+    expect(state.rpc).toEqual([]);
+    expect(state.selects).toEqual([]);
   });
 
   it('takes lines × recipes (and add-ons) off stock in one call', async () => {

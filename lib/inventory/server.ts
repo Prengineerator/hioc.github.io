@@ -351,11 +351,13 @@ export async function loadAssignees(admin: SupabaseClient): Promise<PersonRef[]>
  * takes nothing twice. Voided lines (order_items.voided) are left out: a line
  * that was voided was never made, so its recipe uses no stock. An add-on's
  * usage is the recipe for the line's menu item and size when it has one (see
- * addonRecipeFor), else its general recipe. A no-op with the flag off, before
- * the migration, or when nothing on the order has a recipe.
+ * addonRecipeFor), else its general recipe. A no-op with either flag off
+ * (inventory, or inventorySales — the Stock screen can be live while sales
+ * still leave stock alone), before the migration, or when nothing on the
+ * order has a recipe.
  */
 export async function consumeStockForOrder(orderId: string, actorId: string | null): Promise<void> {
-  if (!flags.inventory) return;
+  if (!flags.inventory || !flags.inventorySales) return;
   try {
     const admin = createAdminSupabaseClient();
     const { data: lines, error: linesError } = await admin

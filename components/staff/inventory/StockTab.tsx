@@ -27,6 +27,7 @@ import {
   type ItemsPayload,
 } from '@/components/staff/inventory/client';
 import type { StaffSurface } from '@/lib/staff/surfaceRules';
+import { flags } from '@/lib/flags';
 
 type Filter = 'all' | 'attention';
 
@@ -83,6 +84,15 @@ export function StockTab({
 
   return (
     <div>
+      {/* Set-up period: the Stock screen is live but sales don't touch stock
+          yet (flags.inventorySales), so counts don't drift while the team
+          enters items, opening stock and recipes. */}
+      {!flags.inventorySales ? (
+        <p role="note" className="mb-4 rounded-md border border-[#e5e5e5] bg-surface px-3 py-2 text-sm text-charcoal">
+          <span className="font-semibold">Setting up:</span> sales don’t take stock off yet. Stock only changes when it is
+          received, counted or written off.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={primaryButton} onClick={() => setRequestOpen(true)}>
           Request stock
