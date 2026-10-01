@@ -56,10 +56,10 @@ async function reconcileWithGateway(
   return result;
 }
 
-// /api/cron/expire-orders — runs every 5 minutes from Supabase pg_cron +
-// pg_net (supabase/2026-10-expire-orders-cron.sql, job `expire-orders-poll`),
-// because the Vercel plan only runs crons daily. The daily entry in vercel.json
-// is kept as a backstop. Covers menu orders and HIOC Ritual pass-sale orders
+// /api/cron/expire-orders — runs 4 times a day (12:00, 16:00, 20:00 and
+// 00:00 IST) from Supabase pg_cron + pg_net (supabase/2026-10-expire-orders-cron.sql,
+// job `expire-orders-poll`), because the Vercel plan only runs crons daily.
+// The daily entry in vercel.json (08:30 IST) is kept as a backstop. Covers menu orders and HIOC Ritual pass-sale orders
 // (order_kind = 'coffee_pass') alike — both sit at status 'placed' until paid.
 // Protected by CRON_SECRET (Bearer). Fails CLOSED: if CRON_SECRET is unset the
 // endpoint is disabled (401), so it can never be triggered publicly.

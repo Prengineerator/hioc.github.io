@@ -1,5 +1,5 @@
 -- ===========================================================================
--- Expire abandoned online orders every 5 minutes (pg_cron + pg_net).
+-- Expire abandoned online orders 4 times a day (pg_cron + pg_net).
 --
 -- An online order that was started but never paid (status 'placed',
 -- payment_status 'payment_pending') — a menu order or a HIOC Ritual pass-sale
@@ -8,11 +8,14 @@
 -- Razorpay whether it was actually paid (a paid-but-tab-closed order is
 -- recovered into the staff queue, not cancelled). The Vercel plan only runs
 -- crons daily, though (vercel.json: "0 3 * * *"), so until now those orders sat
--- "awaiting payment" for up to a day. Postgres can tick faster: pg_cron fires
--- every 5 minutes and pg_net sends the HTTP POST the way a Vercel Cron trigger
--- would, carrying the same CRON_SECRET Bearer token the route already checks —
--- read out of Vault, never hard-coded here. The daily Vercel cron stays as a
--- backstop.
+-- "awaiting payment" for up to a day. pg_cron fires 4 times across opening
+-- hours (10:00–24:00 IST) — 12:00, 16:00, 20:00 and 00:00 IST — and pg_net
+-- sends the HTTP POST the way a Vercel Cron trigger would, carrying the same
+-- CRON_SECRET Bearer token the route already checks, read out of Vault, never
+-- hard-coded here. The daily Vercel cron (08:30 IST) stays as a backstop.
+--
+-- pg_cron reads the schedule in GMT (`cron.timezone`), so the IST times above
+-- are written 5h30m earlier: 06:30, 10:30, 14:30 and 18:30 UTC.
 --
 -- The route accepts POST (app/api/cron/expire-orders/route.ts) —
 -- net.http_post issues a POST, not a GET, so the route must export both.
@@ -44,7 +47,7 @@ end $$;
 
 select cron.schedule(
   'expire-orders-poll',
-  '*/5 * * * *',
+  '30 6,10,14,18 * * *',
   $$
   select net.http_post(
     url := 'https://hioc.in/api/cron/expire-orders',
@@ -69,9 +72,9 @@ select cron.schedule(
 --
 --   -- the cron job is scheduled:
 --   select jobname, schedule, active from cron.job where jobname = 'expire-orders-poll';
---   -- expect: expire-orders-poll | */5 * * * * | t
+--   -- expect: expire-orders-poll | 30 6,10,14,18 * * * | t
 --
---   -- the job has actually been firing (after a few minutes):
+--   -- the job has actually been firing (after its next run time):
 --   select jobid, status, return_message, start_time
 --     from cron.job_run_details
 --    where jobid = (select jobid from cron.job where jobname = 'expire-orders-poll')
