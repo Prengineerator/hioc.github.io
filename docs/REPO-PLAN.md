@@ -1,4 +1,6 @@
-# Servly repo plan (Phase 0 proposal, awaiting the owner's approval)
+# Servly repo plan
+
+> **Status: approved by the owner on 2026-10-02.** All twelve defaults in §1 are accepted. GitHub account: `Prengineerator`; npm scope: `@prengineerator`.
 
 This plan turns HIOC's single app into **Servly**, a white-label product made of independent repos, while HIOC keeps running unchanged.
 
@@ -8,7 +10,7 @@ It builds on [`AUDIT.md`](AUDIT.md) (facts and risks) and [`HIOC-BASELINE.md`](H
 
 ## 1. Decisions needed from the owner
 
-Each has a recommended default. Reply "approve defaults", or override by number.
+Each has a recommended default. **Outcome: all defaults approved (2026-10-02).**
 
 | # | Decision | Recommended default | Why |
 |---|---|---|---|
