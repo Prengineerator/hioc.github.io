@@ -22,7 +22,11 @@ Your job is to find facts, not to fix or suggest code. The lead (orchestrator) p
 - Read the area named in your task. Follow imports one level outward to find coupling, but don't audit areas owned by another auditor.
 - Cite `file:line` for every claim. Use tables. Group repetitive findings and give a count.
 - Separate what you verified from what you inferred, and label inferences.
-- For every hard-coded restaurant-specific value, propose a config key. Examples: `brand.name`, `business.timezone`, `tax.gstRate`, `contact.phone`.
+- For every hard-coded restaurant-specific value, propose a config key. Examples: `brand.name`, `locale.timezone`, `tax.label`, `contact.phone`.
+
+## Acceptance
+- Every claim has a `file:line` (or a command and its output).
+- `git status` is unchanged afterwards.
 
 ## Report back (your final message is the report; don't merge anything)
 Use the section list in your task brief. Always end with:

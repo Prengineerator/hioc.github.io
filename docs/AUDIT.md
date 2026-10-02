@@ -10,7 +10,7 @@
 - the coffee features;
 - shared code, the API and the backend.
 
-A sixth agent ran a performance baseline on a copy of the repo. The lead verified the highest-impact claims directly; those are marked **(verified)**.
+A sixth agent (general-purpose, measure-only) ran a performance baseline in a scratch copy of the repo; the `auditor` definition doesn't allow installs or builds. The lead verified the highest-impact claims directly; those are marked **(verified)**.
 
 Companions: [`HIOC-BASELINE.md`](HIOC-BASELINE.md) (what production looks like today) and [`REPO-PLAN.md`](REPO-PLAN.md) (what we build).
 
@@ -56,7 +56,7 @@ Companions: [`HIOC-BASELINE.md`](HIOC-BASELINE.md) (what production looks like t
    - **Ask Coffey** (the LLM menu suggester, "Jev") is cleanly separable.
    - Neither is coffee-specific in its data model.
 8. **Feature switches are fixed at build time.**
-   - All 14 feature flags are `NEXT_PUBLIC_*`, inlined at build time.
+   - All 13 live feature flags are `NEXT_PUBLIC_*`, inlined at build time. A 14th, `GUEST_OTP`, is set on Vercel but unused.
    - Module code ships in every bundle whether it is on or off.
    - Turning a module on or off means a redeploy; there is no runtime module loading.
 9. **Every page is server-rendered on every request (verified).**
@@ -82,7 +82,7 @@ Companions: [`HIOC-BASELINE.md`](HIOC-BASELINE.md) (what production looks like t
 | API | 152 `route.ts` | Nearly all use the service-role key; ~88 have route-handler tests. |
 | `lib/` | 247 files, ~46k lines | No imports from `app/` or `components/`. One 16-folder module cycle (§3). |
 | Desktop POS | Electron 44, `desktop/`, v0.1.3, Windows | Its own release workflow; it imports `../lib/desktop/bridge.ts`. |
-| Tests | 283 Vitest files, ~5,900 cases | Node environment only. 419 path-based `vi.mock('@/lib/…')`. **No E2E, no visual tests.** |
+| Tests | 283 Vitest files, ~7,400 cases (7,430 passed, 1 skipped when measured; see `PERF.md`) | Node environment only. 419 path-based `vi.mock('@/lib/…')`. **No E2E, no visual tests.** |
 | CI | `code-revamp.yml` (lint, `tsc`, test, build on PRs touching app code) | Also runs a weekly Claude "revamp" job. Never checks `supabase/**`. |
 | Database | 84 tables, 15 views, 38 functions, 25 triggers, 5 enums, 3 pg_cron jobs | All tables have RLS on; ~50 are service-role-only by design. |
 | Legacy | `index.html`, `css/`, `js/`, `sass/`, `fonts/`, `images/`, `CNAME`, `_config.yml` (~2.2 MB) | The old GitHub Pages site. Nothing in the app references it. |
@@ -190,9 +190,9 @@ The decision is in `REPO-PLAN.md` §1, question Q4.
 
 **RLS:**
 - All 84 tables have RLS enabled. About 50 have no policy, which means service-role only (deny-by-default, intentional).
-- Menu, store settings, announcements, loyalty config and active tables are public-read; `qr_token` is hidden by column grants.
+- Menu, store settings, announcements, loyalty config and active tables are public-read.
 - Customer data is own-row; operational tables use `is_staff()`.
-- **One policy gap was found and verified in production.** Some operational tables are readable more widely than intended. It was reported privately (§10).
+- **One access-control finding was reported to the owner privately (§10).** Details are withheld because this repository is public.
 - Advisors:
   - WARN: `is_staff()` is a SECURITY DEFINER function callable by `authenticated`.
   - WARN: leaked-password protection is off.
@@ -231,7 +231,7 @@ About 70 env vars are read in code.
 Other cross-cutting issues:
 - **One `NEXT_PUBLIC_SITE_URL` builds links for three audiences:** customer receipts and QR codes, staff password-reset and stock emails, and owner report emails. After the split each app needs its own base URL.
 - **Flags enforced on the server must be identical in every project that serves the API:** `coffeePass`, `verifiedOrders`, `suggest`, `tableQr`, `staffPos`, `inventory`.
-- **Previews currently share production's Supabase, WhatsApp and Resend credentials.** These variables target both `preview` and `production` with one value each. So a preview deployment of this repo talks to the **production database with the service-role key**, and can send real WhatsApp messages. No E2E test may run against these previews (`REPO-PLAN.md` §7).
+- **Previews currently share production's Supabase, WhatsApp and Resend credentials.** These variables target both `preview` and `production` with one value each. So a preview deployment of this repo is **not isolated from production data**, and can send real WhatsApp messages. The owner should consider scoping production credentials to the Production environment only. No E2E test may run against these previews (`REPO-PLAN.md` §7).
 
 ---
 
@@ -304,7 +304,7 @@ The perf-baseline agent's measurements (build route table, First Load JS, produc
   - The owner marketing dashboard imports 7 tabs eagerly.
   - `qrcode` is imported statically.
   - The root layout ships the customer header and footer, Vercel Analytics and three font families to every surface.
-- **Order-status updates poll every 4 s, a cost once the Realtime publication is fixed.** Fixing the publication (Phase 6) is the biggest single reduction in function invocations.
+- **Order-status updates poll every 4 s, a cost once the Realtime publication is fixed.** Fixing the publication (Phase 6) is one of the biggest reductions in function invocations, alongside static pages.
 
 ---
 
@@ -314,14 +314,14 @@ None of these were changed in Phase 0. Each needs the owner's go-ahead. Most are
 
 | # | Severity | Issue | Evidence |
 |---|---|---|---|
-| S1 | **High (security)** | RLS policy gap: some operational tables are readable more widely than intended **(verified in production)**. Details were given to the owner privately. | withheld (public repo) |
+| S1 | Security | One access-control finding, reported to the owner privately. Details withheld because this repository is public. | withheld |
 | B1 | High (ops) | The Realtime publication is empty, so "live" updates never arrive. Staff boards wait up to 15 s for new orders and the customer menu up to 15 s for availability changes **(verified)**. | `pg_publication_tables` |
-| B2 | Medium | On `staff.hioc.in`, `/staff-print/<id>/<type>` is rewritten to `/staff/staff-print/...`, which doesn't exist. Browser-fallback and "system+driver" printing 404 on the subdomain; raw ESC/POS is unaffected **(verified by reading the code)**. | `lib/routing/surface.ts:54-58` |
+| B2 | Medium | On `staff.hioc.in`, `/staff-print/<id>/<type>` is rewritten to `/staff/staff-print/...`, which doesn't exist. Browser-fallback and "system+driver" printing 404 on the subdomain; raw ESC/POS is unaffected **(verified by executing the function; not reproduced on a live counter)**. | `lib/routing/surface.ts:54-60` |
 | B3 | Medium | Owner Settings "Save" from a normal (non-enrolled) browser fails. The page sends `hidden_categories` and `hidden_variant_labels`, which the API only accepts from an enrolled POS device **(verified by reading the code; not reproduced live)**. | `app/owner/settings/page.tsx:94`, `app/api/store-settings/route.ts:63-78` |
 | B4 | Low | The owner login ignores `?error=not_staff`. The owner layout redirects to `/staff/login` while middleware uses `/owner/login`. There is no owner sign-out control. | `app/owner/login/page.tsx:34`, `app/owner/layout.tsx:27` |
-| B5 | Low (security) | The staff login form follows `?next=` without `safeNextPath`. | `components/staff/StaffLoginForm.tsx:79` |
+| B5 | Low (security) | The staff login form follows `?next=` without `safeNextPath`. | `components/staff/StaffLoginForm.tsx:81-82` |
 | B6 | Low | Staff password-reset and stock emails link via the customer base URL. They still work today because one app serves all paths. | `lib/staff/emails.ts:142` |
-| B7 | Low | Owner marketing and attendance APIs aren't flag-gated; only their UI is. | `lib/marketing/server/http.ts:19` |
+| B7 | Low | Owner marketing and attendance APIs aren't flag-gated; only their UI is. | `lib/marketing/server/http.ts:20` |
 | B8 | Hygiene | Stale env vars on Vercel and missing names in `.env.local.example` (§6). | |
 | B9 | Hygiene | Supabase advisors: `is_staff()` exposed as a definer function, leaked-password protection off, extensions in `public`. | Supabase advisors |
 | B10 | Hygiene | `idempotency_keys` and `rate_limits` grow forever. | no purge job |
@@ -341,6 +341,6 @@ None of these were changed in Phase 0. Each needs the owner's go-ahead. Most are
 | R7 | Build-time flags differ between the three projects | Server rejects what the UI offers, e.g. Ritual at checkout | One `hioc-config` is the source of flags for all apps; CI asserts parity. |
 | R8 | Path-based `vi.mock` goes stale after moves | Tests pass while mocking nothing | `package-extractor` acceptance requires the test count to stay equal; reviewer checks mock paths. |
 | R9 | Vercel Hobby limits: 100 deploys/day, 1 build at a time, private-repo commit-author rule | Blocked or queued deploys | Previews only for PRs, ignored-build step, batched upgrades, repo-visibility decision (Q1). |
-| R10 | Free-tier exhaustion: GitHub Actions 2,000 min/month on private repos, Packages 500 MB / 1 GB transfer, Supabase 2 active free projects | CI stops or test DBs can't be created | Public repos where possible; lean CI; one test project at a time, pausing between uses (`REPO-PLAN.md` §8). |
+| R10 | Free-tier exhaustion: GitHub Actions 2,000 min/month on private repos, Packages 500 MB / 1 GB transfer, Supabase 2 active free projects | CI stops or test DBs can't be created | Public repos where possible; lean CI; one test project at a time, pausing between uses (`REPO-PLAN.md` §7, §9). |
 | R11 | A module "switched off" still leaves DB triggers and columns (Ritual) | Not fully clean switch-off | Documented exception; Ritual becomes a module only after core extension points exist. |
 | R12 | The Claude `code-revamp` weekly job opens PRs against paths that are moving | Merge conflicts, surprise deploys | Pause it during Stage A (owner's call). |

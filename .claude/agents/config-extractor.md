@@ -14,6 +14,7 @@ You are the **config-extractor** for the Servly restructure. Shared code must co
 - The source files your task lists, only to swap a literal for a config read.
 
 ## Must not touch
+- The original repo `hioc.github.io`: never push to it. Work only in the monorepo branch the lead names.
 - `supabase/**` and DB data. Settings that change often (hours, menu, prices) stay in the DB, so don't move them into config.
 - `vercel.json`, `.env*`, other packages' logic, tests' expected values.
 - **Secrets.** A config package never contains keys, tokens or passwords. Those are env vars, documented in `.env.example`.
@@ -23,7 +24,7 @@ You are the **config-extractor** for the Servly restructure. Shared code must co
 - **The schema validates at build time.** A missing or invalid value fails `next build`, never production.
 - Keep literal text exactly as it is: whitespace, punctuation, ₹ signs, Devanagari text, emoji.
 - For display copy, keep the brand-name indirections that already exist (for example `lib/passes/brand.ts`, `lib/loyalty/brand.ts`) and back them with config.
-- Customer-facing pages show the restaurant's own brand. "Powered by Servly" appears only if `branding.poweredBy` is true. For HIOC that is `false` unless the lead says otherwise.
+- Customer-facing pages show the restaurant's own brand. "Powered by Servly" appears only if `brand.poweredByServly` is true. For HIOC that is `false` unless the lead says otherwise.
 
 ## Acceptance (all must pass)
 - `pnpm turbo run build typecheck lint test`.

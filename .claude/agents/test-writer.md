@@ -22,7 +22,8 @@ Tests are the safety net. They must pass on the code as it is today before anyth
 ## Rules
 - **Never run tests against production** (hioc.in, staff.hioc.in, owner.hioc.in) or HIOC's production Supabase project. Allowed targets:
   - a local `next start` against the test Supabase project the lead names;
-  - a Vercel **preview** URL with the protection-bypass header, when the lead gives you one.
+  - a Vercel **preview** URL with the protection-bypass header, when the lead gives you one **and its project is bound to the test Supabase project** (`servly-stage-a`, `servly-*`).
+  - **Never a `hioc-in` preview.** Those carry production Supabase, WhatsApp and Resend credentials.
 - Test data must be clearly fake. Use names like `E2E Test Customer` and phone numbers from a reserved test range the lead provides. Never use real customer data.
 - No payments with real money. Use Razorpay test mode or the "pay at counter" path only.
 - **Characterization tests assert today's behaviour, including oddities.** Don't "correct" expectations.

@@ -9,7 +9,7 @@ Recorded 2026-10-02, Phase 0 of the Servly restructure, using read-only API call
 
 The live values stay in the Vercel and Supabase dashboards.
 
-This is the state that the restructure must keep working: the same URLs, flows, data and look. Phase 10 compares new preview deployments against it, and the rollback plan in `SWITCH-OVER.md` returns to it.
+This is the state that the restructure must keep working: the same URLs, flows, data and look. Phase 10 compares new preview deployments against it, and the rollback plan in `SWITCH-OVER.md` (planned) returns to it.
 
 ---
 
@@ -111,7 +111,7 @@ The targets are what Vercel reports. "branch" means a preview variable scoped to
 
 Other notes:
 - Names in `.env.local.example` that are **not** set on Vercel use their code defaults. Examples: `RESEND_FROM_REPORTS`, `TWILIO_*`, `JEV_MODEL`, `SUGGEST_*`, the remaining `WHATSAPP_TPL_*`, and `NEXT_PUBLIC_FLAG_{REALTIME,STAFF_POS,TABLE_QR,OWNER_DASHBOARD,INVENTORY_SALES}`. The full reconciliation of code against `.env.example` against Vercel is in `AUDIT.md`.
-- **Usage policy:** Vercel Hobby is for non-commercial use. HIOC takes real payments, so it should move to Pro (or another commercial plan) once it is commercially live. See `DEPLOY.md`.
+- **Usage policy:** Vercel Hobby is for non-commercial use. HIOC takes real payments, so it should move to Pro (or another commercial plan) once it is commercially live. See `DEPLOY.md` (planned).
 
 ## 3. Supabase
 

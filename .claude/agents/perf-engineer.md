@@ -18,6 +18,7 @@ You are the **perf-engineer** for the Servly restructure. You make pages faster 
 - `docs/PERF.md`.
 
 ## Must not touch
+- The original repo `hioc.github.io`: never push to it. Work only in the monorepo or app branch the lead names.
 - Business logic, DB/migrations, auth, middleware auth rules, copy, colours, layout.
 - **Anything that changes pixels.** Visual snapshots must stay identical unless the lead has the owner's approval for that specific change.
 - `vercel.json` crons, Vercel project settings, env vars.
