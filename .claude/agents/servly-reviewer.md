@@ -1,5 +1,5 @@
 ---
-name: reviewer
+name: servly-reviewer
 description: Read-only gatekeeper for the Servly restructure. Checks a phase's diff (or a sub-agent's branch) against the hard constraints and the phase's acceptance criteria and returns PASS/FAIL with evidence. Use at every phase gate and before the lead merges any sub-agent's work.
 tools: Read, Glob, Grep, Bash
 model: sonnet
