@@ -9,37 +9,32 @@
 -- (staff, manager or owner), matching orders, payments and refunds
 -- (supabase/security-rls-fix.sql).
 --
+-- ALTER POLICY changes each policy's condition in place: no drop and
+-- re-create, so there is no window without a policy, and names, roles and
+-- commands are unchanged.
+--
 -- No app behaviour changes: every read of these tables in the app goes
 -- through the service-role client (createAdminSupabaseClient), which
--- bypasses RLS. Policy names are kept, so the schema shape is unchanged.
+-- bypasses RLS.
 --
--- Reversible: supabase/2026-10-staff-only-reads.down.sql restores the old
--- policies exactly. Idempotent: safe to re-run.
+-- Reversible: supabase/2026-10-staff-only-reads.down.sql restores
+-- `using (true)`. Idempotent: safe to re-run.
 --
--- Verify (as a signed-in non-staff user, e.g. via the API with a customer
--- session): each table returns zero rows. As staff: rows as before.
+-- Tested 2026-10-02 on the separate test project (production schema baseline):
+--   * before: a signed-in customer (is_staff() = false) read 14 role_permissions rows;
+--   * after:  that customer reads 0 rows from all five tables; staff still read 14;
+--   * down:   the customer reads 14 again; re-applying returns it to 0.
+--
+-- Verify after applying (Supabase SQL editor):
+--   select tablename, policyname, qual from pg_policies
+--    where schemaname = 'public'
+--      and tablename in ('order_payments','order_amendments','cash_days',
+--                        'role_permissions','permission_change_audit');
+--   -- expect qual = is_staff() on all five rows
 -- ===========================================================================
 
-begin;
-
-drop policy if exists order_payments_staff_read on public.order_payments;
-create policy order_payments_staff_read on public.order_payments
-  for select to authenticated using (public.is_staff());
-
-drop policy if exists order_amendments_staff_read on public.order_amendments;
-create policy order_amendments_staff_read on public.order_amendments
-  for select to authenticated using (public.is_staff());
-
-drop policy if exists cash_days_staff_read on public.cash_days;
-create policy cash_days_staff_read on public.cash_days
-  for select to authenticated using (public.is_staff());
-
-drop policy if exists role_permissions_read on public.role_permissions;
-create policy role_permissions_read on public.role_permissions
-  for select to authenticated using (public.is_staff());
-
-drop policy if exists permission_change_audit_read on public.permission_change_audit;
-create policy permission_change_audit_read on public.permission_change_audit
-  for select to authenticated using (public.is_staff());
-
-commit;
+alter policy order_payments_staff_read on public.order_payments using (public.is_staff());
+alter policy order_amendments_staff_read on public.order_amendments using (public.is_staff());
+alter policy cash_days_staff_read on public.cash_days using (public.is_staff());
+alter policy role_permissions_read on public.role_permissions using (public.is_staff());
+alter policy permission_change_audit_read on public.permission_change_audit using (public.is_staff());
