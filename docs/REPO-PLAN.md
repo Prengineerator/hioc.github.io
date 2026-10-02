@@ -1,5 +1,7 @@
 # Servly repo plan
 
+> **Superseded in part (2026-10-02):** the owner cancelled the Servly white-label goal. The repos are now for HIOC only, split into small single-responsibility repos. See `docs/STAGE-A-STATUS.md` in `servly-monorepo` for the current scope and repo list. Where the two disagree, `STAGE-A-STATUS.md` wins.
+
 > **Status: approved by the owner on 2026-10-02.** All twelve defaults in §1 are accepted. GitHub account: `Prengineerator`; npm scope: `@prengineerator`.
 
 This plan turns HIOC's single app into **Servly**, a white-label product made of independent repos, while HIOC keeps running unchanged.
