@@ -5,7 +5,7 @@ import { hasPermission } from '@/lib/permissions';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { denomsTotalInr, sanitizeDenoms } from '@/lib/cash/denoms';
 import { istBusinessDate } from '@/lib/cash/date';
-import { evaluateClose, evaluateOpen } from '@/lib/cash/day';
+import { evaluateClose, evaluateOpen, handoverMovementReason } from '@/lib/cash/day';
 import { recordCount } from '@/lib/cash/checkpoints';
 import {
   CASH_DAY_COLUMNS,
@@ -377,7 +377,7 @@ export async function PATCH(request: Request) {
     const { error: moveError } = await admin.from('cash_movements').insert({
       direction: 'out',
       amount_inr: evaluation.takenOutInr,
-      reason: `Day close handover (${closedDay.business_date}): cash taken out to owner/bank`,
+      reason: handoverMovementReason(closedDay.business_date),
       recorded_by: user.id,
     });
     if (moveError) {

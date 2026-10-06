@@ -1,7 +1,8 @@
 // Owner → Reports: reconcile any range of IST days. What was sold (by the day
 // it was placed), what money came in and how (by the day it was received —
-// the cash day's own rules), refunds, unpaid bills, cash in/out and each
-// day's drawer close, with a CSV download. Rules: lib/reports/reconcile.ts.
+// the cash day's own rules), refunds, unpaid bills, and the cash drawer by
+// cash day — each close's statement and its count by denomination — with a
+// CSV download. Rules: lib/reports/reconcile.ts.
 
 import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
@@ -10,7 +11,15 @@ import { Card, inr } from '@/components/owner/dashboard';
 import { flags } from '@/lib/flags';
 import { reportPassRows } from '@/lib/passes/ownerUi';
 import { ReportEmailSettingsPanel } from '@/components/owner/ReportEmailSettingsPanel';
-import { parseRange, REPORT_METHODS, type Report, type ReportDay } from '@/lib/reports/reconcile';
+import {
+  closingCountRows,
+  closingDayOf,
+  parseRange,
+  REPORT_METHODS,
+  type CashDayRow,
+  type Report,
+  type ReportDay,
+} from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
 
 export const dynamic = 'force-dynamic';
@@ -28,6 +37,21 @@ function shortDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
+
+/** '5 Oct, 3:02 pm' in IST. */
+function istTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+const signed = (n: number) => `${n >= 0 ? '+' : '−'} ${inr(Math.abs(n))}`;
 
 function presets(today: string): { label: string; from: string; to: string }[] {
   const [y, m] = today.split('-').map(Number);
@@ -131,7 +155,6 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
 
 function ReportBody({ report, label }: { report: Report; label: string }) {
   const t = report.totals;
-  const cashNet = t.received.cash - t.refunds.cash + t.cashInInr - t.cashOutInr;
   // HIOC Ritual (CP-D21): two informational rows. Ritual sales are already inside
   // Gross sales, and the cover on a redeemed cup is not a discount, so neither
   // changes Gross or Net. Only with the flag on and something to show.
@@ -175,7 +198,8 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
           </ul>
           <p className="mt-3 text-xs text-muted">
             Counted on the day the money was received. A bill placed on one day and paid the next is money on the day it
-            was paid. Tips {inr(t.tipsInr)} are included in these amounts but not in sales.
+            was paid. Tips {inr(t.tipsInr)} are included in these amounts but not in sales. Cash here is by calendar day;
+            the cash drawer below is by cash day.
           </p>
         </Card>
 
@@ -200,25 +224,11 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
         </Card>
       </div>
 
-      <Card title="Cash drawer">
-        <dl className="grid grid-cols-2 gap-y-1 text-sm sm:grid-cols-4">
-          <Row k="Cash received" v={inr(t.received.cash)} />
-          <Row k="Cash refunds" v={`− ${inr(t.refunds.cash)}`} />
-          <Row k="Cash in" v={inr(t.cashInInr)} />
-          <Row k="Cash out" v={`− ${inr(t.cashOutInr)}`} />
-          {t.expensesInr > 0 ? <Row k="of which expenses" v={`− ${inr(t.expensesInr)}`} /> : null}
-          <Row k="Net cash movement" v={inr(cashNet)} strong />
-          <Row
-            k={`Over / short (${t.cashDaysClosed} closed day${t.cashDaysClosed === 1 ? '' : 's'})`}
-            v={t.cashDaysClosed ? `${t.overShortInr >= 0 ? '+' : '−'} ${inr(Math.abs(t.overShortInr))}` : '—'}
-            strong
-          />
-        </dl>
-      </Card>
+      <CashDrawer report={report} />
 
       <Card title="Day by day">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm tabular-nums">
+          <table className="w-full min-w-[980px] text-sm tabular-nums">
             <thead>
               <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-muted">
                 <th className="py-1.5 pr-3">Date</th>
@@ -233,7 +243,8 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
                 <th className="py-1.5 pr-3 text-right">Refunds</th>
                 <th className="py-1.5 pr-3 text-right">Net received</th>
                 <th className="py-1.5 pr-3 text-right">Unpaid</th>
-                <th className="py-1.5 pr-3 text-right">Drawer</th>
+                <th className="py-1.5 pr-3 text-right">Counted</th>
+                <th className="py-1.5 pr-3 text-right">Over/short</th>
               </tr>
             </thead>
             <tbody>
@@ -250,14 +261,14 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
 
 function DayRow({ d }: { d: ReportDay }) {
   const cell = 'py-1.5 pr-3 text-right';
-  const drawer =
-    d.cashDay?.status === 'closed'
-      ? `${(d.cashDay.over_short_inr ?? 0) >= 0 ? '+' : '−'}${inr(Math.abs(d.cashDay.over_short_inr ?? 0))}`
-      : d.cashDay
-        ? 'open'
-        : '—';
-  const drawerTone =
-    d.cashDay?.status === 'closed' && (d.cashDay.over_short_inr ?? 0) < 0 ? 'text-red-700' : 'text-charcoal';
+  // The drawer by the cash day opened on this date: the last close's count, and
+  // the over/short of every close.
+  const closing = closingDayOf(d);
+  const overShort = d.cashDays.reduce((s, c) => s + (c.status === 'closed' ? c.over_short_inr ?? 0 : 0), 0);
+  const notClosed = d.cashDays.length ? 'open' : '—';
+  const counted = closing ? inr(closing.counted_total_inr ?? 0) : notClosed;
+  const drawer = closing ? signed(overShort) : notClosed;
+  const drawerTone = closing && overShort < 0 ? 'text-red-700' : 'text-charcoal';
   return (
     <tr className="border-t border-[#f2efe9]">
       <td className="py-1.5 pr-3 font-semibold text-charcoal">{shortDate(d.date)}</td>
@@ -272,8 +283,154 @@ function DayRow({ d }: { d: ReportDay }) {
       <td className={`${cell} ${d.refundsTotalInr ? 'text-red-700' : ''}`}>{d.refundsTotalInr ? `−${inr(d.refundsTotalInr)}` : '—'}</td>
       <td className={`${cell} font-semibold`}>{inr(d.netReceivedInr)}</td>
       <td className={`${cell} ${d.unpaidOrders ? 'text-amber-800' : ''}`}>{d.unpaidOrders ? `${d.unpaidOrders} · ${inr(d.unpaidInr)}` : '—'}</td>
+      <td className={cell}>{counted}</td>
       <td className={`${cell} ${drawerTone}`}>{drawer}</td>
     </tr>
+  );
+}
+
+// The drawer, by cash day (lib/reports/reconcile.ts): the range's totals, then
+// one card per cash day — its statement as staff closed it and the closing
+// count by denomination (what stayed as the float, what was taken out).
+function CashDrawer({ report }: { report: Report }) {
+  const d = report.drawer;
+  const daysClosed = report.days.filter((x) => x.cashDays.some((c) => c.status === 'closed')).length;
+  const cashDays = report.days.flatMap((x) => x.cashDays).reverse();
+  const single = report.from === report.to;
+  return (
+    <Card title="Cash drawer">
+      <p className="mb-3 text-xs text-muted">
+        By cash day — from when the drawer was opened to when it was counted and closed, the figures staff saw at the
+        close. A cash day sits on the date it was opened, so cash taken after midnight is here but under the next date in
+        How the money came in.
+      </p>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
+        <Row k="Days closed" v={`${daysClosed} of ${report.days.length}`} />
+        <Row k={`Cash sales${d.cashSalesCount ? ` (${d.cashSalesCount})` : ''}`} v={inr(d.cashSalesInr)} />
+        <Row k="Cash refunds" v={`− ${inr(d.cashRefundsInr)}`} />
+        <Row k="Cash in" v={inr(d.cashInInr)} />
+        <Row k="Cash out" v={`− ${inr(d.cashOutInr)}`} />
+        {d.expensesInr > 0 ? <Row k="of which expenses" v={`− ${inr(d.expensesInr)}`} /> : null}
+        <Row k="Over / short" v={d.closed ? signed(d.overShortInr) : '—'} strong />
+        <Row k="Handed over to owner/bank" v={inr(d.handoverInr)} strong />
+        <Row k="Float left in drawer" v={d.floatLeftInr === null ? '—' : inr(d.floatLeftInr)} />
+      </dl>
+      {d.open ? (
+        <p className="mt-2 text-xs text-amber-800">
+          {d.open} cash day{d.open === 1 ? ' is' : 's are'} still open — not counted yet, so not in these totals.
+        </p>
+      ) : null}
+      {cashDays.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">No cash day was opened on these dates.</p>
+      ) : (
+        <div className="mt-4 flex flex-col gap-2">
+          {cashDays.map((c, i) => (
+            <CashDayCard key={c.id ?? `${c.business_date}-${i}`} c={c} open={single} />
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
+  const closed = c.status === 'closed';
+  const os = c.over_short_inr ?? 0;
+  const reason = (c.close_reason || c.notes || '').trim();
+  const hasHandover = c.handover_inr !== null && c.handover_inr !== undefined;
+  const rows = closed ? closingCountRows(c) : [];
+  return (
+    <details open={open} className="group rounded-md border border-line bg-white">
+      <summary className="flex min-h-[44px] cursor-pointer list-none flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2">
+        <span className="min-w-0">
+          <span className="font-bold text-charcoal">{shortDate(c.business_date)}</span>
+          <span className="ml-2 text-xs text-muted">
+            {istTime(c.opened_at)} → {closed ? istTime(c.closed_at) : 'still open'}
+          </span>
+        </span>
+        <span className="text-right text-sm text-charcoal">
+          {closed ? (
+            <>
+              Counted <span className="font-mono font-bold tabular-nums">{inr(c.counted_total_inr ?? 0)}</span>
+              {' · '}
+              <span className={`font-mono font-bold tabular-nums ${os < 0 ? 'text-red-700' : 'text-green-700'}`}>
+                {os === 0 ? 'ties out' : signed(os)}
+              </span>
+            </>
+          ) : (
+            <span className="font-bold text-amber-800">Open — not counted yet</span>
+          )}
+        </span>
+      </summary>
+      <div className="grid gap-4 border-t border-line px-3 py-3 md:grid-cols-2">
+        <dl className="grid grid-cols-2 content-start gap-y-1 text-sm">
+          <Row k="Opening float" v={inr(c.opening_total_inr ?? 0)} />
+          {closed ? (
+            <>
+              <Row
+                k={`+ Cash sales${c.cash_sales_count ? ` (${c.cash_sales_count})` : ''}`}
+                v={c.cash_sales_inr === null || c.cash_sales_inr === undefined ? '—' : inr(c.cash_sales_inr)}
+              />
+              <Row k="− Cash refunds" v={inr(c.cash_refunds_inr ?? 0)} />
+              <Row k="+ Cash in" v={inr(c.cash_in_inr ?? 0)} />
+              <Row k="− Cash out" v={inr(c.cash_out_inr ?? 0)} />
+              {c.expenses_inr ? <Row k="of which expenses" v={inr(c.expenses_inr)} /> : null}
+              <Row k="= Expected in drawer" v={inr(c.expected_cash_inr ?? 0)} />
+              <Row k="Counted at close" v={inr(c.counted_total_inr ?? 0)} strong />
+              <Row k="Over / short" v={os === 0 ? 'ties out' : signed(os)} strong />
+              {os !== 0 && reason ? (
+                <dd className="col-span-2 text-xs text-muted">Reason: {reason}</dd>
+              ) : null}
+              <Row k="Handed over to owner/bank" v={hasHandover ? inr(c.handover_inr ?? 0) : '—'} />
+              <Row k="Float left in drawer" v={hasHandover ? inr(c.float_left_total_inr ?? 0) : '—'} />
+            </>
+          ) : null}
+        </dl>
+        {closed ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm tabular-nums">
+              <thead>
+                <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-muted">
+                  <th className="py-1 pr-2">Closing count</th>
+                  <th className="py-1 pr-2 text-right">Count</th>
+                  <th className="py-1 pr-2 text-right">Amount</th>
+                  <th className="py-1 pr-2 text-right">Float left</th>
+                  <th className="py-1 text-right">Taken out</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-1 text-xs text-muted">
+                      Nothing counted by denomination.
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map((r) => (
+                    <tr key={r.key} className="border-t border-[#f2efe9]">
+                      <td className="py-1 pr-2 font-semibold text-charcoal">{r.label}</td>
+                      <td className="py-1 pr-2 text-right font-mono">{r.count}</td>
+                      <td className="py-1 pr-2 text-right font-mono">{inr(r.amountInr)}</td>
+                      <td className="py-1 pr-2 text-right font-mono text-muted">{r.floatLeft || '—'}</td>
+                      <td className="py-1 text-right font-mono text-muted">{r.takenOut || '—'}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-line font-bold text-charcoal">
+                  <td className="py-1 pr-2">Total</td>
+                  <td className="py-1 pr-2" />
+                  <td className="py-1 pr-2 text-right font-mono">{inr(c.counted_total_inr ?? 0)}</td>
+                  <td className="py-1 pr-2 text-right font-mono">{hasHandover ? inr(c.float_left_total_inr ?? 0) : '—'}</td>
+                  <td className="py-1 text-right font-mono">{hasHandover ? inr(c.handover_inr ?? 0) : '—'}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }
 

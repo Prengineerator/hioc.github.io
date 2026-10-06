@@ -5,6 +5,7 @@ import { errorResponse, notFound, parseJsonBody } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { expenseCategoryLabel, isExpenseCategory } from '@/lib/cash/expenses';
 import { writeDayExpenses } from '@/lib/cash/dayServer';
+import { isHandoverMovement } from '@/lib/cash/day';
 
 export const dynamic = 'force-dynamic';
 
@@ -100,7 +101,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   };
   if (movement.voided_at) return errorResponse(409, 'This expense was undone, so it can no longer be tagged.');
   if (movement.direction !== 'out') return errorResponse(400, 'Only a cash out can be an expense');
-  if ((movement.reason ?? '').trim().toLowerCase().startsWith('day close handover')) {
+  if (isHandoverMovement(movement.reason)) {
     return errorResponse(400, 'The day-close handover is not an expense');
   }
 

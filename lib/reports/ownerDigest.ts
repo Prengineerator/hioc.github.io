@@ -18,7 +18,15 @@
 import { CAFE_NAME } from '@/lib/constants';
 import { escapeHtml, staffEmailShell } from '@/lib/staff/emails';
 import { normalizeEmail } from '@/lib/email';
-import { REPORT_METHODS, type Report } from '@/lib/reports/reconcile';
+import {
+  REPORT_METHODS,
+  closingCountRows,
+  closingDayOf,
+  istDateOf,
+  type CashDayRow,
+  type ClosingCountRow,
+  type Report,
+} from '@/lib/reports/reconcile';
 
 export type ReportKind = 'daily' | 'weekly' | 'monthly';
 export const REPORT_KINDS: readonly ReportKind[] = ['daily', 'weekly', 'monthly'];
@@ -285,6 +293,155 @@ function aov(r: Report): number {
   return r.totals.orders > 0 ? r.totals.netSalesInr / r.totals.orders : 0;
 }
 
+// ── The cash drawer ─────────────────────────────────────────────────────────
+
+interface DrawerLine {
+  k: string;
+  v: string;
+  style?: string;
+}
+
+interface DrawerSection {
+  heading: string;
+  lines: DrawerLine[];
+  /** A closed day's count by denomination. */
+  count?: { rows: ClosingCountRow[]; countedInr: number; floatLeftInr: number | null };
+  note?: string;
+}
+
+const signed = (n: number) => `${n >= 0 ? '+' : '−'}${rupees(Math.abs(n))}`;
+const varianceStyle = (n: number) => (n < 0 ? 'color:#b42318;font-weight:bold;' : 'font-weight:bold;');
+
+/** 'Mon, 5 Oct, 3:02 pm' in IST. */
+function istTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+/** One cash day, the way it was closed: float in, the day's cash, expected vs counted, what left the drawer. */
+function cashDayLines(c: CashDayRow): DrawerLine[] {
+  const lines: DrawerLine[] = [{ k: 'Opened', v: istTime(c.opened_at) }];
+  if (c.status !== 'closed') {
+    lines.push({ k: 'Opening float', v: rupees(c.opening_total_inr ?? 0) });
+    lines.push({ k: 'Closing count', v: 'not counted — the day is still open', style: 'color:#b42318;font-weight:bold;' });
+    return lines;
+  }
+  const os = c.over_short_inr ?? 0;
+  const reason = (c.close_reason || c.notes || '').trim();
+  lines.push({ k: 'Closed', v: istTime(c.closed_at) });
+  lines.push({ k: 'Opening float', v: rupees(c.opening_total_inr ?? 0) });
+  if (c.cash_sales_inr !== null && c.cash_sales_inr !== undefined) {
+    const n = c.cash_sales_count;
+    lines.push({ k: `Cash sales${n ? ` (${n})` : ''}`, v: `+${rupees(c.cash_sales_inr)}` });
+  }
+  if (c.cash_refunds_inr) lines.push({ k: 'Cash refunds', v: `−${rupees(c.cash_refunds_inr)}` });
+  if (c.cash_in_inr) lines.push({ k: 'Cash in', v: `+${rupees(c.cash_in_inr)}` });
+  if (c.cash_out_inr) lines.push({ k: 'Cash out', v: `−${rupees(c.cash_out_inr)}` });
+  if (c.expenses_inr) lines.push({ k: 'of which expenses', v: `−${rupees(c.expenses_inr)}` });
+  lines.push({ k: 'Expected in drawer', v: rupees(c.expected_cash_inr ?? 0) });
+  lines.push({ k: 'Counted at close', v: rupees(c.counted_total_inr ?? 0), style: 'font-weight:bold;' });
+  lines.push({ k: 'Over / short', v: signed(os), style: varianceStyle(os) });
+  if (os !== 0 && reason) lines.push({ k: 'Reason', v: reason });
+  if (c.handover_inr !== null && c.handover_inr !== undefined) {
+    lines.push({ k: 'Handed over to owner/bank', v: rupees(c.handover_inr) });
+    lines.push({ k: 'Float left in drawer', v: rupees(c.float_left_total_inr ?? 0) });
+  }
+  return lines;
+}
+
+/** The cash-drawer sections of an email: per cash day for a daily report, totals for a range. */
+export function drawerSections(period: ReportPeriod, report: Report): DrawerSection[] {
+  if (period.kind === 'daily') {
+    const day = report.days[0];
+    const cashDays = day?.cashDays ?? [];
+    if (cashDays.length === 0) return [{ heading: 'Cash drawer', lines: [{ k: 'Cash day', v: 'not opened' }] }];
+    return cashDays.map((c, i) => {
+      const sec: DrawerSection = {
+        heading: cashDays.length > 1 ? `Cash drawer — cash day ${i + 1} of ${cashDays.length}` : 'Cash drawer',
+        lines: cashDayLines(c),
+      };
+      if (c.status === 'closed') {
+        sec.count = { rows: closingCountRows(c), countedInr: c.counted_total_inr ?? 0, floatLeftInr: c.float_left_total_inr ?? null };
+        if (c.closed_at && istDateOf(c.closed_at) > c.business_date) {
+          sec.note = `Closed after midnight: cash taken after 12 am is in this drawer, but Money in counts it on ${shortDate(istDateOf(c.closed_at))}.`;
+        }
+      }
+      return sec;
+    });
+  }
+
+  const d = report.drawer;
+  const daysClosed = report.days.filter((x) => x.cashDays.some((c) => c.status === 'closed')).length;
+  const lines: DrawerLine[] = [
+    { k: 'Days closed', v: `${daysClosed} of ${report.days.length}${d.open ? ` · ${d.open} still open` : ''}` },
+  ];
+  if (d.closed) {
+    lines.push({ k: `Cash sales${d.cashSalesCount ? ` (${d.cashSalesCount})` : ''}`, v: rupees(d.cashSalesInr) });
+    if (d.cashRefundsInr) lines.push({ k: 'Cash refunds', v: `−${rupees(d.cashRefundsInr)}` });
+    if (d.cashInInr || d.cashOutInr) lines.push({ k: 'Cash in / out', v: `${rupees(d.cashInInr)} / −${rupees(d.cashOutInr)}` });
+    if (d.expensesInr) lines.push({ k: 'Expenses from the drawer', v: `−${rupees(d.expensesInr)}` });
+    lines.push({ k: 'Over / short', v: signed(d.overShortInr), style: varianceStyle(d.overShortInr) });
+    lines.push({ k: 'Handed over to owner/bank', v: rupees(d.handoverInr), style: 'font-weight:bold;' });
+    if (d.floatLeftInr !== null) lines.push({ k: 'Float left in drawer', v: rupees(d.floatLeftInr) });
+  } else {
+    lines.push({ k: 'Over / short', v: '—' });
+  }
+  const sections: DrawerSection[] = [{ heading: 'Cash drawer', lines }];
+
+  // A week fits a line per day: what each close counted and how it tied out.
+  if (period.kind === 'weekly' && d.closed) {
+    sections.push({
+      heading: 'Closing count by day',
+      lines: report.days.flatMap((x) => {
+        const c = closingDayOf(x);
+        if (!c) return [];
+        const label = toUtc(x.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', timeZone: 'UTC' });
+        const os = x.cashDays.reduce((s, cd) => s + (cd.status === 'closed' ? cd.over_short_inr ?? 0 : 0), 0);
+        return [{ k: `${label} · ${signed(os)}`, v: rupees(c.counted_total_inr ?? 0), style: os < 0 ? 'color:#b42318;' : '' }];
+      }),
+    });
+  }
+  return sections;
+}
+
+function countTableHtml(count: NonNullable<DrawerSection['count']>): string {
+  if (count.rows.length === 0) {
+    return `<tr><td colspan="2" style="padding:6px 0 0;font-size:12px;color:#6b6b6b;">Nothing counted by denomination.</td></tr>`;
+  }
+  const th = 'padding:8px 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:#6b6b6b;font-weight:normal;';
+  const td = 'padding:3px 0;font-size:13px;';
+  const body = count.rows
+    .map(
+      (r) =>
+        `<tr><td style="${td}">${escapeHtml(r.label)}</td><td style="${td}text-align:right;">${r.count}</td><td style="${td}text-align:right;">${escapeHtml(rupees(r.amountInr))}</td><td style="${td}text-align:right;color:#6b6b6b;">${r.floatLeft}</td></tr>`,
+    )
+    .join('');
+  const total = `<tr><td style="${td}font-weight:bold;border-top:1px solid #e5e0d8;">Total</td><td style="${td}border-top:1px solid #e5e0d8;"></td><td style="${td}text-align:right;font-weight:bold;border-top:1px solid #e5e0d8;">${escapeHtml(rupees(count.countedInr))}</td><td style="${td}text-align:right;color:#6b6b6b;border-top:1px solid #e5e0d8;">${count.floatLeftInr === null ? '' : escapeHtml(rupees(count.floatLeftInr))}</td></tr>`;
+  return `<tr><td colspan="2">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+      <tr><th align="left" style="${th}">Closing count</th><th align="right" style="${th}">Count</th><th align="right" style="${th}">Amount</th><th align="right" style="${th}">Left as float</th></tr>
+      ${body}${total}
+    </table>
+  </td></tr>`;
+}
+
+function countTableText(count: NonNullable<DrawerSection['count']>): string[] {
+  if (count.rows.length === 0) return ['  Closing count: nothing counted by denomination'];
+  return [
+    '  Closing count by denomination:',
+    ...count.rows.map((r) => `    ${r.label} × ${r.count} = ${rupees(r.amountInr)}${r.floatLeft ? ` (${r.floatLeft} left as float)` : ''}`),
+    `    Total: ${rupees(count.countedInr)}`,
+  ];
+}
+
 export interface DigestInput {
   period: ReportPeriod;
   report: Report;
@@ -361,30 +518,18 @@ export function renderOwnerDigest({ period, report, previous, items, reportUrl }
       )
     : '';
 
-  // The drawer: a single day shows how it closed; a range shows the sum.
-  // Expenses punched from the drawer (a part of cash out) — shown whenever there were any.
-  const expenseRow = t.expensesInr ? row('Expenses from the drawer', `−${rupees(t.expensesInr)}`) : '';
-  const drawerRows = (() => {
-    if (period.kind === 'daily') {
-      const cd = report.days[0]?.cashDay;
-      if (!cd) return row('Cash day', 'not opened') + expenseRow;
-      if (cd.status !== 'closed') return row('Cash day', 'still open — not closed') + expenseRow;
-      const os = cd.over_short_inr ?? 0;
-      return (
-        row('Expected in drawer', rupees(cd.expected_cash_inr ?? 0)) +
-        row('Counted', rupees(cd.counted_total_inr ?? 0)) +
-        row('Over / short', `${os >= 0 ? '+' : '−'}${rupees(Math.abs(os))}`, os < 0 ? 'color:#b42318;font-weight:bold;' : 'font-weight:bold;') +
-        expenseRow
-      );
-    }
-    const os = t.overShortInr;
-    return (
-      (t.cashInInr || t.cashOutInr ? row('Cash in / out', `${rupees(t.cashInInr)} / −${rupees(t.cashOutInr)}`) : '') +
-      expenseRow +
-      row('Days closed', `${t.cashDaysClosed} of ${report.days.length}`) +
-      row('Over / short', t.cashDaysClosed ? `${os >= 0 ? '+' : '−'}${rupees(Math.abs(os))}` : '—', os < 0 ? 'color:#b42318;font-weight:bold;' : 'font-weight:bold;')
-    );
-  })();
+  // The drawer, by cash day (lib/reports/reconcile.ts): a single day shows
+  // each close in full with its count by denomination; a range adds them up.
+  const drawerHtml = drawerSections(period, report)
+    .map((sec) =>
+      section(
+        sec.heading,
+        sec.lines.map((l) => row(l.k, l.v, l.style)).join('') +
+          (sec.count ? countTableHtml(sec.count) : '') +
+          (sec.note ? `<tr><td colspan="2" style="padding:6px 0 0;font-size:12px;color:#6b6b6b;line-height:1.5;">${escapeHtml(sec.note)}</td></tr>` : ''),
+      ),
+    )
+    .join('');
 
   // Weekly: every day. Monthly: the best and the slowest trading day.
   const daysHtml = (() => {
@@ -425,9 +570,9 @@ export function renderOwnerDigest({ period, report, previous, items, reportUrl }
      ${section('Money in', moneyRows)}
      ${section('Sales', salesRows)}
      ${daysHtml}
-     ${section('Cash drawer', drawerRows)}
+     ${drawerHtml}
      <p style="text-align:center;margin:24px 0 8px;"><a href="${escapeHtml(reportUrl)}" style="display:inline-block;background:#b08968;color:#fffdfa;text-decoration:none;font-weight:bold;padding:10px 20px;border-radius:6px;font-size:14px;">Open the full report</a></p>
-     <p style="font-size:11px;color:#8a8a8a;line-height:1.5;margin-top:16px;">Sales count on the day an order was placed; money on the day it was received. Change what you get and who gets it on Owner → Reports.</p>`,
+     <p style="font-size:11px;color:#8a8a8a;line-height:1.5;margin-top:16px;">Sales count on the day an order was placed; money on the day it was received; the cash drawer by cash day, from when it was opened to when it was counted and closed. Change what you get and who gets it on Owner → Reports.</p>`,
   );
 
   const text = [
@@ -440,6 +585,13 @@ export function renderOwnerDigest({ period, report, previous, items, reportUrl }
     'Money in:',
     ...REPORT_METHODS.map((m) => `  ${METHOD_LABEL[m]}: ${rupees(t.received[m])}`),
     ...(t.refundsTotalInr ? [`  Refunds: −${rupees(t.refundsTotalInr)}`] : []),
+    ...drawerSections(period, report).flatMap((sec) => [
+      '',
+      `${sec.heading}:`,
+      ...sec.lines.map((l) => `  ${l.k}: ${l.v}`),
+      ...(sec.count ? countTableText(sec.count) : []),
+      ...(sec.note ? [`  ${sec.note}`] : []),
+    ]),
     '',
     `Full report: ${reportUrl}`,
   ].join('\n');
