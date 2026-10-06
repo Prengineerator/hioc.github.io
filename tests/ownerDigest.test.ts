@@ -299,7 +299,9 @@ describe('renderOwnerDigest', () => {
       '₹11,900',
       '−₹50',
       'gave change twice',
-      'Handed over to owner/bank',
+      'Expenses',
+      '−₹350',
+      'Handed over to owner',
       '₹9,900',
       'Float left in drawer',
       'Closing count',
@@ -310,10 +312,27 @@ describe('renderOwnerDigest', () => {
       expect(email.html).toContain(part);
     }
     expect(email.text).toContain('Counted at close: ₹11,900');
+    expect(email.text).not.toContain('Cash out to owner'); // all its cash out was an expense
+    expect(email.text).toContain('Handed over to owner: ₹9,900');
     expect(email.text).toContain('₹500 × 18 = ₹9,000 (2 left as float)');
     expect(email.text).toContain('₹200 × 5 = ₹1,000');
     expect(email.text).not.toContain('₹10 ×'); // nothing counted, no row
     expect(email.text).toContain('Total: ₹11,900');
+  });
+
+  it('counts any cash out that is not an expense as handed to the owner', () => {
+    const email = renderOwnerDigest({
+      period: { kind: 'daily', from: day, to: day },
+      // ₹1,350 out: ₹350 of expenses, ₹1,000 taken to the owner during the day.
+      report: report(day, day, { orders, cashDays: [closedDay({ cash_out_inr: 1350, expenses_inr: 350, expected_cash_inr: 10950, counted_total_inr: 10900, handover_inr: 8900 })] }),
+      previous: null,
+      items: [],
+      reportUrl: 'https://x',
+    });
+    expect(email.text).toContain('Expenses: −₹350');
+    expect(email.text).toContain('Cash out to owner: −₹1,000');
+    expect(email.text).toContain('Handed over at close: ₹8,900');
+    expect(email.text).toContain('Handed over to owner (total): ₹9,900');
   });
 
   it('says a daily drawer is still open rather than showing a count', () => {
@@ -338,25 +357,23 @@ describe('renderOwnerDigest', () => {
         report: report('2026-09-22', '2026-09-28', {
           orders,
           cashDays,
-          // A close's handover is not a cash out, wherever it lands.
-          movements: [{ direction: 'out', amount_inr: 9900, created_at: '2026-09-28T19:46:00Z', reason: 'Day close handover (2026-09-28): cash taken out to owner/bank' }],
         }),
         previous: null,
         items: [],
         reportUrl: 'https://x',
       });
+    // ₹300 out during the day, none of it an expense: it went to the owner.
     const plain = send([closedDay({ cash_out_inr: 300, expenses_inr: 0 })]);
-    expect(plain.html).toContain('Cash in / out');
-    expect(plain.html).toContain('−₹300');
-    expect(plain.html).not.toContain('Expenses from the drawer');
-    expect(plain.html).toContain('Handed over to owner/bank');
-    expect(plain.html).toContain('₹9,900');
+    expect(plain.text).not.toContain('Expenses from the drawer');
+    expect(plain.text).toContain('Handed over to owner: ₹10,200'); // ₹300 + ₹9,900 at close
+    expect(plain.text).toContain('of which cash out during the day: ₹300');
     expect(plain.html).toContain('Closing count by day');
 
+    // ₹380 out, ₹80 of it expenses: the expenses stand apart, the rest went to the owner.
     const withExpense = send([closedDay({ cash_out_inr: 380, expenses_inr: 80 })]);
-    expect(withExpense.html).toContain('Expenses from the drawer');
-    expect(withExpense.html).toContain('−₹80');
-    expect(withExpense.html).toContain('−₹380'); // cash out still includes the expense
+    expect(withExpense.text).toContain('Expenses from the drawer: −₹80');
+    expect(withExpense.text).toContain('Handed over to owner: ₹10,200');
+    expect(withExpense.text).not.toContain('₹380');
   });
 
   it('lists every day on a weekly report and best/slowest on a monthly one', () => {

@@ -20,6 +20,7 @@ import { escapeHtml, staffEmailShell } from '@/lib/staff/emails';
 import { normalizeEmail } from '@/lib/email';
 import {
   REPORT_METHODS,
+  cashDayOuts,
   closingCountRows,
   closingDayOf,
   istDateOf,
@@ -344,16 +345,25 @@ function cashDayLines(c: CashDayRow): DrawerLine[] {
   }
   if (c.cash_refunds_inr) lines.push({ k: 'Cash refunds', v: `−${rupees(c.cash_refunds_inr)}` });
   if (c.cash_in_inr) lines.push({ k: 'Cash in', v: `+${rupees(c.cash_in_inr)}` });
-  if (c.cash_out_inr) lines.push({ k: 'Cash out', v: `−${rupees(c.cash_out_inr)}` });
-  if (c.expenses_inr) lines.push({ k: 'of which expenses', v: `−${rupees(c.expenses_inr)}` });
+  // Expenses on their own; any other cash out went to the owner (lib/reports/reconcile.ts).
+  const outs = cashDayOuts(c);
+  if (outs.expensesInr) lines.push({ k: 'Expenses', v: `−${rupees(outs.expensesInr)}` });
+  if (outs.cashOutInr) lines.push({ k: 'Cash out to owner', v: `−${rupees(outs.cashOutInr)}` });
   lines.push({ k: 'Expected in drawer', v: rupees(c.expected_cash_inr ?? 0) });
   lines.push({ k: 'Counted at close', v: rupees(c.counted_total_inr ?? 0), style: 'font-weight:bold;' });
   lines.push({ k: 'Over / short', v: signed(os), style: varianceStyle(os) });
   if (os !== 0 && reason) lines.push({ k: 'Reason', v: reason });
-  if (c.handover_inr !== null && c.handover_inr !== undefined) {
-    lines.push({ k: 'Handed over to owner/bank', v: rupees(c.handover_inr) });
+  const hasHandover = c.handover_inr !== null && c.handover_inr !== undefined;
+  if (hasHandover) {
+    lines.push(
+      outs.cashOutInr
+        ? { k: 'Handed over at close', v: rupees(outs.handoverInr) }
+        : { k: 'Handed over to owner', v: rupees(outs.handoverInr), style: 'font-weight:bold;' },
+    );
     lines.push({ k: 'Float left in drawer', v: rupees(c.float_left_total_inr ?? 0) });
   }
+  // Cash out during the day went to the owner too: the total they got.
+  if (outs.cashOutInr) lines.push({ k: 'Handed over to owner (total)', v: rupees(outs.toOwnerInr), style: 'font-weight:bold;' });
   return lines;
 }
 
@@ -386,10 +396,11 @@ export function drawerSections(period: ReportPeriod, report: Report): DrawerSect
   if (d.closed) {
     lines.push({ k: `Cash sales${d.cashSalesCount ? ` (${d.cashSalesCount})` : ''}`, v: rupees(d.cashSalesInr) });
     if (d.cashRefundsInr) lines.push({ k: 'Cash refunds', v: `−${rupees(d.cashRefundsInr)}` });
-    if (d.cashInInr || d.cashOutInr) lines.push({ k: 'Cash in / out', v: `${rupees(d.cashInInr)} / −${rupees(d.cashOutInr)}` });
+    if (d.cashInInr) lines.push({ k: 'Cash in', v: `+${rupees(d.cashInInr)}` });
     if (d.expensesInr) lines.push({ k: 'Expenses from the drawer', v: `−${rupees(d.expensesInr)}` });
     lines.push({ k: 'Over / short', v: signed(d.overShortInr), style: varianceStyle(d.overShortInr) });
-    lines.push({ k: 'Handed over to owner/bank', v: rupees(d.handoverInr), style: 'font-weight:bold;' });
+    lines.push({ k: 'Handed over to owner', v: rupees(d.toOwnerInr), style: 'font-weight:bold;' });
+    if (d.cashOutInr) lines.push({ k: 'of which cash out during the day', v: rupees(d.cashOutInr) });
     if (d.floatLeftInr !== null) lines.push({ k: 'Float left in drawer', v: rupees(d.floatLeftInr) });
   } else {
     lines.push({ k: 'Over / short', v: '—' });

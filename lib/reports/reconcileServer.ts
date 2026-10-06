@@ -104,9 +104,8 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
         .order('processed_at')
         .range(a, b) as unknown as PromiseLike<PageResult<RefundRow>>,
     ),
-    // `reason` marks a close's handover. `category` and `voided_at` arrived with
-    // the cash-expenses migration; read without them before that.
-    withOptional<CashMovementRow>('direction, amount_inr, created_at, reason', 'category, voided_at', (cols) =>
+    // `category` and `voided_at` arrived with the cash-expenses migration; read without them before that.
+    withOptional<CashMovementRow>('direction, amount_inr, created_at', 'category, voided_at', (cols) =>
       fetchAll<CashMovementRow>((a, b) =>
         admin
           .from('cash_movements')

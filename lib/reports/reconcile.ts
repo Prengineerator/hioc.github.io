@@ -21,10 +21,13 @@
 // café runs past midnight, so a day's drawer can hold cash a calendar day would
 // put on the next date; re-deriving the drawer from calendar days could never
 // tie out to the over/short. A cash day sits on the date it was OPENED
-// (cash_days.business_date). The cash a close takes out to the owner/bank is a
-// cash_movements 'out' row too (for the drawer chain), but it is the day's
-// handover, not a cash out: it is left out of cashOutInr and reported as the
-// day's `handover_inr`.
+// (cash_days.business_date).
+//
+// CASH OUT, the owner's way: an EXPENSE (a cash out with a category) is money
+// spent and is always reported on its own; EVERY OTHER cash out is cash handed
+// to the owner — taken out during the day, or the handover a close writes
+// (cash_days.handover_inr, also a cash_movements 'out' row for the chain).
+// cashOutInr never includes expenses.
 //
 // HIOC Ritual (docs/COFFEE-PASS-SPEC.md §7, CP-D21): revenue is counted when the
 // pass is SOLD, so a pass sale is an ordinary paid order in every number below
@@ -34,7 +37,6 @@
 
 import type { CashDenoms, PaymentMethod } from '@/lib/types';
 import { DENOMINATIONS, LEGACY_COINS_KEY } from '@/lib/cash/denoms';
-import { isHandoverMovement } from '@/lib/cash/day';
 
 export const REPORT_METHODS: readonly PaymentMethod[] = [
   'cash',
@@ -158,8 +160,6 @@ export interface CashMovementRow {
   category?: string | null;
   /** Set when an expense was undone (same migration); such a row never left the drawer. */
   voided_at?: string | null;
-  /** Identifies a day close's handover row (isHandoverMovement), which is not a cash out. */
-  reason?: string | null;
 }
 
 /** A cash day, with the figures frozen at its close (null on a day still open, or closed before they were kept). */
@@ -175,7 +175,7 @@ export interface CashDayRow {
   cash_refunds_inr?: number | null;
   cash_in_inr?: number | null;
   cash_out_inr?: number | null;
-  /** Of cash_out_inr, the store expenses (2026-10-cash-expenses.sql; absent before it). */
+  /** Of cash_out_inr, the store expenses (2026-10-cash-expenses.sql; absent before it — then none). */
   expenses_inr?: number | null;
   expected_cash_inr: number | null;
   counted_total_inr: number | null;
@@ -240,9 +240,9 @@ export interface ReportDay {
   netReceivedInr: number;
   tipsInr: number;
   cashInInr: number;
-  /** Cash taken out of the drawer this day, NOT counting a close's handover to the owner/bank. */
+  /** Cash handed to the owner this day: every cash out that is not an expense, a close's handover included. */
   cashOutInr: number;
-  /** Of cashOutInr: expenses punched from the drawer (a categorised cash out). */
+  /** Expenses paid from the drawer this day (categorised cash outs) — apart from cashOutInr. */
   expensesInr: number;
   /** The cash days opened on this date, oldest first — usually one. */
   cashDays: CashDayRow[];
@@ -262,13 +262,16 @@ export interface DrawerTotals {
   cashSalesCount: number;
   cashRefundsInr: number;
   cashInInr: number;
-  cashOutInr: number;
-  /** Of cashOutInr, the store expenses. */
+  /** Expenses paid from the drawer. */
   expensesInr: number;
+  /** Cash taken out to the owner during the day (every cash out that is not an expense). */
+  cashOutInr: number;
   /** Σ over/short (negative = short). */
   overShortInr: number;
-  /** Σ cash taken out to the owner/bank at the closes. */
+  /** Cash handed over to the owner at the closes. */
   handoverInr: number;
+  /** Everything the owner got: cashOutInr + handoverInr. */
+  toOwnerInr: number;
   /** What the last close in the range left in the drawer; null when none recorded it. */
   floatLeftInr: number | null;
 }
@@ -394,13 +397,13 @@ export function buildReport(input: ReportInput): Report {
 
   for (const m of input.movements) {
     if (m.voided_at) continue; // an undone expense left no cash out
-    if (m.direction === 'out' && isHandoverMovement(m.reason)) continue; // the close's handover — on its cash day
     const day = dayOf(m.created_at);
     if (!day) continue;
     if (m.direction === 'in') day.cashInInr += m.amount_inr ?? 0;
     else if (m.direction === 'out') {
-      day.cashOutInr += m.amount_inr ?? 0;
+      // An expense is money spent; any other cash out went to the owner.
       if (m.category) day.expensesInr += m.amount_inr ?? 0;
+      else day.cashOutInr += m.amount_inr ?? 0;
     }
   }
 
@@ -463,6 +466,20 @@ export function buildReport(input: ReportInput): Report {
   return { from: input.from, to: input.to, days: list, totals, drawer: drawerTotals(list.flatMap((d) => d.cashDays)) };
 }
 
+/**
+ * A closed cash day's cash out, the owner's way (see the header): expenses on
+ * their own, every other cash out handed to the owner during the day, plus the
+ * handover at the close. A day without an expense total (closed before it was
+ * kept) counts all its cash out as the owner's.
+ */
+export function cashDayOuts(c: CashDayRow): { expensesInr: number; cashOutInr: number; handoverInr: number; toOwnerInr: number } {
+  const totalOut = c.cash_out_inr ?? 0;
+  const expensesInr = Math.min(c.expenses_inr ?? 0, totalOut);
+  const cashOutInr = totalOut - expensesInr;
+  const handoverInr = c.handover_inr ?? 0;
+  return { expensesInr, cashOutInr, handoverInr, toOwnerInr: cashOutInr + handoverInr };
+}
+
 /** The range's drawer, from its cash days (oldest first). */
 export function drawerTotals(cashDays: CashDayRow[]): DrawerTotals {
   const t: DrawerTotals = {
@@ -473,10 +490,11 @@ export function drawerTotals(cashDays: CashDayRow[]): DrawerTotals {
     cashSalesCount: 0,
     cashRefundsInr: 0,
     cashInInr: 0,
-    cashOutInr: 0,
     expensesInr: 0,
+    cashOutInr: 0,
     overShortInr: 0,
     handoverInr: 0,
+    toOwnerInr: 0,
     floatLeftInr: null,
   };
   for (const c of cashDays) {
@@ -484,15 +502,17 @@ export function drawerTotals(cashDays: CashDayRow[]): DrawerTotals {
       t.open += 1;
       continue;
     }
+    const outs = cashDayOuts(c);
     t.closed += 1;
     t.cashSalesInr += c.cash_sales_inr ?? 0;
     t.cashSalesCount += c.cash_sales_count ?? 0;
     t.cashRefundsInr += c.cash_refunds_inr ?? 0;
     t.cashInInr += c.cash_in_inr ?? 0;
-    t.cashOutInr += c.cash_out_inr ?? 0;
-    t.expensesInr += c.expenses_inr ?? 0;
+    t.expensesInr += outs.expensesInr;
+    t.cashOutInr += outs.cashOutInr;
     t.overShortInr += c.over_short_inr ?? 0;
-    t.handoverInr += c.handover_inr ?? 0;
+    t.handoverInr += outs.handoverInr;
+    t.toOwnerInr += outs.toOwnerInr;
     if (c.float_left_total_inr !== null && c.float_left_total_inr !== undefined) t.floatLeftInr = c.float_left_total_inr;
   }
   return t;
@@ -578,7 +598,7 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['Net received (INR)', (d) => d.netReceivedInr],
   ['Tips (INR)', (d) => d.tipsInr],
   ['Cash in (INR)', (d) => d.cashInInr],
-  ['Cash out (INR)', (d) => d.cashOutInr],
+  ['Cash out to owner (INR)', (d) => d.cashOutInr],
   ['Expenses (INR)', (d) => d.expensesInr],
   // The drawer, by the cash day opened on the date (see the header). Additive
   // figures add up every close of the date; the count, the expected cash and
@@ -589,7 +609,7 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['Drawer expected (INR)', (d) => closingDayOf(d)?.expected_cash_inr ?? ''],
   ['Drawer counted (INR)', (d) => closingDayOf(d)?.counted_total_inr ?? ''],
   ['Over/short (INR)', (d) => closedSum(d, (c) => c.over_short_inr)],
-  ['Handed over (INR)', (d) => closedSum(d, (c) => c.handover_inr)],
+  ['Handed over to owner (INR)', (d) => closedSum(d, (c) => cashDayOuts(c).toOwnerInr)],
   ['Float left (INR)', (d) => closingDayOf(d)?.float_left_total_inr ?? ''],
   ...DENOMINATIONS.map(
     (den): [string, (d: ReportDay) => string | number] => [
@@ -622,7 +642,7 @@ export function reportCsv(report: Report): string {
   const drawerTotal: Record<string, number> = {
     'Drawer cash sales (INR)': report.drawer.cashSalesInr,
     'Over/short (INR)': t.overShortInr,
-    'Handed over (INR)': report.drawer.handoverInr,
+    'Handed over to owner (INR)': report.drawer.toOwnerInr,
   };
   const totalRow = CSV_COLUMNS.map(([h, f]) => csvCell(h in drawerTotal ? drawerTotal[h] : f(totalDay))).join(',');
   return [header, ...rows, totalRow].join('\n') + '\n';

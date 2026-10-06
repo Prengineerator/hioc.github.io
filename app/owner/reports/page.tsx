@@ -12,6 +12,7 @@ import { flags } from '@/lib/flags';
 import { reportPassRows } from '@/lib/passes/ownerUi';
 import { ReportEmailSettingsPanel } from '@/components/owner/ReportEmailSettingsPanel';
 import {
+  cashDayOuts,
   closingCountRows,
   closingDayOf,
   parseRange,
@@ -309,12 +310,16 @@ function CashDrawer({ report }: { report: Report }) {
         <Row k={`Cash sales${d.cashSalesCount ? ` (${d.cashSalesCount})` : ''}`} v={inr(d.cashSalesInr)} />
         <Row k="Cash refunds" v={`− ${inr(d.cashRefundsInr)}`} />
         <Row k="Cash in" v={inr(d.cashInInr)} />
-        <Row k="Cash out" v={`− ${inr(d.cashOutInr)}`} />
-        {d.expensesInr > 0 ? <Row k="of which expenses" v={`− ${inr(d.expensesInr)}`} /> : null}
+        <Row k="Expenses" v={`− ${inr(d.expensesInr)}`} />
         <Row k="Over / short" v={d.closed ? signed(d.overShortInr) : '—'} strong />
-        <Row k="Handed over to owner/bank" v={inr(d.handoverInr)} strong />
+        <Row k="Handed over to owner" v={inr(d.toOwnerInr)} strong />
+        {d.cashOutInr > 0 ? <Row k="of which cash out during the day" v={inr(d.cashOutInr)} /> : null}
         <Row k="Float left in drawer" v={d.floatLeftInr === null ? '—' : inr(d.floatLeftInr)} />
       </dl>
+      <p className="mt-2 text-xs text-muted">
+        Expenses are money spent from the drawer. Every other cash out is cash handed to the owner — taken out during
+        the day or at the close.
+      </p>
       {d.open ? (
         <p className="mt-2 text-xs text-amber-800">
           {d.open} cash day{d.open === 1 ? ' is' : 's are'} still open — not counted yet, so not in these totals.
@@ -338,6 +343,7 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
   const os = c.over_short_inr ?? 0;
   const reason = (c.close_reason || c.notes || '').trim();
   const hasHandover = c.handover_inr !== null && c.handover_inr !== undefined;
+  const outs = cashDayOuts(c);
   const rows = closed ? closingCountRows(c) : [];
   return (
     <details open={open} className="group rounded-md border border-line bg-white">
@@ -373,16 +379,17 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
               />
               <Row k="− Cash refunds" v={inr(c.cash_refunds_inr ?? 0)} />
               <Row k="+ Cash in" v={inr(c.cash_in_inr ?? 0)} />
-              <Row k="− Cash out" v={inr(c.cash_out_inr ?? 0)} />
-              {c.expenses_inr ? <Row k="of which expenses" v={inr(c.expenses_inr)} /> : null}
+              <Row k="− Expenses" v={inr(outs.expensesInr)} />
+              <Row k="− Cash out to owner" v={inr(outs.cashOutInr)} />
               <Row k="= Expected in drawer" v={inr(c.expected_cash_inr ?? 0)} />
               <Row k="Counted at close" v={inr(c.counted_total_inr ?? 0)} strong />
               <Row k="Over / short" v={os === 0 ? 'ties out' : signed(os)} strong />
               {os !== 0 && reason ? (
                 <dd className="col-span-2 text-xs text-muted">Reason: {reason}</dd>
               ) : null}
-              <Row k="Handed over to owner/bank" v={hasHandover ? inr(c.handover_inr ?? 0) : '—'} />
+              <Row k="Handed over at close" v={hasHandover ? inr(outs.handoverInr) : '—'} />
               <Row k="Float left in drawer" v={hasHandover ? inr(c.float_left_total_inr ?? 0) : '—'} />
+              <Row k="Handed over to owner (total)" v={inr(outs.toOwnerInr)} strong />
             </>
           ) : null}
         </dl>
