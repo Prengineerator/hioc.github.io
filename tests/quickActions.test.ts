@@ -123,7 +123,7 @@ describe('transitionExtra', () => {
 });
 
 describe('canRemind', () => {
-  const base = { status: 'ready', customer_phone: '+919999999999', order_type: 'takeaway' } as const;
+  const base = { status: 'ready', customer_phone: '+919999999999', order_type: 'takeaway', table_id: null } as const;
 
   it('Ready pickup order with a phone', () => {
     expect(canRemind(base)).toBe(true);
@@ -137,7 +137,10 @@ describe('canRemind', () => {
     expect(canRemind({ ...base, customer_phone: '' })).toBe(false);
     expect(canRemind({ ...base, customer_phone: '  ' })).toBe(false);
   });
-  it('not for dine-in', () => {
-    expect(canRemind({ ...base, order_type: 'dine_in' })).toBe(false);
+  it('not for dine-in at a table', () => {
+    expect(canRemind({ ...base, order_type: 'dine_in', table_id: 'table-1' })).toBe(false);
+  });
+  it('a website dine-in (no table) is collected at the counter, so it can be reminded', () => {
+    expect(canRemind({ ...base, order_type: 'dine_in' })).toBe(true);
   });
 });

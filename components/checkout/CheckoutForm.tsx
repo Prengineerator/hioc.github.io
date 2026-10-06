@@ -80,9 +80,14 @@ interface QuoteResponse {
 export function CheckoutForm({
   settings,
   openState,
+  orderType,
+  onOrderTypeChange: setOrderType,
 }: {
   settings: StoreSettings | null;
   openState: StoreOpenState | null;
+  // Owned by the checkout page so the cart summary shows the same bill.
+  orderType: OrderType;
+  onOrderTypeChange: (next: OrderType) => void;
 }) {
   const router = useRouter();
   const { items, totalPrice, clearCart } = useCart();
@@ -110,7 +115,6 @@ export function CheckoutForm({
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [email, setEmail] = useState(''); // optional — for the e-bill by email
   const [emailError, setEmailError] = useState<string | null>(null);
-  const [orderType, setOrderType] = useState<OrderType>('takeaway');
   const [slotStart, setSlotStart] = useState<string | null>(null); // null = not yet picked
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -328,6 +332,8 @@ export function CheckoutForm({
       coupon_code: nextCoupon || undefined,
       redeem_points: nextPoints || undefined,
       item_ids: items.map((i) => i.menuItemId),
+      // Dine-in has no packaging charge (D5); the quote applies the same rule.
+      order_type: orderType,
     };
     const post = (extra: Record<string, unknown>) =>
       fetch('/api/orders/quote', {
@@ -378,10 +384,11 @@ export function CheckoutForm({
     }
   }
 
+  // Re-quotes on a Takeaway/Dine-in switch too: dine-in drops the packaging.
   useEffect(() => {
     refreshQuote(couponApplied ?? '', pointsApplied ?? 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [totalPrice]);
+  }, [totalPrice, orderType]);
 
   // The session is only known a moment after mount: once it is, and the customer
   // can have a Ritual, ask again with the cart's lines so the cups are priced.

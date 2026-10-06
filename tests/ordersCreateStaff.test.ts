@@ -11,7 +11,8 @@ vi.mock('@/lib/staff/surface', () => ({
 // Handler-level integration test for POST /api/orders — the FND3-2/3 staff
 // order-creation path — exercised end-to-end against a mocked Supabase admin
 // client. Verifies that:
-//  * the web channel is untouched (customer_web, received, name/phone required);
+//  * the web channel is untouched (customer_web, received, name/phone required),
+//    and a website dine-in is a counter pickup with no packaging charge (D5);
 //  * a staff session opens the second channel (staff_pos, starts 'accepted',
 //    attributed via created_by, user_id stays null, no bill at creation);
 //  * dine-in requires a valid active table, snapshots its label, and drops the
@@ -193,12 +194,27 @@ describe('POST /api/orders — web channel (unchanged, FND3-2)', () => {
     expect(noPhone.status).toBe(400);
   });
 
-  it('400s a guest attempting a dine-in order (staff-only channel)', async () => {
+  it('takes a website dine-in order: no packaging, no table, keeps its pickup token', async () => {
     state.sessionUser = { id: 'cust-1' }; // verified web customer — past VERIFY-1
     const res = await POST(
       req({ customer_name: 'Asha', customer_phone: '9000000000', pickup_slot_label: 'ASAP', order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }),
     );
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.channel).toBe('customer_web');
+    expect(state.orderInsert?.order_type).toBe('dine_in');
+    expect(state.orderInsert?.packaging_inr).toBe(0); // D5: dine-in no packaging
+    expect(state.orderInsert?.total_inr).toBe(210); // 200 + 5% GST, no packaging
+    // A customer cannot claim a table from the website; they collect at the counter.
+    expect(state.orderInsert?.table_id).toBeNull();
+    expect(state.orderInsert?.pickup_code).toMatch(/^\d{4}$/);
+    expect(state.orderInsert?.pickup_slot_label).toBe('ASAP');
+  });
+
+  it('still needs a pickup time for a website dine-in order', async () => {
+    state.sessionUser = { id: 'cust-1' };
+    const res = await POST(req({ customer_name: 'Asha', customer_phone: '9000000000', order_type: 'dine_in', items: oneLatte }));
     expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
   });
 });
 

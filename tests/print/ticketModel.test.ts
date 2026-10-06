@@ -140,6 +140,13 @@ describe('buildTicketDoc — kot', () => {
     expect(allText(doc)).not.toMatch(/Table:/);
   });
 
+  it('shows the token for a website dine-in (no table): it is collected at the counter', () => {
+    const doc = buildTicketDoc(order({ order_type: 'dine_in', table_label: '', pickup_code: '4821' }), 'kot');
+    expect(allText(doc)).toContain('Token: 4821');
+    expect(allText(doc)).toContain('Dine-in');
+    expect(allText(doc)).not.toMatch(/Table:/);
+  });
+
   it('includes the KITCHEN ORDER header, addons, and order note', () => {
     const doc = buildTicketDoc(
       order({

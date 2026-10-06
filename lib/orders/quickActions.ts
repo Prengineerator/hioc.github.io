@@ -165,9 +165,12 @@ export function transitionExtra(
 
 /**
  * Whether a "Send pickup reminder" makes sense for this order: a Ready pickup
- * order with a phone number to send to. (Dine-in is served at the table; the
- * server refuses it too.)
+ * order with a phone number to send to. (Dine-in at a table is served there;
+ * the server refuses it too. A website dine-in has no table and is collected.)
  */
-export function canRemind(order: Pick<Order, 'status' | 'customer_phone' | 'order_type'>): boolean {
-  return order.status === 'ready' && order.order_type !== 'dine_in' && Boolean(order.customer_phone?.trim());
+export function canRemind(
+  order: Pick<Order, 'status' | 'customer_phone' | 'order_type' | 'table_id'>,
+): boolean {
+  const servedAtTable = order.order_type === 'dine_in' && Boolean(order.table_id);
+  return order.status === 'ready' && !servedAtTable && Boolean(order.customer_phone?.trim());
 }

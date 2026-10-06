@@ -359,11 +359,11 @@ export async function POST(request: Request) {
     }
     tableId = t.id as string;
     tableLabel = t.label as string;
-  } else if (isDineIn) {
-    // Staff dine-in path: only staff create a dine-in order by table_id in v1.
-    if (!isStaff) {
-      return errorResponse(400, 'Dine-in orders can only be created by staff');
-    }
+  } else if (isDineIn && isStaff) {
+    // Staff dine-in path: the order is served at a table, picked by table_id.
+    // A website dine-in (not staff) has no table: the customer picks it up at
+    // the counter and eats in, so it keeps its pickup slot and token like a
+    // takeaway and differs only in having no packaging charge (D5).
     if (!isUuid(rawTableId)) {
       return errorResponse(400, 'A table is required for dine-in orders');
     }
@@ -704,7 +704,8 @@ export async function POST(request: Request) {
     // Only sent when a pass paid for something, so an order that uses no pass
     // never depends on the column existing (2026-10-coffee-pass.sql).
     ...(bill.pass_discount_inr > 0 ? { pass_discount_inr: bill.pass_discount_inr } : {}),
-    pickup_code: isDineIn ? null : generatePickupCode(),
+    // Table service needs no token; a website dine-in is collected at the counter.
+    pickup_code: tableId ? null : generatePickupCode(),
     notes: notes ?? '',
     // The session that placed it — null for a staff order by design (D4-3).
     // Who the order BELONGS to, when that's a different person, is

@@ -205,7 +205,8 @@ function buildKotSlipBlocks(
   index: number,
   total: number,
 ): TicketBlock[] {
-  const isDineIn = order.order_type === 'dine_in';
+  // A website dine-in has no table: it is collected at the counter by its token.
+  const atTable = order.order_type === 'dine_in' && Boolean(order.table_label);
   const blocks: TicketBlock[] = [];
   if (order.kot_addition) {
     blocks.push({ kind: 'text', text: '** ADDED ITEMS **', align: 'center', bold: true, size: 'large' });
@@ -219,8 +220,8 @@ function buildKotSlipBlocks(
   blocks.push(
     { kind: 'text', text: formatOrderNumber(order.order_number), align: 'center', bold: true },
     { kind: 'divider' },
-    isDineIn
-      ? { kind: 'text', text: `Table: ${order.table_label || '—'}`, align: 'center', bold: true, size: 'large' }
+    atTable
+      ? { kind: 'text', text: `Table: ${order.table_label}`, align: 'center', bold: true, size: 'large' }
       : { kind: 'text', text: `Token: ${order.pickup_code || '—'}`, align: 'center', bold: true, size: 'large' },
     { kind: 'text', text: ORDER_TYPE_LABEL[order.order_type] ?? order.order_type, align: 'center' },
     { kind: 'text', text: formatIstDateTime(order.created_at), align: 'center' },
@@ -313,7 +314,7 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   }
   if (isDineIn && order.table_label) {
     blocks.push({ kind: 'row', left: 'Table', right: order.table_label });
-  } else if (!isDineIn && order.pickup_code) {
+  } else if (order.pickup_code) {
     blocks.push({ kind: 'row', left: 'Token No.', right: order.pickup_code });
   }
 
