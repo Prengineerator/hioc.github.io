@@ -188,6 +188,8 @@ export interface CashDayRow {
   float_left_denoms?: CashDenoms | null;
   /** Why the drawer was over/short (days closed before close_reason kept it in notes). */
   close_reason?: string | null;
+  /** Set when nobody closed the day and it ended on its own at 3 am (lib/cash/autoEnd.ts). */
+  auto_ended_at?: string | null;
   notes?: string | null;
 }
 

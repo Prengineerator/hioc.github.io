@@ -28,6 +28,12 @@ export const flags = {
   // NEXT_PUBLIC_FLAG_STAFF_POS=false to dark it (hides the nav tab and the
   // /staff/orders/new screen renders a "not enabled" state).
   staffPos: boolEnv(process.env.NEXT_PUBLIC_FLAG_STAFF_POS, true),
+  // The counter takes no orders until today's cash day is open, and a day left
+  // open is counted and closed first (lib/cash/autoEnd.ts,
+  // components/staff/CashDayGate.tsx). Default ON (owner request 2026-10-07);
+  // NEXT_PUBLIC_FLAG_CASH_DAY_GATE=false lifts the lock (the day still ends at
+  // 3 am on its own).
+  cashDayGate: boolEnv(process.env.NEXT_PUBLIC_FLAG_CASH_DAY_GATE, true),
   // Table-QR scan-to-order (QR-1). Default OFF — dark-launched: the /t/<token>
   // scan-to-order surface renders a friendly "ask staff" screen (nothing else)
   // until NEXT_PUBLIC_FLAG_TABLE_QR=true. Guards the whole customer QR flow so

@@ -7,6 +7,7 @@ import { denomsTotalInr, sanitizeDenoms } from '@/lib/cash/denoms';
 import { istBusinessDate } from '@/lib/cash/date';
 import { evaluateClose, evaluateOpen, handoverMovementReason } from '@/lib/cash/day';
 import { recordCount } from '@/lib/cash/checkpoints';
+import { cashDayEndsAt, cashDayGateStep, cashDayWindowEnd, isCashDayOverdue } from '@/lib/cash/autoEnd';
 import {
   CASH_DAY_COLUMNS,
   MIGRATION_HINT,
@@ -15,6 +16,7 @@ import {
   getLatestDay,
   getOpenDay,
   isMissingColumn,
+  markDayAutoEnded,
   unpaidOrdersSince,
   writeDayAppTotals,
   writeDayExpenses,
@@ -37,6 +39,12 @@ export const dynamic = 'force-dynamic';
 // the money moved (lib/cash/checkpoints.ts cashFlowsBetween). The café opens
 // mid-afternoon and runs past midnight, so windowing by the IST date orders
 // were created on split one trading day across two and matched neither.
+//
+// A DAY LEFT OPEN ENDS ON ITS OWN at 3:00 am IST the morning after its date
+// (lib/cash/autoEnd.ts): its window stops there, whenever it is counted, and
+// any staffer may count and close it — the day is over, the counter is waiting
+// on it, and it needs no manager sign-off. Unpaid orders still need a reason
+// to close it with, from whoever closes it.
 
 const HISTORY_LIMIT = 30;
 
@@ -65,10 +73,13 @@ export async function GET() {
     count: 0,
     orders: [],
   };
+  const nowIso = new Date().toISOString();
+  const overdue = isCashDayOverdue(openDay, Date.parse(nowIso));
   if (openDay) {
     try {
-      const nowIso = new Date().toISOString();
-      const activity = await dayActivity(admin, openDay.opening_total_inr, openDay.opened_at, nowIso);
+      // An ended day's figures stop at its end (lib/cash/autoEnd.ts).
+      const untilIso = cashDayWindowEnd(openDay, nowIso);
+      const activity = await dayActivity(admin, openDay.opening_total_inr, openDay.opened_at, untilIso);
       openSummary = {
         opening_total_inr: openDay.opening_total_inr,
         cash_sales_inr: activity.flows.cashSalesInr,
@@ -84,7 +95,7 @@ export async function GET() {
         swiggy_dineout_inr: activity.swiggyDineoutInr,
         zomato_district_inr: activity.zomatoDistrictInr,
         expected_cash_inr: activity.expectedInr,
-        as_of: nowIso,
+        as_of: untilIso,
       };
       cashSales = activity.cashSales.map((s) => ({
         order_id: s.orderId,
@@ -92,7 +103,7 @@ export async function GET() {
         at: s.at,
         amount_inr: s.amountInr,
       }));
-      const unpaidOrders = await unpaidOrdersSince(admin, openDay.opened_at);
+      const unpaidOrders = await unpaidOrdersSince(admin, openDay.opened_at, overdue ? untilIso : undefined);
       unpaid = { count: unpaidOrders.length, orders: unpaidOrders.slice(0, 20) };
     } catch (err) {
       console.error('GET /api/cash-days: could not build the open-day summary', err);
@@ -133,7 +144,13 @@ export async function GET() {
       !openDay && manager && lastClosed
         ? { id: lastClosed.id, business_date: lastClosed.business_date, closed_at: lastClosed.closed_at }
         : null,
-    can_override_unpaid: manager,
+    // An ended day may be closed with unpaid orders by whoever counts it, with a reason.
+    can_override_unpaid: manager || overdue,
+    // What the counter must do before it takes orders, and when the open day
+    // ends on its own (lib/cash/autoEnd.ts).
+    gate_step: cashDayGateStep(openDay, Date.parse(nowIso)),
+    open_day_ends_at: openDay ? cashDayEndsAt(openDay.business_date) : null,
+    open_day_overdue: overdue,
     history: (history as CashDay[] | null) ?? [],
   });
 }
@@ -168,7 +185,14 @@ export async function POST(request: Request) {
   // mapped from 23505 below in case of a race).
   const { day: alreadyOpen, error: openError } = await getOpenDay(admin);
   if (openError) return errorResponse(500, isMissingColumn(openError) ? MIGRATION_HINT : openError.message);
-  if (alreadyOpen) return errorResponse(409, 'A cash day is already open');
+  if (alreadyOpen) {
+    return errorResponse(
+      409,
+      isCashDayOverdue(alreadyOpen, Date.now())
+        ? 'The last cash day was never closed — count the drawer and close it first.'
+        : 'A cash day is already open',
+    );
+  }
 
   // Tomorrow's open compares against the float the last close left. A day
   // closed before the handover feature (or none at all) left nothing to
@@ -231,7 +255,8 @@ export async function POST(request: Request) {
 //  - unpaid orders created since opening block the close, unless a
 //    manager/owner overrides with a reason;
 //  - float left can't exceed the count, per denomination.
-// Permission-gated (cash_day_close, default manager sign-off).
+// Permission-gated (cash_day_close, default manager sign-off) — except a day
+// that has ended on its own (lib/cash/autoEnd.ts), which any staffer closes.
 // Body: { closing_denoms, float_left_denoms, close_reason?, notes?,
 //         confirm_zero_count?, unpaid_override_reason? }.
 //
@@ -242,9 +267,6 @@ export async function PATCH(request: Request) {
   const actor = await getCounterActor();
   if (!actor) return unauthorized();
   const user = actor.user;
-  if (!(await hasPermission(user, 'cash_day_close', actor.role))) {
-    return errorResponse(403, 'You do not have permission to close the cash day');
-  }
 
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
@@ -265,15 +287,23 @@ export async function PATCH(request: Request) {
   if (openError) return errorResponse(500, isMissingColumn(openError) ? MIGRATION_HINT : openError.message);
   if (!openDay) return errorResponse(404, 'No cash day is open to close');
 
-  // The window ends now: everything taken up to this instant is in the day, and
-  // the handover cash-out written below lands AFTER it, so it never counts
-  // against this day's own expected cash.
+  // A day that has ended on its own (lib/cash/autoEnd.ts) is closed by whoever
+  // counts it; a running day needs the close permission (manager by default).
   const closedAtIso = new Date().toISOString();
+  const overdue = isCashDayOverdue(openDay, Date.parse(closedAtIso));
+  if (!overdue && !(await hasPermission(user, 'cash_day_close', actor.role))) {
+    return errorResponse(403, 'You do not have permission to close the cash day');
+  }
+
+  // The window ends now — or at the day's own end, when it has ended: everything
+  // taken up to that instant is in the day, and the handover cash-out written
+  // below lands AFTER it, so it never counts against this day's own expected cash.
+  const untilIso = cashDayWindowEnd(openDay, closedAtIso);
   let activity;
   let unpaidCount: number;
   try {
-    activity = await dayActivity(admin, openDay.opening_total_inr, openDay.opened_at, closedAtIso);
-    unpaidCount = (await unpaidOrdersSince(admin, openDay.opened_at)).length;
+    activity = await dayActivity(admin, openDay.opening_total_inr, openDay.opened_at, untilIso);
+    unpaidCount = (await unpaidOrdersSince(admin, openDay.opened_at, overdue ? untilIso : undefined)).length;
   } catch (err) {
     console.error('PATCH /api/cash-days: could not compute the day’s figures', err);
     return errorResponse(500, 'Could not compute the day’s cash figures — nothing was closed.');
@@ -287,7 +317,8 @@ export async function PATCH(request: Request) {
     closeReason,
     confirmZeroCount: body.confirm_zero_count === true,
     unpaidCount,
-    isManager: isManagerRole(actor.role),
+    // An ended day's counter may close it over unpaid orders, with a reason.
+    isManager: isManagerRole(actor.role) || overdue,
     unpaidOverrideReason,
   });
   const problem = evaluation.problems[0];
@@ -347,6 +378,9 @@ export async function PATCH(request: Request) {
   await writeDayAppTotals(admin, closedDay.id, activity);
   // Same for the expense total (cash_days.expenses_inr, 2026-10-cash-expenses.sql).
   await writeDayExpenses(admin, closedDay.id, activity.expensesInr);
+  // A day closed after it ended on its own keeps when it ended, should the
+  // 3 am job not have recorded it (cash_days.auto_ended_at).
+  if (overdue) await markDayAutoEnded(admin, closedDay.id, untilIso);
 
   // CC-2: same continuity as day-open — the FULL counted drawer (before the
   // handover) is a checkpoint on the chain. Additive/best-effort.

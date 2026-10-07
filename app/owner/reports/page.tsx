@@ -351,7 +351,12 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
         <span className="min-w-0">
           <span className="font-bold text-charcoal">{shortDate(c.business_date)}</span>
           <span className="ml-2 text-xs text-muted">
-            {istTime(c.opened_at)} → {closed ? istTime(c.closed_at) : 'still open'}
+            {istTime(c.opened_at)} →{' '}
+            {c.auto_ended_at
+              ? `ended on its own ${istTime(c.auto_ended_at)}${closed ? ` · counted ${istTime(c.closed_at)}` : ''}`
+              : closed
+                ? istTime(c.closed_at)
+                : 'still open'}
           </span>
         </span>
         <span className="text-right text-sm text-charcoal">
@@ -364,7 +369,9 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
               </span>
             </>
           ) : (
-            <span className="font-bold text-amber-800">Open — not counted yet</span>
+            <span className="font-bold text-amber-800">
+              {c.auto_ended_at ? 'Never closed — not counted yet' : 'Open — not counted yet'}
+            </span>
           )}
         </span>
       </summary>

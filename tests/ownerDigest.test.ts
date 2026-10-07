@@ -307,7 +307,7 @@ describe('renderOwnerDigest', () => {
       'Closing count',
       'Left as float',
       '₹9,000', // 18 × ₹500
-      'Closed after midnight',
+      'Ran past midnight',
     ]) {
       expect(email.html).toContain(part);
     }
@@ -348,6 +348,36 @@ describe('renderOwnerDigest', () => {
     });
     expect(email.html).toContain('the day is still open');
     expect(email.html).not.toContain('Counted at close');
+  });
+
+  it('says when nobody closed the day and it ended on its own', () => {
+    const daily = (c: CashDayRow) =>
+      renderOwnerDigest({
+        period: { kind: 'daily', from: day, to: day },
+        report: report(day, day, { orders, cashDays: [c] }),
+        previous: null,
+        items: [],
+        reportUrl: 'https://x',
+      }).text;
+    const notCounted = daily({
+      business_date: day,
+      status: 'open',
+      opened_at: '2026-09-28T09:30:00Z',
+      auto_ended_at: '2026-09-28T21:30:00Z',
+      opening_total_inr: 2000,
+      cash_sales_inr: null,
+      expected_cash_inr: 0,
+      counted_total_inr: 0,
+      over_short_inr: 0,
+    });
+    expect(notCounted).toContain('Not closed — ended on its own: Tue, 29 Sept, 3:00 am');
+    expect(notCounted).toContain('not counted yet — staff count it when they next log in');
+
+    const countedNextDay = daily(closedDay({ auto_ended_at: '2026-09-28T21:30:00Z', closed_at: '2026-09-29T10:00:00Z' }));
+    expect(countedNextDay).toContain('Not closed — ended on its own');
+    expect(countedNextDay).toContain('Counted and closed: Tue, 29 Sept, 3:30 pm');
+    expect(countedNextDay).toContain('Counted at close: ₹11,900');
+    expect(countedNextDay).toContain('Money in counts it on 29 Sept'); // the window ran to 3 am
   });
 
   it('adds up a range’s drawer from its cash days, expenses only when there were any', () => {

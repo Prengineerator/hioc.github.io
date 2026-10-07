@@ -330,14 +330,20 @@ function istTime(iso: string | null | undefined): string {
 /** One cash day, the way it was closed: float in, the day's cash, expected vs counted, what left the drawer. */
 function cashDayLines(c: CashDayRow): DrawerLine[] {
   const lines: DrawerLine[] = [{ k: 'Opened', v: istTime(c.opened_at) }];
+  // Nobody closed it: it ended on its own at 3 am (lib/cash/autoEnd.ts).
+  if (c.auto_ended_at) lines.push({ k: 'Not closed — ended on its own', v: istTime(c.auto_ended_at), style: 'color:#b42318;' });
   if (c.status !== 'closed') {
     lines.push({ k: 'Opening float', v: rupees(c.opening_total_inr ?? 0) });
-    lines.push({ k: 'Closing count', v: 'not counted — the day is still open', style: 'color:#b42318;font-weight:bold;' });
+    lines.push({
+      k: 'Closing count',
+      v: c.auto_ended_at ? 'not counted yet — staff count it when they next log in' : 'not counted — the day is still open',
+      style: 'color:#b42318;font-weight:bold;',
+    });
     return lines;
   }
   const os = c.over_short_inr ?? 0;
   const reason = (c.close_reason || c.notes || '').trim();
-  lines.push({ k: 'Closed', v: istTime(c.closed_at) });
+  lines.push({ k: c.auto_ended_at ? 'Counted and closed' : 'Closed', v: istTime(c.closed_at) });
   lines.push({ k: 'Opening float', v: rupees(c.opening_total_inr ?? 0) });
   if (c.cash_sales_inr !== null && c.cash_sales_inr !== undefined) {
     const n = c.cash_sales_count;
@@ -380,8 +386,10 @@ export function drawerSections(period: ReportPeriod, report: Report): DrawerSect
       };
       if (c.status === 'closed') {
         sec.count = { rows: closingCountRows(c), countedInr: c.counted_total_inr ?? 0, floatLeftInr: c.float_left_total_inr ?? null };
-        if (c.closed_at && istDateOf(c.closed_at) > c.business_date) {
-          sec.note = `Closed after midnight: cash taken after 12 am is in this drawer, but Money in counts it on ${shortDate(istDateOf(c.closed_at))}.`;
+        // Where the day's figures stopped: its close, or 3 am when it ended on its own.
+        const endedAt = c.auto_ended_at ?? c.closed_at;
+        if (endedAt && istDateOf(endedAt) > c.business_date) {
+          sec.note = `Ran past midnight: cash taken after 12 am is in this drawer, but Money in counts it on ${shortDate(istDateOf(endedAt))}.`;
         }
       }
       return sec;

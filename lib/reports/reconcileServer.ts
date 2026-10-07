@@ -119,17 +119,21 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
       if (isMissingRelation(err)) return [] as CashMovementRow[];
       throw err;
     }),
-    // The day's expenses (cash_days.expenses_inr) arrived with the cash-expenses migration.
-    withOptional<CashDayRow>(CASH_DAY_COLUMNS, 'expenses_inr', (cols) =>
-      fetchAll<CashDayRow>((a, b) =>
-        admin
-          .from('cash_days')
-          .select(cols)
-          .gte('business_date', from)
-          .lte('business_date', to)
-          .order('opened_at')
-          .range(a, b) as unknown as PromiseLike<PageResult<CashDayRow>>,
-      ),
+    // The day's expenses (cash_days.expenses_inr) arrived with the cash-expenses
+    // migration, and when a day ended on its own (auto_ended_at) with the
+    // auto-end one; read what the database has.
+    withColumnTiers<CashDayRow>(
+      [`${CASH_DAY_COLUMNS}, expenses_inr, auto_ended_at`, `${CASH_DAY_COLUMNS}, expenses_inr`, CASH_DAY_COLUMNS],
+      (cols) =>
+        fetchAll<CashDayRow>((a, b) =>
+          admin
+            .from('cash_days')
+            .select(cols)
+            .gte('business_date', from)
+            .lte('business_date', to)
+            .order('opened_at')
+            .range(a, b) as unknown as PromiseLike<PageResult<CashDayRow>>,
+        ),
     ),
   ]);
 
