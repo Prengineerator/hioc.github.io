@@ -45,9 +45,10 @@ export async function POST(_request: Request, { params }: RouteParams) {
   if (!order.customer_phone) {
     return errorResponse(409, 'This order has no customer phone number');
   }
-  // The dine-in "ready" means "we will bring it to your table" — the automatic
-  // ready message is suppressed for the same reason (engine D7).
-  if (order.order_type === 'dine_in') {
+  // A table dine-in "ready" means "we will bring it to your table" — the
+  // automatic ready message is suppressed for the same reason (engine D7). A
+  // website dine-in has no table and is collected at the counter like a pickup.
+  if (order.order_type === 'dine_in' && order.table_id) {
     return errorResponse(409, 'Dine-in orders are served at the table — no pickup reminder');
   }
 

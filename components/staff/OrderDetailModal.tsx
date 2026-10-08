@@ -429,12 +429,13 @@ export function OrderDetailModal({
           {order.customer_phone ? (
             <a href={`tel:${order.customer_phone}`} className="text-tan-dark hover:underline">{order.customer_phone}</a>
           ) : null}
-          {ritualSale ? null : isDineIn ? (
-            order.table_label ? <p className="mt-1 text-xs text-muted">Table: {order.table_label}</p> : null
-          ) : (
+          {/* A website dine-in has no table: it shows its pickup slot and code. */}
+          {ritualSale ? null : isDineIn && order.table_label ? (
+            <p className="mt-1 text-xs text-muted">Table: {order.table_label}</p>
+          ) : order.pickup_slot_label || order.pickup_time ? (
             <p className="mt-1 text-xs text-muted">Pickup: {order.pickup_slot_label || order.pickup_time}</p>
-          )}
-          {!ritualSale && !isDineIn && order.pickup_code ? <p className="text-xs text-muted">Code: {order.pickup_code}</p> : null}
+          ) : null}
+          {!ritualSale && order.pickup_code ? <p className="text-xs text-muted">Code: {order.pickup_code}</p> : null}
           {!ritualSale && order.promised_ready_at ? (
             <p className="text-xs text-muted">ETA: ~{formatIstTime(new Date(order.promised_ready_at))}</p>
           ) : null}

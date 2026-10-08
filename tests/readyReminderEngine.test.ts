@@ -114,3 +114,19 @@ describe('sendOrderNotification — normal idempotency is unchanged', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('sendOrderNotification — dine-in ready (D7)', () => {
+  it('suppresses ready for a dine-in served at a table', async () => {
+    const atTable = { ...(order as object), order_type: 'dine_in', table_id: 'table-1' } as never;
+    expect(await sendOrderNotification(atTable, 'ready')).toEqual({ sent: false, skipped: 'dine_in_ready_suppressed' });
+  });
+
+  it('does not suppress it for a website dine-in (no table): the customer collects it', async () => {
+    process.env.NOTIFY_PROVIDER = 'whatsapp';
+    process.env.WHATSAPP_TOKEN = 't';
+    process.env.WHATSAPP_PHONE_ID = 'p';
+    const webDineIn = { ...(order as object), order_type: 'dine_in', table_id: null } as never;
+    // Reaches the normal send path (here: the idempotency guard), not the D7 skip.
+    expect(await sendOrderNotification(webDineIn, 'ready')).toMatchObject({ skipped: 'already_sent' });
+  });
+});

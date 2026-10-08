@@ -236,7 +236,8 @@ function KotSlipView({
   index: number;
   total: number;
 }) {
-  const isDineIn = order.order_type === 'dine_in';
+  // A website dine-in has no table: it is collected at the counter by its token.
+  const atTable = order.order_type === 'dine_in' && Boolean(order.table_label);
   return (
     <>
       <div className="text-center">
@@ -257,8 +258,8 @@ function KotSlipView({
       <Divider />
 
       <div className="text-sm">
-        {isDineIn ? (
-          <p className="text-base font-bold">Table: {order.table_label || '—'}</p>
+        {atTable ? (
+          <p className="text-base font-bold">Table: {order.table_label}</p>
         ) : (
           <p className="text-base font-bold">Token: {order.pickup_code || '—'}</p>
         )}
@@ -364,7 +365,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         )}
         {isDineIn && order.table_label ? (
           <MetaRow label="Table" value={order.table_label} />
-        ) : !isDineIn && order.pickup_code ? (
+        ) : order.pickup_code ? (
           <MetaRow label="Token No." value={order.pickup_code} />
         ) : null}
       </div>

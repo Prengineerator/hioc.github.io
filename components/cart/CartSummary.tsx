@@ -6,10 +6,12 @@ import { computeBill } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 
 // `settings` is optional so this still renders (subtotal-only) while the
-// checkout page's store-settings fetch is in flight (C5).
-export function CartSummary({ settings }: { settings?: StoreSettings | null }) {
+// checkout page's store-settings fetch is in flight (C5). Dine-in has no
+// packaging charge (D5), the same rule the order route applies.
+export function CartSummary({ settings, dineIn = false }: { settings?: StoreSettings | null; dineIn?: boolean }) {
   const { items, totalPrice } = useCart();
-  const bill = settings ? computeBill(totalPrice, settings, 0, cartTaxableSubtotal(items)) : null;
+  const billSettings = settings && dineIn ? { ...settings, packaging_charge_inr: 0 } : settings;
+  const bill = billSettings ? computeBill(totalPrice, billSettings, 0, cartTaxableSubtotal(items)) : null;
 
   return (
     <div className="rounded-md border border-line bg-cream p-6 shadow-sm">

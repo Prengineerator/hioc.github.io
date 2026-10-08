@@ -32,7 +32,12 @@ export function CartDrawer({
   if (!open || typeof document === 'undefined') return null;
 
   const isEmpty = items.length === 0;
-  const bill = settings ? computeBill(totalPrice, settings, 0, cartTaxableSubtotal(items)) : null;
+  // Items + GST only: packaging depends on Takeaway vs Dine-in (D5), which is
+  // chosen at checkout, so it is added there.
+  const bill = settings
+    ? computeBill(totalPrice, { ...settings, packaging_charge_inr: 0 }, 0, cartTaxableSubtotal(items))
+    : null;
+  const packagingAtCheckout = (settings?.packaging_charge_inr ?? 0) > 0;
   const checkoutDisabled = isEmpty || !!checkoutDisabledReason;
 
   // Portalled for the same reason as Modal: a transformed ancestor would
@@ -170,11 +175,14 @@ export function CartDrawer({
               <span>Subtotal</span>
               <span className="font-mono tabular-nums">₹{bill ? bill.subtotal_inr : totalPrice}</span>
             </div>
-            {bill && (bill.tax_inr > 0 || bill.packaging_inr > 0) ? (
+            {bill && bill.tax_inr > 0 ? (
               <div className="flex items-center justify-between font-bold text-charcoal">
                 <span>Total (incl. GST)</span>
                 <span className="font-mono tabular-nums text-tan-dark">₹{bill.total_inr}</span>
               </div>
+            ) : null}
+            {!isEmpty && packagingAtCheckout ? (
+              <p className="text-xs text-muted">Takeaway packaging is added at checkout.</p>
             ) : null}
           </div>
           {checkoutDisabledReason ? (

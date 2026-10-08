@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CartProvider, useCart } from '@/lib/cart/CartContext';
 import { useStoreSettings } from '@/lib/cart/useStoreSettings';
 import { CartSummary } from '@/components/cart/CartSummary';
 import { CheckoutForm } from '@/components/checkout/CheckoutForm';
 import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
+import type { OrderType } from '@/lib/types';
 
 export default function CheckoutPage() {
   return (
@@ -20,6 +21,8 @@ function CheckoutPageContent() {
   const router = useRouter();
   const { items, hydrated } = useCart();
   const { settings, openState } = useStoreSettings();
+  // Chosen in the form, read by the summary too: dine-in has no packaging (D5).
+  const [orderType, setOrderType] = useState<OrderType>('takeaway');
 
   // Deliberately only depends on `hydrated`, not `items.length`: this guard
   // exists to bounce someone who *lands* on /checkout with nothing in their
@@ -47,8 +50,13 @@ function CheckoutPageContent() {
       </h1>
       <StoreStatusBanner openState={openState} />
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        <CartSummary settings={settings} />
-        <CheckoutForm settings={settings} openState={openState} />
+        <CartSummary settings={settings} dineIn={orderType === 'dine_in'} />
+        <CheckoutForm
+          settings={settings}
+          openState={openState}
+          orderType={orderType}
+          onOrderTypeChange={setOrderType}
+        />
       </div>
     </div>
   );

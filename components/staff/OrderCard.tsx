@@ -53,12 +53,12 @@ export function OrderCard({
   const isReady = order.status === 'ready';
   const isDineIn = order.order_type === 'dine_in';
   const hasVoid = order.items.some((i) => i.voided);
-  // Dine-in cards show the table instead of a pickup slot (there is none).
-  const whereLabel = isDineIn
-    ? order.table_label
+  // Dine-in cards show the table instead of a pickup slot (there is none). A
+  // website dine-in has no table but does have a pickup slot.
+  const whereLabel =
+    isDineIn && order.table_label
       ? `Table ${order.table_label}`
-      : 'Dine-in'
-    : order.pickup_slot_label || order.pickup_time;
+      : order.pickup_slot_label || order.pickup_time || (isDineIn ? 'Dine-in' : '');
 
   return (
     <div

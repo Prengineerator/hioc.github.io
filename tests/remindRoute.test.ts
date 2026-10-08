@@ -123,9 +123,15 @@ describe('POST /api/orders/[id]/remind', () => {
     expect(sendReadyReminder).not.toHaveBeenCalled();
   });
 
-  it('409s a dine-in order', async () => {
-    state.order = readyOrder({ order_type: 'dine_in' });
+  it('409s a dine-in order served at a table', async () => {
+    state.order = readyOrder({ order_type: 'dine_in', table_id: 'table-1' });
     expect((await call()).status).toBe(409);
+  });
+
+  it('reminds a website dine-in (no table): it is collected at the counter', async () => {
+    state.order = readyOrder({ order_type: 'dine_in', table_id: null });
+    expect((await call()).status).toBe(200);
+    expect(sendReadyReminder).toHaveBeenCalledTimes(1);
   });
 
   it('429s with retry_after_seconds inside the 5-minute cooldown, sending nothing', async () => {
