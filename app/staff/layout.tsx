@@ -11,6 +11,9 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { getStoreSettings } from '@/lib/store/settings';
 import { StaffPinOverlay } from '@/components/staff/pin/StaffPinOverlay';
 import { LockScreen } from '@/components/staff/pin/LockScreen';
+import { CashDayGate } from '@/components/staff/CashDayGate';
+import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { cashDayGateState } from '@/lib/cash/dayServer';
 
 // DEV-1 — the install offer belongs to this surface and no other. The manifest
 // describes the POS (app/pos.webmanifest/route.ts), so linking it from the
@@ -81,7 +84,22 @@ export default async function StaffLayout({
   // POS (an enrolled counter device) or the staff website — decides the
   // navigation, whether this screen may take orders, and whether it may edit
   // the menu (lib/staff/surfaceRules.ts). The API routes re-check both.
-  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
+  // The counter takes no orders until the cash day is in order — yesterday
+  // closed if it was left open, today opened (lib/cash/autoEnd.ts). Read here
+  // so a fresh load never shows the POS before the lock; CashDayGate keeps it
+  // current after that.
+  const [surface, storeSettings, cashGate] = await Promise.all([
+    getStaffSurface(),
+    getStoreSettings(),
+    flags.cashDayGate && flags.staffPos ? cashDayGateState(createAdminSupabaseClient()) : Promise.resolve(null),
+  ]);
+  const page = cashGate ? (
+    <CashDayGate initialStep={cashGate.step} initialEndsAt={cashGate.openDay?.ends_at ?? null}>
+      {children}
+    </CashDayGate>
+  ) : (
+    children
+  );
   const staffWebOrdering = storeSettings.staff_web_ordering === true;
   const displayName =
     (user.user_metadata?.full_name as string | undefined) ??
@@ -105,7 +123,7 @@ export default async function StaffLayout({
             device={{ id: device.id, name: device.name }}
             initialOperatorName={via === 'device' ? displayName || user.email || null : null}
           >
-            {children}
+            {page}
           </StaffPinOverlay>
         </div>
       </StaffShell>
@@ -117,7 +135,7 @@ export default async function StaffLayout({
       <div className="min-h-screen bg-cream">
         <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
         {/* Not <main> — the root layout already provides the landmark. */}
-        <div>{children}</div>
+        <div>{page}</div>
       </div>
     </StaffShell>
   );

@@ -8,6 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { cashActivityBetween, type CashSaleEntry } from '@/lib/cash/checkpoints';
 import { expectedCashInr } from '@/lib/cash/denoms';
 import type { CashDayFlows } from '@/lib/cash/day';
+import { cashDayEndsAt, cashDayGateStep, type CashDayGateStep } from '@/lib/cash/autoEnd';
 import type { CashDay } from '@/lib/types';
 
 type Admin = SupabaseClient;
@@ -102,6 +103,51 @@ export async function dayExpensesFor(admin: Admin, dayIds: string[]): Promise<Ma
   return out;
 }
 
+/**
+ * Records that a day ended on its own (cash_days.auto_ended_at,
+ * 2026-10-cash-day-auto-end.sql) — only where it is not recorded yet. Separate
+ * and best-effort like writeDayAppTotals: the rule itself (lib/cash/autoEnd.ts)
+ * never depends on the column, so a database without it still ends the day.
+ * Returns false when the column is missing.
+ */
+export async function markDayAutoEnded(admin: Admin, dayId: string, endedAtIso: string): Promise<boolean> {
+  const { error } = await admin
+    .from('cash_days')
+    .update({ auto_ended_at: endedAtIso })
+    .eq('id', dayId)
+    .is('auto_ended_at', null);
+  if (error) {
+    if (isMissingColumn(error)) return false;
+    console.error('cash-days: could not record that the day ended on its own', error);
+  }
+  return true;
+}
+
+export interface CashDayGateState {
+  step: CashDayGateStep;
+  /** The open day, if any, with when it ends on its own. */
+  openDay: { id: string; business_date: string; opened_at: string; ends_at: string } | null;
+}
+
+/**
+ * What the counter must do before it takes orders (lib/cash/autoEnd.ts). Fails
+ * OPEN — step null — when the cash day can't be read (not set up, a database
+ * error): a broken read must never lock the counter.
+ */
+export async function cashDayGateState(admin: Admin, nowMs: number = Date.now()): Promise<CashDayGateState> {
+  const { day, error } = await getOpenDay(admin);
+  if (error) {
+    if (!isMissingColumn(error)) console.error('cash-days: gate could not read the open day', error);
+    return { step: null, openDay: null };
+  }
+  return {
+    step: cashDayGateStep(day, nowMs),
+    openDay: day
+      ? { id: day.id, business_date: day.business_date, opened_at: day.opened_at, ends_at: cashDayEndsAt(day.business_date) }
+      : null,
+  };
+}
+
 /** The currently OPEN cash day, or null. */
 export async function getOpenDay(admin: Admin): Promise<{ day: CashDay | null; error: { code?: string; message: string } | null }> {
   const { data, error } = await admin.from('cash_days').select(CASH_DAY_COLUMNS).eq('status', 'open').maybeSingle();
@@ -193,16 +239,19 @@ export interface UnpaidOrder {
 // never going to be paid, so they never block a close.
 const LIVE_ORDER_STATUSES = ['placed', 'received', 'accepted', 'preparing', 'ready', 'completed'];
 
-/** Unpaid, not cancelled/rejected orders created since the day opened. */
-export async function unpaidOrdersSince(admin: Admin, openedAtIso: string): Promise<UnpaidOrder[]> {
-  const { data, error } = await admin
+/**
+ * Unpaid, not cancelled/rejected orders created since the day opened — up to
+ * `untilIso` when given (a day that has ended: lib/cash/autoEnd.ts).
+ */
+export async function unpaidOrdersSince(admin: Admin, openedAtIso: string, untilIso?: string): Promise<UnpaidOrder[]> {
+  let query = admin
     .from('orders')
     .select('id, order_number, total_inr, created_at')
     .eq('payment_status', 'unpaid')
     .in('status', LIVE_ORDER_STATUSES)
-    .gte('created_at', openedAtIso)
-    .order('created_at', { ascending: true })
-    .limit(200);
+    .gte('created_at', openedAtIso);
+  if (untilIso) query = query.lte('created_at', untilIso);
+  const { data, error } = await query.order('created_at', { ascending: true }).limit(200);
   if (error) throw new Error(`unpaidOrdersSince: orders query failed: ${error.message}`);
   return (data ?? []) as UnpaidOrder[];
 }

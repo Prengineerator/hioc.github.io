@@ -87,6 +87,21 @@ export function evaluateOpen(input: {
 
 // ── Handover ─────────────────────────────────────────────────────────────────
 
+/**
+ * The reason on the cash_movements 'out' row a close writes for the cash taken
+ * out to the owner/bank (PATCH /api/cash-days). That row is how the drawer
+ * chain knows the cash left; it is not an expense or a day's cash out, and
+ * reports show it as the day's handover instead (cash_days.handover_inr).
+ */
+export function handoverMovementReason(businessDate: string): string {
+  return `Day close handover (${businessDate}): cash taken out to owner/bank`;
+}
+
+/** True for the cash-out a day close wrote for its handover. */
+export function isHandoverMovement(reason: string | null | undefined): boolean {
+  return (reason ?? '').trim().toLowerCase().startsWith('day close handover');
+}
+
 /** Each denomination capped at what was actually counted (the float can't exceed the drawer). */
 export function capDenoms(wanted: CashDenoms | null | undefined, limit: CashDenoms | null | undefined): CashDenoms {
   const out: CashDenoms = {};

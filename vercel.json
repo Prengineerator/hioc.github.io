@@ -11,6 +11,10 @@
       "schedule": "30 21 * * *"
     },
     {
+      "path": "/api/cron/end-cash-day",
+      "schedule": "35 21 * * *"
+    },
+    {
       "path": "/api/cron/leave-reminders",
       "schedule": "30 4 * * *"
     },

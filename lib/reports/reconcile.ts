@@ -15,13 +15,28 @@
 // "Unpaid" explains most of the gap between the two: orders from the range
 // whose money has still not been taken.
 //
+// THE CASH DRAWER is neither clock: it is reported by CASH DAY, from when the
+// drawer was opened to when it was counted and closed, with the figures frozen
+// at that close (cash_days) — the same ones staff saw on the close screen. The
+// café runs past midnight, so a day's drawer can hold cash a calendar day would
+// put on the next date; re-deriving the drawer from calendar days could never
+// tie out to the over/short. A cash day sits on the date it was OPENED
+// (cash_days.business_date).
+//
+// CASH OUT, the owner's way: an EXPENSE (a cash out with a category) is money
+// spent and is always reported on its own; EVERY OTHER cash out is cash handed
+// to the owner — taken out during the day, or the handover a close writes
+// (cash_days.handover_inr, also a cash_movements 'out' row for the chain).
+// cashOutInr never includes expenses.
+//
 // HIOC Ritual (docs/COFFEE-PASS-SPEC.md §7, CP-D21): revenue is counted when the
 // pass is SOLD, so a pass sale is an ordinary paid order in every number below
 // and is also broken out as `passSales`. What a redeemed cup covered
 // (orders.pass_discount_inr) is NOT a marketing discount: it stays out of
 // `discountInr` and is reported on its own as `passRedemptions`.
 
-import type { PaymentMethod } from '@/lib/types';
+import type { CashDenoms, PaymentMethod } from '@/lib/types';
+import { DENOMINATIONS, LEGACY_COINS_KEY } from '@/lib/cash/denoms';
 
 export const REPORT_METHODS: readonly PaymentMethod[] = [
   'cash',
@@ -147,15 +162,35 @@ export interface CashMovementRow {
   voided_at?: string | null;
 }
 
+/** A cash day, with the figures frozen at its close (null on a day still open, or closed before they were kept). */
 export interface CashDayRow {
+  id?: string;
   business_date: string;
   status: string;
+  opened_at?: string | null;
+  closed_at?: string | null;
   opening_total_inr: number | null;
   cash_sales_inr: number | null;
+  cash_sales_count?: number | null;
+  cash_refunds_inr?: number | null;
+  cash_in_inr?: number | null;
+  cash_out_inr?: number | null;
+  /** Of cash_out_inr, the store expenses (2026-10-cash-expenses.sql; absent before it — then none). */
+  expenses_inr?: number | null;
   expected_cash_inr: number | null;
   counted_total_inr: number | null;
   over_short_inr: number | null;
+  /** The closing count, by denomination. */
+  closing_denoms?: CashDenoms | null;
+  /** Cash taken out to the owner/bank at the close = counted − float left. */
   handover_inr?: number | null;
+  float_left_total_inr?: number | null;
+  float_left_denoms?: CashDenoms | null;
+  /** Why the drawer was over/short (days closed before close_reason kept it in notes). */
+  close_reason?: string | null;
+  /** Set when nobody closed the day and it ended on its own at 3 am (lib/cash/autoEnd.ts). */
+  auto_ended_at?: string | null;
+  notes?: string | null;
 }
 
 export interface ReportInput {
@@ -207,21 +242,52 @@ export interface ReportDay {
   netReceivedInr: number;
   tipsInr: number;
   cashInInr: number;
+  /** Cash handed to the owner this day: every cash out that is not an expense, a close's handover included. */
   cashOutInr: number;
-  /** Of cashOutInr: expenses punched from the drawer (a categorised cash out). */
+  /** Expenses paid from the drawer this day (categorised cash outs) — apart from cashOutInr. */
   expensesInr: number;
-  cashDay: CashDayRow | null;
+  /** The cash days opened on this date, oldest first — usually one. */
+  cashDays: CashDayRow[];
+}
+
+/**
+ * The drawer over the range, from the cash days (see the header): what each
+ * close recorded, added up over the CLOSED days. A day still open has nothing
+ * frozen yet and only counts in `open`.
+ */
+export interface DrawerTotals {
+  /** Cash days opened on these dates. */
+  days: number;
+  closed: number;
+  open: number;
+  cashSalesInr: number;
+  cashSalesCount: number;
+  cashRefundsInr: number;
+  cashInInr: number;
+  /** Expenses paid from the drawer. */
+  expensesInr: number;
+  /** Cash taken out to the owner during the day (every cash out that is not an expense). */
+  cashOutInr: number;
+  /** Σ over/short (negative = short). */
+  overShortInr: number;
+  /** Cash handed over to the owner at the closes. */
+  handoverInr: number;
+  /** Everything the owner got: cashOutInr + handoverInr. */
+  toOwnerInr: number;
+  /** What the last close in the range left in the drawer; null when none recorded it. */
+  floatLeftInr: number | null;
 }
 
 export interface Report {
   from: string;
   to: string;
   days: ReportDay[];
-  totals: Omit<ReportDay, 'date' | 'cashDay'> & {
+  totals: Omit<ReportDay, 'date' | 'cashDays'> & {
     cashDaysClosed: number;
     /** Σ over/short across closed cash days (negative = short). */
     overShortInr: number;
   };
+  drawer: DrawerTotals;
 }
 
 const zeroMethods = (): MethodAmounts =>
@@ -253,7 +319,7 @@ function emptyDay(date: string): ReportDay {
     cashInInr: 0,
     cashOutInr: 0,
     expensesInr: 0,
-    cashDay: null,
+    cashDays: [],
   };
 }
 
@@ -337,15 +403,20 @@ export function buildReport(input: ReportInput): Report {
     if (!day) continue;
     if (m.direction === 'in') day.cashInInr += m.amount_inr ?? 0;
     else if (m.direction === 'out') {
-      day.cashOutInr += m.amount_inr ?? 0;
+      // An expense is money spent; any other cash out went to the owner.
       if (m.category) day.expensesInr += m.amount_inr ?? 0;
+      else day.cashOutInr += m.amount_inr ?? 0;
     }
   }
 
-  for (const c of input.cashDays) {
-    const day = days.get(c.business_date);
-    if (day) day.cashDay = c;
-  }
+  // Every cash day on its date (a date can have more than one: a day closed
+  // for an afternoon break and opened again), oldest first.
+  const byOpened = [...input.cashDays].sort((a, b) =>
+    a.business_date !== b.business_date
+      ? a.business_date.localeCompare(b.business_date)
+      : (a.opened_at ?? '').localeCompare(b.opened_at ?? ''),
+  );
+  for (const c of byOpened) days.get(c.business_date)?.cashDays.push(c);
 
   const list = [...days.values()];
   for (const d of list) {
@@ -355,9 +426,9 @@ export function buildReport(input: ReportInput): Report {
     d.netReceivedInr = d.receivedTotalInr - d.refundsTotalInr;
   }
 
-  const { date: _date, cashDay: _cashDay, ...blank } = emptyDay('');
+  const { date: _date, cashDays: _cashDays, ...blank } = emptyDay('');
   void _date;
-  void _cashDay;
+  void _cashDays;
   const totals: Report['totals'] = { ...blank, cashDaysClosed: 0, overShortInr: 0 };
   const numericKeys = [
     'orders',
@@ -387,13 +458,113 @@ export function buildReport(input: ReportInput): Report {
       totals.received[m] += d.received[m];
       totals.refunds[m] += d.refunds[m];
     }
-    if (d.cashDay?.status === 'closed') {
+    for (const c of d.cashDays) {
+      if (c.status !== 'closed') continue;
       totals.cashDaysClosed += 1;
-      totals.overShortInr += d.cashDay.over_short_inr ?? 0;
+      totals.overShortInr += c.over_short_inr ?? 0;
     }
   }
 
-  return { from: input.from, to: input.to, days: list, totals };
+  return { from: input.from, to: input.to, days: list, totals, drawer: drawerTotals(list.flatMap((d) => d.cashDays)) };
+}
+
+/**
+ * A closed cash day's cash out, the owner's way (see the header): expenses on
+ * their own, every other cash out handed to the owner during the day, plus the
+ * handover at the close. A day without an expense total (closed before it was
+ * kept) counts all its cash out as the owner's.
+ */
+export function cashDayOuts(c: CashDayRow): { expensesInr: number; cashOutInr: number; handoverInr: number; toOwnerInr: number } {
+  const totalOut = c.cash_out_inr ?? 0;
+  const expensesInr = Math.min(c.expenses_inr ?? 0, totalOut);
+  const cashOutInr = totalOut - expensesInr;
+  const handoverInr = c.handover_inr ?? 0;
+  return { expensesInr, cashOutInr, handoverInr, toOwnerInr: cashOutInr + handoverInr };
+}
+
+/** The range's drawer, from its cash days (oldest first). */
+export function drawerTotals(cashDays: CashDayRow[]): DrawerTotals {
+  const t: DrawerTotals = {
+    days: cashDays.length,
+    closed: 0,
+    open: 0,
+    cashSalesInr: 0,
+    cashSalesCount: 0,
+    cashRefundsInr: 0,
+    cashInInr: 0,
+    expensesInr: 0,
+    cashOutInr: 0,
+    overShortInr: 0,
+    handoverInr: 0,
+    toOwnerInr: 0,
+    floatLeftInr: null,
+  };
+  for (const c of cashDays) {
+    if (c.status !== 'closed') {
+      t.open += 1;
+      continue;
+    }
+    const outs = cashDayOuts(c);
+    t.closed += 1;
+    t.cashSalesInr += c.cash_sales_inr ?? 0;
+    t.cashSalesCount += c.cash_sales_count ?? 0;
+    t.cashRefundsInr += c.cash_refunds_inr ?? 0;
+    t.cashInInr += c.cash_in_inr ?? 0;
+    t.expensesInr += outs.expensesInr;
+    t.cashOutInr += outs.cashOutInr;
+    t.overShortInr += c.over_short_inr ?? 0;
+    t.handoverInr += outs.handoverInr;
+    t.toOwnerInr += outs.toOwnerInr;
+    if (c.float_left_total_inr !== null && c.float_left_total_inr !== undefined) t.floatLeftInr = c.float_left_total_inr;
+  }
+  return t;
+}
+
+// ── The closing count ────────────────────────────────────────────────────────
+
+export interface ClosingCountRow {
+  key: string;
+  label: string;
+  /** Notes/coins counted at the close (for the legacy lump coins row: the ₹ amount). */
+  count: number;
+  amountInr: number;
+  /** Of `count`, left in the drawer as the float. */
+  floatLeft: number;
+  /** Of `count`, taken out to the owner/bank. */
+  takenOut: number;
+}
+
+function denomCount(denoms: CashDenoms | null | undefined, key: string): number {
+  const n = Number(denoms?.[key]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * A closed day's count, one row per denomination that was in the drawer
+ * (highest first), with how much of it stayed as the float and how much was
+ * taken out. Empty when nothing was counted.
+ */
+export function closingCountRows(day: Pick<CashDayRow, 'closing_denoms' | 'float_left_denoms'>): ClosingCountRow[] {
+  const rows: ClosingCountRow[] = [];
+  for (const d of DENOMINATIONS) {
+    const count = denomCount(day.closing_denoms, d.key);
+    if (count === 0) continue;
+    const floatLeft = Math.min(count, denomCount(day.float_left_denoms, d.key));
+    rows.push({ key: d.key, label: d.label, count, amountInr: count * d.value, floatLeft, takenOut: count - floatLeft });
+  }
+  // Coins counted before 2026-09 were one lump ₹ amount.
+  const coins = denomCount(day.closing_denoms, LEGACY_COINS_KEY);
+  if (coins > 0) {
+    const floatLeft = Math.min(coins, denomCount(day.float_left_denoms, LEGACY_COINS_KEY));
+    rows.push({ key: LEGACY_COINS_KEY, label: 'Coins (₹)', count: coins, amountInr: coins, floatLeft, takenOut: coins - floatLeft });
+  }
+  return rows;
+}
+
+/** The last CLOSED cash day of a date — the store's closing count for it — or null. */
+export function closingDayOf(day: Pick<ReportDay, 'cashDays'>): CashDayRow | null {
+  const closed = day.cashDays.filter((c) => c.status === 'closed');
+  return closed[closed.length - 1] ?? null;
 }
 
 // ── CSV ────────────────────────────────────────────────────────────────────
@@ -429,13 +600,35 @@ const CSV_COLUMNS: [string, (d: ReportDay) => string | number][] = [
   ['Net received (INR)', (d) => d.netReceivedInr],
   ['Tips (INR)', (d) => d.tipsInr],
   ['Cash in (INR)', (d) => d.cashInInr],
-  ['Cash out (INR)', (d) => d.cashOutInr],
+  ['Cash out to owner (INR)', (d) => d.cashOutInr],
   ['Expenses (INR)', (d) => d.expensesInr],
-  ['Cash day', (d) => d.cashDay?.status ?? ''],
-  ['Drawer expected (INR)', (d) => d.cashDay?.expected_cash_inr ?? ''],
-  ['Drawer counted (INR)', (d) => (d.cashDay?.status === 'closed' ? d.cashDay.counted_total_inr ?? '' : '')],
-  ['Over/short (INR)', (d) => (d.cashDay?.status === 'closed' ? d.cashDay.over_short_inr ?? '' : '')],
+  // The drawer, by the cash day opened on the date (see the header). Additive
+  // figures add up every close of the date; the count, the expected cash and
+  // the float are the LAST close's — the store's closing count.
+  ['Cash day', (d) => (d.cashDays.length === 0 ? '' : d.cashDays.some((c) => c.status !== 'closed') ? 'open' : 'closed')],
+  ['Drawer opening float (INR)', (d) => d.cashDays[0]?.opening_total_inr ?? ''],
+  ['Drawer cash sales (INR)', (d) => closedSum(d, (c) => c.cash_sales_inr)],
+  ['Drawer expected (INR)', (d) => closingDayOf(d)?.expected_cash_inr ?? ''],
+  ['Drawer counted (INR)', (d) => closingDayOf(d)?.counted_total_inr ?? ''],
+  ['Over/short (INR)', (d) => closedSum(d, (c) => c.over_short_inr)],
+  ['Handed over to owner (INR)', (d) => closedSum(d, (c) => cashDayOuts(c).toOwnerInr)],
+  ['Float left (INR)', (d) => closingDayOf(d)?.float_left_total_inr ?? ''],
+  ...DENOMINATIONS.map(
+    (den): [string, (d: ReportDay) => string | number] => [
+      `Closing count ${den.value} (pcs)`,
+      (d) => {
+        const c = closingDayOf(d);
+        return c ? denomCount(c.closing_denoms, den.key) : '';
+      },
+    ],
+  ),
 ];
+
+/** Σ of a figure over the date's closed cash days; blank when none closed. */
+function closedSum(d: ReportDay, f: (c: CashDayRow) => number | null | undefined): number | '' {
+  const closed = d.cashDays.filter((c) => c.status === 'closed');
+  return closed.length ? closed.reduce((s, c) => s + (f(c) ?? 0), 0) : '';
+}
 
 function csvCell(v: string | number): string {
   const s = String(v);
@@ -447,10 +640,12 @@ export function reportCsv(report: Report): string {
   const header = CSV_COLUMNS.map(([h]) => h).join(',');
   const rows = report.days.map((d) => CSV_COLUMNS.map(([, f]) => csvCell(f(d))).join(','));
   const t = report.totals;
-  const totalDay: ReportDay = { ...t, date: 'TOTAL', cashDay: null };
-  const totalRow = CSV_COLUMNS.map(([h, f]) => {
-    if (h === 'Over/short (INR)') return csvCell(t.overShortInr);
-    return csvCell(f(totalDay));
-  }).join(',');
+  const totalDay: ReportDay = { ...t, date: 'TOTAL', cashDays: [] };
+  const drawerTotal: Record<string, number> = {
+    'Drawer cash sales (INR)': report.drawer.cashSalesInr,
+    'Over/short (INR)': t.overShortInr,
+    'Handed over to owner (INR)': report.drawer.toOwnerInr,
+  };
+  const totalRow = CSV_COLUMNS.map(([h, f]) => csvCell(h in drawerTotal ? drawerTotal[h] : f(totalDay))).join(',');
   return [header, ...rows, totalRow].join('\n') + '\n';
 }

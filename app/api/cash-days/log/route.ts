@@ -4,6 +4,7 @@ import { errorResponse } from '@/lib/api/http';
 import { requireCashManager } from '@/lib/cash/gate';
 import { CASH_DAY_COLUMNS, MIGRATION_HINT, dayActivity, dayAppTotalsFor, dayExpensesFor, isMissingColumn } from '@/lib/cash/dayServer';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { cashDayWindowEnd } from '@/lib/cash/autoEnd';
 import type { CashDay } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -74,7 +75,9 @@ export async function GET(request: Request) {
       } | null = null;
       if (d.status === 'open') {
         try {
-          const a = await dayActivity(admin, d.opening_total_inr, d.opened_at, new Date().toISOString());
+          // Up to now — or to 3 am, for a day nobody closed (lib/cash/autoEnd.ts).
+          const until = cashDayWindowEnd(d, new Date().toISOString());
+          const a = await dayActivity(admin, d.opening_total_inr, d.opened_at, until);
           live = {
             cash_sales_inr: a.flows.cashSalesInr,
             cash_sales_count: a.cashSales.length,

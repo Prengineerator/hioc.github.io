@@ -56,6 +56,8 @@ const { GET, POST, PATCH } = await import('@/app/api/cash-days/route');
 const { POST: REOPEN } = await import('@/app/api/cash-days/reopen/route');
 const { GET: LOG } = await import('@/app/api/cash-days/log/route');
 const { recordCount } = await import('@/lib/cash/checkpoints');
+const { GET: STATUS } = await import('@/app/api/cash-days/status/route');
+const { GET: CRON } = await import('@/app/api/cron/end-cash-day/route');
 
 function jsonReq(method: string, body: unknown) {
   return new Request('http://t/api/cash-days', {
@@ -131,7 +133,11 @@ describe('expectedCashInr / overShortInr (OPS-2 formula)', () => {
 // ---------------------------------------------------------------------------
 // 2. Handlers — /api/cash-days (GET/POST/PATCH), /reopen, /log.
 // ---------------------------------------------------------------------------
-const NOW = '2026-09-02T12:00:00.000Z'; // fixed "now" for the routes' own clock
+// Fixed "now" for the routes' own clock: 1:30 am IST on the 2nd — after
+// midnight, but before the 1st's day ends on its own at 3:00 am
+// (lib/cash/autoEnd.ts), so these tests run against a day still going. The
+// day-left-open cases at the end set their own clock.
+const NOW = '2026-09-01T20:00:00.000Z';
 const START = '2026-09-01T09:30:00.000Z'; // virtual DB clock start (≈ 3:00 pm IST)
 const OPENED = '2026-09-01T09:30:00.000Z';
 
@@ -372,7 +378,7 @@ describe('POST /api/cash-days — open', () => {
     expect(day.opening_total_inr).toBe(3050); // NOT the client's 999999
     expect(day.status).toBe('open');
     expect(day.opened_by).toBe('staff-1');
-    expect(day.business_date).toBe('2026-09-02'); // IST date at open time (NOW = 5:30 pm IST)
+    expect(day.business_date).toBe('2026-09-02'); // IST date at open time (NOW = 1:30 am IST on the 2nd)
     expect(day.open_expected_total_inr).toBeNull(); // nothing to compare with yet
     expect(day.open_variance_inr).toBeNull();
     // ... and the opening count is on the drawer chain.
@@ -896,5 +902,134 @@ describe('dining-app day totals before the migration', () => {
     await expect(dayAppTotalsFor(erroring(), ['cd-1'])).resolves.toEqual(new Map());
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. A day left open past 3:00 am (lib/cash/autoEnd.ts): it ends on its own,
+//    its figures stop at 3 am, and any staffer counts and closes it.
+// ---------------------------------------------------------------------------
+describe('a cash day left open past its 3 am end', () => {
+  const ENDS_AT = '2026-09-01T21:30:00.000Z'; // 3:00 am IST on the 2nd
+  const NEXT_AFTERNOON = '2026-09-02T10:00:00.000Z'; // 3:30 pm IST on the 2nd
+
+  beforeEach(() => {
+    tables.cash_days.push(dayRow());
+    tables.orders.push(
+      order({ id: 'o1', order_number: 1001, total_inr: 3000, paid_at: '2026-09-01T12:00:00.000Z' }),
+      // 2:00 am IST — after midnight, before the end: still the day's.
+      order({ id: 'o2', order_number: 1002, total_inr: 700, paid_at: '2026-09-01T20:30:00.000Z' }),
+      // 10:30 am IST the next day — after the end: not the day's.
+      order({ id: 'o3', order_number: 1003, total_inr: 999, paid_at: '2026-09-02T05:00:00.000Z' }),
+    );
+    vi.setSystemTime(new Date(NEXT_AFTERNOON));
+  });
+
+  const closeBody = (over: Row = {}) => ({
+    closing_denoms: { '500': 10, '200': 1 }, // 5200 = 1500 + 3000 + 700
+    float_left_denoms: { '500': 3 },
+    ...over,
+  });
+
+  it('GET says it ended, stops its figures at 3 am, and lets whoever counts it close over unpaid orders', async () => {
+    const body = await (await GET()).json();
+    expect(body).toMatchObject({
+      gate_step: 'close_overdue',
+      open_day_overdue: true,
+      open_day_ends_at: ENDS_AT,
+      can_override_unpaid: true, // a plain staffer, on an ended day
+    });
+    expect(body.open_summary).toMatchObject({ cash_sales_inr: 3700, expected_cash_inr: 5200, as_of: ENDS_AT });
+  });
+
+  it('a staffer without the close permission counts and closes it, with the figures to 3 am', async () => {
+    auth.perms.cash_day_close = false;
+    const res = await PATCH(jsonReq('PATCH', closeBody()));
+    expect(res.status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({
+      status: 'closed',
+      closed_by: 'staff-1',
+      closed_at: NEXT_AFTERNOON, // when it was counted
+      cash_sales_inr: 3700, // not the ₹999 taken after 3 am
+      expected_cash_inr: 5200,
+      counted_total_inr: 5200,
+      over_short_inr: 0,
+      handover_inr: 3700,
+      auto_ended_at: ENDS_AT, // recorded at the close when the 3 am job had not
+    });
+  });
+
+  it('still needs the close permission while the day is going', async () => {
+    vi.setSystemTime(new Date('2026-09-01T21:00:00.000Z')); // 2:30 am IST
+    auth.perms.cash_day_close = false;
+    expect((await PATCH(jsonReq('PATCH', closeBody()))).status).toBe(403);
+  });
+
+  it('unpaid orders from the day still need a reason — which any staffer may give — and later ones do not count', async () => {
+    tables.orders.push(
+      order({ id: 'u1', order_number: 3001, payment_status: 'unpaid', status: 'received', total_inr: 200, created_at: '2026-09-01T13:00:00.000Z' }),
+      order({ id: 'u2', order_number: 3002, payment_status: 'unpaid', status: 'received', total_inr: 150, created_at: '2026-09-02T06:00:00.000Z' }),
+    );
+    const blocked = await PATCH(jsonReq('PATCH', closeBody()));
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({ code: 'UNPAID_ORDERS', unpaid_count: 1 });
+
+    const ok = await PATCH(jsonReq('PATCH', closeBody({ unpaid_override_reason: 'table 4 left without paying' })));
+    expect(ok.status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({ status: 'closed', unpaid_count_at_close: 1, unpaid_override_reason: 'table 4 left without paying' });
+  });
+
+  it('a new day cannot open until it is closed, and says so', async () => {
+    const res = await POST(jsonReq('POST', { opening_denoms: { '500': 3 } }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/never closed/);
+  });
+
+  it('the status the counter polls: close it, then open today, then nothing', async () => {
+    expect(await (await STATUS()).json()).toMatchObject({ step: 'close_overdue', open_day: { id: 'cd-1', ends_at: ENDS_AT } });
+    expect((await PATCH(jsonReq('PATCH', closeBody()))).status).toBe(200);
+    expect(await (await STATUS()).json()).toEqual({ step: 'open', open_day: null });
+    expect((await POST(jsonReq('POST', { opening_denoms: { '500': 3 } }))).status).toBe(200);
+    const running = await (await STATUS()).json();
+    expect(running.step).toBeNull();
+    expect(running.open_day).toMatchObject({ business_date: '2026-09-02', ends_at: '2026-09-02T21:30:00.000Z' });
+  });
+
+  it('the status needs a staff session', async () => {
+    auth.user = null;
+    expect((await STATUS()).status).toBe(401);
+  });
+
+  describe('the 3 am job', () => {
+    const cronReq = (secret?: string) =>
+      new Request('http://t/api/cron/end-cash-day', { headers: secret ? { authorization: `Bearer ${secret}` } : {} });
+
+    beforeEach(() => {
+      vi.stubEnv('CRON_SECRET', 'shh');
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('fails closed without the secret', async () => {
+      expect((await CRON(cronReq())).status).toBe(401);
+      expect((await CRON(cronReq('wrong'))).status).toBe(401);
+    });
+
+    it('records that the day ended on its own, once, without closing it', async () => {
+      const body = await (await CRON(cronReq('shh'))).json();
+      expect(body).toMatchObject({ ok: true, ended: 1, day: { id: 'cd-1', ended_at: ENDS_AT } });
+      expect(tables.cash_days[0]).toMatchObject({ status: 'open', auto_ended_at: ENDS_AT });
+
+      tables.cash_days[0].auto_ended_at = '2026-09-01T21:30:05.000Z'; // a second run leaves it alone
+      await CRON(cronReq('shh'));
+      expect(tables.cash_days[0].auto_ended_at).toBe('2026-09-01T21:30:05.000Z');
+    });
+
+    it('leaves a day that is still going', async () => {
+      vi.setSystemTime(new Date('2026-09-01T21:00:00.000Z')); // 2:30 am IST
+      expect(await (await CRON(cronReq('shh'))).json()).toMatchObject({ ended: 0 });
+      expect(tables.cash_days[0].auto_ended_at).toBeUndefined();
+    });
   });
 });

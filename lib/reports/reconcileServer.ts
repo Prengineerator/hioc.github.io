@@ -46,6 +46,10 @@ const SALE_COLUMNS = 'id, created_at, status, payment_status, total_inr, subtota
 // cups covered on it. Read only where the migration has been applied.
 const SALE_PASS_COLUMNS = 'order_kind, pass_discount_inr';
 const PAID_COLUMNS = 'id, payment_method, total_inr, subtotal_inr, paid_at';
+// Everything a close freezes onto its cash day (2026-09-cash-day-handover.sql),
+// including the closing count by denomination and the handover.
+const CASH_DAY_COLUMNS =
+  'id, business_date, status, opened_at, closed_at, opening_total_inr, cash_sales_inr, cash_sales_count, cash_refunds_inr, cash_in_inr, cash_out_inr, expected_cash_inr, counted_total_inr, over_short_inr, closing_denoms, handover_inr, float_left_total_inr, float_left_denoms, close_reason, notes';
 
 export async function loadReport(admin: SupabaseClient, from: string, to: string): Promise<Report> {
   const { startIso, endIso } = rangeBounds(from, to);
@@ -115,14 +119,21 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
       if (isMissingRelation(err)) return [] as CashMovementRow[];
       throw err;
     }),
-    fetchAll<CashDayRow>((a, b) =>
-      admin
-        .from('cash_days')
-        .select('business_date, status, opening_total_inr, cash_sales_inr, expected_cash_inr, counted_total_inr, over_short_inr')
-        .gte('business_date', from)
-        .lte('business_date', to)
-        .order('business_date')
-        .range(a, b) as unknown as PromiseLike<PageResult<CashDayRow>>,
+    // The day's expenses (cash_days.expenses_inr) arrived with the cash-expenses
+    // migration, and when a day ended on its own (auto_ended_at) with the
+    // auto-end one; read what the database has.
+    withColumnTiers<CashDayRow>(
+      [`${CASH_DAY_COLUMNS}, expenses_inr, auto_ended_at`, `${CASH_DAY_COLUMNS}, expenses_inr`, CASH_DAY_COLUMNS],
+      (cols) =>
+        fetchAll<CashDayRow>((a, b) =>
+          admin
+            .from('cash_days')
+            .select(cols)
+            .gte('business_date', from)
+            .lte('business_date', to)
+            .order('opened_at')
+            .range(a, b) as unknown as PromiseLike<PageResult<CashDayRow>>,
+        ),
     ),
   ]);
 

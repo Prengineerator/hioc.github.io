@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildReport,
+  cashDayOuts,
+  closingCountRows,
+  closingDayOf,
   datesBetween,
   istDateOf,
   parseRange,
@@ -118,11 +121,11 @@ describe('buildReport', () => {
       }),
     );
     expect(r.days[0]).toMatchObject({ cashOutInr: 2000, cashInInr: 0 });
-    expect(r.days[0].cashDay?.over_short_inr).toBe(-50);
+    expect(r.days[0].cashDays[0]?.over_short_inr).toBe(-50);
     expect(r.totals).toMatchObject({ cashInInr: 500, cashOutInr: 2000, cashDaysClosed: 1, overShortInr: -50 });
   });
 
-  it('counts expensesInr only for categorised cash-outs, as a subset of cashOutInr', () => {
+  it('keeps expenses (categorised cash-outs) apart from cash out to the owner', () => {
     const r = buildReport(
       base({
         movements: [
@@ -134,9 +137,9 @@ describe('buildReport', () => {
         ],
       }),
     );
-    expect(r.days[0]).toMatchObject({ cashOutInr: 2200, expensesInr: 200, cashInInr: 0 });
+    expect(r.days[0]).toMatchObject({ cashOutInr: 2000, expensesInr: 200, cashInInr: 0 });
     expect(r.days[1]).toMatchObject({ cashOutInr: 40, expensesInr: 0, cashInInr: 500 });
-    expect(r.totals).toMatchObject({ cashOutInr: 2240, expensesInr: 200, cashInInr: 500 });
+    expect(r.totals).toMatchObject({ cashOutInr: 2040, expensesInr: 200, cashInInr: 500 });
   });
 
   it('leaves voided (undone) expenses out of cash out and expenses, and keeps pending ones', () => {
@@ -149,8 +152,116 @@ describe('buildReport', () => {
         ],
       }),
     );
-    expect(r.days[0]).toMatchObject({ cashOutInr: 2080, expensesInr: 80 });
-    expect(r.totals).toMatchObject({ cashOutInr: 2080, expensesInr: 80 });
+    expect(r.days[0]).toMatchObject({ cashOutInr: 2000, expensesInr: 80 });
+    expect(r.totals).toMatchObject({ cashOutInr: 2000, expensesInr: 80 });
+  });
+
+  it('counts a close’s handover as cash out to the owner, on the day it was taken', () => {
+    const r = buildReport(
+      base({
+        movements: [
+          { direction: 'out', amount_inr: 300, created_at: '2026-09-27T12:00:00Z' },
+          { direction: 'out', amount_inr: 9900, created_at: '2026-09-27T19:46:00Z' }, // the handover, 1:16 am IST on the 28th
+        ],
+      }),
+    );
+    expect(r.days[0]).toMatchObject({ cashOutInr: 300, expensesInr: 0 });
+    expect(r.days[1]).toMatchObject({ cashOutInr: 9900, expensesInr: 0 });
+  });
+
+  it('splits a cash day’s cash out into expenses and cash to the owner', () => {
+    const day = { business_date: '2026-09-27', status: 'closed', opening_total_inr: 0, cash_sales_inr: 0, expected_cash_inr: 0, counted_total_inr: 0, over_short_inr: 0 };
+    expect(cashDayOuts({ ...day, cash_out_inr: 1350, expenses_inr: 350, handover_inr: 9900 })).toEqual({
+      expensesInr: 350,
+      cashOutInr: 1000,
+      handoverInr: 9900,
+      toOwnerInr: 10900,
+    });
+    // Closed before expenses were kept: all its cash out went to the owner.
+    expect(cashDayOuts({ ...day, cash_out_inr: 500, expenses_inr: null, handover_inr: null })).toEqual({
+      expensesInr: 0,
+      cashOutInr: 500,
+      handoverInr: 0,
+      toOwnerInr: 500,
+    });
+  });
+
+  it('keeps every cash day of a date and adds up the closed ones for the drawer', () => {
+    const r = buildReport(
+      base({
+        cashDays: [
+          // Out of order on purpose: a date's cash days are kept oldest first.
+          { id: 'b', business_date: '2026-09-27', status: 'closed', opened_at: '2026-09-27T12:00:00Z', closed_at: '2026-09-27T19:00:00Z', opening_total_inr: 1500, cash_sales_inr: 3000, cash_sales_count: 6, cash_refunds_inr: 0, cash_in_inr: 0, cash_out_inr: 500, expenses_inr: 0, expected_cash_inr: 4000, counted_total_inr: 3980, over_short_inr: -20, handover_inr: 1980, float_left_total_inr: 2000 },
+          { id: 'a', business_date: '2026-09-27', status: 'closed', opened_at: '2026-09-27T04:00:00Z', closed_at: '2026-09-27T09:00:00Z', opening_total_inr: 1000, cash_sales_inr: 1000, cash_sales_count: 2, cash_refunds_inr: 100, cash_in_inr: 50, cash_out_inr: 80, expenses_inr: 80, expected_cash_inr: 1870, counted_total_inr: 1880, over_short_inr: 10, handover_inr: 380, float_left_total_inr: 1500 },
+          { id: 'c', business_date: '2026-09-28', status: 'open', opened_at: '2026-09-28T09:00:00Z', opening_total_inr: 2000, cash_sales_inr: null, expected_cash_inr: 0, counted_total_inr: 0, over_short_inr: 0 },
+        ],
+      }),
+    );
+    expect(r.days[0].cashDays.map((c) => c.id)).toEqual(['a', 'b']);
+    expect(r.days[1].cashDays.map((c) => c.id)).toEqual(['c']);
+    expect(closingDayOf(r.days[0])?.id).toBe('b'); // the store's closing count is the last close
+    expect(closingDayOf(r.days[1])).toBeNull();
+    expect(r.totals).toMatchObject({ cashDaysClosed: 2, overShortInr: -10 });
+    expect(r.drawer).toEqual({
+      days: 3,
+      closed: 2,
+      open: 1,
+      cashSalesInr: 4000,
+      cashSalesCount: 8,
+      cashRefundsInr: 100,
+      cashInInr: 50,
+      expensesInr: 80,
+      cashOutInr: 500,
+      overShortInr: -10,
+      handoverInr: 2360,
+      toOwnerInr: 2860,
+      floatLeftInr: 2000,
+    });
+  });
+
+  it('lays out a closing count by denomination with what stayed as the float', () => {
+    expect(
+      closingCountRows({
+        closing_denoms: { '500': 4, '200': 0, '100': 3, '10': 2, '2000': 9 }, // an unknown note never counts
+        float_left_denoms: { '500': 1, '100': 5 }, // more than counted is capped
+      }),
+    ).toEqual([
+      { key: '500', label: '₹500', count: 4, amountInr: 2000, floatLeft: 1, takenOut: 3 },
+      { key: '100', label: '₹100', count: 3, amountInr: 300, floatLeft: 3, takenOut: 0 },
+      { key: '10', label: '₹10', count: 2, amountInr: 20, floatLeft: 0, takenOut: 2 },
+    ]);
+    // Coins counted before 2026-09 were one lump amount.
+    expect(closingCountRows({ closing_denoms: { coins: 37 }, float_left_denoms: null })).toEqual([
+      { key: 'coins', label: 'Coins (₹)', count: 37, amountInr: 37, floatLeft: 0, takenOut: 37 },
+    ]);
+    expect(closingCountRows({ closing_denoms: {}, float_left_denoms: {} })).toEqual([]);
+  });
+
+  it('puts each date’s drawer and its closing count by denomination in the CSV', () => {
+    const r = buildReport(
+      base({
+        cashDays: [
+          { business_date: '2026-09-27', status: 'closed', opened_at: '2026-09-27T09:00:00Z', opening_total_inr: 2000, cash_sales_inr: 5500, cash_out_inr: 500, expenses_inr: 0, expected_cash_inr: 7000, counted_total_inr: 6950, over_short_inr: -50, closing_denoms: { '500': 13, '200': 1, '100': 2, '50': 1 }, handover_inr: 4950, float_left_total_inr: 2000 },
+        ],
+      }),
+    );
+    const [header, day1, day2, total] = reportCsv(r).trim().split('\n').map((l) => l.split(','));
+    const col = (row: string[], h: string) => row[header.indexOf(h)];
+    expect(col(day1, 'Cash day')).toBe('closed');
+    expect(col(day1, 'Drawer opening float (INR)')).toBe('2000');
+    expect(col(day1, 'Drawer cash sales (INR)')).toBe('5500');
+    expect(col(day1, 'Drawer counted (INR)')).toBe('6950');
+    expect(col(day1, 'Over/short (INR)')).toBe('-50');
+    expect(col(day1, 'Handed over to owner (INR)')).toBe('5450'); // ₹500 cash out during the day + ₹4,950 at close
+    expect(col(day1, 'Float left (INR)')).toBe('2000');
+    expect(col(day1, 'Closing count 500 (pcs)')).toBe('13');
+    expect(col(day1, 'Closing count 50 (pcs)')).toBe('1');
+    expect(col(day1, 'Closing count 1 (pcs)')).toBe('0');
+    expect(col(day2, 'Cash day')).toBe('');
+    expect(col(day2, 'Closing count 500 (pcs)')).toBe('');
+    expect(col(total, 'Over/short (INR)')).toBe('-50');
+    expect(col(total, 'Handed over to owner (INR)')).toBe('5450');
+    expect(col(total, 'Drawer counted (INR)')).toBe('');
   });
 
   it('writes a CSV with a row per day and a total row', () => {
@@ -167,7 +278,7 @@ describe('buildReport', () => {
     expect(lines[3].startsWith('TOTAL,1,0,300,')).toBe(true);
   });
 
-  it('puts the Expenses column right after Cash out, with totals', () => {
+  it('puts the Expenses column right after Cash out to owner, kept apart, with totals', () => {
     const r = buildReport(
       base({
         movements: [
@@ -177,10 +288,10 @@ describe('buildReport', () => {
       }),
     );
     const [header, day1, , total] = reportCsv(r).trim().split('\n').map((l) => l.split(','));
-    const at = header.indexOf('Cash out (INR)');
+    const at = header.indexOf('Cash out to owner (INR)');
     expect(header[at + 1]).toBe('Expenses (INR)');
-    expect(day1.slice(at, at + 2)).toEqual(['590', '90']);
-    expect(total.slice(at, at + 2)).toEqual(['590', '90']);
+    expect(day1.slice(at, at + 2)).toEqual(['500', '90']);
+    expect(total.slice(at, at + 2)).toEqual(['500', '90']);
   });
 });
 

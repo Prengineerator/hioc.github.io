@@ -14,12 +14,16 @@
 //    since opening are unpaid (a manager can override with a reason).
 //  - Always       → a manager can reopen the last day if it was closed by
 //    mistake, and recent closures are listed.
+//  - A day left open past 3:00 am has ENDED (lib/cash/autoEnd.ts): its figures
+//    stop there and anyone can count and close it. The counter is locked until
+//    it is closed and today is opened (components/staff/CashDayGate.tsx, which
+//    renders this screen and is told when the day changes via onDayChange).
 //
 // Money is server-authoritative: every total shown here is a live MIRROR (the
 // same lib/cash/day.ts rules the route enforces); POST/PATCH recompute every
 // stored figure server-side.
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { CashCountSheet } from '@/components/staff/CashCountSheet';
 import { CashDayDenomGrid } from '@/components/staff/CashDayDenomGrid';
@@ -83,6 +87,10 @@ interface CashDayData {
   floatLeft: FloatLeft | null;
   reopenableDay: ReopenableDay | null;
   canOverrideUnpaid: boolean;
+  /** The open day passed its 3 am end without being closed. */
+  overdue: boolean;
+  /** When the open day ends on its own. */
+  endsAt: string | null;
   history: CashDay[];
 }
 
@@ -94,6 +102,8 @@ const EMPTY_DATA: CashDayData = {
   floatLeft: null,
   reopenableDay: null,
   canOverrideUnpaid: false,
+  overdue: false,
+  endsAt: null,
   history: [],
 };
 
@@ -102,7 +112,7 @@ const REFRESH_MS = 30_000;
 
 const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
-export function CashDayManager() {
+export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {}) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<CashDayData>(EMPTY_DATA);
   const [busy, setBusy] = useState(false);
@@ -132,6 +142,8 @@ export function CashDayManager() {
         floatLeft: d.float_left ?? null,
         reopenableDay: d.reopenable_day ?? null,
         canOverrideUnpaid: Boolean(d.can_override_unpaid),
+        overdue: Boolean(d.open_day_overdue),
+        endsAt: d.open_day_ends_at ?? null,
         history: d.history ?? [],
       });
     } catch {
@@ -170,6 +182,7 @@ export function CashDayManager() {
         }
         showToast(`Cash day opened with a ${inr(denomsTotalInr(openingDenoms))} float.`);
         await load();
+        onDayChange?.();
         return true;
       } catch {
         showToast('Could not open the cash day — please try again.');
@@ -178,7 +191,7 @@ export function CashDayManager() {
         setBusy(false);
       }
     },
-    [load],
+    [load, onDayChange],
   );
 
   const closeTheDay = useCallback(
@@ -202,6 +215,7 @@ export function CashDayManager() {
           body.handover_warning ? 12000 : 5000,
         );
         await load();
+        onDayChange?.();
         return true;
       } catch {
         showToast('Could not close the cash day — please try again.');
@@ -210,7 +224,7 @@ export function CashDayManager() {
         setBusy(false);
       }
     },
-    [load],
+    [load, onDayChange],
   );
 
   const reopenTheDay = useCallback(
@@ -229,6 +243,7 @@ export function CashDayManager() {
         }
         showToast('Cash day reopened.');
         await load();
+        onDayChange?.();
         return true;
       } catch {
         showToast('Could not reopen the cash day — please try again.');
@@ -237,7 +252,7 @@ export function CashDayManager() {
         setBusy(false);
       }
     },
-    [load],
+    [load, onDayChange],
   );
 
   const manualCount = useCallback(
@@ -301,6 +316,11 @@ export function CashDayManager() {
               ? `Open since ${formatDayTime(openDay.opened_at)} · float ${inr(openDay.opening_total_inr)}`
               : 'Count the opening float to start the day.'}
           </p>
+          {openDay && data.overdue && data.endsAt ? (
+            <p className="mt-1 text-sm font-bold text-red-700">
+              Never closed — it ended on its own at {formatDayTime(data.endsAt)}. Count the drawer to close it.
+            </p>
+          ) : null}
         </div>
         {/* CC-3 — a spot count any time, independent of open/close (a mid-shift
             handover, a manager's spot-check). Visible to every staffer. */}
@@ -315,7 +335,12 @@ export function CashDayManager() {
 
       {openDay && data.openSummary ? (
         <>
-          <DaySummary openDay={openDay} summary={data.openSummary} sales={data.cashSales} />
+          <DaySummary
+            openDay={openDay}
+            summary={data.openSummary}
+            sales={data.cashSales}
+            endedAt={data.overdue ? data.endsAt : null}
+          />
           <CloseForm
             openDay={openDay}
             summary={data.openSummary}
@@ -476,38 +501,46 @@ function OpenForm({
 
 // ── During the day ───────────────────────────────────────────────────────────
 
-function DaySummary({ openDay, summary, sales }: { openDay: CashDay; summary: OpenSummary; sales: CashSaleRow[] }) {
+function DaySummary({
+  openDay,
+  summary,
+  sales,
+  endedAt,
+}: {
+  openDay: CashDay;
+  summary: OpenSummary;
+  sales: CashSaleRow[];
+  /** Set when the day ended on its own: its figures stop there. */
+  endedAt: string | null;
+}) {
   const [showSales, setShowSales] = useState(false);
+  // Expenses are money spent; every other cash out went to the owner.
+  const expensesInr = Math.min(summary.expenses_inr ?? 0, summary.cash_out_inr);
   const rows: [string, string][] = [
     ['Opening float', inr(summary.opening_total_inr)],
     [`Cash sales (${summary.cash_sales_count})`, `+ ${inr(summary.cash_sales_inr)}`],
     ['Cash refunds', `− ${inr(summary.cash_refunds_inr)}`],
     ['Cash in', `+ ${inr(summary.cash_in_inr)}`],
-    ['Cash out', `− ${inr(summary.cash_out_inr)}`],
+    ['Expenses', `− ${inr(expensesInr)}`],
+    ['Cash out to owner', `− ${inr(summary.cash_out_inr - expensesInr)}`],
   ];
-  const expensesInr = summary.expenses_inr ?? 0;
   return (
     <div className="rounded-md border border-tan bg-surface p-4">
       <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-charcoal">
-        Day so far <span className="font-normal normal-case text-muted">· since {formatDayTime(openDay.opened_at)}</span>
+        {endedAt ? 'The day' : 'Day so far'}{' '}
+        <span className="font-normal normal-case text-muted">
+          · {endedAt ? `${formatDayTime(openDay.opened_at)} to ${formatDayTime(endedAt)}` : `since ${formatDayTime(openDay.opened_at)}`}
+        </span>
       </h2>
       <dl className="flex flex-col gap-1">
         {rows.map(([label, value]) => (
-          <Fragment key={label}>
-            <div className="flex items-center justify-between text-sm">
-              <dt className="text-muted">{label}</dt>
-              <dd className="font-bold tabular-nums text-charcoal">{value}</dd>
-            </div>
-            {label === 'Cash out' && expensesInr > 0 ? (
-              <div className="flex items-center justify-between pl-4 text-xs">
-                <dt className="text-muted">of which expenses</dt>
-                <dd className="tabular-nums text-muted">{inr(expensesInr)}</dd>
-              </div>
-            ) : null}
-          </Fragment>
+          <div key={label} className="flex items-center justify-between text-sm">
+            <dt className="text-muted">{label}</dt>
+            <dd className="font-bold tabular-nums text-charcoal">{value}</dd>
+          </div>
         ))}
         <div className="mt-1 flex items-center justify-between border-t border-tan/40 pt-2 text-base">
-          <dt className="font-bold text-charcoal">Expected cash now</dt>
+          <dt className="font-bold text-charcoal">{endedAt ? 'Expected cash in the drawer' : 'Expected cash now'}</dt>
           <dd className="font-bold tabular-nums text-charcoal">{inr(summary.expected_cash_inr)}</dd>
         </div>
       </dl>
