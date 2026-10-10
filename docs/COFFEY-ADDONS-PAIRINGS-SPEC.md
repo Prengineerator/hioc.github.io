@@ -174,7 +174,7 @@ buildCoOrderStats(orders: { itemIds: string[] }[]): CoOrderStats   // distinct i
 - **'ordered'** is written by `POST /api/orders` from `pairing_lines: [{ menu_item_id, anchor_item_id }]` (≤ 5, parsed leniently, never a 400), after the order is created. It is best-effort and sits beside the existing `writeOrderAttribution`, with the line total as `value_inr`. A failure is logged, never thrown.
 
 ### 4.4 Owner view
-Owner → Suggestions → Overview gains a **"Checkout pairings"** widget for the last 30 days. It shows the shown, added and ordered counts, the add rate (added ÷ distinct shown), the attributed revenue (the sum of `value_inr` on ordered), and the top 5 anchor → item pairs by adds. While the table is missing, the widget shows "Apply supabase/2026-10-coffey-addons-pairings.sql to start measuring" instead.
+Owner → Suggestions → Overview gains a **"Checkout pairings"** card for the page's selected window (Today / 7 days / 30 days, like every other card there). The server page reads it directly, through `getPairingStats`; there is no API route. It shows the shown, added and ordered counts, the add rate (added ÷ distinct shown), the attributed revenue (the sum of `value_inr` on ordered), and the top 5 anchor → item pairs by adds. While the table is missing, the widget shows "Apply supabase/2026-10-coffey-addons-pairings.sql to start measuring" instead.
 
 ---
 
@@ -222,7 +222,7 @@ Opus wrote this spec and the shared contract in `lib/suggest/types.ts` (commit "
 | 1 | **D** | Haiku | §2.3 and §4.3 migration, the flag, verify-db | `supabase/2026-10-coffey-addons-pairings.sql` (new), `lib/flags.ts`, `scripts/verify-db.mjs` |
 | 2 | **E** | Sonnet | §1.2, §4.2, §4.3 pairings API, checkout rail, events, attribution | `lib/suggest/serverData.ts` (new), `app/api/suggest/route.ts`, `app/api/suggest/pairings/**` (new), `components/checkout/PairsWellWith.tsx` (new), `app/checkout/page.tsx`, `lib/cart/CartContext.tsx`, `components/checkout/CheckoutForm.tsx` (payload only), `app/api/orders/route.ts` + `lib/suggest/attribution.ts` (pairing lines only), tests |
 | 2 | **F** | Sonnet | §2.3 owner add-on traits API and editor | `lib/suggest/addonTraitsValidate.ts` (new), `app/api/owner/suggest/addon-traits/route.ts` (new), `components/owner/suggestions/AddonTraitsSection.tsx` (new), `TraitsTab.tsx` (mount only), tests |
-| 2 | **G** | Haiku | §4.4 owner widget, `/coffey` article blurb | `lib/suggest/pairingStats.ts` (new), `app/api/owner/suggest/pairings/route.ts` (new), `components/owner/suggestions/PairingsWidget.tsx` (new), `app/owner/suggestions/page.tsx` (mount only), `app/coffey/page.tsx` (one section), tests |
+| 2 | **G** | Haiku | §4.4 owner card, `/coffey` article section | `lib/suggest/pairingStats.ts` (new, + an optional server query file), `components/owner/suggestions/PairingsWidget.tsx` (new), `app/owner/suggestions/page.tsx` (mount only), `app/coffey/page.tsx` (one section), tests |
 | 3 | — | Opus | Merge, full gate, adversarial review, eval, push | — |
 
 **Why this split:**
