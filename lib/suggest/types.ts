@@ -411,8 +411,15 @@ export interface FlavourAddonSuggestion {
 export const ADDON_SUGGEST_LIMITS = {
   /** Options dearer than this are never pointed to. */
   maxPriceInr: 60,
-  /** The flavour sub-fit for a family reached through an add-on (native = 1). */
-  flavourFit: 0.75,
+  /** The flavour sub-fit for a family reached through an add-on (native = 1).
+   * 0 on purpose: the add-on is a TIP on a pick, not a ranking boost. Measured
+   * on the live menu (2026-10-10, 360 picks over mood × flavour × sweetness ×
+   * kinds): at 0.75, 41.7% of picks were native flavour matches vs 60.6% at 0;
+   * add-on items pushed out drinks that really are caramel or nutty while
+   * rescuing almost no pick that matched nothing (22.8% → 20.0%). Even 0.15
+   * cost 1.2 points of native matches for 0.6 rescued. At 0, ranking is exactly
+   * as before and 16.7% of picks still carry a flavour add-on tip. */
+  flavourFit: 0,
 } as const;
 
 // ---------------------------------------------------------------------------

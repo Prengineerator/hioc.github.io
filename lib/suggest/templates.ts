@@ -93,6 +93,8 @@ interface FlavourPhrase {
   /** A shorter wording (one note instead of two; the family phrase without its
    * "from <add-on>") for when `full` doesn't fit. */
   short: string | null;
+  /** The flavour comes from an add-on, not the item itself. */
+  fromAddon?: boolean;
 }
 
 /**
@@ -117,7 +119,7 @@ function flavourPhraseFor(
 
   if (addon && inputs.flavours.includes(addon.family)) {
     const phrase = FLAVOUR_FAMILY_INFO[addon.family].phrase;
-    return { full: `${phrase} from ${addon.label}`, short: phrase };
+    return { full: `${phrase} from ${addon.label}`, short: phrase, fromAddon: true };
   }
 
   const notes = (traits.flavor_notes ?? []).filter((n) => typeof n === 'string' && n.trim().length > 0).slice(0, 2);
@@ -172,8 +174,17 @@ function isFiniteNumber(n: unknown): n is number {
  * nothing. When the customer set a sweetness and the item has a sugar choice,
  * the word describes the drink as they will get it (the preset lifts it), not as
  * the kitchen makes it, so the sentence agrees with the sugar note on the card.
+ *
+ * `withSweetness: false` leaves sweetness out altogether — for a reason whose
+ * flavour comes from a syrup or sauce, which sweetens the drink: "Bold and
+ * unsweetened, with buttery caramel notes from Caramel Sauce" contradicts itself.
  */
-function descriptorsFor(traits: MenuItemTraits, inputs: SuggestInputs, sugarAdjustable: boolean): Descriptor[] {
+function descriptorsFor(
+  traits: MenuItemTraits,
+  inputs: SuggestInputs,
+  sugarAdjustable: boolean,
+  withSweetness = true,
+): Descriptor[] {
   const all: Descriptor[] = [];
 
   if (traits.kind === 'drink' && isFiniteNumber(traits.intensity)) {
@@ -183,7 +194,9 @@ function descriptorsFor(traits: MenuItemTraits, inputs: SuggestInputs, sugarAdju
 
   const inherent = sweetnessLevel(traits);
   const target = sweetnessTarget(inputs.sweetness);
-  if (target !== null) {
+  if (!withSweetness) {
+    // The add-on decides how sweet it ends up; say nothing rather than guess.
+  } else if (target !== null) {
     const word = sweetnessWord(achievableSweetness(inherent, sugarAdjustable, target));
     all.push({ alone: word, paired: word, asked: true });
   } else if ((inherent <= 1 && traits.kind !== 'food') || inherent >= 8) {
@@ -289,7 +302,7 @@ export function templateReason(
   }
 
   // v2: richest sentence first, then progressively plainer until one fits.
-  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable);
+  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable, !phrase?.fromAddon);
   const attempts: string[] = [];
   for (let d = descriptors.length; d >= 0; d--) {
     for (const p of phrases) attempts.push(richSentence(descriptors.slice(0, d), p, clause));

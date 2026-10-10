@@ -23,8 +23,9 @@ import { buildSugarGroup, makeMenuItem, makeTraits, makeTraitsV2 } from './fixtu
 // COFFEY-ADDONS-PAIRINGS-SPEC §2.4, §3 and §6 — reaching a requested flavour
 // through an add-on. The running example is the live menu's: a Cappucino with
 // the "Add a Syrup" group (Salted Caramel / Vanilla / Hazelnut / Caramel, ₹35),
-// asked for something nutty, which scores 0.75 for flavours instead of 0 and
-// carries a "Hazelnut syrup" tip.
+// asked for something nutty, which carries a "Hazelnut syrup" tip. The add-on is
+// a tip, not a ranking boost: ADDON_SUGGEST_LIMITS.flavourFit is 0 (measured on
+// the live menu, see its comment in lib/suggest/types.ts).
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -428,11 +429,11 @@ describe('scoreCandidates and preferenceFits — flavours via an add-on', () => 
     return scoreCandidates({ candidates: filtered, inputs: forInputs, addonTraitsById, ...now });
   }
 
-  it('the flavours sub-fit is 0.75 through an add-on, 1 natively, 0 otherwise', () => {
+  it('the flavours sub-fit is flavourFit (0) through an add-on, 1 natively, 0 otherwise', () => {
     const [candidate] = scoreMenu([cappucino()], [CAPPUCINO_TRAITS], inputs);
     expect(candidate.addonFlavourFamilies).toEqual(['nutty']);
-    expect(ADDON_SUGGEST_LIMITS.flavourFit).toBe(0.75);
-    expect(preferenceFits(inputs, candidate).flavours).toBe(0.75);
+    expect(ADDON_SUGGEST_LIMITS.flavourFit).toBe(0);
+    expect(preferenceFits(inputs, candidate).flavours).toBe(ADDON_SUGGEST_LIMITS.flavourFit);
 
     // The same item with no add-on route, as it scored before: 0.
     expect(preferenceFits(inputs, { ...candidate, addonFlavourFamilies: [] }).flavours).toBe(0);
@@ -452,7 +453,7 @@ describe('scoreCandidates and preferenceFits — flavours via an add-on', () => 
     expect(preferenceFits(inputs, { ...candidate, addonFlavourFamilies: ['caramel'] }).flavours).toBe(0);
   });
 
-  it('OR semantics: one native family among several asked is a full match, an add-on one is partial', () => {
+  it('OR semantics: one native family among several asked is a full match, an add-on one scores flavourFit', () => {
     const both = ask(['caramel', 'nutty']);
     const caramelNative = latteTraits('cappucino', { flavor_notes: ['caramel'] });
     const [native] = scoreMenu([cappucino()], [caramelNative], both);
@@ -460,13 +461,14 @@ describe('scoreCandidates and preferenceFits — flavours via an add-on', () => 
     expect(preferenceFits(both, native).flavours).toBe(1);
     const [viaAddon] = scoreMenu([cappucino()], [CAPPUCINO_TRAITS], both);
     expect(viaAddon.addonFlavourFamilies).toEqual(['caramel', 'nutty']);
-    expect(preferenceFits(both, viaAddon).flavours).toBe(0.75);
+    expect(preferenceFits(both, viaAddon).flavours).toBe(ADDON_SUGGEST_LIMITS.flavourFit);
   });
 
-  it('the score moves by exactly the preference weight × 0.75 (the only change in the scorer)', () => {
+  it('the score moves by exactly the preference weight × flavourFit, i.e. not at all', () => {
     const [withSyrup] = scoreMenu([cappucino()], [CAPPUCINO_TRAITS], inputs);
     const [without] = scoreMenu([cappucino([])], [CAPPUCINO_TRAITS], inputs);
-    expect(withSyrup.score - without.score).toBeCloseTo(0.25 * 0.75, 10);
+    expect(withSyrup.score - without.score).toBeCloseTo(0.25 * ADDON_SUGGEST_LIMITS.flavourFit, 10);
+    expect(withSyrup.score).toBe(without.score);
   });
 
   it('the sweetness guard keeps the score where it was: no add-on route, no credit', () => {
@@ -732,14 +734,26 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     expect(cap.flavourAddon!.label).toBe('Hazelnut syrup');
     expect(cap.matchTags).toEqual(['Cosy', 'Nutty add-on']);
     expect(cap.reason).toContain('from Hazelnut syrup');
+    // No sweetness word: the syrup sweetens the drink, so "unsweetened … from
+    // Hazelnut syrup" would contradict itself. The next descriptor (texture) leads.
     expect(cap.reason).toBe(
-      'Mellow and unsweetened, with toasty nutty notes from Hazelnut syrup — warm and unhurried, a cosy choice.',
+      'Mellow and silky, with toasty nutty notes from Hazelnut syrup — warm and unhurried, a cosy choice.',
     );
     expect(lintReason(cap.reason).ok).toBe(true);
     expect(cap.reason.length).toBeLessThanOrEqual(SUGGEST_LIMITS.reasonMaxChars);
     expect(cap.reasonCode).toBe('cosy');
     // The preselected sugar option is the sugar job's alone: nothing else is preselected.
     expect(cap.sugarPreset).toBeNull();
+  });
+
+  it('a reason that names an add-on never states a sweetness, even when the customer chose one', async () => {
+    for (const sweetness of ['none', 'light', 'medium', 'any'] as const) {
+      const result = await run(ask(['nutty'], { sweetness }));
+      for (const p of result.picks) {
+        if (!p.reason.includes(' from ')) continue;
+        expect(p.reason, `${sweetness}: ${p.reason}`).not.toMatch(/unsweetened|lightly sweet|medium-sweet|dessert-sweet|\bsweet\b/);
+      }
+    }
   });
 
   it('a natively nutty pick has no add-on; one with nothing nutty to offer has none either', async () => {
@@ -755,7 +769,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     expect(plain.matchTags).toEqual(['Cosy']);
   });
 
-  it('ranks native above add-on above neither', async () => {
+  it('ranks native first; an add-on route alone does not lift an item (ties fall to id)', async () => {
     const inputs = ask(['nutty']);
     const m = menu();
     const scored = scoreCandidates({
@@ -768,8 +782,8 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     });
     expect(scored.map((c) => c.menuItemId)).toEqual(['hazelnut-latte', 'cappucino', 'plain-latte']);
     const [native, viaAddon, neither] = scored;
-    expect(native.score - viaAddon.score).toBeCloseTo(0.25 * 0.25, 10);
-    expect(viaAddon.score - neither.score).toBeCloseTo(0.25 * 0.75, 10);
+    expect(native.score - viaAddon.score).toBeCloseTo(0.25 * (1 - ADDON_SUGGEST_LIMITS.flavourFit), 10);
+    expect(viaAddon.score - neither.score).toBeCloseTo(0.25 * ADDON_SUGGEST_LIMITS.flavourFit, 10);
   });
 
   it('no flavours asked for: no flavourAddon anywhere, and the response is what it is without the syrups', async () => {
