@@ -1944,6 +1944,44 @@ async function checkCoffeyTraitsV2() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Coffey add-ons & pairings (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md §2.3, §4.3,
+// supabase/2026-10-coffey-addons-pairings.sql).
+//
+// READ-ONLY, like the traits v2 probes above: every request is a GET, so this
+// can run against production at any time. It proves that both tables exist and
+// carry every column the code reads and writes, answered through PostgREST with
+// the service role (the client the owner routes and the events route use). The
+// CHECKs and RLS need a write to prove, so the migration's own Verify block
+// checks them from the SQL editor instead.
+// ---------------------------------------------------------------------------
+const ADDON_PAIRING_TABLES = [
+  {
+    table: 'addon_option_traits',
+    columns: ['option_id', 'role', 'flavour_families', 'sweetness_delta', 'intensity_delta', 'indulgence_delta', 'textures', 'updated_at'],
+  },
+  {
+    table: 'pairing_events',
+    columns: ['id', 'anon_id', 'user_id', 'event', 'menu_item_id', 'anchor_item_id', 'order_id', 'value_inr', 'created_at'],
+  },
+];
+
+async function checkCoffeeAddonsPairings() {
+  heading('COFFEY · add-ons & pairings tables', '2026-10-coffey-addons-pairings.sql');
+  const hint = 'apply supabase/2026-10-coffey-addons-pairings.sql';
+
+  for (const { table, columns } of ADDON_PAIRING_TABLES) {
+    const res = await rest(`/${table}?select=${columns.join(',')}&limit=1`);
+    if (res.ok) {
+      pass(`${table} exists`, `${columns.length} column(s) selectable`);
+      continue;
+    }
+    const kind = errKind(res);
+    if (kind === 'no_table' || kind === 'no_column') fail(`${table} exists`, `${hint} — ${errText(res)}`);
+    else fail(`${table} exists`, `${kind}: ${errText(res)}`);
+  }
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -1968,6 +2006,7 @@ async function main() {
   await checkCashCounts();
   await checkSuggestionEngine();
   await checkCoffeyTraitsV2();
+  await checkCoffeeAddonsPairings();
   await checkInventory();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
