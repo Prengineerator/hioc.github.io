@@ -147,7 +147,7 @@ buildCoOrderStats(orders: { itemIds: string[] }[]): CoOrderStats   // distinct i
 ```
 - **Pool:** menu items not in the cart, `isMenuItemAvailable`, with a traits row, and `minPrice ≤ max(PAIRING_LIMITS.minPriceCapInr, max over cart items of their minPrice)`. The caller has already removed in-store-only, hidden-category and switched-off items, as `loadMenuAndTraits` does. Cart ids with no menu row or no traits are ignored; if none remain, the result is `[]`.
 - **Score:** each candidate `c` is scored against each cart anchor `a`, and keeps its **best anchor**:
-  `score = 0.40·complement + 0.25·coOrder + 0.20·harmony + 0.10·popularity + 0.05·daypartFit`. The weights are exported as `PAIRING_WEIGHTS`.
+  `score = 0.40·complement + 0.25·coOrder + 0.20·harmony + 0.05·popularity + 0.10·daypartFit`. The weights are exported as `PAIRING_WEIGHTS`. The first draft had popularity 0.10 and daypart 0.05; a read-only probe on the live menu (476 orders in 90 days) showed every coffee cart getting the same three best-selling desserts, and a cappuccino offered beside a brownie at 21:30.
   - **complement** (cart composition; `K` = the set of cart kinds):
     - c drink: 1 if `drink ∉ K`, else 0.2.
     - c dessert: 0.15 if `dessert ∈ K`; else 1 if `drink ∈ K`; else 0.6.
@@ -156,7 +156,11 @@ buildCoOrderStats(orders: { itemIds: string[] }[]): CoOrderStats   // distinct i
   - **harmony(a, c):** `min(1, 0.6·[shares a flavour family] + 0.4·[contrast])`. Flavour families come from `flavourFamiliesOf`. The contrast is "a is a coffee drink at sweetnessLevel ≤ 4 and c is a dessert at ≥ 6" (a sweet partner for a bold coffee), or the reverse.
   - **popularity:** the same normaliser as `score.ts` (the 30-day units ÷ the max).
   - **daypartFit:** for a drink with medium or high caffeine, `{morning 1, afternoon 1, evening 0.5, late 0}[daypartFor(now)]`; otherwise 1.
-- **Select:** drop scores below `PAIRING_LIMITS.minScore` (0.35). Go down the list in descending score order (ties broken by menuItemId ascending) and take candidates whose **category** isn't already taken, with at most one drink, until `limit` is reached.
+- **Select:** drop scores below `PAIRING_LIMITS.minScore` (0.35).
+  1. **Kind coverage:** for each kind the cart lacks (in `KINDS` order: drink, dessert, food), take the best candidate of that kind.
+  2. **Fill:** go down the rest in descending score order (ties broken by menuItemId ascending) until `limit` is reached.
+
+  Throughout, skip a **category** already taken and any second drink. Return the picks best first. Without kind coverage, a coffee-only cart never saw anything savoury.
 - **Reason** (≤ `PAIRING_LIMITS.reasonMaxChars` = 90, must pass `lintReason`). `<A>` is the anchor name, shortened with "…" so the reason fits.
   1. coOrder ≥ 0.6 → "Often ordered with your <A>."
   2. a shared flavour family `f` (the first shared one, in `FLAVOUR_FAMILIES` order) → "Pairs well with your <A> — <FLAVOUR_FAMILY_INFO[f].phrase>."

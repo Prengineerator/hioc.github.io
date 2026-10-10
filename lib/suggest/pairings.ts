@@ -28,20 +28,26 @@ import { sweetnessLevel } from './sweetness';
 import { lintReason } from './tone';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 import type { CoOrderStats, Daypart, FlavourFamily, MenuItemTraits, PairingPick, TraitKind } from './types';
-import { PAIRING_LIMITS } from './types';
+import { KINDS, PAIRING_LIMITS } from './types';
 
 // ---------------------------------------------------------------------------
 // Weights and term constants (§4.1) — change with a reviewed diff
 // ---------------------------------------------------------------------------
 
 /** How much each term counts towards a pairing's score. Sums to 1, so a score is
- * on 0–1 and compares directly with PAIRING_LIMITS.minScore. */
+ * on 0–1 and compares directly with PAIRING_LIMITS.minScore.
+ *
+ * Popularity is 0.05 and daypart 0.10, not the first draft's 0.10 / 0.05. On the
+ * live menu (2026-10-10, 476 orders in 90 days, read-only probe), popularity was
+ * the one term that doesn't depend on the anchor, so every coffee cart got the
+ * same three best-selling desserts. And at 0.05 the caffeine nudge couldn't stop
+ * a cappuccino being offered beside a brownie at 21:30. */
 export const PAIRING_WEIGHTS = {
   complement: 0.4,
   coOrder: 0.25,
   harmony: 0.2,
-  popularity: 0.1,
-  daypart: 0.05,
+  popularity: 0.05,
+  daypart: 0.1,
 } as const;
 
 /** A co-order rate of this share of the anchor's orders is "as good as it gets"
@@ -334,11 +340,12 @@ interface Scored {
  * - Pool: items not in the cart that are available (at `now`), have a traits row,
  *   and whose cheapest size is ≤ max(PAIRING_LIMITS.minPriceCapInr, the dearest
  *   cheapest size in the cart).
- * - Score: `0.40·complement + 0.25·coOrder + 0.20·harmony + 0.10·popularity +
- *   0.05·daypartFit` against each cart item, keeping the best anchor.
- * - Select: drop scores under PAIRING_LIMITS.minScore, then take candidates in
- *   descending score order (ties by menuItemId ascending), skipping a category
- *   already taken and any second drink.
+ * - Score: `0.40·complement + 0.25·coOrder + 0.20·harmony + 0.05·popularity +
+ *   0.10·daypartFit` against each cart item, keeping the best anchor.
+ * - Select: drop scores under PAIRING_LIMITS.minScore. First take the best
+ *   candidate of each kind the cart lacks (KINDS order), then fill in descending
+ *   score order (ties by menuItemId ascending). Skip a category already taken
+ *   and any second drink throughout. The picks are returned best first.
  *
  * An empty cart, or one whose items are all unknown or untagged, gives [].
  */
@@ -391,28 +398,41 @@ export function pairingsFor(args: PairingsArgs): PairingPick[] {
     if (best && best.score >= PAIRING_LIMITS.minScore) scored.push(best);
   }
 
-  scored.sort((a, b) => b.score - a.score || (a.subject.item.id < b.subject.item.id ? -1 : 1));
+  const byScoreThenId = (a: Scored, b: Scored) => b.score - a.score || (a.subject.item.id < b.subject.item.id ? -1 : 1);
+  scored.sort(byScoreThenId);
 
-  const picks: PairingPick[] = [];
+  // Kind coverage first: the best candidate of each kind the cart is missing
+  // (KINDS order: drink, sweet, savoury), so a coffee-only cart sees something
+  // savoury as well as something sweet instead of three desserts. Then fill by
+  // score. Every pick keeps the two rules: a category at most once, at most one
+  // drink.
+  const chosen: Scored[] = [];
   const takenCategories = new Set<string>();
   let hasDrink = false;
-  for (const s of scored) {
-    if (picks.length >= limit) break;
+  const take = (s: Scored): boolean => {
+    if (chosen.length >= limit || chosen.includes(s)) return false;
     const isDrink = s.subject.traits.kind === 'drink';
-    if (takenCategories.has(s.subject.item.category) || (isDrink && hasDrink)) continue;
+    if (takenCategories.has(s.subject.item.category) || (isDrink && hasDrink)) return false;
     takenCategories.add(s.subject.item.category);
     if (isDrink) hasDrink = true;
-    picks.push({
-      menuItemId: s.subject.item.id,
-      anchorItemId: s.anchor.item.id,
-      reason: pairingReason({
-        anchorName: s.anchor.item.name,
-        coOrder: s.coOrder,
-        sharedFamily: s.sharedFamily,
-        kind: s.subject.traits.kind,
-      }),
-      score: s.score,
-    });
+    chosen.push(s);
+    return true;
+  };
+  for (const kind of KINDS) {
+    if (cartKinds.has(kind)) continue;
+    for (const s of scored) if (s.subject.traits.kind === kind && take(s)) break;
   }
-  return picks;
+  for (const s of scored) take(s);
+
+  return chosen.sort(byScoreThenId).map((s) => ({
+    menuItemId: s.subject.item.id,
+    anchorItemId: s.anchor.item.id,
+    reason: pairingReason({
+      anchorName: s.anchor.item.name,
+      coOrder: s.coOrder,
+      sharedFamily: s.sharedFamily,
+      kind: s.subject.traits.kind,
+    }),
+    score: s.score,
+  }));
 }

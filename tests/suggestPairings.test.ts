@@ -237,7 +237,8 @@ describe('buildCoOrderStats', () => {
 
 describe('PAIRING_WEIGHTS', () => {
   it('are the spec values and sum to 1', () => {
-    expect(PAIRING_WEIGHTS).toEqual({ complement: 0.4, coOrder: 0.25, harmony: 0.2, popularity: 0.1, daypart: 0.05 });
+    // popularity 0.05 / daypart 0.10: retuned on the live menu (see the constant's comment).
+    expect(PAIRING_WEIGHTS).toEqual({ complement: 0.4, coOrder: 0.25, harmony: 0.2, popularity: 0.05, daypart: 0.1 });
     const sum = Object.values(PAIRING_WEIGHTS).reduce((a, b) => a + b, 0);
     expect(sum).toBeCloseTo(1, 10);
   });
@@ -360,6 +361,54 @@ describe('complementFit', () => {
     expect(order[0]).toBe('dessert');
     expect(order.indexOf('food')).toBeGreaterThan(order.indexOf('dessert'));
     expect(order).not.toContain('drink');
+  });
+
+  it('kind coverage: a drink-only cart gets something savoury even when sweet things outscore it', () => {
+    // Three desserts in three categories, each a better match than any food —
+    // filling by score alone would return three desserts.
+    const tart = entry({
+      id: 'tart',
+      name: 'Lemon Tart',
+      category: 'Tarts',
+      price: 110,
+      traits: { kind: 'dessert', is_coffee: false, caffeine: 'none', sweetness_level: 7, flavor_notes: [] },
+    });
+    const entries = [AMERICANO, BROWNIE, CHEESECAKE, tart, FRIES];
+    const picks = ask(['americano'], {}, entries);
+    const kinds = picks.map((p) => kindOf(p.menuItemId, entries));
+    expect(kinds).toContain('food');
+    expect(kinds.filter((k) => k === 'dessert')).toHaveLength(2);
+    // ...and the picks still come back best first.
+    expect(picks.map((p) => p.score)).toEqual([...picks.map((p) => p.score)].sort((a, b) => b - a));
+  });
+
+  it('kind coverage never takes a missing kind that falls below the cut-off', () => {
+    // A dessert cart: the drink is missing and clears the cut-off; a food is
+    // missing too, but a dessert-only cart scores food low.
+    const picks = ask(['brownie'], {}, [BROWNIE, CHAI, FRIES]);
+    for (const p of picks) expect(p.score).toBeGreaterThanOrEqual(PAIRING_LIMITS.minScore);
+    expect(picks.map((p) => kindOf(p.menuItemId, [BROWNIE, CHAI, FRIES]))).toContain('drink');
+  });
+
+  it('late at night a caffeine-free drink beats an equally good caffeinated one beside a dessert', () => {
+    const hotChoc = entry({
+      id: 'hot-choc',
+      name: 'Hot Chocolate',
+      category: 'Hot Non-Coffee',
+      price: 130,
+      traits: { kind: 'drink', is_coffee: false, caffeine: 'none', sweetness_level: 7, flavor_notes: ['chocolate'] },
+    });
+    const mocha = entry({
+      id: 'mocha',
+      name: 'Mocha',
+      category: 'Coffee',
+      price: 130,
+      traits: { kind: 'drink', is_coffee: true, caffeine: 'medium', sweetness_level: 7, flavor_notes: ['chocolate'] },
+    });
+    const entries = [BROWNIE, hotChoc, mocha];
+    const popularity = new Map([['mocha', 100], ['hot-choc', 0]]); // the mocha sells far better
+    expect(ask(['brownie'], { popularity, now: MORNING }, entries)[0].menuItemId).toBe('mocha');
+    expect(ask(['brownie'], { popularity, now: LATE }, entries)[0].menuItemId).toBe('hot-choc');
   });
 
   it('a food-only cart favours a drink', () => {
