@@ -1,0 +1,62 @@
+-- ===========================================================================
+-- Fix: let the notifications delivery log accept event = 'feedback'.
+--
+-- THE BUG. The post-order WhatsApp feedback request is a first-class
+-- notification event in code, but the database was never told:
+--   * lib/types.ts            NotificationEvent includes 'feedback'
+--   * lib/notifications/engine.ts  sendFeedbackRequestNotification() logs its
+--     outcome (sent / skipped / failed) into `notifications` with
+--     event = 'feedback' via logSkip()/deliverAndLog(), called from
+--     lib/feedback/send.ts (the feedback-requests cron + the owner's Resend
+--     button).
+--   * notifications_event_check — last rewritten by 2026-07-order-email.sql
+--     (and the same block inside apply-phase3.sql) — still reads
+--     ('accepted','ready','rejected','cancelled','bill').
+--     2026-10-order-feedback.sql added the feedback tables but never widened
+--     this CHECK.
+--
+-- So every 'feedback' log write is rejected by Postgres (23514). The engine
+-- only console.errors a failed log write, so nothing visibly breaks — but:
+--   * no row  -> no idempotency guard at the engine: deliverAndLog's
+--                 "already_sent" check (and the (order_id, event, channel)
+--                 UNIQUE behind it) has nothing to find, so only
+--                 feedback_requests stands between a retry and a second send;
+--   * no row  -> no attempts counter and no audit trail of skips/failures;
+--   * no row  -> the WhatsApp status webhook cannot match delivered/read
+--                 receipts, which it joins on notifications.provider_ref.
+--
+-- Nothing has been lost yet: feedback is switched off in production, so no
+-- feedback message has been sent. Apply this BEFORE turning it on.
+--
+-- THE FIX. Re-state the CHECK with 'feedback' added, the same drop-and-re-add
+-- every earlier widening used (2026-07-order-email.sql added 'bill' this way).
+--
+-- Idempotent: safe to re-run (drop ... if exists, then add).
+--
+-- Additive: it only WIDENS the allowed set — every value that was legal before
+-- is still legal, so every existing row still satisfies it. That makes it safe
+-- to apply before OR after any deploy of the code that logs 'feedback'.
+--
+-- KEEP IN SYNC. The list below must equal NOTIFICATION_EVENTS in lib/types.ts.
+-- tests/notificationsEventCheck.test.ts reads the latest date-prefixed
+-- migration that sets this constraint and fails if the two lists differ, so the
+-- next event added to the type cannot silently miss its CHECK again.
+-- ===========================================================================
+
+alter table public.notifications drop constraint if exists notifications_event_check;
+alter table public.notifications add constraint notifications_event_check
+  check (event in ('accepted', 'ready', 'rejected', 'cancelled', 'bill', 'feedback'));
+
+-- ---------------------------------------------------------------------------
+-- Verify:
+--   -- the constraint now lists all six events:
+--   select pg_get_constraintdef(oid) from pg_constraint
+--    where conname = 'notifications_event_check';
+--
+--   -- ...and still REJECTS garbage, i.e. it was widened, not dropped. This
+--   -- must raise 23514; if it succeeds, the constraint is gone:
+--   -- insert into notifications (order_id, channel, event, status)
+--   --   values ('00000000-0000-0000-0000-000000000000', 'whatsapp', 'bogus', 'queued');
+--
+-- Then run `npm run verify:db` (it probes this with a doomed insert).
+-- ---------------------------------------------------------------------------

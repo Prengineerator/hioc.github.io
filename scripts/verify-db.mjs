@@ -335,6 +335,45 @@ async function checkNotifyDelivery() {
 }
 
 // ---------------------------------------------------------------------------
+// 1c — the post-order feedback request is logged in `notifications`.
+//
+// lib/types.ts has allowed event='feedback' since the feedback feature landed,
+// and sendFeedbackRequestNotification writes it, but notifications_event_check
+// was never widened to match (2026-10-order-feedback.sql did not touch it). Every
+// feedback log write was therefore rejected by Postgres and only console.errored:
+// no row means no "already_sent" guard, no attempts counter, and no row for the
+// WhatsApp status webhook to match delivered/read receipts against
+// (notifications.provider_ref). The failure is silent by construction, which is
+// exactly why it needs a probe against the live database.
+//
+// Same doomed-insert technique as checks 1 and 1b. status stays at 'queued' (the
+// original table's own default) and the row is tagged through provider_ref (also
+// original), so the probe depends on no other migration.
+// ---------------------------------------------------------------------------
+async function checkNotificationsFeedbackEvent() {
+  heading('FEEDBACK · notification log accepts the feedback event', '2026-10-notifications-feedback-event.sql');
+
+  const feedback = await doomedInsert('notifications', {
+    order_id: BOGUS_ORDER_ID, channel: 'whatsapp', event: 'feedback',
+    status: 'queued', provider_ref: SENTINEL,
+  });
+  if (errKind(feedback) === 'check') {
+    fail("notifications.event CHECK accepts 'feedback'", `rejected by the CHECK — apply supabase/2026-10-notifications-feedback-event.sql (${errText(feedback)})`);
+  } else {
+    expectKind("notifications.event CHECK accepts 'feedback'", feedback, 'fk', 'reached the FK, so the CHECK passed');
+  }
+
+  // Negative control. The migration DROPS and re-adds the constraint, so
+  // "widened it" and "deleted it" look identical from the accepting side; an
+  // unknown event must still die on the CHECK.
+  const bogusEvent = await doomedInsert('notifications', {
+    order_id: BOGUS_ORDER_ID, channel: 'whatsapp', event: `bogus_${RUN_ID}`,
+    status: 'queued', provider_ref: SENTINEL,
+  });
+  expectKind('notifications.event CHECK still rejects unknown events', bogusEvent, 'check', 'widened, not dropped');
+}
+
+// ---------------------------------------------------------------------------
 // 2 — TAB-1: adding to an open order is an amendment, not a second order.
 // ---------------------------------------------------------------------------
 async function checkRunningTab() {
@@ -1989,6 +2028,7 @@ async function main() {
 
   await checkBillObservability();
   await checkNotifyDelivery();
+  await checkNotificationsFeedbackEvent();
   await checkRunningTab();
   await checkSplitPayments();
   await checkIdempotencyKeys();
