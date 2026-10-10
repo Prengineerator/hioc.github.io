@@ -189,6 +189,21 @@ export default function CoffeyPage() {
         </p>
       </section>
 
+      {/* Add-ons and pairing ideas: after "Sugar, your way". The checkout paragraph only shows with its flag on. */}
+      <section aria-labelledby="coffey-addons-heading" className="mt-16 max-w-2xl">
+        <SectionHeading id="coffey-addons-heading">Add-ons and pairing ideas</SectionHeading>
+        <p className="mt-4 leading-relaxed text-charcoal">
+          When you pick a flavour, I can also suggest a drink that gets that flavour from an add-on, like a cappuccino
+          with hazelnut syrup. I point the add-on out on the customise screen and never add it for you.
+        </p>
+        {flags.checkoutPairings ? (
+          <p className="mt-4 leading-relaxed text-charcoal">
+            At checkout, I suggest a few things that go well with what&apos;s already in your cart. Each one has an Add
+            button, and it&apos;s easy to ignore.
+          </p>
+        ) : null}
+      </section>
+
       {/* 6. Your data */}
       <section aria-labelledby="coffey-data-heading" className="mt-16 max-w-2xl">
         <SectionHeading id="coffey-data-heading">Your data</SectionHeading>
