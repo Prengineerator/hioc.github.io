@@ -24,8 +24,9 @@
 //                         short — a truncated note would lose its closing quote.
 //   describeCandidate()   one shortlisted item as a small JSON object (name,
 //                         category, price, menu description, a one-line taste
-//                         summary, flavours, textures, the feelings it suits and
-//                         whether its sugar can be adjusted). It is the
+//                         summary, flavours, textures, the feelings it suits,
+//                         whether its sugar can be adjusted and which asked-for
+//                         flavours it gets only from an add-on). It is the
 //                         `instructions` of that item's `fit_c{i}` score question
 //                         (COFFEY-SPEC §4.5), so Jev grades each item on its
 //                         whole taste profile rather than a name.
@@ -487,6 +488,8 @@ export function suitsMood(traits: Pick<MenuItemTraits, 'moods' | 'mood_fit'>, mo
  *   textures      omitted when there are none
  *   best_for      the MOOD_INFO tag of every feeling the item suits (suitsMood), in MOODS order
  *   sugar         SUGAR_ADJUSTABLE_NOTE — only when the item has a sugar choice
+ *   addOnFlavours the labels of the flavours it gets only from an add-on
+ *                 (COFFEY-ADDONS-PAIRINGS-SPEC §3.3) — omitted when there are none
  *
  * Values are strings, string arrays and nothing else, so the object is valid
  * JSON as it stands (and assignable to the SDK's `EntryType`).
@@ -512,6 +515,11 @@ export function describeCandidate(c: Candidate): Record<string, JsonValue> {
   out.best_for = MOODS.filter((m) => suitsMood(c.traits, m)).map((m) => MOOD_INFO[m].tag);
 
   if (c.sugarAdjustable) out.sugar = SUGAR_ADJUSTABLE_NOTE;
+
+  // COFFEY-ADDONS-PAIRINGS-SPEC §3.3 — flavours the customer asked for that the
+  // item gets only from an add-on. Omitted when there are none.
+  const addOnFlavours = (c.addonFlavourFamilies ?? []).map((f) => FLAVOUR_FAMILY_INFO[f].label);
+  if (addOnFlavours.length > 0) out.addOnFlavours = addOnFlavours;
 
   return out;
 }
