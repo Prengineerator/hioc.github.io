@@ -193,8 +193,9 @@ export default function CoffeyPage() {
       <section aria-labelledby="coffey-addons-heading" className="mt-16 max-w-2xl">
         <SectionHeading id="coffey-addons-heading">Add-ons and pairing ideas</SectionHeading>
         <p className="mt-4 leading-relaxed text-charcoal">
-          When you pick a flavour, I can also suggest a drink that gets that flavour from an add-on, like a cappuccino
-          with hazelnut syrup. I point the add-on out on the customise screen and never add it for you.
+          When you pick a flavour and one of my picks doesn&apos;t have it on its own, I tell you which add-on gives it
+          that flavour, like hazelnut syrup in a cappuccino. I point the add-on out on the customise screen and never
+          add it for you.
         </p>
         {flags.checkoutPairings ? (
           <p className="mt-4 leading-relaxed text-charcoal">

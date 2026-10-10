@@ -92,8 +92,8 @@ interface AddonTraits {
   - `price_inr ≤ ADDON_SUGGEST_LIMITS.maxPriceInr` (60);
   - their resolved role is in `FLAVOUR_REACH_ROLES` (flavour, topping, serve);
   - they have at least one flavour family.
-- `reachableAddonFamilies(item, inputs, baseLevel, overrides?) → FlavourFamily[]`. These are the requested families (`inputs.flavours`) that the item does **not** match natively (`flavourFamiliesOf`) but that a reachable option provides. There is a **sweetness guard**: when `sweetnessTarget(inputs.sweetness)` is not null, an option only counts when `baseLevel + sweetness_delta ≤ target + SWEETNESS_SCALE.tolerance`. "Not sweet + caramel" never routes through a caramel syrup that blows the ceiling. With no requested flavours, the result is `[]`.
-- `flavourAddonFor(item, inputs, baseLevel, overrides?) → FlavourAddonSuggestion | null` returns null unless `reachableAddonFamilies` is non-empty. Otherwise it is the single best option, ordered by:
+- `reachableAddonFamilies(item, traits, inputs, overrides?) → FlavourFamily[]`. It takes `traits` because the item's native families come from `traits.flavor_notes`. These are the requested families (`inputs.flavours`) that the item does **not** match natively (`flavourFamiliesOf`) but that a reachable option provides. There is a **sweetness guard**: when `sweetnessTarget(inputs.sweetness)` is not null, an option only counts when `baseLevel + sweetness_delta ≤ target + SWEETNESS_SCALE.tolerance`. "Not sweet + caramel" never routes through a caramel syrup that blows the ceiling. With no requested flavours, the result is `[]`.
+- `flavourAddonFor(item, traits, inputs, overrides?) → FlavourAddonSuggestion | null` returns null unless `reachableAddonFamilies` is non-empty. Otherwise it is the single best option, ordered by:
   1. the requested family's index in `inputs.flavours`;
   2. role (flavour < topping < serve);
   3. `sweetness_delta` ascending;
@@ -111,7 +111,17 @@ interface AddonTraits {
 ### 3.1 Candidate and scoring (`score.ts`)
 - `ScoreCandidatesArgs.addonTraitsById?: Map<string, AddonTraits>` (owner overrides). `Candidate.addonFlavourFamilies?: FlavourFamily[]`, and the same optional field on `ScoredSubject` / `MatchTagSubject`. Absent means `[]`, so every existing fixture keeps working.
 - `scoreCandidates` sets `addonFlavourFamilies = reachableAddonFamilies(c.item, inputs, sweetnessLevel(c.traits), addonTraitsById)`.
-- `preferenceFits` flavours: native match → 1; else any requested family in `subject.addonFlavourFamilies` → `ADDON_SUGGEST_LIMITS.flavourFit` (0.75); else 0. Nothing else in the scorer changes.
+- `preferenceFits` flavours: native match → 1; else any requested family in `subject.addonFlavourFamilies` → `ADDON_SUGGEST_LIMITS.flavourFit`; else 0. Nothing else in the scorer changes.
+- **`flavourFit` is 0: the add-on is a tip, not a ranking boost.** The first draft said 0.75. A read-only probe on the live menu (2026-10-10; 360 picks over mood × flavour × sweetness × kinds) showed what that did:
+
+  | `flavourFit` | native flavour match | match via add-on | no match |
+  |---|---|---|---|
+  | 0 | 60.6% | 16.7% | 22.8% |
+  | 0.15 | 59.4% | 18.3% | 22.2% |
+  | 0.5 | 51.9% | 27.8% | 20.3% |
+  | 0.75 | 41.7% | 38.3% | 20.0% |
+
+  Any credit mostly pushed out drinks that really are caramel or nutty, and rescued almost no pick that matched nothing. At 0 the ranking is exactly as before (`npm run eval:suggest`: 65.4% both ways), and one pick in six still carries an add-on tip. The knob stays, in case the traits change enough to rerun the probe.
 
 ### 3.2 Engine (`engine.ts`)
 - `RunSuggestArgs.addonTraitsById?` is passed through to `scoreCandidates`.
@@ -120,7 +130,7 @@ interface AddonTraits {
 
 ### 3.3 Reasons, tags, decider (`templates.ts`, `brief.ts`)
 - **Match tag** (priority slot 2, in place of the native family tag): when the family matched only through an add-on, the tag is `` `${FLAVOUR_FAMILY_INFO[f].tag} add-on` `` ("Nutty add-on", "Caramel add-on").
-- **Reason**: when the flavour phrase comes from an add-on, it becomes `"<family phrase> from <label>"`, e.g. "Mellow and silky, with toasty nutty notes from Hazelnut syrup — easy to sip while you focus." If the result is over 120 characters, drop `" from <label>"`. If it is still over, the existing truncation rules apply. The result must pass `lintReason`. To keep the template pure, `templateReason` gets an optional trailing `addon?: FlavourAddonSuggestion | null` argument.
+- **Reason**: when the flavour phrase comes from an add-on, it becomes `"<family phrase> from <label>"`, e.g. "Mellow and silky, with toasty nutty notes from Hazelnut syrup — easy to sip while you focus." Such a reason **never states a sweetness**: the syrup or sauce sweetens the drink, so "unsweetened … from Caramel Sauce" would contradict itself. If the result is over 120 characters, drop `" from <label>"`. If it is still over, the existing truncation rules apply. The result must pass `lintReason`. To keep the template pure, `templateReason` gets an optional trailing `addon?: FlavourAddonSuggestion | null` argument.
 - **Jev**: `describeCandidate(c)` adds `addOnFlavours: string[]`, the labels of `c.addonFlavourFamilies` (e.g. `["Nutty"]`), only when non-empty. The rubric question is unchanged.
 
 ### 3.4 Response contract
@@ -190,7 +200,7 @@ Owner → Suggestions → Overview gains a **"Checkout pairings"** card for the 
 
 ## 6. Acceptance
 - Cappucino with `flavours: ['nutty']` and `sweetness: 'any'`:
-  - scores flavours 0.75 (it was 0);
+  - keeps its flavours sub-fit at `flavourFit` (0), so the ranking is unchanged;
   - carries `flavourAddon.label === 'Hazelnut syrup'`;
   - has the tag "Nutty add-on";
   - the modal shows the pill, and nothing extra is preselected.
