@@ -18,6 +18,7 @@
 //     fields. The table scrolls sideways on a phone (DataTable's own wrapper).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AddonTraitsSection } from '@/components/owner/suggestions/AddonTraitsSection';
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable';
 import type { TraitsOverview, TraitsOverviewRow } from '@/lib/suggest/queries';
@@ -934,6 +935,8 @@ export function TraitsTab({ initial }: TraitsTabProps) {
           onCancel={() => setAskRegenerate(false)}
         />
       ) : null}
+
+      <AddonTraitsSection />
     </div>
   );
 }
