@@ -66,6 +66,13 @@ export const flags = {
   // points and the owner Suggestions tab. NEXT_PUBLIC_ because the menu and
   // home pages decide client-side whether to show the entry banner.
   suggest: boolEnv(process.env.NEXT_PUBLIC_FLAG_SUGGEST, false),
+  // Coffey add-ons & pairings (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md §5): the
+  // "Pairs well with your order" card on checkout. Default OFF = dark launch:
+  // nothing shows until supabase/2026-10-coffey-addons-pairings.sql is applied
+  // and the owner has skimmed the add-on traits. Then set
+  // NEXT_PUBLIC_FLAG_CHECKOUT_PAIRINGS=true on Vercel and redeploy once. The
+  // checkout decides client-side whether to render the card, hence NEXT_PUBLIC_.
+  checkoutPairings: boolEnv(process.env.NEXT_PUBLIC_FLAG_CHECKOUT_PAIRINGS, false),
   // Phase-6 PIN operator switching (PIN-2/3). Default OFF (D6-7/R2): even with
   // an enrolled device, the lock screen stays dark and every staff route keeps
   // answering the classic session only, until this is explicitly turned on —
