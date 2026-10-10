@@ -26,9 +26,17 @@ export function MenuItemCustomizeModal({
    * initialSelection(): anything invalid for its group falls back to the
    * usual default. Read once, on open. */
   initialSelection?: Record<string, string[]>;
+  /** Options to HIGHLIGHT with a "Coffey's pick" pill, never to preselect
+   * (group id → option ids): the flavour add-on Coffey suggests on /suggest
+   * (COFFEY-ADDONS-PAIRINGS-SPEC §1.1). Unlike `initialSelection` it changes
+   * nothing about what is chosen, so it can't quietly add to the bill. Vetted by
+   * lib/menu/customization suggestedOptionIds(): an unknown group or option, or
+   * one that is switched off, is ignored. */
+  suggestedOptions?: Record<string, string[]>;
   /** A short line shown above the options, e.g. "Coffey set sugar to “No
-   * Sugar” for you — change it anytime." */
-  hint?: string;
+   * Sugar” for you — change it anytime." A list stacks several lines, one
+   * paragraph each. */
+  hint?: string | string[];
 }) {
   const { addItem } = useCart();
   const [variantId, setVariantId] = useState(item.variants[0]?.id ?? '');
@@ -37,6 +45,8 @@ export function MenuItemCustomizeModal({
   const [instructions, setInstructions] = useState('');
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
+
+  const hints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
 
   const addonsFlat = useMemo(() => flattenAddons(item, selected), [item, selected]);
   const invalid = useMemo(() => invalidGroups(item, selected), [item, selected]);
@@ -97,10 +107,12 @@ export function MenuItemCustomizeModal({
 
   return (
     <Modal open onClose={onClose} title={item.name} subtitle={item.description || undefined} footer={footer} dense>
-      {hint ? (
-        <p role="status" className="mb-3 text-sm text-muted">
-          {hint}
-        </p>
+      {hints.length > 0 ? (
+        <div role="status" className="mb-3 space-y-1 text-sm text-muted">
+          {hints.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+        </div>
       ) : null}
       <ItemCustomizer
         item={item}

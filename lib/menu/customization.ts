@@ -111,6 +111,32 @@ export function initialSelection(
 }
 
 /**
+ * The option ids a caller wants HIGHLIGHTED in the modal (not preselected):
+ * Coffey's flavour add-on on /suggest (COFFEY-ADDONS-PAIRINGS-SPEC §1.1). Unlike
+ * `presets` above this never touches the selection, so it can't quietly add to
+ * the bill.
+ *
+ * `suggested` (group id → option ids) is vetted against the item: a group the
+ * item doesn't have, an option that isn't in that group, or an option switched
+ * off (`is_available === false`) is dropped, so a stale hint can never light up
+ * a row the customer couldn't have tapped. Nothing passed → an empty set, and
+ * existing callers are unaffected.
+ */
+export function suggestedOptionIds(
+  item: Pick<MenuItem, 'addon_groups'>,
+  suggested?: Record<string, string[]>,
+): Set<string> {
+  const ids = new Set<string>();
+  if (!suggested) return ids;
+  for (const group of item.addon_groups) {
+    for (const id of suggested[group.id] ?? []) {
+      if (group.options.some((o) => o.id === id && o.is_available !== false)) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Applies a tap on `optionId` within `group`. Single-select replaces the
  * current pick (deselecting back to nothing only when the group is
  * optional); multi-select toggles the option, refusing to add past max_select.
