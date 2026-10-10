@@ -5,7 +5,7 @@
 // client events route (playbook S-4).
 
 import { isUuid } from '@/lib/api/constants';
-import { SUGGEST_LIMITS } from './types';
+import { PAIRING_LIMITS, SUGGEST_LIMITS } from './types';
 
 // ---------------------------------------------------------------------------
 // Pure
@@ -87,6 +87,92 @@ export function matchAttributionEvents(args: {
 }
 
 // ---------------------------------------------------------------------------
+// Checkout pairings (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md §4.3) — same shape as
+// the suggestion attribution above: a lenient parser and a pure matcher here, a
+// best-effort writer below.
+// ---------------------------------------------------------------------------
+
+/** One entry of POST /api/orders `pairing_lines`. */
+export interface PairingLine {
+  menu_item_id: string;
+  anchor_item_id: string;
+}
+
+/**
+ * Keeps up to `max` valid, distinct pairing lines from an arbitrary request body
+ * value. Lenient by design — never throws, never causes a 400: anything that is
+ * not an object with two UUIDs is dropped, a repeat of an item already kept is
+ * dropped (the first anchor wins: the server attributes an item's whole line
+ * total to it, so a second entry would count the same money twice), and so is an
+ * item "paired" with itself. A checkout must never fail over an analytics field.
+ */
+export function parsePairingLines(raw: unknown, max: number = PAIRING_LIMITS.orderLinesMax): PairingLine[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PairingLine[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (out.length >= max) break;
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    const { menu_item_id, anchor_item_id } = entry as Record<string, unknown>;
+    if (!isUuid(menu_item_id) || !isUuid(anchor_item_id)) continue;
+    // UUIDs are case-insensitive; order lines carry the lower-case form.
+    const itemId = menu_item_id.toLowerCase();
+    const anchorId = anchor_item_id.toLowerCase();
+    if (itemId === anchorId || seen.has(itemId)) continue;
+    seen.add(itemId);
+    out.push({ menu_item_id: itemId, anchor_item_id: anchorId });
+  }
+  return out;
+}
+
+export interface PairingOrderedEvent {
+  user_id: string | null;
+  event: 'ordered';
+  menu_item_id: string;
+  anchor_item_id: string;
+  order_id: string;
+  value_inr: number;
+}
+
+/**
+ * §4.3: one 'ordered' event per pairing line whose `menu_item_id` is actually on
+ * the created order. `value_inr` is the summed `line_total_inr` of that item's
+ * lines in the order (the same numbers the order was priced with), so an item
+ * ordered on two lines counts both. A pairing line for an item that is not in the
+ * order contributes nothing: a client cannot claim revenue for something that was
+ * not bought.
+ */
+export function matchPairingEvents(args: {
+  orderId: string;
+  userId: string | null;
+  lines: AttributionLine[];
+  pairingLines: PairingLine[];
+}): PairingOrderedEvent[] {
+  const { orderId, userId, lines, pairingLines } = args;
+
+  const totalByItem = new Map<string, number>();
+  for (const line of lines) {
+    if (!line.menu_item_id) continue;
+    totalByItem.set(line.menu_item_id, (totalByItem.get(line.menu_item_id) ?? 0) + line.line_total_inr);
+  }
+
+  const events: PairingOrderedEvent[] = [];
+  for (const pairing of pairingLines) {
+    const total = totalByItem.get(pairing.menu_item_id);
+    if (total === undefined) continue;
+    events.push({
+      user_id: userId,
+      event: 'ordered',
+      menu_item_id: pairing.menu_item_id,
+      anchor_item_id: pairing.anchor_item_id,
+      order_id: orderId,
+      value_inr: total,
+    });
+  }
+  return events;
+}
+
+// ---------------------------------------------------------------------------
 // Server writer
 // ---------------------------------------------------------------------------
 
@@ -128,5 +214,32 @@ export async function writeOrderAttribution(
     }
   } catch (err) {
     console.error('writeOrderAttribution threw (best-effort, order unaffected)', err);
+  }
+}
+
+/**
+ * Best-effort: inserts the 'ordered' pairing_events rows for an order that has
+ * just been created (§4.3). `userId` is the order's own `user_id`, never anything
+ * the client sent. NEVER throws, and an insert error (including the table not
+ * existing before supabase/2026-10-coffey-addons-pairings.sql is applied) is only
+ * logged — the order is already committed and nothing here may touch the response.
+ */
+export async function writePairingAttribution(
+  admin: AdminClient,
+  args: { orderId: string; userId: string | null; lines: AttributionLine[]; pairingLines: PairingLine[] },
+): Promise<void> {
+  const { orderId, userId, lines, pairingLines } = args;
+  if (pairingLines.length === 0) return;
+
+  try {
+    const events = matchPairingEvents({ orderId, userId, lines, pairingLines });
+    if (events.length === 0) return;
+
+    const { error } = await admin.from('pairing_events').insert(events);
+    if (error) {
+      console.error('writePairingAttribution: insert failed (best-effort, order unaffected)', error);
+    }
+  } catch (err) {
+    console.error('writePairingAttribution threw (best-effort, order unaffected)', err);
   }
 }

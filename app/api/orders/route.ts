@@ -33,9 +33,14 @@ import { validateAndComputeCoupon } from '@/lib/promotions/coupons';
 import { quoteRedemption, redeemForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import { createCounterCustomer, findVerifiedCustomerByPhone } from '@/lib/loyalty/customerLink';
 import { createPaymentIntent, type CreatedPaymentIntent } from '@/lib/payments/gateway';
-import { parseSuggestionSessionIds, writeOrderAttribution } from '@/lib/suggest/attribution';
+import {
+  parsePairingLines,
+  parseSuggestionSessionIds,
+  writeOrderAttribution,
+  writePairingAttribution,
+} from '@/lib/suggest/attribution';
 import { markProfileStale } from '@/lib/suggest/profileStore';
-import { SUGGEST_LIMITS } from '@/lib/suggest/types';
+import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
 import { allocateOrderPass, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
@@ -95,6 +100,7 @@ export async function POST(request: Request) {
     redeem_points,
     pass_drinks: rawPassDrinks,
     suggestion_session_ids,
+    pairing_lines,
   } = body;
 
   // Phase-7 (SUG-8/SUG-9): distinct session ids the cart's lines carry, so the
@@ -102,6 +108,10 @@ export async function POST(request: Request) {
   // Never a 400 — anything malformed here is simply ignored; a checkout must
   // never fail over an analytics field.
   const suggestionSessionIds = parseSuggestionSessionIds(suggestion_session_ids, SUGGEST_LIMITS.orderSessionIdsMax);
+  // Coffey checkout pairings (COFFEY-ADDONS-PAIRINGS-SPEC §4.3): the cart lines
+  // that were added from the "Pairs well with your order" card. Parsed
+  // leniently for the same reason — anything malformed is dropped, never a 400.
+  const pairingLines = parsePairingLines(pairing_lines, PAIRING_LIMITS.orderLinesMax);
 
   // Phase-3 (FND3-2/3): a request carrying an authenticated staff/manager/owner
   // session — or, PIN-3, an enrolled device's PIN operator — is the second
@@ -978,6 +988,18 @@ export async function POST(request: Request) {
         orderId: orderRow.id as string,
         sessionIds: suggestionSessionIds,
         lines: resolvedLines.map((l) => ({ menu_item_id: l.menu_item_id, line_total_inr: l.line_total_inr })),
+      }),
+    );
+  }
+  // Same for the checkout pairings: one 'ordered' pairing_events row per pairing
+  // line that is really on the order (never throws; the table may not exist yet).
+  if (pairingLines.length > 0) {
+    runAfterResponse(
+      writePairingAttribution(admin, {
+        orderId: orderRow.id as string,
+        userId,
+        lines: resolvedLines.map((l) => ({ menu_item_id: l.menu_item_id, line_total_inr: l.line_total_inr })),
+        pairingLines,
       }),
     );
   }

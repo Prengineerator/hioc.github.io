@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
-import { collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
+import { collectPairingLines, collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
 import { postSuggestEvent } from '@/components/suggest/api';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
@@ -100,6 +100,10 @@ export function CheckoutForm({
   // id that only shows up later, e.g. after navigating back to add another
   // suggested item).
   const suggestionSessionIds = useMemo(() => collectSuggestionSessionIds(items), [items]);
+  // Coffey checkout pairings (COFFEY-ADDONS-PAIRINGS-SPEC §4.3): the lines added
+  // from the "Pairs well with your order" card, and the cart item each was
+  // suggested beside. Payload only; omitted entirely when there are none.
+  const pairingLines = useMemo(() => collectPairingLines(items), [items]);
   const firedCheckoutStarted = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!suggestionSessionIds) return;
@@ -587,6 +591,8 @@ export function CheckoutForm({
           // Phase-7 (SUG-8): omitted entirely (not sent as []) when no cart
           // line came from a /suggest session.
           ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
+          // Coffey checkout pairings: same rule, omitted when no line came from the card.
+          ...(pairingLines ? { pairing_lines: pairingLines } : {}),
         }),
       });
 

@@ -36,6 +36,13 @@ export interface CartItem {
   // and never set by the existing /menu flow, so old stored carts (which have
   // no such field) keep working unchanged.
   suggestionSessionId?: string;
+  // Coffey checkout pairings (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md §4.3): set
+  // when this line was added from the "Pairs well with your order" card, to the
+  // id of the cart item that pick was suggested beside, so the order it ends up
+  // in can be attributed back to the pairing (components/checkout/CheckoutForm.tsx
+  // → pairing_lines). Optional and never set by any other flow, so old stored
+  // carts (which have no such field) keep working unchanged.
+  pairingAnchorId?: string;
   // GST-exempt item (2026-09-gst-exempt), for the bill PREVIEW only — the
   // server re-derives it from the menu when the order is placed. Absent on
   // carts saved before this existed, which just previews GST on everything.
@@ -68,6 +75,13 @@ interface CartContextValue {
   // consumes (and clears) it on its very next call regardless, so it can
   // never leak onto an unrelated line added later from /menu.
   setPendingSuggestionSessionId: (id: string | null) => void;
+  // Coffey checkout pairings (§4.3): the same one-shot hint, for the anchor item
+  // of a pairing pick. components/checkout/PairsWellWith.tsx sets it right before
+  // opening the customize modal for a pick that can't be added in one tap, and
+  // clears it again when the modal closes either way; addItem consumes (and
+  // clears) it on its very next call regardless, so it can never leak onto an
+  // unrelated line.
+  setPendingPairingAnchorId: (id: string | null) => void;
 }
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
@@ -123,6 +137,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // state) is correct here: it's consumed synchronously by the very next
   // addItem() call and never itself drives a render.
   const pendingSuggestionSessionId = useRef<string | null>(null);
+  // Same, for setPendingPairingAnchorId.
+  const pendingPairingAnchorId = useRef<string | null>(null);
 
   useEffect(() => {
     setItems(readFromStorage().items);
@@ -147,25 +163,39 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     // onto a later, unrelated addItem() call.
     const suggestionSessionId = line.suggestionSessionId ?? pendingSuggestionSessionId.current ?? undefined;
     pendingSuggestionSessionId.current = null;
+    // Same rule for the checkout pairing anchor (§4.3): an explicit field wins,
+    // else the one-shot hint, which is consumed either way.
+    const pairingAnchorId = line.pairingAnchorId ?? pendingPairingAnchorId.current ?? undefined;
+    pendingPairingAnchorId.current = null;
     setItems((prev) => {
       const existing = prev.find((i) => i.key === key);
       if (existing) {
         // The cart key is unchanged (same item/variant/addons/instructions),
         // so a suggested line and the same line added plainly from /menu
         // still merge into one — keep whichever suggestionSessionId is
-        // already on the line, or take the new one if it didn't have one.
+        // already on the line, or take the new one if it didn't have one. The
+        // pairing anchor follows the same rule.
         return prev.map((i) =>
           i.key === key
-            ? { ...i, qty: i.qty + qty, suggestionSessionId: i.suggestionSessionId ?? suggestionSessionId }
+            ? {
+                ...i,
+                qty: i.qty + qty,
+                suggestionSessionId: i.suggestionSessionId ?? suggestionSessionId,
+                pairingAnchorId: i.pairingAnchorId ?? pairingAnchorId,
+              }
             : i,
         );
       }
-      return [...prev, { ...line, key, qty, suggestionSessionId }];
+      return [...prev, { ...line, key, qty, suggestionSessionId, pairingAnchorId }];
     });
   }, []);
 
   const setPendingSuggestionSessionId = useCallback((id: string | null) => {
     pendingSuggestionSessionId.current = id;
+  }, []);
+
+  const setPendingPairingAnchorId = useCallback((id: string | null) => {
+    pendingPairingAnchorId.current = id;
   }, []);
 
   const removeItem = useCallback((key: string) => {
@@ -219,6 +249,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       clearCart,
       getQty,
       setPendingSuggestionSessionId,
+      setPendingPairingAnchorId,
     }),
     [
       items,
@@ -233,6 +264,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       clearCart,
       getQty,
       setPendingSuggestionSessionId,
+      setPendingPairingAnchorId,
     ],
   );
 
