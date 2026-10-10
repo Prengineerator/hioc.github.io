@@ -15,6 +15,7 @@ import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 import type { ResolvedQrTable } from '@/lib/tables/resolveTableByToken';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { lineSizeLabel } from '@/lib/menu/weight';
 
 // Dine-in bill preview (QR-1). Always calls the quote endpoint with
 // order_type='dine_in' so packaging shows as ₹0 — the client NEVER computes
@@ -190,6 +191,7 @@ export function QrCheckout({
             quantity: i.qty,
             addon_option_ids: i.addons.map((a) => a.optionId),
             special_instructions: i.specialInstructions,
+            ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
           })),
         }),
       });
@@ -282,7 +284,7 @@ export function QrCheckout({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <span className="font-semibold text-charcoal">{item.name}</span>
-                <span className="ml-1 text-sm text-muted">({item.variantLabel})</span>
+                <span className="ml-1 text-sm text-muted">({lineSizeLabel(item.variantLabel, item.weightGrams)})</span>
                 {item.addons.length > 0 ? (
                   <p className="mt-0.5 text-sm text-muted">
                     {item.addons.map((a) => a.optionName).join(', ')}

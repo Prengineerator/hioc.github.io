@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/Button';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { ORDER_TYPE_LABEL, PAYMENT_LABEL, formatIstDateTime } from '@/lib/print/labels';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 import type {
   CustomerOrderResponse,
   HiocCustomerOrderResponse,
@@ -127,7 +128,7 @@ function OrderCard({
           <li key={item.id}>
             <p>
               {item.quantity}× {item.name_snapshot}
-              {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+              {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}
             </p>
             {item.addons.length > 0 ? (
               <p className="text-xs text-muted">
@@ -177,7 +178,7 @@ function LegacyBillCard({
         {order.items.map((item, i) => (
           <li key={i}>
             {item.name_snapshot}
-            {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+            {lineSizeSuffix(item.variant_label_snapshot)}
           </li>
         ))}
       </ul>

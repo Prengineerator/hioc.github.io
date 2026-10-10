@@ -10,13 +10,16 @@ import { buttonVariants } from '@/components/ui/Button';
 import { MenuItemCustomizeModal } from '@/components/menu/MenuItemCustomizeModal';
 import { MenuItemImage } from '@/components/menu/MenuItemImage';
 import { RitualChip } from '@/components/passes/RitualChip';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import type { MenuItem } from '@/lib/types';
 
+// A sold-by-weight item's variant prices are per kg (lib/menu/weight.ts).
 function priceLabel(item: MenuItem): string {
   const prices = item.variants.map((v) => v.price_inr);
   const min = Math.min(...prices);
   const max = Math.max(...prices);
-  return min === max ? `₹${min}` : `₹${min}–₹${max}`;
+  const unit = isSoldByWeight(item) ? '/kg' : '';
+  return min === max ? `₹${min}${unit}` : `₹${min}–₹${max}${unit}`;
 }
 
 // "Currently unavailable" for a manual 86, or "Back at 6:30 PM" for a timed
@@ -41,7 +44,9 @@ export function MenuItemCard({ item, showRitual = false }: { item: MenuItem; sho
   const [customizing, setCustomizing] = useState(false);
 
   const available = isMenuItemAvailable(item);
-  const isSimple = item.variants.length === 1 && item.addon_groups.length === 0;
+  // A sold-by-weight item always opens the modal: the customer picks the grams.
+  const byWeight = isSoldByWeight(item);
+  const isSimple = item.variants.length === 1 && item.addon_groups.length === 0 && !byWeight;
   const onlyVariant = item.variants[0];
   const simpleKey = onlyVariant ? computeCartKey(item.id, onlyVariant.id, [], '') : '';
   const qty = isSimple ? getQty(simpleKey) : 0;
@@ -149,7 +154,7 @@ export function MenuItemCard({ item, showRitual = false }: { item: MenuItem; sho
               onClick={() => setCustomizing(true)}
               className={buttonVariants({ size: 'sm', fullWidth: true })}
             >
-              Customize &amp; Add
+              {byWeight ? 'Choose weight' : <>Customize &amp; Add</>}
             </button>
           )}
         </div>

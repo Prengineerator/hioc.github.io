@@ -5,6 +5,7 @@
 
 import type { CartItem } from '@/lib/cart/CartContext';
 import { defaultOptionIds, flattenAddons, initialSelection, invalidGroups, isRequired } from '@/lib/menu/customization';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import type { MenuItem } from '@/lib/types';
 
 /** What CartContext.addItem takes. */
@@ -16,6 +17,7 @@ export type PairingCartLine = Omit<CartItem, 'qty' | 'key'>;
  * is nothing for the customer to choose and nothing that quietly costs more:
  *
  *  - exactly one variant (several sizes is a choice), and
+ *  - not sold by weight (how many grams is a choice), and
  *  - every REQUIRED add-on group's default options (`defaultOptionIds`, the ones
  *    the modal itself would preselect) exist, are switched on, and cost ₹0, and
  *    together answer the group's min/max rule.
@@ -26,7 +28,7 @@ export type PairingCartLine = Omit<CartItem, 'qty' | 'key'>;
  * away. `pairingAnchorId` rides on the line (§4.3).
  */
 export function quickAddLine(item: MenuItem, anchorId: string): PairingCartLine | null {
-  if (item.variants.length !== 1) return null;
+  if (item.variants.length !== 1 || isSoldByWeight(item)) return null;
   const variant = item.variants[0];
 
   for (const group of item.addon_groups) {

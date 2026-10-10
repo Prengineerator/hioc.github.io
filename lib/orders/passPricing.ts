@@ -29,6 +29,9 @@ import type { StoreSettings } from '@/lib/types';
  * A line's unit price is what ONE unit cost with add-ons included
  * (price_inr_snapshot), so a pass cup covers up to its drink value of the whole
  * drink as the customer will be charged for it, not of the bare size.
+ *
+ * A weighed line (a bag of beans, weight_grams) is never a drink, so a cup
+ * never pays for it, whatever the item's pass setting says.
  */
 export function passLinesFor(lines: ResolvedLine[], keys: string[], eligibleIds: Set<string>): PassLine[] {
   return lines.map((line, i) => ({
@@ -36,7 +39,7 @@ export function passLinesFor(lines: ResolvedLine[], keys: string[], eligibleIds:
     menu_item_id: line.menu_item_id,
     unit_price_inr: line.price_inr_snapshot,
     quantity: line.quantity,
-    eligible: eligibleIds.has(line.menu_item_id),
+    eligible: eligibleIds.has(line.menu_item_id) && line.weight_grams == null,
     gst_exempt: line.gst_exempt,
   }));
 }

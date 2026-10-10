@@ -6,14 +6,17 @@ import { MenuItemImage } from '@/components/menu/MenuItemImage';
 import { coffeyTip } from '@/components/suggest/addonHint';
 import { buttonVariants } from '@/components/ui/Button';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import type { MenuItem } from '@/lib/types';
 import type { SuggestionPick } from '@/lib/suggest/types';
 
+// A sold-by-weight item's variant prices are per kg (lib/menu/weight.ts).
 function priceLabel(item: MenuItem): string {
   const prices = item.variants.map((v) => v.price_inr);
   const min = Math.min(...prices);
   const max = Math.max(...prices);
-  return min === max ? `₹${min}` : `₹${min}–₹${max}`;
+  const unit = isSoldByWeight(item) ? '/kg' : '';
+  return min === max ? `₹${min}${unit}` : `₹${min}–₹${max}${unit}`;
 }
 
 export function SuggestionCard({

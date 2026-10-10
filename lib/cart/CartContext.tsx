@@ -47,6 +47,11 @@ export interface CartItem {
   // server re-derives it from the menu when the order is placed. Absent on
   // carts saved before this existed, which just previews GST on everything.
   gstExempt?: boolean;
+  // Sold-by-weight item (lib/menu/weight.ts): grams in ONE unit of the line —
+  // qty counts the bags — sent as items[].weight_grams. unitPriceInr is already
+  // that weight's price (plus add-ons), so every total below is unchanged.
+  // Absent on every by-the-unit line and on carts saved before this existed.
+  weightGrams?: number;
 }
 
 interface CartState {
@@ -156,6 +161,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       line.variantId,
       line.addons.map((a) => a.optionId),
       line.specialInstructions,
+      line.weightGrams,
     );
     // An explicit suggestionSessionId on the line wins; otherwise fall back to
     // the one-shot pending hint (set by /suggest right before opening the

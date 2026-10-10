@@ -30,6 +30,7 @@ import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constan
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 
 type OrderWithItems = Order & { items: OrderItem[]; coupon_code?: string | null };
 
@@ -409,7 +410,7 @@ export default function OrderStatusPage() {
               <div className="flex items-start justify-between">
                 <span>
                   {item.name_snapshot}
-                  {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''} ×{' '}
+                  {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)} ×{' '}
                   {item.quantity}
                   {!item.voided && item.pass_drinks && item.pass_drinks > 0 ? (
                     <RitualChip className="ml-2 align-middle">{ritualTagLabel(item.pass_drinks)}</RitualChip>

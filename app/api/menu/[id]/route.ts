@@ -9,6 +9,7 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 import { flags } from '@/lib/flags';
 import { isMissingColumnError } from '@/lib/api/postgrest';
+import { SELL_BY_WEIGHT_MIGRATION_HINT } from '@/lib/menu/weight';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,6 +114,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       | 'in_store_only'
       | 'gst_exempt'
       | 'stock_out_auto'
+      | 'sold_by_weight'
     >
   > = {};
 
@@ -177,6 +179,13 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       return errorResponse(400, 'gst_exempt must be a boolean');
     }
     updates.gst_exempt = body.gst_exempt;
+  }
+
+  if ('sold_by_weight' in body) {
+    if (typeof body.sold_by_weight !== 'boolean') {
+      return errorResponse(400, 'sold_by_weight must be a boolean');
+    }
+    updates.sold_by_weight = body.sold_by_weight;
   }
 
   if ('sort_order' in body) {
@@ -252,15 +261,26 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       .select('id')
       .maybeSingle();
     // The inventory flag can be on before supabase/2026-10-inventory.sql is
-    // applied; the menu must keep saving either way.
-    if (updateError && 'stock_out_auto' in updates && isMissingColumnError(updateError)) {
+    // applied, and the editor sends sold_by_weight before
+    // supabase/2026-10-sell-by-weight.sql is; the menu must keep saving either
+    // way. Switching an item TO sold by weight is the one change that needs
+    // its migration, so that is refused with the fix rather than dropped.
+    if (
+      updateError &&
+      ('stock_out_auto' in updates || 'sold_by_weight' in updates) &&
+      isMissingColumnError(updateError)
+    ) {
       delete updates.stock_out_auto;
+      if (updates.sold_by_weight !== true) delete updates.sold_by_weight;
       ({ error: updateError, data: updated } = await admin
         .from('menu_items')
         .update(updates)
         .eq('id', id)
         .select('id')
         .maybeSingle());
+      if (updateError && updates.sold_by_weight === true && isMissingColumnError(updateError)) {
+        return errorResponse(409, SELL_BY_WEIGHT_MIGRATION_HINT);
+      }
     }
     if (updateError) {
       if (updateError.code === '23505') {

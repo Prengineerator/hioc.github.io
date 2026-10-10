@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { computeBill } from '@/lib/store/hours';
+import { lineSizeLabel } from '@/lib/menu/weight';
 import type { StoreSettings } from '@/lib/types';
 
 // `settings` is optional so this still renders (subtotal-only) while the
@@ -28,7 +29,7 @@ export function CartSummary({ settings, dineIn = false }: { settings?: StoreSett
             <li key={item.key} className="text-sm text-charcoal">
               <div className="flex items-start justify-between">
                 <span>
-                  {item.name} ({item.variantLabel}) × {item.qty}
+                  {item.name} ({lineSizeLabel(item.variantLabel, item.weightGrams)}) × {item.qty}
                 </span>
                 <span className="shrink-0 font-mono font-bold tabular-nums">₹{lineTotal}</span>
               </div>

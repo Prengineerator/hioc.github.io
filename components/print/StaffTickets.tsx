@@ -21,6 +21,7 @@ import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel } from '@/lib/pos/ritual';
 import { passCoveredNote, passValidTillText } from '@/lib/print/ticketModel';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -274,7 +275,7 @@ function KotSlipView({
           <li key={item.id} className={item.voided ? 'line-through' : ''}>
             <p className="font-bold">
               {item.quantity} × {item.name_snapshot}
-              {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+              {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}
               {item.voided ? '  [VOID]' : ''}
             </p>
             {addonsLines(item.addons, { withPrice: false }).map((line) => (
@@ -380,7 +381,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
             <span>{index + 1}</span>
             <span>
               {item.name_snapshot}
-              {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+              {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}
             </span>
             <span className="text-right">{item.quantity}</span>
             <span className="text-right">{unitPriceInclAddons(item).toFixed(2)}</span>

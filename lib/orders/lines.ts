@@ -15,11 +15,16 @@
 //    item's groups; each group's min/max_select is enforced.
 //  * Name/label/price are SNAPSHOT onto the line, so later menu edits never
 //    rewrite history on an existing order.
+//  * A sold-by-weight item (lib/menu/weight.ts) needs the line's grams and is
+//    priced from them; a by-the-unit item refuses grams — so a cart saved
+//    before the owner flipped the switch can't be charged a different bill
+//    than it showed.
 
 import { isUuid } from '@/lib/api/constants';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 import { applyMenuSwitches, isCategoryHidden, type MenuSwitches } from '@/lib/menu/menuSwitches';
+import { basePriceInr, isSoldByWeight, isValidWeightGrams, WEIGHT_MAX_GRAMS, WEIGHT_MIN_GRAMS } from '@/lib/menu/weight';
 
 export const MAX_INSTRUCTION_LENGTH = 200;
 
@@ -58,6 +63,9 @@ export type IncomingOrderItem = {
   quantity: number;
   addon_option_ids: string[];
   special_instructions: string;
+  /** Grams in one unit, for a sold-by-weight item (2026-10-sell-by-weight);
+   * null/absent for everything else. */
+  weight_grams?: number | null;
 };
 
 export type ResolvedLine = {
@@ -71,6 +79,10 @@ export type ResolvedLine = {
   special_instructions: string;
   /** Snapshot of menu_items.gst_exempt at sale time (2026-09-gst-exempt). */
   gst_exempt: boolean;
+  /** Grams in one unit of a sold-by-weight line (2026-10-sell-by-weight).
+   * PRESENT ONLY on weighed lines, so a by-the-unit line's insert row is
+   * exactly what it was before the migration. */
+  weight_grams?: number;
   addons: {
     addon_option_id: string;
     group_name_snapshot: string;
@@ -95,7 +107,7 @@ export function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
     if (typeof entry !== 'object' || entry === null) {
       return `items[${i}] must be an object`;
     }
-    const { menu_item_id, variant_id, quantity, addon_option_ids, special_instructions } =
+    const { menu_item_id, variant_id, quantity, addon_option_ids, special_instructions, weight_grams } =
       entry as Record<string, unknown>;
     if (!isUuid(menu_item_id)) {
       return `items[${i}].menu_item_id must be a valid uuid`;
@@ -120,12 +132,20 @@ export function parseItems(rawItems: unknown): IncomingOrderItem[] | string {
       }
       instructions = special_instructions.trim().slice(0, MAX_INSTRUCTION_LENGTH);
     }
+    let weightGrams: number | null = null;
+    if (weight_grams !== undefined && weight_grams !== null) {
+      if (!isValidWeightGrams(weight_grams)) {
+        return `items[${i}].weight_grams must be a whole number of grams from ${WEIGHT_MIN_GRAMS} to ${WEIGHT_MAX_GRAMS}`;
+      }
+      weightGrams = weight_grams;
+    }
     parsed.push({
       menu_item_id,
       variant_id,
       quantity,
       addon_option_ids: addonIds,
       special_instructions: instructions,
+      ...(weightGrams !== null ? { weight_grams: weightGrams } : {}),
     });
   }
   return parsed;
@@ -178,6 +198,22 @@ export function resolveOrderLines(
       return { ok: false, error: `"${menuItem.name}" in ${variant.label} isn't available right now` };
     }
 
+    // Sold by weight: the variant's price is per kg and the line must say how
+    // many grams. Either mismatch means the cart was built against a menu that
+    // has since changed, so refuse rather than price it some other way.
+    const weightGrams = item.weight_grams ?? null;
+    const byWeight = isSoldByWeight(menuItem);
+    if (byWeight && weightGrams === null) {
+      return { ok: false, error: `"${menuItem.name}" is sold by weight — choose how many grams` };
+    }
+    if (!byWeight && weightGrams !== null) {
+      return {
+        ok: false,
+        error: `"${menuItem.name}" is no longer sold by weight — please remove it and add it again`,
+      };
+    }
+    const basePrice = basePriceInr(variant.price_inr, weightGrams);
+
     const optionById = new Map<string, { option: AddonGroup['options'][number]; group: AddonGroup }>();
     for (const group of visible.addon_groups) {
       for (const option of group.options) {
@@ -225,7 +261,7 @@ export function resolveOrderLines(
     });
 
     const addonsTotal = addonsFlat.reduce((sum, a) => sum + a.price_inr_snapshot, 0);
-    const unitPrice = variant.price_inr + addonsTotal;
+    const unitPrice = basePrice + addonsTotal;
     const line_total_inr = unitPrice * item.quantity;
     subtotalInr += line_total_inr;
     const gst_exempt = menuItem.gst_exempt === true;
@@ -241,6 +277,7 @@ export function resolveOrderLines(
       line_total_inr,
       special_instructions: item.special_instructions,
       gst_exempt,
+      ...(weightGrams !== null ? { weight_grams: weightGrams } : {}),
       addons: addonsFlat,
     });
   }

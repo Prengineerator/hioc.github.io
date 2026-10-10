@@ -429,6 +429,7 @@ async function addLines(
       lines: resolved.lines.map((l) => ({
         name: l.name_snapshot,
         variant: l.variant_label_snapshot,
+        ...(l.weight_grams != null ? { weight_grams: l.weight_grams } : {}),
         quantity: l.quantity,
         line_total_inr: l.line_total_inr,
       })),

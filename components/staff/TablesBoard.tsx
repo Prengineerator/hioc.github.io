@@ -24,6 +24,7 @@ import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { useStaffOrdersRealtime, type RealtimeConnection } from '@/lib/realtime/hooks';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
+import { lineSizeLabel } from '@/lib/menu/weight';
 import {
   groupTablesByZone,
   isOccupied,
@@ -219,7 +220,9 @@ function TableTile({
                   .map((i) => (
                     <li key={i.id} className="truncate">
                       {i.quantity}× {i.name_snapshot}
-                      {i.variant_label_snapshot ? ` · ${i.variant_label_snapshot}` : ''}
+                      {lineSizeLabel(i.variant_label_snapshot, i.weight_grams)
+                        ? ` · ${lineSizeLabel(i.variant_label_snapshot, i.weight_grams)}`
+                        : ''}
                     </li>
                   ))}
               </ul>

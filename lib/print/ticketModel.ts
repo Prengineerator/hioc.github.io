@@ -15,6 +15,7 @@ import type { PrintType } from '@/lib/staff/autoPrint';
 import type { TicketDoc, TicketBlock, TicketColumn } from '@/lib/print/ticketDoc';
 import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY } from '@/lib/constants';
 import { BUSINESS } from '@/lib/legal';
 import {
@@ -104,16 +105,18 @@ function addonsLines(addons: AddonForLine[], opts: { withPrice: boolean; itemQua
   return lines;
 }
 
-function itemLabel(item: { quantity: number; name_snapshot: string; variant_label_snapshot: string }): string {
-  const variant = item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : '';
-  return `${item.quantity} × ${item.name_snapshot}${variant}`;
+// weight_grams: a sold-by-weight line prints its grams beside the variant
+// ("2 × House Blend (250 g)"), so the counter knows what to weigh.
+type LabelledItem = { name_snapshot: string; variant_label_snapshot: string; weight_grams?: number | null };
+
+function itemLabel(item: LabelledItem & { quantity: number }): string {
+  return `${item.quantity} × ${item.name_snapshot}${lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}`;
 }
 
 /** Item name + variant with no quantity prefix — the receipt's item table
  * has its own Qty. column, unlike the KOT's single "2 × Name" line. */
-function itemDisplayName(item: { name_snapshot: string; variant_label_snapshot: string }): string {
-  const variant = item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : '';
-  return `${item.name_snapshot}${variant}`;
+function itemDisplayName(item: LabelledItem): string {
+  return `${item.name_snapshot}${lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}`;
 }
 
 /**

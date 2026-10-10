@@ -66,6 +66,8 @@ export const MENU_CATEGORIES: {
   { slug: 'Cup Cakes', label: 'Cup Cakes', parent: '' },
   { slug: 'Cheesecakes', label: 'Cheesecakes', parent: '' },
   { slug: 'Monthly Drops', label: 'Monthly Drops', parent: '' },
+  // Beans to take home, usually sold by weight (2026-10-sell-by-weight.sql).
+  { slug: 'Coffee Beans', label: 'Coffee Beans', parent: '' },
   { slug: 'In-store', label: 'In-store', parent: '', inStoreOnly: true },
 ];
 

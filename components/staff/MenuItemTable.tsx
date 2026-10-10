@@ -6,6 +6,7 @@ import { formatIstTime } from '@/lib/store/hours';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { MenuItem } from '@/lib/types';
 import { isInStoreOnly } from '@/lib/menu/inStore';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import { DataTable } from '@/components/ui/DataTable';
 
 // S6 86/snooze durations the table offers. Page-level handler turns these
@@ -14,8 +15,10 @@ import { DataTable } from '@/components/ui/DataTable';
 export type SnoozeDuration = '2h' | 'eod' | 'indefinite';
 
 function variantSummary(item: MenuItem): string {
+  // A sold-by-weight item's prices are per kg (lib/menu/weight.ts).
+  const unit = isSoldByWeight(item) ? '/kg' : '';
   return item.variants
-    .map((v) => (item.variants.length === 1 ? `₹${v.price_inr}` : `${v.label} ₹${v.price_inr}`))
+    .map((v) => (item.variants.length === 1 ? `₹${v.price_inr}${unit}` : `${v.label} ₹${v.price_inr}${unit}`))
     .join(' / ');
 }
 
@@ -129,6 +132,11 @@ export function MenuItemTable({
               {item.gst_exempt ? (
                 <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
                   No GST
+                </span>
+              ) : null}
+              {isSoldByWeight(item) ? (
+                <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
+                  By weight
                 </span>
               ) : null}
             </>

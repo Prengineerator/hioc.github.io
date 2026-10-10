@@ -9,6 +9,7 @@ import { ownsOrder, verifiedEmailOf } from '@/lib/account/history';
 import type { AddonGroup, MenuItem, OrderItem, OrderItemAddon } from '@/lib/types';
 import type { CartAddonSelection, CartItem } from '@/lib/cart/CartContext';
 import { isInStoreOnly } from '@/lib/menu/inStore';
+import { basePriceInr, repeatWeight } from '@/lib/menu/weight';
 
 export const dynamic = 'force-dynamic';
 
@@ -185,6 +186,13 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
       skipped.push({ name: displayName, reason: 'This option is no longer offered' });
       continue;
     }
+    // Sold by weight: keep the bag size ordered last time, at today's per-kg
+    // price; skip a line from before the item changed how it is sold.
+    const weight = repeatWeight(menuItem, oi.weight_grams);
+    if (!weight.ok) {
+      skipped.push({ name: displayName, reason: weight.reason });
+      continue;
+    }
 
     const optionById = new Map<string, { option: AddonGroup['options'][number]; group: AddonGroup }>();
     for (const group of menuItem.addon_groups) {
@@ -215,7 +223,8 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
       });
     }
 
-    const unitPriceInr = variant.price_inr + kept.reduce((sum, a) => sum + a.priceInr, 0);
+    const unitPriceInr =
+      basePriceInr(variant.price_inr, weight.weightGrams) + kept.reduce((sum, a) => sum + a.priceInr, 0);
 
     items.push({
       menuItemId: menuItem.id,
@@ -226,6 +235,7 @@ export async function GET(_request: Request, { params }: { params: { orderId: st
       gstExempt: menuItem.gst_exempt === true,
       addons: kept,
       specialInstructions: oi.special_instructions ?? '',
+      ...(weight.weightGrams !== null ? { weightGrams: weight.weightGrams } : {}),
       qty: oi.quantity,
     });
   }

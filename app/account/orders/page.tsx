@@ -28,6 +28,7 @@ import {
 import { hasBill } from '@/lib/orders/paymentStatusUI';
 import { Spinner } from '@/components/ui/Spinner';
 import type { OrderResponse } from '@/lib/api/orders';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 
 type Tab = 'active' | 'past';
 
@@ -39,7 +40,7 @@ interface LegacyOrderResponse {
   total_inr: number;
   status: string;
   channel: string;
-  items: Array<{ name_snapshot: string; variant_label_snapshot: string }>;
+  items: Array<{ name_snapshot: string; variant_label_snapshot: string; weight_grams?: number | null }>;
 }
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -356,7 +357,7 @@ function AccountOrdersContent() {
                 </div>
 
                 <p className="mt-2 line-clamp-2 text-sm text-muted">
-                  {order.items.map((i) => `${i.name_snapshot}${i.variant_label_snapshot ? ` (${i.variant_label_snapshot})` : ''}`).join(', ')}
+                  {order.items.map((i) => `${i.name_snapshot}${lineSizeSuffix(i.variant_label_snapshot, i.weight_grams)}`).join(', ')}
                 </p>
               </li>
             ))}

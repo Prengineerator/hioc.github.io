@@ -13,6 +13,7 @@ import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/lib/passes/ui';
 import { RitualChip } from '@/components/passes/RitualChip';
 import { SurfaceLink } from '@/components/SurfaceLink';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -153,7 +154,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
               <div className="flex items-start justify-between gap-2">
                 <span>
                   {item.quantity} × {item.name_snapshot}
-                  {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+                  {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}
                   {!item.voided && item.pass_drinks && item.pass_drinks > 0 ? (
                     <RitualChip className="ml-2 align-middle print:border-black print:text-black">
                       {ritualTagLabel(item.pass_drinks)}

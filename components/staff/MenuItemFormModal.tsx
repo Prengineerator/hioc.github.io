@@ -6,6 +6,10 @@ import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 import { isInStoreOnly, isInStoreOnlyCategory } from '@/lib/menu/inStore';
+import { DEFAULT_WEIGHT_GRAMS, formatWeight, weightPriceInr } from '@/lib/menu/weight';
+
+// The category new beans go in; an item created there starts out sold by weight.
+const BEANS_CATEGORY = 'Coffee Beans';
 
 export interface MenuItemFormValues {
   name: string;
@@ -18,6 +22,8 @@ export interface MenuItemFormValues {
   in_store_only: boolean;
   /** No GST charged on this item (2026-09-gst-exempt). */
   gst_exempt: boolean;
+  /** Sold by the gram; variant prices are per kg (2026-10-sell-by-weight). */
+  sold_by_weight: boolean;
   sort_order: number;
   image_url: string;
   short_code: string | null; // optional POS quick-add shortform (UPPERCASE or null)
@@ -52,6 +58,7 @@ export function MenuItemFormModal({
   // that wouldn't take effect.
   const categoryForcesInStore = isInStoreOnlyCategory(category);
   const [gstExempt, setGstExempt] = useState(initial?.gst_exempt ?? false);
+  const [soldByWeight, setSoldByWeight] = useState(initial?.sold_by_weight === true);
   const [sortOrder, setSortOrder] = useState(String(initial?.sort_order ?? 0));
   const [imageUrl, setImageUrl] = useState(initial?.image_url ?? '');
   const [shortCode, setShortCode] = useState(initial?.short_code ?? '');
@@ -74,6 +81,13 @@ export function MenuItemFormModal({
       .then((data: { addonGroups?: AddonGroup[] }) => setAllAddonGroups(data.addonGroups ?? []))
       .catch(() => setAllAddonGroups([]));
   }, []);
+
+  // A new item put in the beans category is almost always sold by weight, so
+  // the switch follows the category there; it can still be turned off.
+  function handleCategoryChange(next: string) {
+    setCategory(next);
+    if (mode === 'create' && next === BEANS_CATEGORY) setSoldByWeight(true);
+  }
 
   function updateVariant(index: number, field: keyof VariantRow, value: string) {
     setVariantRows((prev) =>
@@ -150,7 +164,9 @@ export function MenuItemFormModal({
       // separately so a blank price field is rejected instead of silently
       // becoming a free (₹0) variant.
       if (row.price.trim() === '' || !Number.isInteger(price) || price < 0) {
-        setError(`Price for "${row.label}" must be a non-negative whole number.`);
+        setError(
+          `${soldByWeight ? 'Price per kg' : 'Price'} for "${row.label}" must be a non-negative whole number.`,
+        );
         return;
       }
       variants.push({ label: row.label.trim(), price_inr: price });
@@ -175,6 +191,7 @@ export function MenuItemFormModal({
         is_available: isAvailable,
         in_store_only: inStoreOnly || categoryForcesInStore,
         gst_exempt: gstExempt,
+        sold_by_weight: soldByWeight,
         sort_order: Number(sortOrder) || 0,
         image_url: imageUrl,
         short_code: trimmedCode || null,
@@ -187,6 +204,8 @@ export function MenuItemFormModal({
       setSubmitting(false);
     }
   }
+
+  const priceExample = soldByWeight ? weightExample(variantRows) : '';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-4 py-8">
@@ -289,7 +308,7 @@ export function MenuItemFormModal({
                   id="item-category"
                   required
                   value={category}
-                  onChange={(e) => setCategory(e.target.value)}
+                  onChange={(e) => handleCategoryChange(e.target.value)}
                   className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
                 >
                   {MENU_CATEGORIES.map((c) => (
@@ -325,15 +344,28 @@ export function MenuItemFormModal({
                 </p>
               </div>
 
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-sm font-bold text-charcoal">Sold by weight (grams)</span>
+                  <p className="text-xs text-muted">
+                    For coffee beans and other loose goods. Prices below are per kg; customers and staff pick
+                    how many grams, and the price is worked out from it.
+                  </p>
+                </div>
+                <ToggleSwitch checked={soldByWeight} onChange={setSoldByWeight} label="Sold by weight" />
+              </div>
+
               <div>
                 <div className="mb-1 flex items-center justify-between">
-                  <span className="text-sm font-bold text-charcoal">Sizes &amp; Prices</span>
+                  <span className="text-sm font-bold text-charcoal">
+                    {soldByWeight ? 'Price per kg' : <>Sizes &amp; Prices</>}
+                  </span>
                   <button
                     type="button"
                     onClick={addVariantRow}
                     className="text-sm font-bold text-tan-dark hover:underline"
                   >
-                    + Add size
+                    {soldByWeight ? '+ Add option' : '+ Add size'}
                   </button>
                 </div>
                 <div className="flex flex-col gap-2">
@@ -345,7 +377,7 @@ export function MenuItemFormModal({
                     <div key={i} className="flex flex-wrap items-center gap-2">
                       <input
                         type="text"
-                        placeholder="e.g. Large"
+                        placeholder={soldByWeight ? 'e.g. Whole beans' : 'e.g. Large'}
                         value={row.label}
                         onChange={(e) => updateVariant(i, 'label', e.target.value)}
                         className="min-w-[7rem] flex-1 rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
@@ -356,7 +388,7 @@ export function MenuItemFormModal({
                           type="number"
                           min={0}
                           step={1}
-                          placeholder="Price"
+                          placeholder={soldByWeight ? 'Per kg' : 'Price'}
                           value={row.price}
                           onChange={(e) => updateVariant(i, 'price', e.target.value)}
                           className="w-full min-w-0 rounded-md px-2 py-2 text-charcoal outline-none"
@@ -375,7 +407,15 @@ export function MenuItemFormModal({
                   ))}
                 </div>
                 <p className="mt-1 text-xs text-muted">
-                  A single-price item just needs one row (label it &quot;Regular&quot;).
+                  {soldByWeight ? (
+                    <>
+                      One row per grind or roast (e.g. &quot;Whole beans&quot;, &quot;Ground&quot;), or a single row
+                      labelled &quot;Regular&quot;.
+                      {priceExample ? ` ${priceExample}` : ''}
+                    </>
+                  ) : (
+                    <>A single-price item just needs one row (label it &quot;Regular&quot;).</>
+                  )}
                 </p>
               </div>
 
@@ -480,4 +520,13 @@ export function MenuItemFormModal({
       </div>
     </div>
   );
+}
+
+// "250 g at ₹2400/kg = ₹600." for the first row with a usable price, so the
+// owner can check the per-kg figure before saving; '' until there is one.
+function weightExample(rows: VariantRow[]): string {
+  const row = rows.find((r) => r.price.trim() !== '' && Number.isInteger(Number(r.price)) && Number(r.price) > 0);
+  if (!row) return '';
+  const perKg = Number(row.price);
+  return `${formatWeight(DEFAULT_WEIGHT_GRAMS)} at ₹${perKg}/kg = ₹${weightPriceInr(perKg, DEFAULT_WEIGHT_GRAMS)}.`;
 }

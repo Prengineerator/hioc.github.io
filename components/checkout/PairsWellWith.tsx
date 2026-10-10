@@ -22,6 +22,7 @@ import { getAnonId } from '@/components/suggest/api';
 import { Button } from '@/components/ui/Button';
 import { useCart } from '@/lib/cart/CartContext';
 import { minVariantPriceInr, quickAddLine } from '@/lib/cart/pairingAdd';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import { flags } from '@/lib/flags';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { PAIRING_LIMITS } from '@/lib/suggest/types';
@@ -137,7 +138,11 @@ export function PairsWellWithCard({ rows, onAdd }: { rows: PairingRow[]; onAdd: 
               </div>
               <p className="mt-0.5 break-words text-sm text-muted">{row.pick.reason}</p>
               <p className="mt-0.5 text-sm text-muted">
-                from <span className="font-mono font-bold tabular-nums text-tan-dark">₹{row.minPriceInr}</span>
+                from{' '}
+                <span className="font-mono font-bold tabular-nums text-tan-dark">
+                  ₹{row.minPriceInr}
+                  {isSoldByWeight(row.item) ? '/kg' : ''}
+                </span>
               </p>
             </div>
             <Button

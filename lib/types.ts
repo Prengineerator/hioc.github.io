@@ -148,6 +148,11 @@ export interface MenuItem {
   // A HIOC Ritual pass can pay for this drink (2026-10-coffee-pass migration).
   // Optional so a row read before the migration still type-checks; absent = no.
   pass_eligible?: boolean;
+  // Sold by the gram, e.g. coffee beans (2026-10-sell-by-weight migration):
+  // each variant's price_inr is then the price PER KG and every order line
+  // carries weight_grams (lib/menu/weight.ts). Optional so a row read before
+  // the migration still type-checks; absent = sold by the unit.
+  sold_by_weight?: boolean;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
@@ -264,6 +269,10 @@ export interface OrderItem {
   // The terms that pass was sold with (see CoffeePassTerms); the trigger that
   // issues the pass reads them. Null/absent on any other line.
   coffee_pass_terms?: CoffeePassTerms | null;
+  // 2026-10-sell-by-weight.sql: grams in ONE unit of a sold-by-weight line
+  // (quantity counts the bags); price_inr_snapshot is already that weight's
+  // price. Null/absent on every by-the-unit line.
+  weight_grams?: number | null;
   addons: OrderItemAddon[];
   // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
   // is VOIDED, never deleted — kept for audit; excluded from totals server-side.

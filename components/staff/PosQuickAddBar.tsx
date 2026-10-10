@@ -9,6 +9,7 @@
 
 import { useEffect, useId, useMemo, useState, type KeyboardEvent, type RefObject } from 'react';
 import { parseQuickAddInput, resolveQuickAdd, type QuickAddCandidate } from '@/lib/pos/quickAdd';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import type { MenuItem } from '@/lib/types';
 
 const DROPDOWN_LIMIT = 8;
@@ -16,7 +17,9 @@ const DROPDOWN_LIMIT = 8;
 function priceLabel(item: MenuItem): string {
   const prices = item.variants.map((v) => v.price_inr);
   const min = prices.length ? Math.min(...prices) : 0;
-  return item.variants.length > 1 ? `from ₹${min}` : `₹${min}`;
+  // A sold-by-weight item's prices are per kg (lib/menu/weight.ts).
+  const unit = isSoldByWeight(item) ? '/kg' : '';
+  return item.variants.length > 1 ? `from ₹${min}${unit}` : `₹${min}${unit}`;
 }
 
 export function PosQuickAddBar({
