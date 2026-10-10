@@ -10,6 +10,8 @@ import {
   useState,
 } from 'react';
 import { computeCartKey } from '@/lib/cart/cartKey';
+import { computeBill, type BillBreakdown } from '@/lib/store/hours';
+import type { StoreSettings } from '@/lib/types';
 
 const STORAGE_KEY = 'hioc.cart.v2';
 
@@ -283,4 +285,14 @@ export function useCart(): CartContextValue {
  * GST-exempt items. For bill previews; the server recomputes it. */
 export function cartTaxableSubtotal(items: Pick<CartItem, 'qty' | 'unitPriceInr' | 'gstExempt'>[]): number {
   return items.filter((i) => !i.gstExempt).reduce((sum, i) => sum + i.qty * i.unitPriceInr, 0);
+}
+
+/** The cart's items + GST, without packaging: packaging depends on Takeaway vs
+ * Dine-in (D5), which is chosen at checkout, so it is added there. */
+export function cartBillBeforePackaging(
+  items: Pick<CartItem, 'qty' | 'unitPriceInr' | 'gstExempt'>[],
+  subtotalInr: number,
+  settings: StoreSettings,
+): BillBreakdown {
+  return computeBill(subtotalInr, { ...settings, packaging_charge_inr: 0 }, 0, cartTaxableSubtotal(items));
 }

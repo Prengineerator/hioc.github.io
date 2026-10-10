@@ -3,9 +3,8 @@
 import { useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
+import { cartBillBeforePackaging, useCart } from '@/lib/cart/CartContext';
 import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
-import { computeBill } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 
 export function CartDrawer({
@@ -32,11 +31,7 @@ export function CartDrawer({
   if (!open || typeof document === 'undefined') return null;
 
   const isEmpty = items.length === 0;
-  // Items + GST only: packaging depends on Takeaway vs Dine-in (D5), which is
-  // chosen at checkout, so it is added there.
-  const bill = settings
-    ? computeBill(totalPrice, { ...settings, packaging_charge_inr: 0 }, 0, cartTaxableSubtotal(items))
-    : null;
+  const bill = settings ? cartBillBeforePackaging(items, totalPrice, settings) : null;
   const packagingAtCheckout = (settings?.packaging_charge_inr ?? 0) > 0;
   const checkoutDisabled = isEmpty || !!checkoutDisabledReason;
 
