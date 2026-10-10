@@ -26,6 +26,7 @@ export function ItemCustomizer({
   instructions,
   onInstructionsChange,
   size = 'default',
+  suggestedOptionIds,
 }: {
   item: MenuItem;
   variantId: string;
@@ -36,6 +37,10 @@ export function ItemCustomizer({
   onInstructionsChange: (value: string) => void;
   /** 'touch' gives POS tablets slightly larger tap targets. */
   size?: 'default' | 'touch';
+  /** Option ids to mark with a "Coffey's pick" pill (already vetted by
+   * lib/menu/customization suggestedOptionIds). Highlight only: nothing about
+   * the selection changes. Omitted by the POS and the menu page. */
+  suggestedOptionIds?: ReadonlySet<string>;
 }) {
   const requiredGroups = item.addon_groups.filter(isRequired);
   const optionalGroups = item.addon_groups.filter((g) => !isRequired(g));
@@ -60,6 +65,7 @@ export function ItemCustomizer({
                 selectedIds={selection[group.id] ?? []}
                 onToggle={onToggle}
                 size={size}
+                suggestedOptionIds={suggestedOptionIds}
               />
             ))}
           </div>
@@ -77,6 +83,7 @@ export function ItemCustomizer({
                 selectedIds={selection[group.id] ?? []}
                 onToggle={onToggle}
                 size={size}
+                suggestedOptionIds={suggestedOptionIds}
               />
             ))}
           </div>
@@ -134,11 +141,13 @@ function AddonGroupBlock({
   selectedIds,
   onToggle,
   size,
+  suggestedOptionIds,
 }: {
   group: AddonGroup;
   selectedIds: string[];
   onToggle: (group: AddonGroup, optionId: string) => void;
   size: 'default' | 'touch';
+  suggestedOptionIds?: ReadonlySet<string>;
 }) {
   const labelId = useId();
   const required = isRequired(group);
@@ -174,6 +183,7 @@ function AddonGroupBlock({
         {group.options.map((option) => {
           const selected = selectedIds.includes(option.id);
           const atMax = group.selection_type === 'multi' && !selected && count >= group.max_select;
+          const suggested = suggestedOptionIds?.has(option.id) ?? false;
           return (
             <button
               key={option.id}
@@ -185,6 +195,21 @@ function AddonGroupBlock({
             >
               {group.selection_type === 'multi' && selected ? <span aria-hidden="true">✓ </span> : null}
               {option.name}
+              {/* Coffey's flavour add-on (COFFEY-ADDONS-PAIRINGS-SPEC §1.1). Real
+                  text inside the button, so it is part of the option's accessible
+                  name ("Hazelnut syrup Coffey's pick +₹35") and doesn't rely on
+                  colour. Brand tokens: tan-dark text is AA on both `surface` and
+                  the white pill used on a selected (tan-dark) chip. */}
+              {suggested ? (
+                <span
+                  className={
+                    'ml-1.5 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[11px] font-semibold text-tan-dark ' +
+                    (selected ? 'bg-cream' : 'bg-surface')
+                  }
+                >
+                  Coffey&apos;s pick
+                </span>
+              ) : null}
               {option.price_inr > 0 ? (
                 <span className={'ml-1 font-mono tabular-nums ' + (selected ? 'text-cream/80' : 'text-muted')}>
                   +₹{option.price_inr}

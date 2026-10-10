@@ -6,6 +6,7 @@ import {
   flattenAddons,
   initialSelection,
   invalidGroups,
+  suggestedOptionIds,
   toggleOption,
 } from '@/lib/menu/customization';
 import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
@@ -17,6 +18,7 @@ export function MenuItemCustomizeModal({
   item,
   onClose,
   initialSelection: presets,
+  suggestedOptions,
   hint,
 }: {
   item: MenuItem;
@@ -47,6 +49,8 @@ export function MenuItemCustomizeModal({
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
   const hints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+
+  const suggestedIds = useMemo(() => suggestedOptionIds(item, suggestedOptions), [item, suggestedOptions]);
 
   const addonsFlat = useMemo(() => flattenAddons(item, selected), [item, selected]);
   const invalid = useMemo(() => invalidGroups(item, selected), [item, selected]);
@@ -122,6 +126,7 @@ export function MenuItemCustomizeModal({
         onToggle={(group, optionId) => setSelected((prev) => toggleOption(prev, group, optionId))}
         instructions={instructions}
         onInstructionsChange={setInstructions}
+        suggestedOptionIds={suggestedIds}
       />
     </Modal>
   );

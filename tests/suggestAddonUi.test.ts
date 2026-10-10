@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 //     must never quietly add to the bill);
 //   - the hints read right for every family, and stack with sugar first.
 
+import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
 import { SuggestionCard } from '@/components/suggest/SuggestionCard';
 import {
   coffeyTip,
@@ -255,6 +256,55 @@ describe('customizeModalProps: highlight, never preselect', () => {
   it('is empty for a pick with neither (today\'s behaviour)', () => {
     expect(customizeModalProps(item(), {})).toEqual({});
     expect(customizeModalProps(item(), { sugarPreset: null, flavourAddon: null })).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Option rows: the "Coffey's pick" pill (server-rendered; ItemCustomizer has no portal)
+// ---------------------------------------------------------------------------
+
+describe('ItemCustomizer "Coffey\'s pick" pill', () => {
+  const PILL = 'Coffey&#x27;s pick';
+  const render = (suggested?: ReadonlySet<string>) =>
+    renderToStaticMarkup(
+      createElement(ItemCustomizer, {
+        item: item(),
+        variantId: 'v-reg',
+        onVariantChange: () => {},
+        selection: initialSelection(item()),
+        onToggle: () => {},
+        instructions: '',
+        onInstructionsChange: () => {},
+        suggestedOptionIds: suggested,
+      }),
+    );
+  /** The <button> markup of one option row. */
+  const row = (html: string, name: string) => {
+    const buttons = html.match(/<button[^>]*>.*?<\/button>/g) ?? [];
+    return buttons.find((b) => b.includes(name)) ?? '';
+  };
+
+  it('puts the pill on the suggested option\'s row only, as text inside the button', () => {
+    const html = render(suggestedOptionIds(item(), { 'g-syrup': ['o-hazelnut'] }));
+    expect(html.split(PILL).length - 1).toBe(1);
+    expect(row(html, 'Hazelnut')).toContain(PILL);
+    expect(row(html, 'Vanilla')).not.toContain(PILL);
+    expect(row(html, 'Normal')).not.toContain(PILL);
+  });
+
+  it('does not select the suggested option', () => {
+    const html = render(suggestedOptionIds(item(), { 'g-syrup': ['o-hazelnut'] }));
+    expect(row(html, 'Hazelnut')).toContain('aria-pressed="false"');
+  });
+
+  it('draws no pill for a suggestion the item cannot show', () => {
+    expect(render(suggestedOptionIds(item(), { 'g-syrup': ['o-caramel'] }))).not.toContain(PILL);
+    expect(render(suggestedOptionIds(item(), { 'g-ghost': ['o-hazelnut'] }))).not.toContain(PILL);
+  });
+
+  it('is unchanged for callers that pass nothing (the menu page, the POS)', () => {
+    expect(render()).not.toContain(PILL);
+    expect(render()).toBe(render(new Set()));
   });
 });
 
