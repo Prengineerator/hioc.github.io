@@ -250,6 +250,43 @@ describe('writePairingAttribution', () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
+  it('an anchor that is not a menu item (FK 23503) keeps the sale: one retry with the anchor cleared', async () => {
+    let calls = 0;
+    insertResult = { error: null };
+    const fkOnce = {
+      from: (table: string) => ({
+        insert: (rows: Record<string, unknown>[]) => {
+          inserts.push({ table, rows });
+          calls += 1;
+          return Promise.resolve(calls === 1 ? { error: { code: '23503', message: 'violates foreign key' } } : { error: null });
+        },
+      }),
+    } as unknown as Parameters<typeof writePairingAttribution>[0];
+
+    await writePairingAttribution(fkOnce, {
+      orderId: ORDER_ID,
+      userId: USER_ID,
+      lines,
+      pairingLines: [{ menu_item_id: BROWNIE, anchor_item_id: LATTE }],
+    });
+    expect(inserts).toHaveLength(2);
+    expect(inserts[1].rows).toEqual([
+      { user_id: USER_ID, event: 'ordered', menu_item_id: BROWNIE, anchor_item_id: null, order_id: ORDER_ID, value_inr: 360 },
+    ]);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not retry on any other insert error', async () => {
+    insertResult = { error: { code: '42P01', message: 'relation "pairing_events" does not exist' } };
+    await writePairingAttribution(admin(), {
+      orderId: ORDER_ID,
+      userId: null,
+      lines,
+      pairingLines: [{ menu_item_id: BROWNIE, anchor_item_id: AMERICANO }],
+    });
+    expect(inserts).toHaveLength(1);
+  });
+
   it('never throws when the insert itself throws', async () => {
     insertResult = () => {
       throw new Error('connection reset');

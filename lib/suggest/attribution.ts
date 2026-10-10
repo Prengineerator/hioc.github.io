@@ -235,7 +235,13 @@ export async function writePairingAttribution(
     const events = matchPairingEvents({ orderId, userId, lines, pairingLines });
     if (events.length === 0) return;
 
-    const { error } = await admin.from('pairing_events').insert(events);
+    let { error } = await admin.from('pairing_events').insert(events);
+    // 23503: an anchor id that isn't a menu item (deleted since it was added to
+    // the cart, or forged — the client sends it). Every menu_item_id is on the
+    // order, so it exists; keep the sale and drop only the anchor.
+    if (error && (error as { code?: string }).code === '23503') {
+      ({ error } = await admin.from('pairing_events').insert(events.map((e) => ({ ...e, anchor_item_id: null }))));
+    }
     if (error) {
       console.error('writePairingAttribution: insert failed (best-effort, order unaffected)', error);
     }
