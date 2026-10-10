@@ -5,7 +5,7 @@
 // Kept dependency-free (no Supabase, no React) so it's unit-testable without
 // a DOM — see tests/suggestCart.test.ts.
 
-import { SUGGEST_LIMITS } from '@/lib/suggest/types';
+import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 
 /**
  * Returns the distinct `suggestionSessionId`s found on the given cart lines,
@@ -27,4 +27,37 @@ export function collectSuggestionSessionIds(
   }
   if (distinct.length === 0) return undefined;
   return distinct.slice(0, max);
+}
+
+/** One entry of POST /api/orders `pairing_lines`: a cart item that was added from
+ * the checkout "Pairs well with your order" card, and the cart item it was
+ * suggested beside (COFFEY-ADDONS-PAIRINGS-SPEC §4.3). */
+export interface PairingLinePayload {
+  menu_item_id: string;
+  anchor_item_id: string;
+}
+
+/**
+ * The `pairing_lines` for an order: one entry per distinct menu item among the
+ * cart lines that carry a `pairingAnchorId`, in first-seen order (the first line
+ * of an item wins when its lines name different anchors), capped at `max`
+ * (default `PAIRING_LIMITS.orderLinesMax`). One entry per ITEM because the server
+ * attributes an item's whole line total to it, so two entries for one item would
+ * count that money twice. Returns `undefined` when no line carries an anchor, so
+ * a caller can spread the result into the request body and have the field
+ * disappear entirely, like `collectSuggestionSessionIds`.
+ */
+export function collectPairingLines(
+  items: readonly { menuItemId: string; pairingAnchorId?: string }[],
+  max: number = PAIRING_LIMITS.orderLinesMax,
+): PairingLinePayload[] | undefined {
+  const lines: PairingLinePayload[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (!item.pairingAnchorId || !item.menuItemId || seen.has(item.menuItemId)) continue;
+    seen.add(item.menuItemId);
+    lines.push({ menu_item_id: item.menuItemId, anchor_item_id: item.pairingAnchorId });
+  }
+  const capped = lines.slice(0, Math.max(0, max));
+  return capped.length > 0 ? capped : undefined;
 }
