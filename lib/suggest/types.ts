@@ -283,6 +283,10 @@ export interface SuggestionPick {
    * null/absent when the customer chose no sweetness or the item has no
    * sugar choice. */
   sugarPreset?: SugarPreset | null;
+  /** An add-on that gives this item a flavour the customer asked for and it
+   * doesn't have on its own (COFFEY-ADDONS-PAIRINGS-SPEC §2.4). Highlighted in
+   * the customise modal, never preselected. null/absent otherwise. */
+  flavourAddon?: FlavourAddonSuggestion | null;
 }
 
 export interface SugarPreset {
@@ -328,6 +332,10 @@ export interface Candidate {
   /** The item offers a sugar choice (lib/suggest/sugar.ts findSugarGroup),
    * so its sweetness can be raised above its inherent level (COFFEY-SPEC §4.2). */
   sugarAdjustable: boolean;
+  /** Requested flavour families the item lacks on its own but can get from
+   * one of its add-ons (lib/suggest/addonTraits.ts reachableAddonFamilies,
+   * COFFEY-ADDONS-PAIRINGS-SPEC §2.4). Absent means none. */
+  addonFlavourFamilies?: FlavourFamily[];
 }
 
 // What the decider model is allowed to know about a person (playbook S-3).
@@ -359,6 +367,119 @@ export type Decider = (args: {
   daypart: Daypart;
   signal: AbortSignal;
 }) => Promise<DeciderResult>;
+
+// ---------------------------------------------------------------------------
+// Add-on traits (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md §2)
+// ---------------------------------------------------------------------------
+
+/** What an add-on option does to the item it's added to. Derived from the
+ * group and option names (lib/suggest/addonTraits.ts deriveAddonTraits); the
+ * owner can override any option (addon_option_traits). */
+export const ADDON_ROLES = ['flavour', 'topping', 'shot', 'sweetener', 'milk', 'ice', 'serve', 'side', 'other'] as const;
+export type AddonRole = (typeof ADDON_ROLES)[number];
+
+/** Roles whose flavour families can give an item a flavour it lacks (§2.4),
+ * in tie-break order. Sugar is lib/suggest/sugar.ts's job; milk, ice and a
+ * side don't change what the item itself tastes of. */
+export const FLAVOUR_REACH_ROLES = ['flavour', 'topping', 'serve'] as const satisfies readonly AddonRole[];
+
+export interface AddonTraits {
+  role: AddonRole;
+  flavour_families: FlavourFamily[]; // ≤ 2
+  sweetness_delta: number; // 0–5, on the 0–10 item sweetness scale
+  intensity_delta: number; // 0–2 (an espresso shot is 1)
+  indulgence_delta: number; // 0–2
+  textures: Texture[]; // ≤ 2
+}
+
+/** addon_option_traits — the owner's override for one option. Mirrors
+ * supabase/2026-10-coffey-addons-pairings.sql; change both together. */
+export interface AddonOptionTraitsRow extends AddonTraits {
+  option_id: string;
+  updated_at: string;
+}
+
+/** The one add-on Coffey points to for a requested flavour (§2.4). */
+export interface FlavourAddonSuggestion {
+  groupId: string;
+  optionId: string;
+  label: string; // customer-facing, e.g. "Hazelnut syrup"
+  priceInr: number;
+  family: FlavourFamily;
+}
+
+export const ADDON_SUGGEST_LIMITS = {
+  /** Options dearer than this are never pointed to. */
+  maxPriceInr: 60,
+  /** The flavour sub-fit for a family reached through an add-on (native = 1). */
+  flavourFit: 0.75,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Checkout pairings (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md §4)
+// ---------------------------------------------------------------------------
+
+/** POST /api/suggest/pairings */
+export interface PairingRequest {
+  itemIds: string[]; // distinct menu item ids in the cart, ≤ PAIRING_LIMITS.cartItemsMax
+}
+
+export interface PairingPick {
+  menuItemId: string;
+  /** The cart item it goes with — named in the reason. */
+  anchorItemId: string;
+  reason: string; // ≤ PAIRING_LIMITS.reasonMaxChars, tone-linted
+  score: number; // 0–1; for tests and logs, the UI ignores it
+}
+
+export interface PairingResponse {
+  picks: PairingPick[]; // 0–PAIRING_LIMITS.picks
+  /** Menu rows for the picks, shaped like /api/menu items. */
+  items: import('@/lib/types').MenuItem[];
+}
+
+/** Co-order counts from recent order history (lib/suggest/pairings.ts
+ * buildCoOrderStats). `pairs` is keyed by pairKey(a, b): the two ids sorted
+ * and joined with '|'. */
+export interface CoOrderStats {
+  orders: number;
+  itemOrders: Map<string, number>;
+  pairs: Map<string, number>;
+}
+
+export const PAIRING_EVENTS = ['shown', 'added', 'ordered'] as const;
+export type PairingEventType = (typeof PAIRING_EVENTS)[number];
+/** What POST /api/suggest/pairings/events accepts; 'ordered' is server-written. */
+export const CLIENT_PAIRING_EVENTS = ['shown', 'added'] as const satisfies readonly PairingEventType[];
+export type ClientPairingEventType = (typeof CLIENT_PAIRING_EVENTS)[number];
+
+/** pairing_events — mirrors supabase/2026-10-coffey-addons-pairings.sql. */
+export interface PairingEventRow {
+  id: string;
+  anon_id: string | null;
+  user_id: string | null;
+  event: PairingEventType;
+  menu_item_id: string | null;
+  anchor_item_id: string | null;
+  order_id: string | null;
+  value_inr: number | null;
+  created_at: string;
+}
+
+export const PAIRING_LIMITS = {
+  picks: 3,
+  cartItemsMax: 20,
+  reasonMaxChars: 90,
+  minScore: 0.35,
+  minCoOrders: 3,
+  historyDays: 90,
+  historyMaxOrders: 5000,
+  /** A pick's cheapest size may cost up to max(this, the dearest cart item's cheapest size). */
+  minPriceCapInr: 150,
+  ipRequestsPer10Min: 60,
+  eventsPerRequest: 3,
+  orderLinesMax: 5,
+} as const;
 
 // ---------------------------------------------------------------------------
 // Owner analytics (SUG-10)
