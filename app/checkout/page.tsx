@@ -6,6 +6,7 @@ import { CartProvider, useCart } from '@/lib/cart/CartContext';
 import { useStoreSettings } from '@/lib/cart/useStoreSettings';
 import { CartSummary } from '@/components/cart/CartSummary';
 import { CheckoutForm } from '@/components/checkout/CheckoutForm';
+import { PairsWellWith } from '@/components/checkout/PairsWellWith';
 import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
 import type { OrderType } from '@/lib/types';
 
@@ -50,7 +51,10 @@ function CheckoutPageContent() {
       </h1>
       <StoreStatusBanner openState={openState} />
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
-        <CartSummary settings={settings} dineIn={orderType === 'dine_in'} />
+        <div className="flex min-w-0 flex-col gap-6">
+          <CartSummary settings={settings} dineIn={orderType === 'dine_in'} />
+          <PairsWellWith />
+        </div>
         <CheckoutForm
           settings={settings}
           openState={openState}

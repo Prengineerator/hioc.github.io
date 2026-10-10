@@ -10,6 +10,7 @@
 // Pure: no Supabase, no 'server-only'. Runs in <20ms per spec §1 so it's a
 // safe fallback path when the LLM is slow/down/over budget.
 
+import { reachableAddonFamilies } from './addonTraits';
 import { flavourFamiliesOf } from './flavor';
 import type { FilteredCandidate } from './filter';
 import { moodsOf } from './inputs';
@@ -17,8 +18,10 @@ import { achievableSweetness, isSugarAdjustable } from './sugar';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 import type {
+  AddonTraits,
   Candidate,
   Daypart,
+  FlavourFamily,
   MenuItemTraits,
   Mood,
   SuggestInputs,
@@ -27,7 +30,7 @@ import type {
   TraitCaffeine,
   TraitKind,
 } from './types';
-import { KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
+import { ADDON_SUGGEST_LIMITS, KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 
 // ---------------------------------------------------------------------------
 // Weights (COFFEY-SPEC §4.2) — the exact numbers from the spec.
@@ -60,6 +63,10 @@ export interface ScoredSubject {
   traits: MenuItemTraits;
   /** The item offers a sugar choice (lib/suggest/sugar.ts findSugarGroup). */
   sugarAdjustable: boolean;
+  /** Requested flavour families the item lacks natively but can get from one of
+   * its add-ons (lib/suggest/addonTraits.ts reachableAddonFamilies,
+   * COFFEY-ADDONS-PAIRINGS-SPEC §3.1). Absent means none. */
+  addonFlavourFamilies?: FlavourFamily[];
 }
 
 // ---------------------------------------------------------------------------
@@ -244,10 +251,15 @@ export function preferenceFits(inputs: SuggestInputs, subject: ScoredSubject): P
     else fits.strength = clamp01(1 - Math.abs(intensity - 1.5) / 1.5); // balanced
   }
 
-  // Flavours: OR semantics — any one picked family is enough.
+  // Flavours: OR semantics — any one picked family is enough. One the item has
+  // natively is a full match; one it can only get from an add-on (a Cappucino
+  // with Hazelnut syrup) is a partial one (COFFEY-ADDONS-PAIRINGS-SPEC §3.1).
   if (inputs.flavours.length > 0) {
     const families = flavourFamiliesOf(subject.name, traits.flavor_notes);
-    fits.flavours = inputs.flavours.some((f) => families.includes(f)) ? 1 : 0;
+    const viaAddon = subject.addonFlavourFamilies ?? [];
+    if (inputs.flavours.some((f) => families.includes(f))) fits.flavours = 1;
+    else if (inputs.flavours.some((f) => viaAddon.includes(f))) fits.flavours = ADDON_SUGGEST_LIMITS.flavourFit;
+    else fits.flavours = 0;
   }
 
   return fits;
@@ -471,19 +483,27 @@ export interface ScoreCandidatesArgs {
   popularity: Map<string, number>;
   /** Items ordered in the customer's last 3 visits (§5.3 explore nudge). */
   recentItemIds: string[];
+  /** The owner's add-on trait overrides, keyed by option id
+   * (COFFEY-ADDONS-PAIRINGS-SPEC §2.3). Absent means the derived defaults. */
+  addonTraitsById?: Map<string, AddonTraits>;
 }
 
 /** Sorted desc by score; ties break on menuItemId ascending, so ordering is
  * fully deterministic (same inputs ⇒ same shortlist, every time). */
 export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
-  const { candidates, inputs, profile, daypart, popularity, recentItemIds } = args;
+  const { candidates, inputs, profile, daypart, popularity, recentItemIds, addonTraitsById } = args;
   const popularityFor = popularityNormalizer(popularity);
   const recent = new Set(recentItemIds);
 
   const scored: Candidate[] = candidates.map((c) => {
     const minPrice = Math.min(...c.item.variants.map((v) => v.price_inr));
     const maxPrice = Math.max(...c.item.variants.map((v) => v.price_inr));
-    const subject: ScoredSubject = { name: c.item.name, traits: c.traits, sugarAdjustable: isSugarAdjustable(c.item) };
+    const subject: ScoredSubject = {
+      name: c.item.name,
+      traits: c.traits,
+      sugarAdjustable: isSugarAdjustable(c.item),
+      addonFlavourFamilies: reachableAddonFamilies(c.item, c.traits, inputs, addonTraitsById),
+    };
     const weighted =
       MOOD_WEIGHT * moodScore(inputs, c.traits, profile) +
       PREFERENCE_WEIGHT * preferenceScore(inputs, subject) +
@@ -504,6 +524,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       description: c.item.description,
       traits: c.traits,
       sugarAdjustable: subject.sugarAdjustable,
+      addonFlavourFamilies: subject.addonFlavourFamilies,
     };
   });
 

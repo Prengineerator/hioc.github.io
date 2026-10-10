@@ -18,10 +18,12 @@ import {
   WindowTabs,
   type WindowKey,
 } from '@/components/owner/suggestions/OverviewWidgets';
+import { PairingsCard } from '@/components/owner/suggestions/PairingsWidget';
 import { TraitsTab } from '@/components/owner/suggestions/TraitsTab';
 import { flags } from '@/lib/flags';
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { dailyBudgetUsdMicros } from '@/lib/suggest/models';
+import { getPairingStats } from '@/lib/suggest/pairingStatsQuery';
 import { getLatestDigest, getSuggestionStats } from '@/lib/suggest/queries';
 
 export const dynamic = 'force-dynamic';
@@ -79,7 +81,11 @@ export default async function OwnerSuggestionsPage({
   const windowKey = parseWindow(searchParams?.window);
   const windowStart = windowStartFor(windowKey);
 
-  const [{ stats, missingTables }, digest] = await Promise.all([getSuggestionStats(windowStart), getLatestDigest()]);
+  const [{ stats, missingTables }, digest, pairings] = await Promise.all([
+    getSuggestionStats(windowStart),
+    getLatestDigest(),
+    getPairingStats(windowStart),
+  ]);
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
@@ -109,6 +115,7 @@ export default async function OwnerSuggestionsPage({
       <WindowTabs active={windowKey} />
       <FunnelCard stats={stats} />
       <RevenueCard stats={stats} />
+      <PairingsCard stats={pairings.stats} missingTable={pairings.missingTable} enabled={flags.checkoutPairings} />
       <MoodMixCard stats={stats} />
       <TopPicksTable stats={stats} />
       <PersonalisedCard stats={stats} />

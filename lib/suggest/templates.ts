@@ -18,6 +18,7 @@ import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from './traitVocabulary';
 import type {
   Budget,
   Candidate,
+  FlavourAddonSuggestion,
   FlavourFamily,
   MenuItemTraits,
   Mood,
@@ -89,20 +90,37 @@ function requestedFamilyOf(inputs: SuggestInputs, name: string, traits: MenuItem
 
 interface FlavourPhrase {
   full: string;
-  /** A shorter wording (one note instead of two) for when `full` doesn't fit. */
+  /** A shorter wording (one note instead of two; the family phrase without its
+   * "from <add-on>") for when `full` doesn't fit. */
   short: string | null;
+  /** The flavour comes from an add-on, not the item itself. */
+  fromAddon?: boolean;
 }
 
 /**
  * "Name the taste, not the sale" (§4 "Do"). When the customer asked for a
  * flavour family and this item matches it, name that family in the words they
- * picked it by (FLAVOUR_FAMILY_INFO.phrase); otherwise the item's top two notes.
- * A v2 row's notes read "espresso and roasty notes"; a pre-v2 row keeps v1's
- * bare join ("bold and nutty").
+ * picked it by (FLAVOUR_FAMILY_INFO.phrase); when it only gets that family from
+ * an add-on, say so — "toasty nutty notes from Hazelnut syrup"
+ * (COFFEY-ADDONS-PAIRINGS-SPEC §3.3), with the bare family phrase as the
+ * shorter wording; otherwise the item's top two notes. A v2 row's notes read
+ * "espresso and roasty notes"; a pre-v2 row keeps v1's bare join ("bold and
+ * nutty").
  */
-function flavourPhraseFor(traits: MenuItemTraits, inputs: SuggestInputs, name: string, v2: boolean): FlavourPhrase | null {
+function flavourPhraseFor(
+  traits: MenuItemTraits,
+  inputs: SuggestInputs,
+  name: string,
+  v2: boolean,
+  addon: FlavourAddonSuggestion | null,
+): FlavourPhrase | null {
   const family = requestedFamilyOf(inputs, name, traits);
   if (family) return { full: FLAVOUR_FAMILY_INFO[family].phrase, short: null };
+
+  if (addon && inputs.flavours.includes(addon.family)) {
+    const phrase = FLAVOUR_FAMILY_INFO[addon.family].phrase;
+    return { full: `${phrase} from ${addon.label}`, short: phrase, fromAddon: true };
+  }
 
   const notes = (traits.flavor_notes ?? []).filter((n) => typeof n === 'string' && n.trim().length > 0).slice(0, 2);
   if (notes.length === 0) return null;
@@ -156,8 +174,17 @@ function isFiniteNumber(n: unknown): n is number {
  * nothing. When the customer set a sweetness and the item has a sugar choice,
  * the word describes the drink as they will get it (the preset lifts it), not as
  * the kitchen makes it, so the sentence agrees with the sugar note on the card.
+ *
+ * `withSweetness: false` leaves sweetness out altogether — for a reason whose
+ * flavour comes from a syrup or sauce, which sweetens the drink: "Bold and
+ * unsweetened, with buttery caramel notes from Caramel Sauce" contradicts itself.
  */
-function descriptorsFor(traits: MenuItemTraits, inputs: SuggestInputs, sugarAdjustable: boolean): Descriptor[] {
+function descriptorsFor(
+  traits: MenuItemTraits,
+  inputs: SuggestInputs,
+  sugarAdjustable: boolean,
+  withSweetness = true,
+): Descriptor[] {
   const all: Descriptor[] = [];
 
   if (traits.kind === 'drink' && isFiniteNumber(traits.intensity)) {
@@ -167,7 +194,9 @@ function descriptorsFor(traits: MenuItemTraits, inputs: SuggestInputs, sugarAdju
 
   const inherent = sweetnessLevel(traits);
   const target = sweetnessTarget(inputs.sweetness);
-  if (target !== null) {
+  if (!withSweetness) {
+    // The add-on decides how sweet it ends up; say nothing rather than guess.
+  } else if (target !== null) {
     const word = sweetnessWord(achievableSweetness(inherent, sugarAdjustable, target));
     all.push({ alone: word, paired: word, asked: true });
   } else if ((inherent <= 1 && traits.kind !== 'food') || inherent >= 8) {
@@ -219,6 +248,11 @@ const TRAIT_CLAUSE = 'a lovely match for what you asked for';
  * (flavor_notes alone still work without it, e.g. from a 'usual' call site).
  * `sugarAdjustable` (Candidate.sugarAdjustable) lets the sweetness descriptor
  * agree with the sugar preset; leaving it out describes the drink as made.
+ * `addon` (lib/suggest/addonTraits.ts flavourAddonFor, COFFEY-ADDONS-PAIRINGS-SPEC
+ * §3.3) is the add-on that gives the item a flavour the customer asked for: when
+ * the item has no requested family of its own, the flavour phrase becomes
+ * "<family phrase> from <label>", and it loses its " from <label>" before any
+ * descriptor is dropped, or if the label fails the tone lint.
  *
  * Whatever the notes hold, the result is ≤ SUGGEST_LIMITS.reasonMaxChars and
  * passes lintReason(): a longer sentence is shortened by dropping detail, never
@@ -230,9 +264,10 @@ export function templateReason(
   reasonCode: SuggestionPick['reasonCode'],
   name = '',
   sugarAdjustable = false,
+  addon: FlavourAddonSuggestion | null = null,
 ): string {
   const v2 = (traits.traits_version ?? 1) >= CURRENT_TRAITS_VERSION;
-  const phrase = flavourPhraseFor(traits, inputs, name, v2);
+  const phrase = flavourPhraseFor(traits, inputs, name, v2, addon);
   const phrases = phrase ? [phrase.full, ...(phrase.short ? [phrase.short] : [])] : [];
 
   if (reasonCode === 'usual') {
@@ -267,7 +302,7 @@ export function templateReason(
   }
 
   // v2: richest sentence first, then progressively plainer until one fits.
-  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable);
+  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable, !phrase?.fromAddon);
   const attempts: string[] = [];
   for (let d = descriptors.length; d >= 0; d--) {
     for (const p of phrases) attempts.push(richSentence(descriptors.slice(0, d), p, clause));
@@ -310,14 +345,16 @@ const TAG_MATCH_FIT = 0.66;
 export const MAX_MATCH_TAGS = 3;
 
 /** What a match tag needs to know about an item — a Candidate satisfies it as
- * is, and the "usual" (which isn't a Candidate) is built from its menu row. */
-export type MatchTagSubject = Pick<Candidate, 'name' | 'traits' | 'sugarAdjustable'>;
+ * is, and the "usual" (which isn't a Candidate) is built from its menu row.
+ * `addonFlavourFamilies` is optional: absent means none. */
+export type MatchTagSubject = Pick<Candidate, 'name' | 'traits' | 'sugarAdjustable' | 'addonFlavourFamilies'>;
 
 /**
  * §4.6 — at most MAX_MATCH_TAGS labels saying why this item suits what the
  * customer asked for, in priority order:
  *  1. the feeling it fits (the first of theirs that it does)
- *  2. the flavour family they asked for that it belongs to
+ *  2. the flavour family they asked for that it belongs to — or, when it only
+ *     gets one from an add-on, "<Family> add-on" (COFFEY-ADDONS-PAIRINGS-SPEC §3.3)
  *  3. their sweetness label, only when the sweetness they can get from the item
  *     (sugar counted) is in the SAME band as what they chose — the band the
  *     reason's descriptor is drawn from (sweetnessWord), so the tag can never
@@ -339,7 +376,12 @@ export function matchTagsFor(subject: MatchTagSubject, inputs: SuggestInputs): s
   if (mood) tags.push(MOOD_INFO[mood].tag);
 
   const family = requestedFamilyOf(inputs, subject.name, traits);
-  if (family) tags.push(FLAVOUR_FAMILY_INFO[family].tag);
+  if (family) {
+    tags.push(FLAVOUR_FAMILY_INFO[family].tag);
+  } else {
+    const viaAddon = inputs.flavours.find((f) => subject.addonFlavourFamilies?.includes(f));
+    if (viaAddon) tags.push(`${FLAVOUR_FAMILY_INFO[viaAddon].tag} add-on`);
+  }
 
   const target = sweetnessTarget(inputs.sweetness);
   if (target !== null && inputs.sweetness !== 'any') {

@@ -21,6 +21,7 @@ import { MenuItemCustomizeModal } from '@/components/menu/MenuItemCustomizeModal
 import { Chip } from '@/components/suggest/Chip';
 import { MoodCard } from '@/components/suggest/MoodCard';
 import { SuggestionCard } from '@/components/suggest/SuggestionCard';
+import { customizeModalProps, needsCustomizeModal } from '@/components/suggest/addonHint';
 import { SweetnessScale } from '@/components/suggest/SweetnessScale';
 import { ResultsSkeleton, ThinkingCopy } from '@/components/suggest/ResultsSkeleton';
 import { fetchSuggestions, getAnonId, postSuggestEvent } from '@/components/suggest/api';
@@ -39,6 +40,7 @@ import {
 import type {
   BodyPref,
   Budget,
+  FlavourAddonSuggestion,
   FlavourFamily,
   Mood,
   RelaxHint,
@@ -178,6 +180,28 @@ interface CustomizeTarget {
   beforeCartTotal: number;
   /** The sugar option Coffey preselected for this pick, if any (§4.7). */
   sugarPreset: SugarPreset | null;
+  /** The add-on Coffey points to for a requested flavour, if any
+   * (COFFEY-ADDONS-PAIRINGS-SPEC §1.1). Highlighted in the modal, never
+   * preselected. */
+  flavourAddon: FlavourAddonSuggestion | null;
+}
+
+// The customise modal for a pick. Coffey's sugar preselection (§4.7) goes in as
+// `initialSelection`; the flavour add-on (COFFEY-ADDONS-PAIRINGS-SPEC §1.1) goes
+// in as `suggestedOptions` and is NOT preselected, so it can never quietly add to
+// the bill. The engine names groups and options; the modal vets them against the
+// item. Hints stack, sugar first (components/suggest/addonHint.ts).
+function CustomizeModal({ target, onClose }: { target: CustomizeTarget; onClose: () => void }) {
+  const { initialSelection, suggestedOptions, hint } = customizeModalProps(target.item, target);
+  return (
+    <MenuItemCustomizeModal
+      item={target.item}
+      onClose={onClose}
+      initialSelection={initialSelection}
+      suggestedOptions={suggestedOptions}
+      hint={hint}
+    />
+  );
 }
 
 export function SuggestWizard() {
@@ -426,7 +450,9 @@ export function SuggestWizard() {
 
   function handleAddToCart(item: MenuItem, pick: SuggestionPick) {
     if (!response) return;
-    const isSimple = item.variants.length === 1 && item.addon_groups.length === 0;
+    // A pick that carries a flavour add-on never takes the one-tap path, even on
+    // an otherwise simple item: the customer has to see the suggestion (§1.1).
+    const isSimple = !needsCustomizeModal(item, pick);
     engagedRef.current = true;
     if (isSimple && item.variants[0]) {
       const variant = item.variants[0];
@@ -453,6 +479,7 @@ export function SuggestWizard() {
         sessionId: response.sessionId,
         beforeCartTotal: totalItems,
         sugarPreset: pick.sugarPreset ?? null,
+        flavourAddon: pick.flavourAddon ?? null,
       });
     }
   }
@@ -813,24 +840,7 @@ export function SuggestWizard() {
         </button>
       </div>
 
-      {customizeTarget ? (
-        <MenuItemCustomizeModal
-          item={customizeTarget.item}
-          onClose={handleCloseCustomize}
-          // Coffey's sugar preselection (§4.7): the engine names the group and
-          // option; the modal vets them against the item before using them.
-          initialSelection={
-            customizeTarget.sugarPreset
-              ? { [customizeTarget.sugarPreset.groupId]: [customizeTarget.sugarPreset.optionId] }
-              : undefined
-          }
-          hint={
-            customizeTarget.sugarPreset
-              ? `Coffey set sugar to “${customizeTarget.sugarPreset.label}” for you — change it anytime.`
-              : undefined
-          }
-        />
-      ) : null}
+      {customizeTarget ? <CustomizeModal target={customizeTarget} onClose={handleCloseCustomize} /> : null}
     </div>
   );
 }

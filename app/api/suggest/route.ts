@@ -4,21 +4,17 @@ import { getAuthUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { clientIp, rateLimitOk } from '@/lib/api/rateLimit';
 import { flags } from '@/lib/flags';
-import { MENU_ITEM_SELECT, shapeMenuItem, type MenuItemRow } from '@/lib/orders/lines';
 import { isOverBudget } from '@/lib/suggest/budget';
 import { runSuggest } from '@/lib/suggest/engine';
 import { activeDecider } from '@/lib/suggest/llm';
 import { dailyBudgetUsdMicros, llmDisabledReason, llmEnabled } from '@/lib/suggest/models';
 import { getOrBuildProfile } from '@/lib/suggest/profileStore';
+import { loadMenuAndTraits, loadPopularity30d } from '@/lib/suggest/serverData';
 import { templateHeader } from '@/lib/suggest/templates';
 import { todaySpendMicros } from '@/lib/suggest/spend';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { validateSuggestRequest } from '@/lib/suggest/validate';
-import type { Decider, FallbackReason, MenuItemTraits, SuggestResponse } from '@/lib/suggest/types';
-import type { MenuItem } from '@/lib/types';
-import { isInStoreOnly } from '@/lib/menu/inStore';
-import { getStoreSettings } from '@/lib/store/settings';
-import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
+import type { Decider, FallbackReason, SuggestResponse } from '@/lib/suggest/types';
 
 export const dynamic = 'force-dynamic';
 // SUGGEST_LIMITS.deciderTimeoutMs is 9s; with menu/traits/popularity loads,
@@ -28,81 +24,9 @@ export const maxDuration = 20;
 
 type AdminClient = ReturnType<typeof createAdminSupabaseClient>;
 
-// ---------------------------------------------------------------------------
-// Menu + traits + popularity: in-memory, per-instance, 60s cache (§5's
-// architecture diagram: "[cache 60 s]"). A stale-by-a-minute menu is a
-// non-issue for a suggestion; a Supabase round trip on every keystroke of a
-// wizard is.
-// ---------------------------------------------------------------------------
-
-const CACHE_TTL_MS = 60_000;
-
-let menuCache: { at: number; items: MenuItem[]; traitsById: Map<string, MenuItemTraits> } | null = null;
-let popularityCache: { at: number; map: Map<string, number> } | null = null;
-
-async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[]; traitsById: Map<string, MenuItemTraits> }> {
-  if (menuCache && Date.now() - menuCache.at < CACHE_TTL_MS) return menuCache;
-
-  const [menuResult, traitsResult, settings] = await Promise.all([
-    admin.from('menu_items').select(MENU_ITEM_SELECT).eq('is_available', true),
-    admin.from('menu_item_traits').select('*'),
-    getStoreSettings(),
-  ]);
-  if (menuResult.error) {
-    console.error('suggest route: menu load failed', menuResult.error);
-    return { items: [], traitsById: new Map() };
-  }
-  if (traitsResult.error) {
-    console.error('suggest route: traits load failed', traitsResult.error);
-  }
-
-  // Coffey v2 (COFFEY-SPEC §4.7): MENU_ITEM_SELECT brings every item's addon
-  // groups WITH their options, and shapeMenuItem keeps them on `addon_groups`.
-  // Sugar detection (lib/suggest/sugar.ts) reads exactly that, both to rank a
-  // sugar-adjustable coffee fairly and to preselect its sugar option, and the
-  // rows come back in the response's `items` for the customise modal — so don't
-  // narrow this select. applyMenuSwitches below drops switched-off options, so a
-  // "No Sugar" that is out of stock can never be the preset.
-  //
-  // In-store-only items (water bottles…) are never suggested — not even as a
-  // regular's "usual", though their counter orders and Petpooja history may be
-  // full of them.
-  const items = (menuResult.data ?? [])
-    // Nothing switched off (category, size, add-on) is suggested either.
-    .map((row) => applyMenuSwitches(shapeMenuItem(row as unknown as MenuItemRow), switchesFromSettings(settings)))
-    .filter((item) => !isCategoryHidden(item.category, settings.hidden_categories))
-    .filter((item) => !isInStoreOnly(item));
-  const traitsById = new Map<string, MenuItemTraits>(
-    ((traitsResult.data ?? []) as MenuItemTraits[]).map((t) => [t.menu_item_id, t]),
-  );
-
-  menuCache = { at: Date.now(), items, traitsById };
-  return menuCache;
-}
-
-/** 30-day units sold, across the whole menu (§5.3 popularity term). */
-async function loadPopularity30d(admin: AdminClient): Promise<Map<string, number>> {
-  if (popularityCache && Date.now() - popularityCache.at < CACHE_TTL_MS) return popularityCache.map;
-
-  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const { data, error } = await admin
-    .from('order_items')
-    .select('menu_item_id, quantity, voided, orders!inner(status, created_at)')
-    .gte('orders.created_at', since)
-    .not('orders.status', 'in', '("rejected","cancelled")');
-  if (error) {
-    console.error('suggest route: popularity load failed', error);
-    return new Map();
-  }
-
-  const map = new Map<string, number>();
-  for (const row of (data ?? []) as { menu_item_id: string | null; quantity: number; voided: boolean }[]) {
-    if (!row.menu_item_id || row.voided) continue;
-    map.set(row.menu_item_id, (map.get(row.menu_item_id) ?? 0) + row.quantity);
-  }
-  popularityCache = { at: Date.now(), map };
-  return map;
-}
+// The menu + traits and 30-day popularity loaders (and their 60 s cache) live in
+// lib/suggest/serverData.ts, shared with POST /api/suggest/pairings
+// (COFFEY-ADDONS-PAIRINGS-SPEC §4.2).
 
 async function loadRecentItemIds(admin: AdminClient, userId: string | null): Promise<string[]> {
   if (!userId) return [];
@@ -243,7 +167,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const [{ items: menu, traitsById }, popularity, recentItemIds] = await Promise.all([
+  const [{ items: menu, traitsById, addonTraitsById }, popularity, recentItemIds] = await Promise.all([
     loadMenuAndTraits(admin),
     loadPopularity30d(admin),
     loadRecentItemIds(admin, userId),
@@ -262,6 +186,7 @@ export async function POST(request: Request) {
     profile,
     popularity,
     recentItemIds,
+    addonTraitsById,
     now,
     decider,
     fallbackReason: preDecidedFallbackReason,
