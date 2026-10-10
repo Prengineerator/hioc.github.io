@@ -3,6 +3,7 @@
 // One suggestion (a pick, or the "Your usual" card — same shape, §3.2 step 3).
 
 import { MenuItemImage } from '@/components/menu/MenuItemImage';
+import { coffeyTip } from '@/components/suggest/addonHint';
 import { buttonVariants } from '@/components/ui/Button';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { MenuItem } from '@/lib/types';
@@ -80,6 +81,11 @@ export function SuggestionCard({
           ))}
         </ul>
       ) : null}
+      {/* A flavour reached through an add-on (COFFEY-ADDONS-PAIRINGS-SPEC §1.1):
+          one quiet line, no price — Coffey never talks about spending. Tapping
+          Add opens the customise modal, where the option is highlighted but not
+          chosen. */}
+      {pick.flavourAddon ? <p className="mt-2 text-xs text-muted">{coffeyTip(pick.flavourAddon)}</p> : null}
       {!available ? (
         <p className="mt-2 text-sm font-medium text-muted">Currently unavailable</p>
       ) : null}
