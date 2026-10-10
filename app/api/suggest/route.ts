@@ -14,7 +14,14 @@ import { templateHeader } from '@/lib/suggest/templates';
 import { todaySpendMicros } from '@/lib/suggest/spend';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { validateSuggestRequest } from '@/lib/suggest/validate';
-import type { Decider, FallbackReason, MenuItemTraits, SuggestResponse } from '@/lib/suggest/types';
+import type {
+  AddonOptionTraitsRow,
+  AddonTraits,
+  Decider,
+  FallbackReason,
+  MenuItemTraits,
+  SuggestResponse,
+} from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
 import { isInStoreOnly } from '@/lib/menu/inStore';
 import { getStoreSettings } from '@/lib/store/settings';
@@ -37,23 +44,37 @@ type AdminClient = ReturnType<typeof createAdminSupabaseClient>;
 
 const CACHE_TTL_MS = 60_000;
 
-let menuCache: { at: number; items: MenuItem[]; traitsById: Map<string, MenuItemTraits> } | null = null;
+interface MenuAndTraits {
+  items: MenuItem[];
+  traitsById: Map<string, MenuItemTraits>;
+  /** The owner's add-on trait overrides, option id → traits (COFFEY-ADDONS-PAIRINGS-SPEC §2.3). */
+  addonTraitsById: Map<string, AddonTraits>;
+}
+
+let menuCache: ({ at: number } & MenuAndTraits) | null = null;
 let popularityCache: { at: number; map: Map<string, number> } | null = null;
 
-async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[]; traitsById: Map<string, MenuItemTraits> }> {
+async function loadMenuAndTraits(admin: AdminClient): Promise<MenuAndTraits> {
   if (menuCache && Date.now() - menuCache.at < CACHE_TTL_MS) return menuCache;
 
-  const [menuResult, traitsResult, settings] = await Promise.all([
+  const [menuResult, traitsResult, addonTraitsResult, settings] = await Promise.all([
     admin.from('menu_items').select(MENU_ITEM_SELECT).eq('is_available', true),
     admin.from('menu_item_traits').select('*'),
+    admin.from('addon_option_traits').select('*'),
     getStoreSettings(),
   ]);
   if (menuResult.error) {
     console.error('suggest route: menu load failed', menuResult.error);
-    return { items: [], traitsById: new Map() };
+    return { items: [], traitsById: new Map(), addonTraitsById: new Map() };
   }
   if (traitsResult.error) {
     console.error('suggest route: traits load failed', traitsResult.error);
+  }
+  // The table is created by supabase/2026-10-coffey-addons-pairings.sql, so it
+  // may be missing before that migration is applied: log once per cache fill and
+  // carry on with the derived defaults (an empty map).
+  if (addonTraitsResult.error) {
+    console.error('suggest route: add-on traits load failed', addonTraitsResult.error);
   }
 
   // Coffey v2 (COFFEY-SPEC §4.7): MENU_ITEM_SELECT brings every item's addon
@@ -76,7 +97,21 @@ async function loadMenuAndTraits(admin: AdminClient): Promise<{ items: MenuItem[
     ((traitsResult.data ?? []) as MenuItemTraits[]).map((t) => [t.menu_item_id, t]),
   );
 
-  menuCache = { at: Date.now(), items, traitsById };
+  const addonTraitsById = new Map<string, AddonTraits>();
+  if (!addonTraitsResult.error) {
+    for (const row of (addonTraitsResult.data ?? []) as AddonOptionTraitsRow[]) {
+      addonTraitsById.set(row.option_id, {
+        role: row.role,
+        flavour_families: row.flavour_families ?? [],
+        sweetness_delta: row.sweetness_delta,
+        intensity_delta: row.intensity_delta,
+        indulgence_delta: row.indulgence_delta,
+        textures: row.textures ?? [],
+      });
+    }
+  }
+
+  menuCache = { at: Date.now(), items, traitsById, addonTraitsById };
   return menuCache;
 }
 
@@ -243,7 +278,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const [{ items: menu, traitsById }, popularity, recentItemIds] = await Promise.all([
+  const [{ items: menu, traitsById, addonTraitsById }, popularity, recentItemIds] = await Promise.all([
     loadMenuAndTraits(admin),
     loadPopularity30d(admin),
     loadRecentItemIds(admin, userId),
@@ -262,6 +297,7 @@ export async function POST(request: Request) {
     profile,
     popularity,
     recentItemIds,
+    addonTraitsById,
     now,
     decider,
     fallbackReason: preDecidedFallbackReason,
