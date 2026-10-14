@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { computeBill, FALLBACK_STORE_SETTINGS } from '@/lib/store/hours';
 import { recomputeOrderTotals } from '@/lib/orders/amend';
 import { resolveOrderLines } from '@/lib/orders/lines';
-import { cartTaxableSubtotal } from '@/lib/cart/CartContext';
+import { cartBillBeforePackaging, cartTaxableSubtotal } from '@/lib/cart/CartContext';
 import type { MenuItem, StoreSettings } from '@/lib/types';
 
 // Per-item GST exemption (supabase/2026-09-gst-exempt.sql). GST is money on a
@@ -118,5 +118,21 @@ describe('cartTaxableSubtotal', () => {
         { qty: 1, unitPriceInr: 50, gstExempt: false },
       ]),
     ).toBe(250);
+  });
+});
+
+describe('cartBillBeforePackaging (cart drawer and floating cart bar)', () => {
+  it('is items + GST on the taxable lines, with no packaging even when the store charges it', () => {
+    const items = [
+      { qty: 2, unitPriceInr: 100 },
+      { qty: 1, unitPriceInr: 10, gstExempt: true },
+    ];
+    expect(cartBillBeforePackaging(items, 210, { ...exclusive, packaging_charge_inr: 10 })).toEqual({
+      subtotal_inr: 210,
+      tax_inr: 10,
+      packaging_inr: 0,
+      discount_inr: 0,
+      total_inr: 220,
+    });
   });
 });

@@ -337,7 +337,7 @@ function MenuPageContent() {
         <div aria-hidden="true" className="h-20" />
       </div>
 
-      <FloatingCartBar onOpen={() => setDrawerOpen(true)} />
+      <FloatingCartBar onOpen={() => setDrawerOpen(true)} settings={settings} />
       <CartDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
