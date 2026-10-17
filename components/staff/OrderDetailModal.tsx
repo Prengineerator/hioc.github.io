@@ -36,6 +36,7 @@ import {
 } from '@/lib/staff/confirmation';
 import type { PrintType } from '@/lib/staff/autoPrint';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
+import { lineSizeSuffix } from '@/lib/menu/weight';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -466,7 +467,7 @@ export function OrderDetailModal({
                 <div className="flex justify-between gap-2">
                   <span className={struck ? 'text-muted line-through' : ''}>
                     {item.quantity}× {item.name_snapshot}
-                    {item.variant_label_snapshot ? ` (${item.variant_label_snapshot})` : ''}
+                    {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}
                   </span>
                   <span className={'shrink-0 font-bold' + (item.voided ? ' text-muted line-through' : '')}>
                     ₹{item.line_total_inr}
@@ -731,7 +732,7 @@ export function OrderDetailModal({
             {voidTarget ? (
               <p className="mt-1 text-xs text-muted">
                 {voidTarget.quantity}× {voidTarget.name_snapshot}
-                {voidTarget.variant_label_snapshot ? ` (${voidTarget.variant_label_snapshot})` : ''} · ₹{voidTarget.line_total_inr}
+                {lineSizeSuffix(voidTarget.variant_label_snapshot, voidTarget.weight_grams)} · ₹{voidTarget.line_total_inr}
               </p>
             ) : null}
             <p className="mt-1 text-xs text-muted">

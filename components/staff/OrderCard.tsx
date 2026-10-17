@@ -19,6 +19,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { canRemind, quickActionsFor, type QuickAction } from '@/lib/orders/quickActions';
 import type { Order, OrderItem } from '@/lib/types';
+import { lineSizeLabel } from '@/lib/menu/weight';
 
 const CORNER_TONE: Record<QuickAction['tone'], string> = {
   primary: 'bg-tan-dark text-cream hover:bg-tan-darker',
@@ -143,8 +144,8 @@ export function OrderCard({
           {order.items.map((item) => (
             <li key={item.id} className={item.voided ? 'text-muted line-through' : ''}>
               <span className="font-bold">{item.quantity}×</span> {item.name_snapshot}
-              {item.variant_label_snapshot ? (
-                <span className="text-muted"> ({item.variant_label_snapshot})</span>
+              {lineSizeLabel(item.variant_label_snapshot, item.weight_grams) ? (
+                <span className="text-muted"> ({lineSizeLabel(item.variant_label_snapshot, item.weight_grams)})</span>
               ) : null}
               {item.addons.length > 0 ? (
                 <span className="block pl-4 text-xs text-muted">

@@ -1577,6 +1577,25 @@ async function checkCoffeePassPerDrink() {
 }
 
 // ---------------------------------------------------------------------------
+// Sell by weight (supabase/2026-10-sell-by-weight.sql): coffee beans priced per
+// kg and sold by the gram. Orders work without it (a weight is only written on a
+// weighed line), but no item can be switched to sold by weight until it is in.
+// Reads only.
+// ---------------------------------------------------------------------------
+async function checkSellByWeight() {
+  heading('Sell by weight: menu_items.sold_by_weight + order_items.weight_grams', '2026-10-sell-by-weight.sql');
+  const hint = 'apply supabase/2026-10-sell-by-weight.sql';
+  for (const [table, col] of [
+    ['menu_items', 'sold_by_weight'],
+    ['order_items', 'weight_grams'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' ? hint : errText(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase 7 · SUG-1 — the "Help me choose" suggestion engine
 // (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §8 SUG-1 AC, supabase/2026-09-suggestion-engine.sql).
 // Five tables, RLS on, everything but customer_taste_profiles' self-read
@@ -2010,6 +2029,7 @@ async function main() {
   await checkInventory();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
+  await checkSellByWeight();
   await checkMarketingAgent();
   await checkCleanup();
 

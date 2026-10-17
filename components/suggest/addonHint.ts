@@ -11,6 +11,7 @@
 // `initialSelection` by construction.
 
 import { suggestedOptionIds } from '@/lib/menu/customization';
+import { isSoldByWeight } from '@/lib/menu/weight';
 import { FLAVOUR_FAMILY_INFO } from '@/lib/suggest/traitVocabulary';
 import type { FlavourAddonSuggestion, SugarPreset, SuggestionPick } from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
@@ -39,15 +40,17 @@ export function sugarPresetHint(preset: SugarPreset): string {
 
 /**
  * Add on a pick opens the customise modal — never the one-tap path — when the
- * item needs a choice (several sizes or any add-on group) OR the pick carries a
- * flavour add-on (§1.1): the customer has to be able to see and tap the
- * suggestion, even on an item that would otherwise be "simple".
+ * item needs a choice (several sizes, any add-on group, or how many grams of a
+ * sold-by-weight item) OR the pick carries a flavour add-on (§1.1): the
+ * customer has to be able to see and tap the suggestion, even on an item that
+ * would otherwise be "simple".
  */
 export function needsCustomizeModal(
-  item: Pick<MenuItem, 'variants' | 'addon_groups'>,
+  item: Pick<MenuItem, 'variants' | 'addon_groups' | 'sold_by_weight'>,
   pick: Pick<SuggestionPick, 'flavourAddon'>,
 ): boolean {
   if (pick.flavourAddon) return true;
+  if (isSoldByWeight(item)) return true;
   return !(item.variants.length === 1 && item.addon_groups.length === 0);
 }
 

@@ -393,6 +393,9 @@ export interface OrderLineLike {
   /** order_items.variant_label_snapshot */
   variant_label: string | null;
   quantity: number;
+  /** order_items.weight_grams: grams in one unit of a sold-by-weight line
+   * (2026-10-sell-by-weight); null/absent for a by-the-unit line. */
+  weight_grams?: number | null;
   /** order_item_addons.addon_option_id for this line (null = deleted option). */
   addon_option_ids?: (string | null)[];
 }
@@ -451,7 +454,12 @@ export function addonRecipeFor(
  * recipe plus each of its add-ons' recipes (addonRecipeFor: scoped to the
  * line's item and size), × the line quantity (add-ons are priced per unit,
  * lib/orders/lines.ts). Lines with no menu item (deleted since) or no recipe
- * use nothing of their own. */
+ * use nothing of their own.
+ *
+ * A sold-by-weight line (weight_grams) has its item recipe written PER GRAM
+ * sold, so the item recipe is × grams × quantity: 2 × 250 g of beans with a
+ * recipe of 1 g per gram uses 500 g. Its add-ons (a grind, a bag) are per bag
+ * like any add-on, so they stay × quantity. */
 export function orderUsage(
   orderLines: OrderLineLike[],
   recipeLines: RecipeLineLike[],
@@ -463,7 +471,9 @@ export function orderUsage(
     const units = Number(line.quantity) || 0;
     if (units <= 0) continue;
     if (line.menu_item_id) {
-      for (const r of recipeFor(recipeLines, line.menu_item_id, line.variant_label)) add(r.item_id, Number(r.qty) * units);
+      const grams = Number(line.weight_grams) || 0;
+      const itemUnits = grams > 0 ? units * grams : units;
+      for (const r of recipeFor(recipeLines, line.menu_item_id, line.variant_label)) add(r.item_id, Number(r.qty) * itemUnits);
     }
     for (const optionId of line.addon_option_ids ?? []) {
       if (!optionId) continue;

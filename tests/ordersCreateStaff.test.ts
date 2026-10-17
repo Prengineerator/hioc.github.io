@@ -31,6 +31,8 @@ const state: {
   tableRow: Record<string, unknown> | null;
   menuRows: Record<string, unknown>[];
   orderInsert?: Record<string, unknown>;
+  /** The order_items bulk insert (one row per line). */
+  itemsInsert?: Record<string, unknown>[];
   eventRow?: Record<string, unknown>;
   /** What the route handed validateAndComputeCoupon (the coupon itself is stubbed to refuse). */
   couponCtx?: Record<string, unknown>;
@@ -51,6 +53,7 @@ vi.mock('@/lib/supabase-server', () => ({
           Promise.resolve({ data: state.menuRows, error: null }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
+          if (table === 'order_items') state.itemsInsert = payload as unknown as Record<string, unknown>[];
           if (table === 'order_status_events') state.eventRow = payload;
           // orders / order_items chain on into `.select().single()`; the addon
           // and event inserts are awaited directly and resolve here.
@@ -152,6 +155,7 @@ beforeEach(() => {
   state.actor = null;
   state.sessionUser = null;
   state.orderInsert = undefined;
+  state.itemsInsert = undefined;
   state.eventRow = undefined;
   state.couponCtx = undefined;
   state.tableRow = { id: TABLE_ID, label: 'T1', is_active: true };
@@ -313,6 +317,49 @@ describe('POST /api/orders — staff walk-in takeaway (FND3-3)', () => {
     const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
     expect(res.status).toBe(201);
     expect(state.orderInsert?.tax_inr).toBe(10);
+  });
+
+  describe('sold by weight (2026-10-sell-by-weight)', () => {
+    const beansRow = () => ({
+      ...state.menuRows[0],
+      name: 'House Blend',
+      category: 'Coffee Beans',
+      sold_by_weight: true,
+      menu_item_variants: [{ id: VARIANT_ID, label: 'Whole beans', price_inr: 2400, sort_order: 0 }],
+    });
+
+    it('prices a weighed line from its grams and stores weight_grams on the line', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+      state.menuRows = [beansRow()];
+      const items = [{ menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 2, weight_grams: 250 }];
+      const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items }));
+      expect(res.status).toBe(201);
+      // 2 × 250 g at ₹2400/kg = 2 × ₹600.
+      expect(state.orderInsert?.subtotal_inr).toBe(1200);
+      expect(state.itemsInsert?.[0]).toMatchObject({
+        variant_label_snapshot: 'Whole beans',
+        weight_grams: 250,
+        price_inr_snapshot: 600,
+        quantity: 2,
+        line_total_inr: 1200,
+      });
+    });
+
+    it('refuses a weighed item sent without its grams', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+      state.menuRows = [beansRow()];
+      const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/sold by weight/);
+      expect(state.orderInsert).toBeUndefined();
+    });
+
+    it('writes no weight_grams column for a by-the-unit line (works before the migration)', async () => {
+      state.actor = { user: { id: 'staff-1' }, role: 'staff' };
+      const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+      expect(res.status).toBe(201);
+      expect(state.itemsInsert?.[0]).not.toHaveProperty('weight_grams');
+    });
   });
 
   describe('staff website vs POS', () => {

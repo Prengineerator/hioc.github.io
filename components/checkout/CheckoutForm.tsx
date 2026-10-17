@@ -316,6 +316,7 @@ export function CheckoutForm({
       quantity: i.qty,
       addon_option_ids: i.addons.map((a) => a.optionId),
       special_instructions: i.specialInstructions,
+      ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
     }));
   }
 

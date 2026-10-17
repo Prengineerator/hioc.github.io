@@ -11,6 +11,8 @@ import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 import { getStoreSettings } from '@/lib/store/settings';
 import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { flags } from '@/lib/flags';
+import { isMissingColumnError } from '@/lib/api/postgrest';
+import { SELL_BY_WEIGHT_MIGRATION_HINT } from '@/lib/menu/weight';
 
 export const dynamic = 'force-dynamic';
 
@@ -175,6 +177,7 @@ export async function POST(request: Request) {
     short_code,
     in_store_only,
     gst_exempt,
+    sold_by_weight,
   } = body;
 
   if (typeof name !== 'string' || name.trim().length === 0) {
@@ -210,6 +213,10 @@ export async function POST(request: Request) {
 
   if (gst_exempt !== undefined && typeof gst_exempt !== 'boolean') {
     return errorResponse(400, 'gst_exempt must be a boolean');
+  }
+
+  if (sold_by_weight !== undefined && typeof sold_by_weight !== 'boolean') {
+    return errorResponse(400, 'sold_by_weight must be a boolean');
   }
 
   if (
@@ -281,6 +288,9 @@ export async function POST(request: Request) {
       // editor says otherwise explicitly.
       in_store_only: in_store_only ?? isInStoreOnlyCategory(category as string),
       gst_exempt: gst_exempt ?? false,
+      // Only written when on (2026-10-sell-by-weight.sql), so creating an
+      // ordinary item works before that migration is applied.
+      ...(sold_by_weight === true ? { sold_by_weight: true } : {}),
     })
     .select()
     .single();
@@ -288,6 +298,9 @@ export async function POST(request: Request) {
   if (itemError || !item) {
     if (itemError?.code === '23505') {
       return errorResponse(409, 'Code already in use');
+    }
+    if (sold_by_weight === true && isMissingColumnError(itemError)) {
+      return errorResponse(409, SELL_BY_WEIGHT_MIGRATION_HINT);
     }
     return errorResponse(500, 'Failed to create menu item');
   }

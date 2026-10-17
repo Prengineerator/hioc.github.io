@@ -93,6 +93,7 @@ import {
 } from '@/lib/staff/confirmation';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
+import { isSoldByWeight, lineSizeLabel } from '@/lib/menu/weight';
 import type { MenuItem, OrderType } from '@/lib/types';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
@@ -166,6 +167,7 @@ function orderItemsOf(cart: readonly CartItem[]) {
     quantity: i.qty,
     addon_option_ids: i.addons.map((a) => a.optionId),
     special_instructions: i.specialInstructions,
+    ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
   }));
 }
 
@@ -822,6 +824,7 @@ export function PosOrderEntry({
       line.variantId,
       line.addons.map((a) => a.optionId),
       line.specialInstructions,
+      line.weightGrams,
     );
     setCart((prev) => {
       const existing = prev.find((i) => i.key === key);
@@ -1516,7 +1519,7 @@ export function PosOrderEntry({
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-bold text-charcoal">{line.name}</p>
                         <p className="truncate text-xs text-muted">
-                          {line.variantLabel}
+                          {lineSizeLabel(line.variantLabel, line.weightGrams)}
                           {line.addons.length > 0
                             ? ` · ${line.addons.map((a) => a.optionName).join(', ')}`
                             : ''}
@@ -2272,7 +2275,9 @@ function BillRow({ label, value }: { label: string; value: number }) {
 function PosMenuTile({ item, onTap }: { item: MenuItem; onTap: () => void }) {
   const available = isMenuItemAvailable(item);
   const minPrice = Math.min(...item.variants.map((v) => v.price_inr));
-  const priceLabel = item.variants.length > 1 ? `from ₹${minPrice}` : `₹${minPrice}`;
+  // A sold-by-weight item's prices are per kg (lib/menu/weight.ts).
+  const unit = isSoldByWeight(item) ? '/kg' : '';
+  const priceLabel = item.variants.length > 1 ? `from ₹${minPrice}${unit}` : `₹${minPrice}${unit}`;
 
   return (
     <button

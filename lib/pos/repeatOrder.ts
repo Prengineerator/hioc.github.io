@@ -20,6 +20,7 @@
 // CURRENT price (never the order's old price_inr_snapshot).
 
 import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { basePriceInr, isSoldByWeight, repeatWeight } from '@/lib/menu/weight';
 import type { CartAddonSelection, CartItem } from '@/lib/cart/CartContext';
 import type { CustomerOrderItemResponse, LegacyOrderItemResponse } from '@/lib/api/customerOrders';
 import type { MenuItem } from '@/lib/types';
@@ -77,6 +78,13 @@ export function mapOrderItemsToCartLines(
       skipped.push({ name: displayName, reason: 'This option is no longer offered' });
       continue;
     }
+    // Sold by weight: the same bag size as last time (lib/menu/weight.ts
+    // repeatWeight — the website's "Order again" uses the same rule).
+    const weight = repeatWeight(menuItem, orderItem.weight_grams);
+    if (!weight.ok) {
+      skipped.push({ name: displayName, reason: weight.reason });
+      continue;
+    }
 
     const optionById = new Map<string, { option: MenuItem['addon_groups'][number]['options'][number]; group: MenuItem['addon_groups'][number] }>();
     for (const group of menuItem.addon_groups) {
@@ -107,7 +115,8 @@ export function mapOrderItemsToCartLines(
       });
     }
 
-    const unitPriceInr = variant.price_inr + kept.reduce((sum, a) => sum + a.priceInr, 0);
+    const unitPriceInr =
+      basePriceInr(variant.price_inr, weight.weightGrams) + kept.reduce((sum, a) => sum + a.priceInr, 0);
 
     lines.push({
       menuItemId: menuItem.id,
@@ -117,6 +126,7 @@ export function mapOrderItemsToCartLines(
       unitPriceInr,
       addons: kept,
       specialInstructions: orderItem.special_instructions ?? '',
+      ...(weight.weightGrams !== null ? { weightGrams: weight.weightGrams } : {}),
       qty: orderItem.quantity,
     });
   }
@@ -184,6 +194,11 @@ export function mapLegacyBillItemsToCartLines(
     }
     if (!variant) {
       skipped.push({ name: displayName, reason: 'This option is no longer offered' });
+      continue;
+    }
+    // A Petpooja bill never recorded grams, so there is no bag size to repeat.
+    if (isSoldByWeight(menuItem)) {
+      skipped.push({ name: displayName, reason: 'Sold by weight — add it from the menu' });
       continue;
     }
 

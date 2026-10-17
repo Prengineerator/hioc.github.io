@@ -7,6 +7,7 @@ import {
   invalidGroups,
   toggleOption,
 } from '@/lib/menu/customization';
+import { basePriceInr, DEFAULT_WEIGHT_GRAMS, isSoldByWeight } from '@/lib/menu/weight';
 import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -41,14 +42,21 @@ export function PosCustomizeModal({
   const [selected, setSelected] = useState<Record<string, string[]>>(() => initialSelection(item));
   const [qty, setQty] = useState(Math.max(1, initialQty));
   const [instructions, setInstructions] = useState('');
+  // Sold by weight (lib/menu/weight.ts): grams in one bag, as read off the
+  // scale; null while the typed weight isn't valid. Same rules as the web modal.
+  const byWeight = isSoldByWeight(item);
+  const [weightGrams, setWeightGrams] = useState<number | null>(byWeight ? DEFAULT_WEIGHT_GRAMS : null);
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
   const addonsFlat = useMemo(() => flattenAddons(item, selected), [item, selected]);
   const invalid = useMemo(() => invalidGroups(item, selected), [item, selected]);
 
-  const unitPrice = (variant?.price_inr ?? 0) + addonsFlat.reduce((s, a) => s + a.priceInr, 0);
-  const canSubmit = !!variant && invalid.length === 0;
+  const needsWeight = byWeight && weightGrams === null;
+  const unitPrice =
+    basePriceInr(variant?.price_inr ?? 0, byWeight ? weightGrams : null) +
+    addonsFlat.reduce((s, a) => s + a.priceInr, 0);
+  const canSubmit = !!variant && invalid.length === 0 && !needsWeight;
 
   function handleAdd() {
     if (!variant || !canSubmit) return;
@@ -62,6 +70,7 @@ export function PosCustomizeModal({
         gstExempt: item.gst_exempt === true,
         addons: addonsFlat,
         specialInstructions: instructions.trim(),
+        ...(byWeight && weightGrams !== null ? { weightGrams } : {}),
       },
       qty,
     );
@@ -90,7 +99,11 @@ export function PosCustomizeModal({
         </button>
       </div>
       <Button disabled={!canSubmit} onClick={handleAdd} className="flex-1">
-        {canSubmit ? `Add to order · ₹${unitPrice * qty}` : 'Select required options'}
+        {canSubmit
+          ? `Add to order · ₹${unitPrice * qty}`
+          : needsWeight
+            ? 'Enter a weight'
+            : 'Select required options'}
       </Button>
     </div>
   );
@@ -106,6 +119,8 @@ export function PosCustomizeModal({
         instructions={instructions}
         onInstructionsChange={setInstructions}
         size="touch"
+        weightGrams={weightGrams}
+        onWeightChange={byWeight ? setWeightGrams : undefined}
       />
     </Modal>
   );

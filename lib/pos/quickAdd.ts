@@ -11,6 +11,7 @@
 
 import type { MenuItem } from '@/lib/types';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { isSoldByWeight } from '@/lib/menu/weight';
 
 export type QuickMatchKind =
   | 'code' // exact owner short_code (Phase 2)
@@ -70,9 +71,10 @@ export function normalizeToken(input: string): string {
 
 // The "add straight vs open the customize modal" rule — the SINGLE source of
 // truth, reused by both the tile tap and the quick-add commit so they can't
-// drift. An item is simple iff it has exactly one variant and no addon groups.
+// drift. An item is simple iff it has exactly one variant and no addon groups,
+// and isn't sold by weight (the staffer has to enter the grams).
 export function isSimpleItem(item: MenuItem): boolean {
-  return item.variants.length === 1 && item.addon_groups.length === 0;
+  return item.variants.length === 1 && item.addon_groups.length === 0 && !isSoldByWeight(item);
 }
 
 // Qty grammar for the command bar: "3*cap" | "3xcap" | "3 cap" -> qty 3.

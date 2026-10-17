@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { cartBillBeforePackaging, useCart } from '@/lib/cart/CartContext';
 import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
+import { lineSizeLabel } from '@/lib/menu/weight';
 import type { StoreSettings } from '@/lib/types';
 
 export function CartDrawer({
@@ -102,7 +103,7 @@ export function CartDrawer({
                         {item.name}
                       </span>
                       <span className="ml-1 text-sm text-muted">
-                        ({item.variantLabel})
+                        ({lineSizeLabel(item.variantLabel, item.weightGrams)})
                       </span>
                       {item.addons.length > 0 ? (
                         <p className="mt-0.5 text-sm text-muted">

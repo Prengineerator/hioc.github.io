@@ -7,15 +7,26 @@ import {
   MAX_INSTRUCTIONS_LEN,
   selectionLabel,
 } from '@/lib/menu/customization';
+import {
+  formatPerKg,
+  formatWeight,
+  isSoldByWeight,
+  parseWeightInput,
+  WEIGHT_MAX_GRAMS,
+  WEIGHT_MIN_GRAMS,
+  WEIGHT_PRESETS_GRAMS,
+  weightPriceInr,
+} from '@/lib/menu/weight';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 
 /**
  * Shared modal body for the customer MenuItemCustomizeModal and the staff
- * PosCustomizeModal — size picker, addon groups (split into a "Required"
- * section and an "Add-ons (optional)" section) and the special-instructions
- * field. Pure presentation: all selection state and rules live in the caller
- * (backed by lib/menu/customization.ts) so both modals stay byte-for-byte
- * aligned on what's required and what a tap does.
+ * PosCustomizeModal — size picker, weight picker (sold-by-weight items,
+ * lib/menu/weight.ts), addon groups (split into a "Required" section and an
+ * "Add-ons (optional)" section) and the special-instructions field. Pure
+ * presentation: all selection state and rules live in the caller (backed by
+ * lib/menu/customization.ts) so both modals stay byte-for-byte aligned on
+ * what's required and what a tap does.
  */
 export function ItemCustomizer({
   item,
@@ -27,10 +38,16 @@ export function ItemCustomizer({
   onInstructionsChange,
   size = 'default',
   suggestedOptionIds,
+  weightGrams = null,
+  onWeightChange,
 }: {
   item: MenuItem;
   variantId: string;
   onVariantChange: (id: string) => void;
+  /** Sold-by-weight items only: grams in one unit, or null while the typed
+   * weight isn't valid (the caller then can't add the line). */
+  weightGrams?: number | null;
+  onWeightChange?: (grams: number | null) => void;
   selection: Record<string, string[]>;
   onToggle: (group: AddonGroup, optionId: string) => void;
   instructions: string;
@@ -45,8 +62,10 @@ export function ItemCustomizer({
   const requiredGroups = item.addon_groups.filter(isRequired);
   const optionalGroups = item.addon_groups.filter((g) => !isRequired(g));
   const showSize = item.variants.length > 1;
+  const byWeight = isSoldByWeight(item) && onWeightChange !== undefined;
+  const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
-  const hasRequiredSection = showSize || requiredGroups.length > 0;
+  const hasRequiredSection = showSize || byWeight || requiredGroups.length > 0;
   const hasOptionalSection = optionalGroups.length > 0;
 
   return (
@@ -57,6 +76,14 @@ export function ItemCustomizer({
           <div className="space-y-3">
             {showSize ? (
               <SizePicker item={item} variantId={variantId} onVariantChange={onVariantChange} size={size} />
+            ) : null}
+            {byWeight && variant ? (
+              <WeightPicker
+                pricePerKg={variant.price_inr}
+                weightGrams={weightGrams}
+                onWeightChange={onWeightChange}
+                size={size}
+              />
             ) : null}
             {requiredGroups.map((group) => (
               <AddonGroupBlock
@@ -109,11 +136,13 @@ function SizePicker({
   size: 'default' | 'touch';
 }) {
   const labelId = useId();
+  // A sold-by-weight item's "sizes" are its grinds/roasts, priced per kg.
+  const byWeight = isSoldByWeight(item);
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-2">
         <span id={labelId} className="truncate text-sm font-semibold text-charcoal">
-          Size
+          {byWeight ? 'Type' : 'Size'}
         </span>
       </div>
       <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby={labelId}>
@@ -127,10 +156,109 @@ function SizePicker({
               onClick={() => onVariantChange(v.id)}
               className={chipClasses(selected, size)}
             >
-              {v.label} · <span className="font-mono tabular-nums">₹{v.price_inr}</span>
+              {v.label} ·{' '}
+              <span className="font-mono tabular-nums">{byWeight ? formatPerKg(v.price_inr) : `₹${v.price_inr}`}</span>
             </button>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How many grams in one unit: preset bags as chips (each with its price at the
+ * chosen type's per-kg rate), or any whole number of grams typed into "Other".
+ * Reports null while "Other" holds something out of range, so the caller can't
+ * add a line the server would refuse.
+ */
+function WeightPicker({
+  pricePerKg,
+  weightGrams,
+  onWeightChange,
+  size,
+}: {
+  pricePerKg: number;
+  weightGrams: number | null;
+  onWeightChange: (grams: number | null) => void;
+  size: 'default' | 'touch';
+}) {
+  const labelId = useId();
+  const inputId = useId();
+  const hintId = useId();
+  // What's typed in "Other". Empty while a preset chip is the choice.
+  const [custom, setCustom] = useState(() =>
+    weightGrams !== null && !WEIGHT_PRESETS_GRAMS.includes(weightGrams) ? String(weightGrams) : '',
+  );
+  const customInvalid = custom !== '' && parseWeightInput(custom) === null;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span id={labelId} className="truncate text-sm font-semibold text-charcoal">
+          Weight
+        </span>
+        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] font-semibold tabular-nums text-muted">
+          {formatPerKg(pricePerKg)}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby={labelId}>
+        {WEIGHT_PRESETS_GRAMS.map((grams) => {
+          const selected = custom === '' && weightGrams === grams;
+          return (
+            <button
+              key={grams}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => {
+                setCustom('');
+                onWeightChange(grams);
+              }}
+              className={chipClasses(selected, size)}
+            >
+              {formatWeight(grams)} ·{' '}
+              <span className="font-mono tabular-nums">₹{weightPriceInr(pricePerKg, grams)}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label htmlFor={inputId} className="text-sm text-muted">
+          Other
+        </label>
+        {/* The focus ring goes on the box, not the input, so it wraps the "g". */}
+        <div
+          className={
+            'flex w-32 items-center rounded-md border focus-within:border-tan focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-tan ' +
+            (customInvalid ? 'border-tan-dark' : 'border-line')
+          }
+        >
+          <input
+            id={inputId}
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            value={custom}
+            onChange={(e) => {
+              const next = e.target.value.replace(/\D/g, '').slice(0, 5);
+              setCustom(next);
+              onWeightChange(next === '' ? null : parseWeightInput(next));
+            }}
+            placeholder="grams"
+            aria-describedby={hintId}
+            aria-invalid={customInvalid || undefined}
+            className="w-full min-w-0 rounded-md bg-transparent px-3 py-2 font-mono text-sm tabular-nums text-charcoal outline-none focus-visible:outline-none"
+          />
+          <span className="pr-3 text-sm text-muted">g</span>
+        </div>
+        {custom !== '' && !customInvalid ? (
+          <span className="font-mono text-sm tabular-nums text-charcoal">
+            ₹{weightPriceInr(pricePerKg, Number(custom))}
+          </span>
+        ) : null}
+        <span id={hintId} className={'text-xs ' + (customInvalid ? 'font-semibold text-tan-dark' : 'text-muted')}>
+          {WEIGHT_MIN_GRAMS}–{WEIGHT_MAX_GRAMS} g
+        </span>
       </div>
     </div>
   );

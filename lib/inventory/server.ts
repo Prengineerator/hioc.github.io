@@ -6,6 +6,7 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 import { flags } from '@/lib/flags';
 import { istBusinessDate } from '@/lib/cash/date';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
@@ -360,11 +361,18 @@ export async function consumeStockForOrder(orderId: string, actorId: string | nu
   if (!flags.inventory || !flags.inventorySales) return;
   try {
     const admin = createAdminSupabaseClient();
-    const { data: lines, error: linesError } = await admin
-      .from('order_items')
-      .select('menu_item_id, variant_label_snapshot, quantity, order_item_addons(addon_option_id)')
-      .eq('order_id', orderId)
-      .eq('voided', false);
+    // weight_grams (2026-10-sell-by-weight.sql) may not exist yet: read without
+    // it then, when no line can be weighed anyway.
+    const readLines = (withWeight: boolean) =>
+      admin
+        .from('order_items')
+        .select(
+          `menu_item_id, variant_label_snapshot, quantity, ${withWeight ? 'weight_grams, ' : ''}order_item_addons(addon_option_id)`,
+        )
+        .eq('order_id', orderId)
+        .eq('voided', false);
+    let { data: lines, error: linesError } = await readLines(true);
+    if (linesError && isMissingColumnError(linesError)) ({ data: lines, error: linesError } = await readLines(false));
     if (linesError) {
       console.error('consumeStockForOrder: order lines lookup failed', linesError);
       return;
@@ -373,12 +381,14 @@ export async function consumeStockForOrder(orderId: string, actorId: string | nu
       menu_item_id: string | null;
       variant_label_snapshot: string | null;
       quantity: number;
+      weight_grams?: number | null;
       order_item_addons: { addon_option_id: string | null }[] | null;
     };
-    const orderLines: OrderLineLike[] = ((lines ?? []) as LineRow[]).map((l) => ({
+    const orderLines: OrderLineLike[] = ((lines ?? []) as unknown as LineRow[]).map((l) => ({
       menu_item_id: l.menu_item_id,
       variant_label: l.variant_label_snapshot,
       quantity: l.quantity,
+      weight_grams: l.weight_grams ?? null,
       addon_option_ids: (l.order_item_addons ?? []).map((a) => a.addon_option_id),
     }));
     const menuIds = [...new Set(orderLines.map((l) => l.menu_item_id).filter((v): v is string => Boolean(v)))];

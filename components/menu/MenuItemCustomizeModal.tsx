@@ -9,6 +9,7 @@ import {
   suggestedOptionIds,
   toggleOption,
 } from '@/lib/menu/customization';
+import { basePriceInr, DEFAULT_WEIGHT_GRAMS, isSoldByWeight } from '@/lib/menu/weight';
 import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -45,6 +46,10 @@ export function MenuItemCustomizeModal({
   const [selected, setSelected] = useState<Record<string, string[]>>(() => initialSelection(item, presets));
   const [qty, setQty] = useState(1);
   const [instructions, setInstructions] = useState('');
+  // Sold by weight (lib/menu/weight.ts): grams in one bag; null while the
+  // typed weight isn't valid.
+  const byWeight = isSoldByWeight(item);
+  const [weightGrams, setWeightGrams] = useState<number | null>(byWeight ? DEFAULT_WEIGHT_GRAMS : null);
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
@@ -55,8 +60,11 @@ export function MenuItemCustomizeModal({
   const addonsFlat = useMemo(() => flattenAddons(item, selected), [item, selected]);
   const invalid = useMemo(() => invalidGroups(item, selected), [item, selected]);
 
-  const unitPrice = (variant?.price_inr ?? 0) + addonsFlat.reduce((s, a) => s + a.priceInr, 0);
-  const canSubmit = !!variant && invalid.length === 0;
+  const needsWeight = byWeight && weightGrams === null;
+  const unitPrice =
+    basePriceInr(variant?.price_inr ?? 0, byWeight ? weightGrams : null) +
+    addonsFlat.reduce((s, a) => s + a.priceInr, 0);
+  const canSubmit = !!variant && invalid.length === 0 && !needsWeight;
 
   function handleAdd() {
     if (!variant || !canSubmit) return;
@@ -70,6 +78,7 @@ export function MenuItemCustomizeModal({
         gstExempt: item.gst_exempt === true,
         addons: addonsFlat,
         specialInstructions: instructions.trim(),
+        ...(byWeight && weightGrams !== null ? { weightGrams } : {}),
       },
       qty,
     );
@@ -102,6 +111,8 @@ export function MenuItemCustomizeModal({
           <>
             Add to Cart · <span className="font-mono tabular-nums">₹{unitPrice * qty}</span>
           </>
+        ) : needsWeight ? (
+          'Choose a weight'
         ) : (
           'Select required options'
         )}
@@ -127,6 +138,8 @@ export function MenuItemCustomizeModal({
         instructions={instructions}
         onInstructionsChange={setInstructions}
         suggestedOptionIds={suggestedIds}
+        weightGrams={weightGrams}
+        onWeightChange={byWeight ? setWeightGrams : undefined}
       />
     </Modal>
   );
