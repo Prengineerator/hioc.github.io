@@ -1,0 +1,47 @@
+# The self-hosted HIOC stack (docs/HOSTING-MIGRATION-PLAN.md). Lives at
+# /opt/hioc/docker-compose.yml on the server; the deploy workflow keeps it in
+# sync with this file and deploy.sh does the restarts — there is nothing to run
+# by hand after setup-server.sh except the first deploy.
+name: hioc
+
+services:
+  app:
+    # deploy.sh retags each new build as :current and the one before it as
+    # :previous, so a rollback is a retag, not a rebuild.
+    image: hioc-web:current
+    restart: unless-stopped
+    # Server-only secrets (service-role key, Razorpay, WhatsApp, CRON_SECRET…).
+    # Values containing `$` must be wrapped in 'single quotes' or compose will
+    # try to interpolate them.
+    env_file: app.env
+    ports:
+      # Loopback only: the host's cron jobs (hioc-cron) call the app here.
+      # The public reaches it solely through caddy below.
+      - "127.0.0.1:3000:3000"
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      # A directory, not the single file: the deploy replaces Caddyfile with a
+      # new file, and a single-file bind mount would keep showing the old one.
+      - ./caddy:/etc/caddy:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+volumes:
+  # Holds the Let's Encrypt certificates — keep it, or every re-create asks
+  # for new ones and can hit the issuance rate limit.
+  caddy_data:
+  caddy_config:

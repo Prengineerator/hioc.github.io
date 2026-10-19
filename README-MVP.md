@@ -157,6 +157,9 @@ backend or server to stand up — the API routes ship inside the Next.js app its
 On Vercel, serverless functions are pinned to `icn1` (Seoul) via `vercel.json` so
 they sit next to the Supabase database in `ap-northeast-2`.
 
+To self-host on a small server instead (Docker + Caddy, deployed by GitHub
+Actions), see `docs/HOSTING-MIGRATION-PLAN.md` and the `deploy/` folder.
+
 ## What's in the seed menu
 
 `supabase/seed.sql` loads 21 items across 5 categories:

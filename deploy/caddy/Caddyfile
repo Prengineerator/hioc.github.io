@@ -1,0 +1,27 @@
+# Caddy terminates HTTPS for every HIOC hostname and proxies to the Next.js
+# container. Certificates come from Let's Encrypt on their own, the first time
+# each name is requested after DNS points at this server (ports 80 and 443
+# must be open). The four names are the ones attached to the Vercel project
+# today; www is served as-is, not redirected, exactly as Vercel does now.
+#
+# The app reads the client IP from the first X-Forwarded-For entry
+# (lib/api/rateLimit.ts). Caddy sets that header to the real peer address and
+# drops any value a client sent, so it can't be spoofed. If Cloudflare's proxy
+# is ever put in front, add `trusted_proxies` for Cloudflare's ranges first,
+# or every request will look like it came from Cloudflare.
+
+hioc.in, www.hioc.in, staff.hioc.in, owner.hioc.in {
+	encode zstd gzip
+
+	# Vercel adds this header by default; keep sending it so browsers that
+	# already remember "HTTPS only" for hioc.in see no change.
+	header Strict-Transport-Security "max-age=63072000"
+
+	reverse_proxy app:3000 {
+		# A deploy restarts the app container for a few seconds. Hold and
+		# retry requests meanwhile instead of answering 502, so a POS tap
+		# mid-deploy is just a little slow rather than an error.
+		lb_try_duration 20s
+		lb_try_interval 250ms
+	}
+}

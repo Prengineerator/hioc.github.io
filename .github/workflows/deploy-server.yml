@@ -1,0 +1,93 @@
+name: Deploy to server
+
+# Builds the Docker image (Dockerfile) and ships it to the self-hosted server
+# from docs/HOSTING-MIGRATION-PLAN.md, then lets deploy/deploy.sh on the server
+# swap it in (and roll itself back if the new build never turns healthy).
+#
+# Inert until the repository variable SERVER_DEPLOY_ENABLED is "true": every
+# run before that is skipped, so having this file on main changes nothing for
+# the Vercel deployment.
+#
+# Settings → Secrets and variables → Actions:
+#   Variables
+#     SERVER_DEPLOY_ENABLED  true
+#     SERVER_HOST            the server's static IP
+#     SERVER_USER            ubuntu (Lightsail) / root (Vultr) — whoever ran setup-server.sh
+#   Secrets
+#     SERVER_SSH_KEY         a private key whose public half is in that user's ~/.ssh/authorized_keys
+#     SERVER_KNOWN_HOSTS     output of `ssh-keyscan -t ed25519 <SERVER_HOST>`; pins the server's identity
+#     NEXT_PUBLIC_ENV        every NEXT_PUBLIC_*=… line of the production env, one per line.
+#                            These are baked into the JS at build time (Dockerfile header).
+#
+# The image is piped straight over SSH (docker save | ssh … docker load), so
+# there is no registry and no registry login to keep on the server.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# One deploy at a time, and never cancel one half-way through a container swap.
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.SERVER_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Write build-time env
+        env:
+          NEXT_PUBLIC_ENV: ${{ secrets.NEXT_PUBLIC_ENV }}
+        run: |
+          if [ -z "$NEXT_PUBLIC_ENV" ]; then
+            echo "::error::The NEXT_PUBLIC_ENV secret is empty."
+            exit 1
+          fi
+          printf '%s\n' "$NEXT_PUBLIC_ENV" > "$RUNNER_TEMP/public.env"
+          # Anything in this file ends up in the browser bundle. Refuse to
+          # build if a server secret was pasted in by mistake.
+          if grep -vE '^[[:space:]]*(#|$)' "$RUNNER_TEMP/public.env" | grep -vqE '^NEXT_PUBLIC_[A-Z0-9_]+='; then
+            echo "::error::NEXT_PUBLIC_ENV may only contain NEXT_PUBLIC_* lines."
+            exit 1
+          fi
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: hioc-web:${{ github.sha }}
+          secret-files: |
+            public_env=${{ runner.temp }}/public.env
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Ship to the server and switch over
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.SERVER_KNOWN_HOSTS }}
+          TARGET: ${{ vars.SERVER_USER }}@${{ vars.SERVER_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh_cmd() { ssh -i ~/.ssh/id_deploy -o BatchMode=yes "$TARGET" "$@"; }
+
+          # Server config first, so a Caddyfile or deploy.sh change in this
+          # commit is what the switch-over below runs with. app.env and the
+          # installed /etc/cron.d/hioc are never touched from here.
+          tar -C deploy -cz docker-compose.yml caddy/Caddyfile deploy.sh run-cron.sh hioc-cron \
+            | ssh_cmd 'tar -C /opt/hioc -xz'
+
+          docker save "hioc-web:${GITHUB_SHA}" | gzip -1 | ssh_cmd 'bash /opt/hioc/deploy.sh'

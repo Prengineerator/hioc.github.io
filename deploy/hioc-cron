@@ -1,0 +1,26 @@
+# /etc/cron.d/hioc — the self-hosted replacement for the "crons" block in
+# vercel.json, same schedules, same UTC times (setup-server.sh puts the server
+# clock on UTC). Keep the two lists identical until Vercel is retired.
+#
+# Install it ONLY at cutover, in the same step as Vercel's crons are switched
+# off (docs/HOSTING-MIGRATION-PLAN.md, step 6). With both running, every job
+# fires twice — owner report emails and leave reminders would go out twice.
+#
+# The three jobs Supabase pg_cron already calls (expire-orders poll,
+# marketing-send, feedback-requests) hit https://hioc.in and simply follow
+# DNS, so they are not listed here.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+0 3 * * *    root /opt/hioc/run-cron.sh expire-orders
+30 21 * * *  root /opt/hioc/run-cron.sh close-attendance
+35 21 * * *  root /opt/hioc/run-cron.sh end-cash-day
+30 4 * * *   root /opt/hioc/run-cron.sh leave-reminders
+0 2 * * 0    root /opt/hioc/run-cron.sh purge-location
+30 22 * * 0  root /opt/hioc/run-cron.sh suggest-digest
+0 20 * * *   root /opt/hioc/run-cron.sh expire-points
+30 2 * * *   root /opt/hioc/run-cron.sh owner-reports
+15 4 * * *   root /opt/hioc/run-cron.sh marketing-plan
+
+# Not a Vercel job: restart the app if it hangs (deploy.sh, "heal").
+* * * * *    root /opt/hioc/deploy.sh heal

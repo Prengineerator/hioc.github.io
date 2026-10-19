@@ -1,0 +1,22 @@
+# Keep the Docker build context to what `next build` needs. Anything here is
+# never sent to the builder, so secrets and local state can't leak into an
+# image layer by accident.
+.git
+.github
+.claude
+.vercel
+.next
+node_modules
+desktop
+tests
+deploy
+docs
+data
+scripts
+supabase
+*.md
+.env*
+*key*.txt
+*secret*.txt
+*credentials*.txt
+.DS_Store
