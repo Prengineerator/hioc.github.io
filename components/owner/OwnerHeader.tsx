@@ -1,14 +1,20 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { MENU_PENDING_COUNT_EVENT } from '@/components/owner/menu/menuEvents';
+
+const MENU_HREF = '/owner/menu';
 
 const LINKS = [
   { href: '/owner', label: 'Overview' },
   { href: '/owner/customers', label: 'Customers' },
+  // The owner's own menu editor, plus the menu changes staff ask for on the POS
+  // (approve / reject). Before Suggestions because that tab tags this menu.
+  { href: MENU_HREF, label: 'Menu' },
   // Phase-7 SUG-10. Always shown (not flag-gated): the owner needs the Traits
   // tab to tag the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on (Gate 7A).
   { href: '/owner/suggestions', label: 'Suggestions' },
@@ -55,6 +61,8 @@ export function OwnerHeader() {
   // See StaffHeader: compare the RESOLVED href, not the canonical one.
   const toHref = useSurfaceHref();
   const navRef = useRef<HTMLElement>(null);
+  // Staff menu changes waiting for the owner, shown as a badge on the Menu tab.
+  const [pendingMenu, setPendingMenu] = useState(0);
 
   // Mobile nav is a horizontally scrolling pill row (see className below) — on
   // first paint (and on every navigation) the active pill may be off-screen,
@@ -64,6 +72,36 @@ export function OwnerHeader() {
     const active = navRef.current?.querySelector('[data-active="true"]');
     active?.scrollIntoView({ block: 'nearest', inline: 'center' });
   }, [pathname]);
+
+  // One fetch on load (and when the tab regains focus); the Menu screen pushes
+  // fresh counts through MENU_PENDING_COUNT_EVENT after each decision, so no
+  // polling. A failed fetch just leaves the badge off.
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      fetch('/api/owner/menu-requests?status=pending', { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { pendingCount?: number } | null) => {
+          if (alive && data && typeof data.pendingCount === 'number') setPendingMenu(data.pendingCount);
+        })
+        .catch(() => undefined);
+    };
+    const onCount = (e: Event) => {
+      const n = (e as CustomEvent<number>).detail;
+      if (typeof n === 'number') setPendingMenu(n);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    load();
+    window.addEventListener(MENU_PENDING_COUNT_EVENT, onCount);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      window.removeEventListener(MENU_PENDING_COUNT_EVENT, onCount);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
 
   return (
     // Sticky so the section nav stays one tap away on the long overview.
@@ -97,6 +135,17 @@ export function OwnerHeader() {
                 }
               >
                 {l.label}
+                {l.href === MENU_HREF && pendingMenu > 0 ? (
+                  <span
+                    className={
+                      'ml-2 rounded-full px-1.5 py-0.5 text-[11px] font-bold ' +
+                      (active ? 'bg-cream text-charcoal' : 'bg-tan-dark text-cream')
+                    }
+                  >
+                    {pendingMenu}
+                    <span className="sr-only"> menu changes waiting</span>
+                  </span>
+                ) : null}
               </Link>
             );
           })}
