@@ -24,7 +24,7 @@ export interface ReportDef {
 export interface GstCode {
   code: string;
   description: string;
-  /** Unit Quantity Code for GSTR-1 Table 12: 'KGS' for beans by weight, 'NA' for services. */
+  /** Unit Quantity Code for GSTR-1 Table 12, as the offline tool spells it: 'KGS-KILOGRAMS' for beans by weight, 'NA' for services. */
   uqc: string;
   kind: 'service' | 'goods';
 }
