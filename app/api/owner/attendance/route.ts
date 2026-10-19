@@ -6,7 +6,7 @@ import { errorResponse } from '@/lib/api/http';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
 import { loadEmploymentRows, employmentOnDate, toDayEmployment } from '@/lib/attendance/employment';
 import { rollUpDay, dayOfWeekFor, type DaySession, type DayMark } from '@/lib/attendance/day';
-import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { loadApprovedLeave, loadTeamRoster, scheduledOffLookup } from '@/lib/attendance/roster';
 import type { AttendanceSession, StaffEmployment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -52,27 +52,13 @@ export async function GET(request: Request) {
 
   // Everyone on the team, so a person with no punches still shows a row —
   // a whole month of nothing is a fact the owner needs to see, and filtering
-  // to "people who punched" would hide exactly that.
-  const { data: profileRows, error: profileErr } = await admin
-    .from('profiles')
-    .select('id, name, role')
-    .in('role', ['staff', 'manager', 'owner']);
-  if (profileErr) return errorResponse(500, profileErr.message);
-  const people = (profileRows ?? []) as { id: string; name: string; role: string }[];
+  // to "people who punched" would hide exactly that. The roster and the names
+  // (resolved, sorted) come from lib/attendance/roster.ts.
+  const roster = await loadTeamRoster(admin);
+  if (!roster.ok) return errorResponse(500, roster.message);
+  const { people, displayNames } = roster;
 
-  // profiles.name is usually empty (staff sign in as <name>@hioc.in and never
-  // set it), so both the displayed name and the sort order below are resolved
-  // through it rather than the raw column — otherwise everyone collapses to
-  // "(no name)" and sorts as one undifferentiated group.
-  const displayNames = await getStaffDisplayNames(
-    admin,
-    people.map((p) => p.id),
-  );
-  people.sort((a, b) =>
-    (displayNames.get(a.id) ?? '').localeCompare(displayNames.get(b.id) ?? ''),
-  );
-
-  const [{ data: sessionRows, error: sessErr }, { data: markRows }, { data: leaveRows }, employment] = await Promise.all([
+  const [{ data: sessionRows, error: sessErr }, { data: markRows }, leave, employment] = await Promise.all([
     admin
       .from('attendance_sessions')
       .select('*')
@@ -84,17 +70,12 @@ export async function GET(request: Request) {
       .select('user_id, business_date, mark, reason')
       .gte('business_date', bounds.from)
       .lte('business_date', bounds.to),
-    // Approved leave is the week's rostered day off (LEAVE). Without this the
-    // sheet would mark someone ABSENT on a day their manager had cleared.
-    admin
-      .from('leave_requests')
-      .select('user_id, leave_date')
-      .eq('status', 'approved')
-      .gte('leave_date', bounds.from)
-      .lte('leave_date', bounds.to),
+    // Approved leave is the week's rostered day off (LEAVE); see lib/attendance/roster.ts.
+    loadApprovedLeave(admin, bounds.from, bounds.to),
     loadEmploymentRows(bounds.from, bounds.to),
   ]);
   if (sessErr) return errorResponse(500, sessErr.message);
+  const leaveRows = leave.rows;
 
   const sessions = (sessionRows ?? []) as AttendanceSession[];
   const marks = (markRows ?? []) as { user_id: string; business_date: string; mark: DayMark }[];
@@ -118,19 +99,9 @@ export async function GET(request: Request) {
   }
   const markByUserDate = new Map(marks.map((m) => [sessionKey(m.user_id, m.business_date), m.mark]));
 
-  // Only dates that actually appear here get `scheduledOff` passed. Everything
-  // else leaves it undefined, so rollUpDay falls back to the fixed weekly_off_dow
-  // — which is what keeps weeks predating the leave feature computing correctly.
-  const approvedLeave = new Set(
-    ((leaveRows ?? []) as { user_id: string; leave_date: string }[]).map((l) =>
-      sessionKey(l.user_id, l.leave_date),
-    ),
-  );
-  const leaveWeeksSeen = new Set(
-    ((leaveRows ?? []) as { user_id: string; leave_date: string }[]).map(
-      (l) => `${l.user_id}|${l.leave_date.slice(0, 7)}`,
-    ),
-  );
+  // Only dates in a month with approved leave get `scheduledOff` passed; see
+  // scheduledOffLookup in lib/attendance/roster.ts.
+  const scheduledOff = scheduledOffLookup(leaveRows);
 
   const dates = eachDate(bounds.from, bounds.to);
   const employmentRows = employment as StaffEmployment[];
@@ -153,11 +124,7 @@ export async function GET(request: Request) {
         rules,
         employment: toDayEmployment(employmentOnDate(employmentRows, person.id, date)),
         mark: markByUserDate.get(sessionKey(person.id, date)) ?? null,
-        // Supplied only when this person has SOME approved leave in the month;
-        // otherwise undefined so the fixed rostered day still applies.
-        scheduledOff: leaveWeeksSeen.has(`${person.id}|${date.slice(0, 7)}`)
-          ? approvedLeave.has(sessionKey(person.id, date))
-          : undefined,
+        scheduledOff: scheduledOff(person.id, date),
         dayOfWeek: dayOfWeekFor(date),
       });
     });
