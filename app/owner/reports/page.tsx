@@ -100,6 +100,18 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
           >
             Email reports
           </a>
+          <Link
+            href={`/owner/reports/insights?from=${from}&to=${to}`}
+            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
+          >
+            Insights
+          </Link>
+          <Link
+            href={`/owner/reports/downloads?from=${from}&to=${to}`}
+            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
+          >
+            Downloads
+          </Link>
           <a
             href={csvHref}
             className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
