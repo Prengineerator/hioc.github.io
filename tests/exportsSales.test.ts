@@ -107,6 +107,7 @@ function refund(id: string, over: Partial<ExportRefund> = {}): ExportRefund {
     reason: null,
     status: 'processed',
     processedAt: '2026-09-01T06:00:00.000Z',
+    createdById: null,
     createdByName: '',
     ...over,
   };

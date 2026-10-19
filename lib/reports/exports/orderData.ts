@@ -364,6 +364,7 @@ export function buildOrderDataset(input: OrderDatasetInput): OrderDataset {
         reason: r.reason?.trim() || null,
         status: r.status,
         processedAt: r.processed_at,
+        createdById: r.created_by,
         createdByName: nameOf(r.created_by, staffNames),
       };
     })

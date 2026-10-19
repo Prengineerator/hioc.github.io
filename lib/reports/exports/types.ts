@@ -132,6 +132,8 @@ export interface ExportRefund {
   reason: string | null;
   status: string;
   processedAt: string | null;
+  /** refunds.created_by: the staff member who issued it; null when none is recorded. */
+  createdById: string | null;
   createdByName: string;
 }
 
