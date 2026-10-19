@@ -8,6 +8,7 @@ import type { MenuItem } from '@/lib/types';
 import { isInStoreOnly } from '@/lib/menu/inStore';
 import { isSoldByWeight } from '@/lib/menu/weight';
 import { DataTable } from '@/components/ui/DataTable';
+import type { MenuChangeAction } from '@/lib/menu/changeRequestTypes';
 
 // S6 86/snooze durations the table offers. Page-level handler turns these
 // into the actual { is_available, unavailable_until } PATCH body — see
@@ -41,6 +42,7 @@ export function MenuItemTable({
   onSnooze,
   onReenable,
   readOnly = false,
+  pendingByItemId,
 }: {
   items: MenuItem[];
   onEdit: (item: MenuItem) => void;
@@ -50,6 +52,9 @@ export function MenuItemTable({
   /** Staff website: the menu is changed on the POS only, so no edit,
    * delete or sold-out controls here (the API refuses them anyway). */
   readOnly?: boolean;
+  /** Items with an edit or delete request waiting for the owner, by item id
+   * (menu_change_requests). Optional, so callers without requests are unchanged. */
+  pendingByItemId?: Record<string, MenuChangeAction>;
 }) {
   // id of the row whose "86 this item" duration menu is open (one at a time).
   const [menuOpenFor, setMenuOpenFor] = useState<string | null>(null);
@@ -124,6 +129,15 @@ export function MenuItemTable({
           render: (item) => (
             <>
               {item.name}
+              {pendingByItemId?.[item.id] === 'delete' ? (
+                <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-900">
+                  Delete pending
+                </span>
+              ) : pendingByItemId?.[item.id] ? (
+                <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-900">
+                  Pending approval
+                </span>
+              ) : null}
               {isInStoreOnly(item) ? (
                 <span className="ml-2 rounded-full bg-surface px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-muted">
                   In-store
