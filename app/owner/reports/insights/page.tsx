@@ -11,7 +11,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card, inr } from '@/components/owner/dashboard';
 import { flags } from '@/lib/flags';
-import { beaniesLabel } from '@/lib/loyalty/brand';
+import { beaniesUnit } from '@/lib/loyalty/brand';
 import { cupsLabel, PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { parseRange } from '@/lib/reports/reconcile';
 import { exportHref, lastDayOfMonth, previousMonth } from '@/lib/reports/exports/period';
@@ -69,6 +69,8 @@ function mergeHighlights(a: string[], b: string[], max = 8): string[] {
 
 const num = (n: number) => n.toLocaleString('en-IN');
 const pct = (n: number | null) => (n === null ? '—' : `${n}%`);
+/** '41,230 Beanies' (the unit follows the count: 1 Beanie). */
+const beanies = (n: number) => `${num(n)} ${beaniesUnit(n)}`;
 
 export default async function OwnerInsightsPage({ searchParams }: { searchParams: { from?: string; to?: string } }) {
   const today = istDateIso();
@@ -251,7 +253,7 @@ function RetentionBody({ r }: { r: RetentionInsights }) {
             <table className="w-full min-w-[520px] text-sm tabular-nums">
               <thead>
                 <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  <th className="py-1.5 pr-3">First visit</th>
+                  <th className="sticky left-0 bg-cream py-1.5 pr-3">First visit</th>
                   <th className="py-1.5 pr-3 text-right">Customers</th>
                   {[1, 2, 3, 4, 5, 6].map((n) => (
                     <th key={n} className="px-1 py-1.5 text-center">
@@ -263,7 +265,7 @@ function RetentionBody({ r }: { r: RetentionInsights }) {
               <tbody>
                 {r.cohorts.map((c) => (
                   <tr key={c.month} className="border-t border-[#f2efe9]">
-                    <td className="py-1.5 pr-3 font-semibold text-charcoal">{c.label}</td>
+                    <td className="sticky left-0 bg-cream py-1.5 pr-3 font-semibold text-charcoal">{c.label}</td>
                     <td className="py-1.5 pr-3 text-right font-mono">{num(c.customers)}</td>
                     {c.retention.map((v, i) => (
                       <td
@@ -307,8 +309,8 @@ function BeaniesSection({ result, from, to }: { result: Loaded<ProgrammeInsights
       {b ? (
         <>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Earned" value={beaniesLabel(b.earnedPoints)} sub={`${num(b.earnedCustomers)} customers`} />
-            <Stat label="Redeemed" value={beaniesLabel(b.redeemedPoints)} sub={`${num(b.redeemedCustomers)} customers`} />
+            <Stat label="Beanies earned" value={num(b.earnedPoints)} sub={`${num(b.earnedCustomers)} customers`} />
+            <Stat label="Beanies redeemed" value={num(b.redeemedPoints)} sub={`${num(b.redeemedCustomers)} customers`} />
             <Stat label="Discount given" value={inr(b.discountGivenInr)} sub={`${num(b.billsWithRedemption)} of ${num(b.validBills)} bills`} />
             <Stat
               label="Avg bill with Beanies"
@@ -318,24 +320,24 @@ function BeaniesSection({ result, from, to }: { result: Loaded<ProgrammeInsights
             <Stat
               label="Outstanding at the end"
               value={inr(b.outstandingValueInr)}
-              sub={`${beaniesLabel(b.outstandingPoints)} · ${num(b.holders)} customers`}
+              sub={`${beanies(b.outstandingPoints)} · ${num(b.holders)} customers`}
             />
             <Stat
-              label="Expire in 7 days"
-              value={beaniesLabel(b.expiring7.points)}
-              sub={`${inr(b.expiring7.valueInr)} · ${num(b.expiring7.customers)} customers`}
+              label="Expiring in 7 days"
+              value={num(b.expiring7.points)}
+              sub={`Beanies worth ${inr(b.expiring7.valueInr)} · ${num(b.expiring7.customers)} customers`}
               warn={b.expiring7.points > 0}
             />
             <Stat
-              label="Expire in 30 days"
-              value={beaniesLabel(b.expiring30.points)}
-              sub={`${inr(b.expiring30.valueInr)} · ${num(b.expiring30.customers)} customers`}
+              label="Expiring in 30 days"
+              value={num(b.expiring30.points)}
+              sub={`Beanies worth ${inr(b.expiring30.valueInr)} · ${num(b.expiring30.customers)} customers`}
             />
             <Stat label="Active members" value={num(b.activeMembers)} sub="earned or redeemed" />
           </div>
           <p className="mt-3 text-xs text-muted">
             Outstanding is what customers held at the end of these dates, valued at ₹{b.inrPerPoint} a Beanie: what the café owes if
-            all of it is redeemed. The expiring figures are as of today, not the end of the dates. {beaniesLabel(b.expiredPoints)}{' '}
+            all of it is redeemed. The expiring figures are as of today, not the end of the dates. {beanies(b.expiredPoints)}{' '}
             expired in these dates.
           </p>
         </>
@@ -388,7 +390,7 @@ function RitualSection({ result, from, to }: { result: Loaded<ProgrammeInsights>
           ) : null}
           {r.soldByPlan.length > 0 ? (
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[320px] text-sm tabular-nums">
+              <table className="w-full min-w-[280px] text-sm tabular-nums">
                 <thead>
                   <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-muted">
                     <th className="py-1.5 pr-3">Plan</th>
@@ -427,7 +429,7 @@ function CouponsSection({ result, from, to }: { result: Loaded<RetentionInsights
             <table className="w-full min-w-[720px] text-sm tabular-nums">
               <thead>
                 <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  <th className="py-1.5 pr-3">Coupon / campaign</th>
+                  <th className="sticky left-0 w-36 min-w-[9rem] bg-cream py-1.5 pr-3 sm:w-56">Coupon / campaign</th>
                   <th className="py-1.5 pr-3 text-right">Uses</th>
                   <th className="py-1.5 pr-3 text-right">Customers</th>
                   <th className="py-1.5 pr-3 text-right">New</th>
@@ -440,7 +442,7 @@ function CouponsSection({ result, from, to }: { result: Loaded<RetentionInsights
               <tbody>
                 {coupons.map((c) => (
                   <tr key={c.label} className="border-t border-[#f2efe9]">
-                    <td className="py-1.5 pr-3 font-semibold text-charcoal">{c.label}</td>
+                    <td className="sticky left-0 w-36 min-w-[9rem] bg-cream py-1.5 pr-3 font-semibold text-charcoal sm:w-56">{c.label}</td>
                     <td className="py-1.5 pr-3 text-right font-mono">{num(c.redemptions)}</td>
                     <td className="py-1.5 pr-3 text-right font-mono">{num(c.uniqueCustomers)}</td>
                     <td className="py-1.5 pr-3 text-right font-mono">{num(c.newCustomers)}</td>
@@ -485,7 +487,7 @@ function CampaignsSection({ result, from, to }: { result: Loaded<ProgrammeInsigh
             <table className="w-full min-w-[760px] text-sm tabular-nums">
               <thead>
                 <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  <th className="py-1.5 pr-3">Campaign</th>
+                  <th className="sticky left-0 w-36 min-w-[9rem] bg-cream py-1.5 pr-3 sm:w-56">Campaign</th>
                   <th className="py-1.5 pr-3 text-right">Sent</th>
                   <th className="py-1.5 pr-3 text-right">Read</th>
                   <th className="py-1.5 pr-3 text-right">Came back</th>
@@ -498,7 +500,7 @@ function CampaignsSection({ result, from, to }: { result: Loaded<ProgrammeInsigh
               <tbody>
                 {c.campaigns.map((x) => (
                   <tr key={`${x.name}-${x.startedAt ?? ''}`} className="border-t border-[#f2efe9]">
-                    <td className="py-1.5 pr-3">
+                    <td className="sticky left-0 w-36 min-w-[9rem] bg-cream py-1.5 pr-3 sm:w-56">
                       <span className="font-semibold text-charcoal">{x.name}</span>
                       <span className="block text-xs text-muted">{x.kind}</span>
                     </td>
@@ -551,7 +553,7 @@ function Downloads({ keys, from, to }: { keys: string[]; from: string; to: strin
 function Stat({ label, value, sub, warn }: { label: string; value: string; sub: string; warn?: boolean }) {
   return (
     <div className={`rounded-md border p-4 shadow-sm ${warn ? 'border-amber-300 bg-amber-50' : 'border-line bg-cream'}`}>
-      <p className="text-xs uppercase tracking-wide text-muted">{label}</p>
+      <p className="min-h-[2rem] text-xs uppercase tracking-wide text-muted lg:min-h-0">{label}</p>
       <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-charcoal">{value}</p>
       <p className="text-xs text-muted">{sub}</p>
     </div>
