@@ -58,12 +58,15 @@ export interface RecomputeInput {
  * - subtotal = Σ `line_total_inr` over non-voided items
  * - pass cover = Σ `pass_covered_inr` over non-voided items; the part of it on
  *   GST-liable lines leaves the taxable base (CP-D11)
- * - GST on the non-voided lines that aren't GST-exempt (their snapshot)
+ * - GST on the non-voided lines that aren't GST-exempt (their snapshot), less
+ *   their share of the discount, plus packaging (computeBill)
  * - discount = min(stored discount, new subtotal - pass cover)  ← v1 clamp (D8)
  * - GST/packaging via composePassBill (= computeBill with no pass); dine-in
  *   forces packaging 0 (decision D5)
  *
- * With no pass cover anywhere this is byte-for-byte the recompute it always was.
+ * The recompute always uses the current GST rules (computeBill), so amending an
+ * order placed before GST_NET_OF_DISCOUNT_FROM (lib/store/hours.ts) re-taxes it
+ * net of its discount, with packaging taxed.
  */
 export function recomputeOrderTotals({
   items,
@@ -94,20 +97,13 @@ export function recomputeOrderTotals({
   // creation (CP-D12), so this is the same ceiling they were under then.
   const discount = Math.min(Math.max(0, discountInr), Math.max(0, subtotalInr - passCoveredInr));
 
-  const bill = composePassBill(
+  // Dine-in never carries a packaging charge (D5), whatever the store's
+  // packaging setting: billed with none, so no GST is charged on it either.
+  // Mirrors the create path (composeOrderBill in lib/orders/passPricing.ts).
+  return composePassBill(
     { subtotalInr, taxableSubtotalInr, discountInr: discount, passCoveredInr, passCoveredTaxableInr },
-    settings,
+    orderType === 'dine_in' ? { ...settings, packaging_charge_inr: 0 } : settings,
   );
-
-  // Dine-in never carries a packaging charge (D5): drop it from the total and
-  // zero the line, regardless of the store's packaging setting. Mirrors the
-  // create path in app/api/orders/route.ts.
-  if (orderType === 'dine_in' && bill.packaging_inr !== 0) {
-    bill.total_inr -= bill.packaging_inr;
-    bill.packaging_inr = 0;
-  }
-
-  return bill;
 }
 
 /**

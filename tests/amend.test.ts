@@ -128,13 +128,22 @@ describe('recomputeOrderTotals (FND3-4 money, no mocks)', () => {
     }
   });
 
-  it('dine-in drops packaging to 0; takeaway keeps it', () => {
+  it('dine-in drops packaging and its GST; takeaway keeps both', () => {
     const items = [{ voided: false, line_total_inr: 100 }];
     const dine = recomputeOrderTotals({ items, settings, orderType: 'dine_in', discountInr: 0 });
     const take = recomputeOrderTotals({ items, settings, orderType: 'takeaway', discountInr: 0 });
     expect(dine.packaging_inr).toBe(0);
+    expect(dine.tax_inr).toBe(5); // 5% of the ₹100 line only
     expect(take.packaging_inr).toBe(20);
-    expect(take.total_inr - dine.total_inr).toBe(20); // the dropped packaging
+    expect(take.tax_inr).toBe(6); // 5% of ₹100 + ₹20 packaging
+    expect(take.total_inr - dine.total_inr).toBe(21); // the dropped packaging and its GST
+  });
+
+  it('takes GST on the lines after the stored discount, not before it', () => {
+    const items = [{ voided: false, line_total_inr: 500 }];
+    const bill = recomputeOrderTotals({ items, settings, orderType: 'dine_in', discountInr: 50 });
+    expect(bill.tax_inr).toBe(23); // 5% of (500 - 50) = 22.5
+    expect(bill.total_inr).toBe(500 + 23 - 50);
   });
 
   it('clamps an over-large stored discount to the shrunken subtotal', () => {

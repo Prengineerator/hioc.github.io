@@ -113,16 +113,15 @@ export interface OrderBillInput {
 /**
  * The authoritative bill for an order (create and quote both call it): the pass
  * first, then coupon and points on what is left (CP-D12), GST on the taxable
- * base with the covered rupees taken out of it (CP-D11), then the dine-in
- * packaging rule.
+ * value with the covered rupees and the discount taken out of it and packaging
+ * in it (CP-D11, computeBill), and no packaging for dine-in (D5).
  *
  *   discount_inr       = min(coupon + points, subtotal - pass cover)  (marketing discounts only)
  *   pass_discount_inr  = the pass cover
  *   total_inr          = subtotal + tax + packaging - discount_inr - pass_discount_inr
  *
- * With no pass (`passCoveredInr` 0) this is byte-for-byte the bill the route
- * always produced: computeBill(subtotal, settings, min(coupon + points,
- * subtotal), taxable) and the dine-in packaging drop.
+ * With no pass (`passCoveredInr` 0) this is computeBill(subtotal, settings,
+ * min(coupon + points, subtotal), taxable), with packaging 0 for dine-in.
  */
 export function composeOrderBill(input: OrderBillInput): BillBreakdown & { pass_discount_inr: number } {
   const passCovered = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
@@ -130,7 +129,9 @@ export function composeOrderBill(input: OrderBillInput): BillBreakdown & { pass_
     Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr),
     afterPass(input.subtotalInr, passCovered),
   );
-  const bill = composePassBill(
+  // Dine-in has no packaging charge (D5), whatever the store's packaging
+  // setting: billed with none, so no GST is charged on it either.
+  return composePassBill(
     {
       subtotalInr: input.subtotalInr,
       taxableSubtotalInr: input.taxableSubtotalInr,
@@ -138,14 +139,6 @@ export function composeOrderBill(input: OrderBillInput): BillBreakdown & { pass_
       passCoveredInr: passCovered,
       passCoveredTaxableInr: input.passCoveredTaxableInr,
     },
-    input.settings,
+    input.isDineIn ? { ...input.settings, packaging_charge_inr: 0 } : input.settings,
   );
-
-  // Dine-in has no packaging charge (D5): force packaging to 0 and drop it from
-  // the total, regardless of the store's packaging setting.
-  if (input.isDineIn && bill.packaging_inr !== 0) {
-    bill.total_inr -= bill.packaging_inr;
-    bill.packaging_inr = 0;
-  }
-  return bill;
 }
