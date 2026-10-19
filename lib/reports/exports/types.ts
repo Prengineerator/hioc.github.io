@@ -6,7 +6,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { CsvTable } from '@/lib/reports/csv';
 
-export type ReportGroup = 'gst' | 'sales' | 'cash';
+export type ReportGroup = 'gst' | 'sales' | 'cash' | 'loyalty';
 
 export interface ReportDef {
   /** URL slug: /api/owner/reports/export?report=<key>. Also the file name. */
