@@ -6,6 +6,12 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isUuid } from '@/lib/api/constants';
 import { recomputeOrderTotals, statusAfterAdd } from '@/lib/orders/amend';
 import {
+  MAX_EDIT_REASON_LENGTH,
+  planSettleEdit,
+  settleEditBlockReason,
+  type PlannedEdit,
+} from '@/lib/orders/settleEdit';
+import {
   MENU_ITEM_SELECT,
   parseItems,
   resolveOrderLines,
@@ -34,8 +40,13 @@ const OPEN_STATUSES: OrderStatus[] = ['accepted', 'preparing', 'ready'];
 type OrderLine = {
   id: string;
   voided: boolean;
+  quantity: number;
+  /** The price of ONE unit (add-ons and a weighed line's weight included) — what a reduced line is re-priced from. */
+  price_inr_snapshot: number;
   line_total_inr: number;
   gst_exempt?: boolean;
+  /** Units of this line a HIOC Ritual cup paid for; absent before 2026-10-coffee-pass.sql. */
+  pass_drinks?: number;
   /** Rupees a HIOC Ritual cup paid for on this line; absent before 2026-10-coffee-pass.sql. */
   pass_covered_inr?: number;
 };
@@ -74,19 +85,20 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
   return passDiscountInr !== (order.pass_discount_inr ?? 0) ? { pass_discount_inr: passDiscountInr } : {};
 }
 
-// POST /api/orders/[id]/amend — correct an open order. Two operations:
+// POST /api/orders/[id]/amend — correct an open order. Three operations:
 //
-//   { item_id, reason }        → VOID a wrongly-punched line (FND3-4, UI POS-4)
-//   { op: 'add', items: [...] }→ ADD lines to the running order (TAB-1, UI TAB-2)
+//   { item_id, reason }              → VOID a wrongly-punched line (FND3-4, UI POS-4)
+//   { op: 'add', items: [...] }      → ADD lines to the running order (TAB-1, UI TAB-2)
+//   { op: 'edit', changes, reason }  → LOWER a quantity / REMOVE lines before settling
 //
 // `op` defaults to 'void' so the existing POS-4 contract is unchanged.
 //
-// Both refuse a HIOC Ritual sale (order_kind 'coffee_pass') outright (409).
+// All three refuse a HIOC Ritual sale (order_kind 'coffee_pass') outright (409).
 //
-// Both share the same invariants: the order must be open and unpaid, totals are
-// recomputed SERVER-SIDE under the optimistic `version` guard, a lost race rolls
-// the change back rather than half-applying it, and every amendment is audited
-// in order_amendments.
+// All three share the same invariants: the order must be open and unpaid,
+// totals are recomputed SERVER-SIDE under the optimistic `version` guard, a lost
+// race rolls the change back rather than half-applying it, and every amendment
+// is audited in order_amendments.
 //
 // They differ in authorization, deliberately. A void REDUCES what a customer
 // owes and is manager-gated (`void_line`, D4). An add increases an unpaid tab —
@@ -94,6 +106,11 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
 // `pos_order_entry` permission as punching the order in the first place. Using a
 // new key here would fail CLOSED to manager on any deploy whose seed row is
 // missing (see lib/permissions.ts), quietly breaking normal service.
+//
+// An edit lowers the bill just as a void does, so it also defaults to manager —
+// but under its own key, `settle_edit_order`, so the owner can open it to staff
+// without opening voids. Failing closed to manager when its seed row is missing
+// is the intended default here, not a breakage.
 //
 // PIN-3/PIN-4: gated by getCounterActor() — classic session first, unchanged;
 // an enrolled-device PIN operator only when there is no session at all.
@@ -112,6 +129,9 @@ export async function POST(request: Request, { params }: RouteParams) {
 
   if (body.op === 'add') {
     return addLines(request, id, user, actor.role, body);
+  }
+  if (body.op === 'edit') {
+    return editLines(request, id, user, actor.role, body);
   }
 
   // --- VOID (FND3-4) --------------------------------------------------------
@@ -476,6 +496,177 @@ async function addLines(
   });
 }
 
+/**
+ * Settle edit — lower quantities and/or remove lines on an open, unpaid order,
+ * from the Settle screen, before payment.
+ *
+ * Same safety model as the void and add paths: the order must be open and
+ * unpaid, the new totals are recomputed SERVER-SIDE under the optimistic version
+ * guard, a lost race puts every line back exactly as it was, and the audit rows
+ * are written only after the guarded write commits. Edits only ever lower the
+ * bill (lib/orders/settleEdit.ts) — more of something goes through op 'add', so
+ * the kitchen gets a ticket for it. No status change: nothing new has to be made.
+ */
+async function editLines(
+  _request: Request,
+  id: string,
+  user: { id: string },
+  roleHint: UserRole,
+  body: Record<string, unknown>,
+) {
+  // roleHint = actor.role from the caller's getCounterActor() — see
+  // hasPermission()'s own comment: a device operator has no classic session
+  // for it to re-derive the role from.
+  if (!(await hasPermission(user as never, 'settle_edit_order', roleHint))) {
+    return errorResponse(403, 'You don’t have permission to edit an order before settling');
+  }
+
+  const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  if (!reason) {
+    return errorResponse(400, 'reason is required and must be a non-empty string');
+  }
+  if (reason.length > MAX_EDIT_REASON_LENGTH) {
+    return errorResponse(400, `reason must be at most ${MAX_EDIT_REASON_LENGTH} characters`);
+  }
+
+  const admin = createAdminSupabaseClient();
+
+  const { data, error: readError } = await admin
+    .from('orders')
+    .select(AMEND_ORDER_SELECT)
+    .eq('id', id)
+    .maybeSingle();
+
+  if (readError) return errorResponse(500, 'Failed to load the order');
+  if (!data) return notFound();
+  const order = data as LoadedOrder;
+
+  // A Ritual sale, a paid bill, or an order that isn't open — one message each.
+  const blocked = settleEditBlockReason(order);
+  if (blocked) return errorResponse(409, blocked);
+
+  const items: OrderLine[] = order.order_items ?? [];
+  const plan = planSettleEdit(items, body.changes);
+  if (!plan.ok) return errorResponse(plan.status, plan.error);
+
+  // Write the lines, tracking what landed so a failure or a lost version race can
+  // put it back. Removal voids (never deletes — snapshot rule; a fired KOT may
+  // reference the line); a reduction rewrites quantity and the line total.
+  const nowIso = new Date().toISOString();
+  const applied: PlannedEdit[] = [];
+  for (const change of plan.changes) {
+    const { error: itemError } = await admin
+      .from('order_items')
+      .update(
+        change.remove
+          ? { voided: true, void_reason: reason, voided_by: user.id, voided_at: nowIso }
+          : { quantity: change.to_quantity, line_total_inr: change.to_line_total_inr },
+      )
+      .eq('id', change.item_id);
+    if (itemError) {
+      await rollbackEdits(admin, applied);
+      return errorResponse(500, 'Failed to change the order');
+    }
+    applied.push(change);
+  }
+
+  // Recompute from the lines as they now stand. A removed line leaves the bill (and
+  // its pass cover goes with it, the database having given the cups back); a
+  // reduced line carries no pass cup (plan refuses those), so its cover is 0.
+  const changeById = new Map(plan.changes.map((c) => [c.item_id, c]));
+  const settings = await getStoreSettings();
+  const edited = items.map((line) => {
+    const change = changeById.get(line.id);
+    if (!change) return line;
+    return change.remove ? { ...line, voided: true } : { ...line, line_total_inr: change.to_line_total_inr };
+  });
+  const bill = recomputeOrderTotals({
+    items: edited,
+    settings,
+    orderType: order.order_type,
+    discountInr: order.discount_inr,
+  });
+
+  const { data: guarded, error: updateError } = await admin
+    .from('orders')
+    .update({
+      subtotal_inr: bill.subtotal_inr,
+      tax_inr: bill.tax_inr,
+      packaging_inr: bill.packaging_inr,
+      discount_inr: bill.discount_inr,
+      total_inr: bill.total_inr,
+      ...passDiscountPatch(order, bill.pass_discount_inr),
+      version: order.version + 1,
+    })
+    .eq('id', id)
+    .eq('version', order.version)
+    // Settling doesn't bump `version`, so the bill being settled on another till
+    // in the meantime is caught here: it must not be lowered once it is paid.
+    .neq('payment_status', 'paid')
+    .select('id')
+    .maybeSingle();
+
+  if (updateError) {
+    await rollbackEdits(admin, applied);
+    return errorResponse(500, 'Failed to update the order total');
+  }
+  if (!guarded) {
+    // Someone else changed the order first. Put every line back so the
+    // re-presented order is clean, and make the caller re-check — never force.
+    await rollbackEdits(admin, applied);
+    return errorResponse(
+      409,
+      'Order was updated by someone else — please re-check the order and try again.',
+    );
+  }
+
+  // Audit only after the guarded write commits (a lost race leaves no phantom
+  // row). A removal is a void in everything but where it was done, so it reuses
+  // 'void_item' (`via` tells them apart); a reduction is 'change_qty'.
+  //
+  // The lines and totals are already committed, so a failed audit must NOT fail
+  // the request — but it must not vanish either. The most likely cause is
+  // 2026-10-settle-edit-order.sql not being applied (kind='change_qty' fails the
+  // CHECK), which would otherwise mean edits silently going unaudited.
+  const { error: auditError } = await admin.from('order_amendments').insert(
+    plan.changes.map((c) => ({
+      order_id: id,
+      staff_id: user.id,
+      kind: c.remove ? 'void_item' : 'change_qty',
+      payload: c.remove
+        ? { order_item_id: c.item_id, reason, line_total_inr: c.from_line_total_inr, via: 'settle_edit' }
+        : {
+            order_item_id: c.item_id,
+            reason,
+            from_quantity: c.from_quantity,
+            to_quantity: c.to_quantity,
+            from_line_total_inr: c.from_line_total_inr,
+            to_line_total_inr: c.to_line_total_inr,
+          },
+    })),
+  );
+  if (auditError) {
+    console.error(
+      `order_amendments audit FAILED for settle edit on order ${id} ` +
+        `(items ${plan.changes.map((c) => c.item_id).join(',')}) — is supabase/2026-10-settle-edit-order.sql applied?`,
+      auditError,
+    );
+  }
+
+  await broadcastOrderEvent(id, order.status);
+
+  const { data: full, error: reloadError } = await admin
+    .from('orders')
+    .select('*, order_items(*, order_item_addons(*))')
+    .eq('id', id)
+    .single();
+  if (reloadError || !full) {
+    return errorResponse(500, 'Changed the order but failed to reload it');
+  }
+
+  return NextResponse.json({ order: toOrderResponse(full as OrderRowWithItems) });
+}
+
 /** Best-effort removal of just-inserted lines (addons cascade). */
 async function rollbackLines(
   admin: ReturnType<typeof createAdminSupabaseClient>,
@@ -484,4 +675,22 @@ async function rollbackLines(
   if (ids.length === 0) return;
   const { error } = await admin.from('order_items').delete().in('id', ids);
   if (error) console.error('addLines rollback failed', error, ids);
+}
+
+/** Best-effort undo of settle edits already written: un-void removed lines, restore reduced ones. */
+async function rollbackEdits(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  applied: PlannedEdit[],
+): Promise<void> {
+  for (const change of applied) {
+    const { error } = await admin
+      .from('order_items')
+      .update(
+        change.remove
+          ? { voided: false, void_reason: '', voided_by: null, voided_at: null }
+          : { quantity: change.from_quantity, line_total_inr: change.from_line_total_inr },
+      )
+      .eq('id', change.item_id);
+    if (error) console.error('editLines rollback failed', error, change);
+  }
 }

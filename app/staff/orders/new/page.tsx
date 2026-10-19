@@ -55,7 +55,7 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
 export default async function NewOrderPage({
   searchParams,
 }: {
-  searchParams: { table?: string | string[]; add?: string | string[] };
+  searchParams: { table?: string | string[]; add?: string | string[]; back?: string | string[] };
 }) {
   if (!flags.staffPos) {
     return (
@@ -91,5 +91,10 @@ export default async function NewOrderPage({
     typeof searchParams.add === 'string' ? searchParams.add : null,
   );
 
-  return <PosOrderEntry initialTableId={initialTableId} addToOrder={addToOrder} />;
+  // Where an add returns to. Tables by default; Settle when the staffer opened
+  // the bill there (`?back=settle`). A fixed allow-list on purpose: the value
+  // becomes a navigation target, so it is never taken from the query as-is.
+  const returnTo = addToOrder && searchParams.back === 'settle' ? '/staff/settle' : undefined;
+
+  return <PosOrderEntry initialTableId={initialTableId} addToOrder={addToOrder} returnTo={returnTo} />;
 }

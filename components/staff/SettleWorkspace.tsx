@@ -8,12 +8,18 @@
 // Settle opens the same payment step as New order (cash with change, UPI,
 // card, split). Bills settled here stay under "Just settled" for the shift,
 // with "Change payment" — the customer said cash, then paid by UPI.
+//
+// Opening a bill (its row) shows what is on it. With the owner's permission
+// (`settle_edit_order`, Team → Permissions) the sheet also lowers it before it
+// is settled — a quantity down, a line off, with a reason — and offers the
+// running-tab "Add items"; the amend route re-checks all of it.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
 import { Badge } from '@/components/ui/Badge';
 import { RITUAL_SALE_LABEL, isRitualSale } from '@/lib/pos/ritual';
 import { usePrintDock } from '@/components/staff/PrintDock';
+import { SettleOrderSheet, whereOf } from '@/components/staff/SettleOrderSheet';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
@@ -39,24 +45,27 @@ function dateIst(iso: string): string {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
 }
 
-function whereOf(o: Order): string {
-  // A HIOC Ritual sale has no table or pickup: name what it is.
-  if (isRitualSale(o)) return RITUAL_SALE_LABEL;
-  if (o.order_type === 'dine_in') return o.table_label ? `Table ${o.table_label}` : 'Dine-in';
-  if (o.pickup_code) return `Token ${o.pickup_code}`;
-  return o.order_type === 'delivery' ? 'Delivery' : 'Takeaway';
-}
-
 function itemsSummary(o: OrderWithItems): string {
   const lines = o.items.filter((i) => !i.voided);
   const names = lines.slice(0, 3).map((i) => `${i.quantity > 1 ? `${i.quantity}× ` : ''}${i.name_snapshot}`);
   return names.join(', ') + (lines.length > 3 ? ` +${lines.length - 3} more` : '');
 }
 
-export function SettleWorkspace() {
+export function SettleWorkspace({
+  canEdit = false,
+  canAddItems = false,
+}: {
+  /** The `settle_edit_order` permission: lower a bill before settling it. */
+  canEdit?: boolean;
+  /** May add items to a running bill (the POS add flow + its permission). */
+  canAddItems?: boolean;
+} = {}) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // The bill open in the sheet — held by id and read back out of `orders`, so
+  // the sheet follows every refetch instead of showing a stale copy.
+  const [viewingId, setViewingId] = useState<string | null>(null);
   const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
   const [justSettled, setJustSettled] = useState<OrderWithItems[]>([]);
   const [toast, setToast] = useState('');
@@ -92,6 +101,19 @@ export function SettleWorkspace() {
 
   const groups = useMemo(() => groupForSettle(orders), [orders]);
   const owed = orders.reduce((sum, o) => sum + totalOf(o), 0);
+  const viewing = viewingId ? (orders.find((o) => o.id === viewingId) ?? null) : null;
+
+  // Settled (or cancelled) on another till while it was open: the sheet closes.
+  useEffect(() => {
+    if (viewingId && !viewing) setViewingId(null);
+  }, [viewingId, viewing]);
+
+  // The amend route returns the whole order: swap it in, so the row, the "still
+  // to collect" figure and the sheet all show the new total at once.
+  function handleEdited(updated: OrderWithItems) {
+    setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)).filter(isSettleable));
+    setToast(`#${formatOrderNumber(updated.order_number)} updated · new total ${rupees(totalOf(updated))}`);
+  }
 
   function handleDone(updated: Order) {
     if (!paying) return;
@@ -152,9 +174,15 @@ export function SettleWorkspace() {
             title="Earlier days"
             orders={groups.earlier}
             showDate
+            onOpen={(o) => setViewingId(o.id)}
             onSettle={(o) => setPaying({ order: o, intent: 'settle' })}
           />
-          <SettleGroup title="Today" orders={groups.today} onSettle={(o) => setPaying({ order: o, intent: 'settle' })} />
+          <SettleGroup
+            title="Today"
+            orders={groups.today}
+            onOpen={(o) => setViewingId(o.id)}
+            onSettle={(o) => setPaying({ order: o, intent: 'settle' })}
+          />
         </>
       )}
 
@@ -199,6 +227,20 @@ export function SettleWorkspace() {
         </section>
       ) : null}
 
+      {viewing ? (
+        <SettleOrderSheet
+          order={viewing}
+          canEdit={canEdit}
+          canAddItems={canAddItems}
+          onClose={() => setViewingId(null)}
+          onUpdated={handleEdited}
+          onSettle={(o) => {
+            setViewingId(null);
+            setPaying({ order: o, intent: 'settle' });
+          }}
+        />
+      ) : null}
+
       {paying ? (
         <SettlePaymentDialog
           order={paying.order}
@@ -226,11 +268,13 @@ function SettleGroup({
   title,
   orders,
   showDate = false,
+  onOpen,
   onSettle,
 }: {
   title: string;
   orders: OrderWithItems[];
   showDate?: boolean;
+  onOpen: (o: OrderWithItems) => void;
   onSettle: (o: OrderWithItems) => void;
 }) {
   if (orders.length === 0) return null;
@@ -249,8 +293,16 @@ function SettleGroup({
             key={o.id}
             className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 border-l-4 border-l-red-500 bg-white px-4 py-3"
           >
-            <div className="min-w-0 flex-1">
-              <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            {/* The info block opens the bill (what is on it, and — with the
+                owner's permission — lowering it before it is settled). Spans, not
+                paragraphs: a button holds phrasing content only. */}
+            <button
+              type="button"
+              onClick={() => onOpen(o)}
+              aria-label={`Open order #${formatOrderNumber(o.order_number)}`}
+              className="-mx-2 -my-1 block min-h-[44px] min-w-0 flex-1 rounded-md px-2 py-1 text-left transition-colors hover:bg-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+            >
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 <span className="font-mono font-bold tabular-nums text-charcoal">#{formatOrderNumber(o.order_number)}</span>
                 <span className="text-xs text-muted">
                   {showDate ? `${dateIst(o.created_at)}, ` : ''}
@@ -267,9 +319,9 @@ function SettleGroup({
                     {STATUS_LABELS[o.status] ?? o.status}
                   </span>
                 )}
-              </p>
-              <p className="mt-1 truncate text-xs text-muted">{itemsSummary(o)}</p>
-            </div>
+              </span>
+              <span className="mt-1 block truncate text-xs text-muted">{itemsSummary(o)}</span>
+            </button>
             <div className="flex items-center gap-3">
               <span className="font-mono text-lg font-bold tabular-nums text-red-800">{rupees(totalOf(o))}</span>
               <button
