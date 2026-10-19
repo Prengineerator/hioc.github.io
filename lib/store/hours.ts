@@ -162,10 +162,29 @@ export interface BillBreakdown {
 }
 
 /**
+ * The day (IST) bills started charging GST on the taxable value net of the
+ * discount, with packaging in it (computeBill below). Orders before it were
+ * taxed on the pre-discount subtotal with packaging untaxed; their stored
+ * tax_inr is what was charged and stays as it is.
+ */
+export const GST_NET_OF_DISCOUNT_FROM = '2026-10-19';
+
+/**
  * Authoritative bill math from a server-computed subtotal (C5/CUS-031).
- * GST rounds to the nearest integer ₹ (repo-wide integer-₹ convention). When
- * gst_inclusive is true the GST is extracted from the subtotal rather than
- * added on top, so the grand total equals the subtotal.
+ *
+ * GST is on the taxable value of the supply (CGST Act s.15):
+ *
+ *   taxable lines − their share of the discount + packaging
+ *
+ * - The discount (coupon + Beanies) is on the bill at the time of sale, so it
+ *   is not part of the taxable value (s.15(3)(a)). It is spread over all the
+ *   lines in proportion to their value, so GST-exempt lines take their share.
+ * - Packaging is part of the restaurant supply, taxed at the same rate.
+ *
+ * GST rounds once per order to the nearest integer ₹ (repo-wide integer-₹
+ * convention). When gst_inclusive is true the GST is extracted from that value
+ * (packaging included) rather than added on top, so the grand total is
+ * subtotal + packaging − discount.
  */
 export function computeBill(
   subtotalInr: number,
@@ -176,13 +195,16 @@ export function computeBill(
    * clamped to it so a bad value can never tax more than was sold. */
   taxableSubtotalInr: number = subtotalInr,
 ): BillBreakdown {
-  const rate = settings.gst_percent / 100;
+  const percent = settings.gst_percent;
   const packaging = settings.packaging_charge_inr;
   const taxable = Math.min(Math.max(0, taxableSubtotalInr), subtotalInr);
+  const discount = Math.min(Math.max(0, discountInr), Math.max(0, subtotalInr));
+  // The taxable lines less their share of the discount. Not rounded: GST is.
+  const taxableLines = subtotalInr > 0 ? (taxable * (subtotalInr - discount)) / subtotalInr : 0;
+  const taxableValue = taxableLines + packaging;
 
   if (settings.gst_inclusive) {
-    const base = taxable / (1 + rate);
-    const tax = Math.round(taxable - base);
+    const tax = Math.round((taxableValue * percent) / (100 + percent));
     return {
       subtotal_inr: subtotalInr,
       tax_inr: tax,
@@ -192,7 +214,7 @@ export function computeBill(
     };
   }
 
-  const tax = Math.round(taxable * rate);
+  const tax = Math.round((taxableValue * percent) / 100);
   return {
     subtotal_inr: subtotalInr,
     tax_inr: tax,

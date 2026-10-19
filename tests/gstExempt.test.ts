@@ -29,6 +29,14 @@ describe('computeBill with a taxable subtotal', () => {
     expect(bill.total_inr).toBe(210);
   });
 
+  it('spreads the discount over taxable and exempt lines by value', () => {
+    // ₹200 taxable + ₹100 exempt, ₹60 off: the taxable lines carry 200/300 of it (₹40).
+    const bill = computeBill(300, exclusive, 60, 200);
+    expect(bill.tax_inr).toBe(8); // 5% of 160
+    expect(bill.total_inr).toBe(248); // 300 + 8 - 60
+    expect(computeBill(300, inclusive, 60, 200).tax_inr).toBe(8); // 160 - 160/1.05 = 7.62
+  });
+
   it('charges no GST on an all-exempt order', () => {
     expect(computeBill(50, exclusive, 0, 0).tax_inr).toBe(0);
   });

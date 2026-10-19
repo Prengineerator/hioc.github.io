@@ -181,15 +181,19 @@ GST-inclusive pricing the total is ₹750, and ₹36 of it is GST. No points are
 |---|---|---|---|---|---|---|
 | A. Cappuccino L ₹120, 1 pass drink | 120 | −120 | 0 | 0 | 0 | **₹0** (starts `paid`) |
 | B. Lotus Biscoff Latte XL ₹215 + Cappuccino L ₹120, 2 pass drinks | 335 | −(150 + 120) = −270 | 0 | 65 | 3 | **₹68** |
-| C. Latte L ₹140 + Sandwich ₹180, 1 pass drink, 10% coupon | 320 | −140 | coupon 10% of (320 − 140) = −18 | 180 | 9 | **₹171** |
+| C. Latte L ₹140 + Sandwich ₹180, 1 pass drink, 10% coupon | 320 | −140 | coupon 10% of (320 − 140) = −18 | 162 | 8 | **₹170** |
 | D. 3 Cappuccinos, 1 pass drink left | 360 | −120 (1 unit) | 0 | 240 | 12 | **₹252** |
+
+Taxable is what is left after the pass **and** the coupon / points: since 19 Oct 2026 the discount
+comes out of the taxable value and packaging, when charged, goes into it (CGST Act s.15;
+`computeBill` in `lib/store/hours.ts`). Before that, example C was taxed on 180 (GST 9, ₹171).
 
 The pure helper that every create, quote and recompute path uses:
 
 ```
 composePassBill({ subtotal, taxableSubtotal, passCovered, passCoveredTaxable, discount }, settings)
-  → computeBill(subtotal, settings, discount + passCovered, taxableSubtotal − passCoveredTaxable)
-    with discount_inr = discount (coupon + points only) and pass_discount_inr = passCovered
+  → computeBill(subtotal − passCovered, settings, discount, taxableSubtotal − passCoveredTaxable)
+    with subtotal_inr = subtotal, discount_inr = discount (coupon + points only) and pass_discount_inr = passCovered
 ```
 
 `recomputeOrderTotals` (void / add on a running tab) recomputes `passCovered` from the **non-voided**

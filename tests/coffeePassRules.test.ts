@@ -109,17 +109,17 @@ describe('spec §6 worked examples (GST 5% exclusive, drink value ₹150)', () =
     expect(bill.discount_inr).toBe(0);
   });
 
-  it('C. Latte L ₹140 + Sandwich ₹180 (not eligible), 1 pass drink, 10% coupon: ₹171', () => {
+  it('C. Latte L ₹140 + Sandwich ₹180 (not eligible), 1 pass drink, 10% coupon: ₹170', () => {
     const lines = [line('latte', 140), line('sandwich', 180, 1, { eligible: false })];
     const { a, bill, coupon } = price(lines, [pass('p1', 7)], 1, EXCLUSIVE, 10);
     expect(a.covered_inr).toBe(140);
     expect(a.allocations).toEqual([{ pass_id: 'p1', line_key: 'latte', drinks: 1, covered_inr: 140 }]);
     expect(coupon).toBe(18); // 10% of (320 - 140)
     expect(bill.subtotal_inr).toBe(320);
-    expect(bill.tax_inr).toBe(9); // GST on 180
+    expect(bill.tax_inr).toBe(8); // GST on 180 - the 18 coupon = 162
     expect(bill.discount_inr).toBe(18); // coupon only
     expect(bill.pass_discount_inr).toBe(140); // pass kept apart
-    expect(bill.total_inr).toBe(171);
+    expect(bill.total_inr).toBe(170);
     // The identity every renderer relies on.
     expect(bill.total_inr).toBe(
       bill.subtotal_inr + bill.tax_inr + bill.packaging_inr - bill.discount_inr - bill.pass_discount_inr,
@@ -160,30 +160,34 @@ describe('GST-inclusive pricing (the same four orders)', () => {
   it('C with a coupon: total = subtotal - coupon - pass', () => {
     const lines = [line('latte', 140), line('sandwich', 180, 1, { eligible: false })];
     const { bill } = price(lines, [pass('p1', 7)], 1, INCLUSIVE, 10);
-    expect(bill.tax_inr).toBe(9 - 0); // 180 - 180/1.05, rounded
+    expect(bill.tax_inr).toBe(8); // 162 - 162/1.05, rounded: the coupon is out of the taxable value
     expect(bill.total_inr).toBe(320 - 18 - 140);
   });
 });
 
 describe('composePassBill', () => {
-  it('equals computeBill with discount + pass cover and the taxable base reduced by the covered taxable', () => {
+  it('equals computeBill on what the pass leaves, with the coupon spread over that and not over the covered drinks', () => {
     const input = { subtotalInr: 335, taxableSubtotalInr: 335, discountInr: 20, passCoveredInr: 270, passCoveredTaxableInr: 270 };
     const composed = composePassBill(input, EXCLUSIVE);
-    const direct = computeBill(335, EXCLUSIVE, 20 + 270, 335 - 270);
+    const direct = computeBill(335 - 270, EXCLUSIVE, 20, 335 - 270);
     expect(composed.tax_inr).toBe(direct.tax_inr);
+    expect(composed.tax_inr).toBe(2); // 5% of (65 - 20) = 2.25
     expect(composed.total_inr).toBe(direct.total_inr);
+    expect(composed.total_inr).toBe(335 + 2 - 20 - 270);
+    expect(composed.subtotal_inr).toBe(335);
     expect(composed.discount_inr).toBe(20);
     expect(composed.pass_discount_inr).toBe(270);
   });
 
-  it('keeps packaging (the caller decides it) in the total', () => {
+  it('keeps packaging (the caller decides it) in the total, with its GST', () => {
     const settings = { ...EXCLUSIVE, packaging_charge_inr: 10 };
     const bill = composePassBill(
       { subtotalInr: 120, taxableSubtotalInr: 120, discountInr: 0, passCoveredInr: 120, passCoveredTaxableInr: 120 },
       settings,
     );
     expect(bill.packaging_inr).toBe(10);
-    expect(bill.total_inr).toBe(10);
+    expect(bill.tax_inr).toBe(1); // 5% of the ₹10 packaging = 0.5, rounded up
+    expect(bill.total_inr).toBe(11);
   });
 
   it('a GST-exempt cup leaves the taxable base untouched', () => {

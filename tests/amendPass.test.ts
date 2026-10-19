@@ -99,21 +99,21 @@ describe('recomputeOrderTotals with HIOC Ritual cover', () => {
     { voided: false, line_total_inr: 180 },
   ];
 
-  it('reproduces the create-path bill for a covered order (spec example C: ₹171)', () => {
+  it('reproduces the create-path bill for a covered order (spec example C: ₹170)', () => {
     const bill = recomputeOrderTotals({ items: exampleC, settings, orderType: 'takeaway', discountInr: 18 });
     expect(bill).toMatchObject({
       subtotal_inr: 320,
-      tax_inr: 9,
+      tax_inr: 8, // 5% of 180 - 18 = 162
       discount_inr: 18,
       pass_discount_inr: 140,
-      total_inr: 171,
+      total_inr: 170,
     });
   });
 
   it('voiding the covered line takes its cover with it', () => {
     const items = [{ ...exampleC[0], voided: true }, exampleC[1]];
     const bill = recomputeOrderTotals({ items, settings, orderType: 'takeaway', discountInr: 18 });
-    expect(bill).toMatchObject({ subtotal_inr: 180, pass_discount_inr: 0, tax_inr: 9, discount_inr: 18, total_inr: 171 });
+    expect(bill).toMatchObject({ subtotal_inr: 180, pass_discount_inr: 0, tax_inr: 8, discount_inr: 18, total_inr: 170 });
   });
 
   it("voiding the OTHER line keeps the cover and clamps the discount to what is left after it", () => {
@@ -153,7 +153,7 @@ describe('recomputeOrderTotals with HIOC Ritual cover', () => {
     expect(bill.total_inr).toBe(0);
   });
 
-  it('is the recompute it always was for orders with no cover (byte-for-byte)', () => {
+  it('with no cover it is computeBill on the remaining lines, the discount shared by taxable and exempt lines', () => {
     const items = [
       { voided: false, line_total_inr: 200 },
       { voided: true, line_total_inr: 99 },
@@ -161,12 +161,13 @@ describe('recomputeOrderTotals with HIOC Ritual cover', () => {
     ];
     const withPackaging: StoreSettings = { ...settings, packaging_charge_inr: 20 };
     const bill = recomputeOrderTotals({ items, settings: withPackaging, orderType: 'takeaway', discountInr: 50 });
+    // 5% of (200 taxable less its 200/300 share of the 50 discount = 166.67) + 20 packaging = 9.33
     expect(bill).toEqual({
       subtotal_inr: 300,
-      tax_inr: 10,
+      tax_inr: 9,
       packaging_inr: 20,
       discount_inr: 50,
-      total_inr: 300 + 10 + 20 - 50,
+      total_inr: 300 + 9 + 20 - 50,
       pass_discount_inr: 0,
     });
   });
@@ -204,7 +205,7 @@ describe('POST /api/orders/[id]/amend with HIOC Ritual cover', () => {
     const res = await POST(req({ item_id: LATTE_LINE, reason: 'customer changed their mind' }), params);
     expect(res.status).toBe(200);
     expect(state.itemUpdate?.voided).toBe(true);
-    // Sandwich ₹180 + 5% GST + ₹20 packaging, less the ₹18 coupon, and no cover any more.
+    // Sandwich ₹180 less the ₹18 coupon, + ₹20 packaging, 5% GST on that ₹182, and no cover any more.
     expect(state.orderPatch).toMatchObject({
       subtotal_inr: 180,
       tax_inr: 9,
@@ -219,8 +220,8 @@ describe('POST /api/orders/[id]/amend with HIOC Ritual cover', () => {
   it('voiding an uncovered line keeps the cover, and does not rewrite pass_discount_inr (unchanged)', async () => {
     const res = await POST(req({ item_id: SANDWICH_LINE, reason: 'wrong item' }), params);
     expect(res.status).toBe(200);
-    // Latte ₹140 fully covered: nothing left to pay but packaging; the coupon has nothing to bite on.
-    expect(state.orderPatch).toMatchObject({ subtotal_inr: 140, discount_inr: 0, total_inr: 20, tax_inr: 0 });
+    // Latte ₹140 fully covered: nothing left to pay but packaging and its GST; the coupon has nothing to bite on.
+    expect(state.orderPatch).toMatchObject({ subtotal_inr: 140, discount_inr: 0, total_inr: 21, tax_inr: 1 });
     expect(state.orderPatch).not.toHaveProperty('pass_discount_inr');
   });
 
@@ -246,7 +247,7 @@ describe('POST /api/orders/[id]/amend with HIOC Ritual cover', () => {
     };
     const res = await POST(req({ item_id: LATTE_LINE, reason: 'wrong item' }), params);
     expect(res.status).toBe(200);
-    expect(state.orderPatch).toMatchObject({ subtotal_inr: 180, tax_inr: 9, total_inr: 209 });
+    expect(state.orderPatch).toMatchObject({ subtotal_inr: 180, tax_inr: 10, total_inr: 210 }); // 5% of 180 + 20 packaging
     expect(state.orderPatch).not.toHaveProperty('pass_discount_inr');
   });
 
@@ -269,10 +270,10 @@ describe('POST /api/orders/[id]/amend with HIOC Ritual cover', () => {
       params,
     );
     expect(res.status).toBe(200);
-    // 140 + 180 + 150 = 470; the cover stays 140; coupon 18 stays; GST on 470 - 140.
+    // 140 + 180 + 150 = 470; the cover stays 140; coupon 18 stays; GST on 470 - 140 - 18 + 20 packaging.
     expect(state.orderPatch).toMatchObject({
       subtotal_inr: 470,
-      tax_inr: 17, // 5% of 330 = 16.5, rounded
+      tax_inr: 17, // 5% of 332 = 16.6, rounded
       discount_inr: 18,
       total_inr: 470 + 17 + 20 - 18 - 140,
     });

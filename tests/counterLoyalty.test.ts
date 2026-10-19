@@ -500,8 +500,9 @@ describe('VAL-1 — points at the till', () => {
     expect(res.status).toBe(201);
     expect(state.orderInsert?.subtotal_inr).toBe(200);
     expect(state.orderInsert?.discount_inr).toBe(10);
-    // 200 + 5% GST on (200-10) + 20 packaging - 10 discount, all server-side.
-    expect(state.orderInsert?.total_inr).toBe(220);
+    // 200 + 5% GST on (200 - 10 discount + 20 packaging) = 10.5 → 11, + 20 packaging - 10 discount, all server-side.
+    expect(state.orderInsert?.tax_inr).toBe(11);
+    expect(state.orderInsert?.total_inr).toBe(221);
   });
 
   it('rejects a malformed redeem_points before anything is created', async () => {

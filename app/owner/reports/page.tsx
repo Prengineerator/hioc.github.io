@@ -22,6 +22,8 @@ import {
   type ReportDay,
 } from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
+import { formatIstDate } from '@/lib/account/orderDisplay';
+import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 
 export const dynamic = 'force-dynamic';
 
@@ -228,6 +230,11 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
             {ritual.cups ? <Row k={ritual.cups.label} v={ritual.cups.value} /> : null}
           </dl>
           <p className="mt-3 text-xs text-muted">Counted on the day the order was placed.</p>
+          <p className="mt-1 text-xs text-muted">
+            Before you file: from {formatIstDate(`${GST_NET_OF_DISCOUNT_FROM}T00:00:00+05:30`)}, GST is charged on the
+            bill after coupons and Beanies, and on takeaway packaging too. Orders before then were taxed on the price
+            before discounts, with packaging untaxed. The GST above is always what each bill charged.
+          </p>
           {ritual.sales || ritual.cups ? (
             <p className="mt-1 text-xs text-muted">
               Ritual sales are inside Gross sales. Cups served on a Ritual were paid for when it was sold, so what they

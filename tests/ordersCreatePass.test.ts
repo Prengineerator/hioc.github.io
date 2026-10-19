@@ -333,16 +333,16 @@ describe('POST /api/orders — HIOC Ritual cups (spec §6 examples through the r
     expect(state.itemRows.find((r) => r.menu_item_id === MENU.capp)).toMatchObject({ pass_drinks: 1, pass_covered_inr: 120 });
   });
 
-  it('C: one cup + a 10% coupon: the coupon is on the ₹180 left after the pass (₹18), total ₹171', async () => {
+  it('C: one cup + a 10% coupon: the coupon is on the ₹180 left after the pass (₹18), total ₹170', async () => {
     const res = await POST(req(web({ items: [line('latte'), line('sandwich')], pass_drinks: 1, coupon_code: 'TEN' })));
     expect(res.status).toBe(201);
     expect(state.couponCtx?.subtotalInr).toBe(180); // 320 - 140, CP-D12
     expect(state.orderInsert).toMatchObject({
       subtotal_inr: 320,
-      tax_inr: 9,
+      tax_inr: 8, // 5% of 180 - 18 = 162
       discount_inr: 18, // coupon only, never the pass
       pass_discount_inr: 140,
-      total_inr: 171,
+      total_inr: 170,
     });
     // Only the drink took the cup.
     expect(state.itemRows.find((r) => r.menu_item_id === MENU.latte)).toMatchObject({ pass_drinks: 1, pass_covered_inr: 140 });
@@ -373,10 +373,10 @@ describe('POST /api/orders — HIOC Ritual cups (spec §6 examples through the r
     expect(state.quoteRemaining).toBe(180 - 18);
     expect(state.orderInsert).toMatchObject({
       subtotal_inr: 320,
-      tax_inr: 9,
+      tax_inr: 6, // 5% of 180 - 68 = 112
       discount_inr: 68, // coupon 18 + Beanies 50
       pass_discount_inr: 140,
-      total_inr: 320 + 9 - 68 - 140,
+      total_inr: 320 + 6 - 68 - 140,
     });
     // And they are applied in that order in the database, the cups first so
     // that anything failing after them takes them back with the order.
@@ -541,12 +541,13 @@ describe('POST /api/orders — inert when no cups are used', () => {
     expect(passesServer.redeemPassDrinks).not.toHaveBeenCalled();
   });
 
-  it('a coupon and Beanies without a pass are computed on the whole subtotal, exactly as before', async () => {
+  it('a coupon and Beanies without a pass are computed on the whole subtotal, and GST on what they leave', async () => {
     const res = await POST(req(web({ items: [line('latte'), line('sandwich')], coupon_code: 'TEN', redeem_points: 50 })));
     expect(res.status).toBe(201);
     expect(state.couponCtx?.subtotalInr).toBe(320);
     expect(state.quoteRemaining).toBe(320 - 32);
-    expect(state.orderInsert).toMatchObject({ discount_inr: 82, total_inr: 320 + 16 - 82 });
+    // 5% of 320 - 82 = 238 is 11.9.
+    expect(state.orderInsert).toMatchObject({ discount_inr: 82, tax_inr: 12, total_inr: 320 + 12 - 82 });
     expect(state.orderInsert).not.toHaveProperty('pass_discount_inr');
   });
 });
