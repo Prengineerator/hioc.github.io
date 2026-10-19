@@ -1,7 +1,9 @@
 # Moving the database from Seoul to Mumbai
 
-**Status:** ready to run, 2026-10-19. Tooling: `.github/workflows/supabase-region-move.yml`
-→ `scripts/db-move/`. Nothing changes for customers until cutover step 4.
+**Status:** ready to run, 2026-10-19. The target project **Hioc India**
+(`mulbrnmdzpagzlzgwzuy`, Mumbai) exists and is empty. Tooling:
+`.github/workflows/supabase-region-move.yml` → `scripts/db-move/`. Nothing
+changes for customers until cutover step 4.
 
 ## Why it's in Seoul, and why it has to be copied
 
@@ -46,34 +48,31 @@ The storage copier was tested against a mock Storage API, covering both key styl
 
 ## Before the night (daytime, no customer impact)
 
-### 1. Get a project slot
+### 1. Project slot — done 2026-10-19
 
-The free plan allows **2 active projects across all your Supabase
-organizations**, and both are in use: Hioc Coffee (Seoul) and studio-vastyukt.
-Paused projects don't count. Pick one:
+The free plan allows 2 active projects. The empty **studio-vastyukt** project
+(no tables, logins, files or functions) was **paused** to free the slot.
+Paused projects don't count toward the limit. Delete it for good whenever you
+like: its dashboard → Project Settings → General → Delete project.
 
-- **Upgrade the "Hioc" organization to Pro: $25/month.** One project's compute
-  is included. It also turns on **daily backups**, which production doesn't have
-  today, and stops projects from ever being paused. While Seoul and Mumbai both
-  exist, the second project adds about $10/month, billed hourly. If
-  studio-vastyukt should stay free, transfer it to its own free organization
-  first (Project Settings → General → Transfer project).
-- **Free:** pause studio-vastyukt for the duration (you said it can't be used, so
-  this only works if pausing is acceptable).
+### 2. The Mumbai project — created 2026-10-19
 
-### 2. Create the Mumbai project
+| | |
+|---|---|
+| Name | **Hioc India** |
+| Ref | `mulbrnmdzpagzlzgwzuy` |
+| Region | South Asia (Mumbai), `ap-south-1` |
+| URL | `https://mulbrnmdzpagzlzgwzuy.supabase.co` |
+| Postgres | 17.11, empty |
+| Plan | Free (organization "Hioc") |
 
-Supabase → New project, with these settings:
-- Organization: **Hioc**
-- Name: `Hioc Coffee`
-- Region: **South Asia (Mumbai) – `ap-south-1`**
-- Database password: a long random one, saved in your password manager
-
-Then from its dashboard:
+It was created through the Supabase API, so nobody knows its database
+password yet. Set one: Project Settings → Database → **Reset database
+password**. Use a long random one and save it in your password manager. Then
+collect:
 
 | What | Where |
 |---|---|
-| Project URL | Project Settings → General (or Connect) → `https://<new-ref>.supabase.co` |
 | Publishable key (`sb_publishable_…`) | Project Settings → API Keys |
 | Secret key (`sb_secret_…`) | Project Settings → API Keys |
 | Session pooler connection string | Connect → **Session pooler** (not "Direct") |
@@ -100,12 +99,16 @@ GitHub → repo → Settings → Secrets and variables → Actions → New repos
 | `OLD_DB_URL` | Seoul → Connect → **Session pooler** string, with the real password (URL-encode `@ : / ? #` in it) |
 | `NEW_DB_URL` | the same for Mumbai (its host contains `ap-south-1`) |
 | `OLD_SUPABASE_URL` | `https://jdhavrnivafuenncegqb.supabase.co` |
-| `NEW_SUPABASE_URL` | `https://<new-ref>.supabase.co` |
+| `NEW_SUPABASE_URL` | `https://mulbrnmdzpagzlzgwzuy.supabase.co` |
 | `OLD_SERVICE_KEY` | Seoul's secret key (or its legacy `service_role` key) |
 | `NEW_SERVICE_KEY` | Mumbai's secret key |
 | `CRON_SECRET` | the same value as `CRON_SECRET` in Vercel |
 
 ### 5. Dry runs
+
+GitHub only offers "Run workflow" for workflows that exist on the default
+branch, so `.github/workflows/supabase-region-move.yml` has to be merged into
+`main` first. Merging it changes nothing on the live site.
 
 Actions → **Move Supabase to Mumbai** → Run workflow:
 
@@ -140,7 +143,7 @@ and cash-day jobs run at 03:00 and 03:05 IST.
 
    | Variable | New value |
    |---|---|
-   | `NEXT_PUBLIC_SUPABASE_URL` | `https://<new-ref>.supabase.co` |
+   | `NEXT_PUBLIC_SUPABASE_URL` | `https://mulbrnmdzpagzlzgwzuy.supabase.co` |
    | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Mumbai's publishable key |
    | `SUPABASE_SERVICE_ROLE_KEY` | Mumbai's secret key |
    | `SUPABASE_SEND_SMS_HOOK_SECRET` | the secret from Mumbai's SMS hook (step 3) |
@@ -154,7 +157,7 @@ and cash-day jobs run at 03:00 and 03:05 IST.
 5. **Start Mumbai's background jobs.** In Mumbai's SQL editor:
    `select cron.alter_job(jobid, active := true) from cron.job;`
 6. **Smoke test** on a phone, on mobile data:
-   - The menu loads and the photos show. Right-click a photo: its address is the new `<ref>.supabase.co`.
+   - The menu loads and the photos show. Right-click a photo: its address is `mulbrnmdzpagzlzgwzuy.supabase.co`.
    - A customer can log in with the WhatsApp OTP. This proves the SMS hook works.
    - Staff can log in at `staff.hioc.in` with their usual password. The POS desktop app loads and prints.
    - A pay-at-counter order appears on the staff board.
