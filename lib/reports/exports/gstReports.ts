@@ -8,10 +8,17 @@
 // What is reported is the tax the bills CHARGED (orders.tax_inr, see orderData.ts),
 // never a recomputed figure. Cancelled and rejected orders are left out of every
 // total, and all sales are intra-state: CGST + SGST, IGST always 0.
+//
+// From GST_NET_OF_DISCOUNT_FROM (lib/store/hours.ts) bills charge GST after the
+// coupon / Beanies discount and on takeaway packaging; earlier bills charged it
+// on the pre-discount price with packaging untaxed. A month can hold both, so each
+// order carries its rule (ExportOrder.gstRule) and the packaging is a taxable
+// part of its own: it is reported under SAC 996331 with the restaurant service.
 // Money is summed in integer paise and turned back into rupees once.
 
 import { round2, type CsvTable, type CsvValue } from '@/lib/reports/csv';
 import { B2CS_TYPE, PLACE_OF_SUPPLY, SAC_RESTAURANT, HSN_COFFEE_BEANS } from '@/lib/reports/exports/gstCodes';
+import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 import type { ExportOrder, GstCode, OrderDataset } from '@/lib/reports/exports/types';
 
 const paise = (inr: number): number => Math.round(inr * 100);
@@ -20,11 +27,25 @@ const inr = (p: number): number => p / 100;
 const valid = (ds: OrderDataset): ExportOrder[] => ds.orders.filter((o) => o.valid);
 const rupees = (n: number): string => `₹${round2(n)}`;
 
-/** What an order's lines do not carry of its taxable value / tax (only when tax was charged with no line to hold it). */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** '2026-10-19' → '19 Oct 2026'. */
+function longDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+}
+const RULE_DATE = longDate(GST_NET_OF_DISCOUNT_FROM);
+
+/** The order's packaging as a taxable part (all zero before packaging was taxed). */
+function packagingOf(o: ExportOrder): { taxableP: number; cgstP: number; sgstP: number } {
+  return { taxableP: paise(o.packagingTaxableInr), cgstP: paise(o.packagingCgstInr), sgstP: paise(o.packagingSgstInr) };
+}
+
+/** What neither an order's lines nor its packaging carry of its taxable value / tax (only when tax was charged with nothing to hold it). */
 function unallocated(o: ExportOrder): { taxableP: number; cgstP: number; sgstP: number } {
-  let taxableP = paise(o.taxableValueInr);
-  let cgstP = paise(o.cgstInr);
-  let sgstP = paise(o.sgstInr);
+  const pack = packagingOf(o);
+  let taxableP = paise(o.taxableValueInr) - pack.taxableP;
+  let cgstP = paise(o.cgstInr) - pack.cgstP;
+  let sgstP = paise(o.sgstInr) - pack.sgstP;
   for (const l of o.lines) {
     taxableP -= paise(l.taxableInr);
     cgstP -= paise(l.cgstInr);
@@ -42,7 +63,7 @@ interface CodeTally {
   sgstP: number;
 }
 
-/** Taxable value and tax of the non-exempt lines reported under one kind of code. */
+/** Taxable value and tax of the non-exempt lines (and, for SAC, packaging) reported under one kind of code. */
 function tallyByCode(orders: ExportOrder[], gst: GstCode): CodeTally {
   const t: CodeTally = { orders: new Set(), taxableP: 0, cgstP: 0, sgstP: 0 };
   for (const o of orders) {
@@ -55,13 +76,13 @@ function tallyByCode(orders: ExportOrder[], gst: GstCode): CodeTally {
       t.sgstP += paise(l.sgstInr);
     }
     if (gst.code === SAC_RESTAURANT.code) {
-      // Tax with no line to carry it is reported as restaurant service.
-      const u = unallocated(o);
-      if (u.taxableP !== 0 || u.cgstP !== 0 || u.sgstP !== 0) {
+      // Packaging is part of the restaurant supply, and so is tax with no line to carry it.
+      for (const part of [packagingOf(o), unallocated(o)]) {
+        if (part.taxableP === 0 && part.cgstP === 0 && part.sgstP === 0) continue;
         t.orders.add(o.id);
-        t.taxableP += u.taxableP;
-        t.cgstP += u.cgstP;
-        t.sgstP += u.sgstP;
+        t.taxableP += part.taxableP;
+        t.cgstP += part.cgstP;
+        t.sgstP += part.sgstP;
       }
     }
   }
@@ -130,6 +151,19 @@ export function gstSummary(ds: OrderDataset): CsvTable {
   const exemptValue = sum((o) => o.exemptValueInr);
   const couponTotal = sum((o) => o.couponDiscountInr);
   const beaniesTotal = sum((o) => o.beaniesDiscountInr);
+  // The two bases side by side (see the header): bills on the earlier one and on the current one.
+  const earlier = sales.filter((o) => o.gstRule === 'pre_discount');
+  const current = sales.filter((o) => o.gstRule === 'net_of_discount');
+  const sumOf = (list: ExportOrder[], f: (o: ExportOrder) => number) => inr(list.reduce((s, o) => s + paise(f(o)), 0));
+  const packagingTaxed = { orders: 0, taxableP: 0, cgstP: 0, sgstP: 0 };
+  for (const o of sales) {
+    const p = packagingOf(o);
+    if (p.taxableP === 0 && p.cgstP === 0 && p.sgstP === 0) continue;
+    packagingTaxed.orders += 1;
+    packagingTaxed.taxableP += p.taxableP;
+    packagingTaxed.cgstP += p.cgstP;
+    packagingTaxed.sgstP += p.sgstP;
+  }
   const cancelled = dead.filter((o) => o.status === 'cancelled').length;
   const rejected = dead.length - cancelled;
   const processedRefunds = ds.refunds.filter((r) => r.status === 'processed');
@@ -140,7 +174,7 @@ export function gstSummary(ds: OrderDataset): CsvTable {
       'GSTR-1 Table 7 · GSTR-3B 3.1(a)',
       taxableOrders,
       { taxableP, cgstP, sgstP },
-      `GST charged on the bills, split half CGST and half SGST (all sales are within Uttar Pradesh, so no IGST). Taxable value is the bill before GST, with HIOC Ritual cups taken out. Coupon and Beanies discounts are NOT deducted.${
+      `GST charged on the bills, split half CGST and half SGST (all sales are within Uttar Pradesh, so no IGST). Taxable value is the bill before GST, with HIOC Ritual cups taken out. From ${RULE_DATE} bills charge GST after coupon and Beanies discounts and on takeaway packaging too; earlier bills charged it on the price before discounts, with packaging untaxed. This period: ${current.length} ${current.length === 1 ? 'bill' : 'bills'} on the new basis, ${earlier.length} on the earlier one.${
         ds.gstInclusive ? ' Prices include GST, so taxable value is the price less its GST.' : ''
       }`,
     ),
@@ -149,7 +183,14 @@ export function gstSummary(ds: OrderDataset): CsvTable {
       'GSTR-1 Table 12',
       sac.orders.size,
       sac,
-      'Food, drinks and HIOC Ritual pass sales.',
+      `Food, drinks, HIOC Ritual pass sales and, from ${RULE_DATE}, takeaway packaging.`,
+    ),
+    taxRow(
+      '    of which packaging charges (inside SAC 996331)',
+      'GSTR-1 Table 12',
+      packagingTaxed.orders,
+      packagingTaxed,
+      `Takeaway packaging, taxed at the same rate from ${RULE_DATE}. Already counted in the restaurant service row above.`,
     ),
     taxRow(
       `  of which ${HSN_COFFEE_BEANS.description} (HSN ${HSN_COFFEE_BEANS.code})`,
@@ -171,18 +212,18 @@ export function gstSummary(ds: OrderDataset): CsvTable {
       'Items marked GST-exempt on the menu. No GST was charged on them; not part of Table 7.',
     ],
     infoRow(
-      'Packaging charges',
+      'Packaging charges billed without GST',
       'Not in Table 7',
-      count((o) => o.packagingInr),
-      sum((o) => o.packagingInr),
-      'Billed without GST in this system, so it is outside the taxable value above. Ask your accountant whether it should be treated as part of the supply.',
+      earlier.filter((o) => o.packagingInr > 0).length,
+      sumOf(earlier, (o) => o.packagingInr),
+      `Bills before ${RULE_DATE} billed packaging without GST, so it is outside the taxable value above. From that date packaging is taxed (see the packaging row above). Ask your accountant whether the earlier packaging should be treated as part of the supply.`,
     ),
     infoRow(
       'Discounts given (coupons and Beanies)',
       'For reference',
       count((o) => o.discountInr),
       sum((o) => o.discountInr),
-      `Coupons ${rupees(couponTotal)}, Beanies ${rupees(beaniesTotal)}. Not deducted from the taxable value: GST was charged before the discount.`,
+      `Coupons ${rupees(couponTotal)}, Beanies ${rupees(beaniesTotal)}. From ${RULE_DATE} a discount is deducted from the taxable value, because GST is charged after it (${rupees(sumOf(current, (o) => o.discountInr))} of this total). On earlier bills it was not deducted: GST was charged before the discount (${rupees(sumOf(earlier, (o) => o.discountInr))}).`,
     ),
     infoRow(
       'HIOC Ritual cups covered by a pass',
@@ -281,9 +322,9 @@ export function hsnB2c(ds: OrderDataset): CsvTable {
     for (const l of o.lines) {
       const g = group(l.gstCode, l.gstExempt ? 0 : ds.gstRatePercent);
       if (l.gstExempt) {
-        // Exempt lines: the whole (post-pass) value is the "taxable value" of the rate-0 row.
-        g.taxableP += paise(l.lineTotalInr) - paise(l.passCoveredInr);
-        g.valueP += paise(l.lineTotalInr) - paise(l.passCoveredInr);
+        // Exempt lines: their whole value is the "taxable value" of the rate-0 row.
+        g.taxableP += paise(l.exemptValueInr);
+        g.valueP += paise(l.exemptValueInr);
       } else {
         g.taxableP += paise(l.taxableInr);
         g.cgstP += paise(l.cgstInr);
@@ -292,14 +333,15 @@ export function hsnB2c(ds: OrderDataset): CsvTable {
       }
       if (l.gstCode.kind === 'goods') g.grams += l.quantity * (l.weightGrams ?? 0);
     }
-    // Tax charged with no line to hold it: report it as restaurant service so the table ties to Table 7.
-    const u = unallocated(o);
-    if (u.taxableP !== 0 || u.cgstP !== 0 || u.sgstP !== 0) {
+    // Packaging (taxed from GST_NET_OF_DISCOUNT_FROM) is restaurant service, and so is tax
+    // charged with no line to hold it, so the table still ties to Table 7.
+    for (const part of [packagingOf(o), unallocated(o)]) {
+      if (part.taxableP === 0 && part.cgstP === 0 && part.sgstP === 0) continue;
       const g = group(SAC_RESTAURANT, ds.gstRatePercent);
-      g.taxableP += u.taxableP;
-      g.cgstP += u.cgstP;
-      g.sgstP += u.sgstP;
-      g.valueP += u.taxableP + u.cgstP + u.sgstP;
+      g.taxableP += part.taxableP;
+      g.cgstP += part.cgstP;
+      g.sgstP += part.sgstP;
+      g.valueP += part.taxableP + part.cgstP + part.sgstP;
     }
   }
 

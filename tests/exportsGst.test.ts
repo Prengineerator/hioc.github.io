@@ -165,6 +165,7 @@ describe('gstSummary', () => {
       'Taxable',
       'of',
       'of',
+      'of',
       'GST-exempt',
       'Packaging',
       'Discounts',
@@ -186,6 +187,8 @@ describe('gstSummary', () => {
     expect(at('Taxable sales @ 5%', 'Total tax (INR)')).toBe(138);
     expect(at('Taxable sales @ 5%', 'Value (INR)')).toBe(2907);
     expect(at('Taxable sales @ 5%', 'Return reference')).toContain('3.1(a)');
+    expect(at('Taxable sales @ 5%', 'Note')).toContain('From 19 Oct 2026 bills charge GST after coupon and Beanies discounts');
+    expect(at('Taxable sales @ 5%', 'Note')).toContain('0 bills on the new basis, 5 on the earlier one');
   });
 
   it('splits taxable sales into SAC 996331 and HSN 0901, which add back to the whole', () => {
@@ -203,11 +206,17 @@ describe('gstSummary', () => {
     expect(at('GST-exempt sales', 'Value (INR)')).toBe(50);
     expect(at('GST-exempt sales', 'Total tax (INR)')).toBe(0);
     expect(at('GST-exempt sales', 'Return reference')).toContain('3.1(c)');
-    expect(at('Packaging charges', 'Value (INR)')).toBe(10);
+    // September bills: packaging was billed without GST and discounts were not deducted.
+    expect(at('Packaging charges billed without GST', 'Value (INR)')).toBe(10);
+    expect(at('Packaging charges billed without GST', 'Orders')).toBe(1);
+    expect(at('of which packaging', 'Taxable value (INR)')).toBe(0);
     expect(at('Discounts given', 'Value (INR)')).toBe(20);
     expect(at('Discounts given', 'Note')).toContain('Coupons ₹20');
     expect(at('Discounts given', 'Note')).toContain('Beanies ₹0');
-    expect(at('Discounts given', 'Note')).toContain('Not deducted');
+    expect(at('Discounts given', 'Note')).toContain('From 19 Oct 2026 a discount is deducted');
+    expect(at('Discounts given', 'Note')).toContain('(₹0 of this total)');
+    expect(at('Discounts given', 'Note')).toContain('On earlier bills it was not deducted');
+    expect(at('Discounts given', 'Note')).toContain('(₹20)');
     expect(at('HIOC Ritual cups', 'Value (INR)')).toBe(180);
     expect(at('HIOC Ritual cups', 'Note')).toContain('GST was charged when the pass was sold');
     expect(at('Settle discounts', 'Value (INR)')).toBe(5);
@@ -400,5 +409,146 @@ describe('docsIssued', () => {
       }),
     );
     expect(t.rows).toEqual([['Invoices for outward supply', 'HIOC-000010', 'HIOC-000012', 3, 2, 1]]);
+  });
+});
+
+
+// ── A month that holds both GST rules ───────────────────────────────────────
+
+describe('the pack across GST_NET_OF_DISCOUNT_FROM (2026-10-19)', () => {
+  const OLD_DAY = '2026-10-10T06:30:00Z';
+  const NEW_DAY = '2026-10-25T06:30:00Z';
+
+  /**
+   * 5% exclusive. 3001 (10 Oct): ₹200 latte, ₹20 off, ₹10 packaging: GST on the 200, packaging untaxed → 10.
+   * 3002 (25 Oct, takeaway): ₹300 latte + 2 × 250 g beans ₹1200, ₹150 off, ₹10 packaging:
+   * GST on 1350 + 10 = 1360 → 68.
+   */
+  function october(): OrderDataset {
+    return build({
+      from: '2026-10-01',
+      to: '2026-10-31',
+      orders: [
+        order({ id: 'o3001', order_number: 3001, created_at: OLD_DAY, subtotal_inr: 200, discount_inr: 20, packaging_inr: 10, tax_inr: 10, total_inr: 200 }),
+        order({ id: 'o3002', order_number: 3002, created_at: NEW_DAY, order_type: 'takeaway', subtotal_inr: 1500, discount_inr: 150, packaging_inr: 10, tax_inr: 68, total_inr: 1428 }),
+      ],
+      items: [
+        item('o3001', { line_total_inr: 200 }),
+        item('o3002', { line_total_inr: 300 }),
+        item('o3002', { line_total_inr: 1200, menu_item_id: 'beans', quantity: 2, weight_grams: 250 }),
+      ],
+      redemptions: [
+        { order_id: 'o3001', discount_inr: 20, code: 'WELCOME' },
+        { order_id: 'o3002', discount_inr: 150, code: 'FESTIVE' },
+      ],
+    });
+  }
+
+  it('summary: packaging is taxable from the date, discounts are deducted from it, both stated', () => {
+    const t = gstSummary(october());
+    const at = (label: string, column: string) => rowBy(t, label)[col(t, column)];
+    // 200 + (270 + 1080 + 10) taxable; 10 + 68 tax.
+    expect(at('Taxable sales', 'Taxable value (INR)')).toBe(1560);
+    expect(at('Taxable sales', 'Total tax (INR)')).toBe(78);
+    expect(at('Taxable sales', 'CGST (INR)')).toBe(39);
+    expect(at('Taxable sales', 'Note')).toContain('1 bill on the new basis, 1 on the earlier one');
+    // SAC: 200 + 270 latte, 10 packaging; tax 10 + 13.5 + 0.5.
+    expect(at('of which Restaurant service', 'Taxable value (INR)')).toBe(480);
+    expect(at('of which Restaurant service', 'Total tax (INR)')).toBe(24);
+    expect(at('of which Restaurant service', 'Note')).toContain('from 19 Oct 2026, takeaway packaging');
+    expect(at('of which Coffee, roasted', 'Taxable value (INR)')).toBe(1080);
+    expect(at('of which Coffee, roasted', 'Total tax (INR)')).toBe(54);
+    expect(at('of which packaging', 'Orders')).toBe(1);
+    expect(at('of which packaging', 'Taxable value (INR)')).toBe(10);
+    expect(at('of which packaging', 'Total tax (INR)')).toBe(0.5);
+    // The 10 October packaging stays outside the taxable value.
+    expect(at('Packaging charges billed without GST', 'Value (INR)')).toBe(10);
+    expect(at('Packaging charges billed without GST', 'Orders')).toBe(1);
+    expect(at('Packaging charges billed without GST', 'Note')).toContain('Bills before 19 Oct 2026');
+    expect(at('Discounts given', 'Value (INR)')).toBe(170);
+    expect(at('Discounts given', 'Note')).toContain('From 19 Oct 2026 a discount is deducted from the taxable value');
+    expect(at('Discounts given', 'Note')).toContain('(₹150 of this total)');
+    expect(at('Discounts given', 'Note')).toContain('(₹20)');
+  });
+
+  it('Table 7 includes the packaging and takes the discount off', () => {
+    expect(b2cs(october()).rows).toEqual([[B2CS_TYPE, PLACE_OF_SUPPLY, '', 5, 1560, 0, '']]);
+  });
+
+  it('Table 12 carries packaging under SAC 996331 and ties to Table 7', () => {
+    const ds = october();
+    const t = hsnB2c(ds);
+    expect(t.rows).toEqual([
+      ['0901', 'Coffee, roasted', 'KGS-KILOGRAMS', 0.5, 1134, 5, 1080, 0, 27, 27, 0],
+      ['996331', 'Restaurant service', 'NA', 0, 504, 5, 480, 0, 12, 12, 0],
+    ]);
+    expect(t.rows.reduce((s, r) => s + paise(r[6] as number), 0)).toBe(paise(b2cs(ds).rows[0][4] as number));
+  });
+
+  it('an order each side of the date: only the later one carries packaging tax and the discount cut', () => {
+    const ds = october();
+    const [before, after] = ds.orders;
+    expect([before.gstRule, after.gstRule]).toEqual(['pre_discount', 'net_of_discount']);
+    expect([before.taxableValueInr, before.packagingTaxableInr]).toEqual([200, 0]);
+    expect([after.taxableValueInr, after.packagingTaxableInr]).toEqual([1360, 10]);
+  });
+
+  it('Table 12, Table 7 and the summary agree to the paisa over many random bills of both rules', () => {
+    let state = 424242;
+    const rnd = (n: number) => {
+      state = (state * 1103515245 + 12345) % 2147483648;
+      return state % n;
+    };
+    for (const inclusive of [false, true]) {
+      const orders: OrderRow[] = [];
+      const items: ItemRow[] = [];
+      for (let i = 0; i < 300; i++) {
+        const id = `r${i}`;
+        const created_at = rnd(2) === 0 ? OLD_DAY : NEW_DAY;
+        const lines: ItemRow[] = [];
+        for (let k = 0, n = 1 + rnd(5); k < n; k++) {
+          lines.push(
+            item(id, {
+              line_total_inr: 20 + rnd(500),
+              menu_item_id: rnd(5) === 0 ? 'beans' : 'latte',
+              weight_grams: null,
+              gst_exempt: rnd(7) === 0,
+              pass_covered_inr: 0,
+              voided: rnd(9) === 0,
+            }),
+          );
+        }
+        const subtotal = lines.filter((l) => !l.voided).reduce((s, l) => s + l.line_total_inr, 0);
+        const taxable = lines.filter((l) => !l.voided && !l.gst_exempt).reduce((s, l) => s + l.line_total_inr, 0);
+        const discount = rnd(3) === 0 ? rnd(subtotal + 1) : 0;
+        const packaging = rnd(3) === 0 ? 10 : 0;
+        const left = taxable === 0 ? 0 : (taxable * (subtotal - discount)) / subtotal;
+        const gross = left + (created_at === NEW_DAY ? packaging : 0);
+        const base = created_at === NEW_DAY ? gross : taxable;
+        const pct = 5;
+        const tax = inclusive ? Math.round((base * pct) / (100 + pct)) : Math.round((base * pct) / 100);
+        orders.push(order({ id, order_number: 5000 + i, created_at, subtotal_inr: subtotal, discount_inr: discount, packaging_inr: packaging, tax_inr: subtotal === 0 ? 0 : tax }));
+        items.push(...lines);
+      }
+      const ds = build({ from: '2026-10-01', to: '2026-10-31', gstInclusive: inclusive, orders, items });
+      const sum = gstSummary(ds);
+      const hsn = hsnB2c(ds).rows;
+      const b = b2cs(ds).rows;
+
+      const taxedRows = hsn.filter((r) => r[5] === 5);
+      const exemptRows = hsn.filter((r) => r[5] === 0);
+      const summaryTaxable = rowBy(sum, 'Taxable sales')[col(sum, 'Taxable value (INR)')] as number;
+      const summaryTax = rowBy(sum, 'Taxable sales')[col(sum, 'Total tax (INR)')] as number;
+      expect(taxedRows.reduce((s, r) => s + paise(r[6] as number), 0)).toBe(paise(summaryTaxable));
+      expect(b.length ? paise(b[0][4] as number) : 0).toBe(paise(summaryTaxable));
+      expect(taxedRows.reduce((s, r) => s + paise(r[8] as number) + paise(r[9] as number), 0)).toBe(paise(summaryTax));
+      expect(paise(summaryTax)).toBe(ds.orders.filter((o) => o.valid).reduce((s, o) => s + paise(o.taxInr), 0));
+      expect(exemptRows.reduce((s, r) => s + paise(r[6] as number), 0)).toBe(
+        paise(rowBy(sum, 'GST-exempt sales')[col(sum, 'Value (INR)')] as number),
+      );
+      // The sub-rows add back to the whole.
+      const part = (label: string) => paise(rowBy(sum, label)[col(sum, 'Taxable value (INR)')] as number);
+      expect(part('of which Restaurant service') + part('of which Coffee, roasted')).toBe(paise(summaryTaxable));
+    }
   });
 });

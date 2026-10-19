@@ -29,6 +29,13 @@ export interface GstCode {
   kind: 'service' | 'goods';
 }
 
+/**
+ * Which GST rule an order was billed under (lib/store/hours.ts GST_NET_OF_DISCOUNT_FROM):
+ * 'pre_discount' = GST on the price before coupon / Beanies discounts, packaging untaxed;
+ * 'net_of_discount' = GST on the price after the discount's share, packaging taxed.
+ */
+export type GstRule = 'pre_discount' | 'net_of_discount';
+
 /** One order line that was not voided, with its share of the order's GST. */
 export interface ExportLine {
   id: string;
@@ -48,8 +55,14 @@ export interface ExportLine {
   passDrinks: number;
   gstExempt: boolean;
   gstCode: GstCode;
-  /** Taxable value of the line, 2 dp; 0 for exempt lines. */
+  /**
+   * Taxable value of the line, 2 dp; 0 for exempt lines. After the pass cover, and
+   * (net_of_discount orders) after the line's share of the discount; with
+   * inclusive pricing, less the line's GST.
+   */
   taxableInr: number;
+  /** What an exempt line is worth for the exempt-supplies figures (same basis as taxableInr); 0 for taxable lines. */
+  exemptValueInr: number;
   /** The line's share of the order's tax_inr, split half and half, 2 dp. */
   cgstInr: number;
   sgstInr: number;
@@ -107,13 +120,19 @@ export interface ExportOrder {
   beaniesDiscountInr: number;
   /** Processed refunds against this order, whenever they happened. */
   refundedInr: number;
-  /** Σ lines' taxableInr. */
+  /** The rule the bill's GST was charged under. */
+  gstRule: GstRule;
+  /** Σ lines' taxableInr, plus packagingTaxableInr. */
   taxableValueInr: number;
-  /** Σ exempt lines' (lineTotalInr − passCoveredInr). */
+  /** Σ exempt lines' exemptValueInr (after the pass cover and, under net_of_discount, the discount's share). */
   exemptValueInr: number;
-  /** taxInr split half and half, 2 dp (all sales are intra-state: CGST + SGST, no IGST). */
+  /** taxInr split half and half, 2 dp (all sales are intra-state: CGST + SGST, no IGST). Lines + packaging add up to these. */
   cgstInr: number;
   sgstInr: number;
+  /** Packaging's own taxable value and GST (SAC 996331); all 0 under pre_discount, where packaging is untaxed. */
+  packagingTaxableInr: number;
+  packagingCgstInr: number;
+  packagingSgstInr: number;
   /** Lines that were not voided. */
   lines: ExportLine[];
   voidedLines: VoidedLine[];

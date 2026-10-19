@@ -12,11 +12,19 @@
 //     voided lines are reported on their own in the cancellation sheet.
 //   • Money is whole ₹ from the orders and 2 dp for the GST split; column
 //     headers say "(INR)". Percentages are to 1 dp.
+//   • Taxable value is what the bill's GST was charged on (see orderData.ts):
+//     from GST_NET_OF_DISCOUNT_FROM that is after the coupon / Beanies discount
+//     and includes takeaway packaging; earlier bills charged it before the
+//     discount with packaging untaxed. The order and day sheets say which in a
+//     "GST basis" column; the item and category sheets list the packaging's
+//     taxable value and GST on a row of its own, so their totals tie to the
+//     order register.
 //   • Every sheet ends with a TOTAL row, zeros on an empty dataset, so the
 //     columns line up the same whether or not anything was sold.
 
 import { datesBetween } from '@/lib/reports/reconcile';
 import { round2, type CsvTable, type CsvValue } from '@/lib/reports/csv';
+import { SAC_RESTAURANT } from '@/lib/reports/exports/gstCodes';
 import type { ExportLine, ExportOrder, ExportRefund, OrderDataset } from '@/lib/reports/exports/types';
 
 // ── Table plumbing ──────────────────────────────────────────────────────────
@@ -63,6 +71,27 @@ const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 const validOrders = (ds: OrderDataset): ExportOrder[] => ds.orders.filter((o) => o.valid);
 const itemCount = (o: ExportOrder): number => o.lines.reduce((s, l) => s + l.quantity, 0);
 const totalGst = (o: ExportOrder): number => round2(o.cgstInr + o.sgstInr);
+/** What the GST on these orders was charged on: the rule changed on GST_NET_OF_DISCOUNT_FROM, so a range can hold both. */
+function gstBasis(orders: ExportOrder[]): string {
+  if (orders.length === 0) return '';
+  const current = orders.filter((o) => o.gstRule === 'net_of_discount').length;
+  if (current === orders.length) return 'After discount, packaging taxed';
+  return current === 0 ? 'Before discount, packaging untaxed' : 'Mixed';
+}
+
+/** The packaging the valid orders were taxed on: its taxable value, GST and the orders that had any. */
+function packagingTax(ds: OrderDataset): { orders: Set<string>; taxableInr: number; cgstInr: number; sgstInr: number } {
+  const t = { orders: new Set<string>(), taxableInr: 0, cgstInr: 0, sgstInr: 0 };
+  for (const o of validOrders(ds)) {
+    if (o.packagingTaxableInr === 0 && o.packagingCgstInr === 0 && o.packagingSgstInr === 0) continue;
+    t.orders.add(o.id);
+    t.taxableInr += o.packagingTaxableInr;
+    t.cgstInr += o.packagingCgstInr;
+    t.sgstInr += o.packagingSgstInr;
+  }
+  return t;
+}
+const PACKAGING_LABEL = 'Packaging charges';
 const ONLINE_STAFF = 'Online / customer';
 const staffLabel = (o: ExportOrder): string => o.createdByName || ONLINE_STAFF;
 const variantLabel = (name: string, variant: string): string => (variant ? `${name} (${variant})` : name);
@@ -90,6 +119,7 @@ export function orderRegister(ds: OrderDataset): CsvTable {
     { header: 'SGST (INR)', cell: (o) => o.sgstInr, total: sum((o) => o.sgstInr) },
     { header: 'Total GST (INR)', cell: totalGst, total: sum(totalGst) },
     { header: 'GST-exempt value (INR)', cell: (o) => o.exemptValueInr, total: sum((o) => o.exemptValueInr) },
+    { header: 'GST basis', cell: (o) => gstBasis([o]), total: gstBasis },
     { header: 'Packaging (INR)', cell: (o) => o.packagingInr, total: sum((o) => o.packagingInr) },
     { header: 'Bill total (INR)', cell: (o) => o.totalInr, total: sum((o) => o.totalInr) },
     { header: 'Settle discount (INR)', cell: (o) => o.settleDiscountInr, total: sum((o) => o.settleDiscountInr) },
@@ -145,6 +175,7 @@ export function daySales(ds: OrderDataset): CsvTable {
     dayCol('SGST (INR)', (o) => o.sgstInr),
     dayCol('Total GST (INR)', totalGst),
     dayCol('GST-exempt value (INR)', (o) => o.exemptValueInr),
+    { header: 'GST basis', cell: (d) => gstBasis(d.valid), total: (rs) => gstBasis(rs.flatMap((d) => d.valid)) },
     dayCol('Packaging (INR)', (o) => o.packagingInr),
     dayCol('Bill total (INR)', (o) => o.totalInr),
     dayCol('Settle discounts (INR)', (o) => o.settleDiscountInr),
@@ -179,6 +210,8 @@ interface ItemGroup {
   taxableInr: number;
   cgstInr: number;
   sgstInr: number;
+  /** The packaging row: no item, only the packaging's taxable value and GST. */
+  packaging?: boolean;
 }
 
 /** The valid orders' lines, each with its order id. */
@@ -223,18 +256,42 @@ export function itemSales(ds: OrderDataset): CsvTable {
     g.cgstInr += l.cgstInr;
     g.sgstInr += l.sgstInr;
   }
-  const rows = [...groups.values()].sort(
+  const items = [...groups.values()].sort(
     (a, b) => b.grossInr - a.grossInr || a.name.localeCompare(b.name) || a.variant.localeCompare(b.variant),
   );
-  const wholeGross = sumBy(rows, (g) => g.grossInr);
-  const distinctOrders = new Set(rows.flatMap((g) => [...g.orderIds])).size;
+  const wholeGross = sumBy(items, (g) => g.grossInr);
+  const distinctOrders = new Set(items.flatMap((g) => [...g.orderIds])).size;
+  // Packaging is taxed from GST_NET_OF_DISCOUNT_FROM: its own last row keeps the GST columns tied to the order register.
+  const pack = packagingTax(ds);
+  const rows: ItemGroup[] =
+    pack.orders.size === 0
+      ? items
+      : [
+          ...items,
+          {
+            name: PACKAGING_LABEL,
+            variant: '',
+            category: PACKAGING_LABEL,
+            code: SAC_RESTAURANT.code,
+            exempt: false,
+            quantity: 0,
+            kg: null,
+            orderIds: pack.orders,
+            grossInr: 0,
+            coverInr: 0,
+            taxableInr: pack.taxableInr,
+            cgstInr: pack.cgstInr,
+            sgstInr: pack.sgstInr,
+            packaging: true,
+          },
+        ];
 
   const cols: Col<ItemGroup>[] = [
     { header: 'Item', cell: (g) => g.name, total: text('TOTAL') },
     { header: 'Variant', cell: (g) => g.variant },
     { header: 'Category', cell: (g) => g.category },
     { header: 'HSN/SAC', cell: (g) => g.code },
-    { header: 'Quantity', cell: (g) => g.quantity, total: sum((g) => g.quantity) },
+    { header: 'Quantity', cell: (g) => (g.packaging ? '' : g.quantity), total: sum((g) => g.quantity) },
     {
       header: 'Weight (kg)',
       cell: (g) => (g.kg === null ? '' : round3(g.kg)),
@@ -242,13 +299,13 @@ export function itemSales(ds: OrderDataset): CsvTable {
     },
     // The total counts each order once, not once per item it holds.
     { header: 'Orders', cell: (g) => g.orderIds.size, total: () => distinctOrders },
-    { header: 'Gross sales (INR)', cell: (g) => round2(g.grossInr), total: sum((g) => g.grossInr) },
-    { header: 'Ritual cups covered (INR)', cell: (g) => round2(g.coverInr), total: sum((g) => g.coverInr) },
+    { header: 'Gross sales (INR)', cell: (g) => (g.packaging ? '' : round2(g.grossInr)), total: sum((g) => g.grossInr) },
+    { header: 'Ritual cups covered (INR)', cell: (g) => (g.packaging ? '' : round2(g.coverInr)), total: sum((g) => g.coverInr) },
     { header: 'GST-exempt', cell: (g) => (g.exempt ? 'Yes' : 'No') },
     { header: 'Taxable value (INR)', cell: (g) => round2(g.taxableInr), total: sum((g) => g.taxableInr) },
     { header: 'CGST (INR)', cell: (g) => round2(g.cgstInr), total: sum((g) => g.cgstInr) },
     { header: 'SGST (INR)', cell: (g) => round2(g.sgstInr), total: sum((g) => g.sgstInr) },
-    { header: 'Share of sales %', cell: (g) => pct(g.grossInr, wholeGross), total: fullShare(wholeGross) },
+    { header: 'Share of sales %', cell: (g) => (g.packaging ? '' : pct(g.grossInr, wholeGross)), total: fullShare(wholeGross) },
   ];
   return tableOf(cols, rows);
 }
@@ -261,6 +318,8 @@ interface CategoryGroup {
   coverInr: number;
   taxableInr: number;
   gstInr: number;
+  /** The packaging row: no items, only the packaging's taxable value and GST. */
+  packaging?: boolean;
 }
 
 /** Lines grouped by menu category, biggest first. */
@@ -279,19 +338,36 @@ export function categorySales(ds: OrderDataset): CsvTable {
     g.taxableInr += l.taxableInr;
     g.gstInr += l.cgstInr + l.sgstInr;
   }
-  const rows = [...groups.values()].sort((a, b) => b.grossInr - a.grossInr || a.category.localeCompare(b.category));
-  const wholeGross = sumBy(rows, (g) => g.grossInr);
-  const distinctOrders = new Set(rows.flatMap((g) => [...g.orderIds])).size;
+  const categories = [...groups.values()].sort((a, b) => b.grossInr - a.grossInr || a.category.localeCompare(b.category));
+  const wholeGross = sumBy(categories, (g) => g.grossInr);
+  const distinctOrders = new Set(categories.flatMap((g) => [...g.orderIds])).size;
+  const pack = packagingTax(ds);
+  const rows: CategoryGroup[] =
+    pack.orders.size === 0
+      ? categories
+      : [
+          ...categories,
+          {
+            category: PACKAGING_LABEL,
+            quantity: 0,
+            orderIds: pack.orders,
+            grossInr: 0,
+            coverInr: 0,
+            taxableInr: pack.taxableInr,
+            gstInr: pack.cgstInr + pack.sgstInr,
+            packaging: true,
+          },
+        ];
 
   const cols: Col<CategoryGroup>[] = [
     { header: 'Category', cell: (g) => g.category, total: text('TOTAL') },
-    { header: 'Items sold', cell: (g) => g.quantity, total: sum((g) => g.quantity) },
+    { header: 'Items sold', cell: (g) => (g.packaging ? '' : g.quantity), total: sum((g) => g.quantity) },
     { header: 'Orders', cell: (g) => g.orderIds.size, total: () => distinctOrders },
-    { header: 'Gross sales (INR)', cell: (g) => round2(g.grossInr), total: sum((g) => g.grossInr) },
-    { header: 'Ritual cups covered (INR)', cell: (g) => round2(g.coverInr), total: sum((g) => g.coverInr) },
+    { header: 'Gross sales (INR)', cell: (g) => (g.packaging ? '' : round2(g.grossInr)), total: sum((g) => g.grossInr) },
+    { header: 'Ritual cups covered (INR)', cell: (g) => (g.packaging ? '' : round2(g.coverInr)), total: sum((g) => g.coverInr) },
     { header: 'Taxable value (INR)', cell: (g) => round2(g.taxableInr), total: sum((g) => g.taxableInr) },
     { header: 'Total GST (INR)', cell: (g) => round2(g.gstInr), total: sum((g) => g.gstInr) },
-    { header: 'Share of sales %', cell: (g) => pct(g.grossInr, wholeGross), total: fullShare(wholeGross) },
+    { header: 'Share of sales %', cell: (g) => (g.packaging ? '' : pct(g.grossInr, wholeGross)), total: fullShare(wholeGross) },
   ];
   return tableOf(cols, rows);
 }

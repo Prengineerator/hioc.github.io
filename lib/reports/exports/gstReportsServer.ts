@@ -12,7 +12,7 @@ export const GST_REPORTS: ReportDef[] = [
     group: 'gst',
     title: 'GST summary (for GSTR-3B)',
     description:
-      'Taxable sales with CGST and SGST, exempt sales, packaging, discounts, cancelled bills and refunds in plain words, each tagged with the return it goes into.',
+      'Taxable sales with CGST and SGST, exempt sales, packaging, discounts, cancelled bills and refunds in plain words, each tagged with the return it goes into; the notes say whether the bills were taxed before or after discounts.',
     load: async (admin, from, to) => gstSummary(await loadOrderDataset(admin, from, to)),
   },
   {
@@ -27,7 +27,7 @@ export const GST_REPORTS: ReportDef[] = [
     group: 'gst',
     title: 'GSTR-1 Table 12 — HSN / SAC summary',
     description:
-      'Sales and GST by code: restaurant service (SAC 996331) and roasted coffee beans by the kilo (HSN 0901), with exempt items in their own rate-0 row.',
+      'Sales and GST by code: restaurant service (SAC 996331, takeaway packaging included where it is taxed) and roasted coffee beans by the kilo (HSN 0901), with exempt items in their own rate-0 row.',
     load: async (admin, from, to) => hsnB2c(await loadOrderDataset(admin, from, to)),
   },
   {

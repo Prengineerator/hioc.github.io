@@ -4,31 +4,45 @@
 // the GST, sales and cash sheets all agree on what a sale and its tax are.
 //
 // THE TAX. The app charges GST once per order, rounded to a whole rupee
-// (lib/store/hours.ts computeBill), on the lines that are not GST-exempt less
-// what a HIOC Ritual cup covered, BEFORE any coupon / Beanies discount; packaging
-// is never taxed. The reports show that tax as CHARGED (orders.tax_inr), never a
-// recomputed one, and spread it over the order's lines so a sheet by item or by
-// HSN code adds up to the same figure as a sheet by bill:
-//   • a taxable line is non-exempt, not voided, with something left after the
-//     pass cover (base = line total − pass cover);
-//   • the order's tax is shared out pro-rata by base, in paise, and the last
-//     taxable line takes the remainder, so the lines add up EXACTLY to tax_inr;
-//   • exclusive pricing: a line's taxable value is its base; inclusive pricing
-//     (the GST is inside the prices): base minus the line's tax;
+// (lib/store/hours.ts computeBill). The reports show that tax as CHARGED
+// (orders.tax_inr), never a recomputed one, and spread it over the order's parts
+// so a sheet by item or by HSN code adds up to the same figure as a sheet by bill.
+// What the tax was charged ON depends on the date (GST_NET_OF_DISCOUNT_FROM):
+//   • pre_discount (earlier orders): the non-exempt lines less what a HIOC Ritual
+//     cup covered, BEFORE any coupon / Beanies discount; packaging untaxed;
+//   • net_of_discount (from that date): the same lines less their pro-rata share of
+//     the discount (the discount is spread over ALL lines, exempt ones included,
+//     on what the pass leaves), PLUS packaging, which is part of the restaurant
+//     supply (SAC 996331).
+// Which rule an order was billed under is its IST date's, unless the stored tax
+// only reproduces under the other one (the go-live day, or an old order amended
+// afterwards, which the app re-taxes under the current rule) — see ruleFor.
+//
+// The allocation, in integer paise:
+//   • a line's "value" is its base (line total − pass cover) under pre_discount, or
+//     its share of what is left after the discount under net_of_discount (shared
+//     out cumulatively, so the lines add up exactly to subtotal − cover − discount);
+//   • the taxable parts are the non-exempt lines with a value, plus packaging under
+//     net_of_discount; the order's tax is shared pro-rata by value, the last part
+//     taking the remainder, so the parts add up EXACTLY to tax_inr;
+//   • exclusive pricing: a part's taxable value is its value; inclusive pricing (the
+//     GST is inside the prices): value minus the part's tax;
 //   • all sales are intra-state, so tax is half CGST, half SGST. Order tax is a
-//     whole rupee, so its halves are exact. A line's halves are rounded
+//     whole rupee, so its halves are exact. A part's halves are rounded
 //     cumulatively through the order, so each is within a paisa of half the
-//     line's tax and the lines still add up exactly to the order's halves — a
-//     plain round-half-up per line would favour CGST by a paisa on every odd line.
+//     part's tax and the parts still add up exactly to the order's halves — a
+//     plain round-half-up per part would favour CGST by a paisa on every odd one.
 // All sums are done in integer paise and turned into rupees at the very end.
 
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { istDateOf } from '@/lib/reports/reconcile';
+import { computeBill, FALLBACK_STORE_SETTINGS, GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 import { gstCodeFor } from '@/lib/reports/exports/gstCodes';
 import type {
   ExportLine,
   ExportOrder,
   ExportRefund,
+  GstRule,
   OrderDataset,
   VoidedLine,
 } from '@/lib/reports/exports/types';
@@ -171,12 +185,79 @@ function nameOf(id: string | null, names: ReadonlyMap<string, string>): string {
 // ── One order's lines and tax ───────────────────────────────────────────────
 
 interface PricedOrder {
+  rule: GstRule;
   lines: ExportLine[];
   voidedLines: VoidedLine[];
   taxableValueInr: number;
   exemptValueInr: number;
   cgstInr: number;
   sgstInr: number;
+  packagingTaxableInr: number;
+  packagingCgstInr: number;
+  packagingSgstInr: number;
+}
+
+interface LiveLine {
+  row: ItemRow;
+  coveredP: number;
+  /** Line total less the pass cover. */
+  baseP: number;
+  exempt: boolean;
+}
+
+/** The rule the date alone gives. */
+export function gstRuleOfDate(istDate: string): GstRule {
+  return istDate >= GST_NET_OF_DISCOUNT_FROM ? 'net_of_discount' : 'pre_discount';
+}
+
+/** The GST the bill WOULD charge under a rule, in whole rupees (mirrors computeBill and the rule before it). */
+function expectedTaxInr(
+  rule: GstRule,
+  live: readonly LiveLine[],
+  order: OrderRow,
+  gstRatePercent: number,
+  gstInclusive: boolean,
+): number {
+  const subtotal = live.reduce((s, l) => s + l.baseP, 0) / 100;
+  const taxable = live.reduce((s, l) => s + (l.exempt ? 0 : l.baseP), 0) / 100;
+  if (rule === 'net_of_discount') {
+    // The app's own maths, so this cannot drift from it.
+    return computeBill(
+      subtotal,
+      {
+        ...FALLBACK_STORE_SETTINGS,
+        gst_percent: gstRatePercent,
+        gst_inclusive: gstInclusive,
+        packaging_charge_inr: order.packaging_inr ?? 0,
+      },
+      order.discount_inr ?? 0,
+      taxable,
+    ).tax_inr;
+  }
+  const rate = gstRatePercent / 100;
+  return gstInclusive ? Math.round(taxable - taxable / (1 + rate)) : Math.round(taxable * rate);
+}
+
+/**
+ * The rule an order was billed under: its date's, unless that cannot have produced
+ * the stored tax_inr while the other rule does. The rules only differ on an order
+ * with a discount or packaging, and on the go-live day orders from before and after
+ * the deploy sit side by side, as do old orders amended later (the app re-taxes an
+ * amended order under the current rule).
+ */
+function ruleFor(
+  order: OrderRow,
+  istDate: string,
+  live: readonly LiveLine[],
+  gstRatePercent: number,
+  gstInclusive: boolean,
+): GstRule {
+  const byDate = gstRuleOfDate(istDate);
+  if ((order.discount_inr ?? 0) <= 0 && (order.packaging_inr ?? 0) <= 0) return byDate;
+  const charged = order.tax_inr ?? 0;
+  if (expectedTaxInr(byDate, live, order, gstRatePercent, gstInclusive) === charged) return byDate;
+  const other: GstRule = byDate === 'net_of_discount' ? 'pre_discount' : 'net_of_discount';
+  return expectedTaxInr(other, live, order, gstRatePercent, gstInclusive) === charged ? other : byDate;
 }
 
 function priceOrder(
@@ -196,7 +277,7 @@ function priceOrder(
       reason: i.void_reason?.trim() || null,
     }));
 
-  const live = items
+  const live: LiveLine[] = items
     .filter((i) => i.voided !== true)
     .map((row) => {
       const lineP = toPaise(row.line_total_inr);
@@ -204,31 +285,66 @@ function priceOrder(
       return { row, coveredP, baseP: lineP - coveredP, exempt: row.gst_exempt === true };
     });
 
-  // Taxable lines carry the tax; exempt lines and lines the pass paid for in full carry none.
-  const taxable: number[] = [];
+  const rule = ruleFor(order, istDateOf(order.created_at), live, gstRatePercent, gstInclusive);
+  const netOfDiscount = rule === 'net_of_discount';
+
+  // What GST applies to on each line: its base, or (net_of_discount) its share of
+  // what the discount leaves. Shared out cumulatively over every line, exempt ones
+  // too, so the lines add up exactly to subtotal − cover − discount.
+  const subtotalP = live.reduce((s, l) => s + l.baseP, 0);
+  const valueP = live.map((l) => l.baseP);
+  if (netOfDiscount && subtotalP > 0) {
+    const discountP = Math.min(Math.max(0, toPaise(order.discount_inr)), subtotalP);
+    const leftP = subtotalP - discountP;
+    let cumBaseP = 0;
+    let cumValueP = 0;
+    live.forEach((l, i) => {
+      cumBaseP += l.baseP;
+      const cum = Math.round((cumBaseP * leftP) / subtotalP);
+      valueP[i] = cum - cumValueP;
+      cumValueP = cum;
+    });
+  }
+  const packagingP = netOfDiscount ? Math.max(0, toPaise(order.packaging_inr)) : 0;
+
+  // The parts that carry tax: packaging first, so the remainder falls on the last taxable line.
+  type Part = { kind: 'packaging' } | { kind: 'line'; index: number };
+  const parts: Part[] = [];
+  if (packagingP > 0) parts.push({ kind: 'packaging' });
   live.forEach((l, i) => {
-    if (!l.exempt && l.baseP > 0) taxable.push(i);
+    if (!l.exempt && valueP[i] > 0) parts.push({ kind: 'line', index: i });
   });
-  const isTaxable = new Set(taxable);
-  const totalBaseP = taxable.reduce((s, i) => s + live[i].baseP, 0);
+  const partValueP = (part: Part) => (part.kind === 'packaging' ? packagingP : valueP[part.index]);
+  const totalValueP = parts.reduce((s, part) => s + partValueP(part), 0);
   const orderTaxP = toPaise(order.tax_inr);
 
   const taxP = live.map(() => 0);
   const cgstP = live.map(() => 0);
+  let packTaxP = 0;
+  let packCgstP = 0;
   let allocatedP = 0;
   let cumTaxP = 0;
   let cumCgstP = 0;
-  taxable.forEach((i, k) => {
-    taxP[i] =
-      k === taxable.length - 1
+  parts.forEach((part, k) => {
+    const share =
+      k === parts.length - 1
         ? orderTaxP - allocatedP
-        : Math.floor((orderTaxP * live[i].baseP) / totalBaseP);
-    allocatedP += taxP[i];
-    cumTaxP += taxP[i];
+        : Math.floor((orderTaxP * partValueP(part)) / totalValueP);
+    allocatedP += share;
+    cumTaxP += share;
     const cum = Math.round(cumTaxP / 2);
-    cgstP[i] = cum - cumCgstP;
+    const cgst = cum - cumCgstP;
     cumCgstP = cum;
+    if (part.kind === 'packaging') {
+      packTaxP = share;
+      packCgstP = cgst;
+    } else {
+      taxP[part.index] = share;
+      cgstP[part.index] = cgst;
+    }
   });
+  const isTaxable = new Set(parts.flatMap((part) => (part.kind === 'line' ? [part.index] : [])));
+  const taxableOf = (value: number, tax: number) => (gstInclusive ? value - tax : value);
 
   const lines: ExportLine[] = live.map((l, i) => {
     const menu = l.row.menu_item_id ? menuById.get(l.row.menu_item_id) : undefined;
@@ -248,7 +364,8 @@ function priceOrder(
       passDrinks: l.row.pass_drinks ?? 0,
       gstExempt: l.exempt,
       gstCode: gstCodeFor({ soldByWeight }),
-      taxableInr: isTaxable.has(i) ? fromPaise(gstInclusive ? l.baseP - taxP[i] : l.baseP) : 0,
+      taxableInr: isTaxable.has(i) ? fromPaise(taxableOf(valueP[i], taxP[i])) : 0,
+      exemptValueInr: l.exempt ? fromPaise(valueP[i]) : 0,
       cgstInr: fromPaise(cgstP[i]),
       sgstInr: fromPaise(taxP[i] - cgstP[i]),
     };
@@ -258,12 +375,15 @@ function priceOrder(
   const orderCgstP = Math.round(orderTaxP / 2);
   const orderSgstP = orderTaxP - orderCgstP;
 
-  // Tax was charged but no line can carry it (data that should not exist: every
+  // Tax was charged but nothing can carry it (data that should not exist: every
   // line voided, exempt or pass-paid). Keep the tax on the order and back the
   // taxable value out of it — rate × value = tax holds for exclusive and inclusive pricing alike.
+  const packagingTaxableP = packagingP > 0 ? taxableOf(packagingP, packTaxP) : 0;
   let taxableP: number;
-  if (taxable.length > 0) {
-    taxableP = taxable.reduce((s, i) => s + (gstInclusive ? live[i].baseP - taxP[i] : live[i].baseP), 0);
+  if (parts.length > 0) {
+    taxableP =
+      packagingTaxableP +
+      [...isTaxable].reduce((s, i) => s + taxableOf(valueP[i], taxP[i]), 0);
   } else if (orderTaxP > 0 && gstRatePercent > 0) {
     taxableP = Math.round((orderTaxP * 100) / gstRatePercent);
   } else {
@@ -271,12 +391,16 @@ function priceOrder(
   }
 
   return {
+    rule,
     lines,
     voidedLines,
     taxableValueInr: fromPaise(taxableP),
-    exemptValueInr: fromPaise(live.reduce((s, l) => s + (l.exempt ? l.baseP : 0), 0)),
+    exemptValueInr: fromPaise(live.reduce((s, l, i) => s + (l.exempt ? valueP[i] : 0), 0)),
     cgstInr: fromPaise(orderCgstP),
     sgstInr: fromPaise(orderSgstP),
+    packagingTaxableInr: fromPaise(packagingTaxableP),
+    packagingCgstInr: fromPaise(packCgstP),
+    packagingSgstInr: fromPaise(packTaxP - packCgstP),
   };
 }
 
@@ -335,10 +459,14 @@ export function buildOrderDataset(input: OrderDatasetInput): OrderDataset {
       couponDiscountInr,
       beaniesDiscountInr: Math.max(0, discountInr - couponDiscountInr),
       refundedInr: (processedRefundsByOrder.get(o.id) ?? []).reduce((s, r) => s + (r.amount_inr ?? 0), 0),
+      gstRule: priced.rule,
       taxableValueInr: priced.taxableValueInr,
       exemptValueInr: priced.exemptValueInr,
       cgstInr: priced.cgstInr,
       sgstInr: priced.sgstInr,
+      packagingTaxableInr: priced.packagingTaxableInr,
+      packagingCgstInr: priced.packagingCgstInr,
+      packagingSgstInr: priced.packagingSgstInr,
       lines: priced.lines,
       voidedLines: priced.voidedLines,
     };

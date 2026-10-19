@@ -47,6 +47,7 @@ function line(name: string, over: Partial<ExportLine> = {}): ExportLine {
     gstExempt: false,
     gstCode: SAC,
     taxableInr: 0,
+    exemptValueInr: 0,
     cgstInr: 0,
     sgstInr: 0,
     ...over,
@@ -85,10 +86,14 @@ function order(n: number, over: Partial<ExportOrder> = {}): ExportOrder {
     couponDiscountInr: 0,
     beaniesDiscountInr: 0,
     refundedInr: 0,
+    gstRule: 'pre_discount',
     taxableValueInr: 0,
     exemptValueInr: 0,
     cgstInr: 0,
     sgstInr: 0,
+    packagingTaxableInr: 0,
+    packagingCgstInr: 0,
+    packagingSgstInr: 0,
     lines: [],
     voidedLines: [],
     ...over,
@@ -364,7 +369,8 @@ describe('daySales', () => {
     // 2 Sep only had the cancelled and the rejected order
     expect(at(t, 1, 'Orders')).toBe(0);
     expect(at(t, 1, 'Cancelled/rejected')).toBe(2);
-    for (const h of t.columns.slice(3)) expect(at(t, 1, h), h).toBe(0);
+    for (const h of t.columns.slice(3).filter((c) => c !== 'GST basis')) expect(at(t, 1, h), h).toBe(0);
+    expect(at(t, 1, 'GST basis')).toBe('');
   });
 
   it('adds up a day from its valid orders', () => {
@@ -681,6 +687,84 @@ describe('refundReport', () => {
     const i = last(t);
     expect(at(t, i, 'Amount (INR)')).toBe(220); // not 270: the pending 50 hasn't gone out
     expect(at(t, i, 'Status')).toBe('processed only');
+  });
+});
+
+describe('GST basis and packaging (GST_NET_OF_DISCOUNT_FROM)', () => {
+  // An earlier bill (packaging untaxed) and a later one (packaging taxed, discount cut).
+  const early = order(1, {
+    date: '2026-10-10',
+    packagingInr: 10,
+    taxableValueInr: 200,
+    cgstInr: 5,
+    sgstInr: 5,
+    lines: [line('Latte', { lineTotalInr: 200, taxableInr: 200, cgstInr: 5, sgstInr: 5 })],
+  });
+  const later = order(2, {
+    date: '2026-10-25',
+    gstRule: 'net_of_discount',
+    orderType: 'takeaway',
+    packagingInr: 10,
+    taxableValueInr: 280,
+    cgstInr: 7,
+    sgstInr: 7,
+    packagingTaxableInr: 10,
+    packagingCgstInr: 0.25,
+    packagingSgstInr: 0.25,
+    lines: [line('Latte', { lineTotalInr: 300, taxableInr: 270, cgstInr: 6.75, sgstInr: 6.75 })],
+  });
+  const mixed = dataset([early, later], [], { from: '2026-10-09', to: '2026-10-26' });
+
+  it('the order register says which basis each bill used, Mixed in the total', () => {
+    const t = orderRegister(mixed);
+    expect([0, 1, 2].map((i) => at(t, i, 'GST basis'))).toEqual([
+      'Before discount, packaging untaxed',
+      'After discount, packaging taxed',
+      'Mixed',
+    ]);
+    expect(at(orderRegister(dataset([early])), 1, 'GST basis')).toBe('Before discount, packaging untaxed');
+    expect(at(orderRegister(dataset([])), 0, 'GST basis')).toBe('');
+  });
+
+  it('the day sheet says it per day and overall', () => {
+    const t = daySales(mixed);
+    const day = (d: string) => t.rows.findIndex((r) => r[0] === d);
+    expect(at(t, day('2026-10-10'), 'GST basis')).toBe('Before discount, packaging untaxed');
+    expect(at(t, day('2026-10-25'), 'GST basis')).toBe('After discount, packaging taxed');
+    expect(at(t, day('2026-10-11'), 'GST basis')).toBe('');
+    expect(at(t, last(t), 'GST basis')).toBe('Mixed');
+  });
+
+  it('the item and category sheets list the packaging on a row of its own so the GST ties to the register', () => {
+    const items = itemSales(mixed);
+    expect(items.rows.map((r) => r[0])).toEqual(['Latte', 'Packaging charges', 'TOTAL']);
+    expect(at(items, 1, 'HSN/SAC')).toBe('996331');
+    expect(at(items, 1, 'Quantity')).toBe('');
+    expect(at(items, 1, 'Gross sales (INR)')).toBe('');
+    expect(at(items, 1, 'Orders')).toBe(1);
+    expect(at(items, 1, 'Taxable value (INR)')).toBe(10);
+    expect(at(items, 1, 'CGST (INR)')).toBe(0.25);
+    // 200 + 270 + 10 taxable, 5 + 6.75 + 0.25 CGST: the order register's 480 and 12.
+    expect(at(items, last(items), 'Taxable value (INR)')).toBe(480);
+    expect(at(items, last(items), 'CGST (INR)')).toBe(12);
+    expect(at(items, last(items), 'Gross sales (INR)')).toBe(500);
+    expect(at(items, last(items), 'Orders')).toBe(2);
+    const register = orderRegister(mixed);
+    expect(at(register, last(register), 'Taxable value (INR)')).toBe(480);
+
+    const cats = categorySales(mixed);
+    expect(cats.rows.map((r) => r[0])).toEqual(['Coffee', 'Packaging charges', 'TOTAL']);
+    expect(at(cats, 1, 'Items sold')).toBe('');
+    expect(at(cats, 1, 'Taxable value (INR)')).toBe(10);
+    expect(at(cats, 1, 'Total GST (INR)')).toBe(0.5);
+    expect(at(cats, last(cats), 'Taxable value (INR)')).toBe(480);
+    expect(at(cats, last(cats), 'Total GST (INR)')).toBe(24);
+    expect(at(cats, last(cats), 'Orders')).toBe(2);
+  });
+
+  it('has no packaging row when no packaging was taxed', () => {
+    expect(itemSales(dataset([early])).rows.map((r) => r[0])).toEqual(['Latte', 'TOTAL']);
+    expect(categorySales(dataset([early])).rows.map((r) => r[0])).toEqual(['Coffee', 'TOTAL']);
   });
 });
 

@@ -9,6 +9,7 @@ import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card } from '@/components/owner/dashboard';
 import { BUSINESS } from '@/lib/legal';
 import { getStoreSettings } from '@/lib/store/settings';
+import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 import { exportHref, lastDayOfMonth, previousMonth, resolvePeriod, wholeMonthOf } from '@/lib/reports/exports/period';
 import { REPORT_GROUPS, reportsInGroup } from '@/lib/reports/exports/registry';
 
@@ -197,8 +198,15 @@ function BeforeYouFile() {
       <p className="font-bold">Before you file</p>
       <ul className="mt-1 list-disc space-y-0.5 pl-4">
         <li>GST is shown as it was charged on the bills; nothing is recalculated.</li>
-        <li>Packaging is billed without GST, so it is not in the taxable value.</li>
-        <li>Coupon and Beanies discounts are not deducted from the taxable value.</li>
+        <li>
+          From {longDate(GST_NET_OF_DISCOUNT_FROM)}, GST is charged on the bill after coupons and Beanies, and on
+          takeaway packaging too: the taxable value is after the discount and includes packaging (under SAC 996331).
+        </li>
+        <li>
+          Orders before {longDate(GST_NET_OF_DISCOUNT_FROM)} were taxed on the price before discounts, with packaging
+          untaxed, so those discounts are not deducted and that packaging is not in the taxable value. A month that
+          spans the date has both, and the GST summary says how many bills of each.
+        </li>
         <li>HIOC Ritual GST is charged when the pass is sold, not when a cup is served.</li>
         <li>
           HSN 0901 loses its leading zero if the CSV is opened in Excel and saved. The GST offline tool imports the CSV
