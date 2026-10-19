@@ -20,7 +20,7 @@ import {
 } from '@/lib/reports/reconcile';
 
 const PAGE = 1000;
-const IN_CHUNK = 200;
+export const IN_CHUNK = 200;
 
 export type PageResult<T> = { data: T[] | null; error: { code?: string; message?: string } | null };
 
@@ -156,7 +156,7 @@ export async function loadReport(admin: SupabaseClient, from: string, to: string
  * the database accepts: a select naming a column that is not there is refused
  * outright, so a deploy ahead of its migration reads what it can.
  */
-async function withColumnTiers<T>(tiers: string[], run: (cols: string) => Promise<T[]>): Promise<T[]> {
+export async function withColumnTiers<T>(tiers: string[], run: (cols: string) => Promise<T[]>): Promise<T[]> {
   for (let i = 0; i < tiers.length; i++) {
     try {
       return await run(tiers[i]);
