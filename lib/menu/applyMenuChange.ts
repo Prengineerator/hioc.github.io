@@ -22,11 +22,15 @@ import type { AddonGroup, MenuItem } from '@/lib/types';
 
 type Admin = SupabaseClient;
 
-/** A failed step: `status`/`message` are what the route answers with. */
+/**
+ * A failed step: `status`/`message` are what the route answers with, `extra`
+ * (when set) is merged into the JSON beside `error`.
+ */
 export interface Failure {
   ok: false;
   status: number;
   message: string;
+  extra?: Record<string, unknown>;
 }
 
 export type Outcome<T> = { ok: true; value: T } | Failure;
@@ -36,6 +40,7 @@ export function failure(status: number, message: string): Failure {
 }
 
 export function failureResponse(f: Failure) {
+  if (f.extra) return NextResponse.json({ error: f.message, ...f.extra }, { status: f.status });
   return errorResponse(f.status, f.message);
 }
 
@@ -494,7 +499,10 @@ export async function applyMenuCreate(admin: Admin, values: MenuCreateValues): P
 
   const full = await loadMenuItem(admin, item.id);
   if (!full.ok) {
-    return failure(500, 'Created item but failed to load it back');
+    // Roll back like the steps above: reporting a failure while the item stays
+    // would make a retry (or an approval put back to pending) create it twice.
+    await admin.from('menu_items').delete().eq('id', item.id);
+    return failure(500, 'Failed to load the new menu item');
   }
   return full;
 }

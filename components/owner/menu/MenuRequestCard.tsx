@@ -4,7 +4,10 @@
 // pending) Approve / Reject. The decision is a PATCH to
 // /api/owner/menu-requests/[id]; a failure (409 because the item is gone or the
 // request was already decided, a short-code clash, ...) is shown on the card
-// with the API's own words and the request stays as it was.
+// with the API's own words and the request stays as it was. One 409 is
+// different: when the item was edited after the request was made (`stale`),
+// approving would overwrite those newer edits, so the card says what changed and
+// offers "Approve anyway" (re-sends the approval with force) beside Reject.
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
@@ -48,6 +51,7 @@ export function MenuRequestCard({
 }) {
   const [busy, setBusy] = useState<Decision | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [note, setNote] = useState('');
@@ -55,15 +59,20 @@ export function MenuRequestCard({
   const pending = request.status === 'pending';
   const itemName = request.item_name || 'Untitled item';
 
-  async function decide(decision: Decision) {
+  async function decide(decision: Decision, force = false) {
     setBusy(decision);
     setError(null);
+    setStale(false);
     try {
       const trimmed = note.trim();
       const res = await fetch(`/api/owner/menu-requests/${request.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(decision === 'reject' && trimmed ? { action: decision, note: trimmed } : { action: decision }),
+        body: JSON.stringify({
+          action: decision,
+          ...(decision === 'reject' && trimmed ? { note: trimmed } : {}),
+          ...(force ? { force: true } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -71,7 +80,9 @@ export function MenuRequestCard({
           (data as { error?: string }).error ??
             (decision === 'approve' ? 'Could not approve this request.' : 'Could not reject this request.'),
         );
-        if (res.status === 409) onConflict();
+        // A stale edit is still pending: nothing moved on, so there is nothing to refresh.
+        if (res.status === 409 && (data as { stale?: boolean }).stale === true) setStale(true);
+        else if (res.status === 409) onConflict();
         return;
       }
       const updated =
@@ -138,8 +149,13 @@ export function MenuRequestCard({
 
       {pending ? (
         <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4 sm:flex-row sm:items-center">
-          <Button onClick={approve} loading={busy === 'approve'} disabled={busy !== null} aria-label={`Approve: ${itemName}`}>
-            Approve
+          <Button
+            onClick={stale ? () => void decide('approve', true) : approve}
+            loading={busy === 'approve'}
+            disabled={busy !== null}
+            aria-label={`${stale ? 'Approve anyway' : 'Approve'}: ${itemName}`}
+          >
+            {stale ? 'Approve anyway' : 'Approve'}
           </Button>
           <Button
             variant="secondary"
@@ -147,6 +163,7 @@ export function MenuRequestCard({
             aria-label={`Reject: ${itemName}`}
             onClick={() => {
               setError(null);
+              setStale(false);
               setNote('');
               setRejectOpen(true);
             }}

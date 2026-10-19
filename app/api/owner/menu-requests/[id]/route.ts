@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
 type RouteParams = { params: { id: string } };
 
 // PATCH /api/owner/menu-requests/[id] — owner only. Body
-// { action: 'approve' | 'reject', note?: string }.
+// { action: 'approve' | 'reject', note?: string, force?: boolean }.
 //
 //  - Only a PENDING request can be decided; a decided one is a 409, and so is
 //    losing a race with another click (the claim is a conditional update).
@@ -25,6 +25,9 @@ type RouteParams = { params: { id: string } };
 //    cannot be applied the request stays PENDING and the error is returned: a
 //    4xx for a validation or code conflict, a 409 when the item has since been
 //    deleted, a 500 otherwise.
+//  - approve of an edit whose item was changed after the request was made is a
+//    409 { error, stale: true, fields } and the request stays PENDING; send
+//    force: true to approve it anyway.
 //  - reject just closes it; the note is optional.
 //
 // -> 200 { request, item? } (item = the item as it now stands, for a create or
@@ -47,6 +50,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (body.note !== undefined && body.note !== null && typeof body.note !== 'string') {
     return errorResponse(400, 'note must be a string');
   }
+  if (body.force !== undefined && typeof body.force !== 'boolean') {
+    return errorResponse(400, 'force must be a boolean');
+  }
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   if (note.length > MAX_NOTE_LENGTH) {
     return errorResponse(400, `note must be ${MAX_NOTE_LENGTH} characters or fewer`);
@@ -55,7 +61,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const admin = createAdminSupabaseClient();
 
   if (action === 'approve') {
-    const approved = await approveChangeRequest(admin, id, owner.id, note || null);
+    const approved = await approveChangeRequest(admin, id, owner.id, note || null, body.force === true);
     if (!approved.ok) return failureResponse(approved);
     return NextResponse.json(approved.value);
   }

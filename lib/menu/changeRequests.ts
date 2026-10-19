@@ -193,6 +193,53 @@ export function isAvailabilityOnly(changes: object): boolean {
   return keys.length > 0 && keys.every((key) => AVAILABILITY_KEYS.has(key));
 }
 
+/**
+ * The payload fields whose value on the live item no longer matches what the
+ * item held when the request was made — approving would silently overwrite those
+ * newer values. Only keys the payload carries are looked at (a field it does not
+ * name is never touched, so a change there is harmless), compared the same way
+ * as when the request was made: sizes as an ordered list, add-on groups as a set.
+ */
+export function staleFields(request: MenuChangeRequest, live: MenuItemChangePayload): string[] {
+  if (!request.snapshot || !request.payload) return [];
+  const named = request.payload as Record<string, unknown>;
+  const current: Record<string, unknown> = {};
+  for (const key of Object.keys(named)) {
+    if (named[key] !== undefined) current[key] = (live as Record<string, unknown>)[key];
+  }
+  return Object.keys(diffChangePayload(request.snapshot, current as MenuItemChangePayload));
+}
+
+// What a field is called in the "changed since" message (parent_category is
+// part of the category).
+const FIELD_WORDS: Record<keyof MenuItemChangePayload, string> = {
+  name: 'name',
+  description: 'description',
+  category: 'category',
+  parent_category: 'category',
+  is_veg: 'veg / non-veg',
+  is_available: 'availability',
+  in_store_only: 'in-store only',
+  gst_exempt: 'GST',
+  sold_by_weight: 'sold by weight',
+  sort_order: 'sort order',
+  image_url: 'photo',
+  short_code: 'short code',
+  variants: 'sizes & prices',
+  addon_group_ids: 'add-on groups',
+};
+
+function staleFailure(fields: string[]): Failure {
+  const words = [...new Set(fields.map((f) => FIELD_WORDS[f as keyof MenuItemChangePayload] ?? f))];
+  return {
+    ...failure(
+      409,
+      `This item was changed after the request was made (${words.join(', ')}). Review the current item, then approve anyway or reject.`,
+    ),
+    extra: { stale: true, fields },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
@@ -421,12 +468,19 @@ async function itemExists(admin: Admin, id: string): Promise<Outcome<boolean>> {
  * pending with its decision cleared and the error is returned, so nothing is
  * lost and the owner can retry or reject. A create gets the new item's id as
  * menu_item_id.
+ *
+ * An update replays whole size and add-on lists, so if the item was edited
+ * directly after the request was made it would put the old values back. Before
+ * claiming the row, the payload's fields are checked against the live item and a
+ * mismatch is a 409 { stale: true, fields } with the request left pending, unless
+ * `force` says the owner has seen that and approves anyway.
  */
 export async function approveChangeRequest(
   admin: Admin,
   id: string,
   ownerId: string,
   note: string | null,
+  force = false,
 ): Promise<Outcome<ApprovalResult>> {
   const loaded = await loadChangeRequest(admin, id);
   if (!loaded.ok) return loaded;
@@ -450,6 +504,12 @@ export async function approveChangeRequest(
     const exists = await itemExists(admin, request.menu_item_id);
     if (!exists.ok) return exists;
     if (!exists.value) return failure(409, REQUEST_GONE_MESSAGE);
+  }
+  if (request.action === 'update' && !force) {
+    const live = await loadItemSnapshot(admin, request.menu_item_id as string);
+    if (!live.ok) return live.status === 404 ? failure(409, REQUEST_GONE_MESSAGE) : live;
+    const stale = staleFields(request, live.value);
+    if (stale.length > 0) return staleFailure(stale);
   }
 
   const claimed = await closeRequest(admin, id, 'approved', ownerId, note);
