@@ -212,16 +212,17 @@ function shortfallFor(a: {
 // ---------------------------------------------------------------------------
 
 /**
- * The bill for an order that uses pass cups. The cups are taken off the total
- * like a discount, but they also leave the TAXABLE base, so GST is charged once:
- * on the sale of the pass, not again on the drink it pays for (CP-D11). Then the
- * coupon and points come off what is left (CP-D12: the caller computes them on
- * subtotal - pass cover).
+ * The bill for an order that uses pass cups. The rupees the cups cover leave the
+ * bill's GST maths entirely, so GST is charged once: on the sale of the pass, not
+ * again on the drink it pays for (CP-D11). Then the coupon and points come off
+ * what is left (CP-D12: the caller computes them on subtotal - pass cover), and
+ * so are spread over what is left, not over the covered drinks:
  *
- *   computeBill(subtotal, settings, discount + passCovered,
+ *   computeBill(subtotal - passCovered, settings, discount,
  *               taxableSubtotal - passCoveredTaxable)
  *
- * The result keeps the two discounts apart, as the orders table does:
+ * with subtotal_inr put back to the whole subtotal. The result keeps the two
+ * discounts apart, as the orders table does:
  *   discount_inr      coupon + points only, what the caller passed
  *   pass_discount_inr what the pass covered
  * so total_inr = subtotal + tax + packaging - discount_inr - pass_discount_inr,
@@ -243,12 +244,12 @@ export function composePassBill(
   const passCovered = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
   const passCoveredTaxable = Math.min(Math.max(0, input.passCoveredTaxableInr), passCovered);
   const bill = computeBill(
-    input.subtotalInr,
+    input.subtotalInr - passCovered,
     settings,
-    input.discountInr + passCovered,
+    input.discountInr,
     input.taxableSubtotalInr - passCoveredTaxable,
   );
-  return { ...bill, discount_inr: input.discountInr, pass_discount_inr: passCovered };
+  return { ...bill, subtotal_inr: input.subtotalInr, discount_inr: input.discountInr, pass_discount_inr: passCovered };
 }
 
 // ---------------------------------------------------------------------------

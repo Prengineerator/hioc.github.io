@@ -50,10 +50,10 @@ describe('composeOrderBill — spec §6 examples A-D', () => {
     });
   });
 
-  it('C: a 10% coupon on the ₹180 left after the cup: ₹171', () => {
+  it('C: a 10% coupon on the ₹180 left after the cup, GST on the ₹162 after it: ₹170', () => {
     expect(
       bill({ subtotalInr: 320, taxableSubtotalInr: 320, passCoveredInr: 140, passCoveredTaxableInr: 140, couponDiscountInr: 18 }),
-    ).toMatchObject({ tax_inr: 9, discount_inr: 18, pass_discount_inr: 140, total_inr: 171 });
+    ).toMatchObject({ tax_inr: 8, discount_inr: 18, pass_discount_inr: 140, total_inr: 170 });
   });
 
   it('D: one cup of three Cappuccinos: ₹252', () => {
@@ -86,8 +86,9 @@ describe('composeOrderBill — spec §6 examples A-D', () => {
       pointsDiscountInr: 500,
     });
     expect(b.discount_inr).toBe(180);
-    expect(b.total_inr).toBe(0 + b.tax_inr); // only the tax on the ₹180 taxable base remains
-    expect(b.total_inr).toBeGreaterThanOrEqual(0);
+    // The discount takes the whole ₹180 left, so nothing is left to tax either.
+    expect(b.tax_inr).toBe(0);
+    expect(b.total_inr).toBe(0);
   });
 
   it('takes GST-exempt cover out of nothing: only covered rupees on taxable lines leave the taxable base', () => {
@@ -97,11 +98,11 @@ describe('composeOrderBill — spec §6 examples A-D', () => {
     expect(b.total_inr).toBe(340 + 10 - 140);
   });
 
-  it('dine-in drops packaging from the total; takeaway keeps it', () => {
+  it('dine-in drops packaging and its GST from the total; takeaway keeps both', () => {
     const withPackaging = { ...settings, packaging_charge_inr: 20 };
     const args = { settings: withPackaging, subtotalInr: 140, taxableSubtotalInr: 140, passCoveredInr: 140, passCoveredTaxableInr: 140 };
-    expect(bill({ ...args, isDineIn: true })).toMatchObject({ packaging_inr: 0, total_inr: 0 });
-    expect(bill({ ...args, isDineIn: false })).toMatchObject({ packaging_inr: 20, total_inr: 20 });
+    expect(bill({ ...args, isDineIn: true })).toMatchObject({ packaging_inr: 0, tax_inr: 0, total_inr: 0 });
+    expect(bill({ ...args, isDineIn: false })).toMatchObject({ packaging_inr: 20, tax_inr: 1, total_inr: 21 });
   });
 
   it('with no pass it is exactly computeBill, whatever the settings (GST inclusive too)', () => {

@@ -42,6 +42,50 @@ describe('computeBill', () => {
   });
 });
 
+// GST on the taxable value of the supply (CGST Act s.15): the discount on the
+// bill is not taxed, packaging is.
+describe('computeBill — GST on the taxable value', () => {
+  const exclusive = withSettings({ gst_percent: 5, gst_inclusive: false, packaging_charge_inr: 0 });
+  const inclusive = withSettings({ gst_percent: 5, gst_inclusive: true, packaging_charge_inr: 0 });
+
+  it('takes the discount (coupon + Beanies) out before GST is added', () => {
+    const b = computeBill(500, exclusive, 50);
+    expect(b.tax_inr).toBe(23); // 5% of 450 = 22.5
+    expect(b.total_inr).toBe(473); // 500 + 23 - 50
+  });
+
+  it('taxes packaging at the same rate', () => {
+    const b = computeBill(500, { ...exclusive, packaging_charge_inr: 20 });
+    expect(b.tax_inr).toBe(26); // 5% of 520
+    expect(b.total_inr).toBe(546); // 500 + 26 + 20
+  });
+
+  it('taxes lines less the discount, plus packaging, together', () => {
+    const b = computeBill(500, { ...exclusive, packaging_charge_inr: 20 }, 50);
+    expect(b.tax_inr).toBe(24); // 5% of 450 + 20 = 23.5
+    expect(b.total_inr).toBe(494); // 500 + 24 + 20 - 50
+    expect(b.total_inr).toBe(b.subtotal_inr + b.tax_inr + b.packaging_inr - b.discount_inr);
+  });
+
+  it('extracts GST from the same value when prices include GST, leaving the total as it was', () => {
+    const b = computeBill(500, { ...inclusive, packaging_charge_inr: 20 }, 50);
+    expect(b.tax_inr).toBe(22); // 470 - 470/1.05 = 22.38
+    expect(b.total_inr).toBe(470); // 500 + 20 - 50
+  });
+
+  it('rounds GST once on the whole taxable value, not per part', () => {
+    // ₹30 of lines (1.5) and ₹10 of packaging (0.5) would round to 2 + 1 apart.
+    expect(computeBill(30, { ...exclusive, packaging_charge_inr: 10 }).tax_inr).toBe(2); // 5% of 40
+  });
+
+  it('charges GST on nothing but packaging when the discount takes the whole order', () => {
+    expect(computeBill(100, exclusive, 100).tax_inr).toBe(0);
+    expect(computeBill(100, { ...exclusive, packaging_charge_inr: 20 }, 100).tax_inr).toBe(1); // 5% of 20
+    // A discount over the subtotal (callers clamp it) still can't make the value negative.
+    expect(computeBill(100, { ...exclusive, packaging_charge_inr: 20 }, 500).tax_inr).toBe(1);
+  });
+});
+
 describe('computeStoreOpenState', () => {
   it('is open + accepting mid-day', () => {
     const s = computeStoreOpenState(base, midday);

@@ -216,7 +216,7 @@ describe('POST /api/orders/quote — items and HIOC Ritual cups', () => {
     // The coupon is judged on the cart the server priced, not client ids.
     expect(state.couponCtx?.itemIds.sort()).toEqual([MENU.latte, MENU.sandwich].sort());
     expect(state.couponCtx?.categories.sort()).toEqual(['Beverages', 'Food']);
-    expect(body.bill).toMatchObject({ discount_inr: 18, pass_discount_inr: 140, tax_inr: 9, total_inr: 171 });
+    expect(body.bill).toMatchObject({ discount_inr: 18, pass_discount_inr: 140, tax_inr: 8, total_inr: 170 }); // GST on 180 - 18
   });
 
   it('applies Beanies to what is left after the pass and the coupon', async () => {
@@ -226,7 +226,8 @@ describe('POST /api/orders/quote — items and HIOC Ritual cups', () => {
     const body = await res.json();
     expect(state.quoteRemaining).toBe(162);
     expect(body.bill.discount_inr).toBe(68);
-    expect(body.bill.total_inr).toBe(320 + 9 - 68 - 140);
+    expect(body.bill.tax_inr).toBe(6); // 5% of 180 - 68 = 112
+    expect(body.bill.total_inr).toBe(320 + 6 - 68 - 140);
     expect(body.points).toMatchObject({ ok: true, discountInr: 50 });
     expect(body.balance).toBe(500);
   });
@@ -304,12 +305,12 @@ describe('POST /api/orders/quote — items and HIOC Ritual cups', () => {
     expect(body.pass).toBeNull();
   });
 
-  it('dine-in drops the packaging charge from the previewed total, pass or not', async () => {
+  it('dine-in drops the packaging charge and its GST from the previewed total, pass or not', async () => {
     state.settings = { ...state.settings, packaging_charge_inr: 20 };
     const dineIn = await (await POST(req({ items: [line('latte')], pass_drinks: 1, order_type: 'dine_in' }))).json();
-    expect(dineIn.bill).toMatchObject({ packaging_inr: 0, total_inr: 0 });
+    expect(dineIn.bill).toMatchObject({ packaging_inr: 0, tax_inr: 0, total_inr: 0 });
     const takeaway = await (await POST(req({ items: [line('latte')], pass_drinks: 1 }))).json();
-    expect(takeaway.bill).toMatchObject({ packaging_inr: 20, total_inr: 20 });
+    expect(takeaway.bill).toMatchObject({ packaging_inr: 20, tax_inr: 1, total_inr: 21 });
   });
 
   it('400s a malformed items array or pass_drinks, and an unknown menu item', async () => {
