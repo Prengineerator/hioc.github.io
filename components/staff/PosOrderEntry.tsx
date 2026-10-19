@@ -205,7 +205,13 @@ export interface AddToOrderTarget {
 export function PosOrderEntry({
   initialTableId,
   addToOrder = null,
-}: { initialTableId?: string | null; addToOrder?: AddToOrderTarget | null } = {}) {
+  returnTo = '/staff/tables',
+}: {
+  initialTableId?: string | null;
+  addToOrder?: AddToOrderTarget | null;
+  /** Where the screen goes once items are added to a running order (Tables by default). */
+  returnTo?: string;
+} = {}) {
   const isAddMode = addToOrder !== null;
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
@@ -304,16 +310,17 @@ export function PosOrderEntry({
   // failure chip and the retry.
   const printDock = usePrintDock();
   // TAB-2: set after items are added to a running order; the screen returns
-  // to Tables once its KOT has printed (or straight away when none prints). A
-  // failed print keeps the staffer here, where the Retry button is.
+  // to where the staffer came from (`returnTo`: Tables, or Settle when they
+  // opened the bill there) once its KOT has printed (or straight away when none
+  // prints). A failed print keeps the staffer here, where the Retry button is.
   const [leaveAfterAdd, setLeaveAfterAdd] = useState(false);
 
   const router = useRouter();
   useEffect(() => {
     if (!leaveAfterAdd || printDock.busy || printDock.hasFailed) return undefined;
-    const t = setTimeout(() => router.push('/staff/tables'), 600);
+    const t = setTimeout(() => router.push(returnTo), 600);
     return () => clearTimeout(t);
-  }, [leaveAfterAdd, printDock.busy, printDock.hasFailed, router]);
+  }, [leaveAfterAdd, printDock.busy, printDock.hasFailed, router, returnTo]);
   const inFlight = useRef(false);
   // POS4-2 — identifies THIS order attempt across retries. Rotated only once an
   // order is actually placed, so a retry after a network failure replays rather
@@ -1196,9 +1203,10 @@ export function PosOrderEntry({
       const printsKot = autoPrint.kot && addedIds.length > 0;
       if (printsKot) printDock.enqueue([{ orderId: addToOrder.id, type: 'kot', itemIds: addedIds }]);
       showToast(`Added to order #${label}${printsKot ? ' · KOT printing' : ''}.`);
-      // Back to the board so the running total is visible in context — once the
-      // KOT has gone: the print dock lives on this page, and leaving mid-print
-      // would cancel the kitchen's ticket.
+      // Back to where the staffer came from (Tables, or the bill on Settle) so
+      // the running total is visible in context — once the KOT has gone: the
+      // print dock lives on this page, and leaving mid-print would cancel the
+      // kitchen's ticket.
       setLeaveAfterAdd(true);
     } catch {
       setSubmitError('Network error — please check the connection and try again.');
@@ -1955,7 +1963,7 @@ export function PosOrderEntry({
                       : `Add ${totalItems} item${totalItems === 1 ? '' : 's'} to #${formatOrderNumber(addToOrder.orderNumber)}`}
                 </button>
                 <a
-                  href="/staff/tables"
+                  href={returnTo}
                   className="text-center text-xs font-bold text-muted underline"
                 >
                   Cancel

@@ -12,7 +12,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getUserRole } from '@/lib/api/auth';
 import type { PermissionKey, PermissionMinRole, RolePermission, UserRole } from '@/lib/types';
 
-// The 8 defined sensitive-action keys (must match the role_permissions seed and
+// The defined sensitive-action keys (must match the role_permissions seed and
 // the PermissionKey union in lib/types.ts). Used to validate owner edits and to
 // build a complete matrix for the grid.
 export const KNOWN_PERMISSION_KEYS: PermissionKey[] = [
@@ -21,6 +21,7 @@ export const KNOWN_PERMISSION_KEYS: PermissionKey[] = [
   'menu_edit',
   'cash_day_open',
   'void_line',
+  'settle_edit_order',
   'comp_order',
   'refund',
   'cash_day_close',
@@ -40,6 +41,11 @@ export const DEFAULT_MIN_ROLE: Record<PermissionKey, PermissionMinRole> = {
   menu_edit: 'staff',
   cash_day_open: 'staff',
   void_line: 'manager',
+  // Lowering an unpaid bill on Settle (a quantity down, a line off) is
+  // money-touching like void_line, so manager; the owner can open it to staff.
+  // Seeded by supabase/2026-10-settle-edit-order.sql — failing closed to manager
+  // while that row is missing is the intended default, not a breakage.
+  settle_edit_order: 'manager',
   comp_order: 'manager',
   refund: 'manager',
   cash_day_close: 'manager',

@@ -16,6 +16,10 @@ const PERMISSION_META: Record<string, { label: string; hint: string }> = {
   menu_edit: { label: 'Edit the menu', hint: 'Add, change, 86, or remove menu items' },
   cash_day_open: { label: 'Open the cash day', hint: 'Start the day with an opening float' },
   void_line: { label: 'Void a line', hint: 'Remove an item from an order (with a reason)' },
+  settle_edit_order: {
+    label: 'Edit an order before settling',
+    hint: 'On Settle: lower a quantity or remove an item from an unpaid bill (with a reason)',
+  },
   comp_order: { label: 'Comp / settle at ₹0', hint: 'Waive a charge or settle at zero (with a reason)' },
   refund: { label: 'Issue a refund', hint: 'Refund a captured payment' },
   cash_day_close: { label: 'Close the cash day', hint: 'Count the drawer and sign off the day' },
