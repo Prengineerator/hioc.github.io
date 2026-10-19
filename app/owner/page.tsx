@@ -24,6 +24,7 @@ import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getFeedbackSummary } from '@/lib/feedback/summary';
 import { flags } from '@/lib/flags';
+import { countPendingRequests, listChangeRequests } from '@/lib/menu/changeRequests';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import {
   Card,
@@ -44,6 +45,7 @@ import {
 import { CustomerTypeSplit, RecentOrdersCard } from '@/components/owner/RecentOrders';
 import { LiveOps } from '@/components/owner/LiveOps';
 import { OwnerMarketingCard } from '@/components/owner/marketing/OwnerMarketingCard';
+import { MENU_APPROVALS_PREVIEW, MenuApprovalsCard } from '@/components/owner/menu/MenuApprovalsCard';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -55,6 +57,24 @@ function percentile(values: (number | null)[], p: number): number | null {
   if (nums.length === 0) return null;
   const idx = Math.min(nums.length - 1, Math.floor((p / 100) * nums.length));
   return Math.round(nums[idx] / 60);
+}
+
+// Menu changes waiting for the owner (staff/manager POS edits). Never fails the
+// dashboard: if the table isn't there yet (migration not applied) or the query
+// errors, this is null and the card is left out.
+async function loadMenuApprovals() {
+  try {
+    const admin = createAdminSupabaseClient();
+    const [count, listed] = await Promise.all([
+      countPendingRequests(admin),
+      listChangeRequests(admin, 'pending', MENU_APPROVALS_PREVIEW),
+    ]);
+    if (!count.ok || !listed.ok) return null;
+    return { pendingCount: Math.max(count.value, listed.value.length), requests: listed.value };
+  } catch (err) {
+    console.error('owner overview: menu approvals failed', err);
+    return null;
+  }
 }
 
 export default async function OwnerOverviewPage() {
@@ -75,6 +95,7 @@ export default async function OwnerOverviewPage() {
     last30Split,
     feedback,
     todayPayments,
+    menuApprovals,
   ] = await Promise.all([
     getTodayAtAGlance(),
     getDailySales(30),
@@ -97,6 +118,7 @@ export default async function OwnerOverviewPage() {
       console.error('owner overview: payments by method failed', err);
       return null;
     }),
+    loadMenuApprovals(),
   ]);
 
   // Recent-orders "Entered by <name>" needs the same profiles.name → email
@@ -118,6 +140,10 @@ export default async function OwnerOverviewPage() {
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
       <h1 className="text-2xl font-bold text-charcoal">Today at a glance</h1>
       <GlanceCards g={glance} />
+
+      {/* Menu changes from the POS wait for the owner's OK, so this sits right
+          under the glance cards. Left out if the requests couldn't be loaded. */}
+      {menuApprovals ? <MenuApprovalsCard {...menuApprovals} /> : null}
 
       {todayPayments ? (
         <Card title="Payments received today">

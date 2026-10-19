@@ -38,11 +38,14 @@ export function MenuItemFormModal({
   initial,
   onClose,
   onSubmit,
+  uploadUrl = '/api/menu/upload',
 }: {
   mode: 'create' | 'edit';
   initial?: MenuItem;
   onClose: () => void;
   onSubmit: (values: MenuItemFormValues) => Promise<void>;
+  /** Where a chosen photo is posted: the owner app uses its own route. */
+  uploadUrl?: string;
 }) {
   useModalDismiss(onClose);
   const [name, setName] = useState(initial?.name ?? '');
@@ -133,7 +136,7 @@ export function MenuItemFormModal({
     try {
       const form = new FormData();
       form.append('file', file);
-      const res = await fetch('/api/menu/upload', { method: 'POST', body: form });
+      const res = await fetch(uploadUrl, { method: 'POST', body: form });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? 'Failed to upload photo');
       setImageUrl(data.url);

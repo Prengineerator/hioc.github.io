@@ -4,68 +4,24 @@ import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isMenuCategory, MENU_CATEGORIES } from '@/lib/api/constants';
-import { isInStoreOnly, isInStoreOnlyCategory } from '@/lib/menu/inStore';
-import type { AddonGroup, MenuItem } from '@/lib/types';
+import { isInStoreOnly } from '@/lib/menu/inStore';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canEditMenu, MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 import { getStoreSettings } from '@/lib/store/settings';
 import { applyMenuSwitches, isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { flags } from '@/lib/flags';
-import { isMissingColumnError } from '@/lib/api/postgrest';
-import { SELL_BY_WEIGHT_MIGRATION_HINT } from '@/lib/menu/weight';
+import {
+  applyMenuCreate,
+  failureResponse,
+  MENU_ITEM_SELECT,
+  shapeMenuItem,
+  validateCreateBody,
+  type MenuItemRow,
+} from '@/lib/menu/applyMenuChange';
+import { createChangeRequest, createPayloadFromValues } from '@/lib/menu/changeRequests';
+import type { MenuChangePendingResponse } from '@/lib/menu/changeRequestTypes';
 
 export const dynamic = 'force-dynamic';
-
-// Nested-select shape returned by Supabase for the query in GET below.
-type MenuItemRow = Omit<MenuItem, 'variants' | 'addon_groups'> & {
-  menu_item_variants: MenuItem['variants'];
-  menu_item_addon_groups: { addon_groups: AddonGroup | null }[];
-};
-
-function shapeMenuItem(row: MenuItemRow): MenuItem {
-  const { menu_item_variants, menu_item_addon_groups, ...rest } = row;
-
-  const variants = [...(menu_item_variants ?? [])].sort(
-    (a, b) => a.sort_order - b.sort_order,
-  );
-
-  const addon_groups = (menu_item_addon_groups ?? [])
-    .map((link) => link.addon_groups)
-    .filter((g): g is AddonGroup => g !== null)
-    .map((g) => ({
-      ...g,
-      options: [...(g.options ?? [])].sort((a, b) => a.sort_order - b.sort_order),
-    }))
-    .sort((a, b) => a.sort_order - b.sort_order);
-
-  return { ...rest, variants, addon_groups } as MenuItem;
-}
-
-// `*` already carries menu_items.pass_eligible (HIOC Ritual, 2026-10-coffee-pass.sql)
-// once the column exists, and simply leaves it out before, so the select needs no
-// change and a database without the migration keeps serving the menu. See the
-// GET below for how the field is shaped.
-const MENU_ITEM_SELECT = `
-  *,
-  menu_item_variants(*),
-  menu_item_addon_groups(
-    addon_groups(*, options:addon_options(*))
-  )
-`;
-
-// short_code (2026-07-menu-short-code): optional owner POS shortform. undefined /
-// null / blank clears it; otherwise ^[A-Za-z0-9]{1,8}$, stored UPPERCASE. DB
-// uniqueness (partial index) is surfaced as a 409 by the insert/update callers.
-function parseShortCode(value: unknown): { code: string | null } | { error: string } {
-  if (value === undefined || value === null) return { code: null };
-  if (typeof value !== 'string') return { error: 'short_code must be a string' };
-  const trimmed = value.trim();
-  if (trimmed === '') return { code: null };
-  if (!/^[A-Za-z0-9]{1,8}$/.test(trimmed)) {
-    return { error: 'short_code must be 1–8 letters or digits' };
-  }
-  return { code: trimmed.toUpperCase() };
-}
 
 // GET /api/menu — public. Optional ?category=... and ?includeUnavailable=true.
 export async function GET(request: Request) {
@@ -137,6 +93,10 @@ export async function GET(request: Request) {
 // item-availability toggle (S6) shares this route's PATCH sibling and the
 // same 'menu_edit' permission, so create/edit move together rather than
 // splitting an arbitrary "toggle only" carve-out out of one gate.
+//
+// Menu changes need the owner's approval (lib/menu/changeRequests.ts): the
+// owner's own create applies at once (201 { item }); anyone else's is stored as
+// a pending request and answered 202 { pending: true, request }.
 export async function POST(request: Request) {
   const actor = await getCounterActor();
   if (!actor) {
@@ -162,188 +122,37 @@ export async function POST(request: Request) {
     return errorResponse(400, 'Request body must be a JSON object');
   }
 
-  const {
-    name,
-    description,
-    category,
-    parent_category,
-    is_veg,
-    is_available,
-    sort_order,
-    variants,
-    addon_group_ids,
-    image_url,
-    unavailable_until,
-    short_code,
-    in_store_only,
-    gst_exempt,
-    sold_by_weight,
-  } = body;
-
-  if (typeof name !== 'string' || name.trim().length === 0) {
-    return errorResponse(400, 'name is required and must be a non-empty string');
-  }
-
-  if (!isMenuCategory(category)) {
-    return errorResponse(
-      400,
-      `category is required and must be one of: ${MENU_CATEGORIES.join(', ')}`,
-    );
-  }
-
-  if (description !== undefined && typeof description !== 'string') {
-    return errorResponse(400, 'description must be a string');
-  }
-
-  if (parent_category !== undefined && typeof parent_category !== 'string') {
-    return errorResponse(400, 'parent_category must be a string');
-  }
-
-  if (is_veg !== undefined && typeof is_veg !== 'boolean') {
-    return errorResponse(400, 'is_veg must be a boolean');
-  }
-
-  if (is_available !== undefined && typeof is_available !== 'boolean') {
-    return errorResponse(400, 'is_available must be a boolean');
-  }
-
-  if (in_store_only !== undefined && typeof in_store_only !== 'boolean') {
-    return errorResponse(400, 'in_store_only must be a boolean');
-  }
-
-  if (gst_exempt !== undefined && typeof gst_exempt !== 'boolean') {
-    return errorResponse(400, 'gst_exempt must be a boolean');
-  }
-
-  if (sold_by_weight !== undefined && typeof sold_by_weight !== 'boolean') {
-    return errorResponse(400, 'sold_by_weight must be a boolean');
-  }
-
-  if (
-    sort_order !== undefined &&
-    (typeof sort_order !== 'number' || !Number.isInteger(sort_order))
-  ) {
-    return errorResponse(400, 'sort_order must be an integer');
-  }
-
-  if (
-    !Array.isArray(variants) ||
-    variants.length === 0 ||
-    variants.some(
-      (v) =>
-        typeof v?.label !== 'string' ||
-        v.label.trim().length === 0 ||
-        typeof v?.price_inr !== 'number' ||
-        !Number.isInteger(v.price_inr) ||
-        v.price_inr < 0,
-    )
-  ) {
-    return errorResponse(
-      400,
-      'variants is required and must be a non-empty array of { label: string, price_inr: non-negative integer }',
-    );
-  }
-
-  if (
-    addon_group_ids !== undefined &&
-    (!Array.isArray(addon_group_ids) || addon_group_ids.some((id) => typeof id !== 'string'))
-  ) {
-    return errorResponse(400, 'addon_group_ids must be an array of strings');
-  }
-
-  if (image_url !== undefined && typeof image_url !== 'string') {
-    return errorResponse(400, 'image_url must be a string');
-  }
-
-  // unavailable_until (S6 86/snooze): ISO date string or null.
-  if (
-    unavailable_until !== undefined &&
-    unavailable_until !== null &&
-    (typeof unavailable_until !== 'string' || Number.isNaN(Date.parse(unavailable_until)))
-  ) {
-    return errorResponse(400, 'unavailable_until must be an ISO date string or null');
-  }
-
-  const shortCodeResult = parseShortCode(short_code);
-  if ('error' in shortCodeResult) {
-    return errorResponse(400, shortCodeResult.error);
+  const checked = validateCreateBody(body);
+  if (!checked.ok) {
+    return failureResponse(checked);
   }
 
   const admin = createAdminSupabaseClient();
 
-  const { data: item, error: itemError } = await admin
-    .from('menu_items')
-    .insert({
-      name: name.trim(),
-      description: description ?? '',
-      category,
-      parent_category: parent_category ?? '',
-      is_veg: is_veg ?? true,
-      is_available: is_available ?? true,
-      sort_order: sort_order ?? 0,
-      image_url: typeof image_url === 'string' ? image_url : '',
-      unavailable_until: (unavailable_until as string | null | undefined) ?? null,
-      short_code: shortCodeResult.code,
-      // An item created in an in-store category is in-store only unless the
-      // editor says otherwise explicitly.
-      in_store_only: in_store_only ?? isInStoreOnlyCategory(category as string),
-      gst_exempt: gst_exempt ?? false,
-      // Only written when on (2026-10-sell-by-weight.sql), so creating an
-      // ordinary item works before that migration is applied.
-      ...(sold_by_weight === true ? { sold_by_weight: true } : {}),
-    })
-    .select()
-    .single();
-
-  if (itemError || !item) {
-    if (itemError?.code === '23505') {
-      return errorResponse(409, 'Code already in use');
+  if (actor.role !== 'owner') {
+    // A snooze is an instant availability change, never part of a request.
+    if (checked.value.unavailable_until !== null) {
+      return errorResponse(400, 'A new item cannot be snoozed. Create it, then snooze it.');
     }
-    if (sold_by_weight === true && isMissingColumnError(itemError)) {
-      return errorResponse(409, SELL_BY_WEIGHT_MIGRATION_HINT);
+    const stored = await createChangeRequest(admin, {
+      action: 'create',
+      menuItemId: null,
+      itemName: checked.value.name,
+      payload: createPayloadFromValues(checked.value),
+      snapshot: null,
+      requestedBy: user.id,
+    });
+    if (!stored.ok) {
+      return failureResponse(stored);
     }
-    return errorResponse(500, 'Failed to create menu item');
+    const pending: MenuChangePendingResponse = { pending: true, request: stored.value };
+    return NextResponse.json(pending, { status: 202 });
   }
 
-  const { error: variantsError } = await admin.from('menu_item_variants').insert(
-    variants.map((v: { label: string; price_inr: number }, i: number) => ({
-      menu_item_id: item.id,
-      label: v.label.trim(),
-      price_inr: v.price_inr,
-      sort_order: i * 10,
-    })),
-  );
-
-  if (variantsError) {
-    await admin.from('menu_items').delete().eq('id', item.id);
-    return errorResponse(500, 'Failed to create menu item variants');
+  const created = await applyMenuCreate(admin, checked.value);
+  if (!created.ok) {
+    return failureResponse(created);
   }
 
-  if (Array.isArray(addon_group_ids) && addon_group_ids.length > 0) {
-    const { error: addonError } = await admin.from('menu_item_addon_groups').insert(
-      addon_group_ids.map((addon_group_id: string) => ({
-        menu_item_id: item.id,
-        addon_group_id,
-      })),
-    );
-    if (addonError) {
-      await admin.from('menu_items').delete().eq('id', item.id);
-      return errorResponse(500, 'Failed to associate addon groups');
-    }
-  }
-
-  const { data: full, error: fetchError } = await admin
-    .from('menu_items')
-    .select(MENU_ITEM_SELECT)
-    .eq('id', item.id)
-    .single();
-
-  if (fetchError || !full) {
-    return errorResponse(500, 'Created item but failed to load it back');
-  }
-
-  return NextResponse.json(
-    { item: shapeMenuItem(full as unknown as MenuItemRow) },
-    { status: 201 },
-  );
+  return NextResponse.json({ item: created.value }, { status: 201 });
 }

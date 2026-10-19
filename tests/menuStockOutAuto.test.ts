@@ -11,14 +11,15 @@ const ITEM = '00000000-0000-4000-8000-0000000000c1';
 const state: {
   flag: boolean;
   missingColumn: boolean;
+  role: string;
   updates: Record<string, unknown>[];
-} = { flag: true, missingColumn: false, updates: [] };
+} = { flag: true, missingColumn: false, role: 'staff', updates: [] };
 
 vi.mock('@/lib/flags', () => ({
   flags: new Proxy({}, { get: (_t, key) => (key === 'inventory' ? state.flag : true) }),
 }));
 vi.mock('@/lib/api/auth', () => ({
-  getCounterActor: () => Promise.resolve({ user: { id: 'staff-1' }, role: 'staff', via: 'device' }),
+  getCounterActor: () => Promise.resolve({ user: { id: 'staff-1' }, role: state.role, via: 'device' }),
 }));
 vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(true) }));
 vi.mock('@/lib/staff/surface', () => ({ getStaffSurface: () => Promise.resolve('pos') }));
@@ -73,6 +74,7 @@ function patch(body: unknown) {
 beforeEach(() => {
   state.flag = true;
   state.missingColumn = false;
+  state.role = 'staff';
   state.updates = [];
 });
 
@@ -82,7 +84,10 @@ describe('PATCH /api/menu/[id] — stock_out_auto', () => {
     expect(state.updates).toEqual([{ is_available: true, stock_out_auto: false }]);
   });
 
+  // Only the owner's edit applies at once; a staff edit of the name is a
+  // pending request (tests/menuChangeRequests.test.ts).
   it('leaves it alone for any other edit', async () => {
+    state.role = 'owner';
     expect((await patch({ name: 'Latte' })).status).toBe(200);
     expect(state.updates).toEqual([{ name: 'Latte' }]);
   });
