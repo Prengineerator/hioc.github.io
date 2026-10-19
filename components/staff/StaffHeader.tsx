@@ -25,6 +25,13 @@ import { isActiveTab, staffNav, type StaffTab } from '@/lib/staff/staffNav';
 import { SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 import { useStaffShell } from '@/components/staff/StaffShell';
 import { OpenDrawerButton } from '@/components/staff/OpenDrawerButton';
+import { MenuRequestsBadge } from '@/components/staff/menu/MenuRequestsBadge';
+import { MenuRequestsPanel } from '@/components/staff/menu/MenuRequestsPanel';
+import { publishStaffMenuRequestsChanged } from '@/components/staff/menu/menuEvents';
+import { useCancelMenuRequest } from '@/components/staff/menu/useCancelMenuRequest';
+import { usePendingMenuRequests } from '@/components/staff/menu/usePendingMenuRequests';
+
+const MENU_HREF = '/staff/menu';
 
 
 export interface StaffPinControls {
@@ -87,6 +94,9 @@ export function StaffHeader({
   const closeAccount = useCallback(() => setAccountOpen(false), []);
   const moreRef = useDismiss(moreOpen, closeMore);
   const accountRef = useDismiss(accountOpen, closeAccount);
+  // The list behind the Menu badge: in the bar (md+) or inline in the phone drawer.
+  const [pendingOpen, setPendingOpen] = useState<'bar' | 'drawer' | null>(null);
+  const closePending = useCallback(() => setPendingOpen(null), []);
 
   // Counter mode keeps only what the counter works from, and no More menu.
   // POS vs staff website (lib/staff/staffNav.ts); counter mode then keeps only
@@ -104,6 +114,31 @@ export function StaffHeader({
   const more = shell.counterMode ? [] : nav.more;
   const active = (tab: StaffTab) => isActiveTab(pathname, toHref(tab.href), toHref(SETTINGS_ROOT));
   const moreActive = more.find(active);
+  // Menu changes waiting for the owner: a badge button beside "More" (where the
+  // Menu entry hides) and on the entry itself, opening the list so a request can
+  // be cancelled from anywhere; a dot on the phone hamburger. One fetch for the
+  // whole header, and only when a Menu entry is on show.
+  const menuRequests = usePendingMenuRequests(more.some((t) => t.href === MENU_HREF));
+  const pendingMenu = menuRequests.count;
+  const cancelMenuRequest = useCancelMenuRequest(() => {
+    void menuRequests.refresh();
+    publishStaffMenuRequestsChanged(); // the Menu screen's own panel reloads
+  });
+  // A confirm dialog open inside the list owns Esc and the outside click.
+  const pendingBusy = cancelMenuRequest.confirmTarget !== null;
+  const pendingBarRef = useDismiss(pendingOpen === 'bar' && !pendingBusy, closePending);
+  const pendingDrawerRef = useDismiss(pendingOpen === 'drawer' && !pendingBusy, closePending);
+  const showMenuBadge = (tab: StaffTab) => tab.href === MENU_HREF && pendingMenu > 0;
+  const menuPanel = (className: string) => (
+    <MenuRequestsPanel
+      requests={menuRequests.requests}
+      viewer={menuRequests.viewer}
+      canEditMenu={shell.canEditMenu}
+      cancel={cancelMenuRequest}
+      onClose={closePending}
+      className={className}
+    />
+  );
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
   // /staff/settings/store. Best-effort — a failed fetch just hides it.
@@ -156,7 +191,13 @@ export function StaffHeader({
     setMenuOpen(false);
     setMoreOpen(false);
     setAccountOpen(false);
+    setPendingOpen(null);
   }, [pathname]);
+
+  // Nothing waiting any more (or the drawer shut): the list has nothing to show.
+  useEffect(() => {
+    if (pendingMenu === 0 || (pendingOpen === 'drawer' && !menuOpen)) setPendingOpen(null);
+  }, [pendingMenu, pendingOpen, menuOpen]);
 
   const storePill = openState ? (
     <Link
@@ -281,21 +322,50 @@ export function StaffHeader({
                         className="absolute left-0 top-full z-50 mt-1 min-w-[180px] rounded-md border border-cream/10 bg-charcoal py-1 shadow-lg"
                       >
                         {more.map((tab) => (
-                          <li key={tab.href} role="none">
+                          <li key={tab.href} role="none" className={showMenuBadge(tab) ? 'flex items-center pr-3' : undefined}>
                             <Link
                               href={tab.href}
                               role="menuitem"
                               className={
+                                (showMenuBadge(tab) ? 'flex-1 ' : '') +
                                 'block px-4 py-2.5 text-sm font-bold ' +
                                 (active(tab) ? 'text-tan' : 'text-cream/85 hover:bg-cream/5 hover:text-cream')
                               }
                             >
                               {tab.label}
                             </Link>
+                            {showMenuBadge(tab) ? (
+                              <MenuRequestsBadge
+                                role="menuitem"
+                                count={pendingMenu}
+                                open={false}
+                                onClick={() => {
+                                  setMoreOpen(false);
+                                  setPendingOpen('bar');
+                                }}
+                                className="min-h-[40px] px-1"
+                              />
+                            ) : null}
                           </li>
                         ))}
                       </ul>
                     ) : null}
+                  </div>
+                </li>
+              ) : null}
+              {pendingMenu > 0 ? (
+                <li>
+                  <div ref={pendingBarRef} className="relative">
+                    <MenuRequestsBadge
+                      count={pendingMenu}
+                      open={pendingOpen === 'bar'}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        setPendingOpen((v) => (v === 'bar' ? null : 'bar'));
+                      }}
+                      className="min-h-[40px] px-1"
+                    />
+                    {pendingOpen === 'bar' ? menuPanel('absolute right-0 top-full z-50 mt-1 w-[22rem] max-w-[calc(100vw-2rem)]') : null}
                   </div>
                 </li>
               ) : null}
@@ -387,12 +457,15 @@ export function StaffHeader({
             onClick={() => setMenuOpen((v) => !v)}
             aria-expanded={menuOpen}
             aria-controls="staff-mobile-menu"
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-cream/30 text-cream md:hidden"
+            aria-label={menuOpen ? 'Close menu' : pendingMenu > 0 ? 'Open menu (menu changes waiting)' : 'Open menu'}
+            className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-cream/30 text-cream md:hidden"
           >
             <span aria-hidden className="text-xl leading-none">
               {menuOpen ? '×' : '☰'}
             </span>
+            {!menuOpen && pendingMenu > 0 ? (
+              <span aria-hidden className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-tan" />
+            ) : null}
           </button>
         </div>
       </div>
@@ -402,20 +475,39 @@ export function StaffHeader({
         <div id="staff-mobile-menu" className="border-t border-cream/10 px-4 pb-4 md:hidden">
           <nav aria-label="Staff">
             <ul className="flex flex-col gap-1 pt-3 text-sm">
-              {[...primary, ...more, ...nav.account].map((tab) => (
-                <li key={tab.href}>
+              {[...primary, ...more, ...nav.account].map((tab) => {
+                const link = (
                   <Link
                     href={tab.href}
                     aria-current={active(tab) ? 'page' : undefined}
                     className={
+                      (showMenuBadge(tab) ? 'flex-1 ' : '') +
                       'flex min-h-[44px] items-center rounded-md px-3 font-bold transition-colors ' +
                       (active(tab) ? 'bg-cream/10 text-tan' : 'text-cream/80 hover:bg-cream/5 hover:text-cream')
                     }
                   >
                     {tabLabel(tab)}
                   </Link>
-                </li>
-              ))}
+                );
+                return showMenuBadge(tab) ? (
+                  <li key={tab.href}>
+                    <div ref={pendingDrawerRef}>
+                      <div className="flex items-center gap-1">
+                        {link}
+                        <MenuRequestsBadge
+                          count={pendingMenu}
+                          open={pendingOpen === 'drawer'}
+                          onClick={() => setPendingOpen((v) => (v === 'drawer' ? null : 'drawer'))}
+                          className="min-h-[44px] px-3"
+                        />
+                      </div>
+                      {pendingOpen === 'drawer' ? menuPanel('mt-1') : null}
+                    </div>
+                  </li>
+                ) : (
+                  <li key={tab.href}>{link}</li>
+                );
+              })}
             </ul>
           </nav>
 

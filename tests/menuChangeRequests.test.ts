@@ -570,6 +570,23 @@ describe('GET /api/menu/requests', () => {
   it('rejects an unknown status', async () => {
     expect((await listMine(jsonReq('GET', '/api/menu/requests?status=bogus'))).status).toBe(400);
   });
+
+  it('says who is asking, so the UI can show Cancel only where the cancel route allows it', async () => {
+    const asked = async () => (await read<{ viewer: unknown }>(await listMine(jsonReq('GET', '/api/menu/requests')))).viewer;
+    expect(await asked()).toEqual({ id: 'ravi', role: 'staff' });
+
+    state.actor = { user: { id: 'asha' }, role: 'manager', via: 'device' };
+    expect(await asked()).toEqual({ id: 'asha', role: 'manager' });
+
+    asOwnerOnPos();
+    expect(await asked()).toEqual({ id: 'owner-1', role: 'owner' });
+  });
+
+  it('carries the viewer on an empty list too', async () => {
+    const body = await read<{ requests: unknown[]; viewer: unknown }>(await listMine(jsonReq('GET', '/api/menu/requests')));
+    expect(body.requests).toEqual([]);
+    expect(body.viewer).toEqual({ id: 'ravi', role: 'staff' });
+  });
 });
 
 describe('DELETE /api/menu/requests/[id] (cancel)', () => {

@@ -16,6 +16,10 @@ const PENDING_LIMIT = 200;
 // status so a staff member can see what became of theirs. Newest first.
 //
 // Not surface-gated: it is a read, and the staff website lists them too.
+//
+// `viewer` is who is asking ({ id, role }), so the UI can show Cancel only on
+// the requests the cancel route would let them cancel (their own, or any for a
+// manager / the owner) without knowing their id itself.
 export async function GET(request: Request) {
   const actor = await getCounterActor();
   if (!actor) {
@@ -36,5 +40,5 @@ export async function GET(request: Request) {
     return failureResponse(listed);
   }
 
-  return NextResponse.json({ requests: listed.value });
+  return NextResponse.json({ requests: listed.value, viewer: { id: actor.user.id, role: actor.role } });
 }

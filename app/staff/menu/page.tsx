@@ -13,6 +13,8 @@ import { useStaffShell } from '@/components/staff/StaffShell';
 import { MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 import { MenuSwitchesPanel } from '@/components/staff/MenuSwitchesPanel';
 import { PendingMenuRequests } from '@/components/staff/menu/PendingMenuRequests';
+import { STAFF_MENU_CHANGED_EVENT, publishStaffMenuPending } from '@/components/staff/menu/menuEvents';
+import { parseMenuRequestViewer, type MenuRequestViewer } from '@/components/staff/menu/requestViewer';
 import type { MenuChangeAction, MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
 
 // How often the "waiting for owner approval" list refreshes while the page is open.
@@ -55,6 +57,8 @@ export default function StaffMenuPage() {
   const [view, setView] = useState<'items' | 'switches'>('items');
   // Edits, new items and deletes the owner hasn't decided yet.
   const [pending, setPending] = useState<MenuChangeRequest[]>([]);
+  // Who is looking, so Cancel shows only on requests they may cancel.
+  const [viewer, setViewer] = useState<MenuRequestViewer | null>(null);
   const pendingIdsRef = useRef<Set<string> | null>(null);
   const [notice, setNotice] = useState<{ kind: 'sent' | 'error'; text: string } | null>(null);
   // Set once a create/edit/delete applies at once (the owner's own POS), so the
@@ -78,12 +82,16 @@ export default function StaffMenuPage() {
     try {
       const res = await fetch('/api/menu/requests?status=pending', { cache: 'no-store' });
       if (!res.ok) return;
-      const data = (await res.json()) as { requests?: MenuChangeRequest[] };
+      const data = (await res.json()) as { requests?: MenuChangeRequest[]; viewer?: unknown };
       const next = data.requests ?? [];
+      const nextViewer = parseMenuRequestViewer(data.viewer);
       const nextIds = new Set(next.map((r) => r.id));
       const prevIds = pendingIdsRef.current;
       pendingIdsRef.current = nextIds;
       setPending(next);
+      setViewer(nextViewer);
+      // The header's Menu badge and its list follow at once.
+      publishStaffMenuPending({ requests: next, viewer: nextViewer });
       // A request that left the queue was approved (or decided/cancelled
       // elsewhere): reload the menu so an approved change shows up.
       if (prevIds && Array.from(prevIds).some((id) => !nextIds.has(id))) {
@@ -102,9 +110,13 @@ export default function StaffMenuPage() {
     };
     const timer = setInterval(refresh, PENDING_POLL_MS);
     document.addEventListener('visibilitychange', refresh);
+    // A request cancelled from the header's Menu badge.
+    const onCancelledElsewhere = () => void fetchPending();
+    window.addEventListener(STAFF_MENU_CHANGED_EVENT, onCancelledElsewhere);
     return () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener(STAFF_MENU_CHANGED_EVENT, onCancelledElsewhere);
     };
   }, [fetchPending]);
 
@@ -306,7 +318,12 @@ export default function StaffMenuPage() {
         )
       ) : (
       <>
-      <PendingMenuRequests requests={pending} canCancel={canEditMenu} onChanged={() => void fetchPending()} />
+      <PendingMenuRequests
+        requests={pending}
+        canCancel={canEditMenu}
+        viewer={viewer}
+        onChanged={() => void fetchPending()}
+      />
 
       <input
         type="search"
