@@ -1,9 +1,18 @@
-# Hosting migration plan — Vercel → a small server in Seoul
+# Hosting migration plan — Vercel → a small server in Mumbai
 
 **Status:** proposed, 2026-10-19. The deploy kit (`Dockerfile`, `deploy/`,
 `.github/workflows/deploy-server.yml`) is in the repo and was tested end to end
 in a sandbox. Nothing is switched over until step 6 below; until then Vercel
 keeps serving hioc.in exactly as it does today.
+
+**Updated 2026-10-19:** the database is moving from Seoul to Mumbai
+(`docs/DB-REGION-MOVE.md`), so the server goes to **Mumbai** too. Do the
+database move first, while still on Vercel (it switches Vercel to `bom1`,
+Mumbai), then this server move. Run the other way round, a Mumbai server would
+spend a while talking to a Seoul database. The AWS project is locked to
+**Sydney** (`ap-southeast-2`), since the new AWS experience only allows its one
+assigned Region. It can't host a server in India, so the recommendation is now
+Vultr.
 
 ## TL;DR
 
@@ -14,9 +23,10 @@ keeps serving hioc.in exactly as it does today.
   screens reach the cap. Hobby is also for personal, non-commercial use only.
   A café's ordering and POS system is commercial, so the "legal" Vercel option
   is Pro at **$20/month** anyway.
-- **Recommendation:** run the app on one small cloud server in **Seoul**, next
-  to the Supabase database (`ap-northeast-2`). Use **AWS Lightsail, 2 GB plan,
-  about $12/month** (₹1,050). The $7 1 GB plan also works if money is tight.
+- **Recommendation:** run the app on one small cloud server in **Mumbai**, next
+  to the Supabase database once it has moved there (`ap-south-1`). Use
+  **Vultr, Mumbai, 2 GB plan, about $12/month** (₹1,050). A 1 GB plan (~$6)
+  also works if money is tight.
   You pay a fixed price whatever the traffic, so polling no longer costs
   anything. Caddy provides free automatic HTTPS. GitHub Actions deploys every
   push to `main`. Cron jobs run on the server at exact times.
@@ -32,7 +42,7 @@ keeps serving hioc.in exactly as it does today.
 |---|---|
 | Vercel plan | Team "Hioc" on **Hobby**. The billing API has no charges, and observability queries return "available on Pro and Enterprise plans". |
 | Project | `hioc-in`, Next.js **14.2.35**, Node 24, functions pinned to `icn1` (Seoul) in `vercel.json` |
-| Database | Supabase in `ap-northeast-2` (Seoul), which runs on AWS's Seoul region |
+| Database | Supabase in `ap-northeast-2` (Seoul), moving to `ap-south-1` (Mumbai): `docs/DB-REGION-MOVE.md` |
 | Domains | `hioc.in`, `www.hioc.in`, `staff.hioc.in`, `owner.hioc.in`. www is served directly, not redirected. |
 | DNS | At **GoDaddy** (`ns17/18.domaincontrol.com`). Each name is an A record pointing at Vercel (`216.198.79.1`). |
 | Cron | 9 Vercel crons in `vercel.json` (daily/weekly, UTC), plus 3 Supabase `pg_cron` jobs that POST to `https://hioc.in/api/cron/*` |
@@ -68,23 +78,24 @@ on the provider's page when you sign up.
 
 | Option | Cost / month | Fits HIOC? | Notes |
 |---|---|---|---|
-| **AWS Lightsail, Seoul, 2 GB** (recommended) | **~$12** (1 GB: ~$7) | ✅ | Same AWS region as Supabase. Includes a static IP and 3 TB of transfer. AWS bills Indian accounts in INR. |
-| Vultr, Seoul, 1–2 GB | ~$6–12 | ✅ | Equivalent alternative. Same kit, same steps; only the signup differs. |
+| **Vultr, Mumbai, 2 GB** (recommended) | **~$12** (1 GB: ~$6) | ✅ | Same city as the new database. Public IPv4 included. Billed by the hour with a monthly cap. |
+| DigitalOcean droplet, Bangalore, 1–2 GB | ~$6–12 | ✅ | Equivalent alternative, a few ms further from Mumbai. Same kit, same steps. |
+| AWS Lightsail, Mumbai | ~$7–12 | ⚠️ | Would fit, but **not on your AWS project**, which is locked to Sydney. It needs AWS's advanced features turned on first. |
 | Vercel Pro | $20 + usage over the $20 credit | ✅ | No migration needed. 1 TB transfer and 10M edge requests included. Usage-billed past the credit, so the polling keeps costing money. |
 | Cloudflare Workers Paid (OpenNext) | $5 | ❌ for now | `@opennextjs/cloudflare` 1.20 requires `next >=15.5.28`. HIOC is on 14.2. Workers also run near the visitor, not near the DB, unless placement is configured. Revisit after the Next upgrade. |
-| Oracle Cloud Always Free, Seoul | $0 | ⚠️ | ARM VM, free. But capacity is a lottery, idle VMs get reclaimed unless the account is upgraded to pay-as-you-go, and there is no support. Too fragile for a POS. |
-| Railway / Render / DigitalOcean App Platform | $5–7+ | ❌ | **No Seoul region** (nearest is Singapore). Every database query would cross the sea, which is exactly why Vercel was pinned to `icn1`. |
-| Netlify | free / paid tiers | ❌ | Functions run far from Seoul by default; same latency problem. |
+| Oracle Cloud Always Free, Mumbai | $0 | ⚠️ | ARM VM, free. But capacity is a lottery, idle VMs get reclaimed unless the account is upgraded to pay-as-you-go, and there is no support. Too fragile for a POS. |
+| Railway / Render | $5–7+ | ❌ | **No India region** (nearest is Singapore). Every database query would cross the sea, which is exactly why Vercel was pinned next to the database. |
+| Netlify | free / paid tiers | ❌ | Functions run far from Mumbai by default; same latency problem. |
 
-### Why a server, and why Seoul
+### Why a server, and why Mumbai
 
 - **Price is fixed.** HIOC's traffic is steady and comes from one café,
   mostly polling. That is the worst shape for per-request billing and the best
   shape for a small always-on server.
-- **Next to the database.** Every API route makes several Supabase queries.
-  In the same AWS region they take ~1 ms each, against ~70–100 ms from
-  Singapore or Mumbai. Visitors' round trip from India to Seoul is the same as
-  today, because Vercel already runs the functions in Seoul.
+- **Next to the database, and next to the café.** Every API route makes
+  several Supabase queries. In the same city they take ~1 ms each, against
+  ~70–100 ms from another country. And with both in Mumbai, a customer's or
+  the POS's round trip stays inside India instead of going to Korea and back.
 - **No code changes.** The app already runs as a normal Node server. The only
   change is one opt-in line in `next.config.js`.
 
@@ -141,22 +152,21 @@ alone (MX, the Resend/email TXT records, and so on).
 
 ### Step 2 — create the server
 
-1. AWS Console → **Lightsail** → Create instance → Region **Seoul
-   (ap-northeast-2)** → Linux → **Ubuntu 24.04 LTS** → plan **2 GB** → name
-   `hioc-web`.
-2. Networking → **Create static IP** and attach it to `hioc-web`. Write the IP
-   down.
-3. Networking → IPv4 firewall: keep SSH (22) and add **HTTP (80)**, **HTTPS
-   (443 TCP)** and, optionally, **443 UDP** for HTTP/3.
-4. Download the SSH key (or add your own), then
-   `ssh ubuntu@<static-ip>` once to confirm it works.
+1. Vultr → **Deploy** → Cloud Compute (shared CPU) → Location **Mumbai** →
+   **Ubuntu 24.04 LTS** → plan **2 GB** → add your SSH key → hostname
+   `hioc-web`. Leave automatic backups off; the server holds no data.
+2. Write down its public IPv4. It stays the same for as long as the server
+   exists.
+3. Leave Vultr's firewall group empty: `setup-server.sh` turns on Ubuntu's own
+   firewall (SSH, HTTP, HTTPS only).
+4. `ssh root@<server-ip>` once to confirm it works.
 
 ### Step 3 — set the server up
 
 ```bash
 # from a checkout of this repo
-scp -r deploy ubuntu@<static-ip>:~/
-ssh ubuntu@<static-ip> 'sudo bash ~/deploy/setup-server.sh'
+scp -r deploy root@<server-ip>:~/
+ssh root@<server-ip> 'bash ~/deploy/setup-server.sh'
 ```
 
 Then fill in `/opt/hioc/app.env` with the production environment variables:
@@ -174,7 +184,7 @@ Then fill in `/opt/hioc/app.env` with the production environment variables:
    Vault (`cron_secret`), because the pg_cron jobs send it.
 5. Wrap any value that contains `$` in single quotes.
 6. Copy it up and lock it down:
-   `scp app.env ubuntu@<static-ip>:/opt/hioc/app.env && ssh ubuntu@<static-ip> chmod 600 /opt/hioc/app.env`.
+   `scp app.env root@<server-ip>:/opt/hioc/app.env && ssh root@<server-ip> chmod 600 /opt/hioc/app.env`.
    Delete the local copy afterwards and keep the master copy in your password
    manager. This file is the only thing on the server that can't be rebuilt
    from the repo.
@@ -182,15 +192,15 @@ Then fill in `/opt/hioc/app.env` with the production environment variables:
 ### Step 4 — connect GitHub Actions
 
 Create a deploy key pair on your laptop (`ssh-keygen -t ed25519 -f hioc-deploy -N ''`).
-Append `hioc-deploy.pub` to `/home/ubuntu/.ssh/authorized_keys` on the server.
+Append `hioc-deploy.pub` to `/root/.ssh/authorized_keys` on the server.
 Then in GitHub → repo → Settings → Secrets and variables → Actions:
 
 | Kind | Name | Value |
 |---|---|---|
-| Variable | `SERVER_HOST` | the static IP |
-| Variable | `SERVER_USER` | `ubuntu` |
+| Variable | `SERVER_HOST` | the server's IP |
+| Variable | `SERVER_USER` | `root` |
 | Secret | `SERVER_SSH_KEY` | contents of `hioc-deploy` (the private key) |
-| Secret | `SERVER_KNOWN_HOSTS` | output of `ssh-keyscan -t ed25519 <static-ip>` |
+| Secret | `SERVER_KNOWN_HOSTS` | output of `ssh-keyscan -t ed25519 <server-ip>` |
 | Secret | `NEXT_PUBLIC_ENV` | every `NEXT_PUBLIC_…=…` line from `app.env`, one per line, **including** `NEXT_PUBLIC_SITE_URL` |
 | Variable | `SERVER_DEPLOY_ENABLED` | `true` (set this last) |
 
@@ -207,7 +217,7 @@ effect after `docker compose up -d --force-recreate app`.
 
 Vercel is still live, so test on a spare name:
 
-1. GoDaddy: add an A record `test` → the static IP (TTL 600).
+1. GoDaddy: add an A record `test` → the server's IP (TTL 600).
 2. On the server, add `test.hioc.in` to the first line of
    `/opt/hioc/caddy/Caddyfile` (`hioc.in, www.hioc.in, staff.hioc.in, owner.hioc.in, test.hioc.in {`)
    and run `cd /opt/hioc && docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`.
@@ -223,8 +233,8 @@ Vercel is still live, so test on a spare name:
 ### Step 6 — cutover (after closing, ~30 minutes)
 
 1. **DNS:** at GoDaddy, change the A records for `@`, `www`, `staff` and `owner`
-   from `216.198.79.1` to the static IP. If `www` is a CNAME to Vercel, replace
-   it with an A record to the static IP.
+   from `216.198.79.1` to the server's IP. If `www` is a CNAME to Vercel,
+   replace it with an A record to the server's IP.
 2. **Certificates:** right away, on the server:
    `cd /opt/hioc && docker compose restart caddy && docker compose logs -f caddy`.
    Wait for `certificate obtained successfully` for all four names (usually
@@ -234,7 +244,7 @@ Vercel is still live, so test on a spare name:
    nobody sees an outage.
 3. **Cron, in this order:** first Vercel → Project → Settings → **Cron Jobs →
    Disable**. Then on the server:
-   `sudo install -m 644 -o root -g root /opt/hioc/hioc-cron /etc/cron.d/hioc`.
+   `install -m 644 -o root -g root /opt/hioc/hioc-cron /etc/cron.d/hioc`.
    Never have both on at once, or owner report emails and leave reminders go
    out twice. The 3 pg_cron jobs need nothing; they call `https://hioc.in` and
    follow DNS.
@@ -248,7 +258,7 @@ Vercel is still live, so test on a spare name:
    - If online payments are on, do one small Razorpay payment and refund it.
    - Run one cron by hand. `expire-orders` is safe because it is idempotent
      and pg_cron already runs it 4×/day:
-     `sudo /opt/hioc/run-cron.sh expire-orders && tail -1 /var/log/hioc-cron.log`
+     `/opt/hioc/run-cron.sh expire-orders && tail -1 /var/log/hioc-cron.log`
      should show `HTTP 200`.
 5. **Monitoring:** create two free monitors (UptimeRobot or Better Stack) on
    `https://hioc.in/privacy` and `https://staff.hioc.in/login`, alerting the
@@ -256,10 +266,10 @@ Vercel is still live, so test on a spare name:
 
 ### Step 7 — rollback (if anything is wrong in the first two weeks)
 
-- **A bad deploy:** `ssh ubuntu@<ip> /opt/hioc/deploy.sh rollback`. A deploy
+- **A bad deploy:** `ssh root@<ip> /opt/hioc/deploy.sh rollback`. A deploy
   that fails its health check already rolls itself back.
 - **Back to Vercel entirely:** point the four A records back to
-  `216.198.79.1`. Then `sudo rm /etc/cron.d/hioc` on the server and re-enable
+  `216.198.79.1`. Then `rm /etc/cron.d/hioc` on the server and re-enable
   Vercel's Cron Jobs. Vercel kept building `main` the whole time, so it is
   current.
 
@@ -270,7 +280,7 @@ Vercel is still live, so test on a spare name:
 - Remove `<Analytics />` / `@vercel/analytics` from `app/layout.tsx`. Off
   Vercel it only 404s on `/_vercel/insights/script.js`. If you want traffic
   numbers, Cloudflare Web Analytics is free and needs no DNS change.
-- Optionally take a Lightsail snapshot of the configured server (a few cents a
+- Optionally take a Vultr snapshot of the configured server (a few cents a
   month) for a faster rebuild.
 
 ## 5. What changes for the team
@@ -280,10 +290,10 @@ Vercel is still live, so test on a spare name:
 | Deploy | automatic on push to `main` | automatic on push to `main` (GitHub Actions, ~5 min) |
 | Preview URL per branch | yes | **no**. Use `npm run dev` locally; a staging copy on `test.hioc.in` can be added later on the same server for $0. |
 | Logs | Vercel dashboard | `ssh` → `cd /opt/hioc && docker compose logs -f app` (crons: `/var/log/hioc-cron.log`). `MONITORING_WEBHOOK_URL` alerts work as before. |
-| Static files (JS, CSS, images) | Vercel's CDN, near the visitor | served from Seoul. The first visit is a little slower; after that the browser caches them for a year. Cloudflare's free proxy can be added later (fix `trusted_proxies` first; see the Caddyfile). |
+| Static files (JS, CSS, images) | Vercel's CDN, near the visitor | served from Mumbai. The first visit is a little slower; after that the browser caches them for a year. Cloudflare's free proxy can be added later (fix `trusted_proxies` first; see the Caddyfile). |
 | Cron timing | ±59 min on Hobby | exact |
 | Function time limits (`maxDuration`) | enforced | none (requests run to completion) |
-| Scaling | automatic | one server, ~50× headroom over today's load. Move to a bigger Lightsail plan via snapshot if ever needed. |
+| Scaling | automatic | one server, ~50× headroom over today's load. Resize to a bigger Vultr plan in place if ever needed. |
 | Failover | multi-zone | single server. Automatic restart on crash or hang, automatic rollback of bad deploys, uptime alerts. Data lives in Supabase, so a dead server is rebuilt from this repo in ~30 minutes. |
 | OS upkeep | none | security updates install automatically; any reboot they need happens at 05:00 IST |
 
@@ -298,15 +308,14 @@ Vercel is still live, so test on a spare name:
 2. **Polling volume.** Running the poll backstop only while the realtime
    socket is down (or much slower while it is up) would cut API traffic by
    roughly 4×. That matters on any per-request host, not on this one.
-3. **Database in Seoul, café in India.** Every request crosses India→Seoul
-   (~100 ms each way), on Vercel today and on this server. Moving Supabase and
-   the server to Mumbai (`ap-south-1`) would make the app noticeably snappier,
-   but it is a database migration and a separate project.
+3. **Database in Seoul, café in India.** Being fixed:
+   `docs/DB-REGION-MOVE.md` moves Supabase to Mumbai (`ap-south-1`), and this
+   plan now puts the server there too.
 
 ## Sources
 
 - Vercel limits and Hobby terms: <https://vercel.com/docs/limits>, <https://vercel.com/docs/plans/pro-plan>, <https://vercel.com/docs/cron-jobs/usage-and-pricing>, <https://vercel.com/docs/encryption> (HSTS defaults)
 - Cloudflare Workers pricing: <https://developers.cloudflare.com/workers/platform/pricing/>. OpenNext's Next.js requirement comes from the `@opennextjs/cloudflare` package's `peerDependencies` on npm.
-- Lightsail and Vultr prices: <https://onedollarvps.com/pricing/aws-lightsail-pricing>, <https://onedollarvps.com/pricing/vultr-pricing>, <https://www.vultr.com/products/regular-performance-compute/>
+- Vultr, Lightsail and DigitalOcean prices: <https://onedollarvps.com/pricing/aws-lightsail-pricing>, <https://onedollarvps.com/pricing/vultr-pricing>, <https://www.vultr.com/products/regular-performance-compute/>
 - Oracle Always Free reclamation: <https://docs.oracle.com/en-us/iaas/Content/FreeTier/resourceref.htm>
 - Next.js 14 end of life: <https://www.herodevs.com/blog-posts/nextjs-eol-dates-version-support-timeline>, <https://community.vercel.com/t/is-there-a-fix-available-for-cve-2026-23864-in-nextjs-v14/32932>

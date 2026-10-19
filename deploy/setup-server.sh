@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# One-time bootstrap for a fresh Ubuntu 24.04 LTS server (AWS Lightsail or
-# Vultr, Seoul region — see docs/HOSTING-MIGRATION-PLAN.md, step 2). Copy
-# this deploy/ folder to the server and run it once:
+# One-time bootstrap for a fresh Ubuntu 24.04 LTS server (Vultr, Mumbai —
+# see docs/HOSTING-MIGRATION-PLAN.md, step 2). Copy this deploy/ folder to the
+# server and run it once as root (or with sudo):
 #
-#   scp -r deploy ubuntu@<server-ip>:~/ && ssh ubuntu@<server-ip> 'sudo bash ~/deploy/setup-server.sh'
+#   scp -r deploy root@<server-ip>:~/ && ssh root@<server-ip> 'bash ~/deploy/setup-server.sh'
 #
 # Safe to re-run: every step checks before it changes anything. It does NOT
 # install the cron jobs (that happens at cutover, step 6) and does not start
 # the app (the first deploy from GitHub Actions does).
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
-deploy_user="${SUDO_USER:-ubuntu}"
+# Whoever ran it: `ubuntu` via sudo on Lightsail, root on Vultr (no other user).
+deploy_user="${SUDO_USER:-$(id -un)}"
 here="$(dirname "$(readlink -f "$0")")"
 
 # UTC like Vercel: the cron schedules in hioc-cron are written in UTC, and the
@@ -48,8 +49,8 @@ if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
   grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-# Only SSH and web traffic in. (Also open 22/80/443 in the provider's own
-# firewall panel — Lightsail blocks 443 until you add it there.)
+# Only SSH and web traffic in. (If the provider's own firewall panel is in
+# use, open 22/80/443 there too; Lightsail, for one, blocks 443 by default.)
 ufw allow OpenSSH
 ufw allow 80/tcp
 ufw allow 443/tcp

@@ -1,0 +1,74 @@
+name: Move Supabase to Mumbai
+
+# One-off move of the HIOC database from the Seoul Supabase project to a new,
+# EMPTY project in Mumbai (ap-south-1). Runbook: docs/DB-REGION-MOVE.md.
+# Logic lives in scripts/db-move/move.sh. Seoul is only ever read.
+#
+#   check     read-only preflight: both projects reachable, Mumbai empty
+#   rehearse  full dump of Seoul restored into a throwaway local Supabase on
+#             the runner; neither real project is written to
+#   migrate   the real copy into Mumbai, all or nothing (type MIGRATE)
+#   storage   re-runs only the file copy and the row-count check, if those
+#             failed after migrate's restore had already committed
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   OLD_DB_URL, NEW_DB_URL         each project's Session pooler connection string
+#                                  (Connect → Session pooler). GitHub's runners have
+#                                  no IPv6, so the direct db.<ref>.supabase.co one fails.
+#   OLD_SUPABASE_URL, NEW_SUPABASE_URL   https://<ref>.supabase.co
+#   OLD_SERVICE_KEY, NEW_SERVICE_KEY     each project's secret key (migrate only)
+#   CRON_SECRET                    the same value the app uses
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: check, rehearse, migrate, or storage
+        type: choice
+        options: [check, rehearse, migrate, storage]
+        default: check
+      confirm:
+        description: Type MIGRATE to run the real copy
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+# Never two at once, and never cancel one half-way through a restore.
+concurrency:
+  group: supabase-region-move
+  cancel-in-progress: false
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # psql 17 from the PostgreSQL project's own apt repo: the dumps come from
+      # pg_dump 17 and use meta-commands (\restrict) older clients reject.
+      - name: Install psql 17
+        run: |
+          sudo apt-get install -yq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -yq postgresql-client-17
+          psql --version
+
+      - name: Move
+        env:
+          MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
+          OLD_DB_URL: ${{ secrets.OLD_DB_URL }}
+          NEW_DB_URL: ${{ secrets.NEW_DB_URL }}
+          OLD_SUPABASE_URL: ${{ secrets.OLD_SUPABASE_URL }}
+          NEW_SUPABASE_URL: ${{ secrets.NEW_SUPABASE_URL }}
+          OLD_SERVICE_KEY: ${{ secrets.OLD_SERVICE_KEY }}
+          NEW_SERVICE_KEY: ${{ secrets.NEW_SERVICE_KEY }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: bash scripts/db-move/move.sh
