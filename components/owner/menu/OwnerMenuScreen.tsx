@@ -3,12 +3,14 @@
 // /owner/menu — two tabs held in `?tab=` (so a reload or a link lands on the
 // same one): Items, the owner's own menu editor (changes apply at once), and
 // Approvals, the add/edit/delete requests staff and managers made on the POS.
+// With no `?tab=` the page opens on Approvals when requests are waiting, else Items.
 // The pending list lives here because three things read it: the Approvals tab
 // label, the "waiting" flags on the item table, and the badge on the owner
 // header's Menu tab (published through menuEvents).
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { Spinner } from '@/components/ui/Spinner';
 import { MenuApprovals } from './MenuApprovals';
 import { OwnerMenuItems } from './OwnerMenuItems';
 import { publishMenuPendingCount } from './menuEvents';
@@ -19,11 +21,20 @@ export function OwnerMenuScreen() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const tab = menuTabFromParam(params.get('tab'));
+  const tabParam = params.get('tab');
 
   const pending = useMenuRequests('pending');
   const pendingCount = pending.requests.length;
   const flags = useMemo(() => pendingByItemId(pending.requests), [pending.requests]);
+
+  // With no `?tab=`, the first pending load picks the tab (a failed load counts
+  // as none waiting). It is picked once: a count that changes later, say after
+  // the last approval, never moves the owner.
+  const [defaultTab, setDefaultTab] = useState<OwnerMenuTab | null>(null);
+  useEffect(() => {
+    if (defaultTab === null && !pending.loading) setDefaultTab(pendingCount > 0 ? 'approvals' : 'items');
+  }, [defaultTab, pending.loading, pendingCount]);
+  const tab = tabParam !== null ? menuTabFromParam(tabParam) : defaultTab;
 
   // Keep the header badge in step with whatever this screen last loaded.
   const settled = !pending.loading && !pending.error;
@@ -33,7 +44,8 @@ export function OwnerMenuScreen() {
 
   const goTo = useCallback(
     (next: OwnerMenuTab) => {
-      router.replace(next === 'items' ? pathname : `${pathname}?tab=${next}`, { scroll: false });
+      // Always explicit, so choosing Items sticks when the default is Approvals.
+      router.replace(`${pathname}?tab=${next}`, { scroll: false });
     },
     [router, pathname],
   );
@@ -42,6 +54,9 @@ export function OwnerMenuScreen() {
   const handleChanged = useCallback(() => {
     void reloadPending();
   }, [reloadPending]);
+
+  // Hold the tab choice until the first load, rather than flash Items then jump.
+  if (tab === null) return <Spinner label="Loading menu…" />;
 
   return (
     <div className="flex flex-col gap-5">
