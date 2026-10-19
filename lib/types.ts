@@ -780,6 +780,9 @@ export type PermissionKey =
   | 'menu_edit'
   | 'cash_day_open'
   | 'void_line'
+  // Settle → Edit order (2026-10-settle-edit-order.sql): lower a quantity or
+  // remove a line on an unpaid bill, with a reason. Manager unless the owner opens it.
+  | 'settle_edit_order'
   | 'comp_order'
   | 'refund'
   | 'cash_day_close'

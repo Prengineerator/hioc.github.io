@@ -12,6 +12,11 @@ vi.mock('@/lib/staff/surface', () => ({
 // all migrated to getCounterActor(). Focus: the auth + permission gate on
 // each (menu_edit, hasPermission with roleHint) for both a classic session
 // and an enrolled-device operator. None of these had a route test before.
+//
+// Menu changes need the owner's approval (tests/menuChangeRequests.test.ts goes
+// through them in depth): a create or delete by staff is answered 202 with a
+// pending request, the owner's own applies at once, and a sold-out toggle stays
+// instant for everyone.
 
 const state: {
   actor: { user: { id: string }; role: string; via: 'session' | 'device' } | null;
@@ -36,6 +41,11 @@ vi.mock('@/lib/supabase-server', () => ({
       Object.assign(chain, {
         select: () => chain,
         eq: () => chain,
+        neq: () => chain,
+        in: () => chain,
+        is: () => chain,
+        order: () => chain,
+        limit: () => chain,
         insert: () => chain,
         update: () => chain,
         delete: () => chain,
@@ -87,10 +97,17 @@ describe('POST /api/menu (create)', () => {
     expect((await POST(req(body))).status).toBe(403);
   });
 
-  it('PIN-3: an enrolled-device operator can create a menu item', async () => {
+  it('PIN-3: an enrolled-device operator can submit a menu item (held for approval)', async () => {
     state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
-    expect((await POST(req(body))).status).toBe(201);
+    const res = await POST(req(body));
+    expect(res.status).toBe(202);
+    expect(((await res.json()) as { pending: boolean }).pending).toBe(true);
     expect(hasPermissionCalls[0]).toEqual([{ id: 'ravi' }, 'menu_edit', 'staff']);
+  });
+
+  it('the owner on the POS creates the item straight away', async () => {
+    state.actor = { user: { id: 'owner-1' }, role: 'owner', via: 'session' };
+    expect((await POST(req(body))).status).toBe(201);
   });
 
   it('refuses menu changes from the staff website, even for the owner', async () => {
@@ -144,8 +161,13 @@ describe('DELETE /api/menu/[id]', () => {
     expect((await DELETE(new Request('https://x'), ctx)).status).toBe(401);
   });
 
-  it('PIN-3: an enrolled-device operator can delete', async () => {
+  it('PIN-3: an enrolled-device operator can ask for a delete (held for approval)', async () => {
     state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    expect((await DELETE(new Request('https://x'), ctx)).status).toBe(202);
+  });
+
+  it('the owner on the POS deletes straight away', async () => {
+    state.actor = { user: { id: 'owner-1' }, role: 'owner', via: 'session' };
     expect((await DELETE(new Request('https://x'), ctx)).status).toBe(200);
   });
 });

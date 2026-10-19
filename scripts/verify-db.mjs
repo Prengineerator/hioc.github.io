@@ -1596,6 +1596,33 @@ async function checkSellByWeight() {
 }
 
 // ---------------------------------------------------------------------------
+// Settle → Edit order (supabase/2026-10-settle-edit-order.sql): lowering a
+// quantity on an unpaid bill is audited as kind='change_qty'. The edit itself
+// commits first and a failed audit only logs, so a CHECK that still rejects the
+// kind would leave edits unaudited with nothing on screen to show it.
+// ---------------------------------------------------------------------------
+async function checkSettleEditOrder() {
+  heading('Settle edit · change_qty amendments + settle_edit_order permission', '2026-10-settle-edit-order.sql');
+
+  const qty = await doomedInsert('order_amendments', {
+    order_id: BOGUS_ORDER_ID, kind: 'change_qty', payload: { sentinel: SENTINEL },
+  });
+  expectKind("order_amendments accepts kind='change_qty'", qty, 'fk', 'reached the FK, so the CHECK passed');
+
+  // The key is in lib/permissions.ts' defaults, so an unseeded database still
+  // behaves (manager-and-up, the intended default) and the owner's toggle still
+  // works (the permissions route upserts) — but the matrix row should exist.
+  const perm = await rest('/role_permissions?select=permission_key,min_role&permission_key=eq.settle_edit_order');
+  if (perm.ok && Array.isArray(perm.body) && perm.body.length > 0) {
+    pass('settle_edit_order permission is seeded', `min role: ${perm.body[0].min_role}`);
+  } else if (perm.ok) {
+    fail('settle_edit_order permission is seeded', 'apply supabase/2026-10-settle-edit-order.sql — unseeded, the key falls back to manager (the default), but the migration was not fully applied');
+  } else {
+    fail('settle_edit_order permission is seeded', errText(perm));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase 7 · SUG-1 — the "Help me choose" suggestion engine
 // (docs/PHASE-7-SUGGESTION-ENGINE-SPEC.md §8 SUG-1 AC, supabase/2026-09-suggestion-engine.sql).
 // Five tables, RLS on, everything but customer_taste_profiles' self-read
@@ -2030,6 +2057,7 @@ async function main() {
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();
+  await checkSettleEditOrder();
   await checkMarketingAgent();
   await checkCleanup();
 
