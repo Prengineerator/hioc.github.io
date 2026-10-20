@@ -97,7 +97,12 @@ export interface DocsRow {
   netIssued: number;
 }
 
-/** One step of a reconciliation; the steps add up, top to bottom, to the last 'total' line. */
+/**
+ * One step of a reconciliation; the steps add up, top to bottom, to the last 'total' line.
+ * amountInr is SIGNED: a 'less' step is negative, 'add' and 'start' are positive (or zero), and
+ * 'subtotal'/'total' lines are running totals, not steps. Labels carry no 'Less'/'Add' prefix — the
+ * kind says it.
+ */
 export interface ReconLine {
   label: string;
   amountInr: number;
