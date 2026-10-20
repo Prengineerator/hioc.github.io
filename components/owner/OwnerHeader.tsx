@@ -105,7 +105,7 @@ export function OwnerHeader() {
 
   return (
     // Sticky so the section nav stays one tap away on the long overview.
-    <header className="sticky top-0 z-30 border-b border-line bg-cream/95 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-line bg-cream/95 backdrop-blur print:hidden">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
         <span className="font-bold text-charcoal">HIOC · Owner</span>
         <nav

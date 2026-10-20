@@ -147,7 +147,15 @@ export default async function OwnerReportDownloadsPage({
           if (reports.length === 0) return null;
           return (
             <Card key={group} title={title}>
-              {group === 'gst' ? <BeforeYouFile /> : null}
+              {group === 'gst' ? (
+                <>
+                  <OpenGstReport
+                    label={label}
+                    href={month ? `/owner/reports/gst?month=${month}` : `/owner/reports/gst?from=${from}&to=${to}`}
+                  />
+                  <BeforeYouFile />
+                </>
+              ) : null}
               <ul className="flex flex-col">
                 {reports.map((r) => (
                   <ReportRow key={r.key} title={r.title} description={r.description} href={exportHref(r.key, from, to)} />
@@ -188,6 +196,28 @@ function ReportRow({ title, description, href }: { title: string; description: s
         Download CSV
       </a>
     </li>
+  );
+}
+
+// The finished GST report (app/owner/reports/gst): what you owe and how it was
+// worked out, with the return tables, an Excel file for the CA and a printable page.
+function OpenGstReport({ href, label }: { href: string; label: string }) {
+  return (
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-md border border-tan bg-surface p-3">
+      <div className="min-w-0 flex-1 basis-60">
+        <p className="text-sm font-bold text-charcoal">The GST report for {label}</p>
+        <p className="text-xs text-muted">
+          What you owe, how it was worked out, the GSTR-3B and GSTR-1 tables and the checks, on one page. Print it or
+          download it as Excel for your CA.
+        </p>
+      </div>
+      <Link
+        href={href}
+        className="inline-flex min-h-[40px] items-center rounded-md bg-tan-dark px-4 text-sm font-bold text-cream hover:bg-tan-darker"
+      >
+        Open the GST report
+      </Link>
+    </div>
   );
 }
 
