@@ -471,7 +471,7 @@ function buildToTaxableValue(calcs: readonly Calc[], inclusive: boolean, rate: n
       'Discounts deducted before GST',
       'less',
       disc,
-      `Coupons and Beanies on bills from ${RULE_DATE}: GST is worked out after the discount. Earlier bills are on the next sheet.`,
+      `Coupons and Beanies on bills from ${RULE_DATE}: GST is worked out after the discount. Earlier bills are in the second reconciliation.`,
     ),
     line('GST-exempt items', 'less', exempt, 'Menu items marked GST-exempt. They have no GST and are reported on their own (GSTR-1 Table 8).'),
     line('Packaging taxed', 'add', packTaxed, `Takeaway packaging on bills from ${RULE_DATE} is part of the taxable value.`),
@@ -506,7 +506,7 @@ function buildToInvoiceValue(calcs: readonly Calc[]): ReconLine[] {
   const beanies = sum(early, (c) => paise(c.o.beaniesDiscountInr));
 
   const lines: ReconLine[] = [
-    line('Taxable value', 'start', taxable, 'From the sheet above.'),
+    line('Taxable value', 'start', taxable, 'Worked out in the first reconciliation.'),
     line('CGST', 'add', cgst, 'Central GST charged on the bills.'),
     line('SGST', 'add', sgst, 'State GST charged on the bills.'),
     line('GST-exempt sales', 'add', exempt, 'Menu items with no GST (GSTR-1 Table 8, GSTR-3B 3.1(c)).'),
