@@ -22,6 +22,7 @@ import {
   type ReportDay,
 } from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
+import { wholeMonthOf } from '@/lib/reports/exports/period';
 import { formatIstDate } from '@/lib/account/orderDisplay';
 import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 
@@ -86,6 +87,9 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
   }
 
   const csvHref = `/api/owner/reports?from=${from}&to=${to}&format=csv`;
+  // GST is filed for a whole month: open the one being looked at, else the GST page's own default (last month).
+  const gstMonth = wholeMonthOf(from, to);
+  const gstHref = gstMonth ? `/owner/reports/gst?month=${gstMonth}` : '/owner/reports/gst';
   const label = from === to ? shortDate(from) : `${shortDate(from)} – ${shortDate(to)}`;
 
   return (
@@ -107,6 +111,12 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
             className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
           >
             Insights
+          </Link>
+          <Link
+            href={gstHref}
+            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
+          >
+            GST
           </Link>
           <Link
             href={`/owner/reports/downloads?from=${from}&to=${to}`}

@@ -8,6 +8,8 @@
 // different: when the item was edited after the request was made (`stale`),
 // approving would overwrite those newer edits, so the card says what changed and
 // offers "Approve anyway" (re-sends the approval with force) beside Reject.
+// An add-on group request (2026-10-addon-change-requests.sql) is decided the
+// same way; only its labels and its before → after (AddonChangeDiff) differ.
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/Button';
@@ -15,22 +17,29 @@ import { Modal } from '@/components/ui/Modal';
 import { Textarea } from '@/components/ui/Textarea';
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import { Notice, Pill } from '@/components/owner/marketing/ui';
-import type { MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
+import { isAddonRequest, type MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
+import { AddonChangeDiff } from './AddonChangeDiff';
 import { MenuChangeDiff } from './MenuChangeDiff';
 import {
-  ACTION_LABELS,
   STATUS_LABELS,
   actionTone,
+  changedAddonFieldLabels,
   changedFieldLabels,
   formatIstDateTime,
+  requestActionLabel,
   statusTone,
 } from './menuDiff';
 
 type Decision = 'approve' | 'reject';
 
 function decidedMessage(request: MenuChangeRequest, decision: Decision): string {
-  const name = `“${request.item_name || 'item'}”`;
+  const name = `“${request.item_name || (isAddonRequest(request) ? 'add-on group' : 'item')}”`;
   if (decision === 'reject') return `Rejected the request for ${name}. The menu is unchanged.`;
+  if (isAddonRequest(request)) {
+    return request.action === 'create'
+      ? `Approved ${name}. It can now be added to menu items.`
+      : `Approved the changes to ${name}. They are live now.`;
+  }
   if (request.action === 'create') return `Approved ${name}. It is now on the menu.`;
   if (request.action === 'delete') return `Approved. ${name} was removed from the menu.`;
   return `Approved the changes to ${name}. They are live now.`;
@@ -57,7 +66,9 @@ export function MenuRequestCard({
   const [note, setNote] = useState('');
 
   const pending = request.status === 'pending';
-  const itemName = request.item_name || 'Untitled item';
+  const addon = isAddonRequest(request);
+  const itemName = request.item_name || (addon ? 'Untitled add-on group' : 'Untitled item');
+  const actionLabel = requestActionLabel(request);
 
   async function decide(decision: Decision, force = false) {
     setBusy(decision);
@@ -103,14 +114,19 @@ export function MenuRequestCard({
     else void decide('approve');
   }
 
-  const changed = request.action === 'update' ? changedFieldLabels(request.payload) : [];
+  const changed =
+    request.action !== 'update'
+      ? []
+      : isAddonRequest(request)
+        ? changedAddonFieldLabels(request.payload)
+        : changedFieldLabels(request.payload);
 
   return (
-    <article className="rounded-md border border-line bg-cream p-5 shadow-sm" aria-label={`${ACTION_LABELS[request.action]}: ${itemName}`}>
+    <article className="rounded-md border border-line bg-cream p-5 shadow-sm" aria-label={`${actionLabel}: ${itemName}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Pill tone={actionTone(request.action)}>{ACTION_LABELS[request.action]}</Pill>
+            <Pill tone={actionTone(request.action)}>{actionLabel}</Pill>
             <h3 className="min-w-0 break-words text-lg font-bold text-charcoal">{itemName}</h3>
           </div>
           <p className="mt-1 text-sm text-muted">
@@ -138,7 +154,11 @@ export function MenuRequestCard({
       ) : null}
 
       <div className="mt-3">
-        <MenuChangeDiff request={request} addonNames={addonNames} />
+        {isAddonRequest(request) ? (
+          <AddonChangeDiff request={request} />
+        ) : (
+          <MenuChangeDiff request={request} addonNames={addonNames} />
+        )}
       </div>
 
       {error && !rejectOpen ? (

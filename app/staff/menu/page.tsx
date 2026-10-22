@@ -13,6 +13,7 @@ import { useStaffShell } from '@/components/staff/StaffShell';
 import { MENU_POS_ONLY_MESSAGE } from '@/lib/staff/surfaceRules';
 import { MenuSwitchesPanel } from '@/components/staff/MenuSwitchesPanel';
 import { PendingMenuRequests } from '@/components/staff/menu/PendingMenuRequests';
+import { AddonGroupsPanel } from '@/components/staff/menu/AddonGroupsPanel';
 import { STAFF_MENU_CHANGED_EVENT, publishStaffMenuPending } from '@/components/staff/menu/menuEvents';
 import { parseMenuRequestViewer, type MenuRequestViewer } from '@/components/staff/menu/requestViewer';
 import type { MenuChangeAction, MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
@@ -53,8 +54,9 @@ export default function StaffMenuPage() {
   >(null);
   const [deleteTarget, setDeleteTarget] = useState<MenuItem | null>(null);
   const [query, setQuery] = useState('');
-  // Items list, or the on/off switches for categories, sizes and add-ons.
-  const [view, setView] = useState<'items' | 'switches'>('items');
+  // Items list, the on/off switches for categories, sizes and add-ons, or the
+  // add-on groups themselves (names, rules, options, prices).
+  const [view, setView] = useState<'items' | 'switches' | 'addons'>('items');
   // Edits, new items and deletes the owner hasn't decided yet.
   const [pending, setPending] = useState<MenuChangeRequest[]>([]);
   // Who is looking, so Cancel shows only on requests they may cancel.
@@ -209,6 +211,15 @@ export default function StaffMenuPage() {
     fetchItems();
   }
 
+  // An add-on group saved from the Add-ons tab: the same "sent to the owner" /
+  // applied handling as an item. Items embed their add-on groups, so they reload.
+  function handleAddonSaved(sentForApproval: boolean) {
+    if (sentForApproval) setNotice({ kind: 'sent', text: SENT_FOR_APPROVAL });
+    else setAppliedDirectly(true);
+    void fetchPending();
+    fetchItems();
+  }
+
   async function handleDeleteConfirm() {
     if (!deleteTarget) return;
     const target = deleteTarget;
@@ -255,7 +266,8 @@ export default function StaffMenuPage() {
 
       {canEditMenu && !appliedDirectly ? (
         <p className="-mt-2 mb-4 text-sm text-muted">
-          Edits, new items and deletes go to the owner for approval. Sold-out and on/off switches apply right away.
+          Edits, new items, deletes and add-on changes go to the owner for approval. Sold-out and on/off switches apply
+          right away.
         </p>
       ) : null}
 
@@ -291,6 +303,7 @@ export default function StaffMenuPage() {
         {(
           [
             ['items', 'Items'],
+            ['addons', 'Add-ons'],
             ['switches', 'On / off'],
           ] as const
         ).map(([id, label]) => (
@@ -310,20 +323,31 @@ export default function StaffMenuPage() {
         ))}
       </div>
 
+      {view !== 'switches' ? (
+        <PendingMenuRequests
+          requests={pending}
+          canCancel={canEditMenu}
+          viewer={viewer}
+          onChanged={() => void fetchPending()}
+        />
+      ) : null}
+
       {view === 'switches' ? (
         loading ? (
           <Spinner label="Loading menu items…" />
         ) : (
           <MenuSwitchesPanel items={items} canEdit={canEditMenu} />
         )
+      ) : view === 'addons' ? (
+        <AddonGroupsPanel
+          items={items}
+          canEdit={canEditMenu}
+          approvalNeeded={viewer?.role !== 'owner'}
+          pending={pending}
+          onSaved={handleAddonSaved}
+        />
       ) : (
       <>
-      <PendingMenuRequests
-        requests={pending}
-        canCancel={canEditMenu}
-        viewer={viewer}
-        onChanged={() => void fetchPending()}
-      />
 
       <input
         type="search"

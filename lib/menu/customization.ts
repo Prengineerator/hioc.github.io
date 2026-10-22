@@ -26,6 +26,23 @@ export function selectionLabel(group: AddonGroup): string {
   return `Choose ${group.min_select}–${group.max_select}`;
 }
 
+/**
+ * How an add-on group's rule reads to the people editing it — "Pick one
+ * (required)", "Pick up to 3", "Pick exactly 2", "Pick 1–3" — on the staff
+ * Add-ons tab and in the owner's approvals. null when the type is unknown.
+ */
+export function choiceRuleLabel(
+  values: { selection_type?: AddonGroup['selection_type']; min_select?: number; max_select?: number } | null | undefined,
+): string | null {
+  if (!values?.selection_type) return null;
+  const min = values.min_select ?? 0;
+  const max = values.max_select ?? 1;
+  if (values.selection_type === 'single') return min > 0 ? 'Pick one (required)' : 'Pick one (optional)';
+  if (min === 0) return `Pick up to ${max}`;
+  if (min === max) return `Pick exactly ${min}`;
+  return `Pick ${min}–${max}`;
+}
+
 /** Compact form of the same rule for the group header pill, e.g. "Up to 3". */
 export function compactHint(group: AddonGroup): string {
   const { min_select: min, max_select: max } = group;

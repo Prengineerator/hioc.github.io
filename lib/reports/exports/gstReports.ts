@@ -1,284 +1,119 @@
-// The GST filing pack, as sheets (CsvTable) built from the OrderDataset: a
-// plain-words summary for the owner and accountant (GSTR-3B), and the three
-// GSTR-1 tables a café with only walk-in customers files — Table 7 (B2C small
-// supplies), Table 12 (HSN / SAC summary, B2C tab) and Table 13 (documents
-// issued). Pure and unit-tested; lib/reports/exports/gstReportsServer.ts loads
-// the dataset and picks the builder.
-//
-// What is reported is the tax the bills CHARGED (orders.tax_inr, see orderData.ts),
-// never a recomputed figure. Cancelled and rejected orders are left out of every
-// total, and all sales are intra-state: CGST + SGST, IGST always 0.
-//
-// From GST_NET_OF_DISCOUNT_FROM (lib/store/hours.ts) bills charge GST after the
-// coupon / Beanies discount and on takeaway packaging; earlier bills charged it
-// on the pre-discount price with packaging untaxed. A month can hold both, so each
-// order carries its rule (ExportOrder.gstRule) and the packaging is a taxable
-// part of its own: it is reported under SAC 996331 with the restaurant service.
-// Money is summed in integer paise and turned back into rupees once.
+// The GST filing pack as sheets (CsvTable), each rendered FROM the GstComputation
+// (lib/reports/exports/gstComputation.ts) so a CSV, the owner's page and the CA's
+// workbook show the same figures:
+//   • gstSummary    one clean working: tax to pay, GSTR-3B Table 3.1, the two
+//                   reconciliations, checks and notes, in blank-line-separated
+//                   sections (no paragraph cells)
+//   • b2cs          GSTR-1 Table 7        — the GST offline tool's b2cs.csv
+//   • exemptTable   GSTR-1 Table 8        — exemp.csv
+//   • hsnB2c        GSTR-1 Table 12 (B2C) — hsn(b2c).csv
+//   • docsIssued    GSTR-1 Table 13       — docs.csv
+//   • dayRegister, invoiceRegister — the day-by-day and bill-by-bill registers
+// The five import files carry exactly the offline tool's columns and no totals row.
+// Pure and unit-tested; lib/reports/exports/gstReportsServer.ts loads the computation.
 
-import { round2, type CsvTable, type CsvValue } from '@/lib/reports/csv';
-import { B2CS_TYPE, PLACE_OF_SUPPLY, SAC_RESTAURANT, HSN_COFFEE_BEANS } from '@/lib/reports/exports/gstCodes';
-import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
-import type { ExportOrder, GstCode, OrderDataset } from '@/lib/reports/exports/types';
+import type { CsvTable, CsvValue } from '@/lib/reports/csv';
+import { GSTR3B_TABLE_31_HEADING, longDate } from '@/lib/reports/exports/gstComputation';
+import type { GstComputation, ReconLine } from '@/lib/reports/exports/gstTypes';
 
-const paise = (inr: number): number => Math.round(inr * 100);
+const paise = (n: number): number => Math.round(n * 100);
 const inr = (p: number): number => p / 100;
+const sum = <T>(list: readonly T[], f: (x: T) => number): number => inr(list.reduce((s, x) => s + paise(f(x)), 0));
 
-const valid = (ds: OrderDataset): ExportOrder[] => ds.orders.filter((o) => o.valid);
-const rupees = (n: number): string => `₹${round2(n)}`;
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** '2026-10-19' → '19 Oct 2026'. */
-function longDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  return `${d} ${MONTHS[m - 1]} ${y}`;
-}
-const RULE_DATE = longDate(GST_NET_OF_DISCOUNT_FROM);
-
-/** The order's packaging as a taxable part (all zero before packaging was taxed). */
-function packagingOf(o: ExportOrder): { taxableP: number; cgstP: number; sgstP: number } {
-  return { taxableP: paise(o.packagingTaxableInr), cgstP: paise(o.packagingCgstInr), sgstP: paise(o.packagingSgstInr) };
+/** '2026-10-20T08:35:00.000Z' → '20 Oct 2026, 14:05 IST'. */
+function preparedOn(iso: string): string {
+  const ist = new Date(Date.parse(iso) + 5.5 * 60 * 60 * 1000).toISOString();
+  return `${longDate(ist.slice(0, 10))}, ${ist.slice(11, 16)} IST`;
 }
 
-/** What neither an order's lines nor its packaging carry of its taxable value / tax (only when tax was charged with nothing to hold it). */
-function unallocated(o: ExportOrder): { taxableP: number; cgstP: number; sgstP: number } {
-  const pack = packagingOf(o);
-  let taxableP = paise(o.taxableValueInr) - pack.taxableP;
-  let cgstP = paise(o.cgstInr) - pack.cgstP;
-  let sgstP = paise(o.sgstInr) - pack.sgstP;
-  for (const l of o.lines) {
-    taxableP -= paise(l.taxableInr);
-    cgstP -= paise(l.cgstInr);
-    sgstP -= paise(l.sgstInr);
+const BLANK: CsvValue[] = [];
+
+// ── Summary ─────────────────────────────────────────────────────────────────
+
+const STEP_PREFIX: Record<ReconLine['kind'], string> = {
+  start: '',
+  add: 'Add: ',
+  less: 'Less: ',
+  subtotal: 'Subtotal: ',
+  total: 'Equals: ',
+};
+
+const CHECK_LABEL = { ok: 'OK', warn: 'Look at this', info: 'Note' } as const;
+
+export function gstSummary(c: GstComputation): CsvTable {
+  const { business: b, period: p } = c;
+  const rows: CsvValue[][] = [];
+  const section = (title: string) => {
+    rows.push(BLANK, [title]);
+  };
+
+  rows.push(['Business', `${b.legalName} (${b.tradeName})`]);
+  rows.push(['GSTIN', b.gstin]);
+  rows.push(['State', b.stateName ? `${b.stateCode} - ${b.stateName}` : b.stateCode]);
+  rows.push(['Address', b.address]);
+  rows.push(['Period', p.from === p.to ? longDate(p.from) : `${longDate(p.from)} to ${longDate(p.to)}`]);
+  rows.push(['Return period', p.returnPeriod ?? 'Not a whole month']);
+  rows.push(['Financial year', p.financialYear]);
+  rows.push(['Prepared on', preparedOn(c.generatedAt)]);
+
+  section(`Tax to pay (all in cash: a restaurant at ${c.ratePercent}% takes no input tax credit)`);
+  rows.push(['CGST', c.taxPayable.cgstInr]);
+  rows.push(['SGST', c.taxPayable.sgstInr]);
+  if (c.taxPayable.igstInr !== 0) rows.push(['IGST', c.taxPayable.igstInr]);
+  if (c.taxPayable.cessInr !== 0) rows.push(['Cess', c.taxPayable.cessInr]);
+  rows.push(['Total GST to pay', c.taxPayable.totalInr]);
+  if (p.gstr1DueDate && p.gstr3bDueDate) {
+    rows.push(['GSTR-1 due', longDate(p.gstr1DueDate)]);
+    rows.push(['GSTR-3B due, with payment', longDate(p.gstr3bDueDate)]);
+  } else {
+    rows.push(['Due dates', 'Not a whole month']);
   }
-  return { taxableP, cgstP, sgstP };
-}
 
-// ── Summary (GSTR-3B) ───────────────────────────────────────────────────────
+  section('Bills');
+  rows.push(['Bills issued', c.counts.issuedBills]);
+  rows.push(['Bills cancelled or rejected', c.counts.cancelledBills]);
 
-interface CodeTally {
-  orders: Set<string>;
-  taxableP: number;
-  cgstP: number;
-  sgstP: number;
-}
-
-/** Taxable value and tax of the non-exempt lines (and, for SAC, packaging) reported under one kind of code. */
-function tallyByCode(orders: ExportOrder[], gst: GstCode): CodeTally {
-  const t: CodeTally = { orders: new Set(), taxableP: 0, cgstP: 0, sgstP: 0 };
-  for (const o of orders) {
-    for (const l of o.lines) {
-      if (l.gstExempt || l.gstCode.code !== gst.code) continue;
-      if (l.taxableInr === 0 && l.cgstInr === 0 && l.sgstInr === 0) continue;
-      t.orders.add(o.id);
-      t.taxableP += paise(l.taxableInr);
-      t.cgstP += paise(l.cgstInr);
-      t.sgstP += paise(l.sgstInr);
-    }
-    if (gst.code === SAC_RESTAURANT.code) {
-      // Packaging is part of the restaurant supply, and so is tax with no line to carry it.
-      for (const part of [packagingOf(o), unallocated(o)]) {
-        if (part.taxableP === 0 && part.cgstP === 0 && part.sgstP === 0) continue;
-        t.orders.add(o.id);
-        t.taxableP += part.taxableP;
-        t.cgstP += part.cgstP;
-        t.sgstP += part.sgstP;
-      }
-    }
+  section(`GSTR-3B Table 3.1: ${GSTR3B_TABLE_31_HEADING}`);
+  rows.push([
+    'Nature of supplies',
+    'Total taxable value (INR)',
+    'Integrated tax (INR)',
+    'Central tax (INR)',
+    'State/UT tax (INR)',
+    'Cess (INR)',
+  ]);
+  for (const r of c.gstr3b) {
+    rows.push([
+      `${r.code} ${r.label}`,
+      r.amounts.taxableValueInr,
+      r.amounts.igstInr,
+      r.amounts.cgstInr,
+      r.amounts.sgstInr,
+      r.amounts.cessInr,
+    ]);
   }
-  return t;
+
+  const recon = (title: string, lines: readonly ReconLine[]) => {
+    section(title);
+    rows.push(['Step', 'Amount (INR)']);
+    for (const l of lines) rows.push([`${STEP_PREFIX[l.kind]}${l.label}`, l.amountInr]);
+  };
+  recon('From sales to taxable value', c.toTaxableValue);
+  recon('From taxable value to the bills’ totals', c.toInvoiceValue);
+
+  section('Checks before you file');
+  rows.push(['Result', 'Check', 'Detail']);
+  for (const k of c.checks) rows.push([CHECK_LABEL[k.status], k.title, k.detail]);
+
+  section('Notes for your CA');
+  for (const n of c.notes) rows.push([n]);
+
+  return { columns: [`GST working for ${p.label}`], rows };
 }
 
-const SUMMARY_COLUMNS = [
-  'Line',
-  'Return reference',
-  'Orders',
-  'Value (INR)',
-  'Taxable value (INR)',
-  'CGST (INR)',
-  'SGST (INR)',
-  'IGST (INR)',
-  'Total tax (INR)',
-  'Note',
-];
+// ── GSTR-1 Table 7: B2C small (b2cs.csv) ────────────────────────────────────
 
-export function gstSummary(ds: OrderDataset): CsvTable {
-  const sales = valid(ds);
-  const dead = ds.orders.filter((o) => !o.valid);
-  const rate = `${ds.gstRatePercent}%`;
-  const sum = (f: (o: ExportOrder) => number) => inr(sales.reduce((s, o) => s + paise(f(o)), 0));
-  const count = (f: (o: ExportOrder) => number) => sales.filter((o) => f(o) > 0).length;
-
-  const taxableP = sales.reduce((s, o) => s + paise(o.taxableValueInr), 0);
-  const cgstP = sales.reduce((s, o) => s + paise(o.cgstInr), 0);
-  const sgstP = sales.reduce((s, o) => s + paise(o.sgstInr), 0);
-
-  const taxRow = (
-    line: string,
-    ref: string,
-    orders: number,
-    t: { taxableP: number; cgstP: number; sgstP: number },
-    note: string,
-  ): CsvValue[] => [
-    line,
-    ref,
-    orders,
-    inr(t.taxableP + t.cgstP + t.sgstP),
-    inr(t.taxableP),
-    inr(t.cgstP),
-    inr(t.sgstP),
-    0,
-    inr(t.cgstP + t.sgstP),
-    note,
-  ];
-  // A line that is not a tax figure: only its amount, the tax columns left blank.
-  const infoRow = (line: string, ref: string, orders: number, value: number, note: string): CsvValue[] => [
-    line,
-    ref,
-    orders,
-    value,
-    '',
-    '',
-    '',
-    '',
-    '',
-    note,
-  ];
-
-  const taxableOrders = sales.filter((o) => o.taxableValueInr > 0 || o.cgstInr > 0 || o.sgstInr > 0).length;
-  const sac = tallyByCode(sales, SAC_RESTAURANT);
-  const hsn = tallyByCode(sales, HSN_COFFEE_BEANS);
-  const exemptValue = sum((o) => o.exemptValueInr);
-  const couponTotal = sum((o) => o.couponDiscountInr);
-  const beaniesTotal = sum((o) => o.beaniesDiscountInr);
-  // The two bases side by side (see the header): bills on the earlier one and on the current one.
-  const earlier = sales.filter((o) => o.gstRule === 'pre_discount');
-  const current = sales.filter((o) => o.gstRule === 'net_of_discount');
-  const sumOf = (list: ExportOrder[], f: (o: ExportOrder) => number) => inr(list.reduce((s, o) => s + paise(f(o)), 0));
-  const packagingTaxed = { orders: 0, taxableP: 0, cgstP: 0, sgstP: 0 };
-  for (const o of sales) {
-    const p = packagingOf(o);
-    if (p.taxableP === 0 && p.cgstP === 0 && p.sgstP === 0) continue;
-    packagingTaxed.orders += 1;
-    packagingTaxed.taxableP += p.taxableP;
-    packagingTaxed.cgstP += p.cgstP;
-    packagingTaxed.sgstP += p.sgstP;
-  }
-  const cancelled = dead.filter((o) => o.status === 'cancelled').length;
-  const rejected = dead.length - cancelled;
-  const processedRefunds = ds.refunds.filter((r) => r.status === 'processed');
-
-  const rows: CsvValue[][] = [
-    taxRow(
-      `Taxable sales @ ${rate}`,
-      'GSTR-1 Table 7 · GSTR-3B 3.1(a)',
-      taxableOrders,
-      { taxableP, cgstP, sgstP },
-      `GST charged on the bills, split half CGST and half SGST (all sales are within Uttar Pradesh, so no IGST). Taxable value is the bill before GST, with HIOC Ritual cups taken out. From ${RULE_DATE} bills charge GST after coupon and Beanies discounts and on takeaway packaging too; earlier bills charged it on the price before discounts, with packaging untaxed. This period: ${current.length} ${current.length === 1 ? 'bill' : 'bills'} on the new basis, ${earlier.length} on the earlier one.${
-        ds.gstInclusive ? ' Prices include GST, so taxable value is the price less its GST.' : ''
-      }`,
-    ),
-    taxRow(
-      `  of which ${SAC_RESTAURANT.description} (SAC ${SAC_RESTAURANT.code})`,
-      'GSTR-1 Table 12',
-      sac.orders.size,
-      sac,
-      `Food, drinks, HIOC Ritual pass sales and, from ${RULE_DATE}, takeaway packaging.`,
-    ),
-    taxRow(
-      '    of which packaging charges (inside SAC 996331)',
-      'GSTR-1 Table 12',
-      packagingTaxed.orders,
-      packagingTaxed,
-      `Takeaway packaging, taxed at the same rate from ${RULE_DATE}. Already counted in the restaurant service row above.`,
-    ),
-    taxRow(
-      `  of which ${HSN_COFFEE_BEANS.description} (HSN ${HSN_COFFEE_BEANS.code})`,
-      'GSTR-1 Table 12',
-      hsn.orders.size,
-      hsn,
-      'Roasted coffee beans sold by weight.',
-    ),
-    [
-      'GST-exempt sales',
-      'GSTR-1 Table 8 · GSTR-3B 3.1(c)',
-      count((o) => o.exemptValueInr),
-      exemptValue,
-      exemptValue,
-      0,
-      0,
-      0,
-      0,
-      'Items marked GST-exempt on the menu. No GST was charged on them; not part of Table 7.',
-    ],
-    infoRow(
-      'Packaging charges billed without GST',
-      'Not in Table 7',
-      earlier.filter((o) => o.packagingInr > 0).length,
-      sumOf(earlier, (o) => o.packagingInr),
-      `Bills before ${RULE_DATE} billed packaging without GST, so it is outside the taxable value above. From that date packaging is taxed (see the packaging row above). Ask your accountant whether the earlier packaging should be treated as part of the supply.`,
-    ),
-    infoRow(
-      'Discounts given (coupons and Beanies)',
-      'For reference',
-      count((o) => o.discountInr),
-      sum((o) => o.discountInr),
-      `Coupons ${rupees(couponTotal)}, Beanies ${rupees(beaniesTotal)}. From ${RULE_DATE} a discount is deducted from the taxable value, because GST is charged after it (${rupees(sumOf(current, (o) => o.discountInr))} of this total). On earlier bills it was not deducted: GST was charged before the discount (${rupees(sumOf(earlier, (o) => o.discountInr))}).`,
-    ),
-    infoRow(
-      'HIOC Ritual cups covered by a pass',
-      'For reference',
-      count((o) => o.passDiscountInr),
-      sum((o) => o.passDiscountInr),
-      'Prepaid cups. GST was charged when the pass was sold, so these cups are left out of the taxable value above (no GST twice).',
-    ),
-    infoRow(
-      'Settle discounts',
-      'For reference',
-      count((o) => o.settleDiscountInr),
-      sum((o) => o.settleDiscountInr),
-      'Given at the counter when the bill was settled. They do not change the GST charged.',
-    ),
-    infoRow(
-      'Tips',
-      'Outside the supply',
-      count((o) => o.tipInr),
-      sum((o) => o.tipInr),
-      'Left voluntarily by customers; not part of the bill or its GST.',
-    ),
-    infoRow(
-      'Cancelled / rejected bills (excluded)',
-      'Excluded',
-      dead.length,
-      inr(dead.reduce((s, o) => s + paise(o.totalInr), 0)),
-      `${cancelled} cancelled, ${rejected} rejected. Left out of every figure above, but they still used up invoice numbers (see the Documents issued sheet).`,
-    ),
-    infoRow(
-      'Refunds processed in the period',
-      'No credit notes issued',
-      new Set(processedRefunds.map((r) => r.orderId)).size,
-      inr(processedRefunds.reduce((s, r) => s + paise(r.amountInr), 0)),
-      'Refunds do not change the GST shown on the original bill and the app issues no credit notes. Tell your accountant if GST should be adjusted for them.',
-    ),
-    infoRow(
-      'Total invoice value of valid orders',
-      'For reference',
-      sales.length,
-      sum((o) => o.totalInr),
-      'Bill totals as printed on the invoices: GST and packaging included, discounts and Ritual cover taken off.',
-    ),
-  ];
-
-  return { columns: SUMMARY_COLUMNS, rows };
-}
-
-// ── GSTR-1 Table 7: B2C small ───────────────────────────────────────────────
-
-export function b2cs(ds: OrderDataset): CsvTable {
-  const taxableP = valid(ds).reduce((s, o) => s + paise(o.taxableValueInr), 0);
-  // One rate in force (store_settings), so one row; all-exempt months have nothing to report here.
-  const rows: CsvValue[][] =
-    taxableP > 0 ? [[B2CS_TYPE, PLACE_OF_SUPPLY, '', ds.gstRatePercent, inr(taxableP), 0, '']] : [];
+export function b2cs(c: GstComputation): CsvTable {
   return {
     columns: [
       'Type',
@@ -289,79 +124,30 @@ export function b2cs(ds: OrderDataset): CsvTable {
       'Cess Amount',
       'E-Commerce GSTIN',
     ],
-    rows,
+    rows: c.gstr1.b2cs.map((r): CsvValue[] => [
+      r.type,
+      r.placeOfSupply,
+      r.applicablePercent,
+      r.rate,
+      r.taxableValueInr,
+      r.cessInr,
+      r.ecommerceGstin,
+    ]),
   };
 }
 
-// ── GSTR-1 Table 12: HSN / SAC summary (B2C) ────────────────────────────────
+// ── GSTR-1 Table 8: nil rated, exempted and non-GST supplies (exemp.csv) ────
 
-interface HsnGroup {
-  code: GstCode;
-  rate: number;
-  /** Grams × units, goods only. */
-  grams: number;
-  valueP: number;
-  taxableP: number;
-  cgstP: number;
-  sgstP: number;
+export function exemptTable(c: GstComputation): CsvTable {
+  return {
+    columns: ['Description', 'Nil Rated Supplies', 'Exempted(other than nil rated/non GST supply)', 'Non-GST Supplies'],
+    rows: c.gstr1.nilExempt.map((r): CsvValue[] => [r.description, r.nilRatedInr, r.exemptedInr, r.nonGstInr]),
+  };
 }
 
-export function hsnB2c(ds: OrderDataset): CsvTable {
-  const groups = new Map<string, HsnGroup>();
-  const group = (code: GstCode, rate: number): HsnGroup => {
-    const key = `${code.code}|${rate}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { code, rate, grams: 0, valueP: 0, taxableP: 0, cgstP: 0, sgstP: 0 };
-      groups.set(key, g);
-    }
-    return g;
-  };
+// ── GSTR-1 Table 12: HSN / SAC summary, B2C tab (hsn(b2c).csv) ──────────────
 
-  for (const o of valid(ds)) {
-    for (const l of o.lines) {
-      const g = group(l.gstCode, l.gstExempt ? 0 : ds.gstRatePercent);
-      if (l.gstExempt) {
-        // Exempt lines: their whole value is the "taxable value" of the rate-0 row.
-        g.taxableP += paise(l.exemptValueInr);
-        g.valueP += paise(l.exemptValueInr);
-      } else {
-        g.taxableP += paise(l.taxableInr);
-        g.cgstP += paise(l.cgstInr);
-        g.sgstP += paise(l.sgstInr);
-        g.valueP += paise(l.taxableInr) + paise(l.cgstInr) + paise(l.sgstInr);
-      }
-      if (l.gstCode.kind === 'goods') g.grams += l.quantity * (l.weightGrams ?? 0);
-    }
-    // Packaging (taxed from GST_NET_OF_DISCOUNT_FROM) is restaurant service, and so is tax
-    // charged with no line to hold it, so the table still ties to Table 7.
-    for (const part of [packagingOf(o), unallocated(o)]) {
-      if (part.taxableP === 0 && part.cgstP === 0 && part.sgstP === 0) continue;
-      const g = group(SAC_RESTAURANT, ds.gstRatePercent);
-      g.taxableP += part.taxableP;
-      g.cgstP += part.cgstP;
-      g.sgstP += part.sgstP;
-      g.valueP += part.taxableP + part.cgstP + part.sgstP;
-    }
-  }
-
-  const rows = [...groups.values()]
-    .filter((g) => g.valueP !== 0 || g.grams !== 0)
-    .sort((a, b) => a.code.code.localeCompare(b.code.code) || b.rate - a.rate)
-    .map((g): CsvValue[] => [
-      g.code.code,
-      g.code.description,
-      g.code.uqc,
-      g.code.kind === 'goods' ? g.grams / 1000 : 0,
-      inr(g.valueP),
-      g.rate,
-      inr(g.taxableP),
-      0,
-      inr(g.cgstP),
-      inr(g.sgstP),
-      0,
-    ]);
-
+export function hsnB2c(c: GstComputation): CsvTable {
   return {
     columns: [
       'HSN',
@@ -376,28 +162,126 @@ export function hsnB2c(ds: OrderDataset): CsvTable {
       'State/UT Tax Amount',
       'Cess Amount',
     ],
+    rows: c.gstr1.hsn.map((r): CsvValue[] => [
+      r.hsn,
+      r.description,
+      r.uqc,
+      r.quantity,
+      r.totalValueInr,
+      r.rate,
+      r.taxableValueInr,
+      r.igstInr,
+      r.cgstInr,
+      r.sgstInr,
+      r.cessInr,
+    ]),
+  };
+}
+
+// ── GSTR-1 Table 13: documents issued (docs.csv) ────────────────────────────
+
+export function docsIssued(c: GstComputation): CsvTable {
+  return {
+    columns: ['Nature of Document', 'Sr. No. From', 'Sr. No. To', 'Total Number', 'Cancelled'],
+    rows: c.gstr1.docs.map((r): CsvValue[] => [r.nature, r.fromNo, r.toNo, r.totalNumber, r.cancelled]),
+  };
+}
+
+// ── Registers ───────────────────────────────────────────────────────────────
+
+export function dayRegister(c: GstComputation): CsvTable {
+  const days = c.dayRegister;
+  const rows: CsvValue[][] = days.map((d): CsvValue[] => [
+    d.date,
+    d.firstInvoice,
+    d.lastInvoice,
+    d.bills,
+    d.cancelled,
+    d.taxableValueInr,
+    d.cgstInr,
+    d.sgstInr,
+    d.exemptValueInr,
+    d.invoiceValueInr,
+  ]);
+  rows.push([
+    'Total',
+    '',
+    '',
+    days.reduce((s, d) => s + d.bills, 0),
+    days.reduce((s, d) => s + d.cancelled, 0),
+    sum(days, (d) => d.taxableValueInr),
+    sum(days, (d) => d.cgstInr),
+    sum(days, (d) => d.sgstInr),
+    sum(days, (d) => d.exemptValueInr),
+    sum(days, (d) => d.invoiceValueInr),
+  ]);
+  return {
+    columns: [
+      'Date',
+      'First invoice',
+      'Last invoice',
+      'Bills issued',
+      'Cancelled or rejected',
+      'Taxable value (INR)',
+      'CGST (INR)',
+      'SGST (INR)',
+      'GST-exempt sales (INR)',
+      'Invoice value (INR)',
+    ],
     rows,
   };
 }
 
-// ── GSTR-1 Table 13: documents issued ───────────────────────────────────────
-
-export function docsIssued(ds: OrderDataset): CsvTable {
-  const columns = ['Nature of Document', 'Sr. No. From', 'Sr. No. To', 'Total Number', 'Cancelled', 'Net Issued'];
-  if (ds.orders.length === 0) return { columns, rows: [] };
-
-  // The range counts every number from the first to the last, so a gap (an order
-  // deleted as a test) shows as cancelled, not as missing.
-  let first = ds.orders[0];
-  let last = ds.orders[0];
-  for (const o of ds.orders) {
-    if (o.orderNumber < first.orderNumber) first = o;
-    if (o.orderNumber > last.orderNumber) last = o;
-  }
-  const total = last.orderNumber - first.orderNumber + 1;
-  const net = ds.orders.filter((o) => o.valid).length;
+export function invoiceRegister(c: GstComputation): CsvTable {
+  const all = c.invoiceRegister;
+  const issued = all.filter((r) => r.status === 'Issued');
+  const rows: CsvValue[][] = all.map((r): CsvValue[] => [
+    r.invoiceNo,
+    r.date,
+    r.time,
+    r.status,
+    r.gstBasis,
+    r.taxableValueInr,
+    r.cgstInr,
+    r.sgstInr,
+    r.exemptValueInr,
+    r.packagingInr,
+    r.discountInr,
+    r.invoiceValueInr,
+    r.paymentMode,
+  ]);
+  // Cancelled and rejected bills show what was printed but count in no total.
+  rows.push([
+    'Total of issued bills',
+    '',
+    '',
+    `${issued.length} issued`,
+    '',
+    sum(issued, (r) => r.taxableValueInr),
+    sum(issued, (r) => r.cgstInr),
+    sum(issued, (r) => r.sgstInr),
+    sum(issued, (r) => r.exemptValueInr),
+    sum(issued, (r) => r.packagingInr),
+    sum(issued, (r) => r.discountInr),
+    sum(issued, (r) => r.invoiceValueInr),
+    '',
+  ]);
   return {
-    columns,
-    rows: [['Invoices for outward supply', first.invoiceNo, last.invoiceNo, total, total - net, net]],
+    columns: [
+      'Invoice no.',
+      'Date',
+      'Time',
+      'Status',
+      'GST basis',
+      'Taxable value (INR)',
+      'CGST (INR)',
+      'SGST (INR)',
+      'GST-exempt sales (INR)',
+      'Packaging charged (INR)',
+      'Discount (INR)',
+      'Invoice value (INR)',
+      'Paid by',
+    ],
+    rows,
   };
 }

@@ -8,9 +8,25 @@
 //
 // Every function here takes the admin (service-role) client: the table is
 // closed to anon / authenticated, and the routes check who is asking first.
+//
+// Add-on groups use the same requests (2026-10-addon-change-requests.sql,
+// target 'addon_group'): stored, listed, cancelled and decided here exactly like
+// an item's, and applied through lib/menu/addonChanges.ts.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isInStoreOnly } from '@/lib/menu/inStore';
+import { isMissingColumnError } from '@/lib/api/postgrest';
+import {
+  ADDON_CHANGE_MIGRATION_HINT,
+  ADDON_GROUP_GONE_MESSAGE,
+  applyAddonCreate,
+  applyAddonUpdate,
+  loadAddonSnapshot,
+  staleAddonFailure,
+  staleAddonFields,
+  validateAddonGroupBody,
+  type AddonGroupValues,
+} from '@/lib/menu/addonChanges';
 import {
   applyMenuCreate,
   applyMenuDelete,
@@ -24,13 +40,17 @@ import {
   type Outcome,
 } from '@/lib/menu/applyMenuChange';
 import type {
+  AddonGroupChangePayload,
+  AddonGroupChangeRequest,
   MenuChangeAction,
   MenuChangeRequest,
   MenuChangeStatus,
+  MenuChangeTarget,
   MenuChangeVariant,
   MenuItemChangePayload,
+  MenuItemChangeRequest,
 } from '@/lib/menu/changeRequestTypes';
-import type { MenuItem } from '@/lib/types';
+import type { AddonGroup, MenuItem } from '@/lib/types';
 
 type Admin = SupabaseClient;
 
@@ -43,8 +63,10 @@ export const REQUEST_GONE_MESSAGE =
 /** Longest decision note the owner can leave. */
 export const MAX_NOTE_LENGTH = 500;
 
-const REQUEST_COLUMNS =
-  'id, action, menu_item_id, item_name, payload, snapshot, status, requested_by, requested_by_name, requested_at, decided_by, decided_at, decision_note';
+// Every column: `target` and `addon_group_id` arrive with
+// 2026-10-addon-change-requests.sql, and a database without them must keep
+// serving item requests (toMenuChangeRequest reads a missing target as an item).
+const REQUEST_COLUMNS = '*';
 
 // ---------------------------------------------------------------------------
 // What a proposal changes (pure)
@@ -200,7 +222,7 @@ export function isAvailabilityOnly(changes: object): boolean {
  * name is never touched, so a change there is harmless), compared the same way
  * as when the request was made: sizes as an ordered list, add-on groups as a set.
  */
-export function staleFields(request: MenuChangeRequest, live: MenuItemChangePayload): string[] {
+export function staleFields(request: MenuItemChangeRequest, live: MenuItemChangePayload): string[] {
   if (!request.snapshot || !request.payload) return [];
   const named = request.payload as Record<string, unknown>;
   const current: Record<string, unknown> = {};
@@ -254,18 +276,14 @@ function dbFailure(error: { code?: string | null; message?: string } | null | un
   return failure(500, message);
 }
 
-function asPayload(value: unknown): MenuItemChangePayload | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as MenuItemChangePayload) : null;
+function asObject<T>(value: unknown): T | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as T) : null;
 }
 
 export function toMenuChangeRequest(row: Record<string, unknown>): MenuChangeRequest {
-  return {
+  const base = {
     id: String(row.id),
-    action: row.action as MenuChangeAction,
-    menu_item_id: (row.menu_item_id as string | null | undefined) ?? null,
     item_name: typeof row.item_name === 'string' ? row.item_name : '',
-    payload: asPayload(row.payload),
-    snapshot: asPayload(row.snapshot),
     status: row.status as MenuChangeStatus,
     requested_by: (row.requested_by as string | null | undefined) ?? null,
     requested_by_name: (row.requested_by_name as string | null | undefined) ?? null,
@@ -273,6 +291,25 @@ export function toMenuChangeRequest(row: Record<string, unknown>): MenuChangeReq
     decided_by: (row.decided_by as string | null | undefined) ?? null,
     decided_at: (row.decided_at as string | null | undefined) ?? null,
     decision_note: (row.decision_note as string | null | undefined) ?? null,
+  };
+  if (row.target === 'addon_group') {
+    return {
+      ...base,
+      target: 'addon_group',
+      action: row.action === 'create' ? 'create' : 'update',
+      menu_item_id: null,
+      addon_group_id: (row.addon_group_id as string | null | undefined) ?? null,
+      payload: asObject<AddonGroupChangePayload>(row.payload),
+      snapshot: asObject<AddonGroupChangePayload>(row.snapshot),
+    };
+  }
+  return {
+    ...base,
+    target: 'menu_item',
+    action: row.action as MenuChangeAction,
+    menu_item_id: (row.menu_item_id as string | null | undefined) ?? null,
+    payload: asObject<MenuItemChangePayload>(row.payload),
+    snapshot: asObject<MenuItemChangePayload>(row.snapshot),
   };
 }
 
@@ -307,18 +344,57 @@ export interface NewChangeRequest {
   requestedBy: string;
 }
 
+export interface NewAddonChangeRequest {
+  action: 'create' | 'update';
+  /** The group an update is about; null for a create. */
+  addonGroupId: string | null;
+  /** The proposed name for a create, else the group's current name. */
+  itemName: string;
+  payload: AddonGroupChangePayload;
+  snapshot: AddonGroupChangePayload | null;
+  requestedBy: string;
+}
+
 /**
  * Stores a pending request. A new update / delete for an item replaces any
  * older PENDING update / delete for that same item (the older one is set to
  * cancelled), so the owner only ever has one open request per item to decide.
+ * The same goes for an add-on group's updates.
  */
 export async function createChangeRequest(admin: Admin, input: NewChangeRequest): Promise<Outcome<MenuChangeRequest>> {
+  return storeRequest(admin, 'menu_item', input.menuItemId, input);
+}
+
+export async function createAddonChangeRequest(
+  admin: Admin,
+  input: NewAddonChangeRequest,
+): Promise<Outcome<AddonGroupChangeRequest>> {
+  const stored = await storeRequest(admin, 'addon_group', input.addonGroupId, input);
+  if (!stored.ok) return stored;
+  return { ok: true, value: stored.value as AddonGroupChangeRequest };
+}
+
+async function storeRequest(
+  admin: Admin,
+  target: MenuChangeTarget,
+  subjectId: string | null,
+  input: {
+    action: MenuChangeAction;
+    itemName: string;
+    payload: MenuItemChangePayload | AddonGroupChangePayload | null;
+    snapshot: MenuItemChangePayload | AddonGroupChangePayload | null;
+    requestedBy: string;
+  },
+): Promise<Outcome<MenuChangeRequest>> {
+  const isAddon = target === 'addon_group';
   const requestedByName = await lookupName(admin, input.requestedBy);
   const { data, error } = await admin
     .from('menu_change_requests')
     .insert({
       action: input.action,
-      menu_item_id: input.menuItemId,
+      // An item request is written exactly as before add-on requests existed, so
+      // it saves on a database without 2026-10-addon-change-requests.sql.
+      ...(isAddon ? { target, addon_group_id: subjectId, menu_item_id: null } : { menu_item_id: subjectId }),
       item_name: input.itemName,
       payload: input.payload,
       snapshot: input.snapshot,
@@ -328,11 +404,30 @@ export async function createChangeRequest(admin: Admin, input: NewChangeRequest)
     })
     .select(REQUEST_COLUMNS)
     .single();
-  if (error || !data) return dbFailure(error, 'Failed to save the change request');
+  if (error || !data) {
+    if (isAddon && isMissingColumnError(error)) return failure(409, ADDON_CHANGE_MIGRATION_HINT);
+    return dbFailure(error, 'Failed to save the change request');
+  }
 
   const created = toMenuChangeRequest(data as Record<string, unknown>);
 
-  if (input.menuItemId && input.action !== 'create') {
+  if (isAddon && subjectId && input.action === 'update') {
+    // As for an item below: after the insert, best effort.
+    const { error: supersedeError } = await admin
+      .from('menu_change_requests')
+      .update({
+        status: 'cancelled',
+        decided_at: new Date().toISOString(),
+        decision_note: 'Replaced by a newer request',
+      })
+      .eq('addon_group_id', subjectId)
+      .eq('status', 'pending')
+      .eq('action', 'update')
+      .neq('id', created.id);
+    if (supersedeError) console.error('menu change requests: could not replace older add-on requests', supersedeError);
+  }
+
+  if (!isAddon && subjectId && input.action !== 'create') {
     // After the insert, so a failed insert never costs the older request. A
     // failure here leaves two open requests, which the owner can still decide.
     const { error: supersedeError } = await admin
@@ -342,7 +437,7 @@ export async function createChangeRequest(admin: Admin, input: NewChangeRequest)
         decided_at: new Date().toISOString(),
         decision_note: 'Replaced by a newer request',
       })
-      .eq('menu_item_id', input.menuItemId)
+      .eq('menu_item_id', subjectId)
       .eq('status', 'pending')
       .in('action', ['update', 'delete'])
       .neq('id', created.id);
@@ -429,19 +524,28 @@ export async function rejectChangeRequest(
  * Cancels pending update / delete requests whose item has been deleted
  * (menu_item_id goes null with the item): they can never be applied. Called
  * after any successful menu item delete. Best effort — a failure only leaves
- * requests for the owner to reject by hand.
+ * requests for the owner to reject by hand. An add-on request has no menu item
+ * at all, so it is left alone.
  */
 export async function cancelOrphanedRequests(admin: Admin): Promise<void> {
-  const { error } = await admin
-    .from('menu_change_requests')
-    .update({
-      status: 'cancelled',
-      decided_at: new Date().toISOString(),
-      decision_note: 'The item was deleted',
-    })
-    .eq('status', 'pending')
-    .in('action', ['update', 'delete'])
-    .is('menu_item_id', null);
+  const run = (itemsOnly: boolean) => {
+    let query = admin
+      .from('menu_change_requests')
+      .update({
+        status: 'cancelled',
+        decided_at: new Date().toISOString(),
+        decision_note: 'The item was deleted',
+      })
+      .eq('status', 'pending')
+      .in('action', ['update', 'delete'])
+      .is('menu_item_id', null);
+    if (itemsOnly) query = query.neq('target', 'addon_group');
+    return query;
+  };
+  let { error } = await run(true);
+  // Before 2026-10-addon-change-requests.sql there is no target column, and no
+  // add-on request either.
+  if (error && isMissingColumnError(error)) ({ error } = await run(false));
   if (error && !isMissingTable(error)) console.error('menu change requests: could not clear orphaned requests', error);
 }
 
@@ -453,6 +557,8 @@ export interface ApprovalResult {
   request: MenuChangeRequest;
   /** The item as it now stands (create and update); absent for a delete. */
   item?: MenuItem;
+  /** The add-on group as it now stands (an add-on request). */
+  addonGroup?: AddonGroup;
 }
 
 async function itemExists(admin: Admin, id: string): Promise<Outcome<boolean>> {
@@ -486,6 +592,7 @@ export async function approveChangeRequest(
   if (!loaded.ok) return loaded;
   const request = loaded.value;
   if (request.status !== 'pending') return alreadyDecided(request.status);
+  if (request.target === 'addon_group') return approveAddonRequest(admin, request, ownerId, note, force);
 
   // Check everything that can be checked before claiming the row.
   let createValues: MenuCreateValues | null = null;
@@ -528,18 +635,13 @@ export async function approveChangeRequest(
   }
 
   if (!applied.ok) {
-    const { error: revertError } = await admin
-      .from('menu_change_requests')
-      .update({ status: 'pending', decided_by: null, decided_at: null, decision_note: null })
-      .eq('id', id)
-      .eq('status', 'approved');
-    if (revertError) console.error('menu change requests: could not put a failed approval back to pending', revertError);
+    await putBackToPending(admin, id);
     // The item vanished between the check and the write.
     return applied.status === 404 ? failure(409, REQUEST_GONE_MESSAGE) : applied;
   }
 
   const item = applied.value.item;
-  let finished = claimed.value;
+  let finished = claimed.value as MenuItemChangeRequest;
   if (request.action === 'create' && item) {
     // The item exists either way; only the link back to it can be lost.
     const { error: linkError } = await admin.from('menu_change_requests').update({ menu_item_id: item.id }).eq('id', id);
@@ -553,4 +655,75 @@ export async function approveChangeRequest(
   }
 
   return { ok: true, value: { request: finished, ...(item ? { item } : {}) } };
+}
+
+/** An approval whose change could not be applied goes back to pending, undecided. */
+async function putBackToPending(admin: Admin, id: string): Promise<void> {
+  const { error } = await admin
+    .from('menu_change_requests')
+    .update({ status: 'pending', decided_by: null, decided_at: null, decision_note: null })
+    .eq('id', id)
+    .eq('status', 'approved');
+  if (error) console.error('menu change requests: could not put a failed approval back to pending', error);
+}
+
+/**
+ * approveChangeRequest for an add-on group: the same claim / apply / put back
+ * steps as an item. A create is validated whole. An edit must still make a valid
+ * group once laid over the live one (an option the request names must still be
+ * in the group, the choice rule must fit the options), and — unless `force` —
+ * is refused as stale when a field it carries has changed since it was made.
+ */
+async function approveAddonRequest(
+  admin: Admin,
+  request: AddonGroupChangeRequest,
+  ownerId: string,
+  note: string | null,
+  force: boolean,
+): Promise<Outcome<ApprovalResult>> {
+  const cannotApply = (message: string) => failure(400, `This request has values that cannot be applied: ${message}`);
+
+  let createValues: AddonGroupValues | null = null;
+  if (request.action === 'create') {
+    const checked = validateAddonGroupBody((request.payload ?? {}) as Record<string, unknown>);
+    if (!checked.ok) return cannotApply(checked.message);
+    createValues = checked.value;
+  } else {
+    if (!request.addon_group_id) return failure(409, ADDON_GROUP_GONE_MESSAGE);
+    if (!request.payload || Object.keys(request.payload).length === 0) {
+      return failure(400, 'This request has no changes to apply. Reject it to clear it.');
+    }
+    const live = await loadAddonSnapshot(admin, request.addon_group_id);
+    if (!live.ok) return live.status === 404 ? failure(409, ADDON_GROUP_GONE_MESSAGE) : live;
+    const checked = validateAddonGroupBody({ ...live.value, ...request.payload } as Record<string, unknown>);
+    if (!checked.ok) return cannotApply(checked.message);
+    if (!force) {
+      const stale = staleAddonFields(request, live.value);
+      if (stale.length > 0) return staleAddonFailure(stale);
+    }
+  }
+
+  const claimed = await closeRequest(admin, request.id, 'approved', ownerId, note);
+  if (!claimed.ok) return claimed;
+
+  const applied =
+    request.action === 'create'
+      ? await applyAddonCreate(admin, createValues as AddonGroupValues)
+      : await applyAddonUpdate(admin, request.addon_group_id as string, request.payload as AddonGroupChangePayload);
+  if (!applied.ok) {
+    await putBackToPending(admin, request.id);
+    return applied.status === 404 ? failure(409, ADDON_GROUP_GONE_MESSAGE) : applied;
+  }
+
+  let finished = claimed.value as AddonGroupChangeRequest;
+  if (request.action === 'create') {
+    // The group exists either way; only the link back to it can be lost.
+    const { error: linkError } = await admin
+      .from('menu_change_requests')
+      .update({ addon_group_id: applied.value.id })
+      .eq('id', request.id);
+    if (linkError) console.error('menu change requests: could not link the created add-on group', linkError);
+    finished = { ...finished, addon_group_id: applied.value.id };
+  }
+  return { ok: true, value: { request: finished, addonGroup: applied.value } };
 }

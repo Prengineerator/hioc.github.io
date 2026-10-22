@@ -7,7 +7,7 @@
 // as well as colour.
 
 import { useMemo } from 'react';
-import type { MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
+import type { MenuItemChangeRequest } from '@/lib/menu/changeRequestTypes';
 import {
   buildRequestDiff,
   formatPrice,
@@ -21,7 +21,7 @@ export function MenuChangeDiff({
   request,
   addonNames,
 }: {
-  request: MenuChangeRequest;
+  request: MenuItemChangeRequest;
   /** Add-on group id → display name. */
   addonNames: Record<string, string>;
 }) {
