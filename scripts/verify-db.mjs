@@ -1596,6 +1596,23 @@ async function checkSellByWeight() {
 }
 
 // ---------------------------------------------------------------------------
+// Add-on approvals (supabase/2026-10-addon-change-requests.sql): add-on group
+// changes from the POS are held in menu_change_requests (target 'addon_group')
+// for the owner, like menu item changes. Item requests and the owner's own
+// add-on edits work without it; a staff add-on change answers 409 until it is
+// in. Reads only.
+// ---------------------------------------------------------------------------
+async function checkAddonApprovals() {
+  heading('Add-on approvals: menu_change_requests.target + addon_group_id', '2026-10-addon-change-requests.sql');
+  const hint = 'apply supabase/2026-10-addon-change-requests.sql (after 2026-10-menu-change-requests.sql)';
+  for (const col of ['target', 'addon_group_id']) {
+    const r = await rest(`/menu_change_requests?select=${col}&limit=1`);
+    if (r.ok) pass(`menu_change_requests.${col} exists`);
+    else fail(`menu_change_requests.${col} exists`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Settle → Edit order (supabase/2026-10-settle-edit-order.sql): lowering a
 // quantity on an unpaid bill is audited as kind='change_qty'. The edit itself
 // commits first and a failed audit only logs, so a CHECK that still rejects the
@@ -2057,6 +2074,7 @@ async function main() {
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();
+  await checkAddonApprovals();
   await checkSettleEditOrder();
   await checkMarketingAgent();
   await checkCleanup();

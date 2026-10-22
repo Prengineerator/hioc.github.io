@@ -11,7 +11,7 @@ import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import type { MenuChangeAction, MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
 import { timeAgo } from '@/lib/utils/timeAgo';
 import type { CancelMenuRequest } from './useCancelMenuRequest';
-import { ACTION_LABEL, describeChange } from './requestSummary';
+import { describeChange, requestLabel } from './requestSummary';
 
 const ACTION_PILL: Record<MenuChangeAction, string> = {
   create: 'bg-amber-100 text-amber-900',
@@ -33,9 +33,11 @@ export function MenuRequestRow({
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-bold ${ACTION_PILL[r.action]}`}>
-            {ACTION_LABEL[r.action]}
+            {requestLabel(r)}
           </span>
-          <span className="break-words font-bold text-charcoal">{r.item_name || 'Untitled item'}</span>
+          <span className="break-words font-bold text-charcoal">
+            {r.item_name || (r.target === 'addon_group' ? 'Untitled add-on group' : 'Untitled item')}
+          </span>
         </div>
         <p className="mt-0.5 text-sm text-charcoal">{describeChange(r)}</p>
         <p className="text-xs text-muted">

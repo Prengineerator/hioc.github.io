@@ -44,6 +44,10 @@ export function makeFakeMenuAdmin(tables: Record<string, Row[]>, opts: FakeMenuA
   let idCounter = 1000;
 
   function embed(table: string, row: Row, columns: string): Row {
+    // An add-on group read with its options (`*, options:addon_options(*)`).
+    if (table === 'addon_groups' && columns.includes('addon_options')) {
+      return { ...row, options: (tables.addon_options ?? []).filter((o) => o.addon_group_id === row.id).map((o) => ({ ...o })) };
+    }
     if (table !== 'menu_items') return { ...row };
     const out: Row = { ...row };
     if (columns.includes('menu_item_variants')) {
