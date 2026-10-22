@@ -17,7 +17,7 @@
 // Money is display-only (order.total_inr); this surface never computes a bill.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { useRouter } from 'next/navigation';
 import { Spinner } from '@/components/ui/Spinner';
 import { ElapsedTime } from '@/components/staff/ElapsedTime';

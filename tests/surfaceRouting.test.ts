@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   surfaceForHost,
   rewriteForSurface,
   hrefForSurface,
   isHostAgnostic,
+  surfaceOfPath,
+  surfaceOrigin,
+  prefetchByDefault,
 } from '@/lib/routing/surface';
 
 describe('surfaceForHost', () => {
@@ -79,6 +82,57 @@ describe('rewriteForSurface', () => {
     // /stafffoo is not under /staff.
     expect(rewriteForSurface('staff', '/stafffoo')).toBe('/staff/stafffoo');
   });
+
+  it('serves the ticket page as it is on the staff host', () => {
+    // The desktop POS prints staff.hioc.in/staff-print/<id>/<type> in system +
+    // driver mode; rewritten to /staff/staff-print/... it printed a 404 page.
+    expect(rewriteForSurface('staff', '/staff-print/abc/kot')).toBeNull();
+    expect(rewriteForSurface('staff', '/staff-print')).toBeNull();
+    // Only the staff surface owns it.
+    expect(rewriteForSurface('owner', '/staff-print/abc/kot')).toBe('/owner/staff-print/abc/kot');
+  });
+});
+
+describe('surfaceOfPath', () => {
+  it('places each canonical path on its surface', () => {
+    expect(surfaceOfPath('/staff')).toBe('staff');
+    expect(surfaceOfPath('/staff/orders/new')).toBe('staff');
+    expect(surfaceOfPath('/staff-print/1/kot')).toBe('staff');
+    expect(surfaceOfPath('/owner')).toBe('owner');
+    expect(surfaceOfPath('/owner/payroll')).toBe('owner');
+    expect(surfaceOfPath('/')).toBe('main');
+    expect(surfaceOfPath('/menu')).toBe('main');
+    expect(surfaceOfPath('/login')).toBe('main');
+  });
+
+  it('does not claim a path that merely starts with the prefix letters', () => {
+    expect(surfaceOfPath('/staffing')).toBe('main');
+    expect(surfaceOfPath('/ownership')).toBe('main');
+  });
+
+  it('gives host-agnostic paths to no surface', () => {
+    expect(surfaceOfPath('/api/orders')).toBeNull();
+    expect(surfaceOfPath('/_next/static/x.js')).toBeNull();
+    expect(surfaceOfPath('/pos.webmanifest')).toBeNull();
+  });
+});
+
+describe('surfaceOrigin', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('defaults to the production hosts', () => {
+    expect(surfaceOrigin('main')).toBe('https://hioc.in');
+    expect(surfaceOrigin('staff')).toBe('https://staff.hioc.in');
+    expect(surfaceOrigin('owner')).toBe('https://owner.hioc.in');
+  });
+
+  it('takes an override, without its trailing slash', () => {
+    vi.stubEnv('NEXT_PUBLIC_STAFF_ORIGIN', 'http://staff.localhost:3001/');
+    expect(surfaceOrigin('staff')).toBe('http://staff.localhost:3001');
+    expect(hrefForSurface('owner', '/staff/orders')).toBe('http://staff.localhost:3001/orders');
+  });
 });
 
 describe('isHostAgnostic', () => {
@@ -104,16 +158,38 @@ describe('hrefForSurface', () => {
     expect(hrefForSurface('owner', '/owner')).toBe('/');
   });
 
-  it('leaves CROSS-surface links whole — those are different sites now', () => {
-    // The owner login links to /staff/login; on owner.hioc.in that must stay a
-    // full path so it resolves on the main domain rather than 404ing locally.
-    expect(hrefForSurface('owner', '/staff/login')).toBe('/staff/login');
-    expect(hrefForSurface('staff', '/owner/attendance')).toBe('/owner/attendance');
+  it('sends CROSS-surface links to the other host — a relative one is prefixed here', () => {
+    // These used to stay relative, and relative resolves on the CURRENT host:
+    // owner.hioc.in/staff became /owner/staff (the owner Team page, not the
+    // staff board) and owner.hioc.in/staff/login became /owner/staff/login (404).
+    expect(hrefForSurface('owner', '/staff')).toBe('https://staff.hioc.in/');
+    expect(hrefForSurface('owner', '/staff/login')).toBe('https://staff.hioc.in/login');
+    expect(hrefForSurface('owner', '/staff/login?next=/staff')).toBe(
+      'https://staff.hioc.in/login?next=/staff',
+    );
+    expect(hrefForSurface('staff', '/owner/attendance')).toBe('https://owner.hioc.in/attendance');
   });
 
-  it('leaves customer paths whole', () => {
-    expect(hrefForSurface('staff', '/menu')).toBe('/menu');
-    expect(hrefForSurface('staff', '/privacy')).toBe('/privacy');
+  it('sends customer paths from a subdomain to the main site', () => {
+    expect(hrefForSurface('staff', '/menu')).toBe('https://hioc.in/menu');
+    expect(hrefForSurface('staff', '/privacy')).toBe('https://hioc.in/privacy');
+    expect(hrefForSurface('owner', '/order/abc')).toBe('https://hioc.in/order/abc');
+  });
+
+  it('keeps the ticket page on the staff host as it is', () => {
+    expect(hrefForSurface('staff', '/staff-print/abc/kot?silent=1')).toBe(
+      '/staff-print/abc/kot?silent=1',
+    );
+    expect(hrefForSurface('owner', '/staff-print/abc/kot')).toBe(
+      'https://staff.hioc.in/staff-print/abc/kot',
+    );
+  });
+
+  it('leaves anything that is not an app page alone', () => {
+    for (const href of ['/api/orders', '/images/logo-black.png', '#top', '?tab=x', 'https://example.com/x', '//evil.com/x']) {
+      expect(hrefForSurface('staff', href)).toBe(href);
+      expect(hrefForSurface('owner', href)).toBe(href);
+    }
   });
 
   it('is a no-op on the main domain', () => {
@@ -128,5 +204,22 @@ describe('hrefForSurface', () => {
       const resolved = rewriteForSurface('staff', rendered) ?? rendered;
       expect(resolved).toBe(p);
     }
+  });
+});
+
+describe('prefetchByDefault', () => {
+  it('turns prefetch off for staff and owner pages — each one is a server render', () => {
+    expect(prefetchByDefault('/staff')).toBe(false);
+    expect(prefetchByDefault('/staff/orders/new?table=1')).toBe(false);
+    expect(prefetchByDefault('/staff-print/1/kot')).toBe(false);
+    expect(prefetchByDefault('/owner/reports')).toBe(false);
+  });
+
+  it("keeps Next's default for customer pages and anything that isn't an app path", () => {
+    expect(prefetchByDefault('/')).toBe(true);
+    expect(prefetchByDefault('/menu')).toBe(true);
+    expect(prefetchByDefault('/staffing')).toBe(true);
+    expect(prefetchByDefault('https://staff.hioc.in/')).toBe(true);
+    expect(prefetchByDefault('#top')).toBe(true);
   });
 });

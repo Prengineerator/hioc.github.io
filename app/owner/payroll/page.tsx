@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 import { PayrollScreen } from '@/components/owner/PayrollScreen';
 

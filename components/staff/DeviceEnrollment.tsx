@@ -35,6 +35,7 @@ import { useRouter } from 'next/navigation';
 import { useSurfaceHref } from '@/components/SurfaceLink';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
 import { withEnrolledNotice } from '@/lib/staff/deviceEnrollment';
+import { invalidateSharedJson } from '@/lib/pos/sharedJson';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -62,6 +63,9 @@ function useSignOutOwner(): (opts?: { notice?: boolean }) => Promise<void> {
       } catch {
         // Best-effort — still leave the owner-signed-in screen either way.
       }
+      // This machine just became (or stopped being) an enrolled counter: a
+      // shared device or store answer from before must not outlive that.
+      invalidateSharedJson();
       const staffLogin = toHref('/staff/login');
       router.push(opts?.notice ? withEnrolledNotice(staffLogin) : staffLogin);
       router.refresh();

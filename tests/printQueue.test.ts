@@ -520,3 +520,31 @@ describe('print wording', () => {
     expect(printFailureMessage([])).toBe('');
   });
 });
+
+describe('PrintQueue — the ticket data a placement carries', () => {
+  it('hands the carried order to the executor, and counts the attempts that decide whether to use it', () => {
+    const exec = manualExecutor();
+    const clock = fakeClock();
+    const q = new PrintQueue({ execute: exec.execute, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+    const printOrder = { id: 'order-1' } as unknown as NonNullable<PrintJob['printOrder']>;
+    const [job] = q.enqueue([{ orderId: 'order-1', type: 'kot', printOrder }]);
+
+    expect(exec.started[0].printOrder).toBe(printOrder);
+    expect(exec.started[0].attempts).toBe(1);
+
+    exec.settlers[0].reject();
+    return Promise.resolve().then(() => {
+      q.retry(job.id);
+      expect(exec.started[1].printOrder).toBe(printOrder);
+      expect(exec.started[1].attempts).toBe(2); // lib/print/localTicket: a retry asks the server
+    });
+  });
+
+  it('carries nothing when nothing was given', () => {
+    const exec = manualExecutor();
+    const q = new PrintQueue({ execute: exec.execute });
+    q.enqueue([{ orderId: 'order-1', type: 'kot' }]);
+    expect(exec.started[0]).not.toHaveProperty('printOrder');
+  });
+});
+

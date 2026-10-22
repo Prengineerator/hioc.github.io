@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { mergeCustomerSuggestions, nameSearchTerm, phoneSearchPrefix } from '@/lib/customers/phoneSearch';
+import {
+  MAX_SUGGESTIONS,
+  mergeCustomerSuggestions,
+  nameSearchTerm,
+  phoneSearchPrefix,
+  searchIsComplete,
+  SEARCH_ACCOUNTS_LIMIT,
+  SEARCH_LEGACY_LIMIT,
+  SEARCH_ORDERS_LIMIT,
+  suggestionsFromAnswer,
+  type CustomerSuggestion,
+} from '@/lib/customers/phoneSearch';
 
 describe('phoneSearchPrefix', () => {
   it('searches from 4 digits up to 9', () => {
@@ -75,5 +86,52 @@ describe('mergeCustomerSuggestions', () => {
     });
     expect(rows).toHaveLength(6);
     expect(rows[0].name).toBe('C9');
+  });
+});
+
+describe('searchIsComplete', () => {
+  const full = { accounts: 3, orders: 40, legacy: 2, merged: 4, failed: false };
+
+  it('is complete when nothing was cut short', () => {
+    expect(searchIsComplete(full)).toBe(true);
+  });
+
+  it('is not complete when any source hit its limit', () => {
+    expect(searchIsComplete({ ...full, accounts: SEARCH_ACCOUNTS_LIMIT })).toBe(false);
+    expect(searchIsComplete({ ...full, orders: SEARCH_ORDERS_LIMIT })).toBe(false);
+    expect(searchIsComplete({ ...full, legacy: SEARCH_LEGACY_LIMIT })).toBe(false);
+  });
+
+  it('is not complete at six suggestions — there may have been a seventh', () => {
+    expect(searchIsComplete({ ...full, merged: MAX_SUGGESTIONS })).toBe(false);
+  });
+
+  it('is not complete when a query failed', () => {
+    expect(searchIsComplete({ ...full, failed: true })).toBe(false);
+  });
+});
+
+describe('suggestionsFromAnswer', () => {
+  const row = (phone: string): CustomerSuggestion => ({ phone, name: phone, order_count: 1, last_order_at: null });
+  const customers = [row('9876512345'), row('9876598765'), row('9876500000')];
+
+  it('reuses an answer for the same digits, complete or not (a backspace)', () => {
+    expect(suggestionsFromAnswer({ digits: '98765', customers, complete: false }, '98765')).toBe(customers);
+  });
+
+  it('narrows a complete answer as more digits are typed, keeping its order', () => {
+    const answer = { digits: '98765', customers, complete: true };
+    expect(suggestionsFromAnswer(answer, '987651')).toEqual([row('9876512345')]);
+    expect(suggestionsFromAnswer(answer, '9876')).toBeNull(); // shorter: the server may know more
+    expect(suggestionsFromAnswer(answer, '987659')).toEqual([row('9876598765')]);
+    expect(suggestionsFromAnswer(answer, '9876577')).toEqual([]);
+  });
+
+  it('leaves an incomplete answer to the server', () => {
+    expect(suggestionsFromAnswer({ digits: '98765', customers, complete: false }, '987651')).toBeNull();
+  });
+
+  it('does not apply an answer for other digits', () => {
+    expect(suggestionsFromAnswer({ digits: '98765', customers, complete: true }, '91234')).toBeNull();
   });
 });

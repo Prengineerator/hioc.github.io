@@ -17,7 +17,7 @@
 //    header trimmed to Orders / Settle / New order / Tables (StaffHeader).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';
+import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
 import { canEditMenu, canTakeOrders, type StaffSurface } from '@/lib/staff/surfaceRules';
@@ -163,7 +163,16 @@ export function StaffShell({
   }, []);
 
   // Its own channel name: the Orders page keeps its 'staff-orders' channel.
-  usePostgresChangesRefresh({ table: 'orders', channelName: 'staff-shell-new-orders', onChange: fetchReceived });
+  // 'run' while hidden: this is the alarm, and it must still ring for an
+  // online order when the POS tab is in the background.
+  usePostgresChangesRefresh({
+    table: 'orders',
+    channelName: 'staff-shell-new-orders',
+    onChange: fetchReceived,
+    requiresSession: true,
+    whileHidden: 'run',
+    coalesceMs: ORDERS_COALESCE_MS,
+  });
 
   useEffect(() => {
     void fetchReceived();

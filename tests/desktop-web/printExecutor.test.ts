@@ -39,6 +39,8 @@ function job(overrides: Partial<PrintJob> = {}): PrintJob {
     type: overrides.type ?? 'kot',
     state: overrides.state ?? 'printing',
     attempts: overrides.attempts ?? 1,
+    ...(overrides.itemIds ? { itemIds: overrides.itemIds } : {}),
+    ...(overrides.printOrder ? { printOrder: overrides.printOrder } : {}),
   };
 }
 
@@ -292,3 +294,54 @@ describe('createDesktopExecutor — confirmed aggregation across several printer
     await expect(exec(job({ type: 'kot' }))).rejects.toThrow('Bar: paper out');
   });
 });
+
+describe('createDesktopExecutor — a placement that carries its order', () => {
+  // The smallest order buildTicketDoc can print a KOT from.
+  const carried = {
+    id: 'order-1',
+    order_number: 1042,
+    customer_name: 'Aisha',
+    status: 'accepted',
+    order_type: 'takeaway',
+    created_at: '2026-09-24T10:30:00.000Z',
+    pickup_slot_label: 'ASAP',
+    notes: '',
+    table_label: null,
+    items: [
+      {
+        id: 'item-1',
+        menu_item_id: 'menu-1',
+        name_snapshot: 'Cold Coffee',
+        variant_label_snapshot: '',
+        quantity: 2,
+        special_instructions: '',
+        addons: [],
+        voided: false,
+      },
+    ],
+  } as unknown as NonNullable<PrintJob['printOrder']>;
+
+  it('builds the ticket here on the first attempt: no request, the same bytes the route would give', async () => {
+    const bridge = fakeBridge([printer()]);
+    const exec = createDesktopExecutor(bridge);
+    await exec(job({ printOrder: carried }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    const { buildTicketDoc } = await import('@/lib/print/ticketModel');
+    const expected = renderEscPos(buildTicketDoc(carried, 'kot'), { paperWidthMm: 80, cut: true, cutMode: undefined });
+    expect(bridge.printRaw).toHaveBeenCalledWith('kitchen', expected);
+  });
+
+  it('asks the server on a retry', async () => {
+    const bridge = fakeBridge([printer()]);
+    await createDesktopExecutor(bridge)(job({ printOrder: carried, attempts: 2 }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still loads the ticket page for a driver printer: the shell can only print a URL', async () => {
+    const bridge = fakeBridge([printer({ connection: { kind: 'system', deviceName: 'POS-80', mode: 'driver' } })]);
+    await createDesktopExecutor(bridge)(job({ printOrder: carried }));
+    expect(bridge.printUrl).toHaveBeenCalledTimes(1);
+    expect(bridge.printRaw).not.toHaveBeenCalled();
+  });
+});
+

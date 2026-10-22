@@ -24,7 +24,9 @@ export default async function OwnerLayout({ children }: { children: React.ReactN
   }
 
   const user = await getOwnerUser();
-  if (!user) redirect('/staff/login');
+  // The owner's own door, as middleware does for an expired owner session.
+  // /staff/login read as /owner/staff/login on owner.hioc.in — a 404.
+  if (!user) redirect('/owner/login');
 
   return (
     <div className="min-h-screen bg-cream">

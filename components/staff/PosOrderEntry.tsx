@@ -47,6 +47,8 @@ import { computeCartKey } from '@/lib/cart/cartKey';
 import type { CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
+import { readMenuCache, writeMenuCache } from '@/lib/pos/menuCache';
+import { STORE_CHANGED_EVENT } from '@/lib/pos/sharedJson';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import {
@@ -79,6 +81,7 @@ import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
 import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
+import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { POS_FALLBACK_ORDER_TYPE, resolveDefaultOrderType } from '@/lib/pos/deviceSettings';
@@ -200,6 +203,31 @@ export interface AddToOrderTarget {
   id: string;
   orderNumber: number;
   tableLabel: string | null;
+}
+
+/** POST /api/orders' `settlement` (lib/orders/settlePayment), as this screen reads it. */
+type SettlementAnswer =
+  | { ok: true; change_due_inr?: number; order?: { total_inr: number | null; subtotal_inr: number } }
+  | { ok: false; error?: string }
+  | null;
+
+/** The pre-combined path: settle the just-created order through its payment route. */
+async function settleSeparately(orderId: string, parts: PaymentPart[]): Promise<SettlementAnswer> {
+  try {
+    const res = await fetch(`/api/orders/${orderId}/payment`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parts }),
+    });
+    if (!res.ok) return { ok: false };
+    const data = (await res.json().catch(() => ({}))) as {
+      change_due_inr?: number;
+      order?: { total_inr: number | null; subtotal_inr: number };
+    };
+    return { ok: true, change_due_inr: data.change_due_inr, order: data.order };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export function PosOrderEntry({
@@ -446,19 +474,40 @@ export function PosOrderEntry({
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
     fetch('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((data: { items?: MenuItem[] }) => setMenuItems(data.items ?? []))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`menu ${res.status}`))))
+      .then((data: { items?: MenuItem[] }) => {
+        // A failed or malformed answer keeps what is on screen (often the kept
+        // menu) instead of emptying the grid mid-service.
+        if (!Array.isArray(data.items)) return;
+        setMenuItems(data.items);
+        writeMenuCache(data.items);
+      })
       .catch(() => {})
       .finally(() => setMenuLoading(false));
   }, []);
 
   useEffect(() => {
+    // Draw the last menu this machine saw at once, then refresh it: the
+    // counter is usable before the network answers. Read here, not in
+    // useState, because the server render has no localStorage.
+    const kept = readMenuCache();
+    if (kept) {
+      setMenuItems(kept.items);
+      setMenuLoading(false);
+    }
     fetchMenu();
   }, [fetchMenu]);
 
   // Live 86/un-86: refetch the menu when availability changes so greyed-out
   // state updates within a few seconds (same hook the customer menu uses).
   useMenuAvailabilityRealtime(fetchMenu);
+
+  // Menu switches live in the store settings, which send no realtime event:
+  // a switch flipped on this machine refreshes the grid at once.
+  useEffect(() => {
+    window.addEventListener(STORE_CHANGED_EVENT, fetchMenu);
+    return () => window.removeEventListener(STORE_CHANGED_EVENT, fetchMenu);
+  }, [fetchMenu]);
 
   // --- Tables (for the dine-in picker) --------------------------------------
   const fetchTables = useCallback(() => {
@@ -862,9 +911,11 @@ export function PosOrderEntry({
   // PRT-1/PRT-3 — the only way anything prints from this screen. What prints
   // when is still lib/staff/autoPrint's decision (unchanged); this is purely the
   // execution.
+  // `printOrder` is the ticket data the create answer carried: the first try
+  // prints from it instead of asking the server again.
   const enqueuePrints = useCallback(
-    (orderId: string, types: PrintType[]) => {
-      printDock.enqueue(types.map((type) => ({ orderId, type })));
+    (orderId: string, types: PrintType[], printOrder?: StaffPrintOrder | null) => {
+      printDock.enqueue(types.map((type) => ({ orderId, type, ...(printOrder ? { printOrder } : {}) })));
     },
     [printDock],
   );
@@ -1017,6 +1068,13 @@ export function PosOrderEntry({
       const passApproved = ritualApproved(quotedPass, passCups);
       if (passApproved) body.pass_drinks = passCups;
 
+      // "Collect now" rides with the order: the server settles it the moment
+      // it exists, by the payment route's own rules, in the same call. And
+      // when anything may print, the answer carries the ticket data too, so
+      // the KOT and receipt print without a request each.
+      if (parts) body.settlement = { parts };
+      if (autoPrint.kot || autoPrint.bill) body.include_print_order = true;
+
       // POS4-2: one key per attempted order, generated BEFORE the request and
       // reused if this submit is retried — that's what makes a replay
       // recognisable. A fresh key is minted for the next order in
@@ -1044,7 +1102,12 @@ export function PosOrderEntry({
         return;
       }
 
-      const { order, customer_account_created: accountCreated } = (await res.json()) as {
+      const {
+        order,
+        customer_account_created: accountCreated,
+        settlement,
+        print_order: printOrder,
+      } = (await res.json()) as {
         order: {
           id: string;
           order_number: number;
@@ -1054,6 +1117,9 @@ export function PosOrderEntry({
           order_kind?: string;
         };
         customer_account_created?: boolean;
+        // Absent from a server that predates them; see the fallback below.
+        settlement?: SettlementAnswer;
+        print_order?: StaffPrintOrder | null;
       };
       const numberLabel = formatOrderNumber(order.order_number);
       // Server-authoritative, like every other rupee on this screen.
@@ -1065,22 +1131,20 @@ export function PosOrderEntry({
       let settled = false;
       let note: string | null = null;
       // A bill brought to ₹0 (Ritual cups, a full coupon) is created already paid:
-      // there is nothing to record, and nothing to collect.
-      const createdPaid = order.payment_status === 'paid';
+      // there is nothing to record, and nothing to collect. The server answers
+      // settlement: null for it. (A replayed order reads 'paid' after its first
+      // attempt settled; its settlement answer says so, so it isn't mistaken
+      // for a ₹0 bill.)
+      const createdPaid = order.payment_status === 'paid' && !settlement;
       if (createdPaid) settled = true;
       if (parts && !createdPaid) {
-        const payRes = await fetch(`/api/orders/${order.id}/payment`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ parts }),
-        });
-        if (payRes.ok) {
-          const payData = (await payRes.json().catch(() => ({}))) as {
-            change_due_inr?: number;
-            order?: { total_inr: number | null; subtotal_inr: number };
-          };
-          changeDue = payData.change_due_inr ?? 0;
-          if (payData.order) totalInr = payData.order.total_inr ?? payData.order.subtotal_inr;
+        // A server from before settlement-with-the-order ignores the field:
+        // settle the old way, through the payment route.
+        const answer: SettlementAnswer =
+          settlement !== undefined ? settlement : await settleSeparately(order.id, parts);
+        if (answer?.ok) {
+          changeDue = answer.change_due_inr ?? 0;
+          if (answer.order) totalInr = answer.order.total_inr ?? answer.order.subtotal_inr;
           settled = true;
           // PRN-6 / DRW-1 — no drawer kick here: it already opened when the
           // staffer tapped Cash (PosPaymentPanel), which is when the notes
@@ -1098,7 +1162,7 @@ export function PosOrderEntry({
       // no bill to print (the plan already says so) and, unlike the old pop-up
       // path, nothing here needs to happen inside the staffer's tap. Success is
       // silent; a job that doesn't report back within 10s raises the chip.
-      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled, orderKind: order.order_kind }));
+      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled, orderKind: order.order_kind }), printOrder);
 
       resetForNextOrder();
       setConfirmation({
