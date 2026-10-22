@@ -47,7 +47,7 @@ export function AccountHeader() {
   // The nav below is a horizontally scrolling pill row on narrow screens
   // (360px has no room for 5 labels side by side) — on first paint and on
   // every navigation, the active pill may be scrolled off-screen, so bring
-  // it into view (same pattern as components/owner/OwnerHeader.tsx).
+  // it into view.
   useEffect(() => {
     const active = navRef.current?.querySelector('[data-active="true"]');
     active?.scrollIntoView({ block: 'nearest', inline: 'center' });
