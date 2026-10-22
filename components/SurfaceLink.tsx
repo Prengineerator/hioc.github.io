@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo } from 'react';
 import Link from 'next/link';
-import { hrefForSurface, type Surface } from '@/lib/routing/surface';
+import { hrefForSurface, prefetchByDefault, type Surface } from '@/lib/routing/surface';
 
 // Lets the whole app keep writing canonical hrefs — `/staff/orders`, always —
 // while the address bar reads `staff.hioc.in/orders` on the subdomain.
@@ -42,19 +42,25 @@ export function useSurfaceHref(): (href: string) => string {
 /**
  * Drop-in for `next/link` that rewrites its href for the current surface.
  *
- * Cross-surface links keep their full path on purpose — a link from the owner
- * dashboard to /staff/login must stay absolute so it resolves on the main
- * domain instead of 404ing under owner.hioc.in.
+ * A cross-surface link becomes an absolute URL on the other surface's host
+ * (see hrefForSurface): on owner.hioc.in a relative /staff/login would resolve
+ * to owner.hioc.in/staff/login and 404.
+ *
+ * Links into the staff and owner surfaces don't prefetch unless asked to
+ * (prefetchByDefault): there, each prefetch is a server render.
  */
 export function SurfaceLink({
   href,
   children,
+  prefetch,
   ...rest
 }: React.ComponentProps<typeof Link>) {
   const surface = useSurface();
   const resolved = typeof href === 'string' ? hrefForSurface(surface, href) : href;
+  const prefetchProp =
+    prefetch !== undefined ? prefetch : typeof href === 'string' && !prefetchByDefault(href) ? false : undefined;
   return (
-    <Link href={resolved} {...rest}>
+    <Link href={resolved} prefetch={prefetchProp} {...rest}>
       {children}
     </Link>
   );

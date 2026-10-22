@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react';
 import { AUTO_PRINT_DEFAULTS, type AutoPrintSettings } from '@/lib/staff/autoPrint';
 import { resolveAutoPrint } from '@/lib/pos/deviceSettings';
+import { sharedJson, STORE_SETTINGS_MAX_AGE_MS, STORE_SETTINGS_URL } from '@/lib/pos/sharedJson';
 import type { PosDeviceContext, StoreSettings } from '@/lib/types';
 
 export interface CounterDefaults {
@@ -30,14 +31,8 @@ export interface CounterDefaults {
   ready: boolean;
 }
 
-async function getJson<T>(url: string): Promise<T | null> {
-  try {
-    const res = await fetch(url, { cache: 'no-store' });
-    return res.ok ? ((await res.json()) as T) : null;
-  } catch {
-    return null;
-  }
-}
+/** The device answer changes only when the owner edits this machine; shared like the store's. */
+const DEVICE_CONTEXT_MAX_AGE_MS = 30_000;
 
 export function useCounterDefaults(): CounterDefaults {
   const [state, setState] = useState<CounterDefaults>({
@@ -50,9 +45,11 @@ export function useCounterDefaults(): CounterDefaults {
     let cancelled = false;
     // In parallel: neither answer depends on the other, and this sits on the
     // boot path of the screen someone is waiting to take an order on.
+    // Shared: the header and the order board read the same store settings as
+    // this screen mounts, and each screen switch used to ask both again.
     void Promise.all([
-      getJson<{ settings?: StoreSettings }>('/api/store-settings'),
-      getJson<{ device?: PosDeviceContext | null }>('/api/device/context'),
+      sharedJson<{ settings?: StoreSettings }>(STORE_SETTINGS_URL, STORE_SETTINGS_MAX_AGE_MS),
+      sharedJson<{ device?: PosDeviceContext | null }>('/api/device/context', DEVICE_CONTEXT_MAX_AGE_MS),
     ]).then(([store, ctx]) => {
       if (cancelled) return;
       const device = ctx?.device ?? null;

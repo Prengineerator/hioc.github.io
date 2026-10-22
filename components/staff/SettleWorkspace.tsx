@@ -25,7 +25,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { describeOrderPayment, groupForSettle, isSettleable } from '@/lib/orders/settleList';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
-import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';
+import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
@@ -91,7 +91,13 @@ export function SettleWorkspace({
   }, [fetchUnpaid]);
 
   // A bill placed unpaid (or settled) anywhere else shows up here within seconds.
-  usePostgresChangesRefresh({ table: 'orders', channelName: 'staff-settle', onChange: fetchUnpaid });
+  usePostgresChangesRefresh({
+    table: 'orders',
+    channelName: 'staff-settle',
+    onChange: fetchUnpaid,
+    requiresSession: true,
+    coalesceMs: ORDERS_COALESCE_MS,
+  });
 
   useEffect(() => {
     if (!toast) return undefined;

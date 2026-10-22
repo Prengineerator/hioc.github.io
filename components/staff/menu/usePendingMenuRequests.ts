@@ -2,17 +2,23 @@
 
 // The menu changes waiting for the owner, for the badge on the staff header's
 // Menu tab and the list behind it. One instance for the whole shell: it fetches
-// on mount, when the tab regains focus, and every minute while visible; the Menu
+// on mount, when the tab regains focus, and every 3 minutes while visible; the Menu
 // screen pushes fresh lists through STAFF_MENU_PENDING_EVENT in between. Anything
 // but a good answer (signed out, migration not applied, offline) reads as empty,
 // so the badge just stays off.
+//
+// Every three minutes, not every one: a request waits on the owner's approval
+// anyway, this device's own requests arrive by the push, and each poll is a
+// server call. A return to the tab fires focus and visibilitychange together;
+// the minimum gap makes that one fetch, not two.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
 import { STAFF_MENU_PENDING_EVENT, type StaffMenuPendingDetail } from '@/components/staff/menu/menuEvents';
 import { parseMenuRequestViewer, type MenuRequestViewer } from '@/components/staff/menu/requestViewer';
+import { REFOCUS_MIN_GAP_MS } from '@/lib/realtime/hooks';
 
-const POLL_MS = 60_000;
+const POLL_MS = 180_000;
 
 interface Snapshot {
   requests: MenuChangeRequest[];
@@ -32,12 +38,14 @@ export function usePendingMenuRequests(enabled = true): PendingMenuRequestsState
   // Only the latest answer may land: a pushed list, a newer fetch or unmounting
   // all bump it, so a slow older response can't overwrite fresher state.
   const seq = useRef(0);
+  const lastFetch = useRef(0);
   const invalidate = useCallback(() => {
     seq.current++;
   }, []);
 
   const refresh = useCallback(async () => {
     const mine = ++seq.current;
+    lastFetch.current = Date.now();
     let next = EMPTY;
     try {
       const res = await fetch('/api/menu/requests?status=pending', { cache: 'no-store' });
@@ -65,7 +73,8 @@ export function usePendingMenuRequests(enabled = true): PendingMenuRequestsState
       setSnapshot((prev) => ({ requests: detail.requests, viewer: detail.viewer ?? prev.viewer }));
     };
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refresh();
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastFetch.current >= REFOCUS_MIN_GAP_MS) void refresh();
     };
     void refresh();
     const timer = setInterval(onVisible, POLL_MS);

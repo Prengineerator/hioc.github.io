@@ -6,6 +6,7 @@ import {
   isHostAgnostic,
   surfaceOfPath,
   surfaceOrigin,
+  prefetchByDefault,
 } from '@/lib/routing/surface';
 
 describe('surfaceForHost', () => {
@@ -203,5 +204,22 @@ describe('hrefForSurface', () => {
       const resolved = rewriteForSurface('staff', rendered) ?? rendered;
       expect(resolved).toBe(p);
     }
+  });
+});
+
+describe('prefetchByDefault', () => {
+  it('turns prefetch off for staff and owner pages — each one is a server render', () => {
+    expect(prefetchByDefault('/staff')).toBe(false);
+    expect(prefetchByDefault('/staff/orders/new?table=1')).toBe(false);
+    expect(prefetchByDefault('/staff-print/1/kot')).toBe(false);
+    expect(prefetchByDefault('/owner/reports')).toBe(false);
+  });
+
+  it("keeps Next's default for customer pages and anything that isn't an app path", () => {
+    expect(prefetchByDefault('/')).toBe(true);
+    expect(prefetchByDefault('/menu')).toBe(true);
+    expect(prefetchByDefault('/staffing')).toBe(true);
+    expect(prefetchByDefault('https://staff.hioc.in/')).toBe(true);
+    expect(prefetchByDefault('#top')).toBe(true);
   });
 });

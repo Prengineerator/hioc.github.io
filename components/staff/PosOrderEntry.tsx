@@ -47,6 +47,8 @@ import { computeCartKey } from '@/lib/cart/cartKey';
 import type { CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
+import { readMenuCache, writeMenuCache } from '@/lib/pos/menuCache';
+import { STORE_CHANGED_EVENT } from '@/lib/pos/sharedJson';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import {
@@ -446,19 +448,40 @@ export function PosOrderEntry({
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
     fetch('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((data: { items?: MenuItem[] }) => setMenuItems(data.items ?? []))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`menu ${res.status}`))))
+      .then((data: { items?: MenuItem[] }) => {
+        // A failed or malformed answer keeps what is on screen (often the kept
+        // menu) instead of emptying the grid mid-service.
+        if (!Array.isArray(data.items)) return;
+        setMenuItems(data.items);
+        writeMenuCache(data.items);
+      })
       .catch(() => {})
       .finally(() => setMenuLoading(false));
   }, []);
 
   useEffect(() => {
+    // Draw the last menu this machine saw at once, then refresh it: the
+    // counter is usable before the network answers. Read here, not in
+    // useState, because the server render has no localStorage.
+    const kept = readMenuCache();
+    if (kept) {
+      setMenuItems(kept.items);
+      setMenuLoading(false);
+    }
     fetchMenu();
   }, [fetchMenu]);
 
   // Live 86/un-86: refetch the menu when availability changes so greyed-out
   // state updates within a few seconds (same hook the customer menu uses).
   useMenuAvailabilityRealtime(fetchMenu);
+
+  // Menu switches live in the store settings, which send no realtime event:
+  // a switch flipped on this machine refreshes the grid at once.
+  useEffect(() => {
+    window.addEventListener(STORE_CHANGED_EVENT, fetchMenu);
+    return () => window.removeEventListener(STORE_CHANGED_EVENT, fetchMenu);
+  }, [fetchMenu]);
 
   // --- Tables (for the dine-in picker) --------------------------------------
   const fetchTables = useCallback(() => {

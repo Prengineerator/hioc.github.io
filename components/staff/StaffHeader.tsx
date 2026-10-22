@@ -28,11 +28,20 @@ import { OpenDrawerButton } from '@/components/staff/OpenDrawerButton';
 import { MenuRequestsBadge } from '@/components/staff/menu/MenuRequestsBadge';
 import { MenuRequestsPanel } from '@/components/staff/menu/MenuRequestsPanel';
 import { publishStaffMenuRequestsChanged } from '@/components/staff/menu/menuEvents';
+import {
+  invalidateSharedJson,
+  sharedJson,
+  STORE_CHANGED_EVENT,
+  STORE_SETTINGS_MAX_AGE_MS,
+  STORE_SETTINGS_URL,
+} from '@/lib/pos/sharedJson';
+import { REFOCUS_MIN_GAP_MS } from '@/lib/realtime/hooks';
 import { useCancelMenuRequest } from '@/components/staff/menu/useCancelMenuRequest';
 import { usePendingMenuRequests } from '@/components/staff/menu/usePendingMenuRequests';
 
 const MENU_HREF = '/staff/menu';
-
+/** The store pill's poll while the tab is visible. */
+const STORE_BADGE_POLL_MS = 60_000;
 
 export interface StaffPinControls {
   /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
@@ -141,27 +150,43 @@ export function StaffHeader({
   );
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
-  // /staff/settings/store. Best-effort — a failed fetch just hides it.
-  // Refreshed on a poll, on focus, and on 'hioc:store-changed'.
+  // /staff/settings/store. Best-effort — a failed fetch keeps the last state.
+  // Refreshed on a poll while the tab is visible, on a return to it, and at
+  // once on 'hioc:store-changed'. It was every 15 s, visible or not: 240
+  // function calls an hour for a pill that changes a few times a day. Changes
+  // made on another device show within a minute.
   useEffect(() => {
     let cancelled = false;
+    let lastLoad = 0;
     const load = () => {
-      fetch('/api/store-settings', { cache: 'no-store' })
-        .then((res) => res.json())
-        .then((data) => {
-          if (!cancelled) setOpenState(data.openState ?? null);
-        })
-        .catch(() => {});
+      lastLoad = Date.now();
+      void sharedJson<{ openState?: StoreOpenState | null }>(STORE_SETTINGS_URL, STORE_SETTINGS_MAX_AGE_MS).then(
+        (data) => {
+          if (!cancelled && data) setOpenState(data.openState ?? null);
+        },
+      );
+    };
+    const visible = () => document.visibilityState === 'visible';
+    const onReturn = () => {
+      if (visible() && Date.now() - lastLoad >= REFOCUS_MIN_GAP_MS) load();
+    };
+    const onStoreChanged = () => {
+      invalidateSharedJson(STORE_SETTINGS_URL);
+      load();
     };
     load();
-    const poll = setInterval(load, 15000);
-    window.addEventListener('focus', load);
-    window.addEventListener('hioc:store-changed', load);
+    const poll = setInterval(() => {
+      if (visible()) load();
+    }, STORE_BADGE_POLL_MS);
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener(STORE_CHANGED_EVENT, onStoreChanged);
     return () => {
       cancelled = true;
       clearInterval(poll);
-      window.removeEventListener('focus', load);
-      window.removeEventListener('hioc:store-changed', load);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+      window.removeEventListener(STORE_CHANGED_EVENT, onStoreChanged);
     };
   }, []);
 

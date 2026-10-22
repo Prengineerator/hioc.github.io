@@ -24,7 +24,7 @@
 // stored figure server-side.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { CashCountSheet } from '@/components/staff/CashCountSheet';
 import { CashDayDenomGrid } from '@/components/staff/CashDayDenomGrid';
 import { Spinner } from '@/components/ui/Spinner';

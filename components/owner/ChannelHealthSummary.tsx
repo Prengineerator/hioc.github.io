@@ -14,7 +14,7 @@
 // GET /api/owner/notifications rather than adding a second health endpoint, so
 // the two screens can never disagree about what "configured" means.
 
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { useEffect, useState } from 'react';
 import { summarizeChannelHealth, type HealthSummary } from '@/components/owner/channelHealth';
 import type { ChannelHealth } from '@/lib/notifications/health';

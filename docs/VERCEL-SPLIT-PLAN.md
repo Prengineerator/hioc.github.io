@@ -165,6 +165,10 @@ Prompt template:
 
 ### T1. Make cross-surface links and `/staff-print` work on the subdomains
 
+> **Done** on branch `claude/relaxed-volta-irgkra` (commit 104c2ad, "Subdomains: send
+> cross-surface links to the right host, serve /staff-print"). Skip to T2; the
+> `surfaceOfPath` and `surfaceOrigin` helpers T2 needs exist.
+
 **This fixes bugs that are live today, whatever the split decision.** We
 confirmed each one by running `lib/routing/surface.ts` against these inputs:
 
@@ -644,8 +648,9 @@ lock uses 307 redirects, so browsers have nothing cached to undo.
 ## 8. Gotchas
 
 1. **The free allowance is shared.** A split doesn't add capacity. Watch
-   Vercel → Usage. The 5-minute `marketing-send` job and the staff board's
-   polling are the likely biggest steady consumers.
+   Vercel → Usage. The 5-minute `marketing-send` job is a steady consumer.
+   The staff screens' polling used to be the biggest one; it now slows to a
+   safety net while realtime is live (`lib/realtime/hooks.ts`).
 2. **Each surface serves its own copy of `/api`.** Every merge to `main`
    must reach **all three** projects. If one build fails, the surfaces run
    different code against the same database. After every merge, check all

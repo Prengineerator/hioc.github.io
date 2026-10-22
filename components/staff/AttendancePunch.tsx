@@ -9,7 +9,7 @@
 // what to DO next rather than what went wrong.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { CashCountSheet } from '@/components/staff/CashCountSheet';
 import type { CashCountResult, PunchCashRequirement } from '@/lib/cash/counts';
 import type { AttendanceSession, CashDenoms } from '@/lib/types';

@@ -26,6 +26,7 @@ import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
 import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
+import { sharedJson, STORE_SETTINGS_MAX_AGE_MS, STORE_SETTINGS_URL } from '@/lib/pos/sharedJson';
 import { transitionExtra, type QuickAction } from '@/lib/orders/quickActions';
 import { PICKUP_REMINDER_COOLDOWN_SEC, formatCountdown } from '@/lib/notifications/pickupReminder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -124,10 +125,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
 
   useEffect(() => {
     fetchOrders();
-    fetch('/api/store-settings')
-      .then((r) => r.json())
-      .then((d) => setPrepMin(d?.settings?.default_prep_min ?? 15))
-      .catch(() => {});
+    void sharedJson<{ settings?: { default_prep_min?: number } }>(STORE_SETTINGS_URL, STORE_SETTINGS_MAX_AGE_MS).then(
+      (d) => setPrepMin(d?.settings?.default_prep_min ?? 15),
+    );
   }, [fetchOrders]);
 
   // Keep the open detail modal in sync with fresh data.
