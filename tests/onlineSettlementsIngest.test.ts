@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import ExcelJS from 'exceljs';
-import { ingestSettlementFile } from '@/lib/online-settlements/ingest';
+import { ingestSettlementFile, INTERRUPTED } from '@/lib/online-settlements/ingest';
 import { memoryStore } from './helpers/memorySettlementStore';
 import { buildZomatoWorkbook, orderTable, type FixtureOrder } from './helpers/zomatoSettlementFixture';
 
 // The ingest pipeline (lib/online-settlements/ingest.ts) against an in-memory
 // SettlementStore: dedupe by file hash, newer-report-wins per order and per
-// deduction, Swiggy files saved for later, and what is refused.
+// deduction, Swiggy files saved for later, a report that is not 'read' until
+// its rows are all in, repeated rows collapsed, and what is refused.
 
 const order = (o: Partial<FixtureOrder> & { id: string }): FixtureOrder => ({
   date: '2026-09-28 13:00:00', subtotal: 300, promo: 60, commission: 60, payout: 150, ...o,
@@ -144,3 +145,144 @@ describe('ingestSettlementFile', () => {
     expect(m.reports[0]).toMatchObject({ status: 'failed' });
   });
 });
+
+describe('a report is only read once every row is saved', () => {
+  const week = () =>
+    buildZomatoWorkbook({
+      period: '22 Sep 2026 - 28 Sep 2026',
+      orders: [order({ id: '9000000001' }), order({ id: '9000000002' })],
+      ads: [{ campaign: '43275915', window: '22 September 26 - 28 September 26', amount: 913.4 }],
+    });
+  const NOW = () => new Date('2026-10-01T04:00:00Z');
+
+  it('leaves the report failed and interrupted when an upsert throws, then reads it on the next ingest of the same file', async () => {
+    const m = memoryStore();
+    const bytes = await week();
+    let statusWhileWriting: string | undefined;
+    const dying = {
+      ...m.store,
+      upsertOrders: async () => {
+        statusWhileWriting = m.reports[0].status;
+        throw new Error('connection reset');
+      },
+    };
+
+    await expect(ingestSettlementFile(dying, { bytes, fileName: 'w1.xlsx', source: 'email', platformHint: 'zomato', now: NOW })).rejects.toThrow('connection reset');
+
+    expect(statusWhileWriting).toBe('failed');
+    expect(m.reports).toHaveLength(1);
+    expect(m.reports[0]).toMatchObject({ status: 'failed', error: INTERRUPTED, orders_count: 0, read_at: null });
+    expect(m.orders.size).toBe(0);
+
+    // Not a duplicate: the same bytes are read, on the same report row.
+    const again = await ingestSettlementFile(m.store, { bytes, fileName: 'w1.xlsx', source: 'email', platformHint: 'zomato', now: NOW });
+    expect(again).toMatchObject({ status: 'read', orders: 2, reportId: 'report-1' });
+    expect(m.reports).toHaveLength(1);
+    expect(m.reports[0]).toMatchObject({ status: 'read', error: null, orders_count: 2, deductions_count: 1, read_at: '2026-10-01T04:00:00.000Z' });
+    expect(m.orders.size).toBe(2);
+
+    // And now it is read for good.
+    expect((await ingestSettlementFile(m.store, { bytes, fileName: 'w1.xlsx', source: 'upload' })).status).toBe('duplicate');
+  });
+
+  it('is interrupted too when the deductions fail after the orders went in, or the final update fails', async () => {
+    const bytes = await week();
+
+    const a = memoryStore();
+    const noDeductions = { ...a.store, upsertDeductions: async () => { throw new Error('timeout'); } };
+    await expect(ingestSettlementFile(noDeductions, { bytes, fileName: 'w1.xlsx', source: 'upload', platformHint: 'zomato' })).rejects.toThrow('timeout');
+    expect(a.orders.size).toBe(2);
+    expect(a.reports[0]).toMatchObject({ status: 'failed', error: INTERRUPTED });
+
+    const b = memoryStore();
+    let finalUpdates = 0;
+    const noFinish = {
+      ...b.store,
+      updateReport: async (id: string, patch: Parameters<typeof b.store.updateReport>[1]) => {
+        if (patch.status === 'read') {
+          finalUpdates++;
+          throw new Error('killed');
+        }
+        return b.store.updateReport(id, patch);
+      },
+    };
+    await expect(ingestSettlementFile(noFinish, { bytes, fileName: 'w1.xlsx', source: 'upload', platformHint: 'zomato' })).rejects.toThrow('killed');
+    expect(finalUpdates).toBe(1);
+    expect(b.reports[0]).toMatchObject({ status: 'failed', error: INTERRUPTED, read_at: null });
+  });
+});
+
+describe('re-ingesting a report that already has a row', () => {
+  const other = async () => {
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet('Sheet1').addRow(['Monthly stock count']);
+    return new Uint8Array((await wb.xlsx.writeBuffer()) as ArrayBuffer);
+  };
+  const email = { messageId: '<m1@zomato.com>', from: 'reports@zomato.com', subject: 'Weekly report', receivedAt: '2026-09-30T04:00:00.000Z' };
+
+  it('keeps the email details when the new input has none (a re-upload), and fills them in when it has', async () => {
+    const m = memoryStore();
+    const bytes = await other();
+
+    await ingestSettlementFile(m.store, { bytes, fileName: 'stock.xlsx', source: 'email', platformHint: 'zomato', email });
+    expect(m.reports[0]).toMatchObject({ email_message_id: '<m1@zomato.com>', email_from: 'reports@zomato.com', email_subject: 'Weekly report' });
+
+    // The owner uploads the same file by hand.
+    await ingestSettlementFile(m.store, { bytes, fileName: 'stock.xlsx', source: 'upload', platformHint: 'zomato' });
+    expect(m.reports).toHaveLength(1);
+    expect(m.reports[0]).toMatchObject({
+      email_message_id: '<m1@zomato.com>', email_from: 'reports@zomato.com', email_subject: 'Weekly report', email_received_at: '2026-09-30T04:00:00.000Z',
+    });
+
+    // The other way round: an upload first, then the email that carried it.
+    const m2 = memoryStore();
+    await ingestSettlementFile(m2.store, { bytes, fileName: 'stock.xlsx', source: 'upload', platformHint: 'zomato' });
+    expect(m2.reports[0].email_message_id).toBeNull();
+    await ingestSettlementFile(m2.store, { bytes, fileName: 'stock.xlsx', source: 'email', platformHint: 'zomato', email });
+    expect(m2.reports[0]).toMatchObject({ email_message_id: '<m1@zomato.com>', email_subject: 'Weekly report' });
+  });
+});
+
+describe('a report that repeats a row', () => {
+  it('keeps the last row of an order id that appears twice, and says so', async () => {
+    const m = memoryStore();
+    const bytes = await buildZomatoWorkbook({
+      period: '22 Sep 2026 - 28 Sep 2026',
+      orders: [
+        order({ id: '9000000001', payout: 100 }),
+        order({ id: '9000000002', payout: 90 }),
+        order({ id: '9000000001', payout: 150 }),
+      ],
+    });
+    const out = await ingestSettlementFile(m.store, { bytes, fileName: 'dup.xlsx', source: 'upload', platformHint: 'zomato' });
+
+    expect(out).toMatchObject({ status: 'read', orders: 2 });
+    expect(m.orders.size).toBe(2);
+    expect(m.orders.get('zomato|9000000001')).toMatchObject({ payout_inr: 150 });
+    expect(m.reports[0]).toMatchObject({ status: 'read', orders_count: 2 });
+    expect(m.reports[0].warnings).toEqual(['1 order row(s) repeated an order id in this report: only the last one is kept']);
+  });
+
+  it('adds up deduction rows with the same type, reference and period, and says so', async () => {
+    const m = memoryStore();
+    const window = '22 September 26 - 28 September 26';
+    const bytes = await buildZomatoWorkbook({
+      period: '22 Sep 2026 - 28 Sep 2026',
+      orders: [order({ id: '9000000001' })],
+      ads: [
+        { campaign: '43275915', window, amount: 100.1 },
+        { campaign: '43275915', window, amount: 200.2, status: 'pending' },
+        { campaign: '43275916', window, amount: 50 },
+      ],
+    });
+    const out = await ingestSettlementFile(m.store, { bytes, fileName: 'dup-ads.xlsx', source: 'upload', platformHint: 'zomato' });
+
+    expect(out.status).toBe('read');
+    expect(m.deductions.size).toBe(2);
+    const summed = [...m.deductions.values()].find((d) => d.ref === '43275915');
+    expect(summed).toMatchObject({ kind: 'ads', amount_inr: 300.3, settled_inr: 100.1, outstanding_inr: 200.2 });
+    expect(m.reports[0]).toMatchObject({ status: 'read', deductions_count: 2 });
+    expect(m.reports[0].warnings).toEqual(["1 deduction row(s) repeated another row's type, reference and period: their amounts were added together"]);
+  });
+});
+

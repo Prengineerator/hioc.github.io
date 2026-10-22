@@ -1751,6 +1751,7 @@ async function checkOnlineSettlements() {
       'online_settlement_sync_runs',
       'id,trigger,started_at,finished_at,lookback_days,messages_found,files_found,files_read,files_skipped,files_failed,error,details',
     ],
+    ['online_settlement_seen_messages', 'message_id,platform,outcome,seen_at'],
   ];
   let allExist = true;
   for (const [table, columns] of tables) {

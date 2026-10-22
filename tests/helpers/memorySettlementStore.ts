@@ -3,7 +3,12 @@ import type { Platform } from '@/lib/online-settlements/types';
 
 // An in-memory SettlementStore for the online-settlement tests: report rows,
 // orders, deductions and the raw files in plain collections the test can read
-// (and seed) directly. `reads` lists the paths readFile was asked for.
+// (and seed) directly. `reads` lists the paths readFile was asked for. Like
+// Postgres, an upsert whose batch repeats a key is refused as a whole.
+function refuseRepeatedKeys(keys: string[]) {
+  if (new Set(keys).size < keys.length) throw new Error('ON CONFLICT DO UPDATE command cannot affect row a second time');
+}
+
 export function memoryStore() {
   const reports: (ReportRow & { id: string })[] = [];
   const orders = new Map<string, Record<string, unknown>>();
@@ -40,6 +45,7 @@ export function memoryStore() {
       return out;
     },
     async upsertOrders(rows) {
+      refuseRepeatedKeys(rows.map((r) => `${r.platform}|${r.order_id}`));
       for (const r of rows) orders.set(`${r.platform}|${r.order_id}`, r);
     },
     async deductionPeriods(platform: Platform) {
@@ -50,6 +56,7 @@ export function memoryStore() {
       return out;
     },
     async upsertDeductions(rows) {
+      refuseRepeatedKeys(rows.map((r) => `${r.platform}|${deductionKey(r as never)}`));
       for (const r of rows) deductions.set(`${r.platform}|${deductionKey(r as never)}`, r);
     },
   };

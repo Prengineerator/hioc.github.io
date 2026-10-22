@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SettlementStore } from '@/lib/online-settlements/ingest';
+import { INTERRUPTED, type SettlementStore } from '@/lib/online-settlements/ingest';
 import type { SavedReport } from '@/lib/online-settlements/reprocess';
 import { buildZomatoWorkbook } from './helpers/zomatoSettlementFixture';
 
@@ -203,8 +203,9 @@ describe('POST /api/owner/online-reports/reprocess', () => {
     expect(body.left).toBe(3);
     expect(body.next).toBe('22222222-2222-4222-8222-222222222222');
     expect(saved.loadArgs).toEqual([{ platform: 'zomato', afterId: after, limit: 100 }]);
-    // The same report row is updated, with the email details it arrived with.
-    expect(saved.updates[0]).toMatchObject({ id: 'report-7', patch: { status: 'read', email_message_id: '<m1>', source: 'email' } });
+    // The same report row is updated, with the email details it arrived with: unfinished while the rows are written, read at the end.
+    expect(saved.updates[0]).toMatchObject({ id: 'report-7', patch: { status: 'failed', error: INTERRUPTED, email_message_id: '<m1>', source: 'email' } });
+    expect(saved.updates[saved.updates.length - 1]).toMatchObject({ id: 'report-7', patch: { status: 'read', error: null, orders_count: 1 } });
     expect(saved.orders).toEqual([expect.objectContaining({ order_id: '9000000001', report_id: 'report-7', payout_inr: 150 })]);
   });
 });

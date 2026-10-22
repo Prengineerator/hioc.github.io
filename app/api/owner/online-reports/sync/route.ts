@@ -10,8 +10,9 @@ export const maxDuration = 60;
 // POST /api/owner/online-reports/sync  { lookbackDays?: 1–400 } — owner only.
 // The "Check email now" button on Owner → Online orders: the same mailbox read
 // as the daily cron, on demand. A larger look-back pulls in older reports the
-// first time (a run downloads at most 60 report emails and says how many are
-// left; emails already read are skipped without downloading).
+// first time (a run downloads at most 60 report emails, starts no new one after
+// 45 s, and says how many are left; emails already handled are skipped without
+// downloading).
 export async function POST(request: Request) {
   const owner = await getOwnerUser();
   if (!owner) return unauthorized();

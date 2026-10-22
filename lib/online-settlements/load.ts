@@ -67,6 +67,8 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
       .gte('ordered_at', startIso)
       .lt('ordered_at', endIso)
       .order('ordered_at', { ascending: true })
+      .order('platform', { ascending: true }) // with order_id: the primary key, so pages never repeat or skip a row
+      .order('order_id', { ascending: true })
       .range(page, page + PAGE - 1);
     if (error) {
       if (MISSING_TABLE.test(`${error.code ?? ''} ${error.message}`)) {

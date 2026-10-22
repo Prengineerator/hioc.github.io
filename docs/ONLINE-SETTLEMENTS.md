@@ -9,19 +9,26 @@ each platform emails every week, so nobody has to download and open spreadsheets
 1. Every morning at about 09:15 IST, `/api/cron/online-reports` logs into the mailbox that receives the
    reports (IMAP, **read-only**: nothing is marked read, moved or deleted).
 2. It looks at the last 14 days of mail from the platforms' domains (`zomato.com`; `swiggy.in`, `swiggy.com`),
-   first by envelope and attachment names only, and downloads just the emails that carry a report and were
-   not read before. Mail whose sender failed DMARC is skipped, so a forged "Zomato" email can't put numbers
-   on the dashboard.
+   first by envelope, size and attachment names only, and downloads just the emails that carry a report and
+   were not handled before, one at a time. Mail whose sender failed DMARC, or that is over 25 MB, is skipped
+   from those headers before anything is downloaded, so a forged "Zomato" email can't put numbers on the
+   dashboard.
 3. Each report attachment is hashed. A file already read is skipped, so the same report emailed twice, or
-   emailed and also uploaded, is counted once.
+   emailed and also uploaded, is counted once. An email that was downloaded and handled, whatever came of
+   it, is remembered (`online_settlement_seen_messages`) and not downloaded again.
 4. The raw file goes to the private Storage bucket `online-settlements` and is parsed:
    - **Zomato** `.xlsx` settlement reports are read in full: every order (bill, discount, commission, gateway
      fee, GST, TCS/TDS, payout, settlement date, bank UTR) and the ads/Hyperpure deductions. Zomato `.csv`
-     reports are read the same way when their columns match, and saved as **Could not read** otherwise.
+     reports are read the same way when their columns match, and saved as **Could not read** otherwise. A
+     workbook that would unpack to over 100 MB (or 2,000 parts) is refused as too large to open safely. An
+     order or deduction line repeated within one report is merged, with a warning on the report.
    - **Swiggy** files are saved but **not read yet**. We need one real Swiggy weekly report to write its parser.
      Once that ships, press **Re-read saved reports** to read the saved Swiggy files.
 5. An order that is "pending" in one week's report settles in a later one. The newer report replaces the
    row; re-reading an older file never changes a newer one back.
+6. A report only counts as read once all its orders are saved. If a check is cut short part-way, the report
+   shows as **Could not read** ("Reading stopped before every order was saved") and the next check reads it
+   again by itself.
 
 The owner can also press **Check email now** (optionally looking back up to 13 months) or **Upload a
 report** on the page. Both run the same pipeline.
@@ -80,7 +87,8 @@ adding the variables.
 ### 4. Load the history
 
 Open Owner → Online orders, choose **last 13 months** next to *Check email now* and press it. A run
-downloads up to 60 report emails and says how many are left; press again until none are. Emails already
+downloads up to 60 report emails (fewer if it reaches its 45 seconds) and says how many are left; press
+again until none are. Emails already
 read are skipped without downloading, and the platforms' promotional emails (no report attached) are never
 downloaded. Reports that never came by email (or came
 before the forward was set up) can be uploaded with **Upload a report**.

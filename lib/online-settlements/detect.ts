@@ -69,6 +69,9 @@ export function wantsAttachment(platform: Platform, fileName: string): boolean {
 /** Larger than any real weekly report; stops a stray huge file eating the cron's time. */
 export const MAX_REPORT_BYTES = 15 * 1024 * 1024;
 
+/** Largest whole email worth downloading (a 15 MB file is about 20 MB once mail-encoded). Checked from the size the server reports, before any download. */
+export const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
+
 /**
  * True when the receiving server recorded that the message FAILED DMARC — i.e.
  * the From address was forged. Gmail and most providers stamp this in

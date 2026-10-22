@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isReportAttachment, platformFromFileName, safeFileName } from './detect';
-import { looksLikeXlsx, readCsv, readWorkbook } from './sheets';
+import { looksLikeXlsx, readCsv, readWorkbook, WorkbookRefused } from './sheets';
 import { isZomatoSettlement, parseZomatoSettlement } from './zomato';
 import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, Sheets } from './types';
 
@@ -20,7 +20,14 @@ import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, 
 //   4. Write orders and deductions, NEWER REPORT WINS per row: a row from a
 //      report whose period ends earlier than the one already stored is
 //      dropped, so re-reading an old file never turns a settled order back to
-//      pending.
+//      pending. A report that lists the same order (or the same deduction)
+//      twice is collapsed to one row first, or Postgres would refuse the lot.
+//
+// While the rows are being written the report is 'failed' with INTERRUPTED as
+// its error, and only the last step makes it 'read'. A run killed part-way
+// (an upsert that throws, the 60 s limit) therefore leaves a report the next
+// ingest of the same bytes reads again, not a 'read' one with no rows that
+// every retry would call a duplicate.
 //
 // Storage and the database sit behind SettlementStore so this file is tested
 // against an in-memory store (tests/onlineSettlementsIngest.test.ts) and runs
@@ -47,6 +54,9 @@ export interface ReportRow {
   warnings: string[];
   read_at: string | null;
 }
+
+/** A report's error while its rows are still being written: the mail check reads such a report again. */
+export const INTERRUPTED = 'Reading stopped before every order was saved: it will be read again';
 
 export interface SettlementStore {
   findReportByHash(sha256: string): Promise<{ id: string; status: string } | null>;
@@ -94,6 +104,37 @@ export function sha256Hex(bytes: Uint8Array): string {
 
 export function deductionKey(d: { kind: string; label: string; ref: string; period_text: string }): string {
   return [d.kind, d.label, d.ref, d.period_text].join('\u0000');
+}
+
+/**
+ * One row per order id, and one per deduction key: a report that repeats one
+ * would make Postgres refuse the whole upsert ("ON CONFLICT DO UPDATE command
+ * cannot affect row a second time"). An order seen twice keeps its last row;
+ * deduction rows sharing a key have their amounts added. Each is noted in the
+ * report's warnings.
+ */
+export function collapseDuplicates(parsed: ParsedSettlement): ParsedSettlement {
+  const orders = new Map<string, SettlementOrder>();
+  for (const o of parsed.orders) orders.set(o.orderId, o);
+  const deductions = new Map<string, SettlementDeduction>();
+  for (const d of parsed.deductions) {
+    const key = deductionKey({ kind: d.kind, label: d.label, ref: d.ref, period_text: d.periodText });
+    const first = deductions.get(key);
+    deductions.set(
+      key,
+      first
+        ? { ...first, amount: first.amount + d.amount, settled: first.settled + d.settled, outstanding: first.outstanding + d.outstanding }
+        : d,
+    );
+  }
+  const warnings = [...parsed.warnings];
+  const repeatedOrders = parsed.orders.length - orders.size;
+  if (repeatedOrders) warnings.push(`${repeatedOrders} order row(s) repeated an order id in this report: only the last one is kept`);
+  const repeatedDeductions = parsed.deductions.length - deductions.size;
+  if (repeatedDeductions) {
+    warnings.push(`${repeatedDeductions} deduction row(s) repeated another row's type, reference and period: their amounts were added together`);
+  }
+  return { ...parsed, orders: [...orders.values()], deductions: [...deductions.values()], warnings };
 }
 
 /** Keep an incoming row unless the stored copy came from a report ending later. */
@@ -172,6 +213,8 @@ const CONTENT_TYPE: Record<string, string> = {
 
 const CHUNK = 500;
 
+const EMAIL_FIELDS = ['email_message_id', 'email_from', 'email_subject', 'email_received_at'] as const;
+
 export async function ingestSettlementFile(store: SettlementStore, input: IngestInput): Promise<IngestOutcome> {
   const now = input.now ?? (() => new Date());
   const { bytes, fileName } = input;
@@ -195,7 +238,8 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
     try {
       sheets = await readWorkbook(bytes);
     } catch (err) {
-      readError = `Could not open the workbook: ${err instanceof Error ? err.message : String(err)}`;
+      // A refusal (too large, damaged) is already in the owner's words.
+      readError = err instanceof WorkbookRefused ? err.message : `Could not open the workbook: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
   const platform: Platform | null =
@@ -221,7 +265,7 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
         ? 'The CSV has no Order ID and Order Date columns: not a Zomato settlement report we can read yet'
         : 'No "Order Level" sheet with Order ID and Order Date columns: not a Zomato settlement report';
     } else {
-      parsed = parseZomatoSettlement(sheets, fileName);
+      parsed = collapseDuplicates(parseZomatoSettlement(sheets, fileName));
       if (parsed.orders.length === 0 && parsed.deductions.length === 0) {
         status = 'failed';
         error = parsed.warnings[0] ?? 'The report has no orders';
@@ -235,6 +279,8 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   }
 
   const nowIso = now().toISOString();
+  // A report to be read is saved as 'failed' (INTERRUPTED) until its rows are in.
+  const writing = status === 'read';
   const row: ReportRow = {
     platform,
     source: input.source,
@@ -249,8 +295,8 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
     restaurant_ref: parsed?.restaurantRef ?? null,
     period_start: parsed?.periodStart ?? null,
     period_end: parsed?.periodEnd ?? null,
-    status,
-    error,
+    status: writing ? 'failed' : status,
+    error: writing ? INTERRUPTED : error,
     orders_count: 0,
     deductions_count: 0,
     warnings: parsed?.warnings ?? [],
@@ -260,9 +306,12 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   let reportId: string;
   if (seen) {
     reportId = seen.id;
-    // A failed re-save must not wipe the path of the copy already kept.
-    const { file_sha256: _sha, storage_path, ...patch } = row;
-    await store.updateReport(reportId, saved ? { ...patch, storage_path } : patch);
+    // A failed re-save must not wipe the path of the copy already kept, and a
+    // re-upload (no email details) must not wipe the email ones already there.
+    const { file_sha256: _sha, storage_path, ...rest } = row;
+    const patch: Partial<ReportRow> = saved ? { ...rest, storage_path } : rest;
+    for (const k of EMAIL_FIELDS) if (patch[k] === null) delete patch[k];
+    await store.updateReport(reportId, patch);
   } else {
     reportId = await store.insertReport(row);
   }
@@ -291,6 +340,8 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
 
   const olderRowsSkipped = parsed.orders.length - keep.length + (parsed.deductions.length - dedRows.length);
   await store.updateReport(reportId, {
+    status: 'read',
+    error: null,
     orders_count: parsed.orders.length,
     deductions_count: parsed.deductions.length,
     read_at: nowIso,

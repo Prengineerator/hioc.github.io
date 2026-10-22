@@ -94,6 +94,7 @@ export function supabaseSettlementStore(admin: SupabaseClient): SettlementStore 
           .from('online_settlement_deductions')
           .select('kind, label, ref, period_text, report_period_end')
           .eq('platform', platform)
+          .order('id', { ascending: true }) // a total order, or a page can repeat or skip rows
           .range(from, from + PAGE - 1);
         if (error) throw new Error(`online_settlement_deductions lookup failed: ${error.message}`);
         const rows = (data ?? []) as { kind: string; label: string; ref: string; period_text: string; report_period_end: string | null }[];
@@ -120,17 +121,19 @@ const REREAD_COLUMNS =
  * 'failed', in id order, `limit` at a time starting after `afterId`. `left` is
  * how many more match beyond this batch; the caller passes the last id it
  * handled back as `afterId`, so files that stay unreadable don't block the
- * ones behind them.
+ * ones behind them. `error` narrows it to reports with exactly that error
+ * (the mail check uses it for the ones a run left INTERRUPTED).
  */
 export async function loadRereadableReports(
   admin: SupabaseClient,
-  opts: { platform?: Platform | null; afterId?: string | null; limit: number },
+  opts: { platform?: Platform | null; afterId?: string | null; error?: string; limit: number },
 ): Promise<{ rows: SavedReport[]; left: number }> {
   let q = admin
     .from('online_settlement_reports')
     .select(REREAD_COLUMNS, { count: 'exact' })
     .in('status', ['unsupported', 'failed']);
   if (opts.platform) q = q.eq('platform', opts.platform);
+  if (opts.error) q = q.eq('error', opts.error);
   if (opts.afterId) q = q.gt('id', opts.afterId);
   const { data, error, count } = await q.order('id', { ascending: true }).limit(opts.limit);
   if (error) throw new Error(`online_settlement_reports lookup failed: ${error.message}`);

@@ -9,6 +9,7 @@ import {
   wantsAttachment,
 } from '@/lib/online-settlements/detect';
 import {
+  authResultsText,
   friendlyMailboxError,
   mailboxConfigFromEnv,
   partFileNames,
@@ -18,7 +19,7 @@ import {
 
 // Which emails count as platform reports, and the mailbox settings
 // (lib/online-settlements/detect.ts, mailbox.ts). The IMAP session itself is
-// not exercised here; it is a thin loop over these rules.
+// exercised in onlineSettlementsSync.test.ts, against a stand-in for the server.
 
 describe('trusted senders', () => {
   const d = DEFAULT_SENDER_DOMAINS;
@@ -107,7 +108,9 @@ describe('mailbox settings', () => {
 });
 
 describe('choosing which emails to download', () => {
-  const msg = (uid: number, from: string, fileNames: string[], messageId: string | null = `<${uid}@x>`) => ({ uid, from, fileNames, messageId });
+  const msg = (uid: number, from: string, fileNames: string[], messageId: string | null = `<${uid}@x>`, extra: { size?: number | null; authResults?: string | null } = {}) => ({
+    uid, from, fileNames, messageId, subject: `Report ${uid}`, size: extra.size ?? 200_000, authResults: extra.authResults ?? null,
+  });
 
   it('finds attachment names anywhere in the MIME tree', () => {
     const tree = {
@@ -137,5 +140,40 @@ describe('choosing which emails to download', () => {
     // the next run, with those two processed, reaches the older one
     const next = pickReportMessages(list, new Set(['<read@x>', '<7@x>', '<6@x>']), DEFAULT_SENDER_DOMAINS, 2);
     expect(next.picked.map((m) => m.uid)).toEqual([1]);
+  });
+
+  it('drops a forged (DMARC-failing) or oversize email before any download, without counting it', () => {
+    const forged = 'mx.google.com; dkim=fail; dmarc=fail (p=REJECT sp=REJECT dis=NONE) header.from=zomato.com';
+    const list = [
+      msg(1, 'noreply@zomato.com', ['Zomato_Settlement_Report_1.xlsx']),
+      msg(2, 'noreply@zomato.com', ['Zomato_Settlement_Report_2.xlsx'], '<forged@x>', { authResults: forged }),
+      msg(3, 'noreply@zomato.com', ['Zomato_Settlement_Report_3.xlsx'], '<big@x>', { size: 26 * 1024 * 1024 }),
+      msg(4, 'noreply@zomato.com', ['Zomato_Settlement_Report_4.xlsx'], '<ok@x>', { authResults: 'mx.google.com; dkim=pass; dmarc=pass', size: 25 * 1024 * 1024 }),
+      msg(5, 'noreply@zomato.com', ['Invoice.pdf'], '<invoice@x>', { authResults: forged }), // nothing to read anyway
+      msg(6, 'noreply@zomato.com', ['Zomato_Settlement_Report_6.xlsx'], '<nosize@x>', { size: null }),
+    ];
+    const { picked, candidates, rejected } = pickReportMessages(list, new Set(), DEFAULT_SENDER_DOMAINS);
+    expect(picked.map((m) => m.uid)).toEqual([6, 4, 1]);
+    expect(candidates).toBe(3);
+    expect(rejected).toEqual([
+      { subject: 'Report 2', from: 'noreply@zomato.com', reason: 'failed sender authentication (DMARC): possibly forged' },
+      { subject: 'Report 3', from: 'noreply@zomato.com', reason: 'the email is larger than 25 MB' },
+    ]);
+
+    // A pile of forged mail doesn't take the places of the real ones.
+    const flood = Array.from({ length: 5 }, (_, i) => msg(10 + i, 'noreply@zomato.com', ['Zomato_Settlement_Report_x.xlsx'], `<f${i}@x>`, { authResults: forged }));
+    const capped = pickReportMessages([...list.slice(0, 1), ...flood], new Set(), DEFAULT_SENDER_DOMAINS, 2);
+    expect(capped.picked.map((m) => m.uid)).toEqual([1]);
+    expect(capped.rejected).toHaveLength(5);
+  });
+
+  it('reads the Authentication-Results header(s) from a header fetch', () => {
+    const block = Buffer.from('Authentication-Results: mx.google.com;\r\n\tdkim=pass;\r\n dmarc=fail (p=NONE)\r\nAuthentication-Results: other.example; spf=pass\r\n\r\n');
+    const text = authResultsText(block);
+    expect(text).toContain('dmarc=fail');
+    expect(failedAuthentication(text)).toBe(true);
+    expect(failedAuthentication(authResultsText(Buffer.from('Authentication-Results: mx.google.com; dmarc=pass\r\n\r\n')))).toBe(false);
+    expect(authResultsText(undefined)).toBeNull();
+    expect(authResultsText(Buffer.from('\r\n\r\n'))).toBeNull();
   });
 });

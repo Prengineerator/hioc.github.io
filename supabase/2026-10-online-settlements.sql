@@ -27,8 +27,15 @@
 -- online_settlement_sync_runs   one row per mailbox check (cron or the owner's
 --                               button): what was found and what was read, so
 --                               the owner page can say "last checked …".
+-- online_settlement_seen_messages
+--                               one row per email already downloaded and
+--                               handled, whatever came of it (read, duplicate,
+--                               unsupported, failed, no usable attachment), so
+--                               the next check skips it without downloading it
+--                               again. An email cut short by the time limit is
+--                               not recorded, so it is retried.
 --
--- All four: RLS on, NO policies, explicit REVOKE — service-role only, the same
+-- All five: RLS on, NO policies, explicit REVOKE — service-role only, the same
 -- double lock as the Petpooja archive (2026-09-petpooja-history.sql). The owner
 -- page and routes read them through the admin client after getOwnerUser().
 --
@@ -57,7 +64,11 @@ create table if not exists online_settlement_reports (
   period_end         date,
   -- read:        parsed, orders/deductions written
   -- unsupported: saved, but there is no parser for this platform/format yet
-  -- failed:      a parser ran and could not read it (error says why)
+  -- failed:      a parser ran and could not read it (error says why). Also
+  --              what a report is while its rows are being written, with the
+  --              error 'Reading stopped before every order was saved…': only
+  --              the last step makes it 'read', and the mail check reads such
+  --              a report again if the run was cut short.
   status             text not null check (status in ('read', 'unsupported', 'failed')),
   error              text,
   orders_count       integer not null default 0,
@@ -161,16 +172,26 @@ create table if not exists online_settlement_sync_runs (
 create index if not exists online_settlement_sync_runs_started
   on online_settlement_sync_runs (started_at desc);
 
--- ── Lockdown: service role only ─────────────────────────────────────────────
-alter table online_settlement_reports    enable row level security;
-alter table online_settlement_orders     enable row level security;
-alter table online_settlement_deductions enable row level security;
-alter table online_settlement_sync_runs  enable row level security;
+-- ── online_settlement_seen_messages ─────────────────────────────────────────
+create table if not exists online_settlement_seen_messages (
+  message_id  text primary key,                 -- the email's Message-ID header
+  platform    text not null check (platform in ('zomato', 'swiggy')),
+  outcome     text not null,                    -- read | duplicate | unsupported | failed | skipped
+  seen_at     timestamptz not null default now()
+);
 
-revoke all on online_settlement_reports    from anon, authenticated;
-revoke all on online_settlement_orders     from anon, authenticated;
-revoke all on online_settlement_deductions from anon, authenticated;
-revoke all on online_settlement_sync_runs  from anon, authenticated;
+-- ── Lockdown: service role only ─────────────────────────────────────────────
+alter table online_settlement_reports         enable row level security;
+alter table online_settlement_orders          enable row level security;
+alter table online_settlement_deductions      enable row level security;
+alter table online_settlement_sync_runs       enable row level security;
+alter table online_settlement_seen_messages   enable row level security;
+
+revoke all on online_settlement_reports       from anon, authenticated;
+revoke all on online_settlement_orders        from anon, authenticated;
+revoke all on online_settlement_deductions    from anon, authenticated;
+revoke all on online_settlement_sync_runs     from anon, authenticated;
+revoke all on online_settlement_seen_messages from anon, authenticated;
 
 -- ── Private bucket for the raw report files ─────────────────────────────────
 -- The code also creates it on first upload (lib/online-settlements/store.ts),
