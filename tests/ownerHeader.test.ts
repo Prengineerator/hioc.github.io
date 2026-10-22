@@ -68,9 +68,41 @@ describe('OwnerHeader first paint', () => {
     const html = render();
     expect(html.match(/aria-label="Owner navigation"/g)).toHaveLength(1);
     expect(html.match(/<nav\b/g)).toHaveLength(1);
-    const inside = html.slice(html.indexOf('<nav'), html.indexOf('</nav>'));
-    expect(html).toContain('HIOC · Owner');
-    expect(inside).not.toContain('HIOC · Owner');
+    const navStart = html.indexOf('<nav');
+    const inside = html.slice(navStart, html.indexOf('</nav>'));
+    // The brand is the logo image (alt "HIOC") and an "Owner" label, both ahead of the <nav>.
+    const logo = html.match(/<img\b[^>]*>/)![0];
+    expect(attr(logo, 'alt')).toBe('HIOC');
+    expect(html.indexOf(logo)).toBeLessThan(navStart);
+    expect(html.indexOf('>Owner</span>')).toBeGreaterThan(-1);
+    expect(html.indexOf('>Owner</span>')).toBeLessThan(navStart);
+    expect(inside).not.toContain('<img');
+    expect(inside).not.toContain('>Owner</span>');
+    expect(inside).not.toContain('HIOC Owner');
+  });
+
+  it('makes the brand one link to the Overview, with a name of its own and no aria-current', () => {
+    const html = render('/owner/payments');
+    const brand = links(html)[0];
+    expect(attr(brand.attrs, 'href')).toBe('/owner');
+    expect(attr(brand.attrs, 'href')).toBe(ownerNav(ALL_ON).overview.href);
+    expect(attr(brand.attrs, 'aria-label')).toBe('HIOC Owner – Overview');
+    expect(brand.inner).toContain('<img');
+    expect(brand.text).toBe('Owner');
+    // Even on the Overview the nav's own item carries aria-current, not the brand.
+    expect(attr(links(render('/owner'))[0].attrs, 'aria-current')).toBeUndefined();
+  });
+
+  it('points the brand at the Overview on the owner subdomain', () => {
+    expect(attr(links(render('/payments', 'owner'))[0].attrs, 'href')).toBe('/');
+  });
+
+  it('is the staff header\'s charcoal bar: solid, sticky, no blur', () => {
+    const header = render().match(/<header\b[^>]*>/)![0];
+    const classes = attr(header, 'class')!.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(['bg-charcoal', 'text-cream', 'sticky', 'top-0']));
+    expect(classes).not.toContain('backdrop-blur');
+    expect(classes.some((c) => c.startsWith('bg-cream'))).toBe(false);
   });
 
   it('stays hidden when printed (the GST report prints)', () => {
@@ -145,8 +177,10 @@ describe('the open page', () => {
     expect(marked).toHaveLength(1);
     expect(attr(marked[0].attrs, 'aria-controls')).toBe('owner-nav-sales');
     expect(marked[0].text).toBe('Sales (current section)');
-    // The active look is the old pill's: charcoal with cream text.
-    expect(attr(marked[0].attrs, 'class')).toContain('bg-charcoal text-cream');
+    // The active look: a cream/10 fill, white text (tan text on it fails AA contrast) and a tan bar.
+    expect(attr(marked[0].attrs, 'class')).toContain('bg-cream/10 text-cream');
+    expect(attr(marked[0].attrs, 'class')).toContain('after:bg-tan');
+    expect(attr(marked[0].attrs, 'class')).not.toContain('text-tan');
   });
 
   it('shows the page name on the phone toggle, ahead of a spoken prefix', () => {
