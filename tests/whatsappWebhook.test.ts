@@ -392,6 +392,26 @@ describe('POST /api/webhooks/whatsapp — always 200 once signed', () => {
     expect(row.status).toBe('sent');
   });
 
+  it("logs Meta's failure reason for an unknown message id (an owner's test send is never stored)", async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const res = await POST(
+      post(
+        statusBody([
+          {
+            ref: 'wamid.TEST-SEND',
+            status: 'failed',
+            errors: [{ code: 131049, title: 'This message was not delivered to maintain healthy ecosystem engagement.' }],
+          },
+        ]),
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ unknown: 1, applied: 0 });
+    const line = info.mock.calls.map((c) => String(c[0])).find((l) => l.includes('no notification for'));
+    expect(line).toContain('status failed: 131049: This message was not delivered');
+  });
+
   it('answers 200 to a malformed (non-JSON) body', async () => {
     const res = await POST(post(null, { rawBody: 'not json at all {{{' }));
     expect(res.status).toBe(200);

@@ -895,9 +895,13 @@ export async function POST(request: Request) {
         if (outcome === 'unknown') {
           // Not an error: Meta also delivers receipts for messages sent by
           // other tools on the same number, and for anything sent before this
-          // endpoint existed. Log it and drop it.
+          // endpoint existed. Log it and drop it. Meta's reason stays on the
+          // line: an owner's test send (/api/owner/marketing/test-send) is never
+          // stored, so a test Meta accepted and then failed (131049, 131026, …)
+          // can only be explained from this log.
           console.info(
-            `[whatsapp:webhook] no notification for ${refTail(update.ref)} (status ${update.status}) — dropped`,
+            `[whatsapp:webhook] no notification for ${refTail(update.ref)} (status ${update.status}` +
+              `${update.error ? `: ${update.error}` : ''}) — dropped`,
           );
         }
       }
