@@ -1,4 +1,5 @@
 import type { ParsedSettlement, SettlementDeduction, SettlementOrder, Sheets, DeductionKind } from './types';
+import { dayMonthYear, headerKey, istTimestamp, mapColumns, normalizeStatus, num, text, type Matcher } from './common';
 
 // Parses a Zomato "Settlement Report" workbook (the weekly/monthly payout
 // annexure Zomato emails to the restaurant) into orders + deductions.
@@ -34,22 +35,23 @@ const ORDER_SHEET = 'Order Level';
 const DEDUCTION_SHEET = 'Addition Deductions Details';
 const SUMMARY_SHEET = 'HSummary';
 
+// Swiggy's annexure also has an 'Order Level' sheet with Order ID and Order
+// Date columns, so a Zomato report is told apart by its payout column.
+const PAYOUT_HEADER = 'order level payout';
+
+/** The Order Level table has Zomato's Order ID, Order Date and payout columns. */
 export function isZomatoSettlement(sheets: Sheets): boolean {
+  return ORDER_SHEET in sheets && findHeaderRow(sheets[ORDER_SHEET], true) >= 0;
+}
+
+/**
+ * The Order Level table has Order ID and Order Date columns, whatever else it
+ * has: enough to try the Zomato parser, which then names any missing column.
+ */
+export function hasZomatoOrderTable(sheets: Sheets): boolean {
   return ORDER_SHEET in sheets && findHeaderRow(sheets[ORDER_SHEET]) >= 0;
 }
 
-/** First line of a header cell, trimmed, lower-cased, spaces collapsed. */
-export function headerKey(cell: unknown): string {
-  return String(cell ?? '')
-    .split('\n')[0]
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-// field → how its header reads. `exact` must equal the header key; `prefix`
-// must start it (for headers Zomato words differently between versions).
-type Matcher = { exact?: string; prefix?: string };
 const COLUMNS = {
   orderId: { exact: 'order id' },
   orderDate: { exact: 'order date' },
@@ -90,78 +92,20 @@ type Field = keyof typeof COLUMNS;
 
 const REQUIRED: Field[] = ['orderId', 'orderDate', 'status', 'subtotal', 'payout'];
 
-function findHeaderRow(rows: unknown[][]): number {
+function findHeaderRow(rows: unknown[][], needPayout = false): number {
   return rows.findIndex((r) => {
     const keys = r.map(headerKey);
-    return keys.includes('order id') && keys.includes('order date');
-  });
-}
-
-export function mapColumns(header: unknown[]): Partial<Record<Field, number>> {
-  const keys = header.map(headerKey);
-  const out: Partial<Record<Field, number>> = {};
-  const taken = new Set<number>();
-  for (const [field, m] of Object.entries(COLUMNS) as [Field, Matcher][]) {
-    const idx = keys.findIndex(
-      (k, i) => !taken.has(i) && k !== '' && (m.exact ? k === m.exact : k.startsWith(m.prefix as string)),
+    return (
+      keys.includes('order id') &&
+      keys.includes('order date') &&
+      (!needPayout || keys.some((k) => k.startsWith(PAYOUT_HEADER)))
     );
-    if (idx >= 0) {
-      out[field] = idx;
-      taken.add(idx);
-    }
-  }
-  return out;
-}
-
-/** A report number: numbers as-is; '1,234.50', '₹ 20' parsed; 'NA', '', '-' and junk → 0. */
-export function num(v: unknown): number {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-  if (typeof v !== 'string') return 0;
-  const n = Number(v.replace(/[₹,\s%]/g, ''));
-  return Number.isFinite(n) ? n : 0;
-}
-
-function text(v: unknown): string {
-  if (v === null || v === undefined) return '';
-  const s = String(v).trim();
-  return s.toUpperCase() === 'NA' ? '' : s;
-}
-
-const STATUS: Record<string, string> = {
-  DELIVERED: 'delivered',
-  CANCELLED: 'cancelled',
-  REJECTED: 'rejected',
-  TIMEDOUT: 'timed_out',
-  'TIMED OUT': 'timed_out',
-};
-
-export function normalizeStatus(v: unknown): string {
-  const s = text(v).toUpperCase();
-  return STATUS[s] ?? s.toLowerCase().replace(/\s+/g, '_');
-}
-
-/** '2026-04-01 11:05:31' (IST wall clock) → '2026-04-01T11:05:31+05:30'; null if unreadable. */
-export function istTimestamp(v: unknown): string | null {
-  const m = text(v).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
-  if (!m) return null;
-  return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6] ?? '00'}+05:30`;
+  });
 }
 
 function isoDate(v: unknown): string | null {
   const m = text(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
-}
-
-const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
-
-/** '01 April 26' / '01 Apr 2026' → '2026-04-01'; null if unreadable. */
-export function dayMonthYear(s: string): string | null {
-  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{2}|\d{4})$/);
-  if (!m) return null;
-  const month = MONTHS.indexOf(m[2].slice(0, 3).toLowerCase());
-  if (month < 0) return null;
-  const year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
-  return `${year}-${String(month + 1).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
 }
 
 /** 'A - B' with both ends in dayMonthYear form → [start, end]; nulls if unreadable. */
@@ -177,7 +121,7 @@ function parseOrders(rows: unknown[][], warnings: string[]): { orders: Settlemen
     warnings.push(`"${ORDER_SHEET}" has no header row with Order ID and Order Date`);
     return { orders: [], resId: null };
   }
-  const col = mapColumns(rows[h]);
+  const col = mapColumns(rows[h], COLUMNS);
   const missing = REQUIRED.filter((f) => col[f] === undefined);
   if (missing.length) {
     warnings.push(`"${ORDER_SHEET}" is missing columns: ${missing.join(', ')}`);

@@ -6,8 +6,8 @@ import { buildZomatoWorkbook, orderTable, type FixtureOrder } from './helpers/zo
 
 // The ingest pipeline (lib/online-settlements/ingest.ts) against an in-memory
 // SettlementStore: dedupe by file hash, newer-report-wins per order and per
-// deduction, Swiggy files saved for later, a report that is not 'read' until
-// its rows are all in, repeated rows collapsed, and what is refused.
+// deduction, Swiggy files that are not its annexure kept, a report that is not
+// 'read' until its rows are all in, repeated rows collapsed, and what is refused.
 
 const order = (o: Partial<FixtureOrder> & { id: string }): FixtureOrder => ({
   date: '2026-09-28 13:00:00', subtotal: 300, promo: 60, commission: 60, payout: 150, ...o,
@@ -110,7 +110,20 @@ describe('ingestSettlementFile', () => {
     expect(m.files.size).toBe(1);
   });
 
-  it('saves Swiggy files for later instead of guessing at their format', async () => {
+  it('names the missing columns when a Zomato order table has no payout column', async () => {
+    const m = memoryStore();
+    const bytes = await buildZomatoWorkbook({
+      period: '22 Sep 2026 - 28 Sep 2026',
+      orders: [],
+      header: ['Order ID', 'Order Date', 'Subtotal (items total)'],
+      rows: [['9000000001', '2026-09-28 13:00:00', 300]],
+    });
+    const out = await ingestSettlementFile(m.store, { bytes, fileName: 'orders.xlsx', source: 'upload', platformHint: 'zomato' });
+    expect(out).toMatchObject({ status: 'failed', platform: 'zomato', message: expect.stringMatching(/missing columns: status, payout/) });
+    expect(m.orders.size).toBe(0);
+  });
+
+  it('keeps a Swiggy file that is not its payout annexure for later instead of guessing at it', async () => {
     const m = memoryStore();
     const wb = new ExcelJS.Workbook();
     wb.addWorksheet('Summary').addRow(['Swiggy payout']);

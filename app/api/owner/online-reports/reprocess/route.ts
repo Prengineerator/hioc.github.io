@@ -15,9 +15,10 @@ const TIME_BUDGET_MS = 45_000;
 
 // POST /api/owner/online-reports/reprocess  { platform?: 'zomato' | 'swiggy', after?: uuid } — owner only.
 // The "Re-read saved reports" button on Owner → Online orders: runs the raw
-// files already in Storage whose report is 'unsupported' (Swiggy, no parser
-// yet) or 'failed' back through the ingest pipeline, without the email, so a
-// new or fixed parser picks them up. Reports already read are never touched.
+// files already in Storage whose report is 'unsupported' (a Swiggy file that
+// was not its payout annexure) or 'failed' back through the ingest pipeline,
+// without the email, so a new or fixed parser picks them up. Reports already
+// read are never touched.
 // A call re-reads at most 100 files and says how many are left; `next` is the
 // id to send back as `after` for the following batch.
 export async function POST(request: Request) {

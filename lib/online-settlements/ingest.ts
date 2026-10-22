@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { isReportAttachment, platformFromFileName, safeFileName } from './detect';
 import { looksLikeXlsx, readCsv, readWorkbook, WorkbookRefused } from './sheets';
-import { isZomatoSettlement, parseZomatoSettlement } from './zomato';
-import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, Sheets } from './types';
+import { isSwiggySettlement, parseSwiggySettlement } from './swiggy';
+import { hasZomatoOrderTable, isZomatoSettlement, parseZomatoSettlement } from './zomato';
+import { PLATFORM_LABEL, type ParsedSettlement, type Platform, type SettlementDeduction, type SettlementOrder, type Sheets } from './types';
 
 // One report file in, rows out. Shared by the mailbox sync (sync.ts) and the
 // owner's upload route, so a report reads the same however it arrived.
@@ -12,11 +13,15 @@ import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, 
 //      seen before but NOT read (failed, or saved for a parser that didn't
 //      exist yet) is read again, so improving a parser and re-reading the
 //      saved files (reprocess.ts) picks up the backlog.
-//   2. Decide the platform: the caller's hint (the sender's domain, or the
-//      owner's choice), else the file's name, else its contents.
+//   2. Decide the platform: what the file's contents are, if they are a
+//      Zomato or Swiggy settlement report (both name their sheet 'Order Level',
+//      so each is told by its payout column); else the caller's hint (the
+//      sender's domain, or the owner's choice); else the file's name. The
+//      contents win over a hint that disagrees, with a warning on the report.
 //   3. Save the raw file to Storage, then parse. Zomato .xlsx → orders and
-//      deductions; Zomato .csv → orders only. Swiggy, for now → saved as
-//      'unsupported' until we have a sample report to write its parser against.
+//      deductions; Zomato .csv → orders only; Swiggy .xlsx annexure → orders
+//      and deductions. A Swiggy file that is not that annexure is kept as
+//      'unsupported'.
 //   4. Write orders and deductions, NEWER REPORT WINS per row: a row from a
 //      report whose period ends earlier than the one already stored is
 //      dropped, so re-reading an old file never turns a settled order back to
@@ -228,7 +233,7 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   const seen = await store.findReportByHash(sha);
   if (seen?.status === 'read') return { ...base, status: 'duplicate', reportId: seen.id, message: 'Already read' };
 
-  // Platform: hint → file name → contents. A .csv is its one sheet, 'Order Level'.
+  // A .csv is its one sheet, 'Order Level'.
   const isCsv = /\.csv$/i.test(fileName);
   let sheets: Sheets | null = null;
   let readError: string | null = null;
@@ -242,8 +247,9 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
       readError = err instanceof WorkbookRefused ? err.message : `Could not open the workbook: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
-  const platform: Platform | null =
-    input.platformHint ?? platformFromFileName(fileName) ?? (sheets && isZomatoSettlement(sheets) ? 'zomato' : null);
+  const claimed = input.platformHint ?? platformFromFileName(fileName);
+  const inside: Platform | null = sheets ? (isZomatoSettlement(sheets) ? 'zomato' : isSwiggySettlement(sheets) ? 'swiggy' : null) : null;
+  const platform = inside ?? claimed;
   if (!platform) {
     return { ...base, status: 'failed', message: 'Not a Zomato or Swiggy settlement report' };
   }
@@ -259,7 +265,7 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
     if (!sheets) {
       status = 'failed';
       error = readError ?? 'Zomato reports are read from the .xlsx or .csv file; this file is not one';
-    } else if (!isZomatoSettlement(sheets)) {
+    } else if (!hasZomatoOrderTable(sheets)) {
       status = 'failed';
       error = isCsv
         ? 'The CSV has no Order ID and Order Date columns: not a Zomato settlement report we can read yet'
@@ -273,9 +279,24 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
         status = 'read';
       }
     }
-  } else {
+  } else if (!sheets || !isSwiggySettlement(sheets)) {
     status = 'unsupported';
-    error = 'Swiggy reports are saved but not read yet: share one with the developer to add its parser';
+    error =
+      readError ??
+      'Not Swiggy\'s weekly payout annexure (an .xlsx with an "Order Level" sheet that has a "Net Payout for Order" column), so it is kept but not read';
+  } else {
+    parsed = collapseDuplicates(parseSwiggySettlement(sheets, fileName));
+    if (parsed.orders.length === 0 && parsed.deductions.length === 0) {
+      status = 'failed';
+      error = parsed.warnings[0] ?? 'The report has no orders';
+    } else {
+      status = 'read';
+    }
+  }
+  if (parsed && claimed && platform !== claimed) {
+    parsed.warnings.unshift(
+      `Arrived as a ${PLATFORM_LABEL[claimed]} report (sender, file name or your choice), but its contents are a ${PLATFORM_LABEL[platform]} settlement report: read as ${PLATFORM_LABEL[platform]}`,
+    );
   }
 
   const nowIso = now().toISOString();

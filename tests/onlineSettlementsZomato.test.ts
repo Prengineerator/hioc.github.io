@@ -1,15 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { plainCell, readCsv, readWorkbook } from '@/lib/online-settlements/sheets';
-import {
-  dateRange,
-  dayMonthYear,
-  headerKey,
-  istTimestamp,
-  isZomatoSettlement,
-  normalizeStatus,
-  num,
-  parseZomatoSettlement,
-} from '@/lib/online-settlements/zomato';
+import { dayMonthYear, headerKey, istTimestamp, normalizeStatus, num } from '@/lib/online-settlements/common';
+import { dateRange, isZomatoSettlement, parseZomatoSettlement } from '@/lib/online-settlements/zomato';
 import { buildZomatoWorkbook, orderRow, type FixtureOrder } from './helpers/zomatoSettlementFixture';
 
 // The Zomato settlement parser (lib/online-settlements/zomato.ts), against a

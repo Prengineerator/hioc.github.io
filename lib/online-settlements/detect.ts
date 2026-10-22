@@ -58,8 +58,9 @@ export function isReportAttachment(fileName: string): boolean {
 /**
  * Which attachments of a platform's email to take. Zomato's settlement report
  * is an .xlsx (or a .csv with the same columns, if Zomato sends per-order rows
- * that way), so its other files are left alone. Swiggy's format isn't known
- * yet, so every spreadsheet-like file is kept for when its parser lands.
+ * that way), so its other files are left alone. Swiggy's weekly annexure is an
+ * .xlsx, but every spreadsheet-like file from it is kept (a zip may hold one);
+ * ingest reads the annexure and leaves anything else saved as not read.
  */
 export function wantsAttachment(platform: Platform, fileName: string): boolean {
   if (platform === 'zomato') return /\.(xlsx|csv)$/i.test(fileName.trim());

@@ -22,8 +22,15 @@ each platform emails every week, so nobody has to download and open spreadsheets
      reports are read the same way when their columns match, and saved as **Could not read** otherwise. A
      workbook that would unpack to over 100 MB (or 2,000 parts) is refused as too large to open safely. An
      order or deduction line repeated within one report is merged, with a warning on the report.
-   - **Swiggy** files are saved but **not read yet**. We need one real Swiggy weekly report to write its parser.
-     Once that ships, press **Re-read saved reports** to read the saved Swiggy files.
+   - **Swiggy** weekly payout reports (the `.xlsx` "Annexure" Swiggy emails after each payout) are read in
+     full: every order (bill, discount, commission, gateway fee, GST, TCS/TDS, payout, settlement date), the
+     bank UTR from the report's Summary, and the ads and other adjustments on its *Growth Investments and
+     Other Deductions* sheet. Any other Swiggy file (a tax invoice summary, a zip) is saved but **not read**,
+     and the report says why. Swiggy files saved before this reader existed are read by pressing
+     **Re-read saved reports** once.
+   - A file is read as the platform its **contents** show, not the one its sender or name suggests (both
+     platforms call their sheet "Order Level"; each is told by its payout column). If the two disagree, the
+     report is read as what it is and carries a note saying so.
 5. An order that is "pending" in one week's report settles in a later one. The newer report replaces the
    row; re-reading an older file never changes a newer one back.
 6. A report only counts as read once all its orders are saved. If a check is cut short part-way, the report
@@ -33,14 +40,31 @@ each platform emails every week, so nobody has to download and open spreadsheets
 The owner can also press **Check email now** (optionally looking back up to 13 months) or **Upload a
 report** on the page. Both run the same pipeline.
 
-**Re-read saved reports** (shown while any report is *Saved, not read yet* or *Could not read*) runs those
+**Re-read saved reports** (shown while any report is *Saved, not read* or *Could not read*) runs those
 saved files through the pipeline again, without the email: use it after a parser is added or fixed. It
 re-reads the raw file kept in Storage and updates the same report row. Reports already read are never
 touched, and files that still can't be read stay as they were. A press handles up to 100 files and says how
 many are left; press again for the rest.
 
-Code: `lib/online-settlements/` (parser `zomato.ts`, mailbox `mailbox.ts`, pipeline `ingest.ts`, money math
-`summary.ts`), routes in `app/api/cron/online-reports` and `app/api/owner/online-reports/`.
+Code: `lib/online-settlements/` (parsers `zomato.ts` and `swiggy.ts`, shared cell helpers `common.ts`, mailbox
+`mailbox.ts`, pipeline `ingest.ts`, money math `summary.ts`), routes in `app/api/cron/online-reports` and
+`app/api/owner/online-reports/`.
+
+## What each platform's report holds
+
+| | Zomato | Swiggy |
+| --- | --- | --- |
+| Covers | the period in its Summary (weekly or monthly) | one week; the Summary gives the days without a year, so the year comes from the file name's date (or the orders' dates) |
+| Bank UTR | on each order | one per weekly transfer, in the Summary; every settled order in the report gets it |
+| Customer id | yes (counted as customers) | no, so the customers figure is empty for Swiggy |
+| Platform fees | commission, gateway fee and GST on both, each its own column | Swiggy gives its fee total, the gateway fee and the GST on fees; **commission** here is the total less those two, so commission + gateway fee + GST equals Swiggy's own fee total (long-distance and cancellation charges sit inside commission) |
+| Ads and other charges | *Addition Deductions Details* sheet | *Growth Investments and Other Deductions* sheet: this week's rows are ads (or other), last week's carried-forward rows are adjustments |
+| Not read | | *Unresolved Customer Complaints* (those orders arrive in a later week's report once settled) and *Recovery Details* |
+
+On a Swiggy report the orders' payouts less this week's adjustments are checked against the Summary's **Total
+Payout**. If they differ by more than ₹1 the report is still read, with a note on its row
+(`select file_name, warnings from online_settlement_reports where warnings <> '[]'`). The note is the first
+place to look when a Swiggy week's numbers seem off.
 
 ## Setup (once, about 10 minutes)
 

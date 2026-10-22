@@ -3,10 +3,11 @@ import type { Platform } from './types';
 
 // "Re-read saved reports": run the raw files kept in Storage back through the
 // ingest pipeline, without the email. Every report file is saved before it is
-// parsed, so a Swiggy file saved as 'unsupported' (no parser yet) or a file
-// that 'failed' (a parser bug since fixed) can be read once the parser is
-// better. ingestSettlementFile() finds the row by the file's hash and updates
-// that same row, so nothing is duplicated and a 'read' report is never touched.
+// parsed, so a file saved as 'unsupported' (a Swiggy file that was not its
+// payout annexure) or one that 'failed' (a parser bug since fixed) can be read
+// once the parser is better. ingestSettlementFile() finds the row by the
+// file's hash and updates that same row, so nothing is duplicated and a 'read'
+// report is never touched.
 //
 // The rows come from loadRereadableReports() in store.ts; this file only needs
 // a SettlementStore, so it is tested against an in-memory one
@@ -47,7 +48,7 @@ export interface RereadResult {
   checked: number;
   /** Now read: orders and deductions are in. */
   read: number;
-  /** Swiggy files: saved again, still no parser. */
+  /** Swiggy files saved again, still not the payout annexure the parser reads. */
   stillUnsupported: number;
   /** Still not a readable report (the report's error says why). */
   failed: number;

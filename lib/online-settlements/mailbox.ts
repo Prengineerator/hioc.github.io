@@ -209,8 +209,8 @@ export async function readReportMessage(
 
 /**
  * `known`: Message-IDs already handled (a report row or the seen-messages table
- * has them) — skipped without downloading. A saved Swiggy file is re-read from
- * Storage when its parser lands, not from the mailbox.
+ * has them) — skipped without downloading. A saved file that wasn't read is
+ * re-read from Storage ("Re-read saved reports"), not from the mailbox.
  *
  * Emails are downloaded ONE AT A TIME and handed to `onMessage` before the next
  * is fetched, so memory holds one email, not sixty. `onMessage` answers true

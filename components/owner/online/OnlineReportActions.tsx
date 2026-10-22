@@ -28,7 +28,7 @@ function syncSummary(r: SyncResult): string {
   if (r.filesRead) parts.push(`${r.filesRead} new report${r.filesRead === 1 ? '' : 's'} read`);
   if (r.filesSkipped) parts.push(`${r.filesSkipped} already read`);
   const saved = r.files.filter((f) => f.status === 'unsupported').length;
-  if (saved) parts.push(`${saved} Swiggy file${saved === 1 ? '' : 's'} saved for later`);
+  if (saved) parts.push(`${saved} Swiggy file${saved === 1 ? '' : 's'} saved but not read (not the weekly payout report)`);
   if (r.filesFailed) parts.push(`${r.filesFailed} could not be read`);
   if (!r.filesFound && !r.messagesLeft) parts.push('no new reports');
   const more = r.messagesLeft ? ` ${r.messagesLeft} more report email${r.messagesLeft === 1 ? '' : 's'} to go: press Check email now again.` : '';
@@ -39,7 +39,7 @@ function rereadSummary(r: RereadResult, left: number): string {
   if (r.checked === 0) return 'No saved reports waiting to be read.';
   const parts: string[] = [];
   if (r.read) parts.push(`${r.read} report${r.read === 1 ? '' : 's'} read`);
-  if (r.stillUnsupported) parts.push(`${r.stillUnsupported} Swiggy file${r.stillUnsupported === 1 ? '' : 's'} still waiting for their format`);
+  if (r.stillUnsupported) parts.push(`${r.stillUnsupported} Swiggy file${r.stillUnsupported === 1 ? '' : 's'} still not the weekly payout report`);
   if (r.failed) parts.push(`${r.failed} could not be read`);
   if (r.missingFile) parts.push(`${r.missingFile} file${r.missingFile === 1 ? '' : 's'} not found in storage`);
   const more = left ? ` ${left} more to go: press Re-read saved reports again.` : '';
@@ -97,7 +97,7 @@ export function OnlineReportActions({ configured, rereadable }: { configured: bo
             ? `Read ${o.orders ?? 0} orders${o.periodStart && o.periodEnd ? ` for ${o.periodStart} to ${o.periodEnd}` : ''}.`
             : o.status === 'duplicate'
               ? 'This report was already read.'
-              : 'Saved. Swiggy reports will be read once their format is added.';
+              : "Saved, but this isn't Swiggy's weekly payout report (the .xlsx annexure), so it was not read.";
         setMessage({ tone: 'ok', text });
         router.refresh();
       }

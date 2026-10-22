@@ -1,4 +1,4 @@
-// Owner → Online orders: Zomato (and, once its parser lands, Swiggy) payouts,
+// Owner → Online orders: Zomato and Swiggy payouts,
 // read from the settlement reports the platforms email every week. Server
 // component in the style of app/owner/payments/page.tsx; all money math is in
 // lib/online-settlements/summary.ts. Setup: docs/ONLINE-SETTLEMENTS.md.
@@ -108,7 +108,7 @@ function MetricsHead({ first }: { first: string }) {
 function reportTone(status: string): 'ok' | 'warn' | 'bad' {
   return status === 'read' ? 'ok' : status === 'unsupported' ? 'warn' : 'bad';
 }
-const REPORT_STATUS: Record<string, string> = { read: 'Read', unsupported: 'Saved, not read yet', failed: 'Could not read' };
+const REPORT_STATUS: Record<string, string> = { read: 'Read', unsupported: 'Saved, not read', failed: 'Could not read' };
 
 function ReportsTable({ rows }: { rows: ReportListRow[] }) {
   if (!rows.length) return <p className="py-6 text-center text-sm text-muted">No reports yet. Check email or upload one above.</p>;
