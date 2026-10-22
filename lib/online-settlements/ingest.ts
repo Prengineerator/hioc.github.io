@@ -10,8 +10,8 @@ import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, 
 //   1. Hash the bytes. A file already READ is a duplicate and stops here — the
 //      same attachment arriving twice, or emailed and also uploaded. A file
 //      seen before but NOT read (failed, or saved for a parser that didn't
-//      exist yet) is read again, so improving a parser and re-checking mail
-//      picks up the backlog.
+//      exist yet) is read again, so improving a parser and re-reading the
+//      saved files (reprocess.ts) picks up the backlog.
 //   2. Decide the platform: the caller's hint (the sender's domain, or the
 //      owner's choice), else the file's name, else its contents.
 //   3. Save the raw file to Storage, then parse. Zomato .xlsx → orders and
@@ -51,6 +51,8 @@ export interface ReportRow {
 export interface SettlementStore {
   findReportByHash(sha256: string): Promise<{ id: string; status: string } | null>;
   saveFile(path: string, bytes: Uint8Array, contentType: string): Promise<boolean>;
+  /** A saved raw file back from Storage, or null when it can't be fetched. */
+  readFile(path: string): Promise<Uint8Array | null>;
   insertReport(row: ReportRow): Promise<string>;
   updateReport(id: string, patch: Partial<ReportRow>): Promise<void>;
   /** order_id → report_period_end ('' when unknown) for the ids already stored. */
@@ -253,8 +255,9 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   let reportId: string;
   if (seen) {
     reportId = seen.id;
-    const { file_sha256: _sha, ...patch } = row;
-    await store.updateReport(reportId, patch);
+    // A failed re-save must not wipe the path of the copy already kept.
+    const { file_sha256: _sha, storage_path, ...patch } = row;
+    await store.updateReport(reportId, saved ? { ...patch, storage_path } : patch);
   } else {
     reportId = await store.insertReport(row);
   }

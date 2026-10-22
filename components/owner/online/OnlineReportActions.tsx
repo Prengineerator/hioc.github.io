@@ -3,13 +3,17 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-// The two ways a report gets onto Owner → Online orders by hand: "Check email
-// now" (the daily mail check, on demand, optionally further back) and
-// "Upload a report" (a file saved from the email or the partner dashboard).
-// Both answer with a one-line summary and refresh the server page.
+// The ways a report gets onto Owner → Online orders by hand: "Check email
+// now" (the daily mail check, on demand, optionally further back), "Upload a
+// report" (a file saved from the email or the partner dashboard) and, while
+// some saved files are unread, "Re-read saved reports" (run them through the
+// reader again once a parser has improved). Each answers with a one-line
+// summary and refreshes the server page.
 
 type SyncFile = { fileName: string; status: string; platform: string | null; periodStart?: string | null; periodEnd?: string | null; message?: string };
 type SyncResult = { messagesFound: number; messagesLeft: number; filesFound: number; filesRead: number; filesSkipped: number; filesFailed: number; files: SyncFile[] };
+
+type RereadResult = { checked: number; read: number; stillUnsupported: number; failed: number; missingFile: number };
 
 const LOOKBACKS = [
   { days: 14, label: 'last 2 weeks' },
@@ -31,12 +35,25 @@ function syncSummary(r: SyncResult): string {
   return parts.join(' · ') + '.' + more;
 }
 
-export function OnlineReportActions({ configured }: { configured: boolean }) {
+function rereadSummary(r: RereadResult, left: number): string {
+  if (r.checked === 0) return 'No saved reports waiting to be read.';
+  const parts: string[] = [];
+  if (r.read) parts.push(`${r.read} report${r.read === 1 ? '' : 's'} read`);
+  if (r.stillUnsupported) parts.push(`${r.stillUnsupported} Swiggy file${r.stillUnsupported === 1 ? '' : 's'} still waiting for their format`);
+  if (r.failed) parts.push(`${r.failed} could not be read`);
+  if (r.missingFile) parts.push(`${r.missingFile} file${r.missingFile === 1 ? '' : 's'} not found in storage`);
+  const more = left ? ` ${left} more to go: press Re-read saved reports again.` : '';
+  return parts.join(' · ') + '.' + more;
+}
+
+export function OnlineReportActions({ configured, rereadable }: { configured: boolean; rereadable: number }) {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [lookback, setLookback] = useState(14);
   const [platform, setPlatform] = useState('');
-  const [busy, setBusy] = useState<'sync' | 'upload' | null>(null);
+  // Where the last "Re-read saved reports" stopped, when it left some for another press.
+  const rereadAfter = useRef<string | null>(null);
+  const [busy, setBusy] = useState<'sync' | 'upload' | 'reread' | null>(null);
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
 
   async function checkEmail() {
@@ -89,6 +106,30 @@ export function OnlineReportActions({ configured }: { configured: boolean }) {
     } finally {
       setBusy(null);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  async function rereadSaved() {
+    setBusy('reread');
+    setMessage(null);
+    try {
+      const res = await fetch('/api/owner/online-reports/reprocess', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ after: rereadAfter.current }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setMessage({ tone: 'error', text: body.error ?? 'Could not re-read the saved reports.' });
+      } else {
+        rereadAfter.current = body.next ?? null;
+        setMessage({ tone: 'ok', text: rereadSummary(body.result as RereadResult, Number(body.left) || 0) });
+        router.refresh();
+      }
+    } catch {
+      setMessage({ tone: 'error', text: 'Could not reach the server. Check your connection and try again.' });
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -147,6 +188,20 @@ export function OnlineReportActions({ configured }: { configured: boolean }) {
             if (f) void upload(f);
           }}
         />
+        {rereadable > 0 ? (
+          <>
+            <span className="mx-1 hidden h-5 w-px bg-line sm:inline-block" aria-hidden="true" />
+            <button
+              type="button"
+              className={button}
+              onClick={rereadSaved}
+              disabled={busy !== null}
+              title="Run the report files already saved here through the reader again, without the email"
+            >
+              {busy === 'reread' ? 'Re-reading…' : 'Re-read saved reports'}
+            </button>
+          </>
+        ) : null}
       </div>
       {message ? (
         <p role="status" className={'text-sm ' + (message.tone === 'ok' ? 'text-green-800' : 'text-red-700')}>

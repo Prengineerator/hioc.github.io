@@ -1,59 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import ExcelJS from 'exceljs';
-import { deductionKey, ingestSettlementFile, type ReportRow, type SettlementStore } from '@/lib/online-settlements/ingest';
-import type { Platform } from '@/lib/online-settlements/types';
+import { ingestSettlementFile } from '@/lib/online-settlements/ingest';
+import { memoryStore } from './helpers/memorySettlementStore';
 import { buildZomatoWorkbook, type FixtureOrder } from './helpers/zomatoSettlementFixture';
 
 // The ingest pipeline (lib/online-settlements/ingest.ts) against an in-memory
 // SettlementStore: dedupe by file hash, newer-report-wins per order and per
 // deduction, Swiggy files saved for later, and what is refused.
-
-function memoryStore() {
-  const reports: (ReportRow & { id: string })[] = [];
-  const orders = new Map<string, Record<string, unknown>>();
-  const deductions = new Map<string, Record<string, unknown>>();
-  const files = new Map<string, Uint8Array>();
-  const store: SettlementStore = {
-    async findReportByHash(sha) {
-      const r = reports.find((x) => x.file_sha256 === sha);
-      return r ? { id: r.id, status: r.status } : null;
-    },
-    async saveFile(path, bytes) {
-      files.set(path, bytes);
-      return true;
-    },
-    async insertReport(row) {
-      const id = `report-${reports.length + 1}`;
-      reports.push({ ...row, id });
-      return id;
-    },
-    async updateReport(id, patch) {
-      Object.assign(reports.find((r) => r.id === id) as object, patch);
-    },
-    async orderPeriods(platform: Platform, ids) {
-      const out = new Map<string, string>();
-      for (const id of ids) {
-        const o = orders.get(`${platform}|${id}`);
-        if (o) out.set(id, (o.report_period_end as string | null) ?? '');
-      }
-      return out;
-    },
-    async upsertOrders(rows) {
-      for (const r of rows) orders.set(`${r.platform}|${r.order_id}`, r);
-    },
-    async deductionPeriods(platform: Platform) {
-      const out = new Map<string, string>();
-      for (const d of deductions.values()) {
-        if (d.platform === platform) out.set(deductionKey(d as never), (d.report_period_end as string | null) ?? '');
-      }
-      return out;
-    },
-    async upsertDeductions(rows) {
-      for (const r of rows) deductions.set(`${r.platform}|${deductionKey(r as never)}`, r);
-    },
-  };
-  return { store, reports, orders, deductions, files };
-}
 
 const order = (o: Partial<FixtureOrder> & { id: string }): FixtureOrder => ({
   date: '2026-09-28 13:00:00', subtotal: 300, promo: 60, commission: 60, payout: 150, ...o,

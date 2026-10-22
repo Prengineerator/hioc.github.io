@@ -18,12 +18,18 @@ each platform emails every week, so nobody has to download and open spreadsheets
    - **Zomato** `.xlsx` settlement reports are read in full: every order (bill, discount, commission, gateway
      fee, GST, TCS/TDS, payout, settlement date, bank UTR) and the ads/Hyperpure deductions.
    - **Swiggy** files are saved but **not read yet**. We need one real Swiggy weekly report to write its parser.
-     Once that ships, saved Swiggy files are read on the next mail check.
+     Once that ships, press **Re-read saved reports** to read the saved Swiggy files.
 5. An order that is "pending" in one week's report settles in a later one. The newer report replaces the
    row; re-reading an older file never changes a newer one back.
 
 The owner can also press **Check email now** (optionally looking back up to 13 months) or **Upload a
 report** on the page. Both run the same pipeline.
+
+**Re-read saved reports** (shown while any report is *Saved, not read yet* or *Could not read*) runs those
+saved files through the pipeline again, without the email: use it after a parser is added or fixed. It
+re-reads the raw file kept in Storage and updates the same report row. Reports already read are never
+touched, and files that still can't be read stay as they were. A press handles up to 100 files and says how
+many are left; press again for the rest.
 
 Code: `lib/online-settlements/` (parser `zomato.ts`, mailbox `mailbox.ts`, pipeline `ingest.ts`, money math
 `summary.ts`), routes in `app/api/cron/online-reports` and `app/api/owner/online-reports/`.

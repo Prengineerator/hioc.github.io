@@ -424,7 +424,7 @@ export default async function OwnerOnlineOrdersPage({
           <Card title="Reports & email">
             <div className="flex flex-col gap-4">
               <EmailStatus data={data} configured={!!mailbox} mailbox={mailbox ? maskEmail(mailbox.user) : null} />
-              <OnlineReportActions configured={!!mailbox} />
+              <OnlineReportActions configured={!!mailbox} rereadable={data.rereadable} />
             </div>
           </Card>
           <Body s={buildOnlineSummary({ orders: data.orders, deductions: data.deductions, from, to, group, platform })} data={data} />

@@ -45,6 +45,8 @@ export interface OnlineData {
   orders: OrderRow[];
   deductions: DeductionRow[];
   reports: ReportListRow[];
+  /** Reports saved but not read ('unsupported' or 'failed'), across all of them, not just the list above. */
+  rereadable: number;
   runs: SyncRunRow[];
   /** Earliest and latest order day stored, for the "data from … to …" line. */
   coverage: { first: string | null; last: string | null };
@@ -68,7 +70,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
       .range(page, page + PAGE - 1);
     if (error) {
       if (MISSING_TABLE.test(`${error.code ?? ''} ${error.message}`)) {
-        return { migrated: false, orders: [], deductions: [], reports: [], runs: [], coverage: { first: null, last: null } };
+        return { migrated: false, orders: [], deductions: [], reports: [], rereadable: 0, runs: [], coverage: { first: null, last: null } };
       }
       throw new Error(`online_settlement_orders: ${error.message}`);
     }
@@ -77,7 +79,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
     if (rows.length < PAGE) break;
   }
 
-  const [ded, reports, runs, first, last] = await Promise.all([
+  const [ded, reports, waiting, runs, first, last] = await Promise.all([
     admin
       .from('online_settlement_deductions')
       .select('platform, kind, amount_inr, period_start, period_end, report_period_end')
@@ -87,6 +89,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
       .select('id, platform, source, file_name, period_start, period_end, status, error, orders_count, email_received_at, created_at')
       .order('created_at', { ascending: false })
       .limit(30),
+    admin.from('online_settlement_reports').select('id', { count: 'exact', head: true }).in('status', ['unsupported', 'failed']),
     admin
       .from('online_settlement_sync_runs')
       .select('id, trigger, started_at, finished_at, messages_found, files_found, files_read, files_skipped, files_failed, error')
@@ -95,7 +98,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
     admin.from('online_settlement_orders').select('ordered_at').order('ordered_at', { ascending: true }).limit(1),
     admin.from('online_settlement_orders').select('ordered_at').order('ordered_at', { ascending: false }).limit(1),
   ]);
-  for (const r of [ded, reports, runs, first, last]) {
+  for (const r of [ded, reports, waiting, runs, first, last]) {
     if (r.error) throw new Error(`online settlements: ${r.error.message}`);
   }
   const at = (r: { data: unknown }) => ((r.data as { ordered_at: string }[] | null)?.[0]?.ordered_at ?? null);
@@ -104,6 +107,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
     orders,
     deductions: (ded.data ?? []) as unknown as DeductionRow[],
     reports: (reports.data ?? []) as unknown as ReportListRow[],
+    rereadable: waiting.count ?? 0,
     runs: (runs.data ?? []) as unknown as SyncRunRow[],
     coverage: { first: at(first), last: at(last) },
   };

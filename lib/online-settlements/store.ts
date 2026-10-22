@@ -1,6 +1,7 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deductionKey, type ReportRow, type SettlementStore } from './ingest';
+import type { SavedReport } from './reprocess';
 import type { Platform } from './types';
 
 // The Supabase side of SettlementStore (ingest.ts): the four tables from
@@ -38,6 +39,20 @@ export function supabaseSettlementStore(admin: SupabaseClient): SettlementStore 
         return false;
       }
       return true;
+    },
+
+    async readFile(path) {
+      try {
+        const { data, error } = await admin.storage.from(SETTLEMENT_BUCKET).download(path);
+        if (error || !data) {
+          console.error('online-settlements: raw file download failed', path, error?.message ?? 'no data');
+          return null;
+        }
+        return new Uint8Array(await data.arrayBuffer());
+      } catch (err) {
+        console.error('online-settlements: raw file download failed', path, err);
+        return null;
+      }
     },
 
     async insertReport(row: ReportRow) {
@@ -95,4 +110,30 @@ export function supabaseSettlementStore(admin: SupabaseClient): SettlementStore 
       if (error) throw new Error(`online_settlement_deductions upsert failed: ${error.message}`);
     },
   };
+}
+
+const REREAD_COLUMNS =
+  'id, platform, source, file_name, storage_path, status, email_message_id, email_from, email_subject, email_received_at';
+
+/**
+ * The reports "Re-read saved reports" works on: status 'unsupported' or
+ * 'failed', in id order, `limit` at a time starting after `afterId`. `left` is
+ * how many more match beyond this batch; the caller passes the last id it
+ * handled back as `afterId`, so files that stay unreadable don't block the
+ * ones behind them.
+ */
+export async function loadRereadableReports(
+  admin: SupabaseClient,
+  opts: { platform?: Platform | null; afterId?: string | null; limit: number },
+): Promise<{ rows: SavedReport[]; left: number }> {
+  let q = admin
+    .from('online_settlement_reports')
+    .select(REREAD_COLUMNS, { count: 'exact' })
+    .in('status', ['unsupported', 'failed']);
+  if (opts.platform) q = q.eq('platform', opts.platform);
+  if (opts.afterId) q = q.gt('id', opts.afterId);
+  const { data, error, count } = await q.order('id', { ascending: true }).limit(opts.limit);
+  if (error) throw new Error(`online_settlement_reports lookup failed: ${error.message}`);
+  const rows = (data ?? []) as unknown as SavedReport[];
+  return { rows, left: Math.max((count ?? rows.length) - rows.length, 0) };
 }
