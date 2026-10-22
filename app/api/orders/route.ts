@@ -50,6 +50,8 @@ import type { AllocationResult } from '@/lib/passes/types';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
+import { settleOrderPayment, type CounterActor, type CounterSettlement } from '@/lib/orders/settlePayment';
+import { getStaffPrintOrder, type StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -101,6 +103,8 @@ export async function POST(request: Request) {
     pass_drinks: rawPassDrinks,
     suggestion_session_ids,
     pairing_lines,
+    settlement: rawSettlement,
+    include_print_order: rawIncludePrintOrder,
   } = body;
 
   // Phase-7 (SUG-8/SUG-9): distinct session ids the cart's lines carry, so the
@@ -143,6 +147,23 @@ export async function POST(request: Request) {
   if (isStaff && !canTakeOrders(await getStaffSurface(), settings.staff_web_ordering)) {
     return errorResponse(403, ORDERING_OFF_MESSAGE);
   }
+
+  // The counter's "Collect now", in the same request: how the customer paid
+  // rides along with the order, and the order is settled the moment it exists,
+  // by the same rules as PATCH /api/orders/[id]/payment (settleOrderPayment).
+  // One function call instead of two per counter sale. Only the counter records
+  // payments, so anyone else sending one is refused before anything is written.
+  const settlementRequest =
+    rawSettlement === undefined || rawSettlement === null ? null : (rawSettlement as Record<string, unknown>);
+  if (settlementRequest !== null) {
+    if (!actor) return errorResponse(403, 'Only the counter can record a payment.');
+    if (typeof rawSettlement !== 'object' || Array.isArray(rawSettlement)) {
+      return errorResponse(400, 'settlement must be an object');
+    }
+  }
+  // The counter prints its tickets from this answer rather than asking for each
+  // one again (lib/pos/printQueue.ts). Staff data, so staff only.
+  const wantsPrintOrder = actor !== null && rawIncludePrintOrder === true;
 
   // Phase-3 (QR-1/D6): a NON-staff request carrying a `qr_token` is the third
   // order-entry channel — a seated customer who scanned the table QR. The token
@@ -663,8 +684,20 @@ export async function POST(request: Request) {
         .eq('id', claim.orderId)
         .single();
       if (prior) {
+        const priorOrder = toOrderResponse(prior as OrderRowWithItems);
+        // The first attempt may have settled before its answer was lost, or
+        // not; settling again with the same parts is a re-settle (it replaces
+        // them, and the bill send is idempotent), so the retry ends in the same
+        // state either way.
+        const extras = actor
+          ? await counterExtras(actor, priorOrder.id, {
+              createdPaid: (priorOrder.total_inr ?? priorOrder.subtotal_inr) === 0,
+              settlementRequest,
+              wantsPrintOrder,
+            })
+          : {};
         return NextResponse.json(
-          { order: toOrderResponse(prior as OrderRowWithItems), payment: null, replayed: true },
+          { order: priorOrder, payment: null, replayed: true, ...extras },
           { status: 201 },
         );
       }
@@ -1030,6 +1063,17 @@ export async function POST(request: Request) {
     runAfterResponse(sendBillNotification(response));
   }
 
+  // Settled after everything above is committed: a payment that fails leaves
+  // the order standing, unpaid, exactly as when the POS settled it separately.
+  // A ₹0 bill was created paid and has nothing to settle.
+  const extras = actor
+    ? await counterExtras(actor, orderRow.id as string, {
+        createdPaid: response.payment_status === 'paid',
+        settlementRequest,
+        wantsPrintOrder,
+      })
+    : {};
+
   // `payment_unavailable` tells the client the customer asked to pay online but
   // the gateway failed, so the order was switched to pay-at-counter above — the
   // client shows that instead of silently landing on the order page.
@@ -1041,9 +1085,46 @@ export async function POST(request: Request) {
       // POS-ACC: the counter's confirmation says so, so the staffer can tell
       // the customer their points are waiting under this number.
       ...(counterAccountCreated ? { customer_account_created: true } : {}),
+      ...extras,
     },
     { status: 201 },
   );
+}
+
+/**
+ * The counter-only parts of the create answer: the settle it asked for and the
+ * ticket data it prints from. Each is present only when asked for. Never
+ * throws: the order already exists, so a failure here is reported, not fatal.
+ */
+async function counterExtras(
+  actor: CounterActor,
+  orderId: string,
+  opts: { createdPaid: boolean; settlementRequest: Record<string, unknown> | null; wantsPrintOrder: boolean },
+): Promise<{ settlement?: CounterSettlement; print_order?: StaffPrintOrder | null }> {
+  const extras: { settlement?: CounterSettlement; print_order?: StaffPrintOrder | null } = {};
+  if (opts.settlementRequest) {
+    if (opts.createdPaid) {
+      extras.settlement = null;
+    } else {
+      try {
+        const outcome = await settleOrderPayment(actor, orderId, opts.settlementRequest);
+        extras.settlement = outcome.ok
+          ? { ok: true, ...outcome.body }
+          : { ok: false, status: outcome.status, error: outcome.error };
+      } catch (err) {
+        console.error(`settle with the order failed for ${orderId}`, err);
+        extras.settlement = { ok: false, status: 500, error: 'Failed to record payment' };
+      }
+    }
+  }
+  // After the settle, so a receipt printed from it says how it was paid.
+  if (opts.wantsPrintOrder) {
+    extras.print_order = await getStaffPrintOrder(orderId).catch((err) => {
+      console.error(`print order load failed for ${orderId}`, err);
+      return null;
+    });
+  }
+  return extras;
 }
 
 // GET /api/orders — staff-only. The order board itself.

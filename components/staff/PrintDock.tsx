@@ -35,6 +35,10 @@ import {
 } from '@/lib/pos/printQueue';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
 import { createDesktopExecutor, NoPrintersConfiguredError } from '@/lib/desktop/printExecutor';
+import { localPrintOrder, ticketOrderFor } from '@/lib/print/localTicket';
+import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
+import type { PrintType } from '@/lib/staff/autoPrint';
+import { LocalPrintFrame } from '@/components/staff/LocalPrintFrame';
 
 const EMPTY_SNAPSHOT: PrintQueueSnapshot = {
   jobs: [],
@@ -55,9 +59,17 @@ export interface PrintDock {
   hasFailed: boolean;
 }
 
+/**
+ * The one print frame: the /staff-print page (`src`), or the same ticket drawn
+ * here from the order the job carries (`local`, components/staff/LocalPrintFrame).
+ */
+type Frame =
+  | { jobId: string; src: string }
+  | { jobId: string; local: { order: StaffPrintOrder; type: PrintType } };
+
 export function usePrintDock(): PrintDock {
-  const [frame, setFrame] = useState<{ jobId: string; src: string } | null>(null);
-  const frameRef = useRef<{ jobId: string; src: string } | null>(null);
+  const [frame, setFrame] = useState<Frame | null>(null);
+  const frameRef = useRef<Frame | null>(null);
   frameRef.current = frame;
 
   const waiters = useRef(new Map<string, { resolve: () => void; reject: () => void }>());
@@ -74,11 +86,29 @@ export function usePrintDock(): PrintDock {
   // executor can fall back to it per-job (NoPrintersConfiguredError) without
   // duplicating this. A plain browser (no bridge) always takes this path, so
   // its behaviour is byte-for-byte what it was before PRN-4/PRN-5.
+  //
+  // A placement's first attempt draws the ticket from the order the job carries
+  // instead of loading the page: no server call (lib/print/localTicket.ts). A
+  // retry, or a print with no order attached, loads the page as before.
   const runViaIframe = useCallback(
     (job: PrintJob) =>
       new Promise<void>((resolve, reject) => {
+        const carried = localPrintOrder(job);
+        let local: { order: StaffPrintOrder; type: PrintType } | null = null;
+        if (carried) {
+          try {
+            local = { order: ticketOrderFor(carried, job.type, job.itemIds), type: job.type };
+          } catch (err) {
+            reject(err);
+            return;
+          }
+        }
         waiters.current.set(job.id, { resolve, reject });
-        setFrame({ jobId: job.id, src: printFrameSrc(job.orderId, job.type, job.itemIds) });
+        setFrame(
+          local
+            ? { jobId: job.id, local }
+            : { jobId: job.id, src: printFrameSrc(job.orderId, job.type, job.itemIds) },
+        );
       }),
     [],
   );
@@ -104,34 +134,40 @@ export function usePrintDock(): PrintDock {
     });
   }
 
-  // The frame's "I'm done" / "I couldn't" / "the dialog is up". Only same-origin
-  // messages on our own channel count; anything else on the window is ignored,
-  // and a frame that never speaks is left to the queue's timeout.
+  // The frame's "I'm done" / "I couldn't" / "the dialog is up", from either
+  // kind of frame: the page posts it, the local frame calls it directly.
+  const onFrameEvent = useCallback((event: PrintFrameMessage['event']) => {
+    const active = frameRef.current;
+    if (!active) return;
+
+    // The native print dialog is open and a human is standing in front of it.
+    // The job hasn't finished, so it must not settle — but the 10s watchdog
+    // has to stop counting, or it fires while they're choosing a printer.
+    if (event === 'dialog') {
+      queue.current?.noteDialogOpen();
+      return;
+    }
+
+    const waiter = waiters.current.get(active.jobId);
+    waiters.current.delete(active.jobId);
+    setFrame(null);
+    if (event === 'printed') waiter?.resolve();
+    else waiter?.reject();
+  }, []);
+
+  // Only same-origin messages on our own channel count; anything else on the
+  // window is ignored, and a frame that never speaks is left to the queue's
+  // timeout.
   useEffect(() => {
     function onMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin) return;
       const data = event.data as Partial<PrintFrameMessage> | null;
-      if (!data || data.channel !== PRINT_MESSAGE_CHANNEL) return;
-      const active = frameRef.current;
-      if (!active) return;
-
-      // The native print dialog is open and a human is standing in front of it.
-      // The job hasn't finished, so it must not settle — but the 10s watchdog
-      // has to stop counting, or it fires while they're choosing a printer.
-      if (data.event === 'dialog') {
-        queue.current?.noteDialogOpen();
-        return;
-      }
-
-      const waiter = waiters.current.get(active.jobId);
-      waiters.current.delete(active.jobId);
-      setFrame(null);
-      if (data.event === 'printed') waiter?.resolve();
-      else waiter?.reject();
+      if (!data || data.channel !== PRINT_MESSAGE_CHANNEL || !data.event) return;
+      onFrameEvent(data.event);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [onFrameEvent]);
 
   const enqueue = useCallback((specs: PrintJobSpec[]) => {
     queue.current?.enqueue(specs);
@@ -208,7 +244,9 @@ export function usePrintDock(): PrintDock {
           display:none (a frame with no layout can print blank) and 80 mm wide so
           the ticket lays out exactly as it will on paper. Keyed by job so a retry
           reloads the document and fires print() again. */}
-      {frame ? (
+      {frame && 'local' in frame ? (
+        <LocalPrintFrame key={frame.jobId} order={frame.local.order} type={frame.local.type} onEvent={onFrameEvent} />
+      ) : frame ? (
         <iframe
           key={frame.jobId}
           src={frame.src}
