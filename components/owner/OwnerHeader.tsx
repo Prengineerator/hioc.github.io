@@ -19,6 +19,10 @@ const LINKS = [
   // tab to tag the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on (Gate 7A).
   { href: '/owner/suggestions', label: 'Suggestions' },
   { href: '/owner/payments', label: 'Payments' },
+  // Zomato/Swiggy payouts read from the settlement reports they email
+  // (docs/ONLINE-SETTLEMENTS.md). Next to Payments: it is the delivery apps'
+  // side of the same money.
+  { href: '/owner/online', label: 'Online orders' },
   // Reconcile any date range: sales, money in by method, refunds, drawer.
   { href: '/owner/reports', label: 'Reports' },
   { href: '/owner/promotions', label: 'Promotions' },

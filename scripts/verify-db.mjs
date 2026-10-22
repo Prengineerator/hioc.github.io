@@ -1723,6 +1723,60 @@ async function checkSuggestionEngine() {
 }
 
 // ---------------------------------------------------------------------------
+// Online orders: Zomato/Swiggy settlement reports (2026-10-online-settlements.sql)
+// ---------------------------------------------------------------------------
+async function checkOnlineSettlements() {
+  heading('ONL-1 · online settlement tables + lockdown', '2026-10-online-settlements.sql');
+  const hint = 'apply supabase/2026-10-online-settlements.sql';
+  const tables = [
+    [
+      'online_settlement_reports',
+      'id,platform,source,file_name,file_sha256,file_bytes,storage_path,email_message_id,email_from,email_subject,' +
+        'email_received_at,restaurant_ref,period_start,period_end,status,error,orders_count,deductions_count,warnings,read_at,created_at',
+    ],
+    [
+      'online_settlement_orders',
+      'platform,order_id,report_id,report_period_end,restaurant_ref,ordered_at,status,order_type,offer,payment_mode,' +
+        'cancel_reason,cancel_stage,refund_policy,menu_sales_inr,packaging_inr,discount_inr,gst_from_customer_inr,' +
+        'net_order_value_inr,commission_pct,commission_inr,payment_fee_inr,gst_on_fees_inr,tcs_inr,tds_inr,' +
+        'gst_paid_by_platform_inr,gst_due_by_restaurant_inr,other_deductions_inr,additions_inr,payout_inr,' +
+        'settlement_status,settlement_date,utr,unsettled_inr,customer_ref,updated_at',
+    ],
+    [
+      'online_settlement_deductions',
+      'id,platform,report_id,report_period_end,kind,label,ref,period_text,period_start,period_end,settlement_status,' +
+        'amount_inr,settled_inr,outstanding_inr,updated_at',
+    ],
+    [
+      'online_settlement_sync_runs',
+      'id,trigger,started_at,finished_at,lookback_days,messages_found,files_found,files_read,files_skipped,files_failed,error,details',
+    ],
+  ];
+  let allExist = true;
+  for (const [table, columns] of tables) {
+    const res = await rest(`/${table}?select=${columns}&limit=1`);
+    if (res.ok) pass(`${table} has every column`);
+    else {
+      allExist = false;
+      const kind = errKind(res);
+      fail(`${table} has every column`, kind === 'no_table' || kind === 'no_column' ? `${hint} — ${errText(res)}` : `${kind}: ${errText(res)}`);
+    }
+  }
+  if (!allExist) {
+    skip('anon is refused on every online settlement table', 'at least one table is missing — apply the migration first');
+    return;
+  }
+  // The migration REVOKEs every privilege from anon, so a read is refused
+  // outright (permission denied), not merely filtered to nothing by RLS — which
+  // is what makes this check meaningful even on an empty table.
+  for (const [table] of tables) {
+    const res = await rest(`/${table}?select=*&limit=1`, { key: ANON });
+    if (!res.ok) pass(`anon is refused on ${table}`, `HTTP ${res.status}`);
+    else fail(`anon is refused on ${table}`, 'anon can read it — re-run the REVOKE lines of the migration');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // MKT-1 — the marketing agent (docs/MARKETING-AGENT-SPEC.md §3,
 // supabase/2026-10-marketing-agent.sql).
 //
@@ -2059,6 +2113,7 @@ async function main() {
   await checkSellByWeight();
   await checkSettleEditOrder();
   await checkMarketingAgent();
+  await checkOnlineSettlements();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);
