@@ -3,6 +3,7 @@
 
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type {
+  AddonGroupChangeRequest,
   MenuChangeAction,
   MenuChangeRequest,
   MenuItemChangePayload,
@@ -13,6 +14,12 @@ export const ACTION_LABEL: Record<MenuChangeAction, string> = {
   update: 'Edit',
   delete: 'Delete',
 };
+
+/** The pill's words for a request: an add-on request says so. */
+export function requestLabel(request: MenuChangeRequest): string {
+  if (request.target === 'addon_group') return request.action === 'create' ? 'New add-on group' : 'Edit add-on group';
+  return ACTION_LABEL[request.action];
+}
 
 // What each payload field is called on the screen, in the order they're listed.
 // parent_category folds into "category" (they change together).
@@ -57,8 +64,22 @@ function priceRange(payload: MenuItemChangePayload): string | null {
   return lo === hi ? `₹${lo}${unit}` : `₹${lo}–₹${hi}${unit}`;
 }
 
+function describeAddonChange(request: AddonGroupChangeRequest): string {
+  const p = request.payload ?? {};
+  if (request.action === 'create') {
+    const count = p.options?.length ?? 0;
+    return count > 0 ? `${count} option${count === 1 ? '' : 's'}` : 'New add-on group';
+  }
+  const labels: string[] = [];
+  if (p.display_name !== undefined) labels.push('name');
+  if (p.selection_type !== undefined || p.min_select !== undefined || p.max_select !== undefined) labels.push('choice rule');
+  if (p.options !== undefined) labels.push('options & prices');
+  return labels.length > 0 ? `Changes: ${labels.join(', ')}` : 'Details updated';
+}
+
 /** One short line on what the request would change. */
 export function describeChange(request: MenuChangeRequest): string {
+  if (request.target === 'addon_group') return describeAddonChange(request);
   if (request.action === 'delete') return 'Remove from the menu';
   if (request.action === 'create') {
     const p = request.payload ?? {};

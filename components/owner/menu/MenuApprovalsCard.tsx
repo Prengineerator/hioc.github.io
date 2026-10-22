@@ -11,7 +11,7 @@ import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card } from '@/components/owner/dashboard';
 import type { MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
 import { timeAgo } from '@/lib/utils/timeAgo';
-import { ACTION_LABELS, formatIstDateTime } from './menuDiff';
+import { formatIstDateTime, requestActionLabel } from './menuDiff';
 
 /** How many of the newest pending requests the card lists. */
 export const MENU_APPROVALS_PREVIEW = 3;
@@ -56,9 +56,9 @@ export function MenuApprovalsCard({
         {shown.map((r) => (
           <li key={r.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[#f2efe9] py-2 text-sm">
             <span className="inline-block shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-900">
-              {ACTION_LABELS[r.action]}
+              {requestActionLabel(r)}
             </span>
-            <span className="min-w-0 flex-1 truncate font-bold text-charcoal">{r.item_name || 'Untitled item'}</span>
+            <span className="min-w-0 flex-1 truncate font-bold text-charcoal">{r.item_name || (r.target === 'addon_group' ? 'Untitled add-on group' : 'Untitled item')}</span>
             <span className="shrink-0 text-xs text-muted">
               {r.requested_by_name || 'Unknown'} ·{' '}
               <time dateTime={r.requested_at} title={`${formatIstDateTime(r.requested_at)} IST`}>

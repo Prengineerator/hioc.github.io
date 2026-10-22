@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeMenuAdmin, uuid, type Row } from './helpers/fakeMenuAdmin';
-import type { MenuChangeRequest, MenuItemChangePayload } from '@/lib/menu/changeRequestTypes';
+import type { MenuChangeRequest, MenuItemChangePayload, MenuItemChangeRequest } from '@/lib/menu/changeRequestTypes';
 
 // Menu changes need the owner's approval (supabase/2026-10-menu-change-requests.sql).
 // A create / edit / delete by staff or a manager on the POS is stored as a
@@ -489,7 +489,7 @@ describe('DELETE /api/menu/[id] as staff', () => {
   it('stores a pending delete with the item\'s values and answers 202, deleting nothing', async () => {
     const res = await staffDelete(jsonReq('DELETE', `/api/menu/${ITEM}`), ctx(ITEM));
     expect(res.status).toBe(202);
-    const { request } = await read<{ request: MenuChangeRequest }>(res);
+    const { request } = await read<{ request: MenuItemChangeRequest }>(res);
     expect(request).toMatchObject({ action: 'delete', menu_item_id: ITEM, item_name: 'Latte', payload: null, status: 'pending' });
     expect(request.snapshot?.variants).toHaveLength(2);
     expect(menuItem(ITEM)).toBeDefined();

@@ -5,12 +5,17 @@
 // a time is shown in IST.
 
 import { MENU_CATEGORIES } from '@/lib/constants';
+import { choiceRuleLabel } from '@/lib/menu/customization';
 import type {
+  AddonGroupChangePayload,
+  AddonGroupChangeRequest,
+  AddonOptionChange,
   MenuChangeAction,
   MenuChangeRequest,
   MenuChangeStatus,
   MenuChangeVariant,
   MenuItemChangePayload,
+  MenuItemChangeRequest,
 } from '@/lib/menu/changeRequestTypes';
 
 // ---------------------------------------------------------------------------
@@ -48,6 +53,12 @@ export const ACTION_LABELS: Record<MenuChangeAction, string> = {
   update: 'Edit',
   delete: 'Delete',
 };
+
+/** The action pill's words: an add-on request says so ("New add-on group"). */
+export function requestActionLabel(request: MenuChangeRequest): string {
+  if (request.target === 'addon_group') return request.action === 'create' ? 'New add-on group' : 'Edit add-on group';
+  return ACTION_LABELS[request.action];
+}
 
 export function actionTone(action: MenuChangeAction): Tone {
   return action === 'create' ? 'good' : action === 'delete' ? 'bad' : 'warn';
@@ -288,7 +299,7 @@ function has(obj: MenuItemChangePayload | null | undefined, key: PayloadKey): bo
 
 const UNKNOWN = '—';
 
-export function buildRequestDiff(request: MenuChangeRequest, addonNames: Record<string, string> = {}): RequestDiff {
+export function buildRequestDiff(request: MenuItemChangeRequest, addonNames: Record<string, string> = {}): RequestDiff {
   const { action, payload, snapshot } = request;
   const mode: DiffMode = action === 'create' ? 'proposed' : action === 'delete' ? 'snapshot' : 'diff';
   // The item as it was (an edit or delete) and as it would be (a create or edit).
@@ -340,4 +351,95 @@ export function buildRequestDiff(request: MenuChangeRequest, addonNames: Record<
 /** "Name, Sizes & prices" — the fields an edit touches, for the card's one-line summary. */
 export function changedFieldLabels(payload: MenuItemChangePayload | null | undefined): string[] {
   return FIELD_ORDER.filter((key) => has(payload, key)).map((key) => FIELD_LABELS[key]);
+}
+
+// ---------------------------------------------------------------------------
+// Add-on group requests (2026-10-addon-change-requests.sql)
+// ---------------------------------------------------------------------------
+
+// How a group's choice rule reads: shared with the staff Add-ons tab.
+export { choiceRuleLabel };
+
+export type AddonOptionRowStatus = 'same' | 'changed' | 'added';
+
+export interface AddonOptionDiffRow {
+  key: string;
+  before: { name: string; price_inr: number } | null;
+  after: { name: string; price_inr: number };
+  status: AddonOptionRowStatus;
+}
+
+/**
+ * Lines an option list up with the one before it, by option id: each option of
+ * `after` in its order (same, renamed / repriced, or new), then any option of
+ * `before` that `after` leaves out — a request never removes an option, so those
+ * stay exactly as they are and read as unchanged.
+ */
+export function diffAddonOptions(
+  before: AddonOptionChange[] | null | undefined,
+  after: AddonOptionChange[] | null | undefined,
+): AddonOptionDiffRow[] {
+  const prior = new Map((before ?? []).filter((o) => o.id).map((o) => [o.id as string, o]));
+  const rows: AddonOptionDiffRow[] = (after ?? []).map((o, i) => {
+    const was = o.id ? prior.get(o.id) : undefined;
+    if (o.id) prior.delete(o.id);
+    const now = { name: o.name, price_inr: o.price_inr };
+    if (!was) return { key: o.id ?? `new:${i}`, before: null, after: now, status: 'added' };
+    const same = was.name === o.name && was.price_inr === o.price_inr;
+    return { key: o.id as string, before: { name: was.name, price_inr: was.price_inr }, after: now, status: same ? 'same' : 'changed' };
+  });
+  for (const [id, o] of prior) {
+    const kept = { name: o.name, price_inr: o.price_inr };
+    rows.push({ key: id, before: kept, after: kept, status: 'same' });
+  }
+  return rows;
+}
+
+export interface AddonRequestDiff {
+  /** 'proposed' for a new group (values it will start with), 'diff' for an edit (before → after). */
+  mode: 'proposed' | 'diff';
+  /** null when the request does not change it. */
+  name: { before: string | null; after: string } | null;
+  rule: { before: string | null; after: string } | null;
+  options: AddonOptionDiffRow[] | null;
+}
+
+const RULE_KEYS = ['selection_type', 'min_select', 'max_select'] as const;
+
+export function buildAddonRequestDiff(request: AddonGroupChangeRequest): AddonRequestDiff {
+  const payload = request.payload ?? {};
+  if (request.action === 'create') {
+    return {
+      mode: 'proposed',
+      name: { before: null, after: payload.display_name ?? '' },
+      rule: { before: null, after: choiceRuleLabel(payload) ?? UNKNOWN },
+      options: diffAddonOptions(null, payload.options),
+    };
+  }
+  const snapshot = request.snapshot ?? {};
+  const changesRule = RULE_KEYS.some((key) => payload[key] !== undefined);
+  return {
+    mode: 'diff',
+    name:
+      payload.display_name !== undefined
+        ? { before: snapshot.display_name ?? UNKNOWN, after: payload.display_name }
+        : null,
+    rule: changesRule
+      ? {
+          before: choiceRuleLabel(snapshot) ?? UNKNOWN,
+          after: choiceRuleLabel({ ...snapshot, ...payload }) ?? UNKNOWN,
+        }
+      : null,
+    options: payload.options !== undefined ? diffAddonOptions(snapshot.options, payload.options) : null,
+  };
+}
+
+/** "Name, Options & prices" — what an add-on edit touches, for the card's one-line summary. */
+export function changedAddonFieldLabels(payload: AddonGroupChangePayload | null | undefined): string[] {
+  if (!payload) return [];
+  const labels: string[] = [];
+  if (payload.display_name !== undefined) labels.push('Name');
+  if (RULE_KEYS.some((key) => payload[key] !== undefined)) labels.push('Choice rule');
+  if (payload.options !== undefined) labels.push('Options & prices');
+  return labels;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MenuChangeRequest, MenuItemChangePayload } from '@/lib/menu/changeRequestTypes';
+import type { MenuItemChangeRequest, MenuItemChangePayload } from '@/lib/menu/changeRequestTypes';
 import {
   actionTone,
   addonGroupName,
@@ -17,7 +17,7 @@ import {
   type DiffRow,
 } from '@/components/owner/menu/menuDiff';
 
-function request(over: Partial<MenuChangeRequest>): MenuChangeRequest {
+function request(over: Partial<MenuItemChangeRequest>): MenuItemChangeRequest {
   return {
     id: 'req-1',
     action: 'update',
