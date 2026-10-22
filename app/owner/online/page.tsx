@@ -9,11 +9,13 @@ import { OnlineReportActions } from '@/components/owner/online/OnlineReportActio
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { istDateIso } from '@/lib/api/date';
 import { formatIstDateTime } from '@/lib/print/labels';
-import { loadOnlineData, type OnlineData, type ReportListRow } from '@/lib/online-settlements/load';
+import { loadCoverage, loadOnlineData, type Coverage, type OnlineData, type ReportListRow } from '@/lib/online-settlements/load';
 import { mailboxConfigFromEnv } from '@/lib/online-settlements/mailbox';
 import {
   buildOnlineSummary,
+  DEFAULT_RANGE,
   istDay,
+  rangeCovering,
   RANGES,
   resolveRange,
   type Metrics,
@@ -183,10 +185,55 @@ function EmailStatus({ data, configured, mailbox }: { data: OnlineData; configur
   );
 }
 
+const href = (r: RangeKey, p: Platform | 'all') => `/owner/online?range=${r}${p === 'all' ? '' : `&platform=${p}`}`;
+
+/** The latest order day (IST) of each platform on show that has any orders stored. */
+function latestDays(coverage: Coverage, platform: Platform | 'all'): { platform: Platform; day: string }[] {
+  return (Object.keys(coverage.latest) as Platform[])
+    .filter((p) => platform === 'all' || p === platform)
+    .map((p) => ({ platform: p, day: istDay(coverage.latest[p] as string) }));
+}
+
+/** Platforms with reports stored but no orders in this period, each with a link to a period that has them. */
+function OutOfPeriod({
+  behind,
+  range,
+  platform,
+  today,
+}: {
+  behind: { platform: Platform; day: string }[];
+  range: RangeKey;
+  platform: Platform | 'all';
+  today: string;
+}) {
+  if (!behind.length) return null;
+  return (
+    <div className="flex flex-col gap-1 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="status">
+      {behind.map((b) => {
+        const wider = rangeCovering([b.day], today);
+        const reaches = wider !== range && resolveRange(wider, today).from <= b.day;
+        return (
+          <p key={b.platform}>
+            <span className="font-bold">{PLATFORM_LABEL[b.platform]}</span> has no orders in this period: its reports so far
+            cover orders up to {fmtDay(b.day)}.
+            {reaches ? (
+              <>
+                {' '}
+                <Link href={href(wider, platform)} className="font-bold underline">
+                  Show {RANGES[wider].label}
+                </Link>
+              </>
+            ) : null}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 function Filters({ range, platform }: { range: RangeKey; platform: Platform | 'all' }) {
   const pill = (active: boolean) =>
     `rounded-full border px-3 py-1 text-xs font-bold ${active ? 'border-tan-dark bg-tan-dark text-white' : 'border-line bg-white text-charcoal hover:border-charcoal'}`;
-  const href = (r: RangeKey, p: Platform | 'all') => `/owner/online?range=${r}${p === 'all' ? '' : `&platform=${p}`}`;
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Period and platform">
       {(Object.keys(RANGES) as RangeKey[]).map((r) => (
@@ -204,14 +251,16 @@ function Filters({ range, platform }: { range: RangeKey; platform: Platform | 'a
   );
 }
 
-function Body({ s, data }: { s: OnlineSummary; data: OnlineData }) {
+function Body({ s, data, explained }: { s: OnlineSummary; data: OnlineData; explained: boolean }) {
   const t = s.totals;
   if (t.orders === 0 && t.notDelivered === 0) {
     const last = data.coverage.last ? istDay(data.coverage.last) : null;
     return (
       <Card title="Nothing in this period">
         <p className="py-4 text-center text-sm text-muted">
-          {last
+          {explained
+            ? `No online orders between ${fmtDay(s.from)} and ${fmtDay(s.to)}.`
+            : last
             ? `No online orders between ${fmtDay(s.from)} and ${fmtDay(s.to)}. The latest report covers orders up to ${fmtDay(last)}: pick a longer period.`
             : 'No reports have been read yet. Check email or upload a report above.'}
         </p>
@@ -383,19 +432,32 @@ export default async function OwnerOnlineOrdersPage({
 }: {
   searchParams: { range?: string; platform?: string };
 }) {
-  const range: RangeKey =
-    searchParams.range && Object.prototype.hasOwnProperty.call(RANGES, searchParams.range) ? (searchParams.range as RangeKey) : '12w';
+  const chosen: RangeKey | null =
+    searchParams.range && Object.prototype.hasOwnProperty.call(RANGES, searchParams.range) ? (searchParams.range as RangeKey) : null;
   const platform: Platform | 'all' =
     searchParams.platform === 'zomato' || searchParams.platform === 'swiggy' ? searchParams.platform : 'all';
-  const { from, to, group } = resolveRange(range, istDateIso());
+  const today = istDateIso();
   const mailbox = mailboxConfigFromEnv();
 
+  let range: RangeKey = chosen ?? DEFAULT_RANGE;
   let data: OnlineData | null = null;
   try {
-    data = await loadOnlineData(createAdminSupabaseClient(), from, to);
+    const admin = createAdminSupabaseClient();
+    let coverage: Coverage | undefined;
+    if (!chosen) {
+      // No period chosen: open on one long enough to show every platform that has
+      // reports (a month uploaded by hand can be older than 12 weeks). If this
+      // fails, the load below fails the same way and says so.
+      coverage = await loadCoverage(admin).catch(() => undefined);
+      if (coverage) range = rangeCovering(latestDays(coverage, platform).map((x) => x.day), today);
+    }
+    const period = resolveRange(range, today);
+    data = await loadOnlineData(admin, period.from, period.to, coverage);
   } catch (err) {
     console.error('owner online orders: load failed', err);
   }
+  const { from, to, group } = resolveRange(range, today);
+  const behind = data?.migrated ? latestDays(data.coverage, platform).filter((x) => x.day < from) : [];
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
@@ -407,6 +469,7 @@ export default async function OwnerOnlineOrdersPage({
       </div>
 
       <Filters range={range} platform={platform} />
+      <OutOfPeriod behind={behind} range={range} platform={platform} today={today} />
 
       {!data ? (
         <Card title="Online orders">
@@ -427,7 +490,11 @@ export default async function OwnerOnlineOrdersPage({
               <OnlineReportActions configured={!!mailbox} rereadable={data.rereadable} />
             </div>
           </Card>
-          <Body s={buildOnlineSummary({ orders: data.orders, deductions: data.deductions, from, to, group, platform })} data={data} />
+          <Body
+            s={buildOnlineSummary({ orders: data.orders, deductions: data.deductions, from, to, group, platform })}
+            data={data}
+            explained={behind.length > 0}
+          />
           <Card title="Reports received">
             <ReportsTable rows={data.reports} />
           </Card>

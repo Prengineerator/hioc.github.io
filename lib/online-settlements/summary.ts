@@ -359,3 +359,20 @@ export function resolveRange(key: RangeKey, today: string): { from: string; to: 
   const d = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - r.months, 1));
   return { from: d.toISOString().slice(0, 10), to: today, group: 'month' };
 }
+
+/** The period the page opens on when none is chosen: 12 weeks, or longer if that would leave a platform out. */
+export const DEFAULT_RANGE: RangeKey = '12w';
+
+/**
+ * The shortest period, from DEFAULT_RANGE up, that reaches back to each given
+ * day (a platform's latest order day), so the page never opens on a window
+ * that hides a platform whose reports are all older (a month uploaded by hand,
+ * or a platform whose emails stopped). The longest period if none reaches.
+ */
+export function rangeCovering(days: string[], today: string): RangeKey {
+  const keys = Object.keys(RANGES) as RangeKey[];
+  const choices = keys.slice(keys.indexOf(DEFAULT_RANGE));
+  const oldest = days.reduce<string | null>((m, d) => (m === null || d < m ? d : m), null);
+  if (oldest === null) return DEFAULT_RANGE;
+  return choices.find((k) => resolveRange(k, today).from <= oldest) ?? choices[choices.length - 1];
+}

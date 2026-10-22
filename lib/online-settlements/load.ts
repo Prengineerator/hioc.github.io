@@ -1,6 +1,7 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { DeductionRow, OrderRow } from './summary';
+import { PLATFORM_LABEL, type Platform } from './types';
 
 // Reads what Owner → Online orders needs. Orders are fetched for the chosen
 // IST date range (paged: PostgREST returns at most 1,000 rows a request);
@@ -48,13 +49,44 @@ export interface OnlineData {
   /** Reports saved but not read ('unsupported' or 'failed'), across all of them, not just the list above. */
   rereadable: number;
   runs: SyncRunRow[];
-  /** Earliest and latest order day stored, for the "data from … to …" line. */
-  coverage: { first: string | null; last: string | null };
+  coverage: Coverage;
 }
+
+/** What is stored, whatever the period: the first and last order overall, and each platform's last. */
+export interface Coverage {
+  first: string | null;
+  last: string | null;
+  /** ordered_at of each platform's latest order; a platform with none is absent. */
+  latest: Partial<Record<Platform, string>>;
+}
+
+const NO_COVERAGE: Coverage = { first: null, last: null, latest: {} };
 
 const MISSING_TABLE = /online_settlement_|PGRST205|does not exist|could not find the table/i;
 
-export async function loadOnlineData(admin: SupabaseClient, from: string, to: string): Promise<OnlineData> {
+/** Throws on a query error (including a missing table: loadOnlineData reports that as not migrated). */
+export async function loadCoverage(admin: SupabaseClient): Promise<Coverage> {
+  const platforms = Object.keys(PLATFORM_LABEL) as Platform[];
+  const orders = () => admin.from('online_settlement_orders').select('ordered_at');
+  const [first, ...lasts] = await Promise.all([
+    orders().order('ordered_at', { ascending: true }).limit(1),
+    ...platforms.map((p) => orders().eq('platform', p).order('ordered_at', { ascending: false }).limit(1)),
+  ]);
+  for (const r of [first, ...lasts]) {
+    if (r.error) throw new Error(`online settlements: ${r.error.message}`);
+  }
+  const at = (r: { data: unknown }) => ((r.data as { ordered_at: string }[] | null)?.[0]?.ordered_at ?? null);
+  const latest: Partial<Record<Platform, string>> = {};
+  platforms.forEach((p, i) => {
+    const t = at(lasts[i]);
+    if (t) latest[p] = t;
+  });
+  const last = Object.values(latest).reduce<string | null>((m, t) => (m === null || Date.parse(t) > Date.parse(m) ? t : m), null);
+  return { first: at(first), last, latest };
+}
+
+/** `coverage`, when the caller already loaded it (to pick the period), is used as is. */
+export async function loadOnlineData(admin: SupabaseClient, from: string, to: string, coverage?: Coverage): Promise<OnlineData> {
   // IST day bounds as instants: from 00:00 IST to the end of `to` in IST.
   const startIso = new Date(Date.parse(`${from}T00:00:00+05:30`)).toISOString();
   const endIso = new Date(Date.parse(`${to}T00:00:00+05:30`) + 24 * 60 * 60 * 1000).toISOString();
@@ -72,7 +104,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
       .range(page, page + PAGE - 1);
     if (error) {
       if (MISSING_TABLE.test(`${error.code ?? ''} ${error.message}`)) {
-        return { migrated: false, orders: [], deductions: [], reports: [], rereadable: 0, runs: [], coverage: { first: null, last: null } };
+        return { migrated: false, orders: [], deductions: [], reports: [], rereadable: 0, runs: [], coverage: NO_COVERAGE };
       }
       throw new Error(`online_settlement_orders: ${error.message}`);
     }
@@ -81,7 +113,7 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
     if (rows.length < PAGE) break;
   }
 
-  const [ded, reports, waiting, runs, first, last] = await Promise.all([
+  const [ded, reports, waiting, runs, cover] = await Promise.all([
     admin
       .from('online_settlement_deductions')
       .select('platform, kind, amount_inr, period_start, period_end, report_period_end')
@@ -97,13 +129,11 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
       .select('id, trigger, started_at, finished_at, messages_found, files_found, files_read, files_skipped, files_failed, error')
       .order('started_at', { ascending: false })
       .limit(5),
-    admin.from('online_settlement_orders').select('ordered_at').order('ordered_at', { ascending: true }).limit(1),
-    admin.from('online_settlement_orders').select('ordered_at').order('ordered_at', { ascending: false }).limit(1),
+    coverage ?? loadCoverage(admin),
   ]);
-  for (const r of [ded, reports, waiting, runs, first, last]) {
+  for (const r of [ded, reports, waiting, runs]) {
     if (r.error) throw new Error(`online settlements: ${r.error.message}`);
   }
-  const at = (r: { data: unknown }) => ((r.data as { ordered_at: string }[] | null)?.[0]?.ordered_at ?? null);
   return {
     migrated: true,
     orders,
@@ -111,6 +141,6 @@ export async function loadOnlineData(admin: SupabaseClient, from: string, to: st
     reports: (reports.data ?? []) as unknown as ReportListRow[],
     rereadable: waiting.count ?? 0,
     runs: (runs.data ?? []) as unknown as SyncRunRow[],
-    coverage: { first: at(first), last: at(last) },
+    coverage: cover,
   };
 }

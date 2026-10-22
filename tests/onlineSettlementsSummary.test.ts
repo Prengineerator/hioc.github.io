@@ -3,6 +3,7 @@ import {
   bucketLabel,
   buildOnlineSummary,
   istDay,
+  rangeCovering,
   resolveRange,
   spreadDeduction,
   weekStart,
@@ -54,6 +55,18 @@ describe('dates', () => {
     expect(resolveRange('4w', '2026-10-22')).toEqual({ from: '2026-09-28', to: '2026-10-22', group: 'week' });
     expect(resolveRange('6m', '2026-10-22')).toEqual({ from: '2026-05-01', to: '2026-10-22', group: 'month' });
     expect(resolveRange('12m', '2026-01-15')).toEqual({ from: '2025-02-01', to: '2026-01-15', group: 'month' });
+  });
+
+  it('opens on 12 weeks, or the shortest longer period that reaches every platform\'s latest order', () => {
+    // 12 weeks back from Thu 22 Oct 2026 starts Mon 3 Aug; 6 months, 1 May; 12 months, 1 Nov 2025
+    expect(rangeCovering([], '2026-10-22')).toBe('12w');
+    expect(rangeCovering(['2026-10-21'], '2026-10-22')).toBe('12w'); // never shorter than the default
+    expect(rangeCovering(['2026-10-17', '2026-08-03'], '2026-10-22')).toBe('12w');
+    expect(rangeCovering(['2026-10-17', '2026-08-02'], '2026-10-22')).toBe('6m');
+    // the reported case: Swiggy this month, Zomato only May uploaded so far
+    expect(rangeCovering(['2026-10-17', '2026-05-31'], '2026-10-22')).toBe('6m');
+    expect(rangeCovering(['2026-04-30'], '2026-10-22')).toBe('12m');
+    expect(rangeCovering(['2024-01-01'], '2026-10-22')).toBe('12m'); // nothing reaches: the longest there is
   });
 
   it('spreads an ad bill evenly over its dates, clipped to the period', () => {
