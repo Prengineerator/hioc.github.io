@@ -37,6 +37,10 @@
     {
       "path": "/api/cron/marketing-plan",
       "schedule": "15 4 * * *"
+    },
+    {
+      "path": "/api/cron/online-reports",
+      "schedule": "45 3 * * *"
     }
   ]
 }
