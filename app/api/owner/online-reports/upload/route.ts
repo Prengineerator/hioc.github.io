@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 // POST /api/owner/online-reports/upload — owner only, multipart:
-//   file      the report (.xlsx for Zomato; Swiggy files are saved for later)
+//   file      the report (.xlsx or .csv for Zomato; Swiggy files are saved for later)
 //   platform  optional 'zomato' | 'swiggy' (else worked out from the file)
 // For reports that never came by email, or older ones from before the mailbox
 // was connected. Same pipeline as the mail check, so uploading a file that was

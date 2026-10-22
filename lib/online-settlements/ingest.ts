@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isReportAttachment, platformFromFileName, safeFileName } from './detect';
-import { looksLikeXlsx, readWorkbook } from './sheets';
+import { looksLikeXlsx, readCsv, readWorkbook } from './sheets';
 import { isZomatoSettlement, parseZomatoSettlement } from './zomato';
 import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, Sheets } from './types';
 
@@ -15,8 +15,8 @@ import type { ParsedSettlement, Platform, SettlementDeduction, SettlementOrder, 
 //   2. Decide the platform: the caller's hint (the sender's domain, or the
 //      owner's choice), else the file's name, else its contents.
 //   3. Save the raw file to Storage, then parse. Zomato .xlsx → orders and
-//      deductions. Swiggy, for now → saved as 'unsupported' until we have a
-//      sample report to write its parser against.
+//      deductions; Zomato .csv → orders only. Swiggy, for now → saved as
+//      'unsupported' until we have a sample report to write its parser against.
 //   4. Write orders and deductions, NEWER REPORT WINS per row: a row from a
 //      report whose period ends earlier than the one already stored is
 //      dropped, so re-reading an old file never turns a settled order back to
@@ -185,10 +185,13 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   const seen = await store.findReportByHash(sha);
   if (seen?.status === 'read') return { ...base, status: 'duplicate', reportId: seen.id, message: 'Already read' };
 
-  // Platform: hint → file name → contents.
+  // Platform: hint → file name → contents. A .csv is its one sheet, 'Order Level'.
+  const isCsv = /\.csv$/i.test(fileName);
   let sheets: Sheets | null = null;
   let readError: string | null = null;
-  if (/\.xlsx$/i.test(fileName) && looksLikeXlsx(bytes)) {
+  if (isCsv) {
+    sheets = { 'Order Level': readCsv(bytes) };
+  } else if (/\.xlsx$/i.test(fileName) && looksLikeXlsx(bytes)) {
     try {
       sheets = await readWorkbook(bytes);
     } catch (err) {
@@ -211,10 +214,12 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   if (platform === 'zomato') {
     if (!sheets) {
       status = 'failed';
-      error = readError ?? 'Zomato reports are read from the .xlsx file; this file is not one';
+      error = readError ?? 'Zomato reports are read from the .xlsx or .csv file; this file is not one';
     } else if (!isZomatoSettlement(sheets)) {
       status = 'failed';
-      error = 'No "Order Level" sheet with Order ID and Order Date columns: not a Zomato settlement report';
+      error = isCsv
+        ? 'The CSV has no Order ID and Order Date columns: not a Zomato settlement report we can read yet'
+        : 'No "Order Level" sheet with Order ID and Order Date columns: not a Zomato settlement report';
     } else {
       parsed = parseZomatoSettlement(sheets, fileName);
       if (parsed.orders.length === 0 && parsed.deductions.length === 0) {

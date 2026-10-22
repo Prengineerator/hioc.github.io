@@ -80,6 +80,11 @@ export function orderRow(o: FixtureOrder, i: number): unknown[] {
   ];
 }
 
+/** The Order Level header and order rows, the same cells a .csv export of that sheet holds. */
+export function orderTable(orders: FixtureOrder[]): { header: string[]; rows: unknown[][] } {
+  return { header: HEADER, rows: orders.map(orderRow) };
+}
+
 export async function buildZomatoWorkbook(opts: {
   period: string; // '01 Apr 2026 - 30 Apr 2026'
   orders: FixtureOrder[];

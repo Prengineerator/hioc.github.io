@@ -63,3 +63,55 @@ export async function readWorkbook(bytes: Uint8Array): Promise<Sheets> {
   });
   return sheets;
 }
+
+// A plain number, no leading zeros ('007' stays text, '0.5' is a number).
+const PLAIN_NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+
+/** A CSV cell as the xlsx path would hold it: plain numbers as numbers, unless more than 15 digits. */
+function csvCell(s: string): string | number {
+  if (!PLAIN_NUMBER.test(s) || s.replace(/\D/g, '').length > 15) return s;
+  return Number(s);
+}
+
+/**
+ * RFC 4180 CSV (UTF-8, optional byte-order mark, comma separated, CRLF or LF)
+ * into the same rows-of-cells shape as one workbook sheet. A line that is
+ * empty is an empty row; blank lines at the end are dropped.
+ */
+export function readCsv(bytes: Uint8Array): unknown[][] {
+  // TextDecoder drops a leading byte-order mark.
+  const text = new TextDecoder('utf-8').decode(bytes);
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  const endRow = () => {
+    if (row.length || field) row.push(field);
+    rows.push(row);
+    row = [];
+    field = '';
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch !== '"') field += ch;
+      else if (text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else quoted = false;
+    } else if (ch === '"' && field === '') {
+      quoted = true;
+    } else if (ch === ',') {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      endRow();
+    } else {
+      field += ch;
+    }
+  }
+  if (row.length || field) endRow();
+  while (rows.length && rows[rows.length - 1].length === 0) rows.pop();
+  return rows.map((r) => r.map(csvCell));
+}

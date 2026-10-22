@@ -22,6 +22,10 @@ import type { ParsedSettlement, SettlementDeduction, SettlementOrder, Sheets, De
 //   Summary                       as 0 / #REF! — ignored; everything is summed
 //                                 from Order Level instead.
 //
+// A .csv report is read as just the Order Level sheet (sheets = { 'Order Level':
+// rows }). It has no HSummary, so when the file name has no period either, the
+// period is the span of its order dates.
+//
 // Columns are found by their header TEXT (first line, trimmed, lower-cased),
 // never by position: Zomato has added columns before (Brand pack fee, Express
 // Order Fee), and a positional parser would silently shift every number.
@@ -233,6 +237,7 @@ function parseOrders(rows: unknown[][], warnings: string[]): { orders: Settlemen
     });
   }
   if (skipped) warnings.push(`${skipped} order row(s) skipped: unreadable order id or date`);
+  if (!orders.length && !skipped) warnings.push(`"${ORDER_SHEET}" has no order rows`);
   return { orders, resId };
 }
 
@@ -331,11 +336,19 @@ export function parseZomatoSettlement(sheets: Sheets, fileName: string): ParsedS
   const deductions = parseDeductions(sheets[DEDUCTION_SHEET] ?? []);
   if (!(DEDUCTION_SHEET in sheets)) warnings.push(`"${DEDUCTION_SHEET}" sheet not found: ads and other deductions not read`);
   const period = parsePeriod(sheets, fileName);
+  let { start: periodStart, end: periodEnd } = period;
+  if ((!periodStart || !periodEnd) && orders.length) {
+    // IST calendar dates: the first 10 characters of orderedAt.
+    const days = orders.map((o) => o.orderedAt.slice(0, 10)).sort();
+    periodStart = days[0];
+    periodEnd = days[days.length - 1];
+    warnings.push('Report period taken from the order dates');
+  }
   return {
     platform: 'zomato',
     restaurantRef: period.resId ?? resId,
-    periodStart: period.start,
-    periodEnd: period.end,
+    periodStart,
+    periodEnd,
     orders,
     deductions,
     warnings,

@@ -16,7 +16,8 @@ each platform emails every week, so nobody has to download and open spreadsheets
    emailed and also uploaded, is counted once.
 4. The raw file goes to the private Storage bucket `online-settlements` and is parsed:
    - **Zomato** `.xlsx` settlement reports are read in full: every order (bill, discount, commission, gateway
-     fee, GST, TCS/TDS, payout, settlement date, bank UTR) and the ads/Hyperpure deductions.
+     fee, GST, TCS/TDS, payout, settlement date, bank UTR) and the ads/Hyperpure deductions. Zomato `.csv`
+     reports are read the same way when their columns match, and saved as **Could not read** otherwise.
    - **Swiggy** files are saved but **not read yet**. We need one real Swiggy weekly report to write its parser.
      Once that ships, press **Re-read saved reports** to read the saved Swiggy files.
 5. An order that is "pending" in one week's report settles in a later one. The newer report replaces the

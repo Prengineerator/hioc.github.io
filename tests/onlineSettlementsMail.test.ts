@@ -51,10 +51,10 @@ describe('trusted senders', () => {
 });
 
 describe('attachments', () => {
-  it('takes only the .xlsx from Zomato, any spreadsheet or zip from Swiggy', () => {
+  it('takes only the .xlsx or .csv from Zomato, any spreadsheet or zip from Swiggy', () => {
     expect(wantsAttachment('zomato', 'Zomato_Settlement_Report_1.xlsx')).toBe(true);
     expect(wantsAttachment('zomato', 'Invoice.pdf')).toBe(false);
-    expect(wantsAttachment('zomato', 'summary.csv')).toBe(false);
+    expect(wantsAttachment('zomato', 'summary.csv')).toBe(true);
     expect(wantsAttachment('swiggy', 'annexure.csv')).toBe(true);
     expect(wantsAttachment('swiggy', 'annexure.zip')).toBe(true);
     expect(wantsAttachment('swiggy', 'invoice.pdf')).toBe(false);

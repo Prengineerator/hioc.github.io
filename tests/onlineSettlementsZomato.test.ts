@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { plainCell, readWorkbook } from '@/lib/online-settlements/sheets';
+import { plainCell, readCsv, readWorkbook } from '@/lib/online-settlements/sheets';
 import {
   dateRange,
   dayMonthYear,
@@ -72,6 +72,39 @@ describe('cell and value helpers', () => {
     expect(dayMonthYear('30 Sep 2026')).toBe('2026-09-30');
     expect(dateRange('28 September 26 - 29 September 26')).toEqual(['2026-09-28', '2026-09-29']);
     expect(dateRange('soon')).toEqual([null, null]);
+  });
+});
+
+describe('readCsv', () => {
+  const csv = (s: string) => new TextEncoder().encode(s);
+
+  it('splits rows on LF or CRLF, keeps blank lines in the middle and drops them at the end', () => {
+    expect(readCsv(csv('a,b,c\n1,2,3\r\n4,5,6\r\n\r\n'))).toEqual([['a', 'b', 'c'], [1, 2, 3], [4, 5, 6]]);
+    expect(readCsv(csv('a\n\nb'))).toEqual([['a'], [], ['b']]);
+    expect(readCsv(csv('a,b'))).toEqual([['a', 'b']]);
+    expect(readCsv(csv(''))).toEqual([]);
+  });
+
+  it('handles quotes, doubled quotes, and commas and line breaks inside quoted fields', () => {
+    expect(readCsv(csv('"Name","Note"\n"Smith, J","He said ""hi""\nthen left"\n,"",x\n'))).toEqual([
+      ['Name', 'Note'],
+      ['Smith, J', 'He said "hi"\nthen left'],
+      ['', '', 'x'],
+    ]);
+  });
+
+  it('drops a UTF-8 byte-order mark and reads non-ASCII text as is', () => {
+    expect(readCsv(csv('﻿Order ID,Note\n9000000001,₹ café\n'))).toEqual([['Order ID', 'Note'], [9000000001, '₹ café']]);
+  });
+
+  it('turns plain numbers into numbers and leaves every other cell as text', () => {
+    const [row] = readCsv(csv('1234.50,-20,0.5,0,007,1e3,"1,234.50",NA,,123456789012345,1234567890123456789\n'));
+    expect(row).toEqual([1234.5, -20, 0.5, 0, '007', '1e3', '1,234.50', 'NA', '', 123456789012345, '1234567890123456789']);
+  });
+
+  it('keeps an order ID of more than 15 digits as text, so no digit is lost', () => {
+    const [[id]] = readCsv(csv('7958194966123456789\n'));
+    expect(id).toBe('7958194966123456789');
   });
 });
 
@@ -159,6 +192,20 @@ describe('parseZomatoSettlement', () => {
     const bytes = await buildZomatoWorkbook({ period: 'not a period', orders: ORDERS.slice(0, 1) });
     const p = parseZomatoSettlement(await readWorkbook(bytes), 'Zomato_Settlement_Report_20788341_01_Sep_2026_30_Sep_2026.xlsx');
     expect([p.periodStart, p.periodEnd, p.restaurantRef]).toEqual(['2026-09-01', '2026-09-30', '20788341']);
+  });
+
+  it('takes the period from the order dates when neither HSummary nor the file name has one', async () => {
+    const bytes = await buildZomatoWorkbook({ period: 'not a period', orders: ORDERS });
+    const p = parseZomatoSettlement(await readWorkbook(bytes), 'weekly_orders.xlsx');
+    expect([p.periodStart, p.periodEnd]).toEqual(['2026-04-01', '2026-04-30']);
+    expect(p.warnings).toEqual(['Report period taken from the order dates']);
+  });
+
+  it('says so when the Order Level header has no order rows', async () => {
+    const bytes = await buildZomatoWorkbook({ period: '01 Apr 2026 - 30 Apr 2026', orders: [] });
+    const p = parseZomatoSettlement(await readWorkbook(bytes), 'report.xlsx');
+    expect(p.orders).toEqual([]);
+    expect(p.warnings).toEqual(['"Order Level" has no order rows']);
   });
 
   it('builds fixture rows exactly as wide as the header (guards the fixture itself)', async () => {

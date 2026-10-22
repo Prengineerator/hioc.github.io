@@ -57,11 +57,12 @@ export function isReportAttachment(fileName: string): boolean {
 
 /**
  * Which attachments of a platform's email to take. Zomato's settlement report
- * is always an .xlsx, so its other files are left alone. Swiggy's format isn't
- * known yet, so every spreadsheet-like file is kept for when its parser lands.
+ * is an .xlsx (or a .csv with the same columns, if Zomato sends per-order rows
+ * that way), so its other files are left alone. Swiggy's format isn't known
+ * yet, so every spreadsheet-like file is kept for when its parser lands.
  */
 export function wantsAttachment(platform: Platform, fileName: string): boolean {
-  if (platform === 'zomato') return /\.xlsx$/i.test(fileName.trim());
+  if (platform === 'zomato') return /\.(xlsx|csv)$/i.test(fileName.trim());
   return isReportAttachment(fileName);
 }
 
