@@ -2,9 +2,11 @@
 
 // Owner header. It used to be one row of up to 21 links that wrapped onto three
 // lines on a laptop and was a long sideways-scrolling pill row on a phone. Now:
-//   lg+     HIOC · Owner | Overview  Sales ▾  Menu ▾  Customers ▾  Team ▾  Setup ▾ | Staff board ↗
-//   below   HIOC · Owner ........ [☰ <current page>]  — the toggle opens a drawer
+//   lg+     [HIOC logo] | Owner   Overview  Sales ▾  Menu ▾  Customers ▾  Team ▾  Setup ▾ | Staff board ↗
+//   below   [HIOC logo] | Owner ........ [☰ <current page>]  — the toggle opens a drawer
 //           with every section laid out, nothing hidden behind a second tap
+// The logo and "Owner" label are one link to the Overview, outside the <nav>.
+// The look matches StaffHeader's charcoal chrome, because both are backstage surfaces.
 //
 // WHAT is grouped under which heading lives in lib/owner/ownerNav.ts (pure, so
 // each flag combination is tested); this file only draws it and runs the
@@ -25,6 +27,7 @@
 // being unmounted, so their links are in the page for crawling/prefetch and the
 // server and first client render are identical.
 
+import Image from 'next/image';
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
@@ -100,15 +103,10 @@ function MenuIcon({ open }: { open: boolean }) {
   );
 }
 
-/** Staff menu changes waiting for the owner. `active`: sitting on the charcoal "current" fill. */
-function MenuBadge({ count, active }: { count: number; active: boolean }) {
+/** Staff menu changes waiting for the owner. tan-dark reads on the charcoal bar and on the cream/10 "current" fill alike. */
+function MenuBadge({ count }: { count: number }) {
   return (
-    <span
-      className={
-        'ml-2 rounded-full px-1.5 py-0.5 text-[11px] font-bold ' +
-        (active ? 'bg-cream text-charcoal' : 'bg-tan-dark text-cream')
-      }
-    >
+    <span className="ml-2 rounded-full bg-tan-dark px-1.5 py-0.5 text-[11px] font-bold text-cream">
       {count}
       <span className="sr-only"> menu changes waiting</span>
     </span>
@@ -124,6 +122,12 @@ interface LinkProps {
   onNavigate: () => void;
 }
 
+// The open page or section in the bar. Tan TEXT on the lighter cream/10 fill
+// is only ~3.4:1 (AA wants 4.5:1 at this size), so the label stays white and
+// the tan accent is a 2px bar under it — decoration, where tan belongs.
+const BAR_CURRENT =
+  'relative bg-cream/10 text-cream after:absolute after:inset-x-3 after:bottom-1 after:h-0.5 after:rounded-full after:bg-tan';
+
 /** A top-level link in the desktop bar: Overview, or a group that has only one page. */
 function BarLink({ link, active, pending, onNavigate }: LinkProps) {
   return (
@@ -133,11 +137,11 @@ function BarLink({ link, active, pending, onNavigate }: LinkProps) {
       aria-current={active ? 'page' : undefined}
       className={
         'inline-flex min-h-[40px] items-center whitespace-nowrap rounded-md px-3 text-sm font-bold transition-colors ' +
-        (active ? 'bg-charcoal text-cream' : 'text-charcoal hover:bg-surface')
+        (active ? BAR_CURRENT : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
       }
     >
       {link.label}
-      {pending > 0 ? <MenuBadge count={pending} active={active} /> : null}
+      {pending > 0 ? <MenuBadge count={pending} /> : null}
     </Link>
   );
 }
@@ -150,17 +154,18 @@ function NavItemLink({ link, active, pending, onNavigate }: LinkProps) {
       onClick={onNavigate}
       aria-current={active ? 'page' : undefined}
       className={
-        'relative block min-h-[44px] rounded-md px-3 py-2 transition-colors hover:bg-surface' +
-        (active ? ' bg-surface' : '')
+        'relative block min-h-[44px] rounded-md px-3 py-2 transition-colors ' +
+        (active ? 'bg-cream/10' : 'hover:bg-cream/5')
       }
     >
-      {/* The open page's marker: tan is decoration only, so a bar, not text. */}
+      {/* The open page's marker: a tan bar (decoration); the label stays white
+          for contrast on the cream/10 fill (see BAR_CURRENT). */}
       {active ? <span aria-hidden="true" className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-tan" /> : null}
-      <span className="flex items-center text-sm font-bold text-charcoal">
+      <span className="flex items-center text-sm font-bold text-cream">
         {link.label}
-        {pending > 0 ? <MenuBadge count={pending} active={false} /> : null}
+        {pending > 0 ? <MenuBadge count={pending} /> : null}
       </span>
-      <span className="block text-xs text-muted">{link.description}</span>
+      <span className="block text-xs text-cream/60">{link.description}</span>
     </Link>
   );
 }
@@ -172,7 +177,7 @@ function StaffBoardLink({ link, onNavigate, drawer }: { link: OwnerLink; onNavig
       href={link.href}
       onClick={onNavigate}
       className={
-        'items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface ' +
+        'items-center gap-1.5 whitespace-nowrap rounded-md border border-cream/20 px-3 text-sm font-bold text-cream transition-colors hover:bg-cream/5 ' +
         (drawer ? 'flex min-h-[44px] w-full justify-between' : 'inline-flex min-h-[40px]')
       }
     >
@@ -235,12 +240,16 @@ function GroupDisclosure({
         onClick={() => onToggle(group.id)}
         className={
           'inline-flex min-h-[40px] items-center whitespace-nowrap rounded-md px-3 text-sm font-bold transition-colors ' +
-          (current ? 'bg-charcoal text-cream' : open ? 'bg-surface text-charcoal' : 'text-charcoal hover:bg-surface')
+          (current
+            ? BAR_CURRENT
+            : open
+              ? 'bg-cream/5 text-cream'
+              : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
         }
       >
         {group.label}
         {current ? <span className="sr-only"> (current section)</span> : null}
-        {menuBadge > 0 ? <MenuBadge count={menuBadge} active={current} /> : null}
+        {menuBadge > 0 ? <MenuBadge count={menuBadge} /> : null}
         <Chevron open={open} />
       </button>
       {/* Hidden with the attribute (not unmounted, and no display class on this
@@ -250,7 +259,7 @@ function GroupDisclosure({
         id={panelId}
         hidden={!open}
         className={
-          'absolute top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] animate-scale-in rounded-md border border-line bg-cream p-1.5 shadow-elevated ' +
+          'absolute top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] animate-scale-in rounded-md border border-cream/10 bg-charcoal p-1.5 shadow-elevated ' +
           (align === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left')
         }
       >
@@ -341,13 +350,31 @@ export function OwnerHeader() {
 
   return (
     // Sticky so the section nav stays one tap away on the long overview.
-    <header className="sticky top-0 z-30 border-b border-line bg-cream/95 backdrop-blur print:hidden">
+    <header className="sticky top-0 z-30 bg-charcoal text-cream print:hidden">
       {/* Below lg this row wraps: brand and toggle on the first line, the <nav>
           (the drawer, full width) on the second. From lg the toggle is gone and
           the <nav> shares the first line. The padding is on the children, not
           the row, so the drawer's rule and scrollbar run edge to edge. */}
       <div ref={shellRef} className="mx-auto flex max-w-7xl flex-wrap items-center">
-        <span className="shrink-0 whitespace-nowrap px-4 py-3 font-bold text-charcoal">HIOC · Owner</span>
+        {/* The brand is a link home, outside the <nav>. No aria-current here:
+            the Overview item in the nav carries it. */}
+        <Link
+          href={nav.overview.href}
+          onClick={closeAll}
+          aria-label="HIOC Owner – Overview"
+          className="flex shrink-0 items-center whitespace-nowrap px-4 py-3"
+        >
+          <Image
+            src="/images/logo-light.png"
+            alt="HIOC"
+            width={480}
+            height={291}
+            className="h-7 w-auto shrink-0 object-contain"
+          />
+          <span className="ml-2.5 border-l border-cream/20 pl-2.5 text-xs font-bold uppercase tracking-wide text-tan">
+            Owner
+          </span>
+        </Link>
 
         <button
           ref={toggleRef}
@@ -356,8 +383,8 @@ export function OwnerHeader() {
           aria-controls={MOBILE_NAV_ID}
           onClick={() => setMobileOpen((v) => !v)}
           className={
-            'relative ml-auto mr-4 inline-flex min-h-[44px] max-w-[60%] items-center gap-2 rounded-md border border-line px-3 text-sm font-bold text-charcoal transition-colors hover:bg-surface lg:hidden' +
-            (mobileOpen ? ' bg-surface' : '')
+            'relative ml-auto mr-4 inline-flex min-h-[44px] max-w-[60%] items-center gap-2 rounded-md border border-cream/20 px-3 text-sm font-bold text-cream transition-colors lg:hidden ' +
+            (mobileOpen ? 'bg-cream/10' : 'hover:bg-cream/5')
           }
         >
           <span className="sr-only">{currentLink ? 'Owner sections, current page: ' : 'Owner '}</span>
@@ -368,7 +395,7 @@ export function OwnerHeader() {
               {/* On the hamburger's top-right corner, inside the button: the
                   toggle sits 2px from the top of the screen, so a dot hung off
                   its corner would be cut off. */}
-              <span aria-hidden="true" className="absolute left-[1.625rem] top-1.5 h-2.5 w-2.5 rounded-full bg-tan-dark ring-2 ring-cream" />
+              <span aria-hidden="true" className="absolute left-[1.625rem] top-1.5 h-2.5 w-2.5 rounded-full bg-tan ring-2 ring-charcoal" />
               <span className="sr-only">, menu changes waiting</span>
             </>
           ) : null}
@@ -379,7 +406,7 @@ export function OwnerHeader() {
           aria-label="Owner navigation"
           className={
             (mobileOpen ? 'block ' : 'hidden ') +
-            'max-h-[calc(100dvh-4rem)] w-full overflow-y-auto border-t border-line px-4 pb-4 ' +
+            'max-h-[calc(100dvh-4rem)] w-full overflow-y-auto border-t border-cream/10 px-4 pb-4 ' +
             'lg:block lg:max-h-none lg:w-auto lg:flex-1 lg:overflow-visible lg:border-0 lg:pb-0 lg:pl-0 lg:pr-4'
           }
         >
@@ -435,7 +462,7 @@ export function OwnerHeader() {
               const headingId = `${MOBILE_NAV_ID}-${g.id}-heading`;
               return (
                 <div key={g.id} className="mt-4">
-                  <p id={headingId} className="px-3 text-xs font-bold uppercase tracking-wide text-muted">
+                  <p id={headingId} className="px-3 text-xs font-bold uppercase tracking-wide text-cream/60">
                     {g.label}
                   </p>
                   <ul aria-labelledby={headingId} className="mt-1 grid gap-1 sm:grid-cols-2">
@@ -453,7 +480,7 @@ export function OwnerHeader() {
                 </div>
               );
             })}
-            <div className="mt-4 border-t border-line pt-3">
+            <div className="mt-4 border-t border-cream/10 pt-3">
               <StaffBoardLink link={nav.staffBoard} onNavigate={closeAll} drawer />
             </div>
           </div>
