@@ -159,7 +159,63 @@ describe('mapOrderItemsToCartLines — mixed order', () => {
   });
 
   it('returns empty lines/skipped/modified for an empty order', () => {
-    expect(mapOrderItemsToCartLines([], [menuItem()])).toEqual({ lines: [], skipped: [], modified: [] });
+    expect(mapOrderItemsToCartLines([], [menuItem()])).toEqual({ lines: [], skipped: [], modified: [], needsChoice: [] });
+  });
+});
+
+// A required add-on group linked after the order was placed (e.g. "Ice Level"
+// on every iced drink): the old line can't answer it, and the quote refuses a
+// line that doesn't — so it goes to the add-ons popup instead of the cart.
+const iceLevel = {
+  id: 'group-ice',
+  name: 'ice',
+  display_name: 'Ice Level',
+  selection_type: 'single' as const,
+  min_select: 1,
+  max_select: 1,
+  sort_order: 1,
+  options: [{ id: 'opt-normal-ice', addon_group_id: 'group-ice', name: 'Normal Ice', price_inr: 0, sort_order: 0 }],
+};
+
+describe('mapOrderItemsToCartLines — a required choice the old order never made', () => {
+  it('sends the line to the popup, seeded with its old size, add-ons, note and qty', () => {
+    const latte = menuItem();
+    const item = { ...latte, addon_groups: [...latte.addon_groups, iceLevel] };
+    const result = mapOrderItemsToCartLines([orderItem()], [item]);
+    expect(result.lines).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(result.needsChoice).toEqual([
+      {
+        item,
+        variantId: 'variant-1',
+        qty: 2,
+        selection: { 'group-1': ['opt-1'] },
+        specialInstructions: 'extra hot',
+        weightGrams: null,
+      },
+    ]);
+  });
+
+  it('still adds the line straight away when the old order answered every required group', () => {
+    const latte = menuItem();
+    const item = { ...latte, addon_groups: [...latte.addon_groups, iceLevel] };
+    const answered = orderItem({
+      addons: [
+        ...orderItem().addons,
+        {
+          id: 'addon-2',
+          order_item_id: 'item-1',
+          addon_option_id: 'opt-normal-ice',
+          group_name_snapshot: 'Ice Level',
+          option_name_snapshot: 'Normal Ice',
+          price_inr_snapshot: 0,
+        },
+      ],
+    });
+    const result = mapOrderItemsToCartLines([answered], [item]);
+    expect(result.needsChoice).toEqual([]);
+    expect(result.lines).toHaveLength(1);
+    expect(result.lines[0].addons.map((a) => a.optionName)).toEqual(['Oat', 'Normal Ice']);
   });
 });
 
@@ -270,6 +326,15 @@ describe('mapLegacyBillItemsToCartLines', () => {
   });
 
   it('returns empty lines/skipped/modified for an empty bill', () => {
-    expect(mapLegacyBillItemsToCartLines([], [menuItem()])).toEqual({ lines: [], skipped: [], modified: [] });
+    expect(mapLegacyBillItemsToCartLines([], [menuItem()])).toEqual({ lines: [], skipped: [], modified: [], needsChoice: [] });
+  });
+
+  it('sends an item with a required add-on group to the popup — a Petpooja bill never recorded add-ons', () => {
+    const item = menuItem({ addon_groups: [iceLevel] });
+    const result = mapLegacyBillItemsToCartLines([legacyItem()], [item]);
+    expect(result.lines).toEqual([]);
+    expect(result.needsChoice).toEqual([
+      { item, variantId: 'variant-1', qty: 1, selection: {}, specialInstructions: '', weightGrams: null },
+    ]);
   });
 });

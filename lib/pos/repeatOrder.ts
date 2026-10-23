@@ -20,6 +20,7 @@
 // CURRENT price (never the order's old price_inr_snapshot).
 
 import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { invalidGroups } from '@/lib/menu/customization';
 import { basePriceInr, isSoldByWeight, repeatWeight } from '@/lib/menu/weight';
 import type { CartAddonSelection, CartItem } from '@/lib/cart/CartContext';
 import type { CustomerOrderItemResponse, LegacyOrderItemResponse } from '@/lib/api/customerOrders';
@@ -34,12 +35,30 @@ export interface RepeatNotice {
   reason: string;
 }
 
+/**
+ * A past line whose item now asks a question the old order never answered —
+ * typically a required add-on group linked since (e.g. "Ice Level"). Adding
+ * it as-is would put a line in the cart the server refuses to price, so the
+ * POS opens the add-ons popup for it instead, seeded with what was ordered
+ * last time (`selection` feeds initialSelection's presets).
+ */
+export interface RepeatChoice {
+  item: MenuItem;
+  variantId: string;
+  qty: number;
+  selection: Record<string, string[]>;
+  specialInstructions: string;
+  weightGrams: number | null;
+}
+
 export interface RepeatOrderResult {
   lines: RepeatCartLine[];
   /** Whole lines dropped — the item, its variant, or the item itself is gone. */
   skipped: RepeatNotice[];
   /** Lines kept, but with one or more add-ons dropped (no longer offered). */
   modified: RepeatNotice[];
+  /** Lines that need the add-ons popup before they can be added. */
+  needsChoice: RepeatChoice[];
 }
 
 /**
@@ -56,6 +75,7 @@ export function mapOrderItemsToCartLines(
   const lines: RepeatCartLine[] = [];
   const skipped: RepeatNotice[] = [];
   const modified: RepeatNotice[] = [];
+  const needsChoice: RepeatChoice[] = [];
 
   for (const orderItem of orderItems) {
     if (orderItem.voided) continue;
@@ -94,6 +114,7 @@ export function mapOrderItemsToCartLines(
     }
 
     const kept: CartAddonSelection[] = [];
+    const selection: Record<string, string[]> = {};
     let droppedAddon = false;
     for (const addon of orderItem.addons ?? []) {
       const found = addon.addon_option_id ? optionById.get(addon.addon_option_id) : undefined;
@@ -107,6 +128,21 @@ export function mapOrderItemsToCartLines(
         optionName: found.option.name,
         priceInr: found.option.price_inr,
       });
+      selection[found.group.id] = [...(selection[found.group.id] ?? []), found.option.id];
+    }
+    // A required choice the old order never made (a group linked since, or
+    // its pick dropped above): the popup asks, rather than a line the quote
+    // would refuse.
+    if (invalidGroups(menuItem, selection).length > 0) {
+      needsChoice.push({
+        item: menuItem,
+        variantId: variant.id,
+        qty: orderItem.quantity,
+        selection,
+        specialInstructions: orderItem.special_instructions ?? '',
+        weightGrams: weight.weightGrams,
+      });
+      continue;
     }
     if (droppedAddon) {
       modified.push({
@@ -131,7 +167,7 @@ export function mapOrderItemsToCartLines(
     });
   }
 
-  return { lines, skipped, modified };
+  return { lines, skipped, modified, needsChoice };
 }
 
 /**
@@ -145,7 +181,8 @@ export function mapOrderItemsToCartLines(
  *    same "start from one" a fresh tile tap already uses.
  *  - No add-ons and no per-item price snapshot: the cart line's price is
  *    entirely the variant's CURRENT price, same "never trust an old number"
- *    rule `mapOrderItemsToCartLines` holds for its own unitPriceInr.
+ *    rule `mapOrderItemsToCartLines` holds for its own unitPriceInr. An item
+ *    with a required add-on group goes to `needsChoice` (the popup) instead.
  *
  * Variant resolution:
  *  - `variant_id` set → must still exist on the item; skipped otherwise
@@ -171,6 +208,7 @@ export function mapLegacyBillItemsToCartLines(
 
   const lines: RepeatCartLine[] = [];
   const skipped: RepeatNotice[] = [];
+  const needsChoice: RepeatChoice[] = [];
 
   for (const legacyItem of items) {
     const displayName = legacyItem.name_snapshot;
@@ -201,6 +239,19 @@ export function mapLegacyBillItemsToCartLines(
       skipped.push({ name: displayName, reason: 'Sold by weight — add it from the menu' });
       continue;
     }
+    // No add-ons were ever recorded, so an item with a required group
+    // (Choice of Sugar, Ice Level…) needs the popup to answer it.
+    if (invalidGroups(menuItem, {}).length > 0) {
+      needsChoice.push({
+        item: menuItem,
+        variantId: variant.id,
+        qty: 1,
+        selection: {},
+        specialInstructions: '',
+        weightGrams: null,
+      });
+      continue;
+    }
 
     lines.push({
       menuItemId: menuItem.id,
@@ -215,5 +266,5 @@ export function mapLegacyBillItemsToCartLines(
     });
   }
 
-  return { lines, skipped, modified: [] };
+  return { lines, skipped, modified: [], needsChoice };
 }

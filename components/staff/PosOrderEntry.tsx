@@ -78,7 +78,7 @@ import {
 import { shouldAutofillName } from '@/lib/pos/nameAutofill';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
-import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
+import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines, type RepeatChoice } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
 import type { PaymentPart } from '@/lib/orders/payments';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
@@ -312,6 +312,12 @@ export function PosOrderEntry({
   const [bill, setBill] = useState<PosBill | null>(null);
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
   const [pendingQty, setPendingQty] = useState(1); // qty carried from "3*latte" into the modal
+  // Repeat: a past line that needs a choice opens the modal seeded with what
+  // was ordered last time; the rest wait their turn. The sequence remounts
+  // the modal between two of them so each starts from its own choices.
+  const [customizePrefill, setCustomizePrefill] = useState<RepeatChoice | null>(null);
+  const [choiceQueue, setChoiceQueue] = useState<RepeatChoice[]>([]);
+  const [customizeSeq, setCustomizeSeq] = useState(0);
   const [paymentOpen, setPaymentOpen] = useState(false);
   // Phone layout only (< lg): the order panel becomes a bottom sheet, opened
   // via the sticky "View order" bar, instead of the side column desktop/tablet
@@ -770,10 +776,14 @@ export function PosOrderEntry({
   // Petpooja history: a legacy bill (`source: 'petpooja'`) goes through the
   // sibling mapper instead — it has no quantities/add-ons to resolve and a
   // different, more limited variant-matching rule (lib/pos/repeatOrder.ts).
+  //
+  // A line whose item now has a choice the old order never made (a required
+  // add-on linked since) isn't added as-is: the add-ons popup opens for it,
+  // one such line after another.
   function handleRepeatOrder(order: CustomerOrderResponse) {
     setRepeatingOrderId(order.id);
     try {
-      const { lines, skipped, modified } =
+      const { lines, skipped, modified, needsChoice } =
         order.source === 'petpooja'
           ? mapLegacyBillItemsToCartLines(order.items, menuItems)
           : mapOrderItemsToCartLines(order.items, menuItems);
@@ -782,19 +792,50 @@ export function PosOrderEntry({
         addLine(rest, qty);
       }
       const notices = [...skipped, ...modified].map((n) => n.name);
+      const choosing = needsChoice.map((c) => c.item.name);
       const orderLabel =
         order.source === 'petpooja' ? `Petpooja #${order.bill_no}` : `#${formatOrderNumber(order.order_number)}`;
-      if (lines.length === 0) {
+      if (lines.length === 0 && choosing.length === 0) {
         showToast('None of that order’s items are available right now.');
-      } else if (notices.length > 0) {
-        showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} — skipped ${notices.join(', ')}.`);
+      } else if (notices.length > 0 || choosing.length > 0) {
+        const parts: string[] = [];
+        if (lines.length > 0) parts.push(`Added ${lines.length} item${lines.length === 1 ? '' : 's'}`);
+        if (choosing.length > 0) parts.push(`${parts.length ? 'choose' : 'Choose'} options for ${choosing.join(', ')}`);
+        if (notices.length > 0) parts.push(`${parts.length ? 'skipped' : 'Skipped'} ${notices.join(', ')}`);
+        showToast(`${parts.join(' — ')}.`);
       } else {
         showToast(`Added ${lines.length} item${lines.length === 1 ? '' : 's'} from ${orderLabel}.`);
       }
       setOrdersModalOpen(false);
+      const [first, ...rest] = needsChoice;
+      if (first) {
+        setChoiceQueue(rest);
+        openRepeatChoice(first);
+      }
     } finally {
       setRepeatingOrderId(null);
     }
+  }
+
+  function openRepeatChoice(choice: RepeatChoice) {
+    setCustomizePrefill(choice);
+    setCustomizeSeq((n) => n + 1);
+    setPendingQty(choice.qty);
+    setCustomizing(choice.item);
+  }
+
+  // Added or cancelled alike: the next repeated line waiting for a choice
+  // opens, or the modal closes.
+  function closeCustomize() {
+    const [next, ...rest] = choiceQueue;
+    setChoiceQueue(rest);
+    if (next) {
+      openRepeatChoice(next);
+      return;
+    }
+    setCustomizing(null);
+    setCustomizePrefill(null);
+    setPendingQty(1);
   }
 
   // --- Live bill from the quote endpoint (never computed client-side) -------
@@ -2122,13 +2163,12 @@ export function PosOrderEntry({
 
       {customizing ? (
         <PosCustomizeModal
+          key={customizeSeq}
           item={customizing}
           initialQty={pendingQty}
+          prefill={customizePrefill ?? undefined}
           onAdd={addLine}
-          onClose={() => {
-            setCustomizing(null);
-            setPendingQty(1);
-          }}
+          onClose={closeCustomize}
         />
       ) : null}
 

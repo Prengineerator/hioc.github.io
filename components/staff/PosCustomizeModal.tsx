@@ -12,6 +12,7 @@ import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import type { CartItem } from '@/lib/cart/CartContext';
+import type { RepeatChoice } from '@/lib/pos/repeatOrder';
 import type { MenuItem } from '@/lib/types';
 
 // POS variant/addon picker. Deliberately a sibling of the customer
@@ -30,6 +31,7 @@ export function PosCustomizeModal({
   onAdd,
   onClose,
   initialQty = 1,
+  prefill,
 }: {
   item: MenuItem;
   onAdd: (line: Omit<CartItem, 'qty' | 'key'>, qty: number) => void;
@@ -37,15 +39,24 @@ export function PosCustomizeModal({
   // Seeds the qty stepper — lets the quick-add bar's "3*latte" carry its qty
   // into the customize modal for variant/addon items.
   initialQty?: number;
+  // Repeat: a past line's size, add-ons, note and weight to start from. Picks
+  // that no longer fit the item fall back to the usual defaults.
+  prefill?: Pick<RepeatChoice, 'variantId' | 'selection' | 'specialInstructions' | 'weightGrams'>;
 }) {
-  const [variantId, setVariantId] = useState(item.variants[0]?.id ?? '');
-  const [selected, setSelected] = useState<Record<string, string[]>>(() => initialSelection(item));
+  const [variantId, setVariantId] = useState(
+    () => (item.variants.find((v) => v.id === prefill?.variantId) ?? item.variants[0])?.id ?? '',
+  );
+  const [selected, setSelected] = useState<Record<string, string[]>>(() =>
+    initialSelection(item, prefill?.selection),
+  );
   const [qty, setQty] = useState(Math.max(1, initialQty));
-  const [instructions, setInstructions] = useState('');
+  const [instructions, setInstructions] = useState(prefill?.specialInstructions ?? '');
   // Sold by weight (lib/menu/weight.ts): grams in one bag, as read off the
   // scale; null while the typed weight isn't valid. Same rules as the web modal.
   const byWeight = isSoldByWeight(item);
-  const [weightGrams, setWeightGrams] = useState<number | null>(byWeight ? DEFAULT_WEIGHT_GRAMS : null);
+  const [weightGrams, setWeightGrams] = useState<number | null>(
+    byWeight ? (prefill?.weightGrams ?? DEFAULT_WEIGHT_GRAMS) : null,
+  );
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
