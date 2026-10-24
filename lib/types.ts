@@ -64,7 +64,17 @@ export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
 // exactly like every other event so the delivery-status webhook's receipts
 // (delivered/read) apply to it too; its own conversation thread — replies,
 // follow-ups, the owner's chat-back — lives in `feedback_messages`, not here.
-export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill' | 'feedback';
+//
+// WHY a runtime list, not just a union: the `notifications.event` CHECK in
+// Postgres is a second copy of this set, and the two drifted once —
+// 'feedback' was added here and in the engine but never to the CHECK, so every
+// feedback log write was rejected (fixed by
+// supabase/2026-10-notifications-feedback-event.sql). Deriving the type from
+// this constant lets tests/notificationsEventCheck.test.ts compare the latest
+// migration's CHECK against the one list. Add an event HERE and in a new
+// migration together; the test fails until both agree.
+export const NOTIFICATION_EVENTS = ['accepted', 'ready', 'rejected', 'cancelled', 'bill', 'feedback'] as const;
+export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number];
 // 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
 // attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
 // or "channel not configured" from a send that was tried and failed.
