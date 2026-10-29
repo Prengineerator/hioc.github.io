@@ -16,7 +16,10 @@ const state = {
 
 vi.mock('@/lib/supabase-server', () => ({ createAdminSupabaseClient: () => ({}) }));
 
-vi.mock('@/lib/api/date', () => ({ istDateIso: () => '2026-10-01' })); // a Thursday, the 1st
+vi.mock('@/lib/businessDay', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/businessDay')>('@/lib/businessDay')),
+  businessToday: () => '2026-10-01', // a Thursday, the 1st
+}));
 
 vi.mock('@/lib/reports/ownerDigestServer', () => ({
   MIGRATION_NOT_APPLIED: 'migration not applied',

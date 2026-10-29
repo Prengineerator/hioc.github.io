@@ -4,7 +4,7 @@
 // cash day — each close's statement and its count by denomination — with a
 // CSV download. Rules: lib/reports/reconcile.ts.
 
-import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
+import { businessDateDaysAgo, businessToday } from '@/lib/businessDay';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card, inr } from '@/components/owner/dashboard';
@@ -64,15 +64,16 @@ function presets(today: string): { label: string; from: string; to: string }[] {
   const prevMonthStart = `${prevMonthEnd.toISOString().slice(0, 7)}-01`;
   return [
     { label: 'Today', from: today, to: today },
-    { label: 'Yesterday', from: istDateDaysAgo(1), to: istDateDaysAgo(1) },
-    { label: 'Last 7 days', from: istDateDaysAgo(6), to: today },
+    { label: 'Yesterday', from: businessDateDaysAgo(1), to: businessDateDaysAgo(1) },
+    { label: 'Last 7 days', from: businessDateDaysAgo(6), to: today },
     { label: 'This month', from: firstOfMonth, to: today },
     { label: 'Last month', from: prevMonthStart, to: prevMonthEnd.toISOString().slice(0, 10) },
   ];
 }
 
 export default async function OwnerReportsPage({ searchParams }: { searchParams: { from?: string; to?: string } }) {
-  const today = istDateIso();
+  // Business days (3 am to 3 am IST): until 3 am, today is still the evening before.
+  const today = businessToday();
   const range = parseRange(searchParams.from, searchParams.to, today);
   const from = range.ok ? range.from : today;
   const to = range.ok ? range.to : today;

@@ -9,6 +9,8 @@ import {
   parseRange,
   rangeBounds,
   reportCsv,
+  reportDayOf,
+  reportRangeBounds,
   type ReportInput,
 } from '@/lib/reports/reconcile';
 
@@ -43,6 +45,18 @@ describe('dates', () => {
     });
   });
 
+  it('reports on business days, 3 am to 3 am IST, from 29 Oct 2026', () => {
+    expect(reportDayOf('2026-11-05T19:10:00Z')).toBe('2026-11-05'); // 12:40 am IST on the 6th
+    expect(reportDayOf('2026-11-05T21:30:00Z')).toBe('2026-11-06'); // 3:00 am IST
+    expect(reportDayOf('2026-09-27T18:30:00Z')).toBe('2026-09-28'); // before the change: midnight
+    expect(reportRangeBounds('2026-11-05', '2026-11-06')).toEqual({
+      startIso: '2026-11-04T21:30:00.000Z',
+      endIso: '2026-11-06T21:30:00.000Z',
+    });
+    // The bill's calendar date (downloads, GST) does not move.
+    expect(istDateOf('2026-11-05T19:10:00Z')).toBe('2026-11-06');
+  });
+
   it('validates the range', () => {
     const today = '2026-09-29';
     expect(parseRange(undefined, undefined, today)).toEqual({ ok: true, from: today, to: today });
@@ -68,6 +82,30 @@ describe('buildReport', () => {
     const d = r.days[0];
     expect(d).toMatchObject({ date: '2026-09-27', orders: 2, cancelled: 1, grossSalesInr: 450, taxInr: 20, settleDiscountInr: 10, netSalesInr: 440, unpaidOrders: 1, unpaidInr: 150 });
     expect(r.days[1].orders).toBe(0);
+  });
+
+  it('counts what was sold and paid after midnight on the evening’s day, until 3 am', () => {
+    const r = buildReport(
+      base({
+        from: '2026-11-05',
+        to: '2026-11-06',
+        orders: [
+          // 11:50 pm, 12:40 am and 2:55 am IST: all the 5th's. 3:05 am: the 6th's.
+          { id: 'a', created_at: '2026-11-05T18:20:00Z', status: 'completed', payment_status: 'paid', total_inr: 200, subtotal_inr: 200, tax_inr: 0, discount_inr: 0 },
+          { id: 'b', created_at: '2026-11-05T19:10:00Z', status: 'completed', payment_status: 'paid', total_inr: 300, subtotal_inr: 300, tax_inr: 0, discount_inr: 0 },
+          { id: 'c', created_at: '2026-11-05T21:25:00Z', status: 'completed', payment_status: 'paid', total_inr: 100, subtotal_inr: 100, tax_inr: 0, discount_inr: 0 },
+          { id: 'd', created_at: '2026-11-05T21:35:00Z', status: 'completed', payment_status: 'paid', total_inr: 50, subtotal_inr: 50, tax_inr: 0, discount_inr: 0 },
+        ],
+        paidOrders: [
+          { id: 'b', payment_method: 'cash', total_inr: 300, subtotal_inr: 300, paid_at: '2026-11-05T19:15:00Z' },
+          { id: 'd', payment_method: 'upi', total_inr: 50, subtotal_inr: 50, paid_at: '2026-11-05T21:40:00Z' },
+        ],
+      }),
+    );
+    expect(r.days[0]).toMatchObject({ date: '2026-11-05', orders: 3, grossSalesInr: 600 });
+    expect(r.days[0].received.cash).toBe(300);
+    expect(r.days[1]).toMatchObject({ date: '2026-11-06', orders: 1, grossSalesInr: 50 });
+    expect(r.days[1].received.upi).toBe(50);
   });
 
   it('counts money on the day received, by method — split parts by their own time', () => {

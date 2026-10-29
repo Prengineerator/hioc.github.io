@@ -17,6 +17,7 @@ import { AddonGroupsPanel } from '@/components/staff/menu/AddonGroupsPanel';
 import { STAFF_MENU_CHANGED_EVENT, publishStaffMenuPending } from '@/components/staff/menu/menuEvents';
 import { parseMenuRequestViewer, type MenuRequestViewer } from '@/components/staff/menu/requestViewer';
 import type { MenuChangeAction, MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
+import { endOfBusinessDayIso } from '@/lib/businessDay';
 
 // How often the "waiting for owner approval" list refreshes while the page is open.
 const PENDING_POLL_MS = 30_000;
@@ -28,20 +29,6 @@ const isSentForApproval = (res: Response) => res.status === 202;
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   const data = (await res.json().catch(() => null)) as { error?: string } | null;
   return data?.error ?? fallback;
-}
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-
-// Today's 24:00 IST ("end of day") expressed as a UTC ISO instant — mirrors
-// the IST wall-clock convention in lib/store/hours.ts (that file's helpers
-// are private, so this small piece is duplicated rather than exported).
-function endOfDayIstIso(now: Date): string {
-  const ist = new Date(now.getTime() + IST_OFFSET_MS);
-  const y = ist.getUTCFullYear();
-  const mo = ist.getUTCMonth();
-  const d = ist.getUTCDate();
-  const nextMidnightUtcMs = Date.UTC(y, mo, d + 1, 0, 0, 0) - IST_OFFSET_MS;
-  return new Date(nextMidnightUtcMs).toISOString();
 }
 
 export default function StaffMenuPage() {
@@ -176,7 +163,7 @@ export default function StaffMenuPage() {
             unavailable_until:
               duration === '2h'
                 ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
-                : endOfDayIstIso(new Date()),
+                : endOfBusinessDayIso(),
           };
     await patchAvailability(item, body);
   }

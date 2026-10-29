@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
-import { istDateIso } from '@/lib/api/date';
+import { businessToday } from '@/lib/businessDay';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isReportKind, latestPeriod, resolveRecipients } from '@/lib/reports/ownerDigest';
 import {
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     const recipients = resolveRecipients(settings, await ownerLoginEmails(admin));
     if (recipients.length === 0) return errorResponse(400, 'Add at least one email address first.');
 
-    const period = latestPeriod(body.kind, istDateIso(), settings);
+    const period = latestPeriod(body.kind, businessToday(), settings);
     const { email } = await buildDigest(admin, period);
     const outcomes = await sendDigest(admin, period, email, recipients, 'manual');
     return NextResponse.json({ period, outcomes });

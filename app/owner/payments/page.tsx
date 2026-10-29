@@ -9,7 +9,7 @@
 
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { Card, inr, PaymentsByMethod } from '@/components/owner/dashboard';
-import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
+import { businessDateDaysAgo, businessToday } from '@/lib/businessDay';
 import { loadReport } from '@/lib/reports/reconcileServer';
 import type { Report } from '@/lib/reports/reconcile';
 import { APP_PAYMENT_METHODS } from '@/lib/orders/payments';
@@ -22,7 +22,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 async function getLast30Days(): Promise<Report | null> {
   try {
-    return await loadReport(createAdminSupabaseClient(), istDateDaysAgo(29), istDateIso());
+    return await loadReport(createAdminSupabaseClient(), businessDateDaysAgo(29), businessToday());
   } catch (err) {
     console.error('owner payments: report failed', err);
     return null;

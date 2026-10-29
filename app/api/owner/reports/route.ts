@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, unauthorized } from '@/lib/api/http';
-import { istDateIso } from '@/lib/api/date';
+import { businessToday } from '@/lib/businessDay';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { parseRange, reportCsv } from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   if (!owner) return unauthorized();
 
   const url = new URL(request.url);
-  const range = parseRange(url.searchParams.get('from'), url.searchParams.get('to'), istDateIso());
+  const range = parseRange(url.searchParams.get('from'), url.searchParams.get('to'), businessToday());
   if (!range.ok) return errorResponse(400, range.message);
 
   let report;

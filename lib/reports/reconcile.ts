@@ -1,7 +1,11 @@
-// Reconciliation report (owner → Reports): for a range of IST days, what was
-// sold, what money came in and how, what went back out, and how each day's
+// Reconciliation report (owner → Reports): for a range of business days, what
+// was sold, what money came in and how, what went back out, and how each day's
 // drawer closed. Pure — the rows are fetched by lib/reports/reconcileServer.ts
 // — so every rule here is unit-tested.
+//
+// A DAY here is the café's business day: 3:00 am IST to 3:00 am the next
+// morning (lib/businessDay.ts), the hour a cash day left open ends. The café
+// runs past midnight, so a sale at 12:40 am is the evening's sale.
 //
 // Two different clocks, on purpose:
 //   • SALES are counted on the day the order was PLACED (orders.created_at),
@@ -20,8 +24,8 @@
 // at that close (cash_days) — the same ones staff saw on the close screen. The
 // café runs past midnight, so a day's drawer can hold cash a calendar day would
 // put on the next date; re-deriving the drawer from calendar days could never
-// tie out to the over/short. A cash day sits on the date it was OPENED
-// (cash_days.business_date).
+// tie out to the over/short. A cash day sits on the business day it was OPENED
+// in (cash_days.business_date).
 //
 // CASH OUT, the owner's way: an EXPENSE (a cash out with a category) is money
 // spent and is always reported on its own; EVERY OTHER cash out is cash handed
@@ -37,6 +41,7 @@
 
 import type { CashDenoms, PaymentMethod } from '@/lib/types';
 import { DENOMINATIONS, LEGACY_COINS_KEY } from '@/lib/cash/denoms';
+import { businessDateOf, businessRangeBounds } from '@/lib/businessDay';
 
 export const REPORT_METHODS: readonly PaymentMethod[] = [
   'cash',
@@ -53,7 +58,11 @@ export const MAX_REPORT_DAYS = 93;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The IST calendar date ('YYYY-MM-DD') an instant falls on. */
+/**
+ * The IST calendar date ('YYYY-MM-DD') an instant falls on — the date on the
+ * bill, which the CSV downloads and GST registers use. This report's days are
+ * business days (reportDayOf).
+ */
 export function istDateOf(iso: string): string {
   const d = new Date(Date.parse(iso) + IST_OFFSET_MS);
   return d.toISOString().slice(0, 10);
@@ -79,7 +88,17 @@ export function datesBetween(from: string, to: string): string[] {
   return out;
 }
 
-/** UTC instants bounding IST days [from 00:00, the day after `to` 00:00). */
+/** The business day ('YYYY-MM-DD', 3 am to 3 am IST) an instant counts on in this report. */
+export function reportDayOf(iso: string): string {
+  return businessDateOf(iso);
+}
+
+/** UTC instants bounding the report's business days: [3 am IST on `from`, 3 am IST the day after `to`). */
+export function reportRangeBounds(from: string, to: string): { startIso: string; endIso: string } {
+  return businessRangeBounds(from, to);
+}
+
+/** UTC instants bounding IST calendar days [from 00:00, the day after `to` 00:00) — the downloads' bill dates. */
 export function rangeBounds(from: string, to: string): { startIso: string; endIso: string } {
   const [fy, fm, fd] = from.split('-').map(Number);
   const [ty, tm, td] = to.split('-').map(Number);
@@ -325,7 +344,7 @@ function emptyDay(date: string): ReportDay {
 
 export function buildReport(input: ReportInput): Report {
   const days = new Map(datesBetween(input.from, input.to).map((d) => [d, emptyDay(d)]));
-  const dayOf = (iso: string) => days.get(istDateOf(iso));
+  const dayOf = (iso: string) => days.get(reportDayOf(iso));
 
   // Cups spent per order, from the lines that were not voided since (a voided
   // line's cups went back to the pass).

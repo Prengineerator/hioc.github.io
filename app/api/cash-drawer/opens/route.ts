@@ -4,7 +4,7 @@ import { getCounterActor, getManagerUser } from '@/lib/api/auth';
 import { errorResponse, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { getEnrolledDevice } from '@/lib/api/device';
-import { startOfTodayIstIso } from '@/lib/api/date';
+import { startOfBusinessDayIso } from '@/lib/businessDay';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 
 export const dynamic = 'force-dynamic';
@@ -58,8 +58,9 @@ export async function POST(request: Request) {
   return NextResponse.json({ open: data }, { status: 201 });
 }
 
-// GET /api/cash-drawer/opens?limit= — manager/owner only. Today's counts (IST
-// day) by reason, plus the most recent openings with names resolved.
+// GET /api/cash-drawer/opens?limit= — manager/owner only. Today's counts (the
+// business day, from 3:00 am IST) by reason, plus the most recent openings with
+// names resolved.
 export async function GET(request: Request) {
   const manager = await getManagerUser();
   if (!manager) return unauthorized();
@@ -76,7 +77,7 @@ export async function GET(request: Request) {
       .select('id, opened_at, reason, order_id, opened_by, device_id, orders(order_number), pos_devices(name)')
       .order('opened_at', { ascending: false })
       .limit(limit),
-    admin.from('cash_drawer_opens').select('reason').gte('opened_at', startOfTodayIstIso()),
+    admin.from('cash_drawer_opens').select('reason').gte('opened_at', startOfBusinessDayIso()),
   ]);
   if (recentRes.error || todayRes.error) {
     console.error('cash-drawer/opens: lookup failed', recentRes.error ?? todayRes.error);

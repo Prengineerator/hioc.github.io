@@ -2,6 +2,7 @@
 // every screen agrees on what can be settled or re-recorded.
 
 import type { Order } from '@/lib/types';
+import { businessDateOf } from '@/lib/businessDay';
 
 export { describeOrderPayment, describePaymentMethod } from '@/lib/orders/paymentLabel';
 
@@ -38,12 +39,16 @@ export interface SettleGroups<T> {
   earlier: T[];
 }
 
-/** Today's bills and older ones, each oldest first (the longest-owed on top). */
+/**
+ * Today's bills and older ones, each oldest first (the longest-owed on top).
+ * "Today" is the business day (3 am to 3 am IST, lib/businessDay.ts): a bill
+ * from 11 pm is still today's at 1 am.
+ */
 export function groupForSettle<T extends Pick<Order, 'created_at'>>(orders: T[], now: Date = new Date()): SettleGroups<T> {
-  const todayKey = istDateKey(now);
+  const todayKey = businessDateOf(now);
   const sorted = [...orders].sort((a, b) => a.created_at.localeCompare(b.created_at));
   return {
-    today: sorted.filter((o) => istDateKey(o.created_at) === todayKey),
-    earlier: sorted.filter((o) => istDateKey(o.created_at) !== todayKey),
+    today: sorted.filter((o) => businessDateOf(o.created_at) === todayKey),
+    earlier: sorted.filter((o) => businessDateOf(o.created_at) !== todayKey),
   };
 }

@@ -8,7 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import {
   buildReport,
-  rangeBounds,
+  reportRangeBounds,
   type CashDayRow,
   type CashMovementRow,
   type PaidOrderRow,
@@ -52,7 +52,7 @@ const CASH_DAY_COLUMNS =
   'id, business_date, status, opened_at, closed_at, opening_total_inr, cash_sales_inr, cash_sales_count, cash_refunds_inr, cash_in_inr, cash_out_inr, expected_cash_inr, counted_total_inr, over_short_inr, closing_denoms, handover_inr, float_left_total_inr, float_left_denoms, close_reason, notes';
 
 export async function loadReport(admin: SupabaseClient, from: string, to: string): Promise<Report> {
-  const { startIso, endIso } = rangeBounds(from, to);
+  const { startIso, endIso } = reportRangeBounds(from, to);
 
   // Settle discounts and tips arrived with a later migration; read without
   // them on a database that doesn't have them yet.

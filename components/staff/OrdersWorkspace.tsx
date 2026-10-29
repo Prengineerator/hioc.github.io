@@ -12,7 +12,7 @@
 // (components/staff/StaffShell.tsx) so they survive switching tabs.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { istDateIso } from '@/lib/api/date';
+import { businessToday } from '@/lib/businessDay';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { TodayOrdersList } from '@/components/staff/TodayOrdersList';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
@@ -62,9 +62,10 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const shell = useStaffShell();
   const { refreshNewOrders } = shell;
   const prevReceivedRef = useRef<Set<string> | null>(null);
-  // Orders tab date filter: an IST day ('YYYY-MM-DD'), today by default. A
-  // ref as well, so the realtime refresh always fetches the day on screen.
-  const today = istDateIso();
+  // Orders tab date filter: a business day ('YYYY-MM-DD', 3 am to 3 am IST —
+  // lib/businessDay.ts), today by default. A ref as well, so the realtime
+  // refresh always fetches the day on screen.
+  const today = businessToday();
   const [date, setDate] = useState(today);
   const dateRef = useRef(date);
 
@@ -80,7 +81,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const fetchOrders = useCallback(async () => {
     try {
       const day = dateRef.current;
-      const url = view === 'today' && day !== istDateIso() ? `/api/orders?date=${day}` : '/api/orders';
+      const url = view === 'today' && day !== businessToday() ? `/api/orders?date=${day}` : '/api/orders';
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
@@ -108,7 +109,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
 
   const changeDate = useCallback(
     (next: string) => {
-      if (!next || next > istDateIso()) return;
+      if (!next || next > businessToday()) return;
       dateRef.current = next;
       // Another day's orders are not "new": don't let them ring the alert.
       prevReceivedRef.current = null;

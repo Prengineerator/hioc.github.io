@@ -7,8 +7,9 @@
 // Owner → Reports for the same dates always agree. Fetching and sending live
 // in lib/reports/ownerDigestServer.ts.
 //
-// Periods are whole IST days and always end YESTERDAY: the cron runs in the
-// morning, so the day it runs on is never complete.
+// Periods are whole business days (3 am to 3 am IST, lib/businessDay.ts) and
+// always end YESTERDAY: the cron runs in the morning, so the day it runs on is
+// never complete.
 //   • daily   — yesterday.
 //   • weekly  — the 7 days ending yesterday, sent on the owner's chosen
 //               weekday (Monday → a Monday–Sunday week).
@@ -18,12 +19,13 @@
 import { CAFE_NAME } from '@/lib/constants';
 import { escapeHtml, staffEmailShell } from '@/lib/staff/emails';
 import { normalizeEmail } from '@/lib/email';
+import { cashDayEndsAt } from '@/lib/cash/autoEnd';
 import {
   REPORT_METHODS,
   cashDayOuts,
   closingCountRows,
   closingDayOf,
-  istDateOf,
+  reportDayOf,
   type CashDayRow,
   type ClosingCountRow,
   type Report,
@@ -388,8 +390,14 @@ export function drawerSections(period: ReportPeriod, report: Report): DrawerSect
         sec.count = { rows: closingCountRows(c), countedInr: c.counted_total_inr ?? 0, floatLeftInr: c.float_left_total_inr ?? null };
         // Where the day's figures stopped: its close, or 3 am when it ended on its own.
         const endedAt = c.auto_ended_at ?? c.closed_at;
-        if (endedAt && istDateOf(endedAt) > c.business_date) {
-          sec.note = `Ran past midnight: cash taken after 12 am is in this drawer, but Money in counts it on ${shortDate(istDateOf(endedAt))}.`;
+        // The report day its last cash counts on. Days end at 3 am now, with the
+        // drawer, so only a day from before that change (it ended at midnight)
+        // can spill into the next one.
+        const lastCashDay = endedAt
+          ? reportDayOf(new Date(Math.min(Date.parse(endedAt), Date.parse(cashDayEndsAt(c.business_date))) - 1).toISOString())
+          : null;
+        if (lastCashDay && lastCashDay > c.business_date) {
+          sec.note = `Ran past midnight: cash taken after 12 am is in this drawer, but Money in counts it on ${shortDate(lastCashDay)}.`;
         }
       }
       return sec;

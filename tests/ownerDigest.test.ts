@@ -380,6 +380,21 @@ describe('renderOwnerDigest', () => {
     expect(countedNextDay).toContain('Money in counts it on 29 Sept'); // the window ran to 3 am
   });
 
+  it('adds no past-midnight note once the day itself runs to 3 am', () => {
+    const nov5 = '2026-11-05';
+    const email = (c: Partial<CashDayRow>) =>
+      renderOwnerDigest({
+        period: { kind: 'daily', from: nov5, to: nov5 },
+        report: report(nov5, nov5, { orders: [], cashDays: [closedDay({ business_date: nov5, opened_at: '2026-11-05T09:30:00Z', ...c })] }),
+        previous: null,
+        items: [],
+        reportUrl: 'https://x',
+      }).text;
+    // Closed at 1:15 am, or ended on its own at 3 am and counted the next afternoon.
+    expect(email({ closed_at: '2026-11-05T19:45:00Z' })).not.toContain('Ran past midnight');
+    expect(email({ auto_ended_at: '2026-11-05T21:30:00Z', closed_at: '2026-11-06T10:00:00Z' })).not.toContain('Ran past midnight');
+  });
+
   it('adds up a range’s drawer from its cash days, expenses only when there were any', () => {
     const send = (cashDays: CashDayRow[]) =>
       renderOwnerDigest({

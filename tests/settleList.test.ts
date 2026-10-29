@@ -51,6 +51,19 @@ describe('groupForSettle', () => {
     expect(g.earlier.map((o) => o.id)).toEqual(['x', 'y']);
   });
 
+  it('keeps last evening’s bills under today until 3 am (the business day)', () => {
+    const at1240am = new Date('2026-11-05T19:10:00Z'); // 12:40 am IST on the 6th
+    const orders = [
+      { id: 'late', created_at: '2026-11-05T17:30:00Z' }, // 11:00 pm IST on the 5th
+      { id: 'small-hours', created_at: '2026-11-05T19:00:00Z' }, // 12:30 am IST on the 6th
+      { id: 'lunch', created_at: '2026-11-05T07:30:00Z' }, // 1:00 pm IST on the 5th
+      { id: 'night-before', created_at: '2026-11-04T20:30:00Z' }, // 2:00 am IST on the 5th
+    ];
+    const g = groupForSettle(orders, at1240am);
+    expect(g.today.map((o) => o.id)).toEqual(['lunch', 'late', 'small-hours']);
+    expect(g.earlier.map((o) => o.id)).toEqual(['night-before']);
+  });
+
   it('istDateKey uses India time, not UTC', () => {
     expect(istDateKey('2026-09-25T18:40:00Z')).toBe('2026-09-26');
   });

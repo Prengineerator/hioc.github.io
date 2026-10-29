@@ -1,6 +1,6 @@
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, unauthorized } from '@/lib/api/http';
-import { istDateIso } from '@/lib/api/date';
+import { businessToday } from '@/lib/businessDay';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isReportKind, latestPeriod } from '@/lib/reports/ownerDigest';
 import { buildDigest, loadReportSettings } from '@/lib/reports/ownerDigestServer';
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   const admin = createAdminSupabaseClient();
   try {
     const { settings } = await loadReportSettings(admin);
-    const { email } = await buildDigest(admin, latestPeriod(kind, istDateIso(), settings));
+    const { email } = await buildDigest(admin, latestPeriod(kind, businessToday(), settings));
     return new Response(email.html, {
       headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
     });

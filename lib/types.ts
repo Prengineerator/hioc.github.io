@@ -393,7 +393,7 @@ export interface RoleChangeAudit {
 // ---------------------------------------------------------------------------
 
 export interface DailySalesRow {
-  sale_date: string; // 'YYYY-MM-DD' (IST)
+  sale_date: string; // 'YYYY-MM-DD' (IST business date, 3 am to 3 am — lib/businessDay.ts)
   orders: number;
   revenue_inr: number;
   aov_inr: number;

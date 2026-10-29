@@ -13,7 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { emailAdapter } from '@/lib/notifications/adapters';
 import { absoluteUrl } from '@/lib/url';
 import { loadReport, fetchAll, type PageResult } from '@/lib/reports/reconcileServer';
-import { rangeBounds } from '@/lib/reports/reconcile';
+import { reportRangeBounds } from '@/lib/reports/reconcile';
 import {
   isEmptyReport,
   previousPeriod,
@@ -81,7 +81,7 @@ export async function ownerLoginEmails(admin: SupabaseClient): Promise<string[]>
 
 /** Order lines from valid orders PLACED in the period (the report's sales clock). */
 async function loadItemLines(admin: SupabaseClient, from: string, to: string): Promise<ItemLineRow[]> {
-  const { startIso, endIso } = rangeBounds(from, to);
+  const { startIso, endIso } = reportRangeBounds(from, to);
   const orders = await fetchAll<{ id: string }>((a, b) =>
     admin
       .from('orders')

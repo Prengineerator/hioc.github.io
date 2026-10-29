@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
-import { istDateIso } from '@/lib/api/date';
+import { businessToday } from '@/lib/businessDay';
 import { dueReports, resolveRecipients } from '@/lib/reports/ownerDigest';
 import {
   MIGRATION_NOT_APPLIED,
@@ -42,7 +42,7 @@ export async function GET(request: Request) {
   // Never send on defaults the owner has never seen.
   if (!loaded.migrated) return NextResponse.json({ ok: true, sent: 0, note: MIGRATION_NOT_APPLIED });
 
-  const today = istDateIso();
+  const today = businessToday();
   const due = dueReports(today, loaded.settings);
   if (due.length === 0) return NextResponse.json({ ok: true, today, sent: 0, note: 'no reports due' });
 

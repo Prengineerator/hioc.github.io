@@ -18,7 +18,7 @@ import {
   getTodayAtAGlance,
   summariseChannels,
 } from '@/lib/analytics/queries';
-import { istDateIso, startOfTodayIstIso } from '@/lib/api/date';
+import { businessToday, startOfBusinessDayIso } from '@/lib/businessDay';
 import { loadReport } from '@/lib/reports/reconcileServer';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
@@ -109,12 +109,12 @@ export default async function OwnerOverviewPage() {
     getTableTurnover(30),
     getStaffLeaderboard(30),
     getRecentOrders(20),
-    getCustomerSegmentSplit(startOfTodayIstIso()),
+    getCustomerSegmentSplit(startOfBusinessDayIso()),
     getCustomerSegmentSplit(new Date(Date.now() - 30 * DAY_MS).toISOString()),
     getFeedbackSummary(),
     // Today's money by how it came in (cash / UPI / card / online). Never
     // fails the dashboard: a load error just hides the card.
-    loadReport(createAdminSupabaseClient(), istDateIso(), istDateIso()).catch((err) => {
+    loadReport(createAdminSupabaseClient(), businessToday(), businessToday()).catch((err) => {
       console.error('owner overview: payments by method failed', err);
       return null;
     }),

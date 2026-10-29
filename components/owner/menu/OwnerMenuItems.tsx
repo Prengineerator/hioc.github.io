@@ -14,16 +14,7 @@ import { MenuItemFormModal, type MenuItemFormValues } from '@/components/staff/M
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import type { MenuItem } from '@/lib/types';
 import type { MenuChangeAction } from '@/lib/menu/changeRequestTypes';
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-
-// Today's 24:00 IST ("end of day") as a UTC ISO instant — the same IST
-// wall-clock convention as lib/store/hours.ts and the staff menu page.
-function endOfDayIstIso(now: Date): string {
-  const ist = new Date(now.getTime() + IST_OFFSET_MS);
-  const nextMidnightUtcMs = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() + 1, 0, 0, 0) - IST_OFFSET_MS;
-  return new Date(nextMidnightUtcMs).toISOString();
-}
+import { endOfBusinessDayIso } from '@/lib/businessDay';
 
 async function readError(res: Response, fallback: string): Promise<string> {
   const data = await res.json().catch(() => ({}));
@@ -101,7 +92,7 @@ export function OwnerMenuItems({
             unavailable_until:
               duration === '2h'
                 ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
-                : endOfDayIstIso(new Date()),
+                : endOfBusinessDayIso(),
           },
     );
   }

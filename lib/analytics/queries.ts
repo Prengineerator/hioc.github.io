@@ -9,6 +9,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { istDateDaysAgo } from '@/lib/api/date';
+import { businessDateDaysAgo } from '@/lib/businessDay';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import {
@@ -152,10 +153,11 @@ function metric(value: number, prior: number): GlanceMetric {
 export async function getTodayAtAGlance(): Promise<TodayAtAGlance> {
   const admin = createAdminSupabaseClient();
 
-  // v_daily_sales.sale_date is the IST calendar date, so both comparison days
-  // must be IST dates too (a UTC slice of IST midnight would be yesterday).
-  const todayIso = istDateDaysAgo(0);
-  const lastWeekIso = istDateDaysAgo(7);
+  // v_daily_sales.sale_date is the business date (3 am to 3 am IST,
+  // supabase/2026-10-business-day-3am.sql), so both comparison days must be
+  // business dates too: until 3 am, "today" is still the evening before.
+  const todayIso = businessDateDaysAgo(0);
+  const lastWeekIso = businessDateDaysAgo(7);
 
   const [{ data: sales }, { count: inProgress }] = await Promise.all([
     admin.from('v_daily_sales').select('*').in('sale_date', [todayIso, lastWeekIso]),

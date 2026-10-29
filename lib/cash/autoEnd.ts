@@ -16,11 +16,16 @@
 // Pure, so the gate, the routes and the cron share one rule. IST is UTC+5:30
 // with no DST, so the arithmetic needs no timezone database.
 
+import { BUSINESS_DAY_START_HOUR_IST } from '@/lib/businessDay';
+
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The IST hour, the morning after its date, at which a cash day still open ends. */
-export const CASH_DAY_END_HOUR_IST = 3;
+/**
+ * The IST hour, the morning after its date, at which a cash day still open
+ * ends — the hour the café's business day turns over (lib/businessDay.ts).
+ */
+export const CASH_DAY_END_HOUR_IST = BUSINESS_DAY_START_HOUR_IST;
 
 /** The instant (UTC ISO) a cash day opened on `businessDate` ends: 3:00 am IST the next morning. */
 export function cashDayEndsAt(businessDate: string): string {
