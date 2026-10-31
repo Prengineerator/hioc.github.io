@@ -18,6 +18,7 @@ import {
 } from '@/lib/orders/lines';
 import { afterOffers, afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
 import { computeOffers, type AppliedOffer } from '@/lib/orders/offers';
+import { loadActiveOffers } from '@/lib/orders/offersServer';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
 import { indianE164HonouringPlus } from '@/lib/phone';
@@ -147,15 +148,15 @@ export async function POST(request: Request) {
   let resolvedLines: ResolvedLine[] | null = null;
   if (parsedItems) {
     const menuIds = [...new Set(parsedItems.map((i) => i.menu_item_id))];
-    const { data: menuRows, error: menuError } = await admin()
-      .from('menu_items')
-      .select(MENU_ITEM_SELECT)
-      .in('id', menuIds);
+    const [{ data: menuRows, error: menuError }, offersByItem] = await Promise.all([
+      admin().from('menu_items').select(MENU_ITEM_SELECT).in('id', menuIds),
+      loadActiveOffers(admin(), menuIds),
+    ]);
     if (menuError) return errorResponse(500, 'Failed to validate order items');
     const menuById = new Map(
       (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
     );
-    const resolved = resolveOrderLines(parsedItems, menuById, switchesFromSettings(settings));
+    const resolved = resolveOrderLines(parsedItems, menuById, switchesFromSettings(settings), offersByItem);
     if (!resolved.ok) return errorResponse(400, resolved.error);
     resolvedLines = resolved.lines;
     subtotalInr = resolved.subtotalInr;

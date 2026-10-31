@@ -30,6 +30,8 @@ const state: {
   sessionUser: { id: string } | null;
   tableRow: Record<string, unknown> | null;
   menuRows: Record<string, unknown>[];
+  /** What a read of menu_offers (Promotions → Offers) answers. */
+  offerRows?: Record<string, unknown>[];
   orderInsert?: Record<string, unknown>;
   /** The order_items bulk insert (one row per line). */
   itemsInsert?: Record<string, unknown>[];
@@ -49,8 +51,8 @@ vi.mock('@/lib/supabase-server', () => ({
         eq: () => chain,
         not: () => chain,
         in: () =>
-          // The only `.in()` caller is the menu_items validation fetch.
-          Promise.resolve({ data: state.menuRows, error: null }),
+          // The menu_items validation fetch, and the live offers on those items.
+          Promise.resolve({ data: table === 'menu_offers' ? (state.offerRows ?? []) : state.menuRows, error: null }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
           if (table === 'order_items') state.itemsInsert = payload as unknown as Record<string, unknown>[];
@@ -158,6 +160,7 @@ beforeEach(() => {
   state.itemsInsert = undefined;
   state.eventRow = undefined;
   state.couponCtx = undefined;
+  state.offerRows = undefined;
   state.tableRow = { id: TABLE_ID, label: 'T1', is_active: true };
   state.menuRows = [
     {
@@ -256,15 +259,26 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
     expect(state.eventRow?.actor_id).toBe('ravi');
   });
 
-  it('a multi-buy offer item: lines at the regular price with the offer snapshot, the offer inside discount_inr', async () => {
-    // Instant Coffee, ₹399 a jar, offer 1/2/3 for ₹299/₹499/₹599 (2026-10-item-offers.sql).
+  it('an item with a live offer: lines at the regular price with the offer snapshot, the offer inside discount_inr', async () => {
+    // Instant Coffee, ₹399 a jar (the menu row is untouched), and its offer in
+    // Promotions → Offers: 1/2/3 for ₹299/₹499/₹599 (2026-10-item-offers.sql).
     state.menuRows = [
       {
         ...state.menuRows[0],
         name: 'Instant Coffee',
         gst_exempt: true,
-        offer_prices: [299, 499, 599],
         menu_item_variants: [{ id: VARIANT_ID, label: 'Classic', price_inr: 399, sort_order: 0 }],
+      },
+    ];
+    state.offerRows = [
+      {
+        id: '55555555-5555-4555-8555-555555555555',
+        name: 'Instant Coffee offer',
+        menu_item_id: MENU_ID,
+        tier_prices: [299, 499, 599],
+        active: true,
+        valid_from: null,
+        valid_to: null,
       },
     ];
     const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
@@ -279,6 +293,7 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
     expect(state.itemsInsert?.[0]).toMatchObject({
       price_inr_snapshot: 399,
       line_total_inr: 798,
+      offer_name: 'Instant Coffee offer',
       offer_prices: [299, 499, 599],
       offer_unit_inr: 399,
     });

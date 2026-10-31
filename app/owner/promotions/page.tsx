@@ -1,14 +1,15 @@
 // Owner promotions surface (LOY-2/LOY-5/RET-3). The coupon-performance table
 // reads straight from v_coupon_performance via the admin client (a plain
-// Server Component read, same convention as app/owner/page.tsx); coupon +
-// announcement CRUD is delegated to client components that talk to
-// app/api/coupons and app/api/announcements.
+// Server Component read, same convention as app/owner/page.tsx); offer, coupon
+// and announcement CRUD is delegated to client components that talk to
+// app/api/offers, app/api/coupons and app/api/announcements.
 
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { Card } from '@/components/owner/dashboard';
 import { CouponPerformanceTable } from '@/components/owner/CouponPerformanceTable';
 import { CouponManager } from '@/components/promotions/CouponManager';
 import { AnnouncementManager } from '@/components/promotions/AnnouncementManager';
+import { OfferManager } from '@/components/promotions/OfferManager';
 import type { CouponPerformanceRow } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -45,6 +46,10 @@ export default async function OwnerPromotionsPage() {
           </span>
         </div>
         <CouponPerformanceTable rows={performance} />
+      </Card>
+
+      <Card title="Offers">
+        <OfferManager />
       </Card>
 
       <Card title="Coupons">

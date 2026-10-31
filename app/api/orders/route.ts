@@ -44,6 +44,7 @@ import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
 import { allocateOrderPass, afterOffers, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
 import { computeOffers } from '@/lib/orders/offers';
+import { loadActiveOffers } from '@/lib/orders/offersServer';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { parsePassDrinks, passRedeemMessage, passShortfallMessage } from '@/lib/passes/rules';
 import { redeemPassDrinks } from '@/lib/passes/server';
@@ -437,10 +438,12 @@ export async function POST(request: Request) {
   }
 
   const menuItemIds = [...new Set(items.map((item) => item.menu_item_id))];
-  const { data: menuRows, error: menuError } = await admin
-    .from('menu_items')
-    .select(MENU_ITEM_SELECT)
-    .in('id', menuItemIds);
+  // The live multi-buy offers on these items (Promotions → Offers) load
+  // alongside the menu rows; a failed offers read just means no offer.
+  const [{ data: menuRows, error: menuError }, offersByItem] = await Promise.all([
+    admin.from('menu_items').select(MENU_ITEM_SELECT).in('id', menuItemIds),
+    loadActiveOffers(admin, menuItemIds),
+  ]);
 
   if (menuError) {
     return errorResponse(500, 'Failed to validate order items');
@@ -462,7 +465,7 @@ export async function POST(request: Request) {
 
   // Validate every line and compute authoritative prices server-side —
   // never trust a client-submitted price. Shared with the TAB-1 add path.
-  const resolved = resolveOrderLines(items, menuById, switchesFromSettings(settings));
+  const resolved = resolveOrderLines(items, menuById, switchesFromSettings(settings), offersByItem);
   if (!resolved.ok) {
     return errorResponse(400, resolved.error);
   }
@@ -567,7 +570,7 @@ export async function POST(request: Request) {
   const passCoveredInr = passAllocation?.covered_inr ?? 0;
   const passCoveredTaxableInr = passAllocation?.covered_taxable_inr ?? 0;
   // Multi-buy offers (lib/orders/offers.ts) come off next: they are part of
-  // the price, read straight off the lines' snapshots, so nothing to validate.
+  // the price, read straight off the lines' offer snapshots.
   const offers = computeOffers(resolvedLines);
   // What a coupon and Beanies are computed on (CP-D12), after the offers.
   const payableAfterOffers = afterOffers(afterPass(subtotal_inr, passCoveredInr), offers.discountInr);
@@ -752,8 +755,8 @@ export async function POST(request: Request) {
     // Only sent when a pass paid for something, so an order that uses no pass
     // never depends on the column existing (2026-10-coffee-pass.sql).
     ...(bill.pass_discount_inr > 0 ? { pass_discount_inr: bill.pass_discount_inr } : {}),
-    // The offer part of discount_inr, only when there is one: an item can only
-    // carry an offer once 2026-10-item-offers.sql is applied, which adds this.
+    // The offer part of discount_inr, only when there is one: an offer can only
+    // exist once 2026-10-item-offers.sql is applied, which adds this column.
     ...(bill.offer_discount_inr > 0 ? { offer_discount_inr: bill.offer_discount_inr } : {}),
     // Table service needs no token; a website dine-in is collected at the counter.
     pickup_code: tableId ? null : generatePickupCode(),

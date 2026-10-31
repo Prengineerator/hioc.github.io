@@ -5,6 +5,7 @@ import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { recomputeOrderTotals, statusAfterAdd } from '@/lib/orders/amend';
+import { loadActiveOffers } from '@/lib/orders/offersServer';
 import {
   MAX_EDIT_REASON_LENGTH,
   planSettleEdit,
@@ -52,6 +53,7 @@ type OrderLine = {
   menu_item_id: string;
   name_snapshot: string;
   /** The multi-buy offer the line was sold under; absent before 2026-10-item-offers.sql. */
+  offer_name?: string | null;
   offer_prices?: number[] | null;
   offer_unit_inr?: number | null;
 };
@@ -352,17 +354,18 @@ async function addLines(
   }
 
   // Price the new lines against the live menu (server-authoritative).
+  // A jar added to a tab takes the offer live now (Promotions → Offers).
   const menuIds = [...new Set(parsed.map((i) => i.menu_item_id))];
-  const { data: menuRows, error: menuError } = await admin
-    .from('menu_items')
-    .select(MENU_ITEM_SELECT)
-    .in('id', menuIds);
+  const [{ data: menuRows, error: menuError }, offersByItem] = await Promise.all([
+    admin.from('menu_items').select(MENU_ITEM_SELECT).in('id', menuIds),
+    loadActiveOffers(admin, menuIds),
+  ]);
   if (menuError) return errorResponse(500, 'Failed to validate order items');
 
   const menuById = new Map(
     (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
   );
-  const resolved = resolveOrderLines(parsed, menuById, switchesFromSettings(storeSettings));
+  const resolved = resolveOrderLines(parsed, menuById, switchesFromSettings(storeSettings), offersByItem);
   if (!resolved.ok) return errorResponse(400, resolved.error);
 
   // Insert the lines, tracking ids so a lost version race can roll them back.
@@ -408,6 +411,7 @@ async function addLines(
       menu_item_id: l.menu_item_id,
       name_snapshot: l.name_snapshot,
       quantity: l.quantity,
+      offer_name: l.offer_name ?? null,
       offer_prices: l.offer_prices ?? null,
       offer_unit_inr: l.offer_unit_inr ?? null,
     })),

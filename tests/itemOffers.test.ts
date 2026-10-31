@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 // Multi-buy offers (lib/orders/offers.ts, supabase/2026-10-item-offers.sql):
-// "Instant Coffee: 1 for ₹299, 2 for ₹499, 3 for ₹599" as a discount on the
-// bill, the jars staying at their regular ₹399.
+// "Instant Coffee: 1 for ₹299, 2 for ₹499, 3 for ₹599" as its own offer
+// record, taken off the bill as a discount while the jars stay at ₹399.
 
 import {
   computeOffers,
+  describeTiers,
   discountRows,
+  isOfferLive,
   normalizeOfferPrices,
   offerLabel,
   offerLabelForLines,
@@ -58,7 +60,6 @@ const instantCoffee: MenuItem = {
   category: 'In-store',
   in_store_only: true,
   gst_exempt: true,
-  offer_prices: OFFER,
   variants: [
     { id: CLASSIC, menu_item_id: COFFEE, label: 'Classic', price_inr: 399, sort_order: 0 },
     { id: HAZELNUT, menu_item_id: COFFEE, label: 'Hazelnut', price_inr: 399, sort_order: 10 },
@@ -77,10 +78,16 @@ const beans: MenuItem = {
   name: 'House Beans',
   category: 'Coffee Beans',
   sold_by_weight: true,
-  offer_prices: OFFER, // ignored: offers are for by-the-unit items
   variants: [{ id: BEANS_WHOLE, menu_item_id: BEANS, label: 'Whole Bean', price_inr: 2000, sort_order: 0 }],
 };
 const menu = new Map([instantCoffee, latte, beans].map((m) => [m.id, m]));
+const OFFER_ID = '55555555-5555-4555-8555-555555555555';
+// The live offers (Promotions → Offers), by item. The beans' is ignored:
+// offers are for by-the-unit items.
+const offers = new Map([
+  [COFFEE, { id: OFFER_ID, name: 'Instant Coffee offer', tier_prices: OFFER }],
+  [BEANS, { id: OFFER_ID, name: 'Beans offer', tier_prices: OFFER }],
+]);
 
 const jar = (variant_id: string, quantity = 1) => ({
   menu_item_id: COFFEE,
@@ -91,7 +98,7 @@ const jar = (variant_id: string, quantity = 1) => ({
 });
 
 function resolve(items: Parameters<typeof resolveOrderLines>[0]) {
-  const r = resolveOrderLines(items, menu);
+  const r = resolveOrderLines(items, menu, {}, offers);
   if (!r.ok) throw new Error(r.error);
   return r;
 }
@@ -111,6 +118,24 @@ function billFor(items: Parameters<typeof resolveOrderLines>[0], extra: { coupon
     isDineIn: extra.dineIn ?? true,
   });
 }
+
+describe('an offer record', () => {
+  const offer = { active: true, valid_from: null, valid_to: null, tier_prices: OFFER };
+  const now = new Date('2026-11-01T10:00:00Z');
+
+  it('is live when switched on and inside its window (an empty edge is no limit)', () => {
+    expect(isOfferLive(offer, now)).toBe(true);
+    expect(isOfferLive({ ...offer, active: false }, now)).toBe(false);
+    expect(isOfferLive({ ...offer, valid_from: '2026-11-02T00:00:00Z' }, now)).toBe(false);
+    expect(isOfferLive({ ...offer, valid_to: '2026-11-01T10:00:00Z' }, now)).toBe(false); // ends at that instant
+    expect(isOfferLive({ ...offer, valid_from: '2026-10-01T00:00:00Z', valid_to: '2026-12-01T00:00:00Z' }, now)).toBe(true);
+    expect(isOfferLive({ ...offer, tier_prices: [499, 299] }, now)).toBe(false);
+  });
+
+  it('reads as "1 for ₹299 · 2 for ₹499 · 3 for ₹599"', () => {
+    expect(describeTiers(OFFER)).toBe('1 for ₹299 · 2 for ₹499 · 3 for ₹599');
+  });
+});
 
 describe('offer prices', () => {
   it('accepts 1–10 positive whole rupee tiers that never get cheaper, and nothing else', () => {
@@ -149,7 +174,7 @@ describe('computeOffers', () => {
     const result = computeOffers([line(1), line(1), line(1, { voided: true })]);
     expect(result.discountInr).toBe(299);
     expect(result.offers).toEqual([
-      { menu_item_id: COFFEE, name: 'Instant Coffee', units: 2, regular_inr: 798, offer_inr: 499, discount_inr: 299 },
+      { menu_item_id: COFFEE, name: 'Instant Coffee offer', units: 2, regular_inr: 798, offer_inr: 499, discount_inr: 299 },
     ]);
   });
 
@@ -164,21 +189,38 @@ describe('computeOffers', () => {
     expect(computeOffers([line(1, { offer_unit_inr: 250 })]).discountInr).toBe(0);
   });
 
-  it('labels the row after the item, or "Offers" for several', () => {
-    expect(offerLabel(['Instant Coffee', 'Instant Coffee'])).toBe('Instant Coffee offer');
-    expect(offerLabel(['Instant Coffee', 'Cookie'])).toBe('Offers');
+  it('labels the row with the offer name, or "Offers" for several', () => {
+    expect(offerLabel(['Launch offer', 'Launch offer'])).toBe('Launch offer');
+    expect(offerLabel(['Launch offer', 'Cookie deal'])).toBe('Offers');
     expect(offerLabel([])).toBe('Offer');
+    expect(computeOffers([line(1, { offer_name: 'Launch offer' })]).offers[0].name).toBe('Launch offer');
+    // A line with no name snapshot is "<item> offer".
     expect(offerLabelForLines([line(1), { name_snapshot: 'Latte', offer_prices: null }])).toBe('Instant Coffee offer');
+    expect(offerLabelForLines([line(1, { offer_name: 'Launch offer' })])).toBe('Launch offer');
   });
 });
 
 describe('resolveOrderLines snapshots the offer', () => {
-  it('on a line of an item with an offer: its tiers and the size price before add-ons', () => {
+  it('on a line of an item with a live offer: which offer, its name, its tiers and the size price before add-ons', () => {
     const [coffeeLine, latteLine] = resolve([jar(CLASSIC, 2), { ...jar(LATTE_L), menu_item_id: LATTE }]).lines;
-    expect(coffeeLine).toMatchObject({ price_inr_snapshot: 399, line_total_inr: 798, offer_prices: OFFER, offer_unit_inr: 399 });
+    expect(coffeeLine).toMatchObject({
+      price_inr_snapshot: 399,
+      line_total_inr: 798,
+      offer_id: OFFER_ID,
+      offer_name: 'Instant Coffee offer',
+      offer_prices: OFFER,
+      offer_unit_inr: 399,
+    });
     // Every other line's row is exactly what it was before the migration.
-    expect(latteLine).not.toHaveProperty('offer_prices');
-    expect(latteLine).not.toHaveProperty('offer_unit_inr');
+    for (const key of ['offer_id', 'offer_name', 'offer_prices', 'offer_unit_inr']) {
+      expect(latteLine).not.toHaveProperty(key);
+    }
+  });
+
+  it('never changes the menu: with no live offer passed in, the line is a plain ₹399 jar', () => {
+    const r = resolveOrderLines([jar(CLASSIC)], menu);
+    expect(r.ok && r.lines[0]).toMatchObject({ price_inr_snapshot: 399 });
+    expect(r.ok && r.lines[0]).not.toHaveProperty('offer_prices');
   });
 
   it('never on a sold-by-weight line', () => {

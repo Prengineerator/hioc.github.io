@@ -49,6 +49,7 @@ export interface RecomputeLine {
   pass_covered_inr?: number;
   /** The multi-buy offer snapshot (2026-10-item-offers.sql); absent = the line has none.
    * menu_item_id, name_snapshot and quantity are read only on a line that has one. */
+  offer_name?: string | null;
   offer_prices?: number[] | null;
   offer_unit_inr?: number | null;
   menu_item_id?: string;
@@ -125,6 +126,7 @@ export function recomputeOrderTotals({
         menu_item_id: item.menu_item_id ?? '',
         name_snapshot: item.name_snapshot ?? '',
         quantity: item.quantity ?? 0,
+        offer_name: item.offer_name,
         offer_prices: item.offer_prices,
         offer_unit_inr: item.offer_unit_inr,
       })),

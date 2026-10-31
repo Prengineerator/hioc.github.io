@@ -153,10 +153,6 @@ export interface MenuItem {
   // carries weight_grams (lib/menu/weight.ts). Optional so a row read before
   // the migration still type-checks; absent = sold by the unit.
   sold_by_weight?: boolean;
-  // A multi-buy offer (2026-10-item-offers.sql, lib/orders/offers.ts): what 1,
-  // 2, 3 … units cost together, e.g. [299, 499, 599]; null/absent = no offer.
-  // The sizes keep their regular price and the offer comes off the bill.
-  offer_prices?: number[] | null;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
@@ -281,9 +277,11 @@ export interface OrderItem {
   // (quantity counts the bags); price_inr_snapshot is already that weight's
   // price. Null/absent on every by-the-unit line.
   weight_grams?: number | null;
-  // 2026-10-item-offers.sql: the multi-buy offer the line was sold under (what
-  // 1, 2, 3 … units cost together) and one unit's price before add-ons.
-  // Null/absent on every line of an item with no offer.
+  // 2026-10-item-offers.sql: the multi-buy offer the line was sold under (a
+  // snapshot of menu_offers: id, name, what 1, 2, 3 … units cost together) and
+  // one unit's price before add-ons. Null/absent on every line with no offer.
+  offer_id?: string | null;
+  offer_name?: string | null;
   offer_prices?: number[] | null;
   offer_unit_inr?: number | null;
   addons: OrderItemAddon[];

@@ -25,7 +25,7 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 import { applyMenuSwitches, isCategoryHidden, type MenuSwitches } from '@/lib/menu/menuSwitches';
 import { basePriceInr, isSoldByWeight, isValidWeightGrams, WEIGHT_MAX_GRAMS, WEIGHT_MIN_GRAMS } from '@/lib/menu/weight';
-import { normalizeOfferPrices } from '@/lib/orders/offers';
+import type { ActiveOffer } from '@/lib/orders/offers';
 
 export const MAX_INSTRUCTION_LENGTH = 200;
 
@@ -84,10 +84,13 @@ export type ResolvedLine = {
    * PRESENT ONLY on weighed lines, so a by-the-unit line's insert row is
    * exactly what it was before the migration. */
   weight_grams?: number;
-  /** A multi-buy offer on the item (lib/orders/offers.ts), snapshotted on the
-   * line: what 1, 2, 3 … units cost together, and one unit's price before
-   * add-ons. PRESENT ONLY when the item has an offer, so every other line's
-   * insert row is exactly what it was before 2026-10-item-offers.sql. */
+  /** The live multi-buy offer on the item (menu_offers, lib/orders/offers.ts),
+   * snapshotted on the line: which offer, its name, what 1, 2, 3 … units cost
+   * together, and one unit's price before add-ons. PRESENT ONLY when the item
+   * has a live offer, so every other line's insert row is exactly what it was
+   * before 2026-10-item-offers.sql. */
+  offer_id?: string;
+  offer_name?: string;
   offer_prices?: number[];
   offer_unit_inr?: number;
   addons: {
@@ -169,11 +172,14 @@ export type ResolveResult =
  *
  * `menuById` is supplied by the caller (both call sites already load the menu
  * rows they need), keeping this function pure and directly unit-testable.
+ * `offers` (lib/orders/offersServer.ts loadActiveOffers) are the live offers by
+ * menu item; a line of an item with one carries its snapshot.
  */
 export function resolveOrderLines(
   items: IncomingOrderItem[],
   menuById: Map<string, MenuItem>,
   opts: MenuSwitches = {},
+  offers: ReadonlyMap<string, ActiveOffer> = new Map(),
 ): ResolveResult {
   const lines: ResolvedLine[] = [];
   let subtotalInr = 0;
@@ -275,7 +281,7 @@ export function resolveOrderLines(
     if (!gst_exempt) taxableSubtotalInr += line_total_inr;
     // A weighed line (a bag of beans) is priced by its grams, so a "per unit"
     // offer has nothing fixed to count: offers are for by-the-unit items.
-    const offerPrices = byWeight ? null : normalizeOfferPrices(menuItem.offer_prices);
+    const offer = byWeight ? undefined : offers.get(menuItem.id);
 
     lines.push({
       menu_item_id: menuItem.id,
@@ -288,7 +294,9 @@ export function resolveOrderLines(
       special_instructions: item.special_instructions,
       gst_exempt,
       ...(weightGrams !== null ? { weight_grams: weightGrams } : {}),
-      ...(offerPrices ? { offer_prices: offerPrices, offer_unit_inr: basePrice } : {}),
+      ...(offer
+        ? { offer_id: offer.id, offer_name: offer.name, offer_prices: offer.tier_prices, offer_unit_inr: basePrice }
+        : {}),
       addons: addonsFlat,
     });
   }

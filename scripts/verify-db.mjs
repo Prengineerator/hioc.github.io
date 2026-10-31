@@ -1596,23 +1596,26 @@ async function checkSellByWeight() {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-buy offers (supabase/2026-10-item-offers.sql): "1 for ₹299, 2 for ₹499,
-// 3 for ₹599" taken off the bill as its own row (lib/orders/offers.ts). Orders
-// work without it (an item can only carry an offer once it is in, and the
-// offer columns are only written on lines that have one). Reads only.
+// Multi-buy offers (supabase/2026-10-item-offers.sql): owner-made offers
+// (Promotions → Offers) taken off the bill as their own row
+// (lib/orders/offers.ts). Orders work without it (no offer can exist, and the
+// offer columns are only written on lines that have one); Promotions → Offers
+// answers with the migration hint until it is in. Reads only.
 // ---------------------------------------------------------------------------
 async function checkItemOffers() {
-  heading('Multi-buy offers: menu_items/order_items.offer_prices + orders.offer_discount_inr', '2026-10-item-offers.sql');
+  heading('Multi-buy offers: menu_offers + order_items.offer_* + orders.offer_discount_inr', '2026-10-item-offers.sql');
   const hint = 'apply supabase/2026-10-item-offers.sql';
   for (const [table, col] of [
-    ['menu_items', 'offer_prices'],
+    ['menu_offers', 'tier_prices'],
+    ['order_items', 'offer_id'],
+    ['order_items', 'offer_name'],
     ['order_items', 'offer_prices'],
     ['order_items', 'offer_unit_inr'],
     ['orders', 'offer_discount_inr'],
   ]) {
     const r = await rest(`/${table}?select=${col}&limit=1`);
     if (r.ok) pass(`${table}.${col} exists`);
-    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' ? hint : errText(r));
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
   }
 }
 
