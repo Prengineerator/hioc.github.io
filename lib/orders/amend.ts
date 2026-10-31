@@ -25,9 +25,16 @@
 // creation. The database gives the cups themselves back when a redeemed line is
 // voided (trg_coffee_pass_return_on_void), so this only has to get the bill
 // right.
+//
+// Multi-buy offers (lib/orders/offers.ts) are different: they are PRICE, not a
+// marketing discount, so they are worked out again from the lines that remain
+// (each line carries the offer it was sold under). Voiding one jar of a "2 for
+// ₹499" leaves one jar at the 1-jar price; adding one to a running tab makes it
+// a pair. Only the coupon/points part of the stored discount is clamped (v1).
 
 import type { BillBreakdown } from '@/lib/store/hours';
 import { composePassBill } from '@/lib/passes/rules';
+import { computeOffers } from '@/lib/orders/offers';
 import type { OrderStatus, OrderType, StoreSettings } from '@/lib/types';
 
 // Only the fields the recompute needs from an order line — keeps this callable
@@ -40,13 +47,24 @@ export interface RecomputeLine {
   gst_exempt?: boolean;
   /** Rupees of this line a HIOC Ritual cup paid for (2026-10-coffee-pass.sql); absent = 0. */
   pass_covered_inr?: number;
+  /** The multi-buy offer snapshot (2026-10-item-offers.sql); absent = the line has none.
+   * menu_item_id, name_snapshot and quantity are read only on a line that has one. */
+  offer_name?: string | null;
+  offer_prices?: number[] | null;
+  offer_unit_inr?: number | null;
+  menu_item_id?: string;
+  name_snapshot?: string;
+  quantity?: number;
 }
 
 export interface RecomputeInput {
   items: RecomputeLine[];
   settings: StoreSettings;
   orderType: OrderType;
+  /** The order's stored discount_inr: coupon + points + offer. */
   discountInr: number;
+  /** The part of discountInr that was the offer (orders.offer_discount_inr); absent = 0. */
+  offerDiscountInr?: number;
 }
 
 /**
@@ -60,7 +78,8 @@ export interface RecomputeInput {
  *   GST-liable lines leaves the taxable base (CP-D11)
  * - GST on the non-voided lines that aren't GST-exempt (their snapshot), less
  *   their share of the discount, plus packaging (computeBill)
- * - discount = min(stored discount, new subtotal - pass cover)  ← v1 clamp (D8)
+ * - offer = the multi-buy offers on the remaining lines, worked out again
+ * - discount = offer + min(stored coupon/points, new subtotal - pass cover - offer)  ← v1 clamp (D8)
  * - GST/packaging via composePassBill (= computeBill with no pass); dine-in
  *   forces packaging 0 (decision D5)
  *
@@ -73,7 +92,8 @@ export function recomputeOrderTotals({
   settings,
   orderType,
   discountInr,
-}: RecomputeInput): BillBreakdown & { pass_discount_inr: number } {
+  offerDiscountInr = 0,
+}: RecomputeInput): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number } {
   const remaining = items.filter((item) => !item.voided);
   const subtotalInr = remaining.reduce((sum, item) => sum + item.line_total_inr, 0);
   // GST only on the lines that weren't GST-exempt when sold — the snapshot,
@@ -95,15 +115,35 @@ export function recomputeOrderTotals({
   // goes negative when lines are removed (v1: no coupon/points re-qualification,
   // D8). The coupon and Beanies were computed on subtotal - pass cover at
   // creation (CP-D12), so this is the same ceiling they were under then.
-  const discount = Math.min(Math.max(0, discountInr), Math.max(0, subtotalInr - passCoveredInr));
+  //
+  // The offer comes first (as at creation), re-derived from the remaining lines;
+  // the coupon/points part (what the stored discount held besides the offer) is
+  // clamped to what is left after it.
+  const payable = Math.max(0, subtotalInr - passCoveredInr);
+  const offer = Math.min(
+    computeOffers(
+      remaining.map((item) => ({
+        menu_item_id: item.menu_item_id ?? '',
+        name_snapshot: item.name_snapshot ?? '',
+        quantity: item.quantity ?? 0,
+        offer_name: item.offer_name,
+        offer_prices: item.offer_prices,
+        offer_unit_inr: item.offer_unit_inr,
+      })),
+    ).discountInr,
+    payable,
+  );
+  const otherDiscount = Math.max(0, Math.max(0, discountInr) - Math.max(0, offerDiscountInr));
+  const discount = offer + Math.min(otherDiscount, payable - offer);
 
   // Dine-in never carries a packaging charge (D5), whatever the store's
   // packaging setting: billed with none, so no GST is charged on it either.
   // Mirrors the create path (composeOrderBill in lib/orders/passPricing.ts).
-  return composePassBill(
+  const bill = composePassBill(
     { subtotalInr, taxableSubtotalInr, discountInr: discount, passCoveredInr, passCoveredTaxableInr },
     orderType === 'dine_in' ? { ...settings, packaging_charge_inr: 0 } : settings,
   );
+  return { ...bill, offer_discount_inr: offer };
 }
 
 /**

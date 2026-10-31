@@ -16,6 +16,7 @@
 
 import { isUuid } from '@/lib/api/constants';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { computeOffers, type OfferLine } from '@/lib/orders/offers';
 import type { OrderStatus } from '@/lib/types';
 
 /**
@@ -161,10 +162,23 @@ export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): Se
   return { ok: true, changes };
 }
 
-/** What an edit takes off the bill before tax and packaging (for the sheet's preview). */
-export function editReductionInr(changes: PlannedEdit[]): number {
-  return changes.reduce(
+/**
+ * What an edit takes off the bill before tax and packaging (for the sheet's
+ * preview). With the order's lines, a multi-buy offer the edit shrinks is
+ * netted off (one jar off "2 for ₹499" lowers the bill by ₹200, not ₹399), the
+ * same re-derivation the amend route makes (lib/orders/amend.ts).
+ */
+export function editReductionInr(changes: PlannedEdit[], lines?: readonly (OfferLine & { id: string })[]): number {
+  const linesOff = changes.reduce(
     (sum, c) => sum + (c.remove ? c.from_line_total_inr : c.from_line_total_inr - c.to_line_total_inr),
     0,
   );
+  if (!lines) return linesOff;
+  const byId = new Map(changes.map((c) => [c.item_id, c]));
+  const after = lines.map((line) => {
+    const change = byId.get(line.id);
+    if (!change) return line;
+    return change.remove ? { ...line, voided: true } : { ...line, quantity: change.to_quantity };
+  });
+  return linesOff - (computeOffers(lines).discountInr - computeOffers(after).discountInr);
 }

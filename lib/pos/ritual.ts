@@ -52,6 +52,10 @@ export interface PlanGst {
 export type PosBill = BillBreakdown & {
   /** What HIOC Ritual cups cover on this order. Absent before the migration = 0. */
   pass_discount_inr?: number;
+  /** The multi-buy offer part of discount_inr (lib/orders/offers.ts). Absent = 0. */
+  offer_discount_inr?: number;
+  /** The offer row's label, e.g. "Instant Coffee offer" (offerLabel). */
+  offer_label?: string;
 };
 
 // ---------------------------------------------------------------------------

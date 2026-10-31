@@ -14,6 +14,7 @@ import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/
 import { RitualChip } from '@/components/passes/RitualChip';
 import { SurfaceLink } from '@/components/SurfaceLink';
 import { lineSizeSuffix } from '@/lib/menu/weight';
+import { discountRows, offerLabelForLines } from '@/lib/orders/offers';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -185,7 +186,10 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           {order.tax_inr > 0 ? <BillRow label="GST" value={`₹${order.tax_inr}`} /> : null}
           {order.packaging_inr > 0 ? <BillRow label="Packaging" value={`₹${order.packaging_inr}`} /> : null}
           {passBill ? <BillRow label={passBill.label} value={`-₹${passBill.discountInr}`} /> : null}
-          {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`-₹${order.discount_inr}`} /> : null}
+          {/* A multi-buy offer ("Instant Coffee offer"), then the coupon/Beanies discount. */}
+          {discountRows(order, offerLabelForLines(order.items), discountLabel).map((row) => (
+            <BillRow key={row.label} label={row.label} value={`-₹${row.amountInr}`} />
+          ))}
           <div className="mt-1 flex items-center justify-between border-t border-[#c9c9c9] pt-1 text-sm font-bold">
             <span>Total</span>
             <span className="font-mono tabular-nums">₹{total}</span>
