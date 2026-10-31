@@ -25,6 +25,7 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 import { applyMenuSwitches, isCategoryHidden, type MenuSwitches } from '@/lib/menu/menuSwitches';
 import { basePriceInr, isSoldByWeight, isValidWeightGrams, WEIGHT_MAX_GRAMS, WEIGHT_MIN_GRAMS } from '@/lib/menu/weight';
+import { normalizeOfferPrices } from '@/lib/orders/offers';
 
 export const MAX_INSTRUCTION_LENGTH = 200;
 
@@ -83,6 +84,12 @@ export type ResolvedLine = {
    * PRESENT ONLY on weighed lines, so a by-the-unit line's insert row is
    * exactly what it was before the migration. */
   weight_grams?: number;
+  /** A multi-buy offer on the item (lib/orders/offers.ts), snapshotted on the
+   * line: what 1, 2, 3 … units cost together, and one unit's price before
+   * add-ons. PRESENT ONLY when the item has an offer, so every other line's
+   * insert row is exactly what it was before 2026-10-item-offers.sql. */
+  offer_prices?: number[];
+  offer_unit_inr?: number;
   addons: {
     addon_option_id: string;
     group_name_snapshot: string;
@@ -266,6 +273,9 @@ export function resolveOrderLines(
     subtotalInr += line_total_inr;
     const gst_exempt = menuItem.gst_exempt === true;
     if (!gst_exempt) taxableSubtotalInr += line_total_inr;
+    // A weighed line (a bag of beans) is priced by its grams, so a "per unit"
+    // offer has nothing fixed to count: offers are for by-the-unit items.
+    const offerPrices = byWeight ? null : normalizeOfferPrices(menuItem.offer_prices);
 
     lines.push({
       menu_item_id: menuItem.id,
@@ -278,6 +288,7 @@ export function resolveOrderLines(
       special_instructions: item.special_instructions,
       gst_exempt,
       ...(weightGrams !== null ? { weight_grams: weightGrams } : {}),
+      ...(offerPrices ? { offer_prices: offerPrices, offer_unit_inr: basePrice } : {}),
       addons: addonsFlat,
     });
   }

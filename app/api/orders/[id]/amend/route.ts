@@ -49,6 +49,11 @@ type OrderLine = {
   pass_drinks?: number;
   /** Rupees a HIOC Ritual cup paid for on this line; absent before 2026-10-coffee-pass.sql. */
   pass_covered_inr?: number;
+  menu_item_id: string;
+  name_snapshot: string;
+  /** The multi-buy offer the line was sold under; absent before 2026-10-item-offers.sql. */
+  offer_prices?: number[] | null;
+  offer_unit_inr?: number | null;
 };
 type LoadedOrder = {
   id: string;
@@ -61,6 +66,8 @@ type LoadedOrder = {
   discount_inr: number;
   /** What HIOC Ritual cups cover on the order; absent before 2026-10-coffee-pass.sql. */
   pass_discount_inr?: number;
+  /** The multi-buy offer part of discount_inr; absent before 2026-10-item-offers.sql. */
+  offer_discount_inr?: number;
   order_items: OrderLine[] | null;
 };
 
@@ -83,6 +90,13 @@ const RITUAL_SALE_LOCKED = `A ${PASS_PROGRAM_NAME} sale can't be changed — can
 // sends the column, and a pre-migration database is never asked to store it.
 function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_discount_inr?: number } {
   return passDiscountInr !== (order.pass_discount_inr ?? 0) ? { pass_discount_inr: passDiscountInr } : {};
+}
+
+// Same rule for the multi-buy offer part of the discount (lib/orders/offers.ts):
+// written back only when a void, edit or add changed it, so an order with no
+// offer never sends the column (pre-2026-10-item-offers.sql safe).
+function offerDiscountPatch(order: LoadedOrder, offerDiscountInr: number): { offer_discount_inr?: number } {
+  return offerDiscountInr !== (order.offer_discount_inr ?? 0) ? { offer_discount_inr: offerDiscountInr } : {};
 }
 
 // POST /api/orders/[id]/amend — correct an open order. Three operations:
@@ -214,6 +228,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     settings,
     orderType: order.order_type,
     discountInr: order.discount_inr,
+    offerDiscountInr: order.offer_discount_inr ?? 0,
   });
 
   // Persist the new totals UNDER THE OPTIMISTIC VERSION GUARD. If a concurrent
@@ -229,6 +244,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
+      ...offerDiscountPatch(order, bill.offer_discount_inr),
       version: order.version + 1,
     })
     .eq('id', id)
@@ -388,6 +404,12 @@ async function addLines(
       line_total_inr: l.line_total_inr,
       gst_exempt: l.gst_exempt,
       pass_covered_inr: 0,
+      // A jar added to a tab counts with the jars already on it (one offer).
+      menu_item_id: l.menu_item_id,
+      name_snapshot: l.name_snapshot,
+      quantity: l.quantity,
+      offer_prices: l.offer_prices ?? null,
+      offer_unit_inr: l.offer_unit_inr ?? null,
     })),
   ];
   const bill = recomputeOrderTotals({
@@ -395,6 +417,7 @@ async function addLines(
     settings,
     orderType: order.order_type,
     discountInr: order.discount_inr,
+    offerDiscountInr: order.offer_discount_inr ?? 0,
   });
 
   // New items have to be made: an order the kitchen had marked Ready goes back
@@ -411,6 +434,7 @@ async function addLines(
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
+      ...offerDiscountPatch(order, bill.offer_discount_inr),
       version: order.version + 1,
       ...(nextStatus !== order.status ? { status: nextStatus } : {}),
     })
@@ -578,13 +602,17 @@ async function editLines(
   const edited = items.map((line) => {
     const change = changeById.get(line.id);
     if (!change) return line;
-    return change.remove ? { ...line, voided: true } : { ...line, line_total_inr: change.to_line_total_inr };
+    // The new quantity too: a multi-buy offer counts units, not rupees.
+    return change.remove
+      ? { ...line, voided: true }
+      : { ...line, quantity: change.to_quantity, line_total_inr: change.to_line_total_inr };
   });
   const bill = recomputeOrderTotals({
     items: edited,
     settings,
     orderType: order.order_type,
     discountInr: order.discount_inr,
+    offerDiscountInr: order.offer_discount_inr ?? 0,
   });
 
   const { data: guarded, error: updateError } = await admin
@@ -596,6 +624,7 @@ async function editLines(
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
+      ...offerDiscountPatch(order, bill.offer_discount_inr),
       version: order.version + 1,
     })
     .eq('id', id)

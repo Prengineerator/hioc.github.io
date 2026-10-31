@@ -96,6 +96,7 @@ import {
 } from '@/lib/staff/confirmation';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
+import { discountRows, offerLabel, type AppliedOffer } from '@/lib/orders/offers';
 import { isSoldByWeight, lineSizeLabel } from '@/lib/menu/weight';
 import type { MenuItem, OrderType } from '@/lib/types';
 
@@ -181,6 +182,8 @@ interface QuoteResponse {
   points?: QuotedDiscount | null;
   /** HIOC Ritual: null when the feature is off or no account is known for the phone. */
   pass?: QuotedPass | null;
+  /** Multi-buy offers on the cart (lib/orders/offers.ts): name the offer row. */
+  offers?: AppliedOffer[];
 }
 
 interface StaffTable {
@@ -856,7 +859,9 @@ export function PosOrderEntry({
             setQuoteError(error);
             return;
           }
-          setBill(data.bill);
+          // The offer row's label rides on the bill, so the payment step
+          // (which only gets the bill) names it the same way.
+          setBill({ ...data.bill, offer_label: offerLabel((data.offers ?? []).map((o) => o.name)) });
           setQuotedCoupon(couponCode ? (data.coupon ?? null) : null);
           setQuotedPoints(redeemPoints > 0 ? (data.points ?? null) : null);
           setQuotedPass(data.pass ?? null);
@@ -1651,11 +1656,14 @@ export function PosOrderEntry({
                 {bill && bill.packaging_inr > 0 ? (
                   <BillRow label="Packaging" value={bill.packaging_inr} />
                 ) : null}
-                {/* VAL-1: the coupon + points discount, exactly as the server
-                    computed it. Nothing here is worked out on this tablet. */}
-                {bill && bill.discount_inr > 0 ? (
-                  <BillRow label="Discount" value={-bill.discount_inr} />
-                ) : null}
+                {/* VAL-1: the multi-buy offer, then the coupon + points
+                    discount, exactly as the server computed them. Nothing here
+                    is worked out on this tablet. */}
+                {bill
+                  ? discountRows(bill, bill.offer_label ?? 'Offer').map((row) => (
+                      <BillRow key={row.label} label={row.label} value={-row.amountInr} />
+                    ))
+                  : null}
                 {/* HIOC Ritual: what the cups cover, the server's own figure, kept
                     apart from the coupon/Beanies discount above. */}
                 {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}

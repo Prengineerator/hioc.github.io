@@ -27,6 +27,7 @@ import {
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel, validTillLabel } from '@/lib/pos/ritual';
+import { discountRows, offerLabelForLines } from '@/lib/orders/offers';
 
 // Thermal code pages (the ones ESC/POS printers actually ship with) have no
 // ₹ glyph — it prints as a mangled box or a wrong currency sign depending on
@@ -363,8 +364,10 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   blocks.push({ kind: 'divider' });
   blocks.push({ kind: 'row', left: 'Total Qty', right: String(totalQty) });
   blocks.push({ kind: 'row', left: 'Sub Total', right: formatMoney(order.subtotal_inr) });
-  if (order.discount_inr > 0) {
-    blocks.push({ kind: 'row', left: discountLabel, right: `(${formatMoney(order.discount_inr)})` });
+  // The multi-buy offer first ("Instant Coffee offer"), then the coupon/Beanies
+  // discount: both inside discount_inr (lib/orders/offers.ts).
+  for (const row of discountRows(order, offerLabelForLines(activeItems), discountLabel)) {
+    blocks.push({ kind: 'row', left: row.label, right: `(${formatMoney(row.amountInr)})` });
   }
   // What HIOC Ritual cups covered, kept apart from the coupon/Beanies discount
   // above (total = subtotal + tax + packaging - discount - pass cover).

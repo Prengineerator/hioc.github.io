@@ -1596,6 +1596,27 @@ async function checkSellByWeight() {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-buy offers (supabase/2026-10-item-offers.sql): "1 for ₹299, 2 for ₹499,
+// 3 for ₹599" taken off the bill as its own row (lib/orders/offers.ts). Orders
+// work without it (an item can only carry an offer once it is in, and the
+// offer columns are only written on lines that have one). Reads only.
+// ---------------------------------------------------------------------------
+async function checkItemOffers() {
+  heading('Multi-buy offers: menu_items/order_items.offer_prices + orders.offer_discount_inr', '2026-10-item-offers.sql');
+  const hint = 'apply supabase/2026-10-item-offers.sql';
+  for (const [table, col] of [
+    ['menu_items', 'offer_prices'],
+    ['order_items', 'offer_prices'],
+    ['order_items', 'offer_unit_inr'],
+    ['orders', 'offer_discount_inr'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' ? hint : errText(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Add-on approvals (supabase/2026-10-addon-change-requests.sql): add-on group
 // changes from the POS are held in menu_change_requests (target 'addon_group')
 // for the owner, like menu item changes. Item requests and the owner's own
@@ -2129,6 +2150,7 @@ async function main() {
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();
+  await checkItemOffers();
   await checkAddonApprovals();
   await checkSettleEditOrder();
   await checkMarketingAgent();

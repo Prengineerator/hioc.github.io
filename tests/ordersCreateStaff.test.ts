@@ -256,6 +256,41 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
     expect(state.eventRow?.actor_id).toBe('ravi');
   });
 
+  it('a multi-buy offer item: lines at the regular price with the offer snapshot, the offer inside discount_inr', async () => {
+    // Instant Coffee, ₹399 a jar, offer 1/2/3 for ₹299/₹499/₹599 (2026-10-item-offers.sql).
+    state.menuRows = [
+      {
+        ...state.menuRows[0],
+        name: 'Instant Coffee',
+        gst_exempt: true,
+        offer_prices: [299, 499, 599],
+        menu_item_variants: [{ id: VARIANT_ID, label: 'Classic', price_inr: 399, sort_order: 0 }],
+      },
+    ];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({
+      subtotal_inr: 798,
+      discount_inr: 299,
+      offer_discount_inr: 299,
+      tax_inr: 0,
+      total_inr: 499,
+    });
+    expect(state.itemsInsert?.[0]).toMatchObject({
+      price_inr_snapshot: 399,
+      line_total_inr: 798,
+      offer_prices: [299, 499, 599],
+      offer_unit_inr: 399,
+    });
+  });
+
+  it('an order with no offer item never sends the offer columns (pre-migration safe)', async () => {
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).not.toHaveProperty('offer_discount_inr');
+    expect(state.itemsInsert?.[0]).not.toHaveProperty('offer_prices');
+  });
+
   it('400s a dine-in order with no table', async () => {
     const res = await POST(req({ order_type: 'dine_in', items: oneLatte }));
     expect(res.status).toBe(400);

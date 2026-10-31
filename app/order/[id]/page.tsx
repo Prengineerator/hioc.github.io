@@ -31,6 +31,7 @@ import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
 import { lineSizeSuffix } from '@/lib/menu/weight';
+import { discountRows, offerLabelForLines } from '@/lib/orders/offers';
 
 type OrderWithItems = Order & { items: OrderItem[]; coupon_code?: string | null };
 
@@ -526,7 +527,10 @@ function BillRows({ order }: { order: OrderWithItems }) {
       {order.tax_inr > 0 ? <Row label="GST" value={order.tax_inr} /> : null}
       {order.packaging_inr > 0 ? <Row label="Packaging" value={order.packaging_inr} /> : null}
       {passBill ? <Row label={passBill.label} value={-passBill.discountInr} tone="success" /> : null}
-      {order.discount_inr > 0 ? <Row label={discountLabel} value={-order.discount_inr} /> : null}
+      {/* A multi-buy offer ("Instant Coffee offer"), then the coupon/Beanies discount. */}
+      {discountRows(order, offerLabelForLines(order.items), discountLabel).map((row) => (
+        <Row key={row.label} label={row.label} value={-row.amountInr} />
+      ))}
       <div className="mt-1 flex items-center justify-between border-t border-line pt-2">
         <span className="font-bold text-charcoal">Total</span>
         <span className="font-mono font-bold tabular-nums text-tan-dark">₹{total}</span>

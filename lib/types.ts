@@ -153,6 +153,10 @@ export interface MenuItem {
   // carries weight_grams (lib/menu/weight.ts). Optional so a row read before
   // the migration still type-checks; absent = sold by the unit.
   sold_by_weight?: boolean;
+  // A multi-buy offer (2026-10-item-offers.sql, lib/orders/offers.ts): what 1,
+  // 2, 3 … units cost together, e.g. [299, 499, 599]; null/absent = no offer.
+  // The sizes keep their regular price and the offer comes off the bill.
+  offer_prices?: number[] | null;
   created_at: string;
   updated_at: string;
   variants: MenuItemVariant[];
@@ -235,6 +239,10 @@ export interface Order {
   // absent = 'menu' / 0.
   order_kind?: 'menu' | 'coffee_pass';
   pass_discount_inr?: number;
+  // 2026-10-item-offers.sql: the part of discount_inr that is a multi-buy offer
+  // (lib/orders/offers.ts), so the bill can show it as its own row. Inside
+  // discount_inr, so the total formula above is unchanged. Absent = 0.
+  offer_discount_inr?: number;
 }
 
 export interface OrderItemAddon {
@@ -273,6 +281,11 @@ export interface OrderItem {
   // (quantity counts the bags); price_inr_snapshot is already that weight's
   // price. Null/absent on every by-the-unit line.
   weight_grams?: number | null;
+  // 2026-10-item-offers.sql: the multi-buy offer the line was sold under (what
+  // 1, 2, 3 … units cost together) and one unit's price before add-ons.
+  // Null/absent on every line of an item with no offer.
+  offer_prices?: number[] | null;
+  offer_unit_inr?: number | null;
   addons: OrderItemAddon[];
   // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
   // is VOIDED, never deleted — kept for audit; excluded from totals server-side.

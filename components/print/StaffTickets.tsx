@@ -22,6 +22,7 @@ import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel } from '@/lib/pos/ritual';
 import { passCoveredNote, passValidTillText } from '@/lib/print/ticketModel';
 import { lineSizeSuffix } from '@/lib/menu/weight';
+import { discountRows, offerLabelForLines } from '@/lib/orders/offers';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -408,7 +409,10 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
       <div className="flex flex-col gap-1 text-xs">
         <BillRow label="Total Qty" value={String(totalQty)} />
         <BillRow label="Sub Total" value={money(order.subtotal_inr)} />
-        {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`(${money(order.discount_inr)})`} /> : null}
+        {/* The multi-buy offer, then the coupon/Beanies discount (lib/orders/offers.ts). */}
+        {discountRows(order, offerLabelForLines(activeItems), discountLabel).map((row) => (
+          <BillRow key={row.label} label={row.label} value={`(${money(row.amountInr)})`} />
+        ))}
         {passCovered > 0 ? (
           <BillRow label={ritualBillLabel(cupsOnOrder(activeItems))} value={`(${money(passCovered)})`} />
         ) : null}

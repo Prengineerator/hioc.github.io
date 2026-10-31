@@ -28,6 +28,7 @@ import {
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { PASS_SHORT_NAME } from '@/lib/passes/brand';
 import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, ritualBillRow } from '@/lib/pos/ritual';
+import { discountRows, offerLabelForLines } from '@/lib/orders/offers';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
 
@@ -109,7 +110,7 @@ export function SettleOrderSheet({
   // will accept (and "would empty the order" is said before the tap, not after).
   const plan = useMemo(() => (changes.length > 0 ? planSettleEdit(order.items, changes) : null), [changes, order.items]);
   const planError = plan && !plan.ok ? plan.error : null;
-  const reduction = plan?.ok ? editReductionInr(plan.changes) : 0;
+  const reduction = plan?.ok ? editReductionInr(plan.changes, order.items) : 0;
   const reason = reasonChoice === 'Other' ? reasonText.trim() : reasonChoice;
   const canSave = dirty && !saving && plan?.ok === true && reason !== '';
 
@@ -405,7 +406,9 @@ export function SettleOrderSheet({
         <BillRow label="Subtotal" value={order.subtotal_inr} />
         {order.tax_inr > 0 ? <BillRow label="GST" value={order.tax_inr} /> : null}
         {order.packaging_inr > 0 ? <BillRow label="Packaging" value={order.packaging_inr} /> : null}
-        {order.discount_inr > 0 ? <BillRow label="Discount" value={-order.discount_inr} /> : null}
+        {discountRows(order, offerLabelForLines(order.items)).map((row) => (
+          <BillRow key={row.label} label={row.label} value={-row.amountInr} />
+        ))}
         {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}
         <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
           <span className="font-bold text-charcoal">Total</span>

@@ -18,6 +18,7 @@ import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { CustomerSuggestionList, useCustomerSuggestions } from '@/components/staff/CustomerPhoneSuggestions';
 import type { Feedback } from '@/lib/pos/loyalty';
 import { ritualBillRow, type PosBill } from '@/lib/pos/ritual';
+import { discountRows } from '@/lib/orders/offers';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { OrderType, PaymentMethod } from '@/lib/types';
 
@@ -382,7 +383,9 @@ export function PosPaymentPanel({
                 <BillRow label="Subtotal" value={bill.subtotal_inr} />
                 {bill.tax_inr > 0 ? <BillRow label="GST" value={bill.tax_inr} /> : null}
                 {bill.packaging_inr > 0 ? <BillRow label="Packaging" value={bill.packaging_inr} /> : null}
-                {bill.discount_inr > 0 ? <BillRow label="Discount" value={-bill.discount_inr} /> : null}
+                {discountRows(bill, bill.offer_label ?? 'Offer').map((row) => (
+                  <BillRow key={row.label} label={row.label} value={-row.amountInr} />
+                ))}
                 {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}
                 <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
                   <span className="font-bold text-charcoal">Total</span>

@@ -16,7 +16,8 @@ import {
   type MenuItemRow,
   type ResolvedLine,
 } from '@/lib/orders/lines';
-import { afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { afterOffers, afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { computeOffers, type AppliedOffer } from '@/lib/orders/offers';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
 import { indianE164HonouringPlus } from '@/lib/phone';
@@ -207,13 +208,17 @@ export async function POST(request: Request) {
     };
   }
   // What a coupon and Beanies are computed on once the pass has been applied.
-  const payableAfterPass = afterPass(subtotalInr, passCoveredInr);
+  // Multi-buy offers (lib/orders/offers.ts): only a quote priced from items can
+  // have them (the legacy subtotal-only quote has no lines to count).
+  const offers: AppliedOffer[] = resolvedLines ? computeOffers(resolvedLines).offers : [];
+  const offerDiscountInr = offers.reduce((sum, o) => sum + o.discount_inr, 0);
+  const payableAfterOffers = afterOffers(afterPass(subtotalInr, passCoveredInr), offerDiscountInr);
 
   let couponResult: Awaited<ReturnType<typeof validateAndComputeCoupon>> | null = null;
   let couponDiscountInr = 0;
   if (typeof coupon_code === 'string' && coupon_code.trim().length > 0) {
     couponResult = await validateAndComputeCoupon(coupon_code.trim(), {
-      subtotalInr: payableAfterPass,
+      subtotalInr: payableAfterOffers,
       userId,
       itemIds,
       categories: cats,
@@ -222,7 +227,7 @@ export async function POST(request: Request) {
       counterPhone: isStaff ? indianE164HonouringPlus(customer_phone) : null,
     });
     if (couponResult.ok) {
-      couponDiscountInr = Math.min(couponResult.discountInr, payableAfterPass);
+      couponDiscountInr = Math.min(couponResult.discountInr, payableAfterOffers);
     }
   }
 
@@ -232,7 +237,7 @@ export async function POST(request: Request) {
   if (userId) {
     balance = await getBalance(userId);
     if (typeof redeem_points === 'number' && redeem_points > 0) {
-      const remaining = Math.max(0, payableAfterPass - couponDiscountInr);
+      const remaining = Math.max(0, payableAfterOffers - couponDiscountInr);
       // `balance` was just fetched above for the response's own `balance`
       // field — hand it to quoteRedemption so it doesn't re-scan
       // loyalty_transactions for the same number a moment later.
@@ -250,6 +255,7 @@ export async function POST(request: Request) {
     settings,
     subtotalInr,
     taxableSubtotalInr: taxableInr,
+    offerDiscountInr,
     couponDiscountInr,
     pointsDiscountInr,
     passCoveredInr,
@@ -257,5 +263,7 @@ export async function POST(request: Request) {
     isDineIn,
   });
 
-  return NextResponse.json({ bill, coupon: couponResult, points: pointsResult, balance, pass });
+  // `offers`: one entry per item on a multi-buy offer, for the bill's offer row
+  // (bill.offer_discount_inr is their total, inside bill.discount_inr).
+  return NextResponse.json({ bill, coupon: couponResult, points: pointsResult, balance, pass, offers });
 }

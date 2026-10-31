@@ -8,7 +8,8 @@
 // Two halves:
 //   allocateOrderPass   the database half (loads the passes and which drinks are
 //                       eligible, then hands the pure allocator its lines)
-//   composeOrderBill    the pure half (pass, then coupon, then points: CP-D12)
+//   composeOrderBill    the pure half (pass, then multi-buy offers, then coupon,
+//                       then points: CP-D12)
 //
 // Neither creates or changes anything. redeemPassDrinks (lib/passes/server.ts)
 // is what spends the cups, and only POST /api/orders calls it.
@@ -31,7 +32,8 @@ import type { StoreSettings } from '@/lib/types';
  * drink as the customer will be charged for it, not of the bare size.
  *
  * A weighed line (a bag of beans, weight_grams) is never a drink, so a cup
- * never pays for it, whatever the item's pass setting says.
+ * never pays for it, whatever the item's pass setting says. Nor is a line on a
+ * multi-buy offer: the offer is that line's discount.
  */
 export function passLinesFor(lines: ResolvedLine[], keys: string[], eligibleIds: Set<string>): PassLine[] {
   return lines.map((line, i) => ({
@@ -39,7 +41,10 @@ export function passLinesFor(lines: ResolvedLine[], keys: string[], eligibleIds:
     menu_item_id: line.menu_item_id,
     unit_price_inr: line.price_inr_snapshot,
     quantity: line.quantity,
-    eligible: eligibleIds.has(line.menu_item_id) && line.weight_grams == null,
+    // Nor does it pay for a line on a multi-buy offer (lib/orders/offers.ts):
+    // the offer already prices those units, and a cup on top would discount
+    // the same unit twice.
+    eligible: eligibleIds.has(line.menu_item_id) && line.weight_grams == null && !line.offer_prices,
     gst_exempt: line.gst_exempt,
   }));
 }
@@ -94,12 +99,24 @@ export function afterPass(subtotalInr: number, passCoveredInr: number): number {
   return Math.max(0, subtotalInr - passCoveredInr);
 }
 
+/**
+ * What a coupon and Beanies are computed on once the pass AND the multi-buy
+ * offers (lib/orders/offers.ts) are off: the offer is part of the price the
+ * customer is quoted, so a coupon's minimum and its percentage apply to what
+ * is left after it.
+ */
+export function afterOffers(payableAfterPassInr: number, offerDiscountInr: number): number {
+  return Math.max(0, payableAfterPassInr - Math.max(0, offerDiscountInr));
+}
+
 export interface OrderBillInput {
   settings: StoreSettings;
   subtotalInr: number;
   /** The part of the subtotal GST applies to (every line but GST-exempt ones). */
   taxableSubtotalInr: number;
-  /** Computed on afterPass(subtotal, passCovered). */
+  /** Multi-buy offers on the lines (computeOffers, lib/orders/offers.ts); 0 = none. */
+  offerDiscountInr?: number;
+  /** Computed on afterOffers(afterPass(subtotal, passCovered), offer). */
   couponDiscountInr: number;
   /** Computed on what is left after the pass AND the coupon. */
   pointsDiscountInr: number;
@@ -112,26 +129,31 @@ export interface OrderBillInput {
 
 /**
  * The authoritative bill for an order (create and quote both call it): the pass
- * first, then coupon and points on what is left (CP-D12), GST on the taxable
- * value with the covered rupees and the discount taken out of it and packaging
- * in it (CP-D11, computeBill), and no packaging for dine-in (D5).
+ * first, then the multi-buy offers, then coupon and points on what is left
+ * (CP-D12), GST on the taxable value with the covered rupees and the discount
+ * taken out of it and packaging in it (CP-D11, computeBill), and no packaging
+ * for dine-in (D5).
  *
- *   discount_inr       = min(coupon + points, subtotal - pass cover)  (marketing discounts only)
+ *   offer_discount_inr = min(offers, subtotal - pass cover)
+ *   discount_inr       = offer + min(coupon + points, what is left after it)
  *   pass_discount_inr  = the pass cover
  *   total_inr          = subtotal + tax + packaging - discount_inr - pass_discount_inr
  *
- * With no pass (`passCoveredInr` 0) this is computeBill(subtotal, settings,
+ * With no pass and no offer this is computeBill(subtotal, settings,
  * min(coupon + points, subtotal), taxable), with packaging 0 for dine-in.
  */
-export function composeOrderBill(input: OrderBillInput): BillBreakdown & { pass_discount_inr: number } {
+export function composeOrderBill(
+  input: OrderBillInput,
+): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number } {
   const passCovered = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
-  const discountInr = Math.min(
-    Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr),
-    afterPass(input.subtotalInr, passCovered),
-  );
+  const payable = afterPass(input.subtotalInr, passCovered);
+  const offerInr = Math.min(Math.max(0, input.offerDiscountInr ?? 0), payable);
+  const discountInr =
+    offerInr +
+    Math.min(Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr), payable - offerInr);
   // Dine-in has no packaging charge (D5), whatever the store's packaging
   // setting: billed with none, so no GST is charged on it either.
-  return composePassBill(
+  const bill = composePassBill(
     {
       subtotalInr: input.subtotalInr,
       taxableSubtotalInr: input.taxableSubtotalInr,
@@ -141,4 +163,5 @@ export function composeOrderBill(input: OrderBillInput): BillBreakdown & { pass_
     },
     input.isDineIn ? { ...input.settings, packaging_charge_inr: 0 } : input.settings,
   );
+  return { ...bill, offer_discount_inr: offerInr };
 }
