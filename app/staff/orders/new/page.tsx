@@ -3,10 +3,7 @@ import { flags } from '@/lib/flags';
 import { PosOrderEntry, type AddToOrderTarget } from '@/components/staff/PosOrderEntry';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isUuid } from '@/lib/api/constants';
-import { OrderingOffNotice } from '@/components/staff/OrderingOffNotice';
-import { getStaffSurface } from '@/lib/staff/surface';
-import { getStoreSettings } from '@/lib/store/settings';
-import { canTakeOrders } from '@/lib/staff/surfaceRules';
+import { TakeOrdersGate } from '@/components/staff/TakeOrdersGate';
 
 // The states in which an order can still take more items (mirrors the amend
 // route's OPEN_STATUSES — the route is the real gate; this just avoids offering
@@ -74,12 +71,6 @@ export default async function NewOrderPage({
     );
   }
 
-  // Taking orders: the POS always; the staff website only when switched on.
-  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
-  if (!canTakeOrders(surface, storeSettings.staff_web_ordering)) {
-    return <OrderingOffNotice />;
-  }
-
   // POS-3 deep-link: /staff/orders/new?table=<id> pre-selects that dine-in table
   // (PosOrderEntry validates it against the active tables and ignores an unknown
   // id). Only a single string value is meaningful.
@@ -96,5 +87,20 @@ export default async function NewOrderPage({
   // becomes a navigation target, so it is never taken from the query as-is.
   const returnTo = addToOrder && searchParams.back === 'settle' ? '/staff/settle' : undefined;
 
-  return <PosOrderEntry initialTableId={initialTableId} addToOrder={addToOrder} returnTo={returnTo} />;
+  // Taking orders: the POS always; the staff website only when switched on.
+  // Read from the shell the layout already resolved (TakeOrdersGate), not the
+  // database again: a plain New order now does no server work of its own, so
+  // the tap lands as fast as the sign-in check allows.
+  // The key gives each context (counter, a table, an add) its own screen, so
+  // moving between them starts from that context's own draft.
+  return (
+    <TakeOrdersGate>
+      <PosOrderEntry
+        key={addToOrder ? `add:${addToOrder.id}` : initialTableId ? `table:${initialTableId}` : 'counter'}
+        initialTableId={initialTableId}
+        addToOrder={addToOrder}
+        returnTo={returnTo}
+      />
+    </TakeOrdersGate>
+  );
 }

@@ -9,6 +9,8 @@
 // edits the settings must still read them fresh (fetch directly), and a write
 // announces itself with 'hioc:store-changed', which drops the shared answer.
 
+import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
+
 export const STORE_SETTINGS_URL = '/api/store-settings';
 /** How long a store-settings answer is shared before the next caller asks again. */
 export const STORE_SETTINGS_MAX_AGE_MS = 30_000;
@@ -39,7 +41,9 @@ export function sharedJson<T>(url: string, maxAgeMs: number, now: number = Date.
   const hit = entries.get(url);
   if (hit && now - hit.at < maxAgeMs) return hit.promise as Promise<T | null>;
 
-  const promise: Promise<T | null> = fetch(url, { cache: 'no-store' })
+  // With a timeout: a stalled request would otherwise be shared, unanswered,
+  // with every screen that asks in the next 30 s.
+  const promise: Promise<T | null> = fetchWithTimeout(url, { cache: 'no-store' })
     .then((res) => (res.ok ? (res.json() as Promise<T>) : null))
     .catch(() => null);
   const entry = { at: now, promise };

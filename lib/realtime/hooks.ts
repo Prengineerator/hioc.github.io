@@ -193,6 +193,26 @@ export function startRefreshLoop(
   };
 }
 
+let mountSeq = 0;
+
+/**
+ * A topic unique to this mount, for a postgres_changes channel.
+ *
+ * supabase-js hands back the EXISTING channel when asked for a topic it still
+ * holds, and a channel stays held until the server acknowledges the leave. A
+ * screen switch unmounts one screen and mounts the next in the same instant, so
+ * Live orders → Tables (both 'staff-orders') got the old, leaving channel back:
+ * its subscribe() was a no-op, the new board never went live, and it sat on the
+ * 15 s fallback poll. A fresh topic per mount always gets a fresh channel.
+ *
+ * Never for broadcast channels (useOrderRealtime): there the topic is the
+ * address the server sends to.
+ */
+export function mountChannelName(base: string): string {
+  mountSeq += 1;
+  return `${base}:${mountSeq.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
 /**
  * Subscribes to Postgres change events on `table` and calls `onChange` on each
  * (coalesced to one refetch per `coalesceMs` window), with a poll backstop:
@@ -246,7 +266,9 @@ export function usePostgresChangesRefresh(opts: {
         requiresSession,
         whileHidden,
         coalesceMs,
-        channelName,
+        // One topic per mount (see mountChannelName): a postgres_changes
+        // topic is only a local label, so nothing on the server cares.
+        channelName: mountChannelName(channelName),
         build: (channel, fire) =>
           channel.on(
             'postgres_changes',

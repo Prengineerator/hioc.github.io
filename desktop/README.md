@@ -77,9 +77,19 @@ none of them can drift from the others.
 **No dev tools, no browser chrome, in a packaged build.**
 `webPreferences.devTools: !app.isPackaged` disables DevTools entirely in a
 packaged build (F12/Ctrl+Shift+I do nothing); `Menu.setApplicationMenu(null)` +
-`autoHideMenuBar` remove the application menu; Ctrl+R/F5 still reload the
-page (recovers a frozen screen) but devtools accelerators are blocked as a
-second layer on top of `devTools: false`. `window.open`/`target=_blank` never
+`autoHideMenuBar` remove the application menu; Ctrl+R (and Ctrl+Shift+R,
+skipping the cache) still reload the page — handled by the shell, so even a
+frozen screen can be recovered — but devtools accelerators are blocked as a
+second layer on top of `devTools: false`. F5 is handed to the page, which
+refreshes its data in place without a reload (lib/staff/shortcuts.ts); on an
+error page, where there is no POS to do that, F5 reloads instead. The POS
+shortcuts (Ctrl+N new order, Ctrl+T tables, …) reach the page untouched.
+
+**Self-recovery** (`src/recovery.ts`, wired in `keepWindowAlive()`): a page
+that fails to load (no network at boot, a dropped connection mid-reload) is
+retried with backoff (2 s, 4 s … every 30 s); a crashed renderer is reloaded;
+a renderer that stops responding for 8 s gets a "Reload / Wait" prompt. An
+order being punched survives all three (sessionStorage — lib/pos/draftOrder.ts). `window.open`/`target=_blank` never
 opens a popup — an allowed URL navigates the same window, anything else goes
 to the OS browser (or is dropped) — so there's no popup path at all, matching
 how the POS actually prints (PRN-5's driver window is opened directly by the

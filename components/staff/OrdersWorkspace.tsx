@@ -11,7 +11,7 @@
 // order-alert sound and counter mode live in the staff shell
 // (components/staff/StaffShell.tsx) so they survive switching tabs.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { istDateIso } from '@/lib/api/date';
 import { OrderQueueBoard } from '@/components/staff/OrderQueueBoard';
 import { TodayOrdersList } from '@/components/staff/TodayOrdersList';
@@ -26,6 +26,10 @@ import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
 import { Spinner } from '@/components/ui/Spinner';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
+import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
+import { readSnapshot, writeSnapshot } from '@/lib/pos/localSnapshot';
+import { ACTIVE_ORDERS_SNAPSHOT, ACTIVE_ORDERS_SNAPSHOT_OPTS } from '@/lib/pos/posSnapshots';
+import { usePosRefresh } from '@/lib/staff/posRefresh';
 import { sharedJson, STORE_SETTINGS_MAX_AGE_MS, STORE_SETTINGS_URL } from '@/lib/pos/sharedJson';
 import { transitionExtra, type QuickAction } from '@/lib/orders/quickActions';
 import { PICKUP_REMINDER_COOLDOWN_SEC, formatCountdown } from '@/lib/notifications/pickupReminder';
@@ -45,6 +49,8 @@ function shortIstDate(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
+
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const [orders, setOrders] = useState<OrderWithItems[]>([]);
@@ -81,11 +87,15 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
     try {
       const day = dateRef.current;
       const url = view === 'today' && day !== istDateIso() ? `/api/orders?date=${day}` : '/api/orders';
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetchWithTimeout(url, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
+      // The staffer moved to another day while this was in flight.
+      if (dateRef.current !== day) return;
       const next: OrderWithItems[] = data.orders ?? [];
       setOrders(next);
+      // Today's running orders, shared with Tables (lib/pos/posSnapshots.ts).
+      if (url === '/api/orders') writeSnapshot(ACTIVE_ORDERS_SNAPSHOT, next, ACTIVE_ORDERS_SNAPSHOT_OPTS);
 
       // A HIOC Ritual sale is never a kitchen order, so it never rings the alert.
       const received = new Set(kitchenOrders(next).filter((o) => o.status === 'received').map((o) => o.id));
@@ -122,6 +132,19 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const dayLabel = date === today ? 'today' : `on ${shortIstDate(date)}`;
 
   const connection = useStaffOrdersRealtime(fetchOrders);
+  usePosRefresh(() => void fetchOrders()); // the header's Refresh / F5
+
+  // Draw the running orders this page load last saw (from this board or
+  // Tables) at once, then refetch: switching back to the board is instant.
+  // Memory only — it holds customer names and numbers. Read in a layout effect
+  // so the kept board is up before the first paint; on a full load there is
+  // nothing kept yet and the spinner shows as before.
+  useIsomorphicLayoutEffect(() => {
+    const kept = readSnapshot(ACTIVE_ORDERS_SNAPSHOT, ACTIVE_ORDERS_SNAPSHOT_OPTS);
+    if (!kept) return;
+    setOrders((cur) => (cur.length ? cur : kept.data));
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
     fetchOrders();

@@ -26,6 +26,8 @@ import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { describeOrderPayment, groupForSettle, isSettleable } from '@/lib/orders/settleList';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/hooks';
+import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
+import { usePosRefresh } from '@/lib/staff/posRefresh';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
@@ -74,7 +76,7 @@ export function SettleWorkspace({
 
   const fetchUnpaid = useCallback(async () => {
     try {
-      const res = await fetch('/api/orders?payment=unpaid', { cache: 'no-store' });
+      const res = await fetchWithTimeout('/api/orders?payment=unpaid', { cache: 'no-store' });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { orders?: OrderWithItems[] };
       setOrders((data.orders ?? []).filter(isSettleable));
@@ -89,6 +91,7 @@ export function SettleWorkspace({
   useEffect(() => {
     void fetchUnpaid();
   }, [fetchUnpaid]);
+  usePosRefresh(() => void fetchUnpaid()); // the header's Refresh / F5
 
   // A bill placed unpaid (or settled) anywhere else shows up here within seconds.
   usePostgresChangesRefresh({

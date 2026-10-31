@@ -26,10 +26,12 @@
 // a modal over it (behind NEXT_PUBLIC_FLAG_POS_V2, modal until Gate 6B), and
 // printing happens in a hidden iframe rather than a foreground tab.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { CustomerOrdersModal } from '@/components/staff/CustomerOrdersModal';
+import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
+import { useShortcutHandler } from '@/components/staff/PosShortcuts';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
 import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentModal';
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
@@ -49,6 +51,11 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { readMenuCache, writeMenuCache } from '@/lib/pos/menuCache';
 import { STORE_CHANGED_EVENT } from '@/lib/pos/sharedJson';
+import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
+import { readSnapshot, writeSnapshot } from '@/lib/pos/localSnapshot';
+import { TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS } from '@/lib/pos/posSnapshots';
+import { clearDraft, draftContext, isDraftWorthKeeping, readDraft, writeDraft } from '@/lib/pos/draftOrder';
+import { usePosRefresh } from '@/lib/staff/posRefresh';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import {
@@ -140,6 +147,15 @@ interface PlacementConfirmation {
   /** POS-ACC: this order opened the customer's HIOC account. */
   accountCreated: boolean;
 }
+
+// Seeding from what this machine kept (tables, the draft) must happen before
+// the first paint, or the screen flashes empty first. Layout effect on the
+// client, plain effect on the server (no storage there; keeps React quiet).
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+const NEW_ORDER_HREF = '/staff/orders/new';
+/** After a quote gets no answer, how long before asking again. */
+const QUOTE_RETRY_MS = 4000;
 
 // POS4-2 — a per-attempt key for POST /api/orders. crypto.randomUUID is present
 // in every browser this POS runs on; the timestamp+random fallback keeps an old
@@ -259,6 +275,9 @@ export function PosOrderEntry({
   const orderTypeTouched = useRef(false);
 
   const [tables, setTables] = useState<StaffTable[]>([]);
+  // False until the first answer (kept or fetched): "no tables" must not flash
+  // while the list is still on its way.
+  const [tablesLoaded, setTablesLoaded] = useState(false);
   const [tableId, setTableId] = useState<string | null>(null);
   const [tableFilter, setTableFilter] = useState(''); // POS4-5, shown past ~12 tables
 
@@ -476,7 +495,7 @@ export function PosOrderEntry({
 
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
-    fetch('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
+    fetchWithTimeout('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`menu ${res.status}`))))
       .then((data: { items?: MenuItem[] }) => {
         // A failed or malformed answer keeps what is on screen (often the kept
@@ -513,16 +532,40 @@ export function PosOrderEntry({
   }, [fetchMenu]);
 
   // --- Tables (for the dine-in picker) --------------------------------------
+  // Drawn from the registry this machine kept (shared with the tables board),
+  // then refreshed: a failed or slow read keeps the kept list instead of
+  // telling a counter mid-service that it has no tables.
   const fetchTables = useCallback(() => {
-    fetch('/api/tables', { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : { tables: [] }))
-      .then((data: { tables?: StaffTable[] }) => setTables(data.tables ?? []))
-      .catch(() => {});
+    fetchWithTimeout('/api/tables', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`tables ${res.status}`))))
+      .then((data: { tables?: StaffTable[] }) => {
+        if (!Array.isArray(data.tables)) return;
+        setTables(data.tables);
+        writeSnapshot(TABLES_SNAPSHOT, data.tables, TABLES_SNAPSHOT_OPTS);
+      })
+      .catch(() => {})
+      .finally(() => setTablesLoaded(true));
+  }, []);
+
+  useIsomorphicLayoutEffect(() => {
+    const kept = readSnapshot(TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS);
+    if (kept) {
+      setTables(kept.data);
+      setTablesLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
     fetchTables();
   }, [fetchTables]);
+
+  // The header's Refresh / F5: the menu, the tables and the bill again, with
+  // the cart left exactly as it is.
+  usePosRefresh(() => {
+    fetchMenu();
+    fetchTables();
+    setRefreshTick((n) => n + 1);
+  });
 
   // Pre-select a table passed in from the tables board deep-link (POS-3 →
   // /staff/orders/new?table=<id>). Applied ONCE, and only after the active-tables
@@ -540,6 +583,81 @@ export function PosOrderEntry({
     }
     appliedInitialTable.current = true;
   }, [initialTableId, tables]);
+
+  // --- Draft: the order being punched survives leaving the screen -----------
+  // (lib/pos/draftOrder.ts). Put back before the first paint; saved on every
+  // change after that; gone once the order is placed or cleared (an empty
+  // screen saves nothing, and placing an order empties it).
+  const draftCtx = useMemo(
+    () => draftContext(initialTableId, addToOrder?.id),
+    // The page keys this screen by context, so it never changes under a mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const draftReady = useRef(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  useIsomorphicLayoutEffect(() => {
+    const draft = readDraft(draftCtx);
+    if (draft) {
+      setCart(draft.cart);
+      // The key the interrupted attempt used: if that order did reach the
+      // server, charging again replays it instead of making a second one.
+      idempotencyKey.current = draft.idempotencyKey;
+      if (!isAddMode) {
+        // What the staffer chose beats the machine's default and the table
+        // the link named — they already answered both.
+        orderTypeTouched.current = true;
+        appliedInitialTable.current = true;
+        setOrderType(draft.orderType);
+        setTableId(draft.tableId);
+        setCustName(draft.custName);
+        setCustPhone(draft.custPhone);
+        setCustEmail(draft.custEmail);
+        setShowCustomer(draft.showCustomer);
+        // A name already in the field is the staffer's; a lookup must not swap it.
+        custNameUserEdited.current = draft.custName.trim() !== '';
+      }
+      setDraftRestored(draft.cart.length > 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const persistDraft = useCallback(() => {
+    if (!draftReady.current) return;
+    writeDraft(draftCtx, {
+      idempotencyKey: idempotencyKey.current,
+      cart,
+      orderType,
+      tableId: isAddMode ? null : tableId,
+      custName: isAddMode ? '' : custName,
+      custPhone: isAddMode ? '' : custPhone,
+      custEmail: isAddMode ? '' : custEmail,
+      showCustomer: isAddMode ? false : showCustomer,
+    });
+  }, [draftCtx, cart, orderType, tableId, custName, custPhone, custEmail, showCustomer, isAddMode]);
+  const persistDraftRef = useRef(persistDraft);
+  persistDraftRef.current = persistDraft;
+
+  useEffect(() => {
+    persistDraft();
+  }, [persistDraft]);
+  // Saving starts AFTER the first render's save has run (effects run in
+  // order): that render still holds the empty initial state, and saving it
+  // would wipe the draft the layout effect above has just put back.
+  useEffect(() => {
+    draftReady.current = true;
+  }, []);
+
+  // The "put back" note goes once the staffer has had a moment to read it.
+  useEffect(() => {
+    if (!draftRestored) return undefined;
+    const t = setTimeout(() => setDraftRestored(false), 10_000);
+    return () => clearTimeout(t);
+  }, [draftRestored]);
+
+  const draftHasContent = isDraftWorthKeeping({ cart, custName, custPhone, custEmail });
 
   // --- Derived --------------------------------------------------------------
   const totalItems = useMemo(() => cart.reduce((s, i) => s + i.qty, 0), [cart]);
@@ -668,7 +786,7 @@ export function PosOrderEntry({
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      fetch(`/api/customers/lookup?phone=${lookupPhone}`, { cache: 'no-store' })
+      fetchWithTimeout(`/api/customers/lookup?phone=${lookupPhone}`, { cache: 'no-store' })
         .then((res) => (res.ok ? res.json() : null))
         .then((data: CustomerLookup | null) => {
           if (!cancelled) setCustomer(data ?? null);
@@ -812,6 +930,7 @@ export function PosOrderEntry({
   // debounce) because the gap it has to cover starts at the tap, not at the
   // fetch.
   const [billStale, setBillStale] = useState(false);
+  const [quoteRetry, setQuoteRetry] = useState(0);
 
   useEffect(() => {
     if (cart.length === 0 || subtotal <= 0) {
@@ -826,13 +945,16 @@ export function PosOrderEntry({
       return;
     }
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
     setBillStale(true);
     // Small debounce so rapid qty taps don't fire a burst of quotes.
     const t = setTimeout(() => {
       // The cart goes to the server as order items, exactly as placeOrder sends
       // it: the server prices it itself (and, with HIOC Ritual cups asked for,
       // decides which drinks they pay for), so this screen never computes a rupee.
-      fetch('/api/orders/quote', {
+      // A quote is a read (nothing is created), so it may time out: a stalled
+      // one used to leave the bill "re-pricing" for good, and Charge with it.
+      fetchWithTimeout('/api/orders/quote', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -869,14 +991,21 @@ export function PosOrderEntry({
           // Only now do the numbers on screen describe the cart on screen.
           setBillStale(false);
         })
-        .catch(() => {});
+        .catch(() => {
+          // No answer (offline, timed out): say so, and ask again shortly.
+          if (cancelled) return;
+          setQuoteError('Could not reach the server to price this order — trying again…');
+          retry = setTimeout(() => setQuoteRetry((n) => n + 1), QUOTE_RETRY_MS);
+        });
     }, 250);
     return () => {
       cancelled = true;
       clearTimeout(t);
+      if (retry) clearTimeout(retry);
     };
     // refreshTick: a 409 from the order POST asks for a fresh quote.
-  }, [cart, subtotal, orderType, couponCode, redeemPoints, passCups, lookupPhone, refreshTick]);
+    // quoteRetry: the last quote got no answer.
+  }, [cart, subtotal, orderType, couponCode, redeemPoints, passCups, lookupPhone, refreshTick, quoteRetry]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
   const addLine = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
@@ -1000,6 +1129,57 @@ export function PosOrderEntry({
     setMobileCartOpen(true);
   }
 
+  // Keyboard (lib/staff/shortcuts.ts, components/staff/PosShortcuts.tsx): this
+  // screen owns search, Charge, and what Ctrl+N means while an order is open.
+  useShortcutHandler((action) => {
+    switch (action.type) {
+      case 'focus-search':
+        barRef.current?.focus();
+        barRef.current?.select();
+        return true;
+      case 'charge':
+        if (!paymentOpen) openPayment();
+        return true;
+      case 'navigate':
+        // Never leave mid-charge: the answer (order number, change due, the
+        // prints) lands on this screen.
+        if (inFlight.current || submitting) {
+          showToast('Placing the order — one moment…');
+          return true;
+        }
+        if (paymentOpen) {
+          showToast('Finish or close the payment first.');
+          return true;
+        }
+        // Ctrl+N on the counter's own New order: start again, after asking if
+        // there is something to lose. A table or an add goes to the plain
+        // counter screen as usual (its draft stays for when it's reopened).
+        if (action.href === NEW_ORDER_HREF && !isAddMode && !initialTableId) {
+          if (draftHasContent) setConfirmClear(true);
+          else barRef.current?.focus();
+          return true;
+        }
+        return false;
+      default:
+        return false;
+    }
+  });
+
+  /** Throw the open order away (Clear / Ctrl+N), draft included. */
+  function clearOrder() {
+    setConfirmClear(false);
+    setDraftRestored(false);
+    if (isAddMode) {
+      setCart([]);
+      setBill(null);
+      setSearch('');
+    } else {
+      resetForNextOrder();
+    }
+    clearDraft(draftCtx);
+    barRef.current?.focus();
+  }
+
   const selectedTableLabel = tables.find((t) => t.id === tableId)?.label ?? null;
 
   // FLOW-1 — where the payment step lives. Docked, it takes the place of the
@@ -1099,7 +1279,10 @@ export function PosOrderEntry({
         // the old idempotency key was claimed by an order that no longer exists —
         // start the next attempt on a fresh one.
         const after = orderConflictAction(res.status, data.error, passApproved);
-        if (after.rotateKey) idempotencyKey.current = newIdempotencyKey();
+        if (after.rotateKey) {
+          idempotencyKey.current = newIdempotencyKey();
+          persistDraftRef.current(); // a reload now must not bring back the burnt key
+        }
         if (after.requote) {
           setBillStale(true);
           setRefreshTick((n) => n + 1);
@@ -1368,7 +1551,58 @@ export function PosOrderEntry({
               : 'Punch in a dine-in or walk-in order.'}
           </p>
         </div>
+        {draftHasContent && !submitting ? (
+          <button
+            type="button"
+            onClick={() => setConfirmClear(true)}
+            title={isAddMode ? 'Remove the items added here' : 'Start again with an empty order'}
+            className="min-h-[40px] shrink-0 rounded-md border border-line px-3 py-2 text-sm font-bold text-charcoal transition-colors hover:border-tan"
+          >
+            {isAddMode ? 'Clear items' : 'Clear order'}
+          </button>
+        ) : null}
       </div>
+
+      {/* The screen put back what was being punched before it was left (or the
+          app reloaded) — say so, so a staffer isn't surprised by a full cart. */}
+      {draftRestored ? (
+        <div
+          role="status"
+          className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-tan/60 bg-surface px-3 py-2 text-sm text-charcoal"
+        >
+          <span>Picked up where you left off — the order you were punching is back.</span>
+          <span className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setDraftRestored(false)}
+              className="rounded-md border border-line px-3 py-1 text-xs font-bold hover:border-tan"
+            >
+              OK
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmClear(true)}
+              className="rounded-md border border-charcoal px-3 py-1 text-xs font-bold hover:bg-charcoal hover:text-cream"
+            >
+              Start fresh
+            </button>
+          </span>
+        </div>
+      ) : null}
+
+      {confirmClear ? (
+        <ConfirmDialog
+          heading={isAddMode ? 'Clear these items?' : 'Start a new order?'}
+          body={
+            isAddMode
+              ? 'The items added on this screen will be removed. The running order itself is not touched.'
+              : 'The items and customer details on this screen will be cleared.'
+          }
+          confirmLabel={isAddMode ? 'Clear items' : 'Start new'}
+          onConfirm={clearOrder}
+          onCancel={() => setConfirmClear(false)}
+        />
+      ) : null}
 
       {/* Three columns on a tablet/desktop: categories down the left, the
           search bar and the chosen category's items in the middle, the order
@@ -1526,7 +1760,7 @@ export function PosOrderEntry({
                 <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">Table</p>
                 {tables.length === 0 ? (
                   <p className="text-sm text-muted">
-                    No active tables — add tables in the owner settings first.
+                    {tablesLoaded ? 'No active tables — add tables in the owner settings first.' : 'Loading tables…'}
                   </p>
                 ) : (
                   // POS4-5: grouped by zone (the same grouping the tables board

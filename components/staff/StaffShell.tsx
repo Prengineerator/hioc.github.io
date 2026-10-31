@@ -22,6 +22,8 @@ import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
 import { canEditMenu, canTakeOrders, type StaffSurface } from '@/lib/staff/surfaceRules';
 import { kitchenOrders } from '@/lib/pos/ritual';
+import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
+import { usePosRefresh } from '@/lib/staff/posRefresh';
 
 const CHIME_INTERVAL_MS = 5000;
 
@@ -150,7 +152,7 @@ export function StaffShell({
   // New-order watch — every staff page. Only the waiting orders are fetched.
   const fetchReceived = useCallback(async () => {
     try {
-      const res = await fetch('/api/orders?status=received', { cache: 'no-store' });
+      const res = await fetchWithTimeout('/api/orders?status=received', { cache: 'no-store' });
       if (!res.ok) return;
       const data = (await res.json()) as { orders?: { id: string; order_kind?: string }[] };
       // A HIOC Ritual sale is never a kitchen order, so it never rings the alarm.
@@ -177,6 +179,7 @@ export function StaffShell({
   useEffect(() => {
     void fetchReceived();
   }, [fetchReceived]);
+  usePosRefresh(fetchReceived);
 
   const newOrderCount = newIds.size;
   const previousCount = useRef(0);
