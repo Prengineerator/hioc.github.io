@@ -153,12 +153,14 @@ export function hrefForSurface(surface: Surface, href: string): string {
 /**
  * Whether a link to the canonical `href` should keep Next's default prefetch.
  *
- * Staff and owner pages are dynamic and signed-in, and the app has no
- * loading.tsx, so in production every prefetch is a full server render: one
- * per link when it scrolls into view, and another on every hover or touch.
- * A tap on a touchscreen counter could cost two renders, the prefetch and then
- * the navigation itself. Those links don't prefetch; the tap does the one
- * render it needs. Customer pages keep the default.
+ * Staff and owner pages are dynamic and signed-in, so a prefetch is a server
+ * render: one per link when it scrolls into view, and another on every hover
+ * or touch. A tap on a touchscreen counter could cost two renders, the
+ * prefetch and then the navigation itself. Those links don't prefetch by
+ * default; the tap does the one render it needs, and app/staff/loading.tsx
+ * shows while it runs. Customer pages keep the default. The few counter
+ * screens whose pages do no server work of their own opt back in explicitly
+ * (lib/staff/staffNav.ts, PREFETCHED_TABS).
  */
 export function prefetchByDefault(href: string): boolean {
   if (!href.startsWith('/') || href.startsWith('//')) return true;

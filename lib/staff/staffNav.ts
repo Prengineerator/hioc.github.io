@@ -97,6 +97,19 @@ export function staffNav(input: StaffNavInput): StaffNav {
   };
 }
 
+/**
+ * The counter's screens that do no server work of their own — each page only
+ * mounts its client screen, which loads its data itself (and draws from what
+ * this machine last saw while it does). The header prefetches these in full,
+ * so tapping one is instant: one small render per screen when the POS opens,
+ * renewed at most every five minutes (Next's cache for a full prefetch), and
+ * the tap itself waits on nothing. Settle and the back-office pages read the
+ * database on the server, so they keep the no-prefetch default
+ * (lib/routing/surface.ts, prefetchByDefault) and show app/staff/loading.tsx
+ * while they render.
+ */
+export const PREFETCHED_TABS: readonly string[] = [LIVE.href, ORDERS.href, NEW_ORDER.href, TABLES.href];
+
 /** `pathname` already resolved for the surface (pass `toHref(href)` as href on
  * a subdomain). Settings matches any section under it; every other tab only
  * its own exact path, so Orders doesn't light up on New order. */

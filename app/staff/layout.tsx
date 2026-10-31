@@ -7,6 +7,7 @@ import { operatorFeatureConfigured } from '@/lib/api/operator';
 import { flags } from '@/lib/flags';
 import { StaffHeader } from '@/components/staff/StaffHeader';
 import { StaffShell } from '@/components/staff/StaffShell';
+import { PosShortcuts } from '@/components/staff/PosShortcuts';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { getStoreSettings } from '@/lib/store/settings';
 import { StaffPinOverlay } from '@/components/staff/pin/StaffPinOverlay';
@@ -115,6 +116,7 @@ export default async function StaffLayout({
   if (device) {
     return (
       <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
+        <PosShortcuts />
         <div className="min-h-screen bg-cream">
           <StaffPinOverlay
             userEmail={user.email ?? ''}
@@ -132,6 +134,8 @@ export default async function StaffLayout({
 
   return (
     <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
+      {/* Ctrl+N / Ctrl+T / F5 / F1… on every staff screen (lib/staff/shortcuts.ts). */}
+      <PosShortcuts />
       <div className="min-h-screen bg-cream">
         <StaffHeader userEmail={user.email ?? ''} userName={displayName} role={role} />
         {/* Not <main> — the root layout already provides the landmark. */}

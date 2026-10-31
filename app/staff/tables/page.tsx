@@ -1,17 +1,14 @@
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 import { TablesBoard } from '@/components/staff/TablesBoard';
-import { OrderingOffNotice } from '@/components/staff/OrderingOffNotice';
-import { getStaffSurface } from '@/lib/staff/surface';
-import { getStoreSettings } from '@/lib/store/settings';
-import { canTakeOrders } from '@/lib/staff/surfaceRules';
+import { TakeOrdersGate } from '@/components/staff/TakeOrdersGate';
 
 // Staff tables board (POS-3). The /staff/** layout already gates this route
 // behind getCounterActor() (PIN-3: a classic session, or an enrolled device's
 // PIN operator), so no extra auth check is needed here. Dark-launched behind
 // the same staffPos flag as POS-1 (default ON): when off it renders a clear
 // "not enabled" state rather than the board, matching the New-order page.
-export default async function TablesPage() {
+export default function TablesPage() {
   if (!flags.staffPos) {
     return (
       <div className="mx-auto max-w-lg px-4 py-16 text-center">
@@ -30,11 +27,11 @@ export default async function TablesPage() {
   }
 
   // The tables board seats and adds to orders — taking orders: the POS
-  // always, the staff website only when switched on.
-  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
-  if (!canTakeOrders(surface, storeSettings.staff_web_ordering)) {
-    return <OrderingOffNotice />;
-  }
-
-  return <TablesBoard />;
+  // always, the staff website only when switched on. Answered from the shell
+  // (TakeOrdersGate), so this page does no database work on a tap.
+  return (
+    <TakeOrdersGate>
+      <TablesBoard />
+    </TakeOrdersGate>
+  );
 }
