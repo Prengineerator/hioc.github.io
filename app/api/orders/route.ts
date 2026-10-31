@@ -107,7 +107,18 @@ export async function POST(request: Request) {
     pairing_lines,
     settlement: rawSettlement,
     include_print_order: rawIncludePrintOrder,
+    expected_total_inr: rawExpectedTotal,
   } = body;
+
+  // The total the placing screen showed (the POS prices a cart on its own
+  // screen now — lib/pos/localQuote.ts). Optional: a caller that doesn't send
+  // it (the web checkout, an older POS build) is priced and charged exactly as
+  // before. When sent, a different total here refuses the order before it is
+  // created — see the check after the idempotency claim below.
+  const expectedTotalInr =
+    typeof rawExpectedTotal === 'number' && Number.isFinite(rawExpectedTotal) && rawExpectedTotal >= 0
+      ? rawExpectedTotal
+      : null;
 
   // Phase-7 (SUG-8/SUG-9): distinct session ids the cart's lines carry, so the
   // order can be attributed back to the /suggest sessions that produced them.
@@ -681,8 +692,10 @@ export async function POST(request: Request) {
   // POS4-2: claim the idempotency key immediately before creating. Claiming here
   // rather than at the top of the handler means the many validation early-returns
   // above don't burn a key the staffer will legitimately retry with.
+  let claimedKey = false;
   if (idempotencyKey) {
     const claim = await claimIdempotencyKey(admin, idempotencyKey, userId);
+    claimedKey = claim.state === 'claimed';
     if (claim.state === 'replay') {
       // The original request DID succeed — the response just never arrived.
       // Return its order so the retry is a no-op instead of a duplicate.
@@ -714,6 +727,26 @@ export async function POST(request: Request) {
     }
     // 'unavailable' (migration not applied) falls through: taking the order
     // matters more than the guard, and claimIdempotencyKey logged it.
+  }
+
+  // The screen priced this cart to a different total than the server does: a
+  // price, an offer or a setting changed after it loaded its menu. Refuse now —
+  // after the replay check, so a retry of an order that WAS placed still gets
+  // that order back; before anything is created, settled or printed, so no
+  // money moves on a number nobody saw — and hand back this bill, so the
+  // counter shows the right total and charges again. The key is released: the
+  // retry with the same key is a fresh attempt, not a duplicate.
+  if (expectedTotalInr !== null && Math.round(expectedTotalInr) !== Math.round(bill.total_inr)) {
+    if (idempotencyKey && claimedKey) await releaseIdempotencyKey(admin, idempotencyKey);
+    return NextResponse.json(
+      {
+        error: `The bill changed — the total is now ₹${bill.total_inr}. Check it and charge again.`,
+        code: 'total_changed',
+        bill,
+        offers: offers.offers,
+      },
+      { status: 409 },
+    );
   }
 
   // POS-ACC — a counter order with a number no account holds opens that

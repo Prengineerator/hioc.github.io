@@ -130,10 +130,12 @@ vi.mock('@/lib/loyalty/customerLink', () => ({
 const riders: {
   settle: ReturnType<typeof vi.fn>;
   printOrder: ReturnType<typeof vi.fn>;
+  release: ReturnType<typeof vi.fn>;
   claim: { state: string; orderId?: string };
 } = {
   settle: vi.fn(),
   printOrder: vi.fn(),
+  release: vi.fn(),
   claim: { state: 'claimed' },
 };
 
@@ -147,7 +149,10 @@ vi.mock('@/lib/orders/idempotency', () => ({
   readIdempotencyKey: (r: Request) => r.headers.get('idempotency-key'),
   claimIdempotencyKey: () => Promise.resolve(riders.claim),
   completeIdempotencyKey: () => Promise.resolve(),
-  releaseIdempotencyKey: () => Promise.resolve(),
+  releaseIdempotencyKey: (...args: unknown[]) => {
+    riders.release(...args);
+    return Promise.resolve();
+  },
 }));
 
 const { POST } = await import('@/app/api/orders/route');
@@ -295,5 +300,56 @@ describe('POST /api/orders — print order with the order', () => {
     expect(res.status).toBe(201);
     expect(riders.printOrder).not.toHaveBeenCalled();
     expect(await res.json()).not.toHaveProperty('print_order');
+  });
+});
+
+// The POS prices a cart on its own screen (lib/pos/localQuote.ts) and sends the
+// total it showed. The server stays the authority: a different total refuses
+// the order before anything is written, settled or printed.
+describe('POST /api/orders — expected_total_inr', () => {
+  // 2 × ₹100, GST 5% on (200 + ₹20 packaging) = 11 → ₹231 (computeBill, real).
+  const TOTAL = 231;
+
+  it('places the order when the screen showed the server total', async () => {
+    const res = await POST(req({ ...counterOrder, expected_total_inr: TOTAL, settlement: cash }, 'key-1'));
+    expect(res.status).toBe(201);
+    expect((await res.json()).order.total_inr).toBe(TOTAL);
+    expect(riders.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a different total before creating, settling or printing anything, and hands back its bill', async () => {
+    const res = await POST(
+      req({ ...counterOrder, expected_total_inr: 210, settlement: cash, include_print_order: true }, 'key-1'),
+    );
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.code).toBe('total_changed');
+    expect(data.bill.total_inr).toBe(TOTAL);
+    expect(data.error).toContain(`₹${TOTAL}`);
+    expect(state.orderInsert).toBeUndefined();
+    expect(riders.settle).not.toHaveBeenCalled();
+    expect(riders.printOrder).not.toHaveBeenCalled();
+  });
+
+  it('releases the key it claimed, so charging again with it is a fresh attempt', async () => {
+    await POST(req({ ...counterOrder, expected_total_inr: 210 }, 'key-1'));
+    expect(riders.release).toHaveBeenCalledWith(expect.anything(), 'key-1');
+  });
+
+  it('still returns a replayed order whatever total the retry carries', async () => {
+    riders.claim = { state: 'replay', orderId: ORDER_ID };
+    state.orderInsert = { total_inr: TOTAL, subtotal_inr: 200, payment_status: 'unpaid', status: 'accepted' };
+    const res = await POST(req({ ...counterOrder, expected_total_inr: 999 }, 'key-1'));
+    expect(res.status).toBe(201);
+    expect((await res.json()).replayed).toBe(true);
+    expect(riders.release).not.toHaveBeenCalled();
+  });
+
+  it('ignores a missing or malformed value: priced and charged as before', async () => {
+    for (const expected_total_inr of [undefined, 'abc', -5, null]) {
+      state.orderInsert = undefined;
+      const res = await POST(req({ ...counterOrder, expected_total_inr }));
+      expect(res.status).toBe(201);
+    }
   });
 });

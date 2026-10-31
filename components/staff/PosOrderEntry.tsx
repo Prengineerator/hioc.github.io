@@ -50,6 +50,7 @@ import type { CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { readMenuCache, writeMenuCache } from '@/lib/pos/menuCache';
+import { needsServerQuote, parsePosPricing, quoteLocally, type PosPricingContext } from '@/lib/pos/localQuote';
 import { STORE_CHANGED_EVENT } from '@/lib/pos/sharedJson';
 import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
 import { readSnapshot, writeSnapshot } from '@/lib/pos/localSnapshot';
@@ -156,6 +157,13 @@ const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : us
 const NEW_ORDER_HREF = '/staff/orders/new';
 /** After a quote gets no answer, how long before asking again. */
 const QUOTE_RETRY_MS = 4000;
+/**
+ * A menu or tables list loaded this recently is not fetched again when the
+ * screen reopens: switching New order ↔ Tables used to re-download both every
+ * time. Changes still arrive — an 86 by realtime, everything by F5 / Refresh —
+ * and a price that moved is caught by the server at Charge (total_changed).
+ */
+const REOPEN_REFETCH_AFTER_MS = 60_000;
 
 // POS4-2 — a per-attempt key for POST /api/orders. crypto.randomUUID is present
 // in every browser this POS runs on; the timestamp+random fallback keeps an old
@@ -262,6 +270,15 @@ export function PosOrderEntry({
   const isAddMode = addToOrder !== null;
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
+  // What this screen prices a cart with, beside the menu (lib/pos/localQuote.ts):
+  // the store's GST/packaging settings and the live offers, from the same menu
+  // answer. Null until one arrives, or from a server too old to send it: the
+  // quote route prices instead, as it always did.
+  const [posPricing, setPosPricing] = useState<PosPricingContext | null>(null);
+  // Set when the server corrected this screen's total at Charge (409
+  // total_changed): the rest of THIS order is priced by the server, so a
+  // screen whose pricing disagrees can't loop. The next order goes local again.
+  const [serverPricingPinned, setServerPricingPinned] = useState(false);
   const [category, setCategory] = useState<string>(DEFAULT_CATEGORY);
   const [search, setSearch] = useState('');
 
@@ -495,14 +512,18 @@ export function PosOrderEntry({
 
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
-    fetchWithTimeout('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
+    // pos=true: the pricing context comes with the menu (one request, and the
+    // settings that filtered this menu are the ones it is priced with).
+    fetchWithTimeout('/api/menu?includeUnavailable=true&includeInStore=true&pos=true', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`menu ${res.status}`))))
-      .then((data: { items?: MenuItem[] }) => {
+      .then((data: { items?: MenuItem[]; pos?: unknown }) => {
         // A failed or malformed answer keeps what is on screen (often the kept
         // menu) instead of emptying the grid mid-service.
         if (!Array.isArray(data.items)) return;
+        const pricing = parsePosPricing(data.pos);
         setMenuItems(data.items);
-        writeMenuCache(data.items);
+        setPosPricing(pricing);
+        writeMenuCache(data.items, pricing);
       })
       .catch(() => {})
       .finally(() => setMenuLoading(false));
@@ -515,8 +536,12 @@ export function PosOrderEntry({
     const kept = readMenuCache();
     if (kept) {
       setMenuItems(kept.items);
+      setPosPricing(kept.pricing);
       setMenuLoading(false);
     }
+    // Loaded a moment ago (the staffer just stepped over to Tables and back)
+    // and able to price: draw it and don't download it again.
+    if (kept && kept.pricing && Date.now() - kept.savedAt < REOPEN_REFETCH_AFTER_MS) return;
     fetchMenu();
   }, [fetchMenu]);
 
@@ -547,15 +572,18 @@ export function PosOrderEntry({
       .finally(() => setTablesLoaded(true));
   }, []);
 
+  const tablesFresh = useRef(false);
   useIsomorphicLayoutEffect(() => {
     const kept = readSnapshot(TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS);
     if (kept) {
       setTables(kept.data);
       setTablesLoaded(true);
+      tablesFresh.current = Date.now() - kept.savedAt < REOPEN_REFETCH_AFTER_MS;
     }
   }, []);
 
   useEffect(() => {
+    if (tablesFresh.current) return; // read a moment ago (here or on Tables)
     fetchTables();
   }, [fetchTables]);
 
@@ -918,7 +946,11 @@ export function PosOrderEntry({
     }
   }
 
-  // --- Live bill from the quote endpoint (never computed client-side) -------
+  // --- Live bill ------------------------------------------------------------
+  // An ordinary cart is priced HERE, by the server's own pricing functions run
+  // in the browser (lib/pos/localQuote.ts) — no request per tap — and the server
+  // checks the total again at Charge (expected_total_inr). Anything that
+  // depends on the customer's account goes to the quote endpoint as before:
   // VAL-1: the coupon and the points ride along, so the discount lines shown
   // here are the server's own arithmetic — the same call the web checkout makes,
   // plus the phone, which the server (not this client) turns into the account
@@ -944,6 +976,35 @@ export function PosOrderEntry({
       setBillStale(false);
       return;
     }
+    // Priced on this screen when nothing in the bill depends on the customer's
+    // account. A cart this screen can't price (its menu says an item is off) is
+    // left to the server, whose answer — and reason — is the one that counts.
+    const serverNeeded = needsServerQuote({
+      hasPricing: posPricing !== null,
+      couponCode,
+      redeemPoints,
+      passCups,
+      ritualAvailable: ritual !== null,
+      serverPricingPinned,
+    });
+    if (!serverNeeded && posPricing) {
+      const local = quoteLocally({
+        items: orderItemsOf(cart),
+        menuItems,
+        pricing: posPricing,
+        isDineIn: orderType === 'dine_in',
+      });
+      if (local.ok) {
+        setBill({ ...local.bill, offer_label: offerLabel(local.offers.map((o) => o.name)) });
+        setQuotedCoupon(null);
+        setQuotedPoints(null);
+        setQuotedPass(null);
+        setQuoteError(null);
+        setBillStale(false);
+        return;
+      }
+    }
+
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | null = null;
     setBillStale(true);
@@ -1005,7 +1066,22 @@ export function PosOrderEntry({
     };
     // refreshTick: a 409 from the order POST asks for a fresh quote.
     // quoteRetry: the last quote got no answer.
-  }, [cart, subtotal, orderType, couponCode, redeemPoints, passCups, lookupPhone, refreshTick, quoteRetry]);
+    // menuItems/posPricing: a fresh menu or pricing re-prices a local bill.
+  }, [
+    cart,
+    subtotal,
+    orderType,
+    couponCode,
+    redeemPoints,
+    passCups,
+    lookupPhone,
+    refreshTick,
+    quoteRetry,
+    menuItems,
+    posPricing,
+    ritual,
+    serverPricingPinned,
+  ]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
   const addLine = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
@@ -1173,6 +1249,7 @@ export function PosOrderEntry({
       setCart([]);
       setBill(null);
       setSearch('');
+      setServerPricingPinned(false);
     } else {
       resetForNextOrder();
     }
@@ -1259,6 +1336,11 @@ export function PosOrderEntry({
       // the KOT and receipt print without a request each.
       if (parts) body.settlement = { parts };
       if (autoPrint.kot || autoPrint.bill) body.include_print_order = true;
+      // The total on screen — priced here or by the quote route. The server
+      // prices the order again and refuses it, before creating anything, if
+      // its total differs (409 total_changed below): no money moves on a
+      // number the staffer didn't see.
+      if (bill && !billStale) body.expected_total_inr = bill.total_inr;
 
       // POS4-2: one key per attempted order, generated BEFORE the request and
       // reused if this submit is retried — that's what makes a replay
@@ -1272,6 +1354,21 @@ export function PosOrderEntry({
 
       if (res.status !== 201) {
         const data = await res.json().catch(() => ({}));
+        // The server's total differs from the one on screen (a price, an offer
+        // or a setting changed since the menu loaded). Nothing was created. Show
+        // the server's bill, price the rest of this order there, refresh the
+        // menu, and let the staffer charge again with the same key.
+        if (res.status === 409 && data.code === 'total_changed' && data.bill) {
+          setBill({
+            ...(data.bill as PosBill),
+            offer_label: offerLabel(((data.offers ?? []) as AppliedOffer[]).map((o) => o.name)),
+          });
+          setBillStale(false);
+          setServerPricingPinned(true);
+          setSubmitError(data.error ?? 'The bill changed — check the new total and charge again.');
+          fetchMenu();
+          return;
+        }
         setSubmitError(data.error ?? 'Could not place the order. Please try again.');
         // The Ritual (or a coupon, or Beanies) changed between the quote and the
         // order: the server rolled the order back. Price the cart again and look
@@ -1471,6 +1568,8 @@ export function PosOrderEntry({
   function resetForNextOrder() {
     // A new order attempt gets a new key — this is the ONLY place it rotates.
     idempotencyKey.current = newIdempotencyKey();
+    // The next order is priced on this screen again.
+    setServerPricingPinned(false);
     setCart([]);
     setBill(null);
     setTableId(null);

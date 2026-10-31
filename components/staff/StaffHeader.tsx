@@ -27,6 +27,7 @@ import { finishNavigation, startNavigation, usePendingNavigation } from '@/lib/s
 import { POS_REFRESH_EVENT } from '@/lib/staff/posRefresh';
 import { clearSnapshots } from '@/lib/pos/localSnapshot';
 import { clearAllDrafts } from '@/lib/pos/draftOrder';
+import { resetOrdersFeed } from '@/lib/staff/ordersFeed';
 import { isDesktopApp } from '@/lib/desktop/isDesktopApp';
 import { SHOW_SHORTCUTS_EVENT, useRunPosRefresh } from '@/components/staff/PosShortcuts';
 import { SETTINGS_ROOT } from '@/lib/staff/settingsNav';
@@ -247,6 +248,7 @@ export function StaffHeader({
     // order) belongs to this shift: the next person starts from the server.
     clearSnapshots();
     clearAllDrafts();
+    resetOrdersFeed();
 
     const { href, hardReload } = logoutDestination(Boolean(pinControls));
     if (hardReload) {

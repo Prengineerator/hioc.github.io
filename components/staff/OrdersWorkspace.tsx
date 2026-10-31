@@ -5,8 +5,8 @@
 // One component so the two share the order detail, settle, void, comp, refund
 // and print handling instead of duplicating it.
 //
-// Live staff order cockpit (S1–S3, S5, S7). Realtime board (< 2s via
-// useStaffOrdersRealtime, poll fallback), persistent new-order alert, order
+// Live staff order cockpit (S1–S3, S5, S7). Realtime board (< 2s via the
+// shared orders feed, lib/staff/ordersFeed.ts, poll fallback), persistent new-order alert, order
 // detail with accept/reject/ETA/advance/cancel/payment, and search. The
 // order-alert sound and counter mode live in the staff shell
 // (components/staff/StaffShell.tsx) so they survive switching tabs.
@@ -25,10 +25,8 @@ import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
 import { NotClockedInBanner } from '@/components/staff/NotClockedInBanner';
 import { LeaveReminderBanner } from '@/components/staff/LeaveReminderBanner';
 import { Spinner } from '@/components/ui/Spinner';
-import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
 import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
-import { readSnapshot, writeSnapshot } from '@/lib/pos/localSnapshot';
-import { ACTIVE_ORDERS_SNAPSHOT, ACTIVE_ORDERS_SNAPSHOT_OPTS } from '@/lib/pos/posSnapshots';
+import { fetchOrdersFeed, useOrdersFeed, useOrdersFeedBoard } from '@/lib/staff/ordersFeed';
 import { usePosRefresh } from '@/lib/staff/posRefresh';
 import { sharedJson, STORE_SETTINGS_MAX_AGE_MS, STORE_SETTINGS_URL } from '@/lib/pos/sharedJson';
 import { transitionExtra, type QuickAction } from '@/lib/orders/quickActions';
@@ -83,38 +81,72 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   // The full payment step for one order (split, cash change, change payment).
   const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
 
-  const fetchOrders = useCallback(async () => {
+  // Today's orders come from the shared feed (lib/staff/ordersFeed.ts): the
+  // staff shell's one realtime channel fetches them once per change for this
+  // board, Tables and the new-order alarm alike — this board used to fetch
+  // the same change again on a channel of its own. Another day's orders are
+  // fetched here, on request.
+  // Live orders is always today's board (also after midnight, when `date`
+  // still names the day the screen opened on).
+  const onToday = view === 'live' || date === today;
+  const onTodayRef = useRef(onToday);
+  onTodayRef.current = onToday;
+  const feed = useOrdersFeed();
+  useOrdersFeedBoard(onToday);
+
+  const fetchPastDay = useCallback(async () => {
+    const day = dateRef.current;
     try {
-      const day = dateRef.current;
-      const url = view === 'today' && day !== istDateIso() ? `/api/orders?date=${day}` : '/api/orders';
-      const res = await fetchWithTimeout(url, { cache: 'no-store' });
+      const res = await fetchWithTimeout(`/api/orders?date=${day}`, { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
       // The staffer moved to another day while this was in flight.
       if (dateRef.current !== day) return;
-      const next: OrderWithItems[] = data.orders ?? [];
-      setOrders(next);
-      // Today's running orders, shared with Tables (lib/pos/posSnapshots.ts).
-      if (url === '/api/orders') writeSnapshot(ACTIVE_ORDERS_SNAPSHOT, next, ACTIVE_ORDERS_SNAPSHOT_OPTS);
-
-      // A HIOC Ritual sale is never a kitchen order, so it never rings the alert.
-      const received = new Set(kitchenOrders(next).filter((o) => o.status === 'received').map((o) => o.id));
-      if (prevReceivedRef.current) {
-        const prev = prevReceivedRef.current;
-        setNewOrderIds((cur) => {
-          const s = new Set(cur);
-          received.forEach((id) => !prev.has(id) && s.add(id));
-          s.forEach((id) => !received.has(id) && s.delete(id));
-          return s;
-        });
-      }
-      prevReceivedRef.current = received;
+      setOrders(data.orders ?? []);
     } catch {
-      /* keep last-known-good; realtime/poll retries */
+      /* keep last-known-good */
     } finally {
-      setLoading(false);
+      if (dateRef.current === day) setLoading(false);
     }
-  }, [view]);
+  }, []);
+
+  /** Fresh data for the day on screen (after a status change, a payment, Refresh). */
+  const fetchOrders = useCallback(async () => {
+    if (onTodayRef.current) {
+      // One fetch: the board and the alarm both read it.
+      await fetchOrdersFeed();
+      return;
+    }
+    refreshNewOrders(); // the alarm watches today, whatever day is on screen
+    await fetchPastDay();
+  }, [fetchPastDay, refreshNewOrders]);
+
+  // Today's list onto the board, before the first paint: switching back to
+  // the board draws what the feed already holds at once (and the feed fetches
+  // behind it unless it is moments old). Orders that turned up since the last
+  // list are marked new.
+  useIsomorphicLayoutEffect(() => {
+    if (!onToday) return;
+    if (feed.orders === null) {
+      if (feed.failed) setLoading(false);
+      return;
+    }
+    const next = feed.orders;
+    setOrders(next);
+    setLoading(false);
+    // A HIOC Ritual sale is never a kitchen order, so it never rings the alert.
+    const received = new Set(kitchenOrders(next).filter((o) => o.status === 'received').map((o) => o.id));
+    if (prevReceivedRef.current) {
+      const prev = prevReceivedRef.current;
+      setNewOrderIds((cur) => {
+        const s = new Set(cur);
+        received.forEach((id) => !prev.has(id) && s.add(id));
+        s.forEach((id) => !received.has(id) && s.delete(id));
+        return s;
+      });
+    }
+    prevReceivedRef.current = received;
+  }, [feed.orders, feed.failed, onToday]);
 
   const changeDate = useCallback(
     (next: string) => {
@@ -124,34 +156,26 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
       prevReceivedRef.current = null;
       setNewOrderIds(new Set());
       setDate(next);
+      // Today: the feed has it (the board hook fetches if it's not fresh).
+      if (next === istDateIso()) return;
       setLoading(true);
-      void fetchOrders();
+      void fetchPastDay();
     },
-    [fetchOrders],
+    [fetchPastDay],
   );
   const dayLabel = date === today ? 'today' : `on ${shortIstDate(date)}`;
 
-  const connection = useStaffOrdersRealtime(fetchOrders);
-  usePosRefresh(() => void fetchOrders()); // the header's Refresh / F5
-
-  // Draw the running orders this page load last saw (from this board or
-  // Tables) at once, then refetch: switching back to the board is instant.
-  // Memory only — it holds customer names and numbers. Read in a layout effect
-  // so the kept board is up before the first paint; on a full load there is
-  // nothing kept yet and the spinner shows as before.
-  useIsomorphicLayoutEffect(() => {
-    const kept = readSnapshot(ACTIVE_ORDERS_SNAPSHOT, ACTIVE_ORDERS_SNAPSHOT_OPTS);
-    if (!kept) return;
-    setOrders((cur) => (cur.length ? cur : kept.data));
-    setLoading(false);
-  }, []);
+  const connection = feed.connection;
+  // Refresh / F5: today's feed is refreshed by the shell; another day here.
+  usePosRefresh(() => {
+    if (!onTodayRef.current) void fetchPastDay();
+  });
 
   useEffect(() => {
-    fetchOrders();
     void sharedJson<{ settings?: { default_prep_min?: number } }>(STORE_SETTINGS_URL, STORE_SETTINGS_MAX_AGE_MS).then(
       (d) => setPrepMin(d?.settings?.default_prep_min ?? 15),
     );
-  }, [fetchOrders]);
+  }, []);
 
   // Keep the open detail modal in sync with fresh data.
   useEffect(() => {
@@ -205,10 +229,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
       } catch {
         showToast('Could not update order — check the connection');
       } finally {
-        // Stop the shell's alarm right away once an order is accepted/rejected.
-        refreshNewOrders();
         // Re-enable the card only after the refetch: the next tap must carry the
         // order's NEW version, or the server answers 409 to a perfectly valid move.
+        // For today the one feed fetch also stops the shell's alarm right away.
         await fetchOrders();
         setBusyIds((prev) => {
           const s = new Set(prev);
@@ -217,7 +240,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         });
       }
     },
-    [fetchOrders, refreshNewOrders, autoPrint, enqueuePrint],
+    [fetchOrders, autoPrint, enqueuePrint],
   );
 
   // The corner button and "⋯" menu on a card. A one-tap move goes straight to
