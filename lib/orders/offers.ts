@@ -89,6 +89,42 @@ export function isOfferLive(
   return true;
 }
 
+/** What a stored offer row needs for "is it live, and on what". */
+export type OfferRow = Pick<MenuOffer, 'id' | 'name' | 'menu_item_id' | 'tier_prices' | 'active' | 'valid_from' | 'valid_to'>;
+
+/**
+ * The offers live at `now`, keyed by menu item — the ONE rule for it. The
+ * server applies it to the rows it reads (offersServer.ts loadActiveOffers);
+ * the POS applies it to the rows that came with its menu, at the moment it
+ * prices a cart (lib/pos/localQuote.ts), so an offer that starts or ends
+ * during the shift is honoured the same way on both sides.
+ *
+ * Malformed rows are skipped (never an offer), and one offer per item: should
+ * two ever be live, the first wins rather than stacking.
+ */
+export function liveOffersByItem(rows: readonly Partial<OfferRow>[], now: Date = new Date()): Map<string, ActiveOffer> {
+  const byItem = new Map<string, ActiveOffer>();
+  for (const row of rows) {
+    const prices = normalizeOfferPrices(row.tier_prices);
+    if (
+      typeof row.id !== 'string' ||
+      typeof row.menu_item_id !== 'string' ||
+      typeof row.name !== 'string' ||
+      !prices ||
+      !isOfferLive(
+        { active: row.active === true, valid_from: row.valid_from ?? null, valid_to: row.valid_to ?? null, tier_prices: prices },
+        now,
+      )
+    ) {
+      continue;
+    }
+    if (!byItem.has(row.menu_item_id)) {
+      byItem.set(row.menu_item_id, { id: row.id, name: row.name.trim(), tier_prices: prices });
+    }
+  }
+  return byItem;
+}
+
 /** "1 for ₹299 · 2 for ₹499 · 3 for ₹599" — how an offer reads in the owner's list. */
 export function describeTiers(prices: readonly number[]): string {
   return prices.map((p, i) => `${i + 1} for ₹${p}`).join(' · ');

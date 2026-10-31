@@ -20,10 +20,16 @@ import {
 } from '@/lib/menu/applyMenuChange';
 import { createChangeRequest, createPayloadFromValues } from '@/lib/menu/changeRequests';
 import type { MenuChangePendingResponse } from '@/lib/menu/changeRequestTypes';
+import { loadOfferRows } from '@/lib/orders/offersServer';
+import { pricingSettingsOf } from '@/lib/pos/localQuote';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/menu — public. Optional ?category=... and ?includeUnavailable=true.
+// ?pos=true (a signed-in counter only) also returns what the POS needs to
+// price a cart on its own screen — the store's GST/packaging settings and the
+// switched-on multi-buy offers (lib/pos/localQuote.ts) — in this same answer,
+// rather than one request per tap to the quote route.
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
 
@@ -44,6 +50,7 @@ export async function GET(request: Request) {
   // The menu editor needs the whole menu, switched off or not (saving an item
   // rewrites its sizes from the form — a size missing here would be deleted).
   const allSizes = searchParams.get('allSizes') === 'true' && isCounter;
+  const wantsPos = searchParams.get('pos') === 'true' && isCounter;
 
   // Public menu reads go through the anon-key client — RLS's
   // `*_public_read` select policies (using (true)) cover this.
@@ -64,7 +71,13 @@ export async function GET(request: Request) {
 
   // Settings only drive the on/off switches: if they can't be read, the menu
   // still loads (and orders are still checked against them server-side).
-  const [{ data, error }, settings] = await Promise.all([query, getStoreSettings().catch(() => null)]);
+  const [{ data, error }, settings, offerRows] = await Promise.all([
+    query,
+    getStoreSettings().catch(() => null),
+    // Every switched-on offer, windows included: the POS decides "live" when it
+    // prices (liveOffersByItem). A failed read is no offers, never an error.
+    wantsPos ? loadOfferRows(createAdminSupabaseClient()) : Promise.resolve(null),
+  ]);
 
   if (error) {
     return errorResponse(500, 'Failed to load menu');
@@ -83,7 +96,10 @@ export async function GET(request: Request) {
     // Ritual is visible on a menu until the owner switches it on.
     .map((item) => ({ ...item, pass_eligible: flags.coffeePass === true && item.pass_eligible === true }));
 
-  return NextResponse.json({ items });
+  // No settings, no local pricing: the POS then asks the quote route as before.
+  const pos = wantsPos && settings ? { settings: pricingSettingsOf(settings), offers: offerRows ?? [] } : undefined;
+
+  return NextResponse.json(pos ? { items, pos } : { items });
 }
 
 // POST /api/menu — staff-only.

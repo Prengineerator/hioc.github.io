@@ -1,10 +1,10 @@
 'use client';
 
 // Staff tables board (POS-3). A read-only, at-a-glance projection of every
-// active table's state, grouped by zone: FREE vs OCCUPIED. It reuses the exact
-// board plumbing the Orders queue uses — one GET /api/orders fetch kept live via
-// useStaffOrdersRealtime (Supabase postgres_changes + a poll backstop) — plus a
-// one-shot GET /api/tables for the registry. All occupancy reasoning is the pure
+// active table's state, grouped by zone: FREE vs OCCUPIED. Today's orders come
+// from the shared orders feed (lib/staff/ordersFeed.ts — the staff shell's one
+// realtime channel and one fetch per change, shared with Live orders and the
+// new-order alarm), plus GET /api/tables for the registry. All occupancy reasoning is the pure
 // lib/staff/tableOccupancy helper (unit-tested); this file only renders.
 //
 // Flows (POS-3 AC):
@@ -21,13 +21,12 @@ import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { useRouter } from 'next/navigation';
 import { Spinner } from '@/components/ui/Spinner';
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
-import { useStaffOrdersRealtime, type RealtimeConnection } from '@/lib/realtime/hooks';
+import type { RealtimeConnection } from '@/lib/realtime/hooks';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
 import { readSnapshot, snapshotAgeLabel, writeSnapshot } from '@/lib/pos/localSnapshot';
+import { fetchOrdersFeed, useOrdersFeed, useOrdersFeedBoard } from '@/lib/staff/ordersFeed';
 import {
-  ACTIVE_ORDERS_SNAPSHOT,
-  ACTIVE_ORDERS_SNAPSHOT_OPTS,
   TABLES_BOARD_SNAPSHOT,
   TABLES_BOARD_SNAPSHOT_OPTS,
   TABLES_SNAPSHOT,
@@ -53,96 +52,83 @@ import {
 // keeps React from warning.
 const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
+/** A tables list read this recently (here or on New order) isn't read again on open. */
+const TABLES_REFETCH_AFTER_MS = 60_000;
+
 export function TablesBoard() {
   const router = useRouter();
   const [tables, setTables] = useState<StaffTable[]>([]);
-  const [orders, setOrders] = useState<OrderWithItems[]>([]);
   const [tablesLoaded, setTablesLoaded] = useState(false);
-  const [ordersLoaded, setOrdersLoaded] = useState(false);
+  const [tablesFailed, setTablesFailed] = useState(false);
   const [expandedTableId, setExpandedTableId] = useState<string | null>(null);
-  // When the board on screen is a kept copy rather than a fresh answer: the
-  // time it was kept, and whether the latest attempt to replace it failed.
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [refreshFailed, setRefreshFailed] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  // Answers can land out of order (a slow one, then a quick one); only the
-  // latest request's answer is drawn.
-  const ordersSeq = useRef(0);
+  // The trimmed copy of the board kept for the tab's session — what draws right
+  // after a reload, until the feed's first answer replaces it.
+  const [keptOrders, setKeptOrders] = useState<{ savedAt: number; data: OrderWithItems[] } | null>(null);
+  const tablesFresh = useRef(false);
 
-  // Local first: draw the last tables and orders this machine saw, then ask
-  // the server. A tap on Tables used to show a spinner until both answers came
-  // back; now the board is there at once and corrects itself a moment later.
+  // Today's orders: the shared feed, kept live by the staff shell. While this
+  // board is up the feed fetches the whole day; on open it fetches at once
+  // unless what it holds is moments old (coming straight from Live orders).
+  const feed = useOrdersFeed();
+  useOrdersFeedBoard();
+
+  // Local first: draw the last tables this machine saw, and — after a reload,
+  // when the feed holds nothing yet — the kept board, then let the answers in.
   useIsomorphicLayoutEffect(() => {
-    const keptTables = readSnapshot(TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS);
-    if (keptTables) {
-      setTables(keptTables.data);
+    const kt = readSnapshot(TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS);
+    if (kt) {
+      setTables(kt.data);
       setTablesLoaded(true);
+      tablesFresh.current = Date.now() - kt.savedAt < TABLES_REFETCH_AFTER_MS;
     }
-    // The full board from Live orders (this page load), else the trimmed
-    // copy from before a reload.
-    const keptOrders =
-      readSnapshot(ACTIVE_ORDERS_SNAPSHOT, ACTIVE_ORDERS_SNAPSHOT_OPTS) ??
-      readSnapshot(TABLES_BOARD_SNAPSHOT, TABLES_BOARD_SNAPSHOT_OPTS);
-    if (keptOrders) {
-      setOrders(keptOrders.data);
-      setOrdersLoaded(true);
-      setSavedAt(keptOrders.savedAt);
-    }
+    const ko = readSnapshot(TABLES_BOARD_SNAPSHOT, TABLES_BOARD_SNAPSHOT_OPTS);
+    if (ko) setKeptOrders(ko);
   }, []);
 
-  // Orders — refetched by the realtime hook (+ poll fallback), same as /staff.
-  const fetchOrders = useCallback(async () => {
-    const seq = ++ordersSeq.current;
-    setRefreshing(true);
-    try {
-      const res = await fetchWithTimeout('/api/orders', { cache: 'no-store' });
-      if (!res.ok) throw new Error(`orders ${res.status}`);
-      const data = await res.json();
-      if (seq !== ordersSeq.current) return; // a newer request is on its way
-      const next: OrderWithItems[] = data.orders ?? [];
-      setOrders(next);
-      setSavedAt(null);
-      setRefreshFailed(false);
-      writeSnapshot(ACTIVE_ORDERS_SNAPSHOT, next, ACTIVE_ORDERS_SNAPSHOT_OPTS);
-      writeSnapshot(TABLES_BOARD_SNAPSHOT, toTablesBoardSnapshot(next), TABLES_BOARD_SNAPSHOT_OPTS);
-    } catch {
-      /* keep last-known-good (often the kept copy); realtime/poll retries */
-      if (seq === ordersSeq.current) setRefreshFailed(true);
-    } finally {
-      if (seq === ordersSeq.current) {
-        setRefreshing(false);
-        setOrdersLoaded(true);
-      }
+  // Each fresh day's list also becomes the kept board for a reload (open
+  // dine-in orders only, customer details blanked).
+  useEffect(() => {
+    if (feed.orders && feed.fullAt > 0) {
+      writeSnapshot(TABLES_BOARD_SNAPSHOT, toTablesBoardSnapshot(feed.orders), TABLES_BOARD_SNAPSHOT_OPTS, feed.fullAt);
     }
-  }, []);
+  }, [feed.orders, feed.fullAt]);
 
-  const connection = useStaffOrdersRealtime(fetchOrders);
+  const orders = useMemo(() => feed.orders ?? keptOrders?.data ?? [], [feed.orders, keptOrders]);
+  const ordersLoaded = feed.orders !== null || keptOrders !== null || feed.failed;
+  // When the board on screen is not a fresh answer: when it was fetched (or
+  // kept), for the "couldn't reach the server" note.
+  const savedAt = feed.orders !== null ? feed.fullAt : (keptOrders?.savedAt ?? null);
+  const refreshFailed = feed.failed || tablesFailed;
+  const refreshing = feed.loading;
+  const connection = feed.connection;
 
-  // Tables — the active registry rarely changes mid-shift; read on every open
-  // (and on Refresh), drawn from the kept copy until the answer lands.
+  // Tables — the active registry rarely changes mid-shift; read on open (unless
+  // read a moment ago) and on Refresh, drawn from the kept copy meanwhile.
   const fetchTables = useCallback(() => {
     fetchWithTimeout('/api/tables', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`tables ${res.status}`))))
       .then((data: { tables?: StaffTable[] }) => {
         if (!Array.isArray(data.tables)) return;
         setTables(data.tables);
+        setTablesFailed(false);
         writeSnapshot(TABLES_SNAPSHOT, data.tables, TABLES_SNAPSHOT_OPTS);
       })
       // A failed read keeps the kept registry rather than emptying the board.
-      .catch(() => setRefreshFailed(true))
+      .catch(() => setTablesFailed(true))
       .finally(() => setTablesLoaded(true));
   }, []);
 
   useEffect(() => {
-    void fetchOrders();
-    fetchTables();
-  }, [fetchOrders, fetchTables]);
+    if (!tablesFresh.current) fetchTables();
+  }, [fetchTables]);
 
-  // The header's Refresh / F5.
-  usePosRefresh(() => {
-    void fetchOrders();
+  // The header's Refresh / F5 (the shell refreshes the orders feed itself).
+  usePosRefresh(fetchTables);
+
+  const retry = () => {
+    void fetchOrdersFeed();
     fetchTables();
-  });
+  };
 
   const zones = useMemo(() => groupTablesByZone(tables, orders), [tables, orders]);
   const loading = !tablesLoaded || !ordersLoaded;
@@ -182,16 +168,13 @@ export function TablesBoard() {
           className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-charcoal"
         >
           <span>
-            {savedAt !== null
+            {savedAt
               ? `Showing the tables as of ${snapshotAgeLabel(savedAt)} — couldn't reach the server.`
               : "Couldn't load the latest orders — the board may be out of date."}
           </span>
           <button
             type="button"
-            onClick={() => {
-              void fetchOrders();
-              fetchTables();
-            }}
+            onClick={retry}
             className="rounded-md border border-charcoal px-3 py-1 text-xs font-bold hover:bg-charcoal hover:text-cream"
           >
             Try again

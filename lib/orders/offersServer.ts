@@ -4,7 +4,7 @@
 // offer onto each line it applies to.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { isOfferLive, normalizeOfferPrices, type ActiveOffer, type MenuOffer } from '@/lib/orders/offers';
+import { liveOffersByItem, type ActiveOffer, type OfferRow } from '@/lib/orders/offers';
 
 /** Live offers by menu item id. */
 export type OffersByItem = ReadonlyMap<string, ActiveOffer>;
@@ -19,43 +19,33 @@ export async function loadActiveOffers(
   menuItemIds: readonly string[],
   now: Date = new Date(),
 ): Promise<OffersByItem> {
-  const byItem = new Map<string, ActiveOffer>();
-  if (menuItemIds.length === 0) return byItem;
+  if (menuItemIds.length === 0) return new Map();
+  return liveOffersByItem(await loadOfferRows(admin, menuItemIds), now);
+}
+
+/**
+ * The switched-on offer rows (on `menuItemIds`, or on every item when omitted),
+ * windows included, for a caller that decides "live" itself at the moment it
+ * prices: the POS gets these with its menu (GET /api/menu) and applies
+ * liveOffersByItem when it prices a cart. Never throws: a failed read (the
+ * table not created yet, a network blip) is no offers.
+ */
+export async function loadOfferRows(admin: SupabaseClient, menuItemIds?: readonly string[]): Promise<OfferRow[]> {
   try {
-    const { data, error } = await admin
+    let query = admin
       .from('menu_offers')
       .select('id, name, menu_item_id, tier_prices, active, valid_from, valid_to')
-      .eq('active', true)
-      .in('menu_item_id', [...menuItemIds]);
+      .eq('active', true);
+    if (menuItemIds) query = query.in('menu_item_id', [...menuItemIds]);
+    const { data, error } = await query;
     if (error) {
       // 42P01: supabase/2026-10-item-offers.sql not applied yet — no offers.
-      if (error.code !== '42P01') console.error('loadActiveOffers failed', error);
-      return byItem;
+      if (error.code !== '42P01') console.error('loadOfferRows failed', error);
+      return [];
     }
-    for (const row of (data ?? []) as Partial<MenuOffer>[]) {
-      const prices = normalizeOfferPrices(row.tier_prices);
-      if (
-        typeof row.id !== 'string' ||
-        typeof row.menu_item_id !== 'string' ||
-        typeof row.name !== 'string' ||
-        !prices ||
-        !isOfferLive({
-          active: row.active === true,
-          valid_from: row.valid_from ?? null,
-          valid_to: row.valid_to ?? null,
-          tier_prices: prices,
-        }, now)
-      ) {
-        continue;
-      }
-      // One live offer per item (a unique index); should two ever be live, the
-      // first read wins rather than stacking.
-      if (!byItem.has(row.menu_item_id)) {
-        byItem.set(row.menu_item_id, { id: row.id, name: row.name.trim(), tier_prices: prices });
-      }
-    }
+    return (data ?? []) as OfferRow[];
   } catch (err) {
-    console.error('loadActiveOffers threw', err);
+    console.error('loadOfferRows threw', err);
+    return [];
   }
-  return byItem;
 }

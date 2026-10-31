@@ -21,9 +21,13 @@ import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/ho
 import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
 import { canEditMenu, canTakeOrders, type StaffSurface } from '@/lib/staff/surfaceRules';
-import { kitchenOrders } from '@/lib/pos/ritual';
-import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
 import { usePosRefresh } from '@/lib/staff/posRefresh';
+import {
+  ensureOrdersFeedLoaded,
+  fetchOrdersFeed,
+  setOrdersFeedConnection,
+  useOrdersFeed,
+} from '@/lib/staff/ordersFeed';
 
 const CHIME_INTERVAL_MS = 5000;
 
@@ -104,7 +108,7 @@ export function StaffShell({
   const [soundReady, setSoundReady] = useState(false);
   const [counterMode, setCounterModeState] = useState(false);
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
-  const previousReceived = useRef<Set<string> | null>(null);
+  const previousReceived = useRef<ReadonlySet<string> | null>(null);
 
   // Restore the device's settings after mount (storage isn't available during
   // server rendering).
@@ -149,37 +153,37 @@ export function StaffShell({
     });
   }, [soundOn, soundReady]);
 
-  // New-order watch — every staff page. Only the waiting orders are fetched.
-  const fetchReceived = useCallback(async () => {
-    try {
-      const res = await fetchWithTimeout('/api/orders?status=received', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = (await res.json()) as { orders?: { id: string; order_kind?: string }[] };
-      // A HIOC Ritual sale is never a kitchen order, so it never rings the alarm.
-      const received = new Set(kitchenOrders(data.orders ?? []).map((o) => o.id));
-      setNewIds((current) => nextNewOrderIds(previousReceived.current, received, current));
-      previousReceived.current = received;
-    } catch {
-      // Keep the last known state; the poll retries.
-    }
-  }, []);
-
-  // Its own channel name: the Orders page keeps its 'staff-orders' channel.
+  // New-order watch — every staff page — through the shared orders feed
+  // (lib/staff/ordersFeed.ts): ONE realtime channel and ONE fetch per order
+  // change for the alarm AND the board on screen (Live orders, Orders,
+  // Tables), which used to fetch the same change again on a channel of their
+  // own. With no board up, only the waiting orders are fetched.
   // 'run' while hidden: this is the alarm, and it must still ring for an
   // online order when the POS tab is in the background.
-  usePostgresChangesRefresh({
+  const fetchFeed = useCallback(() => void fetchOrdersFeed(), []);
+  const connection = usePostgresChangesRefresh({
     table: 'orders',
     channelName: 'staff-shell-new-orders',
-    onChange: fetchReceived,
+    onChange: fetchFeed,
     requiresSession: true,
     whileHidden: 'run',
     coalesceMs: ORDERS_COALESCE_MS,
   });
+  useEffect(() => setOrdersFeedConnection(connection), [connection]);
 
   useEffect(() => {
-    void fetchReceived();
-  }, [fetchReceived]);
-  usePosRefresh(fetchReceived);
+    ensureOrdersFeedLoaded();
+  }, []);
+  usePosRefresh(fetchFeed);
+
+  // A HIOC Ritual sale is never a kitchen order, so it never rings the alarm
+  // (the feed's `received` already leaves those out).
+  const { received } = useOrdersFeed();
+  useEffect(() => {
+    if (!received) return;
+    setNewIds((current) => nextNewOrderIds(previousReceived.current, received, current));
+    previousReceived.current = received;
+  }, [received]);
 
   const newOrderCount = newIds.size;
   const previousCount = useRef(0);
@@ -226,7 +230,7 @@ export function StaffShell({
     };
   }, [counterMode]);
 
-  const refreshNewOrders = useCallback(() => void fetchReceived(), [fetchReceived]);
+  const refreshNewOrders = fetchFeed;
   const value = useMemo<StaffShellValue>(
     () => ({
       soundOn,
