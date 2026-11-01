@@ -560,3 +560,27 @@ export function spendOfferBlocks(
 export function spendOfferOnBill(order: { offer_name?: string | null; offer_discount_inr?: number | null }): boolean {
   return (order.offer_name ?? '').trim() !== '' && (order.offer_discount_inr ?? 0) > 0;
 }
+
+/**
+ * What share of an offer discount sits on GST-liable lines (0..1), for GST:
+ * an offer is a discount on its OWN item, so it comes out of that item's value
+ * — a ₹350 offer on a GST-free jar leaves the café items' GST untouched,
+ * instead of being spread over the whole bill like a coupon.
+ *
+ * Shared over the lines that carry an offer snapshot (offer_unit_inr: the lines
+ * of an item with a live offer when sold), by their totals. The bill (create,
+ * quote, the POS, every correction) and the GST export (lib/reports/exports/
+ * orderData.ts) use this same rule, so the stored GST and the report agree.
+ * With no such line (data that shouldn't exist) the offer is spread over every
+ * line, as a coupon is.
+ */
+export function offerTaxableShare(
+  lines: readonly { voided?: boolean | null; line_total_inr: number; gst_exempt?: boolean | null; offer_unit_inr?: number | null }[],
+): number {
+  const live = lines.filter((l) => !l.voided && l.line_total_inr > 0);
+  const carriers = live.filter((l) => typeof l.offer_unit_inr === 'number');
+  const pool = carriers.length > 0 ? carriers : live;
+  const total = pool.reduce((s, l) => s + l.line_total_inr, 0);
+  if (total <= 0) return 0;
+  return pool.filter((l) => l.gst_exempt !== true).reduce((s, l) => s + l.line_total_inr, 0) / total;
+}

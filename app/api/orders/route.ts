@@ -43,7 +43,7 @@ import { markProfileStale } from '@/lib/suggest/profileStore';
 import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
 import { allocateOrderPass, afterOffers, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
-import { billOffers, type SpendOffer } from '@/lib/orders/offers';
+import { billOffers, offerTaxableShare, type SpendOffer } from '@/lib/orders/offers';
 import {
   loadActiveOffers,
   loadActiveSpendOffers,
@@ -683,6 +683,9 @@ export async function POST(request: Request) {
     subtotalInr: subtotal_inr,
     taxableSubtotalInr: resolved.taxableSubtotalInr,
     offerDiscountInr: offers.discountInr,
+    // An offer comes out of its own item's value for GST (a GST-free jar's
+    // offer leaves the café items' GST alone).
+    offerTaxableShare: offerTaxableShare(resolvedLines),
     couponDiscountInr,
     pointsDiscountInr,
     passCoveredInr,

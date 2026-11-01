@@ -33,8 +33,15 @@ export interface OrderBillInput {
   subtotalInr: number;
   /** The part of the subtotal GST applies to (every line but GST-exempt ones). */
   taxableSubtotalInr: number;
-  /** Multi-buy offers on the lines (computeOffers, lib/orders/offers.ts); 0 = none. */
+  /** Offers on the lines (billOffers, lib/orders/offers.ts); 0 = none. */
   offerDiscountInr?: number;
+  /**
+   * The share of the offer on GST-liable lines (offerTaxableShare). Given, the
+   * offer comes out of its own item's value for GST (a GST-free jar's offer
+   * leaves the café items' GST alone); omitted, it is spread over the bill
+   * like a coupon (the rule before offers had their own GST treatment).
+   */
+  offerTaxableShare?: number;
   /** Computed on afterOffers(afterPass(subtotal, passCovered), offer). */
   couponDiscountInr: number;
   /** Computed on what is left after the pass AND the coupon. */
@@ -67,20 +74,84 @@ export function composeOrderBill(
   const passCovered = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
   const payable = afterPass(input.subtotalInr, passCovered);
   const offerInr = Math.min(Math.max(0, input.offerDiscountInr ?? 0), payable);
-  const discountInr =
-    offerInr +
-    Math.min(Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr), payable - offerInr);
-  // Dine-in has no packaging charge (D5), whatever the store's packaging
-  // setting: billed with none, so no GST is charged on it either.
+  const otherInr = Math.min(Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr), payable - offerInr);
+  return billWithOffer(
+    {
+      subtotalInr: input.subtotalInr,
+      taxableSubtotalInr: input.taxableSubtotalInr,
+      passCoveredInr: passCovered,
+      passCoveredTaxableInr: input.passCoveredTaxableInr,
+      offerInr,
+      offerTaxableShare: input.offerTaxableShare,
+      otherDiscountInr: otherInr,
+    },
+    // Dine-in has no packaging charge (D5), whatever the store's packaging
+    // setting: billed with none, so no GST is charged on it either.
+    input.isDineIn ? { ...input.settings, packaging_charge_inr: 0 } : input.settings,
+  );
+}
+
+/**
+ * The bill once the pass cover, the offer and the coupon/Beanies discount are
+ * known (all already clamped): the ONE place their GST treatment lives, for
+ * composeOrderBill (create, quote, the POS) and recomputeOrderTotals (every
+ * correction).
+ *
+ *   - Ritual cover leaves the subtotal and, for what it covers on GST-liable
+ *     lines, the taxable value (CP-D11).
+ *   - The offer does the same: it is a discount on its own item, so its
+ *     GST-liable share (offerTaxableShare) comes out of the taxable value and
+ *     the rest out of the exempt value. Without a share it is spread like a
+ *     coupon (the earlier rule).
+ *   - The coupon/Beanies discount is spread over what is left (computeBill).
+ *
+ *   discount_inr      = offer + coupon/Beanies     (offer_discount_inr says how much is the offer)
+ *   pass_discount_inr = the pass cover
+ *   total_inr         = subtotal + tax + packaging − discount_inr − pass_discount_inr
+ */
+export function billWithOffer(
+  input: {
+    subtotalInr: number;
+    taxableSubtotalInr: number;
+    passCoveredInr: number;
+    passCoveredTaxableInr: number;
+    offerInr: number;
+    offerTaxableShare?: number;
+    otherDiscountInr: number;
+  },
+  settings: StoreSettings,
+): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number } {
+  const pass = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
+  const offer = Math.max(0, input.offerInr);
+  const other = Math.max(0, input.otherDiscountInr);
+  if (input.offerTaxableShare === undefined || offer === 0) {
+    const bill = composePassBill(
+      {
+        subtotalInr: input.subtotalInr,
+        taxableSubtotalInr: input.taxableSubtotalInr,
+        discountInr: offer + other,
+        passCoveredInr: pass,
+        passCoveredTaxableInr: input.passCoveredTaxableInr,
+      },
+      settings,
+    );
+    return { ...bill, offer_discount_inr: offer };
+  }
+  const passTaxable = Math.min(Math.max(0, input.passCoveredTaxableInr), pass);
+  const taxableLeft = Math.max(0, Math.min(input.taxableSubtotalInr, input.subtotalInr) - passTaxable);
+  // Not rounded: GST is, once, at the end (computeBill).
+  const offerTaxable = Math.min(offer * Math.min(1, Math.max(0, input.offerTaxableShare)), taxableLeft);
   const bill = composePassBill(
     {
       subtotalInr: input.subtotalInr,
       taxableSubtotalInr: input.taxableSubtotalInr,
-      discountInr,
-      passCoveredInr: passCovered,
-      passCoveredTaxableInr: input.passCoveredTaxableInr,
+      discountInr: other,
+      // The offer leaves the subtotal and the taxable value the way cover does…
+      passCoveredInr: pass + offer,
+      passCoveredTaxableInr: passTaxable + offerTaxable,
     },
-    input.isDineIn ? { ...input.settings, packaging_charge_inr: 0 } : input.settings,
+    settings,
   );
-  return { ...bill, offer_discount_inr: offerInr };
+  // …and is reported as the discount it is.
+  return { ...bill, discount_inr: offer + other, pass_discount_inr: pass, offer_discount_inr: offer };
 }
