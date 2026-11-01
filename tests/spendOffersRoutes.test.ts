@@ -166,7 +166,7 @@ describe('POST /api/orders/quote with a spend offer', () => {
     expect(body.offers).toEqual([
       { offer_id: SPEND_ID, menu_item_id: COFFEE, name: 'Instant Coffee at ₹49', units: 1, regular_inr: 399, offer_inr: 49, discount_inr: 350 },
     ]);
-    expect(body.offer_notes).toEqual([]);
+    expect(body.offer_notes).toEqual(['Instant Coffee at ₹49: no Beanies are earned on this bill.']);
   });
 
   it('with a coupon applied it stays off and the counter is told why', async () => {

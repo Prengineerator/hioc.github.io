@@ -28,6 +28,7 @@
 --   spend_offer_redemptions    Who has had a spend offer, by phone, on which
 --                              order (once per customer).
 --
+-- A bill with a spend offer earns no Beanies (lib/loyalty/ledger.ts).
 -- It can't be combined: with a coupon or Beanies on the bill it stays off (the
 -- counter screen says why), and against the multi-buy offers the bill takes
 -- whichever saves more, never both. The rule is lib/orders/offers.ts

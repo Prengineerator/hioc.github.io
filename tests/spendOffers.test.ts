@@ -9,6 +9,7 @@ import {
   billOffers,
   describeSpendOffer,
   spendOfferBlocks,
+  spendOfferOnBill,
   liveSpendOffers,
   mergeSpendSnapshot,
   orderOfferLabel,
@@ -138,7 +139,12 @@ describe('spend offer terms', () => {
 describe('billOffers with a spend offer', () => {
   it('₹1099 of other items + 1 jar: the jar is ₹49 (₹350 off), labelled with the offer name', () => {
     const r = offersFor([waffles(7), jars(1)]);
-    expect(r).toMatchObject({ discountInr: 350, kind: 'spend', label: 'Instant Coffee at ₹49', notes: [] });
+    expect(r).toMatchObject({
+      discountInr: 350,
+      kind: 'spend',
+      label: 'Instant Coffee at ₹49',
+      notes: ['Instant Coffee at ₹49: no Beanies are earned on this bill.'],
+    });
     expect(r.offers).toEqual([
       { offer_id: SPEND_ID, menu_item_id: COFFEE, name: 'Instant Coffee at ₹49', units: 1, regular_inr: 399, offer_inr: 49, discount_inr: 350 },
     ]);
@@ -212,6 +218,13 @@ describe('the bill', () => {
     const b = bill([waffles(7), jars(1)]);
     expect(b).toMatchObject({ subtotal_inr: 1498, offer_discount_inr: 350, discount_inr: 350 });
     expect(b.total_inr).toBe(1498 - 350 + b.tax_inr);
+  });
+
+  it('a stored order with the ₹49 jar on its bill earns no Beanies; any other does', () => {
+    expect(spendOfferOnBill({ offer_name: 'Instant Coffee at ₹49', offer_discount_inr: 350 })).toBe(true);
+    expect(spendOfferOnBill({ offer_name: null, offer_discount_inr: 299 })).toBe(false); // the 1/2/3-jar offer
+    expect(spendOfferOnBill({ offer_name: 'Instant Coffee at ₹49', offer_discount_inr: 0 })).toBe(false);
+    expect(spendOfferOnBill({})).toBe(false);
   });
 
   it('the stored label wins over the lines on a printed bill', () => {

@@ -181,8 +181,8 @@ export function SpendOfferManager() {
       <p className="mb-3 text-sm text-muted">
         Spend this much, get one item at a special price — e.g. spend ₹1099, get an Instant Coffee jar at ₹49. Everything
         else on the bill counts, before GST. Once per customer, by phone number: the counter needs the customer&rsquo;s number
-        to give it. It can&rsquo;t be combined with a coupon, {LOYALTY_UNIT.many} or another offer: the bill takes whichever
-        offer saves the customer more.
+        to give it. It can&rsquo;t be combined with a coupon, {LOYALTY_UNIT.many} or another offer (the bill takes whichever
+        offer saves the customer more), and a bill with it earns no {LOYALTY_UNIT.many}.
       </p>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">{offers.length} spend offer(s)</p>
@@ -401,7 +401,8 @@ function SpendOfferForm({
         </label>
       </div>
       <p className="mt-2 text-xs text-muted">
-        One per bill, once per customer (by phone number). Not with a coupon, {LOYALTY_UNIT.many} or another offer.
+        One per bill, once per customer (by phone number). Not with a coupon, {LOYALTY_UNIT.many} or another offer, and
+        the bill earns no {LOYALTY_UNIT.many}.
       </p>
       <label className="mt-3 flex items-center gap-2 text-sm text-charcoal">
         <input type="checkbox" checked={form.active} onChange={(e) => set({ active: e.target.checked })} />

@@ -33,7 +33,8 @@
 // ₹1099, get one Instant Coffee jar at ₹49". One unit of the item drops to the
 // offer price when everything ELSE on the bill reaches the minimum (before GST
 // and packaging, not counting what Ritual cups pay for). Once per customer, by
-// phone number (spend_offer_redemptions; no number, no offer). It can't be combined:
+// phone number (spend_offer_redemptions; no number, no offer), and the bill
+// earns no Beanies (lib/loyalty/ledger.ts earnForOrder). It can't be combined:
 // with a coupon or Beanies on the bill it stays off (and says so), and against
 // the multi-buy offers the bill takes whichever saves more, never both. The
 // live spend offers whose item is on a bill are kept on the order
@@ -411,7 +412,8 @@ export interface BillOffersInput {
 export interface BillOffersResult extends OfferResult {
   /** The bill row's label for `offers` ("Instant Coffee offer"), or '' when there are none. */
   label: string;
-  /** Why an offer the bill qualified for is not on it, for the counter screen. */
+  /** For the counter screen: why an offer the bill qualified for is not on it,
+   * or what the offer on it means (a spend offer earns no Beanies). */
   notes: string[];
   /** Which kind is on the bill: a spend offer, multi-buy offers, or none. */
   kind: 'spend' | 'multi_buy' | 'none';
@@ -495,7 +497,13 @@ export function billOffers(input: BillOffersInput): BillOffersResult {
     ]);
   }
   if (bestSpend.discount_inr <= multi.discountInr) return multiResult([]);
-  return { discountInr: bestSpend.discount_inr, offers: [bestSpend], label: bestSpend.name, notes: [], kind: 'spend' };
+  return {
+    discountInr: bestSpend.discount_inr,
+    offers: [bestSpend],
+    label: bestSpend.name,
+    notes: [spendNoBeaniesNote(bestSpend.name)],
+    kind: 'spend',
+  };
 }
 
 /** The offer row's label for a stored order: the label it was billed with, else its lines' offers. */
@@ -510,6 +518,11 @@ export function orderOfferLabel(order: {
 // ---------------------------------------------------------------------------
 // Once per customer
 // ---------------------------------------------------------------------------
+
+/** The note on a bill a spend offer is on: it earns no Beanies (earnForOrder skips it). */
+export function spendNoBeaniesNote(name: string): string {
+  return `${name}: no ${LOYALTY_UNIT.many} are earned on this bill.`;
+}
 
 /** The note when a bill qualifies for a spend offer but no phone number is on the order. */
 export function spendNeedsPhoneNote(name: string): string {
@@ -537,4 +550,13 @@ export function spendOfferBlocks(
     else if (usedOfferIds.has(offer.id)) blocked.set(offer.id, spendAlreadyUsedNote(offer.name));
   }
   return blocked;
+}
+
+/**
+ * Whether a stored order has a spend offer on its bill (the ₹49 jar). Such a
+ * bill earns no Beanies: the offer can't be combined with them, earning
+ * included. orders.offer_name is only ever set for a spend offer.
+ */
+export function spendOfferOnBill(order: { offer_name?: string | null; offer_discount_inr?: number | null }): boolean {
+  return (order.offer_name ?? '').trim() !== '' && (order.offer_discount_inr ?? 0) > 0;
 }
