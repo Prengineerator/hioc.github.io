@@ -8,7 +8,9 @@ import type { FeedbackRequest } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 // GET or POST /api/cron/feedback-requests — polled by pg_cron every 5 minutes
-// (supabase/2026-10-order-feedback.sql) via `net.http_post`, which issues a
+// (supabase/2026-10-order-feedback.sql), only when feedback is on and a
+// request is due (supabase/2026-11-feedback-cron-guard.sql; keep that check in
+// step with claim_feedback_requests()), via `net.http_post`, which issues a
 // POST — so POST is exported alongside GET (GET for a manual curl / a
 // Vercel-style trigger); both run the identical handler. NOT Vercel Cron:
 // Vercel's plan here only runs crons daily, which cannot express "30 minutes
