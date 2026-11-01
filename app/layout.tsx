@@ -13,9 +13,14 @@ import './globals.css';
 // range). Space Mono — the legacy site's only face (see index.html /
 // css/style.css) — is kept as a brand accent for prices, bill amounts,
 // order numbers and pickup codes, plus code/ID displays on staff surfaces.
+//
+// DM Sans loads as its variable font (every weight, 400–700 included, from one
+// file) rather than as a list of static weights. Google Fonts answers a list of
+// weights for a variable family with extension-less /l/font?kit= URLs, which
+// Next 14.2's font loader cannot handle: `next build` fails in next/font.
 const dmSans = DM_Sans({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  weight: 'variable',
   variable: '--font-dm-sans',
   display: 'swap',
 });

@@ -17,7 +17,9 @@ import Image from 'next/image';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { StoreOpenState } from '@/lib/store/hours';
+import { computeStoreOpenState, type StoreOpenState } from '@/lib/store/hours';
+import type { StoreSettings } from '@/lib/types';
+import { sameOpenState, STORE_BADGE_TICK_MS, storeBadgeTick } from '@/lib/staff/storeBadge';
 import { flags } from '@/lib/flags';
 import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
 import { COUNTER_MODE_HREFS } from '@/lib/staff/newOrderWatch';
@@ -48,8 +50,6 @@ import { useCancelMenuRequest } from '@/components/staff/menu/useCancelMenuReque
 import { usePendingMenuRequests } from '@/components/staff/menu/usePendingMenuRequests';
 
 const MENU_HREF = '/staff/menu';
-/** The store pill's poll while the tab is visible. */
-const STORE_BADGE_POLL_MS = 60_000;
 
 export interface StaffPinControls {
   /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
@@ -179,20 +179,26 @@ export function StaffHeader({
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
   // /staff/settings/store. Best-effort — a failed fetch keeps the last state.
-  // Refreshed on a poll while the tab is visible, on a return to it, and at
-  // once on 'hioc:store-changed'. It was every 15 s, visible or not: 240
-  // function calls an hour for a pill that changes a few times a day. Changes
-  // made on another device show within a minute.
+  // While the tab is visible the open state is re-derived from the held
+  // settings every minute and the settings re-read every 5 minutes
+  // (lib/staff/storeBadge.ts); also on a return to the tab, on F5, and at once
+  // on 'hioc:store-changed'. It was every 15 s, visible or not, then every
+  // minute: 60 function calls an hour for a pill that changes a few times a day.
   useEffect(() => {
     let cancelled = false;
     let lastLoad = 0;
+    let settings: StoreSettings | null = null;
+    const show = (next: StoreOpenState | null) => setOpenState((prev) => (sameOpenState(prev, next) ? prev : next));
     const load = () => {
       lastLoad = Date.now();
-      void sharedJson<{ openState?: StoreOpenState | null }>(STORE_SETTINGS_URL, STORE_SETTINGS_MAX_AGE_MS).then(
-        (data) => {
-          if (!cancelled && data) setOpenState(data.openState ?? null);
-        },
-      );
+      void sharedJson<{ settings?: StoreSettings | null; openState?: StoreOpenState | null }>(
+        STORE_SETTINGS_URL,
+        STORE_SETTINGS_MAX_AGE_MS,
+      ).then((data) => {
+        if (cancelled || !data) return;
+        settings = data.settings ?? null;
+        show(data.openState ?? null);
+      });
     };
     const visible = () => document.visibilityState === 'visible';
     const onReturn = () => {
@@ -204,8 +210,10 @@ export function StaffHeader({
     };
     load();
     const poll = setInterval(() => {
-      if (visible()) load();
-    }, STORE_BADGE_POLL_MS);
+      if (!visible()) return;
+      if (storeBadgeTick({ now: Date.now(), lastLoad, hasSettings: settings !== null }) === 'fetch') load();
+      else if (settings) show(computeStoreOpenState(settings));
+    }, STORE_BADGE_TICK_MS);
     window.addEventListener('focus', onReturn);
     document.addEventListener('visibilitychange', onReturn);
     window.addEventListener(STORE_CHANGED_EVENT, onStoreChanged);

@@ -169,14 +169,22 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Runs on EVERYTHING except Next internals and static assets.
+  // Runs on every PAGE path, and not on API routes, Next internals or static assets.
   //
   // It used to match only /staff and /owner, which is correct for path-based
   // routing and silently wrong for subdomains: on staff.hioc.in the incoming
   // path is /orders, so middleware would never fire, no rewrite would happen,
   // and the staff portal would 404 on its own domain.
   //
-  // The auth gate below still only engages for /staff and /owner paths, so the
-  // added cost on a customer request is one host classification.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|images/|fonts/).*)'],
+  // /api/** is left out because middleware has nothing to do there: an API path
+  // is host-agnostic (rewriteForSurface never prefixes it), it is never under
+  // /staff or /owner (so the gate never engages), and no route handler reads
+  // x-pathname or x-surface. Each API route does its own auth. Vercel bills a
+  // middleware run as a function invocation, so running it on /api/** counted
+  // every poll, order and print TWICE.
+  //
+  // Only whole prefixes are excluded, never "anything with a dot": a dotted
+  // path under /staff or /owner (/owner/feedback/x.png) must still meet the
+  // gate. tests/middlewareMatcher.test.ts pins both halves.
+  matcher: ['/((?!api/|_next/|_vercel/|favicon.ico|images/|fonts/).*)'],
 };
