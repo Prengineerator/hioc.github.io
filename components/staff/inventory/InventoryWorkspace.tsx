@@ -115,6 +115,7 @@ export function InventoryWorkspace() {
               reload={loadStock}
               onRequested={() => setTab('requests')}
               assignees={requests.assignees}
+              actorId={requests.actorId}
             />
           ) : (
             <Spinner />

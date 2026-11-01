@@ -178,7 +178,7 @@ shortfall and every item reads "Count needed".
 
 ### D. Acceptance walk-through
 
-1. Staffer A taps **Request from warehouse** on the Stock screen. Low items are pre-filled; they send it.
+1. Staffer A adds items with **+ Add** on the Stock list (or from **Request from warehouse**; low items are suggested), taps **Review & send**, checks every quantity on the review screen and sends it (INV-D22).
    **The owner receives an email** naming the request, each item, and what the warehouse and the store
    hold. The owner header shows a **Warehouse badge**.
 2. On the owner portal (Warehouse → Requests), the owner chooses **Someone else**, enters "Ravi

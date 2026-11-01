@@ -13,7 +13,6 @@ import {
   formatQty,
   INVENTORY_UNITS,
   UNIT_LABELS,
-  suggestedRequestQty,
   type InventoryUnit,
 } from '@/lib/inventory/rules';
 import {
@@ -30,6 +29,16 @@ import {
 import type { StaffSurface } from '@/lib/staff/surfaceRules';
 import { flags } from '@/lib/flags';
 import { ReturnModal } from '@/components/staff/inventory/ReturnModal';
+import { RequestStockModal, type RequestStep } from '@/components/staff/inventory/RequestStockModal';
+import { useRequestDraft } from '@/components/staff/inventory/useRequestDraft';
+import {
+  addToDraft,
+  draftCount,
+  isInDraft,
+  removeFromDraft,
+  seedDraftWithLowItems,
+  suggestedQtyText,
+} from '@/lib/inventory/requestDraft';
 
 type Filter = 'all' | 'attention';
 
@@ -53,6 +62,7 @@ export function StockTab({
   reload,
   onRequested,
   assignees = [],
+  actorId,
 }: {
   data: ItemsPayload;
   surface: StaffSurface;
@@ -60,6 +70,8 @@ export function StockTab({
   onRequested: () => void;
   /** Who can carry a return to the warehouse (managers get the list). */
   assignees?: PersonRef[];
+  /** Whose request draft this is (each person, each PIN operator, keeps their own). */
+  actorId?: string;
 }) {
   // docs/WAREHOUSE-SPEC.md: requests are filled from the warehouse, and a
   // manager can send stock back to it.
@@ -68,7 +80,20 @@ export function StockTab({
   const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
-  const [requestOpen, setRequestOpen] = useState(false);
+  // The request being built: this person's own draft, reviewed before it is
+  // sent (INV-D22). requestStep is which step of the sheet is open, or null.
+  const draftApi = useRequestDraft(actorId);
+  const { draft, loaded: draftLoaded, update: updateDraft } = draftApi;
+  const inRequest = draftCount(draft);
+  const [requestStep, setRequestStep] = useState<RequestStep | null>(null);
+  const openRequest = (step: RequestStep) => {
+    // A fresh request starts with the low items suggested, as before.
+    if (step === 'choose' && draftLoaded && inRequest === 0) {
+      const seeded = seedDraftWithLowItems(data.items);
+      if (draftCount(seeded) > 0) updateDraft(() => seeded);
+    }
+    setRequestStep(step);
+  };
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [editing, setEditing] = useState<InventoryItemView | 'new' | null>(null);
   const [adjusting, setAdjusting] = useState<{ item: InventoryItemView; kind: 'waste' | 'count' } | null>(null);
@@ -104,8 +129,9 @@ export function StockTab({
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={primaryButton} onClick={() => setRequestOpen(true)}>
+        <button type="button" className={primaryButton} onClick={() => openRequest('choose')}>
           {warehouse ? 'Request from warehouse' : 'Request stock'}
+          {inRequest > 0 ? ` (${inRequest})` : ''}
         </button>
         {warehouse && data.canManage ? (
           <button type="button" className={secondaryButton} onClick={() => setReturnOpen(true)}>
@@ -191,6 +217,29 @@ export function StockTab({
                       {i.openRequestNumbers.length > 0 ? (
                         <Chip tone="green">Requested #{i.openRequestNumbers.join(', #')}</Chip>
                       ) : null}
+                      {i.isActive ? (
+                        isInDraft(draft, i.id) ? (
+                          <button
+                            type="button"
+                            className="min-h-[36px] rounded-full border border-tan-dark bg-tan-dark px-3 text-xs font-bold text-cream"
+                            onClick={() => updateDraft((d) => removeFromDraft(d, i.id))}
+                            aria-pressed="true"
+                            aria-label={`${i.name} is in your request — remove it`}
+                          >
+                            ✓ In request
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="min-h-[36px] rounded-full border border-[#ddd] bg-white px-3 text-xs font-bold text-charcoal hover:border-charcoal"
+                            onClick={() => updateDraft((d) => addToDraft(d, i.id, suggestedQtyText(i)))}
+                            aria-pressed="false"
+                            aria-label={`Add ${i.name} to your request`}
+                          >
+                            + Add
+                          </button>
+                        )
+                      ) : null}
                     </div>
                   </div>
 
@@ -262,13 +311,40 @@ export function StockTab({
           }}
         />
       ) : null}
-      {requestOpen ? (
+      {/* The request being built, always one tap from review. */}
+      {inRequest > 0 && requestStep === null ? (
+        <div className="sticky bottom-3 z-20 mt-6 flex flex-wrap items-center justify-between gap-2 rounded-md border border-charcoal bg-charcoal px-4 py-3 text-cream shadow-elevated">
+          <span className="text-sm font-semibold">
+            Your request: {inRequest} item{inRequest === 1 ? '' : 's'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="min-h-[44px] rounded-md border border-cream/30 px-3 text-sm font-bold text-cream hover:bg-cream/10"
+              onClick={() => openRequest('choose')}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="min-h-[44px] rounded-md bg-tan px-4 text-sm font-bold text-cream hover:bg-tan-dark"
+              onClick={() => openRequest('review')}
+            >
+              Review &amp; send
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {requestStep ? (
         <RequestStockModal
           warehouse={warehouse}
-          items={data.items.filter((i) => i.isActive)}
-          onClose={() => setRequestOpen(false)}
-          onDone={async () => {
-            setRequestOpen(false);
+          items={data.items}
+          draftApi={draftApi}
+          initialStep={requestStep}
+          onClose={() => setRequestStep(null)}
+          onSent={async (message) => {
+            setRequestStep(null);
+            setNotice(message);
             await reload();
             onRequested();
           }}
@@ -351,134 +427,6 @@ function AutoHidePanel({ data, reload }: { data: ItemsPayload; reload: () => Pro
       ) : null}
       {error ? <p className="mt-2 text-red-700">{error}</p> : null}
     </div>
-  );
-}
-
-// ── Request stock ───────────────────────────────────────────────────────────
-
-function RequestStockModal({
-  warehouse,
-  items,
-  onClose,
-  onDone,
-}: {
-  /** Filled from the warehouse (docs/WAREHOUSE-SPEC.md): the owner is told. */
-  warehouse: boolean;
-  items: InventoryItemView[];
-  onClose: () => void;
-  onDone: () => Promise<void>;
-}) {
-  // Low items not already on an open request start ticked, at the suggested qty.
-  const [qty, setQty] = useState<Record<string, string>>(() => {
-    const init: Record<string, string> = {};
-    for (const i of items) {
-      if (i.low && i.openRequestNumbers.length === 0) {
-        const s = suggestedRequestQty({ par_level: i.parLevel, reorder_qty: i.reorderQty }, i.onHand);
-        init[i.id] = s > 0 ? String(s) : '';
-      }
-    }
-    return init;
-  });
-  const [note, setNote] = useState('');
-  const [query, setQuery] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const chosen = Object.keys(qty);
-  const shown = items.filter((i) => chosen.includes(i.id) || (query.trim() && i.name.toLowerCase().includes(query.trim().toLowerCase())));
-
-  async function submit() {
-    setError('');
-    const lines = chosen.map((id) => ({ itemId: id, qty: Number(qty[id]) }));
-    if (lines.length === 0) return setError('Pick at least one item.');
-    const bad = lines.find((l) => !Number.isFinite(l.qty) || l.qty <= 0);
-    if (bad) return setError(`Enter a quantity for ${items.find((i) => i.id === bad.itemId)?.name ?? 'every item'}.`);
-    setBusy(true);
-    const res = await api('/api/inventory/requests', 'POST', { lines, note });
-    setBusy(false);
-    if (!res.ok) return setError(res.error);
-    await onDone();
-  }
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title={warehouse ? 'Request from warehouse' : 'Request stock'}
-      subtitle={
-        warehouse
-          ? 'Low items are already added. The owner is told at once and chooses who delivers it.'
-          : 'Low items are already added. A manager assigns someone to pick it.'
-      }
-      footer={
-        <div className="flex items-center justify-between gap-2">
-          {error ? <p className="text-sm text-red-700">{error}</p> : <span className="text-sm text-muted">{chosen.length} item(s)</span>}
-          <button type="button" className={primaryButton} onClick={submit} disabled={busy}>
-            {busy ? 'Sending…' : 'Send request'}
-          </button>
-        </div>
-      }
-    >
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Find an item to add"
-        className={inputClass}
-        aria-label="Find an item to add"
-      />
-      <ul className="mt-3 divide-y divide-[#eee]">
-        {shown.map((i) => {
-          const on = i.id in qty;
-          return (
-            <li key={i.id} className="flex items-center gap-3 py-2">
-              <input
-                type="checkbox"
-                checked={on}
-                className="h-5 w-5"
-                aria-label={`Request ${i.name}`}
-                onChange={(e) =>
-                  setQty((prev) => {
-                    const next = { ...prev };
-                    if (e.target.checked) {
-                      const s = suggestedRequestQty({ par_level: i.parLevel, reorder_qty: i.reorderQty }, i.onHand);
-                      next[i.id] = s > 0 ? String(s) : '';
-                    } else delete next[i.id];
-                    return next;
-                  })
-                }
-              />
-              <span className="flex-1 text-sm">
-                <span className="font-semibold text-charcoal">{i.name}</span>
-                <span className="block text-xs text-muted">
-                  {formatQty(i.onHand, i.unit)} on hand
-                  {i.openRequestNumbers.length ? ` · already on #${i.openRequestNumbers.join(', #')}` : ''}
-                </span>
-              </span>
-              {on ? (
-                <label className="flex items-center gap-1 text-sm">
-                  <input
-                    type="number"
-                    min={0}
-                    step="any"
-                    inputMode="decimal"
-                    value={qty[i.id]}
-                    onChange={(e) => setQty((prev) => ({ ...prev, [i.id]: e.target.value }))}
-                    className={`${inputBase} w-24 text-right tabular-nums`}
-                    aria-label={`Quantity of ${i.name}`}
-                  />
-                  <span className="w-10 text-muted">{UNIT_LABELS[i.unit]}</span>
-                </label>
-              ) : null}
-            </li>
-          );
-        })}
-        {shown.length === 0 ? <li className="py-4 text-center text-sm text-muted">Search to add an item.</li> : null}
-      </ul>
-      <label className="mt-3 block text-sm">
-        <span className="text-charcoal">Note (optional)</span>
-        <input value={note} onChange={(e) => setNote(e.target.value)} className={`${inputClass} mt-1`} placeholder="e.g. needed before the evening rush" />
-      </label>
-    </Modal>
   );
 }
 
