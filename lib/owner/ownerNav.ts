@@ -62,7 +62,7 @@ export function ownerNav(input: OwnerNavInput): OwnerNav {
       label: 'Sales',
       items: [
         // Reconcile any date range; GST, Insights and Downloads hang off it.
-        { href: '/owner/reports', label: 'Reports', description: 'Sales, GST and downloads for any dates' },
+        { href: '/owner/reports', label: 'Reports', description: 'Item-wise sales, custom reports, GST and downloads' },
         { href: '/owner/payments', label: 'Payments', description: 'Money in by method, last 30 days' },
         // Zomato/Swiggy payouts (docs/ONLINE-SETTLEMENTS.md): the delivery
         // apps' side of the same money, so next to Payments.
