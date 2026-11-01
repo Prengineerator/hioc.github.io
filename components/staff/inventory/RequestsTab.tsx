@@ -5,6 +5,13 @@
 //   Received (verified at the POS by someone other than the picker)
 // and this screen shows the button for the next step only to the person who
 // may take it. The API re-checks every rule (lib/inventory/rules.ts).
+//
+// With the warehouse on (docs/WAREHOUSE-SPEC.md) a request is filled from the
+// warehouse: "Assigned" is who DELIVERS it (a team member or someone without a
+// login), "Picked" is what the warehouse SENT (recorded by the owner or a
+// manager), and whoever delivered it can't be the one who counts it in. A
+// return to the warehouse shows here on its way; the owner counts it in and
+// settles any difference on the owner's Warehouse page.
 
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
@@ -14,12 +21,15 @@ import {
   canPick,
   canReceive,
   formatQty,
+  isWarehouseRoute,
   lineHasDiscrepancy,
-  REQUEST_STATUS_LABELS,
+  requestStatusLabel,
   UNIT_LABELS,
   type RequestActor,
   type RequestFacts,
 } from '@/lib/inventory/rules';
+import { resolutionLabel } from '@/lib/inventory/warehouse';
+import { DelivererPicker, delivererLabel, type DelivererChoice } from '@/components/staff/inventory/DelivererPicker';
 import {
   api,
   inputBase,
@@ -38,8 +48,14 @@ function facts(r: StockRequestView): RequestFacts {
     requested_by: r.requestedBy.id,
     assigned_to: r.assignedTo?.id ?? null,
     picked_by: r.pickedBy?.id ?? null,
+    route: r.route,
   };
 }
+
+const ROUTE_CHIP: Record<'from_warehouse' | 'to_warehouse', string> = {
+  from_warehouse: 'From the warehouse',
+  to_warehouse: 'Back to the warehouse',
+};
 
 const STATUS_TONE: Record<StockRequestView['status'], string> = {
   requested: 'bg-amber-50 text-amber-900 border-amber-200',
@@ -64,6 +80,7 @@ export function RequestsTab({
   reload: () => Promise<void>;
 }) {
   const [picking, setPicking] = useState<StockRequestView | null>(null);
+  const [choosingDeliverer, setChoosingDeliverer] = useState<StockRequestView | null>(null);
   const [receiving, setReceiving] = useState<StockRequestView | null>(null);
   const [cancelling, setCancelling] = useState<StockRequestView | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -102,32 +119,49 @@ export function RequestsTab({
     const mayPick = canPick(f, actor).ok;
     const receiveVerdict = canReceive(f, actor);
     const mayCancel = canCancel(f, actor).ok;
-    const mine = r.assignedTo?.id === data.actorId && r.status === 'assigned';
+    const warehouse = isWarehouseRoute(r.route) ? r.route : null;
+    const mine =
+      r.assignedTo?.id === data.actorId && (r.status === 'assigned' || (warehouse !== null && r.status === 'picked'));
+    const deliverer = delivererLabel(r);
 
     return (
       <li key={r.id} className={`rounded-md border bg-white p-4 ${mine ? 'border-tan' : 'border-[#e5e5e5]'}`}>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <p className="font-semibold text-charcoal">
-              Request #{r.number}
-              {mine ? <span className="ml-2 text-sm font-bold text-tan">Yours to pick</span> : null}
+              {r.route === 'to_warehouse' ? 'Return' : 'Request'} #{r.number}
+              {mine ? <span className="ml-2 text-sm font-bold text-tan-dark">{warehouse ? 'You’re delivering it' : 'Yours to pick'}</span> : null}
             </p>
             <p className="text-xs text-muted">
               by {r.requestedBy.name} · {time(r.createdAt)}
-              {r.assignedTo ? ` · picker ${r.assignedTo.name}` : ''}
-              {r.pickedBy ? ` · picked by ${r.pickedBy.name} ${time(r.pickedAt)}` : ''}
-              {r.receivedBy ? ` · verified by ${r.receivedBy.name} ${time(r.receivedAt)}` : ''}
+              {warehouse
+                ? `${deliverer ? ` · delivered by ${deliverer}` : ''}${r.pickedBy && r.route === 'from_warehouse' ? ` · sent by ${r.pickedBy.name} ${time(r.pickedAt)}` : ''}`
+                : `${r.assignedTo ? ` · picker ${r.assignedTo.name}` : ''}${r.pickedBy ? ` · picked by ${r.pickedBy.name} ${time(r.pickedAt)}` : ''}`}
+              {r.receivedBy ? ` · ${r.route === 'to_warehouse' ? 'counted in' : 'verified'} by ${r.receivedBy.name} ${time(r.receivedAt)}` : ''}
             </p>
             {r.note ? <p className="mt-1 text-sm text-charcoal">“{r.note}”</p> : null}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
+            {warehouse ? (
+              <span className="rounded-full border border-[#e5e5e5] bg-surface px-2 py-0.5 text-xs font-semibold text-charcoal">
+                {ROUTE_CHIP[warehouse]}
+              </span>
+            ) : null}
             {r.hasDiscrepancy ? (
-              <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-800">
-                Arrived different from picked
+              <span
+                className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${
+                  r.resolvedAt ? 'border-[#e5e5e5] bg-[#f4f4f4] text-muted' : 'border-red-200 bg-red-50 text-red-800'
+                }`}
+              >
+                {warehouse
+                  ? r.resolvedAt
+                    ? 'Difference settled by the owner'
+                    : 'Arrived different — the owner settles it'
+                  : 'Arrived different from picked'}
               </span>
             ) : null}
             <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${STATUS_TONE[r.status]}`}>
-              {REQUEST_STATUS_LABELS[r.status]}
+              {requestStatusLabel(r.status, r.route)}
             </span>
           </div>
         </div>
@@ -137,7 +171,7 @@ export function RequestsTab({
             <tr className="text-left text-xs text-muted">
               <th className="py-1 font-medium">Item</th>
               <th className="py-1 text-right font-medium">Asked</th>
-              <th className="py-1 text-right font-medium">Picked</th>
+              <th className="py-1 text-right font-medium">{warehouse ? 'Sent' : 'Picked'}</th>
               <th className="py-1 text-right font-medium">Arrived</th>
             </tr>
           </thead>
@@ -147,6 +181,11 @@ export function RequestsTab({
                 <td className="py-1.5 pr-2">
                   {l.itemName}
                   {l.expiryDate ? <span className="block text-xs text-muted">expires {shortDate(l.expiryDate)}</span> : null}
+                  {warehouse && l.resolution ? (
+                    <span className="block text-xs text-muted">
+                      {formatQty(l.resolvedQty ?? 0, l.unit)}: {resolutionLabel(l.resolution, warehouse)}
+                    </span>
+                  ) : null}
                 </td>
                 <td className="py-1.5 text-right">{formatQty(l.qtyRequested, l.unit)}</td>
                 <td className="py-1.5 text-right">{l.qtyPicked === null ? '—' : formatQty(l.qtyPicked, l.unit)}</td>
@@ -165,7 +204,16 @@ export function RequestsTab({
         {r.status === 'cancelled' && r.cancelReason ? <p className="mt-2 text-xs text-muted">Cancelled: {r.cancelReason}</p> : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {mayAssign ? (
+          {mayAssign && warehouse ? (
+            <button
+              type="button"
+              className={r.status === 'requested' ? primaryButton : secondaryButton}
+              onClick={() => setChoosingDeliverer(r)}
+            >
+              {r.status === 'requested' ? 'Choose who delivers' : 'Change delivery person'}
+            </button>
+          ) : null}
+          {mayAssign && !warehouse ? (
             <label className="flex items-center gap-2 text-sm">
               <span className="text-muted">{r.assignedTo ? 'Re-assign' : 'Assign to'}</span>
               <select
@@ -186,7 +234,7 @@ export function RequestsTab({
           ) : null}
           {mayPick ? (
             <button type="button" className={primaryButton} onClick={() => setPicking(r)}>
-              Mark picked
+              {r.route === 'from_warehouse' ? 'Record what was sent' : 'Mark picked'}
             </button>
           ) : null}
           {r.status === 'picked' ? (
@@ -214,7 +262,7 @@ export function RequestsTab({
       {notice ? <p className="mb-3 text-sm text-green-700">{notice}</p> : null}
       {open.length === 0 ? (
         <p className="rounded-md border border-dashed border-[#ddd] bg-white p-6 text-center text-sm text-muted">
-          No open requests. Use “Request stock” on the Stock tab when something runs low.
+          No open requests. Use “{data.warehouse ? 'Request from warehouse' : 'Request stock'}” on the Stock tab when something runs low.
         </p>
       ) : (
         <ul className="space-y-3">{open.map(card)}</ul>
@@ -229,6 +277,19 @@ export function RequestsTab({
         </div>
       ) : null}
 
+      {choosingDeliverer ? (
+        <DelivererModal
+          request={choosingDeliverer}
+          people={data.assignees}
+          actorId={data.actorId}
+          onClose={() => setChoosingDeliverer(null)}
+          onDone={async (message) => {
+            setChoosingDeliverer(null);
+            setNotice(message);
+            await reload();
+          }}
+        />
+      ) : null}
       {picking ? (
         <PickModal
           request={picking}
@@ -246,7 +307,13 @@ export function RequestsTab({
           onClose={() => setReceiving(null)}
           onDone={async (discrepancy) => {
             setReceiving(null);
-            if (discrepancy) setError(`#${receiving.number} received — some lines arrived different from what was picked; the owner can see it.`);
+            if (discrepancy) {
+              setError(
+                receiving.route === 'from_warehouse'
+                  ? `#${receiving.number} received — some lines arrived different from what the warehouse sent. The owner has been told and settles it.`
+                  : `#${receiving.number} received — some lines arrived different from what was picked; the owner can see it.`,
+              );
+            }
             await reload();
           }}
         />
@@ -267,6 +334,7 @@ export function RequestsTab({
 }
 
 function PickModal({ request, onClose, onDone }: { request: StockRequestView; onClose: () => void; onDone: () => Promise<void> }) {
+  const dispatch = request.route === 'from_warehouse';
   const [qty, setQty] = useState<Record<string, string>>(() =>
     Object.fromEntries(request.lines.map((l) => [l.itemId, String(l.qtyRequested)])),
   );
@@ -289,13 +357,17 @@ function PickModal({ request, onClose, onDone }: { request: StockRequestView; on
     <Modal
       open
       onClose={onClose}
-      title={`Pick request #${request.number}`}
-      subtitle="Enter what you actually picked (0 if it wasn’t available). It is counted again at the POS."
+      title={dispatch ? `Send request #${request.number}` : `Pick request #${request.number}`}
+      subtitle={
+        dispatch
+          ? `Enter what actually leaves the warehouse (0 if there is none). ${request.deliveredBy ? `${request.deliveredBy} carries it; ` : ''}it is counted again at the POS.`
+          : 'Enter what you actually picked (0 if it wasn’t available). It is counted again at the POS.'
+      }
       footer={
         <div className="flex items-center justify-between gap-2">
           {error ? <p className="text-sm text-red-700">{error}</p> : <span />}
           <button type="button" className={primaryButton} onClick={submit} disabled={busy}>
-            {busy ? 'Saving…' : 'Picked — send to POS'}
+            {busy ? 'Saving…' : dispatch ? 'Sent — on its way' : 'Picked — send to POS'}
           </button>
         </div>
       }
@@ -316,7 +388,7 @@ function PickModal({ request, onClose, onDone }: { request: StockRequestView; on
                 value={qty[l.itemId]}
                 onChange={(e) => setQty((p) => ({ ...p, [l.itemId]: e.target.value }))}
                 className={`${inputBase} w-24 text-right tabular-nums`}
-                aria-label={`Picked quantity of ${l.itemName}`}
+                aria-label={`${dispatch ? 'Sent' : 'Picked'} quantity of ${l.itemName}`}
               />
               <span className="w-10 text-muted">{UNIT_LABELS[l.unit]}</span>
             </label>
@@ -338,6 +410,7 @@ function ReceiveModal({
   onClose: () => void;
   onDone: (discrepancy: boolean) => Promise<void>;
 }) {
+  const fromWarehouse = request.route === 'from_warehouse';
   // Blank on purpose: the verifier counts what is in front of them rather
   // than confirming a pre-filled number.
   const [rows, setRows] = useState<Record<string, { qty: string; expiry: string }>>(() =>
@@ -370,7 +443,11 @@ function ReceiveModal({
       onClose={onClose}
       size="lg"
       title={`Verify request #${request.number}`}
-      subtitle={`Picked by ${request.pickedBy?.name ?? 'someone'}. Count each item as it arrives and enter its expiry date.`}
+      subtitle={
+        fromWarehouse
+          ? `Sent from the warehouse${request.deliveredBy ? `, delivered by ${request.deliveredBy}` : ''}. Count each item as it arrives and enter its expiry date.`
+          : `Picked by ${request.pickedBy?.name ?? 'someone'}. Count each item as it arrives and enter its expiry date.`
+      }
       footer={
         <div className="flex items-center justify-between gap-2">
           {error ? <p className="text-sm text-red-700">{error}</p> : <span />}
@@ -386,7 +463,8 @@ function ReceiveModal({
             <p className="text-sm font-semibold text-charcoal">
               {l.itemName}
               <span className="ml-2 text-xs font-normal text-muted">
-                picked {l.qtyPicked === null ? '—' : formatQty(l.qtyPicked, l.unit)}
+                {fromWarehouse ? 'sent' : 'picked'} {l.qtyPicked === null ? '—' : formatQty(l.qtyPicked, l.unit)}
+                {fromWarehouse && l.dispatchExpiry ? ` · earliest expiry sent ${shortDate(l.dispatchExpiry)}` : ''}
               </span>
             </p>
             <QtyExpiryInputs
@@ -396,6 +474,7 @@ function ReceiveModal({
               qty={rows[l.itemId].qty}
               expiry={rows[l.itemId].expiry}
               expected={l.qtyPicked}
+              expectedVerb={fromWarehouse ? 'Sent' : 'Picked'}
               name={l.itemName}
               onChange={(v) => setRows((p) => ({ ...p, [l.itemId]: { ...p[l.itemId], ...v } }))}
             />
@@ -449,6 +528,70 @@ function CancelModal({
         <span className="text-charcoal">Reason{reasonRequired ? '' : ' (optional)'}</span>
         <input value={reason} onChange={(e) => setReason(e.target.value)} className={`${inputClass} mt-1`} placeholder="e.g. requested by mistake" />
       </label>
+    </Modal>
+  );
+}
+
+function DelivererModal({
+  request,
+  people,
+  actorId,
+  onClose,
+  onDone,
+}: {
+  request: StockRequestView;
+  people: RequestsPayload['assignees'];
+  actorId: string;
+  onClose: () => void;
+  onDone: (message: string) => Promise<void>;
+}) {
+  const [choice, setChoice] = useState<DelivererChoice | null>(
+    request.assignedTo ? { assigneeId: request.assignedTo.id } : request.deliverer ? { deliverer: request.deliverer } : null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit() {
+    if (!choice) return setError('Choose who delivers it.');
+    setError('');
+    setBusy(true);
+    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped' }>(`/api/inventory/requests/${request.id}`, 'PATCH', {
+      action: 'assign',
+      ...choice,
+    });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    const name = 'assigneeId' in choice ? people.find((p) => p.id === choice.assigneeId)?.name ?? 'They' : choice.deliverer.name;
+    await onDone(
+      'deliverer' in choice || choice.assigneeId === actorId
+        ? `#${request.number}: ${'deliverer' in choice ? name : 'you'} deliver${'deliverer' in choice ? 's' : ''} it.`
+        : res.data.emailed === 'sent'
+          ? `#${request.number}: ${name} delivers it and has been emailed.`
+          : `#${request.number}: ${name} delivers it. They could not be emailed (no personal email on file?) — tell them.`,
+    );
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Who delivers request #${request.number}?`}
+      subtitle="A team member, or someone without a login (a driver) by name. Whoever delivers it can’t be the one who counts it in."
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          {error ? <p className="text-sm text-red-700">{error}</p> : <span />}
+          <button type="button" className={primaryButton} onClick={submit} disabled={busy || !choice}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      }
+    >
+      <DelivererPicker
+        idPrefix={`deliverer-${request.id}`}
+        people={people}
+        initial={{ assigneeId: request.assignedTo?.id ?? null, name: request.deliverer?.name, phone: request.deliverer?.phone }}
+        onChange={setChoice}
+      />
     </Modal>
   );
 }

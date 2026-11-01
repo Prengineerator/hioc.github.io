@@ -57,8 +57,10 @@ const state: {
 /** PostgREST's default cap on the rows one request returns. */
 const MAX_ROWS = 1000;
 
+// The warehouse (docs/WAREHOUSE-SPEC.md) is its own flag, default off: these
+// are the store-room flow's tests. tests/warehouseRoutes.test.ts has it on.
 vi.mock('@/lib/flags', () => ({
-  flags: new Proxy({}, { get: (_t, key) => (key === 'inventory' ? state.flag : true) }),
+  flags: new Proxy({}, { get: (_t, key) => (key === 'inventory' ? state.flag : key === 'warehouse' ? false : true) }),
 }));
 vi.mock('@/lib/api/auth', () => ({ getCounterActor: () => Promise.resolve(state.actor) }));
 vi.mock('@/lib/api/device', () => ({ getEnrolledDevice: () => Promise.resolve(state.device) }));

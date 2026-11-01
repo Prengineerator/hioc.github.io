@@ -69,10 +69,13 @@ export function InventoryWorkspace() {
           requested_by: r.requestedBy.id,
           assigned_to: r.assignedTo?.id ?? null,
           picked_by: r.pickedBy?.id ?? null,
+          route: r.route,
         };
         return (
           (r.status === 'requested' && canAssign(f, actor).ok) ||
-          (r.assignedTo?.id === requests.actorId && canPick(f, actor).ok) ||
+          // The picker's own pick; a warehouse dispatch is the warehouse
+          // side's (any manager), so it counts for every manager.
+          ((r.assignedTo?.id === requests.actorId || r.route === 'from_warehouse') && canPick(f, actor).ok) ||
           canReceive(f, actor).ok
         );
       }).length
@@ -106,7 +109,13 @@ export function InventoryWorkspace() {
       <div className="mt-5">
         {tab === 'stock' ? (
           items && requests ? (
-            <StockTab data={items} surface={requests.surface} reload={loadStock} onRequested={() => setTab('requests')} />
+            <StockTab
+              data={items}
+              surface={requests.surface}
+              reload={loadStock}
+              onRequested={() => setTab('requests')}
+              assignees={requests.assignees}
+            />
           ) : (
             <Spinner />
           )

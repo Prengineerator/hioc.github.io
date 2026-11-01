@@ -33,8 +33,10 @@ import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { flags } from '@/lib/flags';
 import { MENU_PENDING_COUNT_EVENT } from '@/components/owner/menu/menuEvents';
+import { WAREHOUSE_WAITING_EVENT } from '@/components/owner/warehouse/warehouseEvents';
 import {
   OWNER_MENU_HREF,
+  OWNER_WAREHOUSE_HREF,
   activeOwnerGroup,
   activeOwnerLink,
   ownerNav,
@@ -103,12 +105,18 @@ function MenuIcon({ open }: { open: boolean }) {
   );
 }
 
-/** Staff menu changes waiting for the owner. tan-dark reads on the charcoal bar and on the cream/10 "current" fill alike. */
-function MenuBadge({ count }: { count: number }) {
+/** What the badge counts, for a screen reader, per page. */
+const BADGE_LABELS: Record<string, string> = {
+  [OWNER_MENU_HREF]: 'menu changes waiting',
+  [OWNER_WAREHOUSE_HREF]: 'warehouse transfers waiting on you',
+};
+
+/** Things waiting for the owner on a page (staff menu changes; warehouse transfers). tan-dark reads on the charcoal bar and on the cream/10 "current" fill alike. */
+function MenuBadge({ count, label = 'waiting' }: { count: number; label?: string }) {
   return (
     <span className="ml-2 rounded-full bg-tan-dark px-1.5 py-0.5 text-[11px] font-bold text-cream">
       {count}
-      <span className="sr-only"> menu changes waiting</span>
+      <span className="sr-only"> {label}</span>
     </span>
   );
 }
@@ -116,7 +124,7 @@ function MenuBadge({ count }: { count: number }) {
 interface LinkProps {
   link: OwnerLink;
   active: boolean;
-  /** Menu changes waiting; only the Menu page's link shows it (0 elsewhere). */
+  /** Things waiting on this page (Menu, Warehouse); 0 elsewhere. */
   pending: number;
   /** A tapped link always lands on closed menus, even when the page does not change. */
   onNavigate: () => void;
@@ -141,7 +149,7 @@ function BarLink({ link, active, pending, onNavigate }: LinkProps) {
       }
     >
       {link.label}
-      {pending > 0 ? <MenuBadge count={pending} /> : null}
+      {pending > 0 ? <MenuBadge count={pending} label={BADGE_LABELS[link.href]} /> : null}
     </Link>
   );
 }
@@ -163,7 +171,7 @@ function NavItemLink({ link, active, pending, onNavigate }: LinkProps) {
       {active ? <span aria-hidden="true" className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-tan" /> : null}
       <span className="flex items-center text-sm font-bold text-cream">
         {link.label}
-        {pending > 0 ? <MenuBadge count={pending} /> : null}
+        {pending > 0 ? <MenuBadge count={pending} label={BADGE_LABELS[link.href]} /> : null}
       </span>
       <span className="block text-xs text-cream/60">{link.description}</span>
     </Link>
@@ -194,7 +202,8 @@ interface GroupDisclosureProps {
   current: boolean;
   /** href of the open page, to mark its row in the panel. */
   currentHref: string | undefined;
-  pendingMenu: number;
+  /** What is waiting on a page (its badge). */
+  badgeFor: (link: OwnerLink) => number;
   /** The last group opens leftwards so its panel cannot run off the right edge. */
   align: 'left' | 'right';
   onToggle: (id: GroupId) => void;
@@ -208,7 +217,7 @@ function GroupDisclosure({
   open,
   current,
   currentHref,
-  pendingMenu,
+  badgeFor,
   align,
   onToggle,
   onClose,
@@ -220,7 +229,7 @@ function GroupDisclosure({
   const refocusTrigger = useCallback(() => triggerRef.current?.focus(), []);
   const ref = useDismiss<HTMLDivElement>(open, close, refocusTrigger);
   const panelId = `owner-nav-${group.id}`;
-  const menuBadge = group.items.some((l) => l.href === OWNER_MENU_HREF) ? pendingMenu : 0;
+  const groupBadge = group.items.reduce((n, l) => n + badgeFor(l), 0);
 
   // Tabbing (or shift-tabbing) out of the group closes it. A blur with no
   // relatedTarget is a click on the panel's padding or the window losing focus;
@@ -249,7 +258,7 @@ function GroupDisclosure({
       >
         {group.label}
         {current ? <span className="sr-only"> (current section)</span> : null}
-        {menuBadge > 0 ? <MenuBadge count={menuBadge} /> : null}
+        {groupBadge > 0 ? <MenuBadge count={groupBadge} /> : null}
         <Chevron open={open} />
       </button>
       {/* Hidden with the attribute (not unmounted, and no display class on this
@@ -268,7 +277,7 @@ function GroupDisclosure({
             <NavItemLink
               link={item}
               active={item.href === currentHref}
-              pending={item.href === OWNER_MENU_HREF ? pendingMenu : 0}
+              pending={badgeFor(item)}
               onNavigate={onNavigate}
             />
           </li>
@@ -284,12 +293,19 @@ export function OwnerHeader() {
   // owner.hioc.in '/owner/menu' is '/menu' and the root is '/'.
   const toHref = useSurfaceHref();
   const { coffeePass, marketing, attendance } = flags;
-  const nav = useMemo(() => ownerNav({ coffeePass, marketing, attendance }), [coffeePass, marketing, attendance]);
+  const warehouse = flags.inventory && flags.warehouse;
+  const nav = useMemo(
+    () => ownerNav({ coffeePass, marketing, attendance, warehouse }),
+    [coffeePass, marketing, attendance, warehouse],
+  );
   const currentLink = activeOwnerLink(nav, pathname, toHref);
   const currentGroup = activeOwnerGroup(nav, pathname, toHref);
   const currentHref = currentLink?.href;
   // Staff menu changes waiting for the owner, shown as a badge on the Menu page's link.
   const [pendingMenu, setPendingMenu] = useState(0);
+  // Warehouse transfers waiting on the owner (assign, dispatch, count a return
+  // in, settle a difference), shown on the Warehouse link.
+  const [pendingWarehouse, setPendingWarehouse] = useState(0);
   // At most one desktop section panel is open; the phone drawer is separate.
   const [openId, setOpenId] = useState<GroupId | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -346,7 +362,41 @@ export function OwnerHeader() {
     };
   }, []);
 
-  const pendingFor = (link: OwnerLink) => (link.href === OWNER_MENU_HREF ? pendingMenu : 0);
+  // The same, for the Warehouse badge: fetched on load and when the tab comes
+  // back; the Warehouse screen publishes fresh counts after each action.
+  useEffect(() => {
+    if (!warehouse) return;
+    let alive = true;
+    const load = () => {
+      fetch('/api/owner/warehouse/waiting', { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { waiting?: { total?: number } } | null) => {
+          if (alive && data && typeof data.waiting?.total === 'number') setPendingWarehouse(data.waiting.total);
+        })
+        .catch(() => undefined);
+    };
+    const onCount = (e: Event) => {
+      const n = (e as CustomEvent<number>).detail;
+      if (typeof n === 'number') setPendingWarehouse(n);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    load();
+    window.addEventListener(WAREHOUSE_WAITING_EVENT, onCount);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      alive = false;
+      window.removeEventListener(WAREHOUSE_WAITING_EVENT, onCount);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [warehouse]);
+
+  const pendingFor = useCallback(
+    (link: OwnerLink) => (link.href === OWNER_MENU_HREF ? pendingMenu : link.href === OWNER_WAREHOUSE_HREF ? pendingWarehouse : 0),
+    [pendingMenu, pendingWarehouse],
+  );
+  const pendingAny = pendingMenu + pendingWarehouse;
 
   return (
     // Sticky so the section nav stays one tap away on the long overview.
@@ -390,13 +440,13 @@ export function OwnerHeader() {
           <span className="sr-only">{currentLink ? 'Owner sections, current page: ' : 'Owner '}</span>
           <MenuIcon open={mobileOpen} />
           <span className="min-w-0 truncate">{currentLink ? currentLink.label : 'Sections'}</span>
-          {!mobileOpen && pendingMenu > 0 ? (
+          {!mobileOpen && pendingAny > 0 ? (
             <>
               {/* On the hamburger's top-right corner, inside the button: the
                   toggle sits 2px from the top of the screen, so a dot hung off
                   its corner would be cut off. */}
               <span aria-hidden="true" className="absolute left-[1.625rem] top-1.5 h-2.5 w-2.5 rounded-full bg-tan ring-2 ring-charcoal" />
-              <span className="sr-only">, menu changes waiting</span>
+              <span className="sr-only">, things waiting for you</span>
             </>
           ) : null}
         </button>
@@ -431,7 +481,7 @@ export function OwnerHeader() {
                     open={openId === g.id}
                     current={currentGroup?.id === g.id}
                     currentHref={currentHref}
-                    pendingMenu={pendingMenu}
+                    badgeFor={pendingFor}
                     align={i === nav.groups.length - 1 ? 'right' : 'left'}
                     onToggle={toggleGroup}
                     onClose={closeGroup}

@@ -47,6 +47,13 @@
 #      no rows; every guard refuses (and rolls back the book it had saved);
 #      a real apply is idempotent; anon and authenticated cannot execute it and
 #      the service role can (all in one rolled-back transaction).
+#      (5d) The warehouse (supabase/2026-11-warehouse.sql, applied strictly
+#      twice after the inventory files, and once more after 5b re-ran them):
+#      its constraints survive a re-run of the older file; then the whole
+#      lifecycle — purchase, request, dispatch (earliest expiry first; a
+#      shortfall rather than a refusal), count-in at the store, each
+#      settlement, a return and its settlements, counts and write-offs — and
+#      the grants, in one rolled-back transaction.
 #   6. With --seed <file.sql> (a generated seed.sql: `select
 #      inventory_apply_book(...)`): applies that seed twice with ON_ERROR_STOP=1
 #      and prints what it loaded. The harness assumes nothing about the seed's
@@ -291,7 +298,7 @@ step "3/6" "Applying supabase/*.sql (tolerant pass), then the inventory migratio
 TOLERANT_FILES=(supabase/schema.sql supabase/phase1-migration.sql supabase/phase2-migration.sql supabase/phase2-hardening.sql supabase/phase3-migration.sql supabase/security-rls-fix.sql)
 while IFS= read -r f; do
   case "$(basename "$f" .sql)" in
-    2026-10-inventory|2026-10-inventory-addon-scopes|2026-10-inventory-apply-book|2026-10-inventory-seed*) continue ;;  # strict pass / seeds
+    2026-10-inventory|2026-10-inventory-addon-scopes|2026-10-inventory-apply-book|2026-10-inventory-seed*|2026-11-warehouse) continue ;;  # strict pass / seeds
   esac
   TOLERANT_FILES+=("$f")
 done < <(ls supabase/2026-*.sql 2>/dev/null | LC_ALL=C sort)
@@ -366,6 +373,11 @@ fi
 # it runs, which the assertions of step 5c do). Needs the two files above.
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-10-inventory-apply-book.sql applies cleanly (fresh)" supabase/2026-10-inventory-apply-book.sql || STRICT_OK=0; }
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-10-inventory-apply-book.sql re-applies cleanly (idempotent)" supabase/2026-10-inventory-apply-book.sql || STRICT_OK=0; }
+
+# The warehouse (docs/WAREHOUSE-SPEC.md) extends the inventory tables, so it
+# goes after them. Its assertions are step 5d.
+[ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse.sql applies cleanly (fresh)" supabase/2026-11-warehouse.sql || STRICT_OK=0; }
+[ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse.sql re-applies cleanly (idempotent)" supabase/2026-11-warehouse.sql || STRICT_OK=0; }
 
 # ── [4/6] The live menu ──────────────────────────────────────────────────────
 MENU_OK=0
@@ -1232,6 +1244,354 @@ SQL
   run_assertions "" "$BASE/applybook.sql"
 else
   step "5c/6" "inventory_apply_book — skipped (the migrations or the menu did not load)"
+fi
+
+# ── [5d/6] The warehouse ─────────────────────────────────────────────────────
+# supabase/2026-11-warehouse.sql (docs/WAREHOUSE-SPEC.md), on the database as
+# step 5b left it: 2026-10-inventory.sql was re-applied AFTER the warehouse
+# file there, so this also proves that re-running the older file keeps the
+# warehouse's constraints. Then the warehouse file is applied once more and the
+# whole lifecycle is walked in one rolled-back transaction: purchase into the
+# warehouse, request, dispatch (earliest expiry first, shortfall instead of a
+# refusal), count-in at the store, each settlement, a return to the warehouse
+# and its settlements, the owner's corrections, and the grants. A call that
+# must be refused runs in its own sub-transaction and is checked for having
+# changed nothing.
+if [ $MENU_OK = 1 ]; then
+  step "5d/6" "Assertions: the warehouse (2026-11-warehouse.sql)"
+  { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/wh-constraints.sql"
+do $$
+begin
+  perform smoke.expect('after 2026-10-inventory.sql is re-applied: inventory_movements still allows return_out',
+    pg_get_constraintdef((select oid from pg_constraint where conname = 'inventory_movements_kind_check')) like '%return_out%');
+  perform smoke.expect('...inventory_batches still allows transit_back',
+    pg_get_constraintdef((select oid from pg_constraint where conname = 'inventory_batches_source_check')) like '%transit_back%');
+  perform smoke.expect('...stock_requests still accepts a named outside deliverer',
+    pg_get_constraintdef((select oid from pg_constraint where conname = 'stock_requests_assigned_shape')) like '%deliverer_name%');
+end $$;
+SQL
+  run_assertions "" "$BASE/wh-constraints.sql"
+  apply_strict "supabase/2026-11-warehouse.sql re-applies cleanly after the inventory files are re-run" supabase/2026-11-warehouse.sql
+
+  { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/warehouse.sql"
+create function smoke.wh_on_hand(p uuid) returns numeric language sql as $$
+  select coalesce(sum(qty_remaining), 0) from warehouse_batches where item_id = p $$;
+create function smoke.store_on_hand(p uuid) returns numeric language sql as $$
+  select coalesce(sum(qty_remaining), 0) from inventory_batches where item_id = p $$;
+
+do $$
+declare
+  v_store uuid := gen_random_uuid();   -- a store staffer (requests, counts in)
+  v_owner uuid := gen_random_uuid();   -- the owner (warehouse side)
+  v_mgr   uuid := gen_random_uuid();   -- a store manager (sends returns)
+  v_milk uuid; v_cups uuid;
+  v_req uuid; v_req2 uuid; v_req3 uuid; v_ret uuid; v_ret2 uuid; v_legacy uuid;
+  v_res jsonb; v_n int; v_d date; v_q numeric; v_t text; v_b boolean;
+  d0 date := current_date;
+begin
+  insert into auth.users (id) values (v_store), (v_owner), (v_mgr);
+  insert into inventory_items (name, unit, tracks_expiry) values ('WH smoke milk', 'l', true) returning id into v_milk;
+  insert into inventory_items (name, unit, tracks_expiry) values ('WH smoke cups', 'pcs', false) returning id into v_cups;
+
+  -- ── Purchases into the warehouse ──────────────────────────────────────────
+  v_n := warehouse_purchase(v_owner, 'Dairy Co', 'opening stock', jsonb_build_array(
+    jsonb_build_object('item_id', v_milk, 'qty', 20, 'expiry_date', (d0 + 10)::text),
+    jsonb_build_object('item_id', v_milk, 'qty', 5,  'expiry_date', (d0 + 3)::text),
+    jsonb_build_object('item_id', v_cups, 'qty', 500)));
+  perform smoke.expect('warehouse_purchase: one batch per line',
+    v_n = 3 and (select count(*) from warehouse_batches where item_id in (v_milk, v_cups) and source = 'purchase') = 3, format('returned %s', v_n));
+  perform smoke.expect('...the warehouse sheet holds it (25 L milk, 500 cups); the store is untouched',
+    smoke.wh_on_hand(v_milk) = 25 and smoke.wh_on_hand(v_cups) = 500 and smoke.store_on_hand(v_milk) = 0,
+    format('wh milk %s, cups %s, store milk %s', smoke.wh_on_hand(v_milk), smoke.wh_on_hand(v_cups), smoke.store_on_hand(v_milk)));
+  perform smoke.expect('...with a purchase movement each and the supplier on the batch',
+    (select count(*) from warehouse_movements where item_id in (v_milk, v_cups) and kind = 'purchase') = 3
+    and (select bool_and(supplier = 'Dairy Co') from warehouse_batches where item_id = v_milk));
+  begin
+    perform warehouse_purchase(v_owner, '', '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 2)));
+    perform smoke.expect('warehouse_purchase refuses a perishable with no expiry date', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_purchase refuses a perishable with no expiry date', sqlerrm like 'inventory: enter the expiry date%', sqlerrm);
+  end;
+  begin
+    perform warehouse_purchase(v_owner, '', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 0)));
+    perform smoke.expect('warehouse_purchase refuses a zero quantity', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_purchase refuses a zero quantity', sqlerrm like 'inventory: every quantity%', sqlerrm);
+  end;
+
+  -- ── A request filled from the warehouse ───────────────────────────────────
+  v_req := warehouse_create_request(v_store, 'for the weekend', jsonb_build_array(
+    jsonb_build_object('item_id', v_milk, 'qty', 10), jsonb_build_object('item_id', v_cups, 'qty', 600)));
+  perform smoke.expect('warehouse_create_request: a requested from_warehouse request',
+    (select route = 'from_warehouse' and status = 'requested' from stock_requests where id = v_req));
+
+  begin
+    perform warehouse_dispatch(v_req, v_owner, jsonb_build_array(
+      jsonb_build_object('item_id', v_milk, 'qty', 10), jsonb_build_object('item_id', v_cups, 'qty', 600)));
+    perform smoke.expect('warehouse_dispatch refuses a request nobody is delivering yet', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_dispatch refuses a request nobody is delivering yet', sqlerrm like 'inventory: choose who delivers%', sqlerrm);
+  end;
+
+  -- A team member AND an outside name at once is not one deliverer.
+  begin
+    update stock_requests set status = 'assigned', assigned_to = v_mgr, deliverer_name = 'Ravi' where id = v_req;
+    perform smoke.expect('stock_requests refuses a team member and an outside deliverer at once', false, 'accepted');
+  exception when check_violation then
+    perform smoke.expect('stock_requests refuses a team member and an outside deliverer at once', true);
+  end;
+  -- What the API's assign step writes for someone without a login.
+  update stock_requests
+     set status = 'assigned', deliverer_name = 'Ravi (driver)', deliverer_phone = '+919812345678',
+         assigned_by = v_owner, assigned_at = now()
+   where id = v_req;
+  perform smoke.expect('an outside deliverer (name only, no login) can be assigned',
+    (select status = 'assigned' and assigned_to is null from stock_requests where id = v_req));
+
+  begin
+    perform warehouse_dispatch(v_req, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 10)));
+    perform smoke.expect('warehouse_dispatch refuses a dispatch that leaves out a line', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_dispatch refuses a dispatch that leaves out a line', sqlerrm like 'inventory: give a dispatched quantity%', sqlerrm);
+  end;
+  begin
+    perform warehouse_dispatch(v_req, v_owner, jsonb_build_array(
+      jsonb_build_object('item_id', v_milk, 'qty', 0), jsonb_build_object('item_id', v_cups, 'qty', 0)));
+    perform smoke.expect('warehouse_dispatch refuses an all-zero dispatch', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_dispatch refuses an all-zero dispatch', sqlerrm like 'inventory: nothing was dispatched%', sqlerrm);
+  end;
+  perform smoke.expect('...and a refused dispatch changed nothing',
+    smoke.wh_on_hand(v_milk) = 25 and (select status from stock_requests where id = v_req) = 'assigned'
+    and not exists (select 1 from stock_request_lines where request_id = v_req and qty_picked is not null));
+
+  v_res := warehouse_dispatch(v_req, v_owner, jsonb_build_array(
+    jsonb_build_object('item_id', v_milk, 'qty', 10), jsonb_build_object('item_id', v_cups, 'qty', 600)));
+  perform smoke.expect('warehouse_dispatch: the request is on its way (picked), recorded as the owner''s dispatch',
+    (select status = 'picked' and picked_by = v_owner from stock_requests where id = v_req));
+  perform smoke.expect('...milk leaves the warehouse earliest expiry first (the 5 L batch is emptied first)',
+    smoke.wh_on_hand(v_milk) = 15
+    and (select qty_remaining from warehouse_batches where item_id = v_milk and expiry_date = d0 + 3) = 0
+    and (select qty_remaining from warehouse_batches where item_id = v_milk and expiry_date = d0 + 10) = 15,
+    format('wh milk %s', smoke.wh_on_hand(v_milk)));
+  perform smoke.expect('...the line remembers the first expiry dispatched (a hint for the store)',
+    (select dispatch_expiry from stock_request_lines where request_id = v_req and item_id = v_milk) = d0 + 3);
+  perform smoke.expect('...600 cups sent with only 500 on the sheet: all 500 leave, 100 is a warehouse shortfall, not a refusal',
+    smoke.wh_on_hand(v_cups) = 0
+    and (select shortfall_since_count from warehouse_items where item_id = v_cups) = 100
+    and (select qty_delta = -500 and shortfall = 100 from warehouse_movements where request_id = v_req and item_id = v_cups and kind = 'dispatch')
+    and jsonb_array_length(v_res -> 'short') = 1,
+    v_res::text);
+  perform smoke.expect('...the store has not received anything yet (it is in transit)',
+    smoke.store_on_hand(v_milk) = 0 and smoke.store_on_hand(v_cups) = 0);
+  begin
+    perform warehouse_dispatch(v_req, v_owner, jsonb_build_array(
+      jsonb_build_object('item_id', v_milk, 'qty', 10), jsonb_build_object('item_id', v_cups, 'qty', 600)));
+    perform smoke.expect('warehouse_dispatch refuses a second dispatch of the same request', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_dispatch refuses a second dispatch of the same request', sqlerrm like 'inventory: this request is picked%', sqlerrm);
+  end;
+
+  -- ── Counted in at the store (inventory_receive, unchanged) ────────────────
+  v_res := inventory_receive(v_req, v_store, null, jsonb_build_array(
+    jsonb_build_object('item_id', v_milk, 'qty', 9, 'expiry_date', (d0 + 3)::text),
+    jsonb_build_object('item_id', v_cups, 'qty', 600)));
+  perform smoke.expect('the store counts it in: stock goes up by what ARRIVED; 9 of 10 L is flagged',
+    (v_res ->> 'has_discrepancy')::boolean and smoke.store_on_hand(v_milk) = 9 and smoke.store_on_hand(v_cups) = 600,
+    v_res::text);
+
+  -- ── Settling ──────────────────────────────────────────────────────────────
+  begin
+    perform warehouse_resolve(v_req, v_owner, '', '[]'::jsonb);
+    perform smoke.expect('warehouse_resolve refuses to skip a line that arrived different', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_resolve refuses to skip a line that arrived different', sqlerrm like 'inventory: settle every line%', sqlerrm);
+  end;
+  begin
+    perform warehouse_resolve(v_req, v_owner, '', jsonb_build_array(
+      jsonb_build_object('item_id', v_milk, 'resolution', 'lost'), jsonb_build_object('item_id', v_cups, 'resolution', 'lost')));
+    perform smoke.expect('warehouse_resolve refuses to settle a line that matched', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_resolve refuses to settle a line that matched', sqlerrm like 'inventory: settle every line%', sqlerrm);
+  end;
+  begin
+    perform warehouse_resolve(v_req, v_owner, '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'resolution', 'accepted')));
+    perform smoke.expect('warehouse_resolve refuses an "over" answer for a short line', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_resolve refuses an "over" answer for a short line', sqlerrm like 'inventory: a line that arrived short%', sqlerrm);
+  end;
+  v_res := warehouse_resolve(v_req, v_owner, 'driver says one bottle stayed behind',
+    jsonb_build_array(jsonb_build_object('item_id', v_milk, 'resolution', 'back_to_origin')));
+  perform smoke.expect('back_to_origin: the missing 1 L goes back on the warehouse sheet, with the dispatched expiry',
+    smoke.wh_on_hand(v_milk) = 16
+    and exists (select 1 from warehouse_batches where request_id = v_req and source = 'transit_back' and qty_remaining = 1 and expiry_date = d0 + 3)
+    and exists (select 1 from warehouse_movements where request_id = v_req and kind = 'transit_back' and qty_delta = 1),
+    format('wh milk %s', smoke.wh_on_hand(v_milk)));
+  perform smoke.expect('...the line and the request record the settlement',
+    (select resolution = 'back_to_origin' and resolved_qty = 1 from stock_request_lines where request_id = v_req and item_id = v_milk)
+    and (select resolved_by = v_owner and resolved_at is not null and resolution_note <> '' from stock_requests where id = v_req));
+  begin
+    perform warehouse_resolve(v_req, v_owner, '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'resolution', 'lost')));
+    perform smoke.expect('warehouse_resolve refuses to settle twice', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_resolve refuses to settle twice', sqlerrm like 'inventory: this transfer is already settled%', sqlerrm);
+  end;
+
+  -- Over: 6 arrived of 4 sent, and the warehouse says it really did send 6.
+  v_req2 := warehouse_create_request(v_store, '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 4)));
+  update stock_requests set status = 'assigned', assigned_to = v_mgr, assigned_by = v_owner, assigned_at = now() where id = v_req2;
+  perform warehouse_dispatch(v_req2, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 4)));
+  perform inventory_receive(v_req2, v_store, null, jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 6, 'expiry_date', (d0 + 10)::text)));
+  v_q := smoke.wh_on_hand(v_milk);
+  perform warehouse_resolve(v_req2, v_owner, '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'resolution', 'origin_sent_extra')));
+  perform smoke.expect('origin_sent_extra: the extra 2 L come off the warehouse sheet',
+    v_q = 12 and smoke.wh_on_hand(v_milk) = 10
+    and exists (select 1 from warehouse_movements where request_id = v_req2 and kind = 'transit_extra' and qty_delta = -2 and shortfall = 0),
+    format('before %s, after %s', v_q, smoke.wh_on_hand(v_milk)));
+
+  -- Short, written off.
+  perform warehouse_purchase(v_owner, '', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 100)));
+  v_req3 := warehouse_create_request(v_store, '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 50)));
+  update stock_requests set status = 'assigned', assigned_to = v_mgr, assigned_by = v_owner, assigned_at = now() where id = v_req3;
+  perform warehouse_dispatch(v_req3, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 50)));
+  perform inventory_receive(v_req3, v_store, null, jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 45)));
+  perform warehouse_resolve(v_req3, v_owner, 'crushed sleeve', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'resolution', 'lost')));
+  perform smoke.expect('lost: nothing moves — the warehouse keeps 50, the store got 45',
+    smoke.wh_on_hand(v_cups) = 50 and smoke.store_on_hand(v_cups) = 645
+    and (select resolution = 'lost' and resolved_qty = 5 from stock_request_lines where request_id = v_req3),
+    format('wh %s, store %s', smoke.wh_on_hand(v_cups), smoke.store_on_hand(v_cups)));
+
+  -- ── A return to the warehouse ─────────────────────────────────────────────
+  begin
+    perform warehouse_create_return(v_mgr, '', null, '', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 10)));
+    perform smoke.expect('warehouse_create_return refuses a return nobody is carrying', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_create_return refuses a return nobody is carrying', sqlerrm like 'inventory: say who is taking it%', sqlerrm);
+  end;
+  begin
+    perform warehouse_create_return(v_mgr, '', v_store, 'Ravi', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 10)));
+    perform smoke.expect('warehouse_create_return refuses two deliverers at once', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_create_return refuses two deliverers at once', sqlerrm like 'inventory: say who is taking it%', sqlerrm);
+  end;
+  begin
+    perform warehouse_create_return(v_mgr, '', null, 'Ravi', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 10000)));
+    perform smoke.expect('warehouse_create_return refuses more than the store holds', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_create_return refuses more than the store holds', sqlerrm like 'inventory: the store only has 645 pcs%', sqlerrm);
+  end;
+  perform smoke.expect('...and a refused return took nothing off the store', smoke.store_on_hand(v_cups) = 645);
+
+  v_ret := warehouse_create_return(v_mgr, 'too many cups', null, 'Ravi (driver)', '+919812345678',
+    jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 100)));
+  perform smoke.expect('warehouse_create_return: on its way to the warehouse at once (to_warehouse, picked)',
+    (select route = 'to_warehouse' and status = 'picked' and deliverer_name = 'Ravi (driver)' and assigned_to is null
+            and picked_by = v_mgr and requested_by = v_mgr from stock_requests where id = v_ret));
+  perform smoke.expect('...it leaves the store now (return_out), and the warehouse has not got it yet',
+    smoke.store_on_hand(v_cups) = 545 and smoke.wh_on_hand(v_cups) = 50
+    and exists (select 1 from inventory_movements where request_id = v_ret and kind = 'return_out' and qty_delta = -100));
+
+  begin
+    perform warehouse_dispatch(v_ret, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 100)));
+    perform smoke.expect('warehouse_dispatch refuses a return (it is not filled from the warehouse)', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_dispatch refuses a return (it is not filled from the warehouse)', sqlerrm like 'inventory: this request is not filled%', sqlerrm);
+  end;
+  begin
+    perform warehouse_receive_return(v_req, v_owner, '[]'::jsonb);
+    perform smoke.expect('warehouse_receive_return refuses a store request', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_receive_return refuses a store request', sqlerrm like 'inventory: this is not a return%', sqlerrm);
+  end;
+
+  v_res := warehouse_receive_return(v_ret, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 90)));
+  perform smoke.expect('warehouse_receive_return: 90 of 100 counted in at the warehouse, flagged',
+    (v_res ->> 'has_discrepancy')::boolean and smoke.wh_on_hand(v_cups) = 140
+    and exists (select 1 from warehouse_batches where request_id = v_ret and source = 'return' and qty_received = 90)
+    and (select status = 'received' and received_by = v_owner from stock_requests where id = v_ret),
+    v_res::text);
+  perform warehouse_resolve(v_ret, v_owner, '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'resolution', 'back_to_origin')));
+  perform smoke.expect('a return''s back_to_origin puts the missing 10 back on the STORE shelf',
+    smoke.store_on_hand(v_cups) = 555
+    and exists (select 1 from inventory_batches where request_id = v_ret and source = 'transit_back' and qty_remaining = 10)
+    and exists (select 1 from inventory_movements where request_id = v_ret and kind = 'transit_back' and qty_delta = 10),
+    format('store %s', smoke.store_on_hand(v_cups)));
+
+  v_ret2 := warehouse_create_return(v_mgr, '', v_store, '', '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 2)));
+  perform smoke.expect('a return carried by a team member names them, not an outside deliverer',
+    (select assigned_to = v_store and deliverer_name = '' from stock_requests where id = v_ret2));
+  begin
+    perform warehouse_receive_return(v_ret2, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 3)));
+    perform smoke.expect('warehouse_receive_return refuses a perishable with no expiry date', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_receive_return refuses a perishable with no expiry date', sqlerrm like 'inventory: enter the expiry date%', sqlerrm);
+  end;
+  perform warehouse_receive_return(v_ret2, v_owner, jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 3, 'expiry_date', (d0 + 10)::text)));
+  v_q := smoke.store_on_hand(v_milk);
+  perform warehouse_resolve(v_ret2, v_owner, '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'resolution', 'origin_sent_extra')));
+  perform smoke.expect('a return''s origin_sent_extra takes the extra 1 L off the STORE shelf',
+    v_q = 13 and smoke.store_on_hand(v_milk) = 12
+    and exists (select 1 from inventory_movements where request_id = v_ret2 and kind = 'transit_extra' and qty_delta = -1),
+    format('before %s, after %s', v_q, smoke.store_on_hand(v_milk)));
+
+  -- ── The owner's corrections ───────────────────────────────────────────────
+  v_res := warehouse_adjust(v_cups, v_owner, 'count', 120, null, 'monthly count');
+  perform smoke.expect('warehouse_adjust count: sets the warehouse to what was counted and clears its shortfall',
+    smoke.wh_on_hand(v_cups) = 120
+    and (select shortfall_since_count = 0 and last_counted_at is not null from warehouse_items where item_id = v_cups)
+    and exists (select 1 from warehouse_movements where item_id = v_cups and kind = 'count' and qty_delta = -20),
+    format('wh %s', smoke.wh_on_hand(v_cups)));
+  perform warehouse_adjust(v_milk, v_owner, 'waste', 1, null, 'leaked');
+  perform smoke.expect('warehouse_adjust waste: comes off earliest expiry first', smoke.wh_on_hand(v_milk) = 12,
+    format('wh milk %s', smoke.wh_on_hand(v_milk)));
+  begin
+    perform warehouse_adjust(v_milk, v_owner, 'waste', 1000, null, 'x');
+    perform smoke.expect('warehouse_adjust refuses to waste more than the warehouse holds', false, 'accepted');
+  exception when others then
+    perform smoke.expect('warehouse_adjust refuses to waste more than the warehouse holds', sqlerrm like 'inventory: the warehouse only has%', sqlerrm);
+  end;
+
+  -- ── The store-room route is untouched ─────────────────────────────────────
+  v_legacy := inventory_create_request(v_store, '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 5)));
+  update stock_requests set status = 'assigned', assigned_to = v_store, assigned_by = v_mgr, assigned_at = now() where id = v_legacy;
+  v_q := smoke.wh_on_hand(v_cups);
+  perform inventory_pick(v_legacy, v_store, false, jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 5)));
+  perform smoke.expect('a store_room request still picks without touching the warehouse',
+    (select route = 'store_room' and status = 'picked' from stock_requests where id = v_legacy) and smoke.wh_on_hand(v_cups) = v_q);
+  begin
+    update stock_requests set resolved_at = now() where id = v_legacy;
+    perform smoke.expect('stock_requests refuses a settlement on a request that was not received different', false, 'accepted');
+  exception when check_violation then
+    perform smoke.expect('stock_requests refuses a settlement on a request that was not received different', true);
+  end;
+  begin
+    update stock_requests set deliverer_name = 'Ravi', assigned_to = null where id = v_legacy;
+    perform smoke.expect('stock_requests refuses an outside deliverer on a store_room request', false, 'accepted');
+  exception when check_violation then
+    perform smoke.expect('stock_requests refuses an outside deliverer on a store_room request', true);
+  end;
+
+  -- ── Grants ────────────────────────────────────────────────────────────────
+  perform smoke.expect('anon and authenticated cannot read the warehouse tables',
+    not has_table_privilege('anon', 'warehouse_batches', 'select')
+    and not has_table_privilege('authenticated', 'warehouse_batches', 'select')
+    and not has_table_privilege('anon', 'warehouse_alerts', 'select')
+    and not has_table_privilege('authenticated', 'warehouse_alert_settings', 'select'));
+  perform smoke.expect('anon and authenticated cannot run the warehouse functions; the service role can',
+    not has_function_privilege('anon', 'warehouse_dispatch(uuid, uuid, jsonb)', 'execute')
+    and not has_function_privilege('authenticated', 'warehouse_resolve(uuid, uuid, text, jsonb)', 'execute')
+    and not has_function_privilege('authenticated', 'warehouse_create_return(uuid, text, uuid, text, text, jsonb)', 'execute')
+    and has_function_privilege('service_role', 'warehouse_dispatch(uuid, uuid, jsonb)', 'execute')
+    and has_function_privilege('service_role', 'warehouse_purchase(uuid, text, text, jsonb)', 'execute'));
+  perform smoke.expect('the alert settings row exists, alerts on by default to the owner logins',
+    (select enabled and email_owner_logins from warehouse_alert_settings where is_singleton));
+exception when others then
+  perform smoke.expect('the warehouse walk-through ran to the end', false, sqlerrm);
+end $$;
+SQL
+  run_assertions "" "$BASE/warehouse.sql"
+else
+  step "5d/6" "The warehouse — skipped (the migrations or the menu did not load)"
 fi
 
 # ── [6/6] Optional: a recipe-book seed ───────────────────────────────────────

@@ -1423,6 +1423,65 @@ async function checkInventory() {
 }
 
 // ---------------------------------------------------------------------------
+// Warehouse (docs/WAREHOUSE-SPEC.md, supabase/2026-11-warehouse.sql): the
+// warehouse's own batches and ledger, the owner-alert settings and log, the
+// columns added to stock_requests / stock_request_lines, and the functions.
+// Every probe is a read, or a call on a request that does not exist (refused
+// by the function before it writes anything).
+// ---------------------------------------------------------------------------
+async function checkWarehouse() {
+  heading('WH-1 · warehouse tables, columns, functions + lockdown', '2026-11-warehouse.sql');
+  const hint = 'apply supabase/2026-11-warehouse.sql (after 2026-10-inventory.sql)';
+
+  for (const [table, col] of [
+    ['warehouse_items', 'item_id'],
+    ['warehouse_batches', 'id'],
+    ['warehouse_movements', 'id'],
+    ['warehouse_alerts', 'id'],
+    ['warehouse_alert_settings', 'is_singleton'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    if (table === 'warehouse_alert_settings' && (!Array.isArray(r.body) || r.body.length !== 1)) {
+      fail('warehouse_alert_settings has its one row', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    const asAnon = await rest(`/${table}?select=${col}&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+
+  for (const [table, cols] of [
+    ['stock_requests', 'route,deliverer_name,deliverer_phone,resolved_by,resolved_at,resolution_note'],
+    ['stock_request_lines', 'dispatch_expiry,resolution,resolved_qty'],
+  ]) {
+    const r = await rest(`/${table}?select=${cols}&limit=1`);
+    if (r.ok) pass(`${table}: ${cols.split(',').join(', ')} exist`);
+    else fail(`${table}: ${cols.split(',').join(', ')} exist`, errKind(r) === 'no_column' ? hint : errText(r));
+  }
+
+  // A request that does not exist: the service role reaches the function's own
+  // refusal (it is installed); anon must not reach the function at all.
+  for (const [fn, body] of [
+    ['warehouse_dispatch', { p_request_id: randomUUID(), p_actor: null, p_lines: [] }],
+    ['warehouse_resolve', { p_request_id: randomUUID(), p_actor: null, p_note: '', p_lines: [] }],
+    ['warehouse_receive_return', { p_request_id: randomUUID(), p_actor: null, p_lines: [] }],
+  ]) {
+    const svc = await rest(`/rpc/${fn}`, { method: 'POST', body });
+    if (!svc.ok && errKind(svc) === 'raised' && /request not found/i.test(errText(svc))) pass(`${fn} is installed`, 'an unknown request was refused');
+    else fail(`${fn} is installed`, svc.ok ? `unexpected result ${JSON.stringify(svc.body)}` : `${hint} — ${errText(svc)}`);
+    const anon = await rest(`/rpc/${fn}`, { method: 'POST', body, key: ANON });
+    if (anon.ok || errKind(anon) === 'raised') fail(`${fn} is not callable by the anon key`, 'EXECUTE was granted to anon — re-run the REVOKEs');
+    else pass(`${fn} is not callable by the anon key`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Coffee Pass — prepaid plans sold and redeemed as drinks
 // (docs/COFFEE-PASS-SPEC.md, supabase/2026-10-coffee-pass.sql). Customer-facing
 // it is "HIOC Ritual"; the database names stay coffee_pass_*. Four service-role
@@ -2150,6 +2209,7 @@ async function main() {
   await checkCoffeyTraitsV2();
   await checkCoffeeAddonsPairings();
   await checkInventory();
+  await checkWarehouse();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();

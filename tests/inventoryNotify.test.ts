@@ -44,3 +44,16 @@ describe('renderStockAssignedEmail', () => {
     expect(email.html).not.toContain('<5pm>');
   });
 });
+
+describe('renderStockAssignedEmail — a warehouse delivery (docs/WAREHOUSE-SPEC.md)', () => {
+  const lines = [{ name: 'Full-cream milk', qty: 10, unit: 'l' }];
+  it('asks them to deliver it, not pick it, and says who counts it in', () => {
+    const toStore = renderStockAssignedEmail({ requestId: 'r', requestNumber: 8, note: '', assignedByName: 'The owner', lines, delivery: 'from_warehouse' });
+    expect(toStore.subject).toBe('Stock request #8 is yours to deliver');
+    expect(toStore.text).toContain('The owner asked you to bring this from the warehouse to the store (stock request #8):');
+    expect(toStore.text).toContain('someone else counts it in at the POS');
+    const back = renderStockAssignedEmail({ requestId: 'r', requestNumber: 9, note: '', assignedByName: 'Boss', lines, delivery: 'to_warehouse' });
+    expect(back.text).toContain('take this back to the warehouse');
+    expect(back.text).toContain('The owner counts it in at the warehouse');
+  });
+});

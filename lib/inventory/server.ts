@@ -22,8 +22,10 @@ import {
   type OrderLineLike,
   type RecipeLineLike,
   type StockRequestStatus,
+  type StockRoute,
   type StockSummary,
 } from '@/lib/inventory/rules';
+import type { Resolution } from '@/lib/inventory/warehouse';
 
 export const INVENTORY_MIGRATION_HINT =
   'are supabase/2026-10-inventory.sql and supabase/2026-10-inventory-addon-scopes.sql applied?';
@@ -191,9 +193,15 @@ export interface StockRequestLineView {
   unit: InventoryUnit;
   tracksExpiry: boolean;
   qtyRequested: number;
+  /** Picked — for a warehouse transfer, what was dispatched. */
   qtyPicked: number | null;
   qtyReceived: number | null;
   expiryDate: string | null;
+  /** Warehouse transfers: the expiry of the first batch sent (a hint). */
+  dispatchExpiry: string | null;
+  /** How the owner settled a line that arrived different. */
+  resolution: Resolution | null;
+  resolvedQty: number | null;
 }
 
 export interface PersonRef {
@@ -205,9 +213,19 @@ export interface StockRequestView {
   id: string;
   number: number;
   status: StockRequestStatus;
+  /** Where it comes from and goes to (lib/inventory/rules.ts StockRoute). */
+  route: StockRoute;
   note: string;
   requestedBy: PersonRef;
+  /** The picker — for a warehouse transfer, the team member delivering it. */
   assignedTo: PersonRef | null;
+  /** A warehouse transfer carried by someone without a login (assignedTo is null). */
+  deliverer: { name: string; phone: string } | null;
+  /** Whoever carries it, as one name: assignedTo's or the deliverer's ('' = nobody yet). */
+  deliveredBy: string;
+  resolvedBy: PersonRef | null;
+  resolvedAt: string | null;
+  resolutionNote: string;
   pickedBy: PersonRef | null;
   receivedBy: PersonRef | null;
   createdAt: string;
@@ -219,10 +237,22 @@ export interface StockRequestView {
   lines: StockRequestLineView[];
 }
 
-const REQUEST_SELECT = `
+const LEGACY_REQUEST_SELECT = `
   id, request_number, status, note, requested_by, assigned_to, picked_by, received_by, cancelled_by,
   created_at, assigned_at, picked_at, received_at, has_discrepancy, cancel_reason,
   stock_request_lines ( item_id, qty_requested, qty_picked, qty_received, expiry_date,
+    inventory_items ( name, unit, tracks_expiry ) )
+`;
+
+// With the warehouse columns (supabase/2026-11-warehouse.sql). Before that
+// migration the read falls back to LEGACY_REQUEST_SELECT, and every request
+// reads as a store-room one — which is what each of them is.
+const REQUEST_SELECT = `
+  id, request_number, status, route, note, requested_by, assigned_to, picked_by, received_by, cancelled_by,
+  deliverer_name, deliverer_phone, resolved_by, resolved_at, resolution_note,
+  created_at, assigned_at, picked_at, received_at, has_discrepancy, cancel_reason,
+  stock_request_lines ( item_id, qty_requested, qty_picked, qty_received, expiry_date,
+    dispatch_expiry, resolution, resolved_qty,
     inventory_items ( name, unit, tracks_expiry ) )
 `;
 
@@ -230,6 +260,12 @@ type RequestRow = {
   id: string;
   request_number: number;
   status: StockRequestStatus;
+  route?: StockRoute | null;
+  deliverer_name?: string | null;
+  deliverer_phone?: string | null;
+  resolved_by?: string | null;
+  resolved_at?: string | null;
+  resolution_note?: string | null;
   note: string;
   requested_by: string;
   assigned_to: string | null;
@@ -247,69 +283,160 @@ type RequestRow = {
     qty_picked: number | null;
     qty_received: number | null;
     expiry_date: string | null;
+    dispatch_expiry?: string | null;
+    resolution?: Resolution | null;
+    resolved_qty?: number | null;
     inventory_items: { name: string; unit: InventoryUnit; tracks_expiry: boolean } | null;
   }[] | null;
 };
 
 const RECENT_CLOSED_LIMIT = 30;
 
+/** How long a "the warehouse columns aren't there" answer is trusted before trying again. */
+const LEGACY_RECHECK_MS = 5 * 60_000;
+let legacyColumnsUntil = 0;
+
+/** Tests: forget a remembered pre-migration database. */
+export function resetRequestColumnsMemo(): void {
+  legacyColumnsUntil = 0;
+}
+
+export interface LoadRequestsOptions {
+  /** Only these routes (the owner's Warehouse page: the two warehouse ones). */
+  routes?: StockRoute[];
+  /**
+   * Also every transfer received different and not settled yet, however old:
+   * it is still waiting on the owner, so the recent-30 cut must not drop it.
+   */
+  includeUnsettled?: boolean;
+}
+
 /**
  * Open requests (all of them, paged: nothing caps how many stay open) plus the
- * most recent closed ones (a fixed 30, so one plain query).
+ * most recent closed ones (a fixed 30, so one plain query), and with
+ * `includeUnsettled` every transfer still waiting to be settled. Reads the
+ * warehouse columns when the warehouse migration is applied, and falls back to
+ * the original columns when it is not.
  */
-export async function loadStockRequests(admin: SupabaseClient): Promise<{ requests: StockRequestView[]; error: boolean }> {
-  const [openRes, closedRes] = await Promise.all([
+export async function loadStockRequests(
+  admin: SupabaseClient,
+  options: LoadRequestsOptions = {},
+): Promise<{ requests: StockRequestView[]; error: boolean }> {
+  // Before supabase/2026-11-warehouse.sql every request is a store-room one,
+  // so a filter for warehouse routes matches nothing.
+  const legacyOnly = () =>
+    options.routes && !options.routes.includes('store_room')
+      ? null
+      : readRequestRows(admin, LEGACY_REQUEST_SELECT, { ...options, routes: undefined, includeUnsettled: false });
+  let res: Awaited<ReturnType<typeof readRequestRows>>;
+  if (Date.now() < legacyColumnsUntil) {
+    const legacy = legacyOnly();
+    if (!legacy) return { requests: [], error: false };
+    res = await legacy;
+  } else {
+    res = await readRequestRows(admin, REQUEST_SELECT, options);
+    if (res.missingColumn) {
+      // Remember it for a while: the Stock screen reloads on every focus, and
+      // each miss is a failed query, a retry and an error in the logs.
+      legacyColumnsUntil = Date.now() + LEGACY_RECHECK_MS;
+      const legacy = legacyOnly();
+      if (!legacy) return { requests: [], error: false };
+      res = await legacy;
+    }
+  }
+  if (res.error) return { requests: [], error: true };
+  const seenIds = new Set<string>();
+  const rows = res.rows.filter((r) => (seenIds.has(r.id) ? false : (seenIds.add(r.id), true)));
+
+  const ids = rows
+    .flatMap((r) => [r.requested_by, r.assigned_to, r.picked_by, r.received_by, r.resolved_by ?? null])
+    .filter((v): v is string => Boolean(v));
+  const names = await getStaffDisplayNames(admin, [...new Set(ids)]);
+  const person = (id: string | null | undefined): PersonRef | null => (id ? { id, name: names.get(id) ?? 'Unknown staff' } : null);
+
+  const requests = rows.map((r): StockRequestView => {
+    const assignedTo = person(r.assigned_to);
+    const outsideName = (r.deliverer_name ?? '').trim();
+    const deliverer = !assignedTo && outsideName ? { name: outsideName, phone: (r.deliverer_phone ?? '').trim() } : null;
+    return {
+      id: r.id,
+      number: r.request_number,
+      status: r.status,
+      route: r.route ?? 'store_room',
+      note: r.note ?? '',
+      requestedBy: person(r.requested_by) ?? { id: r.requested_by, name: 'Unknown staff' },
+      assignedTo,
+      deliverer,
+      deliveredBy: assignedTo?.name ?? deliverer?.name ?? '',
+      resolvedBy: person(r.resolved_by),
+      resolvedAt: r.resolved_at ?? null,
+      resolutionNote: r.resolution_note ?? '',
+      pickedBy: person(r.picked_by),
+      receivedBy: person(r.received_by),
+      createdAt: r.created_at,
+      assignedAt: r.assigned_at,
+      pickedAt: r.picked_at,
+      receivedAt: r.received_at,
+      hasDiscrepancy: r.has_discrepancy,
+      cancelReason: r.cancel_reason ?? '',
+      lines: (r.stock_request_lines ?? [])
+        .map((l) => ({
+          itemId: l.item_id,
+          itemName: l.inventory_items?.name ?? 'Unknown item',
+          unit: l.inventory_items?.unit ?? 'pcs',
+          tracksExpiry: l.inventory_items?.tracks_expiry ?? false,
+          qtyRequested: Number(l.qty_requested),
+          qtyPicked: l.qty_picked === null ? null : Number(l.qty_picked),
+          qtyReceived: l.qty_received === null ? null : Number(l.qty_received),
+          expiryDate: l.expiry_date,
+          dispatchExpiry: l.dispatch_expiry ?? null,
+          resolution: l.resolution ?? null,
+          resolvedQty: l.resolved_qty === null || l.resolved_qty === undefined ? null : Number(l.resolved_qty),
+        }))
+        .sort((a, b) => a.itemName.localeCompare(b.itemName)),
+    };
+  });
+  return { requests, error: false };
+}
+
+async function readRequestRows(
+  admin: SupabaseClient,
+  select: string,
+  options: LoadRequestsOptions,
+): Promise<{ rows: RequestRow[]; error: boolean; missingColumn: boolean }> {
+  const scoped = <Q extends { in: (col: string, vals: string[]) => Q }>(q: Q): Q =>
+    options.routes ? q.in('route', options.routes) : q;
+  const [openRes, closedRes, unsettledRes] = await Promise.all([
     selectAll<RequestRow>(() =>
-      admin
-        .from('stock_requests')
-        .select(REQUEST_SELECT)
-        .in('status', OPEN_REQUEST_STATUSES as string[])
+      scoped(admin.from('stock_requests').select(select).in('status', OPEN_REQUEST_STATUSES as string[]))
         .order('created_at', { ascending: true })
         .order('id'),
     ),
-    admin
-      .from('stock_requests')
-      .select(REQUEST_SELECT)
-      .in('status', ['received', 'cancelled'])
+    scoped(admin.from('stock_requests').select(select).in('status', ['received', 'cancelled']))
       .order('updated_at', { ascending: false })
       .limit(RECENT_CLOSED_LIMIT),
+    options.includeUnsettled
+      ? selectAll<RequestRow>(() =>
+          scoped(admin.from('stock_requests').select(select).eq('status', 'received').eq('has_discrepancy', true))
+            .is('resolved_at', null)
+            .order('received_at', { ascending: true })
+            .order('id'),
+        )
+      : Promise.resolve({ data: [] as RequestRow[], error: null }),
   ]);
-  if (openRes.error || closedRes.error) return { requests: [], error: true };
-  const rows = [...(openRes.data ?? []), ...((closedRes.data ?? []) as unknown as RequestRow[])];
-
-  const ids = rows.flatMap((r) => [r.requested_by, r.assigned_to, r.picked_by, r.received_by]).filter((v): v is string => Boolean(v));
-  const names = await getStaffDisplayNames(admin, [...new Set(ids)]);
-  const person = (id: string | null): PersonRef | null => (id ? { id, name: names.get(id) ?? 'Unknown staff' } : null);
-
-  const requests = rows.map((r) => ({
-    id: r.id,
-    number: r.request_number,
-    status: r.status,
-    note: r.note ?? '',
-    requestedBy: person(r.requested_by) ?? { id: r.requested_by, name: 'Unknown staff' },
-    assignedTo: person(r.assigned_to),
-    pickedBy: person(r.picked_by),
-    receivedBy: person(r.received_by),
-    createdAt: r.created_at,
-    assignedAt: r.assigned_at,
-    pickedAt: r.picked_at,
-    receivedAt: r.received_at,
-    hasDiscrepancy: r.has_discrepancy,
-    cancelReason: r.cancel_reason ?? '',
-    lines: (r.stock_request_lines ?? [])
-      .map((l) => ({
-        itemId: l.item_id,
-        itemName: l.inventory_items?.name ?? 'Unknown item',
-        unit: l.inventory_items?.unit ?? 'pcs',
-        tracksExpiry: l.inventory_items?.tracks_expiry ?? false,
-        qtyRequested: Number(l.qty_requested),
-        qtyPicked: l.qty_picked === null ? null : Number(l.qty_picked),
-        qtyReceived: l.qty_received === null ? null : Number(l.qty_received),
-        expiryDate: l.expiry_date,
-      }))
-      .sort((a, b) => a.itemName.localeCompare(b.itemName)),
-  }));
-  return { requests, error: false };
+  const errors = [openRes.error, closedRes.error, unsettledRes.error].filter(Boolean) as { code?: string; message?: string }[];
+  if (errors.length > 0) {
+    return { rows: [], error: true, missingColumn: errors.some((e) => isMissingColumnError(e)) };
+  }
+  return {
+    rows: [
+      ...(openRes.data ?? []),
+      ...((unsettledRes.data ?? []) as RequestRow[]),
+      ...((closedRes.data ?? []) as unknown as RequestRow[]),
+    ],
+    error: false,
+    missingColumn: false,
+  };
 }
 
 export interface AutoHideState {

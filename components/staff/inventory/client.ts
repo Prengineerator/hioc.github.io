@@ -20,6 +20,8 @@ export interface RequestsPayload {
   actorId: string;
   canManage: boolean;
   surface: StaffSurface;
+  /** New requests are filled from the warehouse (docs/WAREHOUSE-SPEC.md). */
+  warehouse?: boolean;
 }
 
 export interface RecipesPayload {

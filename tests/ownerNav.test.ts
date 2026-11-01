@@ -279,3 +279,19 @@ describe('activeOwnerLink and activeOwnerGroup on owner.hioc.in', () => {
     expect(activeOwnerGroup(nav, '/menu', onOwnerSubdomain)?.id).toBe('menu');
   });
 });
+
+describe('ownerNav — the warehouse (docs/WAREHOUSE-SPEC.md)', () => {
+  it('adds a Stock section with the one Warehouse page, after Menu, only when the warehouse is on', () => {
+    const nav = ownerNav({ ...OFF, warehouse: true });
+    expect(nav.groups.map((g) => g.id)).toEqual(['sales', 'menu', 'stock', 'customers', 'team', 'setup']);
+    expect(itemsOf(nav, 'stock').map((l) => [l.href, l.label])).toEqual([['/owner/warehouse', 'Warehouse']]);
+    expect(ownerNav(OFF).groups.map((g) => g.id)).not.toContain('stock');
+    expect(ownerNav({ ...ON, warehouse: false }).groups.map((g) => g.id)).not.toContain('stock');
+  });
+
+  it('lights up on the page and its tabs', () => {
+    const nav = ownerNav({ ...OFF, warehouse: true });
+    expect(activeOwnerLink(nav, '/owner/warehouse')?.label).toBe('Warehouse');
+    expect(activeOwnerGroup(nav, '/owner/warehouse')?.id).toBe('stock');
+  });
+});
