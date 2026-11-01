@@ -72,6 +72,22 @@ beforeEach(() => {
   state.balance = 100;
 });
 
+describe('getStaffPrintOrder — a bill with a spend offer (the ₹49 jar) earns no Beanies', () => {
+  it('projects nothing, so the receipt promises no Beanies and the balance stays as it is', async () => {
+    state.order = baseOrder({ offer_name: 'Instant Coffee at ₹49', offer_discount_inr: 350, total_inr: 1200 });
+    state.balance = 100;
+    const result = await getStaffPrintOrder('order-1');
+    expect(result?.points_earned).toBeNull();
+    expect(result?.points_balance).toBe(100);
+  });
+
+  it('a bill with only the 1/2/3-jar offer still earns as before', async () => {
+    state.order = baseOrder({ offer_discount_inr: 299, total_inr: 499 });
+    const result = await getStaffPrintOrder('order-1');
+    expect(result?.points_earned).toBeGreaterThan(0);
+  });
+});
+
 describe('getStaffPrintOrder — loyalty points (PRN-8)', () => {
   it('projects points earned when no earn row exists yet, and rolls it into the balance shown', () => {
     state.order = baseOrder({ status: 'accepted', payment_status: 'paid', total_inr: 250 });

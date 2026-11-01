@@ -13,6 +13,7 @@ import { isMissingColumnError } from '@/lib/api/postgrest';
 import { expiryCutoff, pointsToExpire, type ExpiryRow } from '@/lib/loyalty/expiry';
 import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
+import { spendOfferOnBill } from '@/lib/orders/offers';
 
 /**
  * The earn formula, factored out so `earnForOrder` (the actual ledger write)
@@ -230,7 +231,26 @@ async function loadOrderForLoyalty(admin: Admin, orderId: string): Promise<Loyal
   };
 }
 
-/** Earns points for a completed, paid order (idempotent per order). */
+/**
+ * Whether the order's bill carries a spend offer (spendOfferOnBill). Read on its
+ * own so the account lookup above keeps its own fallback. A database without
+ * the columns (2026-11-spend-offers.sql) has no spend offers; any other failed
+ * read is logged and treated as none, so an ordinary order still earns.
+ */
+async function hasSpendOfferOnBill(admin: Admin, orderId: string): Promise<boolean> {
+  const { data, error } = await admin
+    .from('orders')
+    .select('offer_name, offer_discount_inr')
+    .eq('id', orderId)
+    .maybeSingle();
+  if (error) {
+    if (!isMissingColumnError(error)) console.error('earnForOrder: offer lookup failed', error);
+    return false;
+  }
+  return data ? spendOfferOnBill(data as { offer_name?: string | null; offer_discount_inr?: number | null }) : false;
+}
+
+/** Earns points for a completed, paid order (idempotent per order). No Beanies on a bill with a spend offer. */
 export async function earnForOrder(orderId: string): Promise<void> {
   if (!orderId) return;
   const admin = createAdminSupabaseClient();
@@ -242,6 +262,10 @@ export async function earnForOrder(orderId: string): Promise<void> {
   if (!order || !order.loyaltyUserId || order.status !== 'completed' || order.payment_status !== 'paid') {
     return;
   }
+
+  // A bill with a spend offer on it ("spend ₹1099, get the jar at ₹49") earns
+  // no Beanies: that offer can't be combined with them (lib/orders/offers.ts).
+  if (await hasSpendOfferOnBill(admin, orderId)) return;
 
   // Idempotency: never double-earn for the same order.
   const { data: existing, error: existingError } = await admin
