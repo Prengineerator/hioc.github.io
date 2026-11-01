@@ -23,7 +23,8 @@
 // changed since the menu was loaded, an offer just ended — it refuses before
 // anything is created or charged, and hands back its bill (POST /api/orders,
 // 'total_changed'). Coupons, Beanies and Ritual cups depend on the customer's
-// account and are still quoted by the server.
+// account and are still quoted by the server. A manager discount doesn't — it is
+// a number typed on this screen — so it is priced here too, by the same rule.
 
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { resolveOrderLines, type IncomingOrderItem } from '@/lib/orders/lines';
@@ -118,6 +119,8 @@ export function quoteLocally(input: {
   menuItems: readonly MenuItem[];
   pricing: PosPricingContext;
   isDineIn: boolean;
+  /** A manager discount typed on this screen (lib/orders/manualDiscount.ts); 0 = none. */
+  manualDiscountInr?: number;
   now?: Date;
 }): LocalQuote {
   const now = input.now ?? new Date();
@@ -149,6 +152,7 @@ export function quoteLocally(input: {
     offerDiscountInr,
     couponDiscountInr: 0,
     pointsDiscountInr: 0,
+    manualDiscountInr: input.manualDiscountInr ?? 0,
     passCoveredInr: 0,
     passCoveredTaxableInr: 0,
     isDineIn: input.isDineIn,

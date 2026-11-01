@@ -32,6 +32,7 @@ import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { CustomerOrdersModal } from '@/components/staff/CustomerOrdersModal';
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import { useShortcutHandler } from '@/components/staff/PosShortcuts';
+import { useStaffShell } from '@/components/staff/StaffShell';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
 import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentModal';
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
@@ -105,6 +106,12 @@ import {
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import { discountRows, offerLabel, type AppliedOffer } from '@/lib/orders/offers';
+import {
+  canGiveManualDiscount,
+  manualDiscountStaffLabel,
+  MAX_MANUAL_DISCOUNT_REASON_LENGTH,
+  parseManualDiscountInput,
+} from '@/lib/orders/manualDiscount';
 import { isSoldByWeight, lineSizeLabel } from '@/lib/menu/weight';
 import type { MenuItem, OrderType } from '@/lib/types';
 
@@ -343,6 +350,28 @@ export function PosOrderEntry({
   // coupon, what is SENT is only what the latest quote approved (placeOrder).
   const [passCups, setPassCups] = useState(0);
   const [quotedPass, setQuotedPass] = useState<QuotedPass | null>(null);
+  // Manager discount (lib/orders/manualDiscount.ts): an amount and a reason a
+  // manager or the owner types. Like a coupon it takes effect on Apply — the
+  // inputs are what is being typed, `manualDiscount` what was applied (and so
+  // priced and sent). Offered only to a manager or the owner: the shell's role
+  // is the signed-in operator's and follows a PIN switch. The server refuses it
+  // from anyone else whatever this screen shows. Not in add mode: an add is
+  // priced by the amend engine, which keeps the order's own discounts.
+  const { role: staffRole } = useStaffShell();
+  const canDiscount = canGiveManualDiscount(staffRole) && !isAddMode;
+  const [discountAmountInput, setDiscountAmountInput] = useState('');
+  const [discountReasonInput, setDiscountReasonInput] = useState('');
+  const [manualDiscount, setManualDiscount] = useState<{ amountInr: number; reason: string } | null>(null);
+  const manualAmount = canDiscount ? (manualDiscount?.amountInr ?? 0) : 0;
+  const manualReason = canDiscount ? (manualDiscount?.reason ?? '') : '';
+  // A switch to a staff operator drops it for good: switching back to a
+  // manager must not quietly bring back a discount nobody re-applied.
+  useEffect(() => {
+    if (canDiscount) return;
+    setManualDiscount(null);
+    setDiscountAmountInput('');
+    setDiscountReasonInput('');
+  }, [canDiscount]);
   // Bumped after the server says something changed under us (a 409 from
   // POST /api/orders): re-quote and look the customer up again.
   const [refreshTick, setRefreshTick] = useState(0);
@@ -1000,6 +1029,7 @@ export function PosOrderEntry({
         menuItems,
         pricing: posPricing,
         isDineIn: orderType === 'dine_in',
+        manualDiscountInr: manualAmount,
       });
       if (local.ok) {
         setBill({ ...local.bill, offer_label: local.offerLabel || offerLabel(local.offers.map((o) => o.name)) });
@@ -1033,6 +1063,7 @@ export function PosOrderEntry({
           ...(couponCode ? { coupon_code: couponCode } : {}),
           ...(redeemPoints > 0 ? { redeem_points: redeemPoints } : {}),
           ...(lookupPhone ? { customer_phone: lookupPhone } : {}),
+          ...(manualAmount > 0 ? { manual_discount: { amount_inr: manualAmount, reason: manualReason } } : {}),
         }),
       })
         .then(async (res) => {
@@ -1090,6 +1121,8 @@ export function PosOrderEntry({
     posPricing,
     ritual,
     serverPricingPinned,
+    manualAmount,
+    manualReason,
   ]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
@@ -1338,6 +1371,9 @@ export function PosOrderEntry({
       // than were asked for, so an unapproved count would fail the order at the till.
       const passApproved = ritualApproved(quotedPass, passCups);
       if (passApproved) body.pass_drinks = passCups;
+      // The manager discount the bill on screen was priced with. The server
+      // re-checks who is signed in (manager or owner) and prices it again.
+      if (manualAmount > 0) body.manual_discount = { amount_inr: manualAmount, reason: manualReason };
 
       // "Collect now" rides with the order: the server settles it the moment
       // it exists, by the payment route's own rules, in the same call. And
@@ -1601,6 +1637,10 @@ export function PosOrderEntry({
     // Nor the last one's Ritual cups.
     setPassCups(0);
     setQuotedPass(null);
+    // A manager discount was for that customer only.
+    setManualDiscount(null);
+    setDiscountAmountInput('');
+    setDiscountReasonInput('');
     setQuoteError(null);
     setOfferNotes([]);
     // POS-5 — a blank name field for the next customer is not "hand-typed",
@@ -1627,6 +1667,21 @@ export function PosOrderEntry({
     setCouponInput('');
     setCouponCode('');
     setQuotedCoupon(null);
+  }
+
+  // A manager discount takes effect on Apply, with both an amount and a reason.
+  const discountAmountTyped = parseManualDiscountInput(discountAmountInput);
+  const discountReasonTyped = discountReasonInput.trim();
+  const canApplyDiscount = discountAmountTyped !== null && discountReasonTyped.length > 0;
+  function applyManualDiscount() {
+    if (discountAmountTyped === null || !discountReasonTyped) return;
+    setManualDiscount({ amountInr: discountAmountTyped, reason: discountReasonTyped });
+  }
+
+  function clearManualDiscount() {
+    setManualDiscount(null);
+    setDiscountAmountInput('');
+    setDiscountReasonInput('');
   }
 
   const displaySubtotal = bill?.subtotal_inr ?? subtotal;
@@ -2003,7 +2058,7 @@ export function PosOrderEntry({
                     discount, exactly as the server computed them. Nothing here
                     is worked out on this tablet. */}
                 {bill
-                  ? discountRows(bill, bill.offer_label ?? 'Offer').map((row) => (
+                  ? discountRows(bill, bill.offer_label ?? 'Offer', 'Discount', manualDiscountStaffLabel(manualReason)).map((row) => (
                       <BillRow key={row.label} label={row.label} value={-row.amountInr} />
                     ))
                   : null}
@@ -2359,6 +2414,81 @@ export function PosOrderEntry({
                       : `Add the customer’s phone to use their ${LOYALTY_UNIT.many}.`}
                   </p>
                 )}
+              </div>
+            ) : null}
+
+            {/* Manager discount — a manager or the owner only (canDiscount).
+                An amount in whole rupees and a reason, both required; it comes
+                off last, before GST, and the bill above shows what it took. */}
+            {canDiscount && cart.length > 0 ? (
+              <div className="flex flex-col gap-2 rounded-md border border-line px-3 py-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-muted">Manager discount</p>
+                <div className="flex gap-2">
+                  <div className="relative w-28 shrink-0">
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted"
+                    >
+                      ₹
+                    </span>
+                    <input
+                      value={discountAmountInput}
+                      onChange={(e) => setDiscountAmountInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          applyManualDiscount();
+                        }
+                      }}
+                      disabled={manualDiscount !== null}
+                      inputMode="numeric"
+                      autoComplete="off"
+                      aria-label="Discount amount in rupees"
+                      placeholder="Amount"
+                      className="w-full rounded-md border border-line py-2 pl-7 pr-3 text-sm tabular-nums outline-none focus:border-tan disabled:opacity-60"
+                    />
+                  </div>
+                  <input
+                    value={discountReasonInput}
+                    onChange={(e) => setDiscountReasonInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        applyManualDiscount();
+                      }
+                    }}
+                    disabled={manualDiscount !== null}
+                    maxLength={MAX_MANUAL_DISCOUNT_REASON_LENGTH}
+                    autoComplete="off"
+                    aria-label="Reason for the discount"
+                    placeholder="Reason"
+                    className="min-w-0 flex-1 rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan disabled:opacity-60"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  {/* aria-live: the bill's verdict on the discount arrives with the re-price. */}
+                  <p aria-live="polite" className="text-xs">
+                    {manualDiscount && bill && !billStale ? (
+                      (bill.manual_discount_inr ?? 0) < manualDiscount.amountInr ? (
+                        <span className="font-bold text-tan-dark">
+                          Only ₹{bill.manual_discount_inr ?? 0} came off — that&rsquo;s all the bill had left.
+                        </span>
+                      ) : (
+                        <span className="font-bold text-green-700">₹{manualDiscount.amountInr} off applied.</span>
+                      )
+                    ) : manualDiscount ? null : (
+                      <span className="text-muted">Enter an amount and a reason.</span>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={manualDiscount ? clearManualDiscount : applyManualDiscount}
+                    disabled={!manualDiscount && !canApplyDiscount}
+                    className="shrink-0 rounded-md border border-line px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {manualDiscount ? 'Remove' : 'Apply'}
+                  </button>
+                </div>
               </div>
             ) : null}
 

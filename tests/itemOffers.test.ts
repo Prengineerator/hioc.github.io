@@ -251,7 +251,7 @@ describe('the bill: regular price, then the offer as its own discount', () => {
   it('a coupon stacks on what is left after the offer, and the bill never goes below zero', () => {
     const bill = billFor([jar(CLASSIC, 2)], { coupon: 50 });
     expect(bill).toMatchObject({ offer_discount_inr: 299, discount_inr: 349, total_inr: 449 });
-    expect(splitOrderDiscount(bill)).toEqual({ offerInr: 299, otherInr: 50 });
+    expect(splitOrderDiscount(bill)).toEqual({ offerInr: 299, otherInr: 50, manualInr: 0 });
     const huge = billFor([jar(CLASSIC, 2)], { coupon: 100000 });
     expect(huge).toMatchObject({ offer_discount_inr: 299, discount_inr: 798, total_inr: 0 });
   });

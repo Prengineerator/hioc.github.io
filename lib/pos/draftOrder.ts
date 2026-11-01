@@ -12,7 +12,8 @@
 //  - the idempotency key. A reload while "Charge" was in flight is exactly
 //    when the order may exist on the server with no answer on screen; keeping
 //    the key means charging again REPLAYS that order instead of making a second.
-//  - NOT coupons, points or Ritual cups: those spend a customer's balance and
+//  - NOT coupons, points, Ritual cups or a manager discount: the first three
+//    spend a customer's balance, the last is a manager's call for one bill, and
 //    must be asked for again, never carried silently.
 //  - NOT the payment step: it re-opens from Charge.
 //

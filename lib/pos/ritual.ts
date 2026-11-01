@@ -56,6 +56,8 @@ export type PosBill = BillBreakdown & {
   offer_discount_inr?: number;
   /** The offer row's label, e.g. "Instant Coffee offer" (offerLabel). */
   offer_label?: string;
+  /** A manager discount's part of discount_inr (lib/orders/manualDiscount.ts). Absent = 0. */
+  manual_discount_inr?: number;
 };
 
 // ---------------------------------------------------------------------------

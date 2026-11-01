@@ -245,6 +245,12 @@ export interface Order {
   // re-checked on every correction. Absent = none.
   offer_name?: string | null;
   spend_offers?: unknown;
+  // 2026-11-manual-discount.sql: the rupees a manager or the owner took off at
+  // the POS (lib/orders/manualDiscount.ts), why, and who. Inside discount_inr
+  // like the offer, so the total formula above is unchanged. Absent = 0 / ''.
+  manual_discount_inr?: number;
+  manual_discount_reason?: string;
+  manual_discount_by?: string | null;
 }
 
 export interface OrderItemAddon {

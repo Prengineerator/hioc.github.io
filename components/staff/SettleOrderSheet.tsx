@@ -29,6 +29,7 @@ import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { PASS_SHORT_NAME } from '@/lib/passes/brand';
 import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, ritualBillRow } from '@/lib/pos/ritual';
 import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
+import { manualDiscountStaffLabel } from '@/lib/orders/manualDiscount';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
 
@@ -417,7 +418,7 @@ export function SettleOrderSheet({
         <BillRow label="Subtotal" value={order.subtotal_inr} />
         {order.tax_inr > 0 ? <BillRow label="GST" value={order.tax_inr} /> : null}
         {order.packaging_inr > 0 ? <BillRow label="Packaging" value={order.packaging_inr} /> : null}
-        {discountRows(order, orderOfferLabel(order)).map((row) => (
+        {discountRows(order, orderOfferLabel(order), 'Discount', manualDiscountStaffLabel(order.manual_discount_reason)).map((row) => (
           <BillRow key={row.label} label={row.label} value={-row.amountInr} />
         ))}
         {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}

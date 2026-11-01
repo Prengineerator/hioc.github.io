@@ -71,6 +71,8 @@ export interface OrderRow {
   tip_inr?: number | null;
   order_kind?: string | null;
   pass_discount_inr?: number | null;
+  manual_discount_inr?: number | null;
+  manual_discount_reason?: string | null;
 }
 
 export interface ItemRow {
@@ -426,6 +428,7 @@ export function buildOrderDataset(input: OrderDatasetInput): OrderDataset {
     const redemptions = redemptionsByOrder.get(o.id) ?? [];
     const couponDiscountInr = redemptions.reduce((s, r) => s + (r.discount_inr ?? 0), 0);
     const discountInr = o.discount_inr ?? 0;
+    const manualDiscountInr = Math.min(Math.max(0, o.manual_discount_inr ?? 0), Math.max(0, discountInr));
     const partMethods = [...new Set((partsByOrder.get(o.id) ?? []).map((p) => p.method).filter(Boolean))];
     const clock = istClock(o.created_at);
     return {
@@ -457,7 +460,9 @@ export function buildOrderDataset(input: OrderDatasetInput): OrderDataset {
       tipInr: o.tip_inr ?? 0,
       couponCodes: [...new Set(redemptions.map((r) => r.code?.trim()).filter((c): c is string => !!c))],
       couponDiscountInr,
-      beaniesDiscountInr: Math.max(0, discountInr - couponDiscountInr),
+      beaniesDiscountInr: Math.max(0, discountInr - couponDiscountInr - manualDiscountInr),
+      manualDiscountInr,
+      manualDiscountReason: manualDiscountInr > 0 ? (o.manual_discount_reason ?? '').trim() : '',
       refundedInr: (processedRefundsByOrder.get(o.id) ?? []).reduce((s, r) => s + (r.amount_inr ?? 0), 0),
       gstRule: priced.rule,
       taxableValueInr: priced.taxableValueInr,

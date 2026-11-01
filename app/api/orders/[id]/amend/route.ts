@@ -77,6 +77,8 @@ type LoadedOrder = {
   pass_discount_inr?: number;
   /** The multi-buy offer part of discount_inr; absent before 2026-10-item-offers.sql. */
   offer_discount_inr?: number;
+  /** The manager-discount part of discount_inr; absent before 2026-11-manual-discount.sql. */
+  manual_discount_inr?: number;
   /** The offer row's label when a spend offer is on the bill; absent before 2026-11-spend-offers.sql. */
   offer_name?: string | null;
   /** The spend offers on the order's items when it was priced (2026-11-spend-offers.sql). */
@@ -112,6 +114,13 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
 // offer never sends the column (pre-2026-10-item-offers.sql safe).
 function offerDiscountPatch(order: LoadedOrder, offerDiscountInr: number): { offer_discount_inr?: number } {
   return offerDiscountInr !== (order.offer_discount_inr ?? 0) ? { offer_discount_inr: offerDiscountInr } : {};
+}
+
+// And for a manager discount (lib/orders/manualDiscount.ts): it only changes
+// when a correction takes the bill below it, so an order without one never
+// sends the column (pre-2026-11-manual-discount.sql safe).
+function manualDiscountPatch(order: LoadedOrder, manualDiscountInr: number): { manual_discount_inr?: number } {
+  return manualDiscountInr !== (order.manual_discount_inr ?? 0) ? { manual_discount_inr: manualDiscountInr } : {};
 }
 
 // Once per customer (spend offers): an order that already has one keeps its
@@ -283,6 +292,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     orderType: order.order_type,
     discountInr: order.discount_inr,
     offerDiscountInr: order.offer_discount_inr ?? 0,
+    manualDiscountInr: order.manual_discount_inr ?? 0,
     spendOffers: parseSpendSnapshot(order.spend_offers),
     spendBlocked: holdsSpendOffer(order) ? undefined : silentlyBlocked(parseSpendSnapshot(order.spend_offers)),
   });
@@ -301,6 +311,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
       ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...manualDiscountPatch(order, bill.manual_discount_inr),
       ...offerNamePatch(order, bill),
       version: order.version + 1,
     })
@@ -499,6 +510,7 @@ async function addLines(
     orderType: order.order_type,
     discountInr: order.discount_inr,
     offerDiscountInr: order.offer_discount_inr ?? 0,
+    manualDiscountInr: order.manual_discount_inr ?? 0,
     spendOffers,
     spendBlocked,
   });
@@ -518,6 +530,7 @@ async function addLines(
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
       ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...manualDiscountPatch(order, bill.manual_discount_inr),
       ...offerNamePatch(order, bill),
       // A spend offer that came live for an item this add brought: kept on the
       // order for later corrections. Only written when it grew.
@@ -702,6 +715,7 @@ async function editLines(
     orderType: order.order_type,
     discountInr: order.discount_inr,
     offerDiscountInr: order.offer_discount_inr ?? 0,
+    manualDiscountInr: order.manual_discount_inr ?? 0,
     spendOffers: parseSpendSnapshot(order.spend_offers),
     spendBlocked: holdsSpendOffer(order) ? undefined : silentlyBlocked(parseSpendSnapshot(order.spend_offers)),
   });
@@ -716,6 +730,7 @@ async function editLines(
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
       ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...manualDiscountPatch(order, bill.manual_discount_inr),
       ...offerNamePatch(order, bill),
       version: order.version + 1,
     })
