@@ -6,9 +6,14 @@ import { Noto_Sans_Devanagari } from 'next/font/google';
 // to rasterize for ESC/POS printers. Latin text ("HIOC.") shares the same
 // stack: this subset doesn't cover Latin glyphs, so the browser/canvas falls
 // through to the declared fallback for it automatically.
+//
+// Loaded as the variable font (400 and 700 both come from it) rather than as a
+// list of static weights: Google Fonts answers that list with extension-less
+// /l/font?kit= URLs, which Next 14.2's font loader cannot handle, and
+// `next build` fails in next/font (same as DM Sans in app/layout.tsx).
 export const devanagariFont = Noto_Sans_Devanagari({
   subsets: ['devanagari'],
-  weight: ['400', '700'],
+  weight: 'variable',
   variable: '--font-noto-devanagari',
   display: 'swap',
   // The variable is declared on the ROOT layout (app/layout.tsx), so every
