@@ -493,6 +493,26 @@ describe('buildOrderDataset: payments and discounts', () => {
     // All Beanies, no coupon.
     expect(ds.orders[2]).toMatchObject({ couponDiscountInr: 0, beaniesDiscountInr: 40, couponCodes: [] });
   });
+
+  it('keeps a manager discount apart from Beanies, with its reason', () => {
+    const ds = buildOrderDataset(
+      input({
+        orders: [
+          order({ id: 'a', order_number: 1, discount_inr: 80, manual_discount_inr: 50, manual_discount_reason: ' Long wait ' }),
+          order({ id: 'b', order_number: 2, discount_inr: 30 }),
+        ],
+        redemptions: [{ order_id: 'a', discount_inr: 30, code: 'WELCOME' }],
+      }),
+    );
+    expect(ds.orders[0]).toMatchObject({
+      couponDiscountInr: 30,
+      beaniesDiscountInr: 0,
+      manualDiscountInr: 50,
+      manualDiscountReason: 'Long wait',
+    });
+    // Before the migration (no column): no manager discount, all Beanies as before.
+    expect(ds.orders[1]).toMatchObject({ beaniesDiscountInr: 30, manualDiscountInr: 0, manualDiscountReason: '' });
+  });
 });
 
 describe('buildOrderDataset: refunds', () => {

@@ -574,3 +574,89 @@ describe('POST /api/orders — who may vouch for a coupon\'s phone (CouponContex
     expect(state.couponCtx?.userId).toBe('cust-1');
   });
 });
+
+// Manager discount (lib/orders/manualDiscount.ts, 2026-11-manual-discount.sql):
+// an amount and a reason a manager or the owner types at the POS. The role is
+// the counter actor's, read on the server — a staff operator, or anyone off the
+// counter, is refused whatever the body says.
+describe('POST /api/orders — manager discount', () => {
+  const discounted = (extra: Record<string, unknown> = {}) =>
+    req({
+      order_type: 'dine_in',
+      table_id: TABLE_ID,
+      items: oneLatte,
+      manual_discount: { amount_inr: 40, reason: '  Regular, birthday ' },
+      ...extra,
+    });
+
+  it('a manager: comes off before GST and the order keeps the amount, the reason and who gave it', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager', via: 'device' };
+    // 2 × ₹100 = ₹200, - ₹40 = ₹160, GST 5% = ₹8 → ₹168 (dine-in: no packaging).
+    const res = await POST(discounted({ expected_total_inr: 168 }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({
+      subtotal_inr: 200,
+      discount_inr: 40,
+      tax_inr: 8,
+      total_inr: 168,
+      manual_discount_inr: 40,
+      manual_discount_reason: 'Regular, birthday',
+      manual_discount_by: 'mgr-1',
+      created_by: 'mgr-1',
+    });
+  });
+
+  it('the owner may too', async () => {
+    state.actor = { user: { id: 'owner-1' }, role: 'owner' };
+    const res = await POST(discounted());
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.manual_discount_by).toBe('owner-1');
+  });
+
+  it('a staff operator is refused, and nothing is created', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    const res = await POST(discounted());
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/manager or the owner/i);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('a website customer is refused', async () => {
+    state.sessionUser = { id: 'cust-1' };
+    const res = await POST(
+      req({
+        customer_name: 'A',
+        customer_phone: '9000000000',
+        pickup_slot_label: 'ASAP',
+        items: oneLatte,
+        manual_discount: { amount_inr: 40, reason: 'please' },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/manager or the owner/i);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('a discount without a reason is a 400', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager' };
+    const res = await POST(discounted({ manual_discount: { amount_inr: 40, reason: '' } }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('never more than the bill has left: a ₹500 discount on a ₹200 bill makes it ₹0, paid', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager' };
+    const res = await POST(discounted({ manual_discount: { amount_inr: 500, reason: 'Comp — long wait' } }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({ discount_inr: 200, manual_discount_inr: 200, tax_inr: 0, total_inr: 0, payment_status: 'paid' });
+  });
+
+  it('an order without one never sends the columns (pre-migration safe)', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager' };
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).not.toHaveProperty('manual_discount_inr');
+    expect(state.orderInsert).not.toHaveProperty('manual_discount_reason');
+    expect(state.orderInsert).not.toHaveProperty('manual_discount_by');
+  });
+});

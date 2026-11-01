@@ -22,6 +22,7 @@ import { loadActiveOffers, loadActiveSpendOffers, loadSpendOfferBlocks } from '@
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
 import { indianE164HonouringPlus } from '@/lib/phone';
+import { canGiveManualDiscount, MANUAL_DISCOUNT_FORBIDDEN, parseManualDiscount } from '@/lib/orders/manualDiscount';
 
 export const dynamic = 'force-dynamic';
 
@@ -79,6 +80,12 @@ export async function POST(request: Request) {
   if (!passDrinksParsed.ok) return errorResponse(400, passDrinksParsed.error);
   const requestedPassDrinks = passDrinksParsed.value;
 
+  // A manager discount to preview (lib/orders/manualDiscount.ts). Checked
+  // against the caller's role once the actor is known, below.
+  const manualParsed = parseManualDiscount(body.manual_discount);
+  if (!manualParsed.ok) return errorResponse(400, manualParsed.error);
+  const manualRequest = manualParsed.value;
+
   // With `items` the server prices the cart itself and the client's subtotal is
   // ignored altogether (a spoofed one cannot even preview a wrong bill). Without
   // it this is the older subtotal-only preview, which cannot see which drinks a
@@ -134,6 +141,10 @@ export async function POST(request: Request) {
   // that's a round trip shaved off of every keystroke's re-quote, not just one.
   const [user, actor, settings] = await Promise.all([getAuthUser(), getCounterActor(), getStoreSettings()]);
   const isStaff = actor !== null;
+  // The same rule POST /api/orders charges by: only a manager or the owner may.
+  if (manualRequest && !canGiveManualDiscount(actor?.role)) {
+    return errorResponse(403, MANUAL_DISCOUNT_FORBIDDEN);
+  }
   // The admin client is made only when something needs it: the anonymous,
   // subtotal-only preview (the common case) touches no table at all.
   let adminClient: ReturnType<typeof createAdminSupabaseClient> | null = null;
@@ -281,6 +292,7 @@ export async function POST(request: Request) {
     ...(resolvedLines ? { offerTaxableShare: offerTaxableShare(resolvedLines) } : {}),
     couponDiscountInr,
     pointsDiscountInr,
+    manualDiscountInr: manualRequest?.amountInr ?? 0,
     passCoveredInr,
     passCoveredTaxableInr,
     isDineIn,

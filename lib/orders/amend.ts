@@ -31,6 +31,9 @@
 // (each line carries the offer it was sold under). Voiding one jar of a "2 for
 // ₹499" leaves one jar at the 1-jar price; adding one to a running tab makes it
 // a pair. Only the coupon/points part of the stored discount is clamped (v1).
+//
+// A manager discount (lib/orders/manualDiscount.ts) is kept as it was given, and
+// comes off last as at creation: lowered only when the bill falls below it.
 
 import type { BillBreakdown } from '@/lib/store/hours';
 import { billWithOffer } from '@/lib/orders/billPricing';
@@ -63,10 +66,12 @@ export interface RecomputeInput {
   items: RecomputeLine[];
   settings: StoreSettings;
   orderType: OrderType;
-  /** The order's stored discount_inr: coupon + points + offer. */
+  /** The order's stored discount_inr: coupon + points + offer + manager discount. */
   discountInr: number;
   /** The part of discountInr that was the offer (orders.offer_discount_inr); absent = 0. */
   offerDiscountInr?: number;
+  /** The part of discountInr that was a manager discount (orders.manual_discount_inr); absent = 0. */
+  manualDiscountInr?: number;
   /** The spend offers kept on the order (orders.spend_offers), re-checked against what remains. */
   spendOffers?: readonly SpendOffer[];
   /** Spend offers this customer can't have here (once per customer), as billOffers takes them. */
@@ -86,6 +91,7 @@ export interface RecomputeInput {
  *   their share of the discount, plus packaging (computeBill)
  * - offer = the multi-buy offers on the remaining lines, worked out again
  * - discount = offer + min(stored coupon/points, new subtotal - pass cover - offer)  ← v1 clamp (D8)
+ *              + min(stored manager discount, what is left after those)
  * - GST/packaging via composePassBill (= computeBill with no pass); dine-in
  *   forces packaging 0 (decision D5)
  *
@@ -99,11 +105,14 @@ export function recomputeOrderTotals({
   orderType,
   discountInr,
   offerDiscountInr = 0,
+  manualDiscountInr = 0,
   spendOffers = [],
   spendBlocked,
 }: RecomputeInput): BillBreakdown & {
   pass_discount_inr: number;
   offer_discount_inr: number;
+  /** What is left of the manager discount (never more than it was). */
+  manual_discount_inr: number;
   offer_label: string;
   offer_kind: 'spend' | 'multi_buy' | 'none';
   /** The spend offer on the bill, when there is one: what its once-per-customer record names. */
@@ -139,7 +148,11 @@ export function recomputeOrderTotals({
   // that takes everything else below its minimum puts that unit back at its
   // regular price. A coupon or Beanies on the order keeps it off, as at creation.
   const payable = Math.max(0, subtotalInr - passCoveredInr);
-  const otherDiscount = Math.max(0, Math.max(0, discountInr) - Math.max(0, offerDiscountInr));
+  // The stored discount, taken apart: the offer, the manager discount, and the
+  // coupon/points that remain. Only the coupon/points part keeps a spend offer off.
+  const beyondOffer = Math.max(0, Math.max(0, discountInr) - Math.max(0, offerDiscountInr));
+  const storedManual = Math.min(Math.max(0, manualDiscountInr), beyondOffer);
+  const otherDiscount = beyondOffer - storedManual;
   const offers = billOffers({
     lines: remaining.map((item) => ({
       menu_item_id: item.menu_item_id ?? '',
@@ -157,7 +170,9 @@ export function recomputeOrderTotals({
     spendBlocked,
   });
   const offer = Math.min(offers.discountInr, payable);
-  const discount = offer + Math.min(otherDiscount, payable - offer);
+  const couponPoints = Math.min(otherDiscount, payable - offer);
+  const manual = Math.min(storedManual, payable - offer - couponPoints);
+  const discount = offer + couponPoints + manual;
 
   // Dine-in never carries a packaging charge (D5), whatever the store's
   // packaging setting: billed with none, so no GST is charged on it either.
@@ -178,6 +193,7 @@ export function recomputeOrderTotals({
   return {
     ...bill,
     offer_discount_inr: offer,
+    manual_discount_inr: manual,
     offer_label: offers.label,
     offer_kind: offers.kind,
     spend_offer_id: offers.kind === 'spend' ? (offers.offers[0]?.offer_id ?? null) : null,

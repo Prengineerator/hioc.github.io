@@ -59,6 +59,7 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
 import { settleOrderPayment, type CounterActor, type CounterSettlement } from '@/lib/orders/settlePayment';
 import { getStaffPrintOrder, type StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
+import { canGiveManualDiscount, MANUAL_DISCOUNT_FORBIDDEN, parseManualDiscount } from '@/lib/orders/manualDiscount';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -108,6 +109,7 @@ export async function POST(request: Request) {
     coupon_code,
     redeem_points,
     pass_drinks: rawPassDrinks,
+    manual_discount: rawManualDiscount,
     suggestion_session_ids,
     pairing_lines,
     settlement: rawSettlement,
@@ -305,6 +307,20 @@ export async function POST(request: Request) {
   const requestedPassDrinks = passDrinksParsed.value;
   if (requestedPassDrinks > 0 && !flags.coffeePass) {
     return errorResponse(400, `${PASS_PROGRAM_NAME} isn't available yet`);
+  }
+
+  // Manager discount (lib/orders/manualDiscount.ts): an amount and a reason a
+  // manager or the owner typed at the POS. The role is the counter actor's —
+  // the classic session, or the enrolled device's PIN operator — read on the
+  // server, never a body field, so a staff operator (or anyone off the counter)
+  // is refused whatever the request says.
+  const manualParsed = parseManualDiscount(rawManualDiscount);
+  if (!manualParsed.ok) {
+    return errorResponse(400, manualParsed.error);
+  }
+  const manualRequest = manualParsed.value;
+  if (manualRequest && !canGiveManualDiscount(actor?.role)) {
+    return errorResponse(403, MANUAL_DISCOUNT_FORBIDDEN);
   }
 
   // Online vs pay-at-counter (PAY-1). Default preserves Phase-1 behavior.
@@ -688,6 +704,7 @@ export async function POST(request: Request) {
     offerTaxableShare: offerTaxableShare(resolvedLines),
     couponDiscountInr,
     pointsDiscountInr,
+    manualDiscountInr: manualRequest?.amountInr ?? 0,
     passCoveredInr,
     passCoveredTaxableInr,
     isDineIn,
@@ -827,6 +844,16 @@ export async function POST(request: Request) {
     // Spend offers on this bill's items (2026-11-spend-offers.sql), only when
     // there are any, so other orders never need the column.
     ...(spendSnapshot.length > 0 ? { spend_offers: spendSnapshot } : {}),
+    // A manager discount (2026-11-manual-discount.sql): what came off, why and
+    // who gave it — only when there is one, so other orders never need the
+    // columns. The amount is the one the bill applied (capped at what was left).
+    ...(bill.manual_discount_inr > 0 && manualRequest && actor
+      ? {
+          manual_discount_inr: bill.manual_discount_inr,
+          manual_discount_reason: manualRequest.reason,
+          manual_discount_by: actor.user.id,
+        }
+      : {}),
     // Table service needs no token; a website dine-in is collected at the counter.
     pickup_code: tableId ? null : generatePickupCode(),
     notes: notes ?? '',
@@ -849,6 +876,15 @@ export async function POST(request: Request) {
     .insert(linkedFields)
     .select()
     .single();
+
+  // A manager discount can't be taken without the columns that say why and who:
+  // refuse it plainly (nothing was created) rather than charge a discount
+  // nobody can account for later. Every other order is unaffected.
+  if (bill.manual_discount_inr > 0 && isMissingColumnError(orderError) && /manual_discount/i.test(orderError?.message ?? '')) {
+    console.error('orders.manual_discount_* is missing — is supabase/2026-11-manual-discount.sql applied?', orderError);
+    if (idempotencyKey && claimedKey) await releaseIdempotencyKey(admin, idempotencyKey);
+    return errorResponse(503, 'Manager discounts aren\'t set up on this database yet — place the order without one.');
+  }
 
   // The column isn't there yet. Losing the loyalty link costs a regular some
   // points; refusing to take a paying customer's order because a migration is

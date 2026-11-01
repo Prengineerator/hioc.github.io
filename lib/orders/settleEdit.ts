@@ -174,7 +174,12 @@ export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): Se
 export function editReductionInr(
   changes: PlannedEdit[],
   lines?: readonly (BillOfferLine & { id: string; pass_covered_inr?: number | null })[],
-  order?: { spend_offers?: unknown; discount_inr?: number; offer_discount_inr?: number | null },
+  order?: {
+    spend_offers?: unknown;
+    discount_inr?: number;
+    offer_discount_inr?: number | null;
+    manual_discount_inr?: number | null;
+  },
 ): number {
   const linesOff = changes.reduce(
     (sum, c) => sum + (c.remove ? c.from_line_total_inr : c.from_line_total_inr - c.to_line_total_inr),
@@ -190,7 +195,14 @@ export function editReductionInr(
       : { ...line, quantity: change.to_quantity, line_total_inr: change.to_line_total_inr };
   });
   const spendOffers = parseSpendSnapshot(order?.spend_offers);
-  const otherDiscountApplied = order ? splitOrderDiscount({ discount_inr: order.discount_inr ?? 0, offer_discount_inr: order.offer_discount_inr }).otherInr > 0 : false;
+  // Only a coupon or Beanies keeps a spend offer off — not a manager discount.
+  const otherDiscountApplied = order
+    ? splitOrderDiscount({
+        discount_inr: order.discount_inr ?? 0,
+        offer_discount_inr: order.offer_discount_inr,
+        manual_discount_inr: order.manual_discount_inr,
+      }).otherInr > 0
+    : false;
   const offersOf = (ls: typeof lines) =>
     billOffers({
       lines: ls,

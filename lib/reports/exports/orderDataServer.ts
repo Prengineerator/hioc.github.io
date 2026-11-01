@@ -26,9 +26,11 @@ import type { OrderDataset } from '@/lib/reports/exports/types';
 const ORDER_COLUMNS =
   'id, order_number, created_at, status, payment_status, payment_method, channel, order_type, table_label, reject_reason, created_by, subtotal_inr, tax_inr, packaging_inr, discount_inr, total_inr';
 // Settle discount + tip (2026-09-settle-adjustments.sql), the HIOC Ritual
-// columns (2026-10-coffee-pass.sql), then the offer part of the discount
-// (2026-10-item-offers.sql): newest first, falling back a migration at a time.
+// columns (2026-10-coffee-pass.sql), the offer part of the discount
+// (2026-10-item-offers.sql), then the manager discount
+// (2026-11-manual-discount.sql): newest first, falling back a migration at a time.
 const ORDER_TIERS = [
+  `${ORDER_COLUMNS}, settle_discount_inr, tip_inr, order_kind, pass_discount_inr, offer_discount_inr, manual_discount_inr, manual_discount_reason`,
   `${ORDER_COLUMNS}, settle_discount_inr, tip_inr, order_kind, pass_discount_inr, offer_discount_inr`,
   `${ORDER_COLUMNS}, settle_discount_inr, tip_inr, order_kind, pass_discount_inr`,
   `${ORDER_COLUMNS}, settle_discount_inr, tip_inr`,

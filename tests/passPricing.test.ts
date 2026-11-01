@@ -122,7 +122,7 @@ describe('composeOrderBill — spec §6 examples A-D', () => {
           couponDiscountInr: coupon,
           pointsDiscountInr: points,
         });
-        expect(got).toEqual({ ...expected, pass_discount_inr: 0, offer_discount_inr: 0 });
+        expect(got).toEqual({ ...expected, pass_discount_inr: 0, offer_discount_inr: 0, manual_discount_inr: 0 });
       }
     }
   });

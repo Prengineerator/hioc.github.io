@@ -115,7 +115,7 @@ export default async function StaffLayout({
 
   if (device) {
     return (
-      <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
+      <StaffShell surface={surface} staffWebOrdering={staffWebOrdering} role={role}>
         <PosShortcuts />
         <div className="min-h-screen bg-cream">
           <StaffPinOverlay
@@ -133,7 +133,7 @@ export default async function StaffLayout({
   }
 
   return (
-    <StaffShell surface={surface} staffWebOrdering={staffWebOrdering}>
+    <StaffShell surface={surface} staffWebOrdering={staffWebOrdering} role={role}>
       {/* Ctrl+N / Ctrl+T / F5 / F1… on every staff screen (lib/staff/shortcuts.ts). */}
       <PosShortcuts />
       <div className="min-h-screen bg-cream">

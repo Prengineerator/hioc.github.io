@@ -113,6 +113,7 @@ export function orderRegister(ds: OrderDataset): CsvTable {
     { header: 'Coupon discount (INR)', cell: (o) => o.couponDiscountInr, total: sum((o) => o.couponDiscountInr) },
     { header: 'Coupon codes', cell: (o) => o.couponCodes.join(', ') },
     { header: 'Beanies discount (INR)', cell: (o) => o.beaniesDiscountInr, total: sum((o) => o.beaniesDiscountInr) },
+    { header: 'Manager discount (INR)', cell: manualOf, total: sum(manualOf) },
     { header: 'Ritual cups covered (INR)', cell: (o) => o.passDiscountInr, total: sum((o) => o.passDiscountInr) },
     { header: 'Taxable value (INR)', cell: (o) => o.taxableValueInr, total: sum((o) => o.taxableValueInr) },
     { header: 'CGST (INR)', cell: (o) => o.cgstInr, total: sum((o) => o.cgstInr) },
@@ -457,10 +458,20 @@ export function staffSales(ds: OrderDataset): CsvTable {
 
 // ── Discounts given ─────────────────────────────────────────────────────────
 
-/** Valid orders where something was knocked off: a coupon, Beanies, a settle discount or Ritual cups. */
+/** A manager discount on the order (absent on datasets read before its migration). */
+function manualOf(o: ExportOrder): number {
+  return o.manualDiscountInr ?? 0;
+}
+
+/** Valid orders where something was knocked off: a coupon, Beanies, a manager or settle discount, or Ritual cups. */
 export function discountReport(ds: OrderDataset): CsvTable {
   const rows = validOrders(ds).filter(
-    (o) => o.couponDiscountInr > 0 || o.beaniesDiscountInr > 0 || o.settleDiscountInr > 0 || o.passDiscountInr > 0,
+    (o) =>
+      o.couponDiscountInr > 0 ||
+      o.beaniesDiscountInr > 0 ||
+      manualOf(o) > 0 ||
+      o.settleDiscountInr > 0 ||
+      o.passDiscountInr > 0,
   );
   const cols: Col<ExportOrder>[] = [
     { header: 'Invoice no', cell: (o) => o.invoiceNo, total: text('TOTAL') },
@@ -468,6 +479,9 @@ export function discountReport(ds: OrderDataset): CsvTable {
     { header: 'Coupon codes', cell: (o) => o.couponCodes.join(', ') },
     { header: 'Coupon discount (INR)', cell: (o) => o.couponDiscountInr, total: sum((o) => o.couponDiscountInr) },
     { header: 'Beanies discount (INR)', cell: (o) => o.beaniesDiscountInr, total: sum((o) => o.beaniesDiscountInr) },
+    { header: 'Manager discount (INR)', cell: manualOf, total: sum(manualOf) },
+    { header: 'Manager discount reason', cell: (o) => o.manualDiscountReason ?? '' },
+    { header: 'Given by', cell: (o) => (manualOf(o) > 0 ? staffLabel(o) : '') },
     { header: 'Settle discount (INR)', cell: (o) => o.settleDiscountInr, total: sum((o) => o.settleDiscountInr) },
     { header: 'Ritual cups covered (INR)', cell: (o) => o.passDiscountInr, total: sum((o) => o.passDiscountInr) },
     { header: 'Bill total (INR)', cell: (o) => o.totalInr, total: sum((o) => o.totalInr) },

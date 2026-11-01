@@ -46,6 +46,11 @@ export interface OrderBillInput {
   couponDiscountInr: number;
   /** Computed on what is left after the pass AND the coupon. */
   pointsDiscountInr: number;
+  /**
+   * A manager discount (lib/orders/manualDiscount.ts): rupees off what is left
+   * after everything above, capped there. 0 / absent = none.
+   */
+  manualDiscountInr?: number;
   passCoveredInr: number;
   /** The part of passCoveredInr that sat on GST-liable lines. */
   passCoveredTaxableInr: number;
@@ -56,26 +61,33 @@ export interface OrderBillInput {
 /**
  * The authoritative bill for an order (create and quote both call it): the pass
  * first, then the multi-buy offers, then coupon and points on what is left
- * (CP-D12), GST on the taxable value with the covered rupees and the discount
- * taken out of it and packaging in it (CP-D11, computeBill), and no packaging
- * for dine-in (D5).
+ * (CP-D12), then a manager discount on what is left after all of that, GST
+ * on the taxable value with the covered rupees and the discount taken out of it
+ * and packaging in it (CP-D11, computeBill), and no packaging for dine-in (D5).
  *
- *   offer_discount_inr = min(offers, subtotal - pass cover)
- *   discount_inr       = offer + min(coupon + points, what is left after it)
- *   pass_discount_inr  = the pass cover
- *   total_inr          = subtotal + tax + packaging - discount_inr - pass_discount_inr
+ *   offer_discount_inr  = min(offers, subtotal - pass cover)
+ *   manual_discount_inr = min(manager discount, what the offer, coupon and points leave)
+ *   discount_inr        = offer + min(coupon + points, what is left after it) + manual
+ *   pass_discount_inr   = the pass cover
+ *   total_inr           = subtotal + tax + packaging - discount_inr - pass_discount_inr
  *
  * With no pass and no offer this is computeBill(subtotal, settings,
  * min(coupon + points, subtotal), taxable), with packaging 0 for dine-in.
  */
 export function composeOrderBill(
   input: OrderBillInput,
-): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number } {
+): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number; manual_discount_inr: number } {
   const passCovered = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
   const payable = afterPass(input.subtotalInr, passCovered);
   const offerInr = Math.min(Math.max(0, input.offerDiscountInr ?? 0), payable);
-  const otherInr = Math.min(Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr), payable - offerInr);
-  return billWithOffer(
+  const couponPointsInr = Math.min(
+    Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr),
+    payable - offerInr,
+  );
+  const manualInr = Math.min(Math.max(0, input.manualDiscountInr ?? 0), payable - offerInr - couponPointsInr);
+  // The manager discount is a discount on the whole bill, like a coupon: it is
+  // spread over what is left for GST, alongside the coupon/Beanies.
+  const bill = billWithOffer(
     {
       subtotalInr: input.subtotalInr,
       taxableSubtotalInr: input.taxableSubtotalInr,
@@ -83,12 +95,13 @@ export function composeOrderBill(
       passCoveredTaxableInr: input.passCoveredTaxableInr,
       offerInr,
       offerTaxableShare: input.offerTaxableShare,
-      otherDiscountInr: otherInr,
+      otherDiscountInr: couponPointsInr + manualInr,
     },
     // Dine-in has no packaging charge (D5), whatever the store's packaging
     // setting: billed with none, so no GST is charged on it either.
     input.isDineIn ? { ...input.settings, packaging_charge_inr: 0 } : input.settings,
   );
+  return { ...bill, manual_discount_inr: manualInr };
 }
 
 /**
@@ -103,9 +116,11 @@ export function composeOrderBill(
  *     GST-liable share (offerTaxableShare) comes out of the taxable value and
  *     the rest out of the exempt value. Without a share it is spread like a
  *     coupon (the earlier rule).
- *   - The coupon/Beanies discount is spread over what is left (computeBill).
+ *   - The coupon/Beanies discount (and a manager discount) is spread over what
+ *     is left (computeBill).
  *
- *   discount_inr      = offer + coupon/Beanies     (offer_discount_inr says how much is the offer)
+ *   discount_inr      = offer + coupon/Beanies + manager discount
+ *                       (offer_discount_inr says how much is the offer)
  *   pass_discount_inr = the pass cover
  *   total_inr         = subtotal + tax + packaging − discount_inr − pass_discount_inr
  */

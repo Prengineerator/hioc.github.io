@@ -37,6 +37,7 @@ import {
 import type { PrintType } from '@/lib/staff/autoPrint';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 import { lineSizeSuffix } from '@/lib/menu/weight';
+import { MANUAL_DISCOUNT_LABEL } from '@/lib/orders/manualDiscount';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -215,6 +216,7 @@ export function OrderDetailModal({
   };
   const canPrintToken = !ritualSale && order.order_type === 'takeaway' && Boolean(order.pickup_code);
   const ritualRow = ritualBillRow(order, cupsOnOrder(order.items));
+  const manualDiscount = order.manual_discount_inr ?? 0;
 
   // POS4-3 + DEV-3 — the same three-way resolution the POS uses, through the
   // same hook, so settling from the queue prints exactly what settling from the
@@ -529,7 +531,24 @@ export function OrderDetailModal({
             <span className="font-mono tabular-nums">-₹{Math.abs(ritualRow.value)}</span>
           </div>
         ) : null}
-        <div className={'flex justify-between text-sm ' + (ritualRow ? 'pt-1' : 'mt-3 border-t border-line pt-2')}>
+        {/* A manager discount, with the reason it was given (staff only — the
+            customer's bill shows just the row). */}
+        {manualDiscount > 0 ? (
+          <div className={'text-sm text-charcoal ' + (ritualRow ? 'pt-1' : 'mt-3 border-t border-line pt-2')}>
+            <div className="flex justify-between">
+              <span>{MANUAL_DISCOUNT_LABEL}</span>
+              <span className="font-mono tabular-nums">-₹{manualDiscount}</span>
+            </div>
+            {order.manual_discount_reason ? (
+              <p className="text-xs text-muted">Reason: {order.manual_discount_reason}</p>
+            ) : null}
+          </div>
+        ) : null}
+        <div
+          className={
+            'flex justify-between text-sm ' + (ritualRow || manualDiscount > 0 ? 'pt-1' : 'mt-3 border-t border-line pt-2')
+          }
+        >
           <span className="font-bold text-charcoal">Total</span>
           <span className="font-bold text-tan-dark">₹{order.total_inr ?? order.subtotal_inr}</span>
         </div>

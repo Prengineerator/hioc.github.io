@@ -28,6 +28,7 @@ import {
   setOrdersFeedConnection,
   useOrdersFeed,
 } from '@/lib/staff/ordersFeed';
+import type { UserRole } from '@/lib/types';
 
 const CHIME_INTERVAL_MS = 5000;
 
@@ -51,6 +52,12 @@ export interface StaffShellValue {
   canTakeOrders: boolean;
   /** This screen may change the menu (POS only). */
   canEditMenu: boolean;
+  /**
+   * The signed-in staffer's role (the PIN operator's on an enrolled device),
+   * from the server; it follows a PIN switch (the layout re-renders on
+   * router.refresh). For what to OFFER only — every API route re-checks it.
+   */
+  role: UserRole | null;
 }
 
 const NOOP_SHELL: StaffShellValue = {
@@ -64,6 +71,7 @@ const NOOP_SHELL: StaffShellValue = {
   surface: 'web',
   canTakeOrders: false,
   canEditMenu: false,
+  role: null,
 };
 
 const StaffShellContext = createContext<StaffShellValue | null>(null);
@@ -98,11 +106,14 @@ export function StaffShell({
   children,
   surface,
   staffWebOrdering,
+  role = null,
 }: {
   children: React.ReactNode;
   /** Resolved on the server by app/staff/layout.tsx (lib/staff/surface.ts). */
   surface: StaffSurface;
   staffWebOrdering: boolean;
+  /** The counter actor's role, resolved on the server by app/staff/layout.tsx. */
+  role?: UserRole | null;
 }) {
   const [soundOn, setSoundOn] = useState(true);
   const [soundReady, setSoundReady] = useState(false);
@@ -243,8 +254,9 @@ export function StaffShell({
       surface,
       canTakeOrders: canTakeOrders(surface, staffWebOrdering),
       canEditMenu: canEditMenu(surface),
+      role,
     }),
-    [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders, surface, staffWebOrdering],
+    [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders, surface, staffWebOrdering, role],
   );
 
   return <StaffShellContext.Provider value={value}>{children}</StaffShellContext.Provider>;

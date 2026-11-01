@@ -45,6 +45,7 @@
 // can't disagree. Loading the live offers is lib/orders/offersServer.ts.
 
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
+import { MANUAL_DISCOUNT_LABEL } from '@/lib/orders/manualDiscount';
 
 /** An offer as stored (menu_offers). */
 export interface MenuOffer {
@@ -258,17 +259,28 @@ export function offerLabelForLines(
   );
 }
 
+/** What a bill's discount_inr is made of, as the order or a quote stores it. */
+export interface DiscountParts {
+  discount_inr: number;
+  offer_discount_inr?: number | null;
+  /** A manager discount (lib/orders/manualDiscount.ts); absent = none. */
+  manual_discount_inr?: number | null;
+}
+
 /**
- * How a stored order's discount_inr splits into the offer and the rest (coupon
- * + Beanies). An order from before the offers migration has no offer part.
+ * How a stored order's discount_inr splits into the offer, a manager discount
+ * and the rest (coupon + Beanies). An order from before the offers or
+ * manager-discount migration has no such part.
  */
-export function splitOrderDiscount(order: { discount_inr: number; offer_discount_inr?: number | null }): {
+export function splitOrderDiscount(order: DiscountParts): {
   offerInr: number;
   otherInr: number;
+  manualInr: number;
 } {
   const total = Math.max(0, order.discount_inr ?? 0);
   const offerInr = Math.min(Math.max(0, order.offer_discount_inr ?? 0), total);
-  return { offerInr, otherInr: total - offerInr };
+  const manualInr = Math.min(Math.max(0, order.manual_discount_inr ?? 0), total - offerInr);
+  return { offerInr, otherInr: total - offerInr - manualInr, manualInr };
 }
 
 /** One discount row on a bill: a label and the rupees it takes off (positive). */
@@ -279,18 +291,21 @@ export interface DiscountRow {
 
 /**
  * The discount rows a bill shows, in order: the offer (e.g. "Instant Coffee
- * offer"), then the rest of discount_inr (coupon + Beanies) under `otherLabel`.
- * A bill without an offer gets the one row it always had.
+ * offer"), then the coupon + Beanies part of discount_inr under `otherLabel`,
+ * then a manager discount under `manualLabel`. A bill without an offer or a
+ * manager discount gets the one row it always had.
  */
 export function discountRows(
-  bill: { discount_inr: number; offer_discount_inr?: number | null },
+  bill: DiscountParts,
   offerLabelText: string,
   otherLabel = 'Discount',
+  manualLabel = MANUAL_DISCOUNT_LABEL,
 ): DiscountRow[] {
-  const { offerInr, otherInr } = splitOrderDiscount(bill);
+  const { offerInr, otherInr, manualInr } = splitOrderDiscount(bill);
   const rows: DiscountRow[] = [];
   if (offerInr > 0) rows.push({ label: offerLabelText, amountInr: offerInr });
   if (otherInr > 0) rows.push({ label: otherLabel, amountInr: otherInr });
+  if (manualInr > 0) rows.push({ label: manualLabel, amountInr: manualInr });
   return rows;
 }
 
