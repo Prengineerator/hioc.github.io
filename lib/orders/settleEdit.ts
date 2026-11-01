@@ -16,7 +16,7 @@
 
 import { isUuid } from '@/lib/api/constants';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import { computeOffers, type OfferLine } from '@/lib/orders/offers';
+import { billOffers, parseSpendSnapshot, splitOrderDiscount, type BillOfferLine } from '@/lib/orders/offers';
 import type { OrderStatus } from '@/lib/types';
 
 /**
@@ -164,11 +164,18 @@ export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): Se
 
 /**
  * What an edit takes off the bill before tax and packaging (for the sheet's
- * preview). With the order's lines, a multi-buy offer the edit shrinks is
- * netted off (one jar off "2 for ₹499" lowers the bill by ₹200, not ₹399), the
- * same re-derivation the amend route makes (lib/orders/amend.ts).
+ * preview). With the order's lines, the offers the edit changes are netted off
+ * the same way the amend route re-derives them (lib/orders/amend.ts): one jar
+ * off "2 for ₹499" lowers the bill by ₹200, not ₹399; and an edit that takes
+ * the rest of the bill under a spend offer's minimum puts that jar back at its
+ * regular price. `order` carries the spend offers kept on it and whether a
+ * coupon or Beanies is on it (which keeps a spend offer off).
  */
-export function editReductionInr(changes: PlannedEdit[], lines?: readonly (OfferLine & { id: string })[]): number {
+export function editReductionInr(
+  changes: PlannedEdit[],
+  lines?: readonly (BillOfferLine & { id: string; pass_covered_inr?: number | null })[],
+  order?: { spend_offers?: unknown; discount_inr?: number; offer_discount_inr?: number | null },
+): number {
   const linesOff = changes.reduce(
     (sum, c) => sum + (c.remove ? c.from_line_total_inr : c.from_line_total_inr - c.to_line_total_inr),
     0,
@@ -178,7 +185,18 @@ export function editReductionInr(changes: PlannedEdit[], lines?: readonly (Offer
   const after = lines.map((line) => {
     const change = byId.get(line.id);
     if (!change) return line;
-    return change.remove ? { ...line, voided: true } : { ...line, quantity: change.to_quantity };
+    return change.remove
+      ? { ...line, voided: true }
+      : { ...line, quantity: change.to_quantity, line_total_inr: change.to_line_total_inr };
   });
-  return linesOff - (computeOffers(lines).discountInr - computeOffers(after).discountInr);
+  const spendOffers = parseSpendSnapshot(order?.spend_offers);
+  const otherDiscountApplied = order ? splitOrderDiscount({ discount_inr: order.discount_inr ?? 0, offer_discount_inr: order.offer_discount_inr }).otherInr > 0 : false;
+  const offersOf = (ls: typeof lines) =>
+    billOffers({
+      lines: ls,
+      spendOffers,
+      otherDiscountApplied,
+      passCoveredInr: ls.filter((l) => !l.voided).reduce((sum, l) => sum + Math.max(0, l.pass_covered_inr ?? 0), 0),
+    }).discountInr;
+  return linesOff - (offersOf(lines) - offersOf(after));
 }

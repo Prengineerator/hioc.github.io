@@ -16,7 +16,7 @@ import { Modal } from '@/components/ui/Modal';
 import { PosPaymentPanel, type SettleAdjustmentInput } from '@/components/staff/PosPaymentModal';
 import { describeOrderPayment } from '@/lib/orders/settleList';
 import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, type PosBill } from '@/lib/pos/ritual';
-import { offerLabelForLines } from '@/lib/orders/offers';
+import { orderOfferLabel } from '@/lib/orders/offers';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { PaymentPart } from '@/lib/orders/payments';
 import type { Order, OrderItem } from '@/lib/types';
@@ -50,7 +50,7 @@ export function SettlePaymentDialog({
     pass_discount_inr: order.pass_discount_inr ?? 0,
     // The multi-buy offer part of the discount, shown as its own row (absent = 0).
     offer_discount_inr: order.offer_discount_inr ?? 0,
-    offer_label: offerLabelForLines(order.items),
+    offer_label: orderOfferLabel(order),
     total_inr: total,
   };
   const itemCount = order.items.filter((i) => !i.voided).reduce((n, i) => n + i.quantity, 0);

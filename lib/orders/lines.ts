@@ -173,13 +173,16 @@ export type ResolveResult =
  * `menuById` is supplied by the caller (both call sites already load the menu
  * rows they need), keeping this function pure and directly unit-testable.
  * `offers` (lib/orders/offersServer.ts loadActiveOffers) are the live offers by
- * menu item; a line of an item with one carries its snapshot.
+ * menu item; a line of an item with one carries its snapshot. `spendItemIds`
+ * are the items a live spend offer is on: their lines record one unit's price
+ * (offer_unit_inr), so the offer can be re-checked against the lines later.
  */
 export function resolveOrderLines(
   items: IncomingOrderItem[],
   menuById: Map<string, MenuItem>,
   opts: MenuSwitches = {},
   offers: ReadonlyMap<string, ActiveOffer> = new Map(),
+  spendItemIds: ReadonlySet<string> = new Set(),
 ): ResolveResult {
   const lines: ResolvedLine[] = [];
   let subtotalInr = 0;
@@ -282,6 +285,7 @@ export function resolveOrderLines(
     // A weighed line (a bag of beans) is priced by its grams, so a "per unit"
     // offer has nothing fixed to count: offers are for by-the-unit items.
     const offer = byWeight ? undefined : offers.get(menuItem.id);
+    const onSpendOffer = !byWeight && spendItemIds.has(menuItem.id);
 
     lines.push({
       menu_item_id: menuItem.id,
@@ -296,7 +300,9 @@ export function resolveOrderLines(
       ...(weightGrams !== null ? { weight_grams: weightGrams } : {}),
       ...(offer
         ? { offer_id: offer.id, offer_name: offer.name, offer_prices: offer.tier_prices, offer_unit_inr: basePrice }
-        : {}),
+        : onSpendOffer
+          ? { offer_unit_inr: basePrice }
+          : {}),
       addons: addonsFlat,
     });
   }

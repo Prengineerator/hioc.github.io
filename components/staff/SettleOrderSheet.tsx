@@ -28,7 +28,7 @@ import {
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { PASS_SHORT_NAME } from '@/lib/passes/brand';
 import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, ritualBillRow } from '@/lib/pos/ritual';
-import { discountRows, offerLabelForLines } from '@/lib/orders/offers';
+import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
 
@@ -110,7 +110,7 @@ export function SettleOrderSheet({
   // will accept (and "would empty the order" is said before the tap, not after).
   const plan = useMemo(() => (changes.length > 0 ? planSettleEdit(order.items, changes) : null), [changes, order.items]);
   const planError = plan && !plan.ok ? plan.error : null;
-  const reduction = plan?.ok ? editReductionInr(plan.changes, order.items) : 0;
+  const reduction = plan?.ok ? editReductionInr(plan.changes, order.items, order) : 0;
   const reason = reasonChoice === 'Other' ? reasonText.trim() : reasonChoice;
   const canSave = dirty && !saving && plan?.ok === true && reason !== '';
 
@@ -328,8 +328,19 @@ export function SettleOrderSheet({
           {plan?.ok ? (
             <>
               <p className="text-sm font-bold text-charcoal">
-                <span className="font-mono tabular-nums">−{rupees(reduction)}</span> before tax
+                <span className="font-mono tabular-nums">
+                  {reduction >= 0 ? '−' : '+'}
+                  {rupees(Math.abs(reduction))}
+                </span>{' '}
+                before tax
               </p>
+              {reduction < 0 ? (
+                // Removing items took the rest of the bill under a spend offer's
+                // minimum, so that item is back at its regular price.
+                <p className="mt-0.5 text-xs font-semibold text-tan-dark">
+                  The bill goes up: an offer no longer applies after this change.
+                </p>
+              ) : null}
               <p className="mt-0.5 text-xs text-muted">GST and the total are recalculated when you save.</p>
             </>
           ) : null}
@@ -406,7 +417,7 @@ export function SettleOrderSheet({
         <BillRow label="Subtotal" value={order.subtotal_inr} />
         {order.tax_inr > 0 ? <BillRow label="GST" value={order.tax_inr} /> : null}
         {order.packaging_inr > 0 ? <BillRow label="Packaging" value={order.packaging_inr} /> : null}
-        {discountRows(order, offerLabelForLines(order.items)).map((row) => (
+        {discountRows(order, orderOfferLabel(order)).map((row) => (
           <BillRow key={row.label} label={row.label} value={-row.amountInr} />
         ))}
         {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}

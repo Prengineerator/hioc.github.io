@@ -34,7 +34,7 @@
 
 import type { BillBreakdown } from '@/lib/store/hours';
 import { composePassBill } from '@/lib/passes/rules';
-import { computeOffers } from '@/lib/orders/offers';
+import { billOffers, type SpendOffer } from '@/lib/orders/offers';
 import type { OrderStatus, OrderType, StoreSettings } from '@/lib/types';
 
 // Only the fields the recompute needs from an order line — keeps this callable
@@ -55,6 +55,8 @@ export interface RecomputeLine {
   menu_item_id?: string;
   name_snapshot?: string;
   quantity?: number;
+  /** One unit's price, add-ons included: a spend offer's minimum doesn't count the unit it prices. */
+  price_inr_snapshot?: number;
 }
 
 export interface RecomputeInput {
@@ -65,6 +67,10 @@ export interface RecomputeInput {
   discountInr: number;
   /** The part of discountInr that was the offer (orders.offer_discount_inr); absent = 0. */
   offerDiscountInr?: number;
+  /** The spend offers kept on the order (orders.spend_offers), re-checked against what remains. */
+  spendOffers?: readonly SpendOffer[];
+  /** Spend offers this customer can't have here (once per customer), as billOffers takes them. */
+  spendBlocked?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -93,7 +99,16 @@ export function recomputeOrderTotals({
   orderType,
   discountInr,
   offerDiscountInr = 0,
-}: RecomputeInput): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number } {
+  spendOffers = [],
+  spendBlocked,
+}: RecomputeInput): BillBreakdown & {
+  pass_discount_inr: number;
+  offer_discount_inr: number;
+  offer_label: string;
+  offer_kind: 'spend' | 'multi_buy' | 'none';
+  /** The spend offer on the bill, when there is one: what its once-per-customer record names. */
+  spend_offer_id: string | null;
+} {
   const remaining = items.filter((item) => !item.voided);
   const subtotalInr = remaining.reduce((sum, item) => sum + item.line_total_inr, 0);
   // GST only on the lines that weren't GST-exempt when sold — the snapshot,
@@ -119,21 +134,29 @@ export function recomputeOrderTotals({
   // The offer comes first (as at creation), re-derived from the remaining lines;
   // the coupon/points part (what the stored discount held besides the offer) is
   // clamped to what is left after it.
+  //
+  // A spend offer is re-checked too (lib/orders/offers.ts billOffers): a void
+  // that takes everything else below its minimum puts that unit back at its
+  // regular price. A coupon or Beanies on the order keeps it off, as at creation.
   const payable = Math.max(0, subtotalInr - passCoveredInr);
-  const offer = Math.min(
-    computeOffers(
-      remaining.map((item) => ({
-        menu_item_id: item.menu_item_id ?? '',
-        name_snapshot: item.name_snapshot ?? '',
-        quantity: item.quantity ?? 0,
-        offer_name: item.offer_name,
-        offer_prices: item.offer_prices,
-        offer_unit_inr: item.offer_unit_inr,
-      })),
-    ).discountInr,
-    payable,
-  );
   const otherDiscount = Math.max(0, Math.max(0, discountInr) - Math.max(0, offerDiscountInr));
+  const offers = billOffers({
+    lines: remaining.map((item) => ({
+      menu_item_id: item.menu_item_id ?? '',
+      name_snapshot: item.name_snapshot ?? '',
+      quantity: item.quantity ?? 0,
+      offer_name: item.offer_name,
+      offer_prices: item.offer_prices,
+      offer_unit_inr: item.offer_unit_inr,
+      line_total_inr: item.line_total_inr,
+      price_inr_snapshot: item.price_inr_snapshot,
+    })),
+    spendOffers,
+    passCoveredInr,
+    otherDiscountApplied: otherDiscount > 0,
+    spendBlocked,
+  });
+  const offer = Math.min(offers.discountInr, payable);
   const discount = offer + Math.min(otherDiscount, payable - offer);
 
   // Dine-in never carries a packaging charge (D5), whatever the store's
@@ -143,7 +166,13 @@ export function recomputeOrderTotals({
     { subtotalInr, taxableSubtotalInr, discountInr: discount, passCoveredInr, passCoveredTaxableInr },
     orderType === 'dine_in' ? { ...settings, packaging_charge_inr: 0 } : settings,
   );
-  return { ...bill, offer_discount_inr: offer };
+  return {
+    ...bill,
+    offer_discount_inr: offer,
+    offer_label: offers.label,
+    offer_kind: offers.kind,
+    spend_offer_id: offers.kind === 'spend' ? (offers.offers[0]?.offer_id ?? null) : null,
+  };
 }
 
 /**

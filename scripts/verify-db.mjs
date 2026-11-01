@@ -1679,6 +1679,27 @@ async function checkItemOffers() {
 }
 
 // ---------------------------------------------------------------------------
+// Spend offers (supabase/2026-11-spend-offers.sql): "spend ₹1099, get one jar at
+// ₹49" (lib/orders/offers.ts billOffers). Orders work without it (no spend offer
+// can exist, and the order columns are only written when one applies);
+// Promotions → Offers → Spend & get answers with the migration hint. Reads only.
+// ---------------------------------------------------------------------------
+async function checkSpendOffers() {
+  heading('Spend offers: spend_offers + spend_offer_redemptions + orders.spend_offers / offer_name', '2026-11-spend-offers.sql');
+  const hint = 'apply supabase/2026-11-spend-offers.sql';
+  for (const [table, col] of [
+    ['spend_offers', 'min_spend_inr'],
+    ['spend_offer_redemptions', 'phone'],
+    ['orders', 'spend_offers'],
+    ['orders', 'offer_name'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Add-on approvals (supabase/2026-10-addon-change-requests.sql): add-on group
 // changes from the POS are held in menu_change_requests (target 'addon_group')
 // for the owner, like menu item changes. Item requests and the owner's own
@@ -2214,6 +2235,7 @@ async function main() {
   await checkCoffeePassPerDrink();
   await checkSellByWeight();
   await checkItemOffers();
+  await checkSpendOffers();
   await checkAddonApprovals();
   await checkSettleEditOrder();
   await checkMarketingAgent();

@@ -17,8 +17,8 @@ import {
   type ResolvedLine,
 } from '@/lib/orders/lines';
 import { afterOffers, afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
-import { computeOffers, type AppliedOffer } from '@/lib/orders/offers';
-import { loadActiveOffers } from '@/lib/orders/offersServer';
+import { billOffers, type BillOffersResult, type SpendOffer } from '@/lib/orders/offers';
+import { loadActiveOffers, loadActiveSpendOffers, loadSpendOfferBlocks } from '@/lib/orders/offersServer';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
 import { indianE164HonouringPlus } from '@/lib/phone';
@@ -146,17 +146,26 @@ export async function POST(request: Request) {
   let subtotalInr: number;
   let taxableInr: number;
   let resolvedLines: ResolvedLine[] | null = null;
+  let spendOffers: SpendOffer[] = [];
   if (parsedItems) {
     const menuIds = [...new Set(parsedItems.map((i) => i.menu_item_id))];
-    const [{ data: menuRows, error: menuError }, offersByItem] = await Promise.all([
+    const [{ data: menuRows, error: menuError }, offersByItem, liveSpend] = await Promise.all([
       admin().from('menu_items').select(MENU_ITEM_SELECT).in('id', menuIds),
       loadActiveOffers(admin(), menuIds),
+      loadActiveSpendOffers(admin(), menuIds),
     ]);
+    spendOffers = liveSpend;
     if (menuError) return errorResponse(500, 'Failed to validate order items');
     const menuById = new Map(
       (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
     );
-    const resolved = resolveOrderLines(parsedItems, menuById, switchesFromSettings(settings), offersByItem);
+    const resolved = resolveOrderLines(
+      parsedItems,
+      menuById,
+      switchesFromSettings(settings),
+      offersByItem,
+      new Set(spendOffers.map((o) => o.menu_item_id)),
+    );
     if (!resolved.ok) return errorResponse(400, resolved.error);
     resolvedLines = resolved.lines;
     subtotalInr = resolved.subtotalInr;
@@ -209,11 +218,20 @@ export async function POST(request: Request) {
     };
   }
   // What a coupon and Beanies are computed on once the pass has been applied.
-  // Multi-buy offers (lib/orders/offers.ts): only a quote priced from items can
-  // have them (the legacy subtotal-only quote has no lines to count).
-  const offers: AppliedOffer[] = resolvedLines ? computeOffers(resolvedLines).offers : [];
-  const offerDiscountInr = offers.reduce((sum, o) => sum + o.discount_inr, 0);
-  const payableAfterOffers = afterOffers(afterPass(subtotalInr, passCoveredInr), offerDiscountInr);
+  // Offers (lib/orders/offers.ts): only a quote priced from items can have them
+  // (the legacy subtotal-only quote has no lines to count). As at create: first
+  // without a spend offer (it can't be combined with a coupon or Beanies), and
+  // tried once neither turns out to be applied.
+  const noOffers: BillOffersResult = { discountInr: 0, offers: [], label: '', notes: [], kind: 'none' };
+  // Once per customer, by phone (the number typed at the counter, or the web
+  // checkout's): no number, or one that has had it, keeps a spend offer off.
+  const spendBlocked = await loadSpendOfferBlocks(admin(), spendOffers, toStoredPhone(customer_phone));
+  const priceOffers = (otherDiscountApplied: boolean) =>
+    resolvedLines
+      ? billOffers({ lines: resolvedLines, spendOffers, passCoveredInr, otherDiscountApplied, spendBlocked })
+      : noOffers;
+  let offerResult = priceOffers(true);
+  const payableAfterOffers = afterOffers(afterPass(subtotalInr, passCoveredInr), offerResult.discountInr);
 
   let couponResult: Awaited<ReturnType<typeof validateAndComputeCoupon>> | null = null;
   let couponDiscountInr = 0;
@@ -249,6 +267,9 @@ export async function POST(request: Request) {
     }
   }
 
+  if (couponDiscountInr + pointsDiscountInr === 0) offerResult = priceOffers(false);
+  const offerDiscountInr = offerResult.discountInr;
+
   // Exactly the create path's bill: pass, then coupon, then Beanies, GST on the
   // taxable base with the covered rupees out of it, and the dine-in packaging
   // rule (lib/orders/passPricing.ts holds the one copy).
@@ -264,7 +285,17 @@ export async function POST(request: Request) {
     isDineIn,
   });
 
-  // `offers`: one entry per item on a multi-buy offer, for the bill's offer row
+  // `offers`: one entry per offer on the bill, for the bill's offer row
   // (bill.offer_discount_inr is their total, inside bill.discount_inr).
-  return NextResponse.json({ bill, coupon: couponResult, points: pointsResult, balance, pass, offers });
+  // `offer_notes`: why an offer the cart qualifies for isn't on it (a spend
+  // offer next to a coupon or Beanies), for the counter screen.
+  return NextResponse.json({
+    bill,
+    coupon: couponResult,
+    points: pointsResult,
+    balance,
+    pass,
+    offers: offerResult.offers,
+    offer_notes: offerResult.notes,
+  });
 }
