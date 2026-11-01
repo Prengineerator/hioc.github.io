@@ -5,7 +5,8 @@ import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { recomputeOrderTotals, statusAfterAdd } from '@/lib/orders/amend';
-import { loadActiveOffers } from '@/lib/orders/offersServer';
+import { loadActiveOffers, loadActiveSpendOffers } from '@/lib/orders/offersServer';
+import { mergeSpendSnapshot, parseSpendSnapshot, type SpendOffer } from '@/lib/orders/offers';
 import {
   MAX_EDIT_REASON_LENGTH,
   planSettleEdit,
@@ -70,6 +71,10 @@ type LoadedOrder = {
   pass_discount_inr?: number;
   /** The multi-buy offer part of discount_inr; absent before 2026-10-item-offers.sql. */
   offer_discount_inr?: number;
+  /** The offer row's label when a spend offer is on the bill; absent before 2026-11-spend-offers.sql. */
+  offer_name?: string | null;
+  /** The spend offers on the order's items when it was priced (2026-11-spend-offers.sql). */
+  spend_offers?: unknown;
   order_items: OrderLine[] | null;
 };
 
@@ -99,6 +104,17 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
 // offer never sends the column (pre-2026-10-item-offers.sql safe).
 function offerDiscountPatch(order: LoadedOrder, offerDiscountInr: number): { offer_discount_inr?: number } {
   return offerDiscountInr !== (order.offer_discount_inr ?? 0) ? { offer_discount_inr: offerDiscountInr } : {};
+}
+
+// The offer row's label: kept on the order only for a spend offer (a multi-buy
+// label is read off the lines), and written back only when it changes, so an
+// order that never had a spend offer never sends the column.
+function offerNamePatch(
+  order: LoadedOrder,
+  bill: { offer_discount_inr: number; offer_kind: string; offer_label: string },
+): { offer_name?: string | null } {
+  const next = bill.offer_discount_inr > 0 && bill.offer_kind === 'spend' ? bill.offer_label : null;
+  return next !== (order.offer_name ?? null) ? { offer_name: next } : {};
 }
 
 // POST /api/orders/[id]/amend — correct an open order. Three operations:
@@ -231,6 +247,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     orderType: order.order_type,
     discountInr: order.discount_inr,
     offerDiscountInr: order.offer_discount_inr ?? 0,
+    spendOffers: parseSpendSnapshot(order.spend_offers),
   });
 
   // Persist the new totals UNDER THE OPTIMISTIC VERSION GUARD. If a concurrent
@@ -247,6 +264,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
       ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...offerNamePatch(order, bill),
       version: order.version + 1,
     })
     .eq('id', id)
@@ -356,17 +374,31 @@ async function addLines(
   // Price the new lines against the live menu (server-authoritative).
   // A jar added to a tab takes the offer live now (Promotions → Offers).
   const menuIds = [...new Set(parsed.map((i) => i.menu_item_id))];
-  const [{ data: menuRows, error: menuError }, offersByItem] = await Promise.all([
+  // Spend offers: the live ones on any item the order will then have, so an
+  // add that takes the bill past a minimum earns the offer.
+  const billItemIds = [
+    ...new Set([...menuIds, ...existingItems.filter((l) => !l.voided).map((l) => l.menu_item_id).filter(Boolean)]),
+  ];
+  const [{ data: menuRows, error: menuError }, offersByItem, liveSpend] = await Promise.all([
     admin.from('menu_items').select(MENU_ITEM_SELECT).in('id', menuIds),
     loadActiveOffers(admin, menuIds),
+    loadActiveSpendOffers(admin, billItemIds),
   ]);
   if (menuError) return errorResponse(500, 'Failed to validate order items');
 
   const menuById = new Map(
     (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
   );
-  const resolved = resolveOrderLines(parsed, menuById, switchesFromSettings(storeSettings), offersByItem);
+  const resolved = resolveOrderLines(
+    parsed,
+    menuById,
+    switchesFromSettings(storeSettings),
+    offersByItem,
+    new Set(liveSpend.map((o) => o.menu_item_id)),
+  );
   if (!resolved.ok) return errorResponse(400, resolved.error);
+  const storedSpend = parseSpendSnapshot(order.spend_offers);
+  const spendOffers: SpendOffer[] = mergeSpendSnapshot(storedSpend, liveSpend, billItemIds);
 
   // Insert the lines, tracking ids so a lost version race can roll them back.
   const insertedIds: string[] = [];
@@ -414,6 +446,7 @@ async function addLines(
       offer_name: l.offer_name ?? null,
       offer_prices: l.offer_prices ?? null,
       offer_unit_inr: l.offer_unit_inr ?? null,
+      price_inr_snapshot: l.price_inr_snapshot,
     })),
   ];
   const bill = recomputeOrderTotals({
@@ -422,6 +455,7 @@ async function addLines(
     orderType: order.order_type,
     discountInr: order.discount_inr,
     offerDiscountInr: order.offer_discount_inr ?? 0,
+    spendOffers,
   });
 
   // New items have to be made: an order the kitchen had marked Ready goes back
@@ -439,6 +473,10 @@ async function addLines(
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
       ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...offerNamePatch(order, bill),
+      // A spend offer that came live for an item this add brought: kept on the
+      // order for later corrections. Only written when it grew.
+      ...(spendOffers.length > storedSpend.length ? { spend_offers: spendOffers } : {}),
       version: order.version + 1,
       ...(nextStatus !== order.status ? { status: nextStatus } : {}),
     })
@@ -617,6 +655,7 @@ async function editLines(
     orderType: order.order_type,
     discountInr: order.discount_inr,
     offerDiscountInr: order.offer_discount_inr ?? 0,
+    spendOffers: parseSpendSnapshot(order.spend_offers),
   });
 
   const { data: guarded, error: updateError } = await admin
@@ -629,6 +668,7 @@ async function editLines(
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
       ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...offerNamePatch(order, bill),
       version: order.version + 1,
     })
     .eq('id', id)

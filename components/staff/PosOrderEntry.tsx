@@ -208,6 +208,8 @@ interface QuoteResponse {
   pass?: QuotedPass | null;
   /** Multi-buy offers on the cart (lib/orders/offers.ts): name the offer row. */
   offers?: AppliedOffer[];
+  /** Why an offer the cart qualifies for isn't on the bill (a spend offer next to a coupon or Beanies). */
+  offer_notes?: string[];
 }
 
 interface StaffTable {
@@ -347,6 +349,10 @@ export function PosOrderEntry({
   // The server's own reason when the cart could not be priced at all (an item
   // switched off, an add-on gone): shown instead of a bill that never arrives.
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  // The server's notes on offers the cart qualifies for but doesn't get
+  // ("… can't be combined with a coupon or Beanies"). Only a server quote has
+  // them: a cart priced on this screen has no coupon or Beanies to block one.
+  const [offerNotes, setOfferNotes] = useState<string[]>([]);
 
   const [bill, setBill] = useState<PosBill | null>(null);
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
@@ -971,6 +977,7 @@ export function PosOrderEntry({
       setQuotedPoints(null);
       setQuotedPass(null);
       setQuoteError(null);
+      setOfferNotes([]);
       // An emptied cart forgets the cups asked for: the next order asks again.
       setPassCups(0);
       setBillStale(false);
@@ -995,7 +1002,8 @@ export function PosOrderEntry({
         isDineIn: orderType === 'dine_in',
       });
       if (local.ok) {
-        setBill({ ...local.bill, offer_label: offerLabel(local.offers.map((o) => o.name)) });
+        setBill({ ...local.bill, offer_label: local.offerLabel || offerLabel(local.offers.map((o) => o.name)) });
+        setOfferNotes([]);
         setQuotedCoupon(null);
         setQuotedPoints(null);
         setQuotedPass(null);
@@ -1045,6 +1053,7 @@ export function PosOrderEntry({
           // The offer row's label rides on the bill, so the payment step
           // (which only gets the bill) names it the same way.
           setBill({ ...data.bill, offer_label: offerLabel((data.offers ?? []).map((o) => o.name)) });
+          setOfferNotes(data.offer_notes ?? []);
           setQuotedCoupon(couponCode ? (data.coupon ?? null) : null);
           setQuotedPoints(redeemPoints > 0 ? (data.points ?? null) : null);
           setQuotedPass(data.pass ?? null);
@@ -1593,6 +1602,7 @@ export function PosOrderEntry({
     setPassCups(0);
     setQuotedPass(null);
     setQuoteError(null);
+    setOfferNotes([]);
     // POS-5 — a blank name field for the next customer is not "hand-typed",
     // and their "Last orders" (if any) belong to a number not yet entered.
     custNameUserEdited.current = false;
@@ -2018,6 +2028,13 @@ export function PosOrderEntry({
                     {quoteError}
                   </p>
                 ) : null}
+                {/* An offer the cart qualifies for but can't have alongside the
+                    coupon or Beanies: said here, so the staffer can choose. */}
+                {offerNotes.map((note) => (
+                  <p key={note} className="mt-1 text-xs font-semibold text-tan-dark">
+                    {note}
+                  </p>
+                ))}
               </div>
             ) : null}
 

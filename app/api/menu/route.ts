@@ -20,7 +20,7 @@ import {
 } from '@/lib/menu/applyMenuChange';
 import { createChangeRequest, createPayloadFromValues } from '@/lib/menu/changeRequests';
 import type { MenuChangePendingResponse } from '@/lib/menu/changeRequestTypes';
-import { loadOfferRows } from '@/lib/orders/offersServer';
+import { loadOfferRows, loadSpendOfferRows } from '@/lib/orders/offersServer';
 import { pricingSettingsOf } from '@/lib/pos/localQuote';
 
 export const dynamic = 'force-dynamic';
@@ -71,12 +71,14 @@ export async function GET(request: Request) {
 
   // Settings only drive the on/off switches: if they can't be read, the menu
   // still loads (and orders are still checked against them server-side).
-  const [{ data, error }, settings, offerRows] = await Promise.all([
+  const [{ data, error }, settings, offerRows, spendRows] = await Promise.all([
     query,
     getStoreSettings().catch(() => null),
     // Every switched-on offer, windows included: the POS decides "live" when it
-    // prices (liveOffersByItem). A failed read is no offers, never an error.
+    // prices (liveOffersByItem, liveSpendOffers). A failed read is no offers,
+    // never an error.
     wantsPos ? loadOfferRows(createAdminSupabaseClient()) : Promise.resolve(null),
+    wantsPos ? loadSpendOfferRows(createAdminSupabaseClient()) : Promise.resolve(null),
   ]);
 
   if (error) {
@@ -97,7 +99,10 @@ export async function GET(request: Request) {
     .map((item) => ({ ...item, pass_eligible: flags.coffeePass === true && item.pass_eligible === true }));
 
   // No settings, no local pricing: the POS then asks the quote route as before.
-  const pos = wantsPos && settings ? { settings: pricingSettingsOf(settings), offers: offerRows ?? [] } : undefined;
+  const pos =
+    wantsPos && settings
+      ? { settings: pricingSettingsOf(settings), offers: offerRows ?? [], spend_offers: spendRows ?? [] }
+      : undefined;
 
   return NextResponse.json(pos ? { items, pos } : { items });
 }

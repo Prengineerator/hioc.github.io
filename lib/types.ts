@@ -239,6 +239,12 @@ export interface Order {
   // (lib/orders/offers.ts), so the bill can show it as its own row. Inside
   // discount_inr, so the total formula above is unchanged. Absent = 0.
   offer_discount_inr?: number;
+  // 2026-11-spend-offers.sql: the offer row's label when a spend offer ("spend
+  // ₹1099, get a jar at ₹49") is on the bill (a multi-buy label is read off the
+  // lines), and the spend offers live on the bill's items when it was priced,
+  // re-checked on every correction. Absent = none.
+  offer_name?: string | null;
+  spend_offers?: unknown;
 }
 
 export interface OrderItemAddon {

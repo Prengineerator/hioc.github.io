@@ -43,7 +43,8 @@ describe('parseMenuCache — the pricing context kept with the menu', () => {
 
   it('brings a valid pricing context back with the menu', () => {
     const raw = JSON.stringify({ savedAt: now - 1000, items, pricing });
-    expect(parseMenuCache(raw, now)?.pricing).toEqual(pricing);
+    // A context saved before spend offers existed reads back with none.
+    expect(parseMenuCache(raw, now)?.pricing).toEqual({ ...pricing, spendOffers: [] });
   });
 
   it('drops a broken pricing context but keeps the menu (the server prices instead)', () => {

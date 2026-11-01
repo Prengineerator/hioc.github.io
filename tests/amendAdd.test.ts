@@ -78,7 +78,7 @@ vi.mock('@/lib/supabase-server', () => ({
         in: (_col: string, values: string[]) => {
           // The menu load, the live offers on those items (none here), or the rollback delete.
           if (table === 'menu_items') return Promise.resolve({ data: state.menuRows, error: null });
-          if (table === 'menu_offers') return Promise.resolve({ data: [], error: null });
+          if (table === 'menu_offers' || table === 'spend_offers') return Promise.resolve({ data: [], error: null });
           state.deletedIds.push(...values);
           return Promise.resolve({ data: null, error: null });
         },

@@ -10,6 +10,7 @@ import { CouponPerformanceTable } from '@/components/owner/CouponPerformanceTabl
 import { CouponManager } from '@/components/promotions/CouponManager';
 import { AnnouncementManager } from '@/components/promotions/AnnouncementManager';
 import { OfferManager } from '@/components/promotions/OfferManager';
+import { SpendOfferManager } from '@/components/promotions/SpendOfferManager';
 import type { CouponPerformanceRow } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -50,6 +51,10 @@ export default async function OwnerPromotionsPage() {
 
       <Card title="Offers">
         <OfferManager />
+        <div className="mt-8 border-t border-line pt-6">
+          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-charcoal">Spend &amp; get</h3>
+          <SpendOfferManager />
+        </div>
       </Card>
 
       <Card title="Coupons">

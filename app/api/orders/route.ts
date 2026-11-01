@@ -43,8 +43,8 @@ import { markProfileStale } from '@/lib/suggest/profileStore';
 import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
 import { allocateOrderPass, afterOffers, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
-import { computeOffers } from '@/lib/orders/offers';
-import { loadActiveOffers } from '@/lib/orders/offersServer';
+import { billOffers, type SpendOffer } from '@/lib/orders/offers';
+import { loadActiveOffers, loadActiveSpendOffers } from '@/lib/orders/offersServer';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { parsePassDrinks, passRedeemMessage, passShortfallMessage } from '@/lib/passes/rules';
 import { redeemPassDrinks } from '@/lib/passes/server';
@@ -449,11 +449,12 @@ export async function POST(request: Request) {
   }
 
   const menuItemIds = [...new Set(items.map((item) => item.menu_item_id))];
-  // The live multi-buy offers on these items (Promotions → Offers) load
-  // alongside the menu rows; a failed offers read just means no offer.
-  const [{ data: menuRows, error: menuError }, offersByItem] = await Promise.all([
+  // The live offers on these items (Promotions → Offers: multi-buy and spend)
+  // load alongside the menu rows; a failed offers read just means no offer.
+  const [{ data: menuRows, error: menuError }, offersByItem, spendOffers] = await Promise.all([
     admin.from('menu_items').select(MENU_ITEM_SELECT).in('id', menuItemIds),
     loadActiveOffers(admin, menuItemIds),
+    loadActiveSpendOffers(admin, menuItemIds),
   ]);
 
   if (menuError) {
@@ -476,7 +477,13 @@ export async function POST(request: Request) {
 
   // Validate every line and compute authoritative prices server-side —
   // never trust a client-submitted price. Shared with the TAB-1 add path.
-  const resolved = resolveOrderLines(items, menuById, switchesFromSettings(settings), offersByItem);
+  const resolved = resolveOrderLines(
+    items,
+    menuById,
+    switchesFromSettings(settings),
+    offersByItem,
+    new Set(spendOffers.map((o: SpendOffer) => o.menu_item_id)),
+  );
   if (!resolved.ok) {
     return errorResponse(400, resolved.error);
   }
@@ -580,9 +587,12 @@ export async function POST(request: Request) {
   }
   const passCoveredInr = passAllocation?.covered_inr ?? 0;
   const passCoveredTaxableInr = passAllocation?.covered_taxable_inr ?? 0;
-  // Multi-buy offers (lib/orders/offers.ts) come off next: they are part of
-  // the price, read straight off the lines' offer snapshots.
-  const offers = computeOffers(resolvedLines);
+  // Offers (lib/orders/offers.ts) come off next: they are part of the price.
+  // First without a spend offer — it can't be combined with a coupon or
+  // Beanies — so the coupon and Beanies are worked out on what the multi-buy
+  // offers leave; if neither ends up applied, the spend offer is tried below.
+  const offerInput = { lines: resolvedLines, spendOffers, passCoveredInr };
+  let offers = billOffers({ ...offerInput, otherDiscountApplied: true });
   // What a coupon and Beanies are computed on (CP-D12), after the offers.
   const payableAfterOffers = afterOffers(afterPass(subtotal_inr, passCoveredInr), offers.discountInr);
 
@@ -646,6 +656,15 @@ export async function POST(request: Request) {
       pointsToRedeem = quote.points;
     }
   }
+
+  // No coupon or Beanies on this bill: a spend offer may apply (when it saves
+  // more than the multi-buy offers — it never stacks with them).
+  if (couponDiscountInr + pointsDiscountInr === 0) {
+    offers = billOffers({ ...offerInput, otherDiscountApplied: false });
+  }
+  // The live spend offers on items this bill has, kept on the order so a
+  // correction re-checks the minimum against the offer as it was sold.
+  const spendSnapshot = spendOffers.filter((o) => resolvedLines.some((l) => l.menu_item_id === o.menu_item_id));
 
   // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand
   // total. GST applies only to the non-exempt lines (2026-09-gst-exempt), less
@@ -791,6 +810,12 @@ export async function POST(request: Request) {
     // The offer part of discount_inr, only when there is one: an offer can only
     // exist once 2026-10-item-offers.sql is applied, which adds this column.
     ...(bill.offer_discount_inr > 0 ? { offer_discount_inr: bill.offer_discount_inr } : {}),
+    // The offer row's label when it is a spend offer (a multi-buy label is read
+    // off the lines' snapshots), so other orders never need the column.
+    ...(bill.offer_discount_inr > 0 && offers.kind === 'spend' ? { offer_name: offers.label } : {}),
+    // Spend offers on this bill's items (2026-11-spend-offers.sql), only when
+    // there are any, so other orders never need the column.
+    ...(spendSnapshot.length > 0 ? { spend_offers: spendSnapshot } : {}),
     // Table service needs no token; a website dine-in is collected at the counter.
     pickup_code: tableId ? null : generatePickupCode(),
     notes: notes ?? '',

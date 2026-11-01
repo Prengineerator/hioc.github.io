@@ -10,8 +10,9 @@
 // SAME functions the server prices it with:
 //
 //   resolveOrderLines   lib/orders/lines.ts       (line prices, availability, add-on rules)
-//   liveOffersByItem    lib/orders/offers.ts      (which offers are live right now)
-//   computeOffers       lib/orders/offers.ts      (the multi-buy discount)
+//   liveOffersByItem    lib/orders/offers.ts      (which multi-buy offers are live right now)
+//   liveSpendOffers     lib/orders/offers.ts      (which spend offers are live right now)
+//   billOffers          lib/orders/offers.ts      (the offers the bill gets)
 //   composeOrderBill    lib/orders/billPricing.ts (GST, packaging, the total)
 //
 // in the same order POST /api/orders/quote calls them. Nothing here is a copy
@@ -26,7 +27,14 @@
 
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { resolveOrderLines, type IncomingOrderItem } from '@/lib/orders/lines';
-import { computeOffers, liveOffersByItem, type AppliedOffer, type OfferRow } from '@/lib/orders/offers';
+import {
+  billOffers,
+  liveOffersByItem,
+  liveSpendOffers,
+  type AppliedOffer,
+  type OfferRow,
+  type SpendOfferRow,
+} from '@/lib/orders/offers';
 import { composeOrderBill } from '@/lib/orders/billPricing';
 import { FALLBACK_STORE_SETTINGS } from '@/lib/store/hours';
 import type { MenuItem, StoreSettings } from '@/lib/types';
@@ -42,10 +50,12 @@ export interface PosPricingContext {
   settings: PosPricingSettings;
   /** Switched-on offer rows, windows included: "live" is decided when pricing. */
   offers: OfferRow[];
+  /** Switched-on spend offer rows, likewise. Absent from an older menu answer = none. */
+  spendOffers?: SpendOfferRow[];
 }
 
 export type LocalQuote =
-  | { ok: true; bill: ReturnType<typeof composeOrderBill>; offers: AppliedOffer[] }
+  | { ok: true; bill: ReturnType<typeof composeOrderBill>; offers: AppliedOffer[]; offerLabel: string }
   | { ok: false; error: string };
 
 /** The pricing settings out of a full settings row (GET /api/menu?pos=true). */
@@ -66,7 +76,11 @@ function isStringList(v: unknown): v is string[] {
 /** Shape check for a pricing context from the network or storage; null when unusable. */
 export function parsePosPricing(v: unknown): PosPricingContext | null {
   if (!v || typeof v !== 'object') return null;
-  const { settings, offers } = v as { settings?: unknown; offers?: unknown };
+  const { settings, offers, spend_offers: spendOffers } = v as {
+    settings?: unknown;
+    offers?: unknown;
+    spend_offers?: unknown;
+  };
   if (!settings || typeof settings !== 'object' || !Array.isArray(offers)) return null;
   const s = settings as Record<string, unknown>;
   if (
@@ -86,8 +100,11 @@ export function parsePosPricing(v: unknown): PosPricingContext | null {
       hidden_categories: isStringList(s.hidden_categories) ? s.hidden_categories : [],
       hidden_variant_labels: isStringList(s.hidden_variant_labels) ? s.hidden_variant_labels : [],
     },
-    // liveOffersByItem skips anything malformed, so rows pass through as they are.
+    // liveOffersByItem / liveSpendOffers skip anything malformed, so rows pass through as they are.
     offers: offers.filter((o): o is OfferRow => o !== null && typeof o === 'object'),
+    spendOffers: Array.isArray(spendOffers)
+      ? spendOffers.filter((o): o is SpendOfferRow => o !== null && typeof o === 'object')
+      : [],
   };
 }
 
@@ -108,15 +125,19 @@ export function quoteLocally(input: {
   // documented default no bill depends on.
   const settings: StoreSettings = { ...FALLBACK_STORE_SETTINGS, ...input.pricing.settings };
   const menuById = new Map(input.menuItems.map((m) => [m.id, m]));
+  const spendOffers = liveSpendOffers(input.pricing.spendOffers ?? [], now);
   const resolved = resolveOrderLines(
     input.items,
     menuById,
     switchesFromSettings(settings),
     liveOffersByItem(input.pricing.offers, now),
+    new Set(spendOffers.map((o) => o.menu_item_id)),
   );
   if (!resolved.ok) return { ok: false, error: resolved.error };
-  const offers = computeOffers(resolved.lines).offers;
-  const offerDiscountInr = offers.reduce((sum, o) => sum + o.discount_inr, 0);
+  // No coupon or Beanies here (those carts go to the server), so a spend offer may apply.
+  const priced = billOffers({ lines: resolved.lines, spendOffers, otherDiscountApplied: false });
+  const offers = priced.offers;
+  const offerDiscountInr = priced.discountInr;
   const bill = composeOrderBill({
     settings,
     subtotalInr: resolved.subtotalInr,
@@ -128,7 +149,7 @@ export function quoteLocally(input: {
     passCoveredTaxableInr: 0,
     isDineIn: input.isDineIn,
   });
-  return { ok: true, bill, offers };
+  return { ok: true, bill, offers, offerLabel: priced.label };
 }
 
 /**

@@ -29,8 +29,20 @@
 // and, separately, as orders.offer_discount_inr, which says how much of it is
 // the offer: the bill shows the offer row and the coupon / Beanies row apart.
 //
+// Spend offers (supabase/2026-11-spend-offers.sql) are the second kind: "spend
+// ₹1099, get one Instant Coffee jar at ₹49". One unit of the item drops to the
+// offer price when everything ELSE on the bill reaches the minimum (before GST
+// and packaging, not counting what Ritual cups pay for). It can't be combined:
+// with a coupon or Beanies on the bill it stays off (and says so), and against
+// the multi-buy offers the bill takes whichever saves more, never both. The
+// live spend offers whose item is on a bill are kept on the order
+// (orders.spend_offers), so a correction re-checks the minimum against the
+// offer as it was sold. billOffers is the one rule for both kinds.
+//
 // Pure: the server prices with it and the screens label with it, so the two
 // can't disagree. Loading the live offers is lib/orders/offersServer.ts.
+
+import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 
 /** An offer as stored (menu_offers). */
 export interface MenuOffer {
@@ -82,7 +94,16 @@ export function isOfferLive(
   offer: Pick<MenuOffer, 'active' | 'valid_from' | 'valid_to' | 'tier_prices'>,
   now: Date = new Date(),
 ): boolean {
-  if (!offer.active || normalizeOfferPrices(offer.tier_prices) === null) return false;
+  if (normalizeOfferPrices(offer.tier_prices) === null) return false;
+  return isWindowLive(offer, now);
+}
+
+/** Switched on, and inside the window (an empty edge is no limit). Either kind of offer. */
+export function isWindowLive(
+  offer: { active: boolean; valid_from: string | null; valid_to: string | null },
+  now: Date = new Date(),
+): boolean {
+  if (!offer.active) return false;
   const t = now.getTime();
   if (offer.valid_from && t < Date.parse(offer.valid_from)) return false;
   if (offer.valid_to && t >= Date.parse(offer.valid_to)) return false;
@@ -267,4 +288,203 @@ export function discountRows(
   if (offerInr > 0) rows.push({ label: offerLabelText, amountInr: offerInr });
   if (otherInr > 0) rows.push({ label: otherLabel, amountInr: otherInr });
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Spend offers: "spend ₹1099, get one Instant Coffee jar at ₹49"
+// ---------------------------------------------------------------------------
+
+/** A spend offer as stored (spend_offers). */
+export interface StoredSpendOffer {
+  id: string;
+  name: string;
+  /** The item one unit of which drops to price_inr. */
+  menu_item_id: string;
+  /** What everything else on the bill must reach, before GST and packaging. */
+  min_spend_inr: number;
+  price_inr: number;
+  active: boolean;
+  valid_from: string | null;
+  valid_to: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** What a bill needs of a spend offer (also the orders.spend_offers snapshot). */
+export interface SpendOffer {
+  id: string;
+  name: string;
+  menu_item_id: string;
+  min_spend_inr: number;
+  price_inr: number;
+}
+
+export type SpendOfferRow = Pick<
+  StoredSpendOffer,
+  'id' | 'name' | 'menu_item_id' | 'min_spend_inr' | 'price_inr' | 'active' | 'valid_from' | 'valid_to'
+>;
+
+/** A spend offer's terms checked; null when unusable (never an offer). */
+export function normalizeSpendOffer(row: unknown): SpendOffer | null {
+  if (!row || typeof row !== 'object') return null;
+  const r = row as Record<string, unknown>;
+  if (typeof r.id !== 'string' || typeof r.menu_item_id !== 'string' || typeof r.name !== 'string') return null;
+  const min = r.min_spend_inr;
+  const price = r.price_inr;
+  if (typeof min !== 'number' || !Number.isInteger(min) || min <= 0) return null;
+  if (typeof price !== 'number' || !Number.isInteger(price) || price < 0) return null;
+  const name = r.name.trim();
+  if (name === '') return null;
+  return { id: r.id, name, menu_item_id: r.menu_item_id, min_spend_inr: min, price_inr: price };
+}
+
+/** The spend offers live at `now` — the ONE rule, for the server and the POS alike. */
+export function liveSpendOffers(rows: readonly Partial<SpendOfferRow>[], now: Date = new Date()): SpendOffer[] {
+  const live: SpendOffer[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const offer = normalizeSpendOffer(row);
+    if (
+      !offer ||
+      seen.has(offer.menu_item_id) ||
+      !isWindowLive({ active: row.active === true, valid_from: row.valid_from ?? null, valid_to: row.valid_to ?? null }, now)
+    ) {
+      continue;
+    }
+    seen.add(offer.menu_item_id);
+    live.push(offer);
+  }
+  return live;
+}
+
+/** orders.spend_offers read back: the usable snapshots, anything else dropped. */
+export function parseSpendSnapshot(value: unknown): SpendOffer[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizeSpendOffer).filter((o): o is SpendOffer => o !== null);
+}
+
+/** The snapshot to keep on an order: `current`, plus any of `live` on an item the bill has, by id. */
+export function mergeSpendSnapshot(
+  current: readonly SpendOffer[],
+  live: readonly SpendOffer[],
+  itemIdsOnBill: Iterable<string>,
+): SpendOffer[] {
+  const onBill = new Set(itemIdsOnBill);
+  const merged = [...current];
+  for (const offer of live) {
+    if (onBill.has(offer.menu_item_id) && !merged.some((o) => o.id === offer.id)) merged.push(offer);
+  }
+  return merged;
+}
+
+/** "Spend ₹1099 → one for ₹49" — how a spend offer reads in the owner's list. */
+export function describeSpendOffer(offer: Pick<SpendOffer, 'min_spend_inr' | 'price_inr'>): string {
+  return `Spend ₹${offer.min_spend_inr} → one for ₹${offer.price_inr}`;
+}
+
+/** A bill line as billOffers reads it. */
+export interface BillOfferLine extends OfferLine {
+  line_total_inr: number;
+  /** One unit's price, add-ons included. */
+  price_inr_snapshot?: number;
+}
+
+export interface BillOffersInput {
+  lines: readonly BillOfferLine[];
+  /** The spend offers to consider (live ones, or an order's snapshot). */
+  spendOffers?: readonly SpendOffer[];
+  /** What Ritual cups pay for on the bill: not spent today, so it doesn't count toward a minimum. */
+  passCoveredInr?: number;
+  /** A coupon or Beanies discount is on the bill: a spend offer can't be combined with it. */
+  otherDiscountApplied?: boolean;
+}
+
+export interface BillOffersResult extends OfferResult {
+  /** The bill row's label for `offers` ("Instant Coffee offer"), or '' when there are none. */
+  label: string;
+  /** Why an offer the bill qualified for is not on it, for the counter screen. */
+  notes: string[];
+  /** Which kind is on the bill: a spend offer, multi-buy offers, or none. */
+  kind: 'spend' | 'multi_buy' | 'none';
+}
+
+/** What a spend offer would take off these lines, or null when the bill doesn't qualify. */
+function spendSaving(
+  offer: SpendOffer,
+  live: readonly BillOfferLine[],
+  liveSubtotal: number,
+  passCoveredInr: number,
+): AppliedOffer | null {
+  let best: { unit: number; full: number } | null = null;
+  for (const line of live) {
+    if (line.menu_item_id !== offer.menu_item_id) continue;
+    const unit = line.offer_unit_inr;
+    if (typeof unit !== 'number' || !Number.isInteger(unit) || unit < 0) continue;
+    if (!best || unit > best.unit) {
+      best = { unit, full: Math.max(unit, line.price_inr_snapshot ?? unit) };
+    }
+  }
+  if (!best) return null;
+  // Everything else on the bill: the subtotal less this one unit (with its
+  // add-ons) and less what Ritual cups pay for.
+  const rest = liveSubtotal - best.full - Math.max(0, passCoveredInr);
+  if (rest < offer.min_spend_inr) return null;
+  const discount = best.unit - offer.price_inr;
+  if (discount <= 0) return null;
+  return {
+    menu_item_id: offer.menu_item_id,
+    name: offer.name,
+    units: 1,
+    regular_inr: best.unit,
+    offer_inr: offer.price_inr,
+    discount_inr: discount,
+  };
+}
+
+/**
+ * The offers a bill gets — the ONE rule for both kinds, used by order create,
+ * the quote, the POS's own pricing and every correction:
+ *
+ *   - the multi-buy offers on the lines (computeOffers), which stack with a
+ *     coupon and Beanies as they always have;
+ *   - a spend offer, when everything else on the bill reaches its minimum.
+ *     It can't be combined with anything: off when a coupon or Beanies is on
+ *     the bill (with a note saying so), and against the multi-buy offers the
+ *     bill takes whichever saves more, never both. One spend offer per bill.
+ */
+export function billOffers(input: BillOffersInput): BillOffersResult {
+  const live = input.lines.filter((l) => !l.voided);
+  const multi = computeOffers(live);
+  const liveSubtotal = live.reduce((sum, l) => sum + Math.max(0, l.line_total_inr), 0);
+
+  let bestSpend: AppliedOffer | null = null;
+  for (const offer of input.spendOffers ?? []) {
+    const saving = spendSaving(offer, live, liveSubtotal, input.passCoveredInr ?? 0);
+    if (saving && (!bestSpend || saving.discount_inr > bestSpend.discount_inr)) bestSpend = saving;
+  }
+
+  const multiResult = (notes: string[]): BillOffersResult => ({
+    ...multi,
+    label: multi.offers.length > 0 ? offerLabel(multi.offers.map((o) => o.name)) : '',
+    notes,
+    kind: multi.offers.length > 0 ? 'multi_buy' : 'none',
+  });
+
+  if (!bestSpend) return multiResult([]);
+  if (input.otherDiscountApplied) {
+    return multiResult([
+      `${bestSpend.name} isn't applied: it can't be combined with a coupon or ${LOYALTY_UNIT.many}.`,
+    ]);
+  }
+  if (bestSpend.discount_inr <= multi.discountInr) return multiResult([]);
+  return { discountInr: bestSpend.discount_inr, offers: [bestSpend], label: bestSpend.name, notes: [], kind: 'spend' };
+}
+
+/** The offer row's label for a stored order: the label it was billed with, else its lines' offers. */
+export function orderOfferLabel(order: {
+  offer_name?: string | null;
+  items: readonly Pick<OfferLine, 'name_snapshot' | 'voided' | 'offer_prices' | 'offer_name'>[];
+}): string {
+  const stored = (order.offer_name ?? '').trim();
+  return stored !== '' ? stored : offerLabelForLines(order.items);
 }
