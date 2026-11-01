@@ -38,6 +38,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { istDateOf } from '@/lib/reports/reconcile';
 import { computeBill, FALLBACK_STORE_SETTINGS, GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 import { gstCodeFor } from '@/lib/reports/exports/gstCodes';
+import { offerTaxableShare, splitOrderDiscount } from '@/lib/orders/offers';
 import type {
   ExportLine,
   ExportOrder,
@@ -71,6 +72,9 @@ export interface OrderRow {
   tip_inr?: number | null;
   order_kind?: string | null;
   pass_discount_inr?: number | null;
+  /** The offer part of discount_inr (2026-10-item-offers.sql); absent = 0. */
+  offer_discount_inr?: number | null;
+  /** The manager-discount part of discount_inr (2026-11-manual-discount.sql); absent = 0. */
   manual_discount_inr?: number | null;
   manual_discount_reason?: string | null;
 }
@@ -90,6 +94,8 @@ export interface ItemRow {
   pass_covered_inr?: number | null;
   coffee_pass_plan_id?: string | null;
   weight_grams?: number | null;
+  /** Set on a line of an item that had a live offer when sold (2026-10-item-offers.sql). */
+  offer_unit_inr?: number | null;
 }
 
 export interface MenuItemRow {
@@ -207,6 +213,11 @@ interface LiveLine {
   exempt: boolean;
 }
 
+/** A live line as offerTaxableShare reads it (its total, GST status and offer snapshot). */
+function offerShareLine(l: LiveLine) {
+  return { line_total_inr: l.row.line_total_inr, gst_exempt: l.exempt, offer_unit_inr: l.row.offer_unit_inr ?? null };
+}
+
 /** The rule the date alone gives. */
 export function gstRuleOfDate(istDate: string): GstRule {
   return istDate >= GST_NET_OF_DISCOUNT_FROM ? 'net_of_discount' : 'pre_discount';
@@ -223,17 +234,23 @@ function expectedTaxInr(
   const subtotal = live.reduce((s, l) => s + l.baseP, 0) / 100;
   const taxable = live.reduce((s, l) => s + (l.exempt ? 0 : l.baseP), 0) / 100;
   if (rule === 'net_of_discount') {
-    // The app's own maths, so this cannot drift from it.
+    // The app's own maths, so this cannot drift from it: an offer comes out of
+    // its own item's value (billWithOffer), the rest of the discount is shared.
+    const { offerInr, otherInr } = splitOrderDiscount({
+      discount_inr: order.discount_inr ?? 0,
+      offer_discount_inr: order.offer_discount_inr,
+    });
+    const share = offerTaxableShare(live.map(offerShareLine));
     return computeBill(
-      subtotal,
+      subtotal - offerInr,
       {
         ...FALLBACK_STORE_SETTINGS,
         gst_percent: gstRatePercent,
         gst_inclusive: gstInclusive,
         packaging_charge_inr: order.packaging_inr ?? 0,
       },
-      order.discount_inr ?? 0,
-      taxable,
+      otherInr,
+      Math.max(0, taxable - Math.min(offerInr * share, taxable)),
     ).tax_inr;
   }
   const rate = gstRatePercent / 100;
@@ -291,18 +308,41 @@ function priceOrder(
   const netOfDiscount = rule === 'net_of_discount';
 
   // What GST applies to on each line: its base, or (net_of_discount) its share of
-  // what the discount leaves. Shared out cumulatively over every line, exempt ones
-  // too, so the lines add up exactly to subtotal − cover − discount.
+  // what the discount leaves. The offer first comes off the lines it was on —
+  // the lines carrying an offer snapshot, by their totals (offerTaxableShare's
+  // rule, so a GST-free jar's offer stays off the café items) — then the rest
+  // of the discount is shared out cumulatively over every line, exempt ones too,
+  // so the lines add up exactly to subtotal − cover − discount.
   const subtotalP = live.reduce((s, l) => s + l.baseP, 0);
   const valueP = live.map((l) => l.baseP);
   if (netOfDiscount && subtotalP > 0) {
     const discountP = Math.min(Math.max(0, toPaise(order.discount_inr)), subtotalP);
-    const leftP = subtotalP - discountP;
+    const offerP = Math.min(Math.max(0, toPaise(order.offer_discount_inr)), discountP);
+    if (offerP > 0) {
+      const carriers = live.map((l, i) => i).filter((i) => typeof live[i].row.offer_unit_inr === 'number' && live[i].row.line_total_inr > 0);
+      const pool = carriers.length > 0 ? carriers : live.map((_, i) => i);
+      const weightP = (i: number) => toPaise(live[i].row.line_total_inr);
+      const poolP = pool.reduce((s, i) => s + weightP(i), 0);
+      let cumW = 0;
+      let cumOff = 0;
+      for (const i of pool) {
+        cumW += weightP(i);
+        const cum = poolP > 0 ? Math.round((cumW * offerP) / poolP) : 0;
+        // Never below zero on a line (a line its cover already took most of).
+        const off = Math.min(cum - cumOff, valueP[i]);
+        valueP[i] -= off;
+        cumOff += off;
+      }
+    }
+    const afterOfferP = valueP.reduce((s, v) => s + v, 0);
+    const otherP = Math.min(discountP - offerP, afterOfferP);
+    const leftP = afterOfferP - otherP;
+    const before = [...valueP];
     let cumBaseP = 0;
     let cumValueP = 0;
-    live.forEach((l, i) => {
-      cumBaseP += l.baseP;
-      const cum = Math.round((cumBaseP * leftP) / subtotalP);
+    live.forEach((_, i) => {
+      cumBaseP += before[i];
+      const cum = afterOfferP > 0 ? Math.round((cumBaseP * leftP) / afterOfferP) : 0;
       valueP[i] = cum - cumValueP;
       cumValueP = cum;
     });
@@ -460,7 +500,12 @@ export function buildOrderDataset(input: OrderDatasetInput): OrderDataset {
       tipInr: o.tip_inr ?? 0,
       couponCodes: [...new Set(redemptions.map((r) => r.code?.trim()).filter((c): c is string => !!c))],
       couponDiscountInr,
-      beaniesDiscountInr: Math.max(0, discountInr - couponDiscountInr - manualDiscountInr),
+      // discount_inr also holds an offer (offer_discount_inr) and a manager
+      // discount (manual_discount_inr): neither is Beanies.
+      beaniesDiscountInr: Math.max(
+        0,
+        discountInr - couponDiscountInr - Math.max(0, o.offer_discount_inr ?? 0) - manualDiscountInr,
+      ),
       manualDiscountInr,
       manualDiscountReason: manualDiscountInr > 0 ? (o.manual_discount_reason ?? '').trim() : '',
       refundedInr: (processedRefundsByOrder.get(o.id) ?? []).reduce((s, r) => s + (r.amount_inr ?? 0), 0),

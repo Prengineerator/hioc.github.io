@@ -59,6 +59,7 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | INV-D19 | **Add-ons** (extra shot, oat milk) have their own recipes: what one add-on uses per serving it is added to. An add-on on a line of 2 is used twice. Add-ons are not auto-hidden. |
 | INV-D20 | When a request is assigned, the **picker is emailed** at their personal email (staff accounts), with the items and a link to the Stock screen. No email when a manager assigns it to themselves. The manager sees whether it went. WhatsApp is not used, because a business-initiated WhatsApp message needs a Meta-approved template. |
 | INV-D21 | An add-on's recipe can be **scoped to a menu item, and to one of its sizes**: sugar on a Latte Extra Large is not sugar on an Espresso. For an order line (item M, size S) and add-on O the most specific scope that has lines is used: **M + S, else M (all sizes), else O's general lines**. The winner **replaces** the others; they are never added. A line whose menu item was deleted uses only the general lines. Sizes go by label (INV-D11). The POS editor edits only the general lines; per-item and per-size amounts come from the recipe book ([INVENTORY-RECIPE-BOOK.md](INVENTORY-RECIPE-BOOK.md)) and the Recipes tab only says they exist. |
+| INV-D22 | **A request is reviewed before it is sent.** Each person builds their **own draft**: items added with "+ Add" on the Stock list or from the request sheet, a quantity each, and a note. The draft is saved on the device under that person's user id, so it survives closing the sheet or a reload, and on a shared POS each PIN operator has their own. "Send" exists only on the **Review** screen, which lists every item with what the store holds, any warning (already on an open request) and anything blocking (a missing or zero quantity). There a line can be changed or removed. Sending clears the draft. A fresh request starts with the low items suggested (INV-D1). Rules: `lib/inventory/requestDraft.ts`. |
 
 ## Data: `supabase/2026-10-inventory.sql`
 
@@ -217,7 +218,7 @@ stock doesn't disappear from the menu; switch it on at C6.
 
 ### D. Acceptance walk-through
 
-1. Staffer A taps **Request stock**. The low items are pre-filled. They send it.
+1. Staffer A taps **+ Add** on two items in the Stock list, then **Request stock**: the low items are suggested beside them. **Review request** lists every item; a blank quantity blocks Send. They send it, and their draft is cleared. A second staffer on the same POS (PIN switch) sees an empty draft of their own.
 2. The manager assigns it to staffer B. B sees **"Yours to pick"** and records the picked quantities.
 3. On the **staff website**, the request shows "Stock is verified and received at the POS only". On the **POS**, B is told someone else has to verify.
 4. Staffer C, on the POS, taps **Verify & receive**, enters one quantity lower than picked and an expiry date for milk. Leaving the milk expiry blank is refused. A past date is refused.

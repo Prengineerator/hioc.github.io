@@ -162,7 +162,8 @@ const PHONE = '9876543210';
 describe('POST /api/orders/quote with a spend offer', () => {
   it('₹1099 of other items + a jar: the jar comes off to ₹49, named on the bill', async () => {
     const body = await (await quote(post('https://t/api/orders/quote', { items: cart, order_type: 'dine_in', customer_phone: PHONE }))).json();
-    expect(body.bill).toMatchObject({ subtotal_inr: 1498, offer_discount_inr: 350, discount_inr: 350 });
+    // GST stays 5% of the ₹1099 of waffles: the offer is on the GST-free jar.
+    expect(body.bill).toMatchObject({ subtotal_inr: 1498, offer_discount_inr: 350, discount_inr: 350, tax_inr: 55, total_inr: 1203 });
     expect(body.offers).toEqual([
       { offer_id: SPEND_ID, menu_item_id: COFFEE, name: 'Instant Coffee at ₹49', units: 1, regular_inr: 399, offer_inr: 49, discount_inr: 350 },
     ]);

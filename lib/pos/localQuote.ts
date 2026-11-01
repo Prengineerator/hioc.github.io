@@ -30,6 +30,7 @@ import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { resolveOrderLines, type IncomingOrderItem } from '@/lib/orders/lines';
 import {
   billOffers,
+  offerTaxableShare,
   liveOffersByItem,
   liveSpendOffers,
   type AppliedOffer,
@@ -150,6 +151,7 @@ export function quoteLocally(input: {
     subtotalInr: resolved.subtotalInr,
     taxableSubtotalInr: resolved.taxableSubtotalInr,
     offerDiscountInr,
+    offerTaxableShare: offerTaxableShare(resolved.lines),
     couponDiscountInr: 0,
     pointsDiscountInr: 0,
     manualDiscountInr: input.manualDiscountInr ?? 0,

@@ -36,8 +36,8 @@
 // comes off last as at creation: lowered only when the bill falls below it.
 
 import type { BillBreakdown } from '@/lib/store/hours';
-import { composePassBill } from '@/lib/passes/rules';
-import { billOffers, type SpendOffer } from '@/lib/orders/offers';
+import { billWithOffer } from '@/lib/orders/billPricing';
+import { billOffers, offerTaxableShare, type SpendOffer } from '@/lib/orders/offers';
 import type { OrderStatus, OrderType, StoreSettings } from '@/lib/types';
 
 // Only the fields the recompute needs from an order line — keeps this callable
@@ -176,9 +176,18 @@ export function recomputeOrderTotals({
 
   // Dine-in never carries a packaging charge (D5), whatever the store's
   // packaging setting: billed with none, so no GST is charged on it either.
-  // Mirrors the create path (composeOrderBill in lib/orders/passPricing.ts).
-  const bill = composePassBill(
-    { subtotalInr, taxableSubtotalInr, discountInr: discount, passCoveredInr, passCoveredTaxableInr },
+  // Mirrors the create path (composeOrderBill in lib/orders/billPricing.ts),
+  // the offer coming out of its own item's value for GST (offerTaxableShare).
+  const bill = billWithOffer(
+    {
+      subtotalInr,
+      taxableSubtotalInr,
+      passCoveredInr,
+      passCoveredTaxableInr,
+      offerInr: offer,
+      offerTaxableShare: offerTaxableShare(remaining),
+      otherDiscountInr: discount - offer,
+    },
     orderType === 'dine_in' ? { ...settings, packaging_charge_inr: 0 } : settings,
   );
   return {

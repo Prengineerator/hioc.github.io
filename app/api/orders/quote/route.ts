@@ -17,7 +17,7 @@ import {
   type ResolvedLine,
 } from '@/lib/orders/lines';
 import { afterOffers, afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
-import { billOffers, type BillOffersResult, type SpendOffer } from '@/lib/orders/offers';
+import { billOffers, offerTaxableShare, type BillOffersResult, type SpendOffer } from '@/lib/orders/offers';
 import { loadActiveOffers, loadActiveSpendOffers, loadSpendOfferBlocks } from '@/lib/orders/offersServer';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
@@ -289,6 +289,7 @@ export async function POST(request: Request) {
     subtotalInr,
     taxableSubtotalInr: taxableInr,
     offerDiscountInr,
+    ...(resolvedLines ? { offerTaxableShare: offerTaxableShare(resolvedLines) } : {}),
     couponDiscountInr,
     pointsDiscountInr,
     manualDiscountInr: manualRequest?.amountInr ?? 0,
