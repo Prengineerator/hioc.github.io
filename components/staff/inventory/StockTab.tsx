@@ -25,9 +25,11 @@ import {
   shortDate,
   type InventoryItemView,
   type ItemsPayload,
+  type PersonRef,
 } from '@/components/staff/inventory/client';
 import type { StaffSurface } from '@/lib/staff/surfaceRules';
 import { flags } from '@/lib/flags';
+import { ReturnModal } from '@/components/staff/inventory/ReturnModal';
 
 type Filter = 'all' | 'attention';
 
@@ -50,12 +52,20 @@ export function StockTab({
   surface,
   reload,
   onRequested,
+  assignees = [],
 }: {
   data: ItemsPayload;
   surface: StaffSurface;
   reload: () => Promise<void>;
   onRequested: () => void;
+  /** Who can carry a return to the warehouse (managers get the list). */
+  assignees?: PersonRef[];
 }) {
+  // docs/WAREHOUSE-SPEC.md: requests are filled from the warehouse, and a
+  // manager can send stock back to it.
+  const warehouse = flags.warehouse;
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [requestOpen, setRequestOpen] = useState(false);
@@ -95,8 +105,13 @@ export function StockTab({
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={primaryButton} onClick={() => setRequestOpen(true)}>
-          Request stock
+          {warehouse ? 'Request from warehouse' : 'Request stock'}
         </button>
+        {warehouse && data.canManage ? (
+          <button type="button" className={secondaryButton} onClick={() => setReturnOpen(true)}>
+            Send back to warehouse
+          </button>
+        ) : null}
         {data.canManage && surface === 'pos' ? (
           <button type="button" className={secondaryButton} onClick={() => setDeliveryOpen(true)}>
             Receive delivery
@@ -108,6 +123,12 @@ export function StockTab({
           </button>
         ) : null}
       </div>
+
+      {notice ? (
+        <p role="status" className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          {notice}
+        </p>
+      ) : null}
 
       <AutoHidePanel data={data} reload={reload} />
 
@@ -229,8 +250,21 @@ export function StockTab({
         ))
       )}
 
+      {returnOpen ? (
+        <ReturnModal
+          items={data.items}
+          people={assignees}
+          onClose={() => setReturnOpen(false)}
+          onDone={async (message) => {
+            setReturnOpen(false);
+            setNotice(message);
+            await reload();
+          }}
+        />
+      ) : null}
       {requestOpen ? (
         <RequestStockModal
+          warehouse={warehouse}
           items={data.items.filter((i) => i.isActive)}
           onClose={() => setRequestOpen(false)}
           onDone={async () => {
@@ -323,10 +357,13 @@ function AutoHidePanel({ data, reload }: { data: ItemsPayload; reload: () => Pro
 // ── Request stock ───────────────────────────────────────────────────────────
 
 function RequestStockModal({
+  warehouse,
   items,
   onClose,
   onDone,
 }: {
+  /** Filled from the warehouse (docs/WAREHOUSE-SPEC.md): the owner is told. */
+  warehouse: boolean;
   items: InventoryItemView[];
   onClose: () => void;
   onDone: () => Promise<void>;
@@ -367,8 +404,12 @@ function RequestStockModal({
     <Modal
       open
       onClose={onClose}
-      title="Request stock"
-      subtitle="Low items are already added. A manager assigns someone to pick it."
+      title={warehouse ? 'Request from warehouse' : 'Request stock'}
+      subtitle={
+        warehouse
+          ? 'Low items are already added. The owner is told at once and chooses who delivers it.'
+          : 'Low items are already added. A manager assigns someone to pick it.'
+      }
       footer={
         <div className="flex items-center justify-between gap-2">
           {error ? <p className="text-sm text-red-700">{error}</p> : <span className="text-sm text-muted">{chosen.length} item(s)</span>}
@@ -540,6 +581,7 @@ export function QtyExpiryInputs({
   onChange,
   name,
   expected,
+  expectedVerb = 'Picked',
 }: {
   unit: InventoryUnit;
   tracksExpiry: boolean;
@@ -550,6 +592,8 @@ export function QtyExpiryInputs({
   name: string;
   /** What was picked — a different count is highlighted as a discrepancy. */
   expected?: number | null;
+  /** How `expected` is described: 'Picked', or 'Sent' for a warehouse transfer. */
+  expectedVerb?: string;
 }) {
   const n = Number(qty);
   const mismatch = expected !== undefined && expected !== null && qty !== '' && Number.isFinite(n) && n !== expected;
@@ -568,7 +612,7 @@ export function QtyExpiryInputs({
           className={`${inputClass} mt-1 text-right tabular-nums ${mismatch ? 'border-amber-500' : ''}`}
           aria-label={`Quantity of ${name} that arrived`}
         />
-        {mismatch ? <span className="mt-1 block text-xs font-semibold text-amber-800">Picked {expected} — this will be flagged</span> : null}
+        {mismatch ? <span className="mt-1 block text-xs font-semibold text-amber-800">{expectedVerb} {expected} — this will be flagged</span> : null}
       </label>
       <label className="block text-sm">
         <span className="text-muted">Expiry date{tracksExpiry ? '' : ' (optional)'}</span>

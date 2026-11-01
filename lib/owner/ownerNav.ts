@@ -6,6 +6,9 @@
 //               counted and reconciled
 //   Menu        Menu, Suggestions — the menu itself and the taste tags and
 //               pairings Ask Coffey reads off it
+//   Stock       (Warehouse) — the owner's warehouse sheet, the store's
+//               requests, what is on the road and what arrived different
+//               (docs/WAREHOUSE-SPEC.md); one page, so it shows as a link
 //   Customers   Customers, Reviews, Feedback, then the offers made to them:
 //               Promotions, (HIOC Ritual,) (Marketing)
 //   Team        Team, (Attendance, Payroll) — the people and their time
@@ -28,7 +31,7 @@ export interface OwnerLink {
 
 export interface OwnerNavGroup {
   /** Stable key, also used for element ids. */
-  id: 'sales' | 'menu' | 'customers' | 'team' | 'setup';
+  id: 'sales' | 'menu' | 'stock' | 'customers' | 'team' | 'setup';
   label: string;
   items: OwnerLink[];
 }
@@ -38,6 +41,8 @@ export interface OwnerNavInput {
   coffeePass: boolean;
   marketing: boolean;
   attendance: boolean;
+  /** Warehouse (inventory AND warehouse flags). Optional so older callers read off. */
+  warehouse?: boolean;
 }
 
 export interface OwnerNav {
@@ -51,6 +56,8 @@ export interface OwnerNav {
 export const OWNER_ROOT = '/owner';
 /** The Menu page carries the badge for staff menu changes waiting on the owner. */
 export const OWNER_MENU_HREF = '/owner/menu';
+/** The Warehouse page carries the badge for transfers waiting on the owner. */
+export const OWNER_WAREHOUSE_HREF = '/owner/warehouse';
 
 const OVERVIEW: OwnerLink = { href: OWNER_ROOT, label: 'Overview', description: 'Today at a glance' };
 const STAFF_BOARD: OwnerLink = { href: '/staff', label: 'Staff board', description: 'The counter’s live orders' };
@@ -84,6 +91,13 @@ export function ownerNav(input: OwnerNavInput): OwnerNav {
         // Traits tab to tag the menu before NEXT_PUBLIC_FLAG_SUGGEST can go on.
         { href: '/owner/suggestions', label: 'Suggestions', description: 'Ask Coffey picks, pairings and taste tags' },
       ],
+    },
+    {
+      id: 'stock',
+      label: 'Stock',
+      items: input.warehouse
+        ? [{ href: OWNER_WAREHOUSE_HREF, label: 'Warehouse', description: 'Warehouse stock, store requests, deliveries in transit' }]
+        : [],
     },
     {
       id: 'customers',

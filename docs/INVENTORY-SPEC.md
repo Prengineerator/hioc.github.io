@@ -252,5 +252,11 @@ nothing is lost. Nothing else in the app reads them.
 - **No supplier or purchase-order records** and no cost/price tracking. Requests
   are internal (store-room → counter or an errand to buy). Costing would come
   next.
+- **A warehouse is a separate feature:** [WAREHOUSE-SPEC.md](WAREHOUSE-SPEC.md)
+  (`NEXT_PUBLIC_FLAG_WAREHOUSE`). With it on, a request is filled from the
+  owner's warehouse sheet, is in transit until the POS counts it in, can be
+  carried by someone without a login, and alerts the owner; differences are
+  settled by the owner, and stock can be sent back. Off, everything above is
+  unchanged.
 - **Assignment alerts are email only** (no WhatsApp: that needs a Meta-approved
   template). The Requests tab also shows a badge of requests waiting on you.

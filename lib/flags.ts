@@ -102,6 +102,18 @@ export const flags = {
   // while sales leave stock alone; switched on ("flag-off day") once the
   // shelves and recipes are in. Shown on the Stock tab, hence NEXT_PUBLIC_.
   inventorySales: boolEnv(process.env.NEXT_PUBLIC_FLAG_INVENTORY_SALES, false),
+  // Warehouse (docs/WAREHOUSE-SPEC.md): the owner's warehouse stock sheet,
+  // "Request stock" filled from the warehouse (dispatch → in transit → counted
+  // in at the POS → any difference settled by the owner), returns to the
+  // warehouse, who delivers each transfer, and an alert to the owner when a
+  // request is placed. Needs `inventory` on too. Default OFF: until
+  // supabase/2026-11-warehouse.sql is applied and the owner has entered the
+  // warehouse's opening stock, every dispatch would read as a shortfall.
+  // Requests made while it is off stay store-room requests for good (the route
+  // is fixed on the row). Gates the owner Warehouse page and its APIs, the
+  // returns API, and which route a new request takes — read on the server and
+  // by both screens, hence NEXT_PUBLIC_.
+  warehouse: boolEnv(process.env.NEXT_PUBLIC_FLAG_WAREHOUSE, false),
   // HIOC Ritual — prepaid coffee passes (docs/COFFEE-PASS-SPEC.md): two plans
   // (7 cups for the price of 5 for a week, 7 for 6 over 30 days) sold on the
   // website and at the POS, and redeemed on either. Default OFF: the plans are

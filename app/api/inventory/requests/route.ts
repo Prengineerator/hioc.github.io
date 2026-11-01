@@ -6,6 +6,9 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { requireInventoryActor, inventoryWriteFailure } from '@/lib/inventory/api';
 import { INVENTORY_MIGRATION_HINT, loadAssignees, loadStockRequests } from '@/lib/inventory/server';
 import { parseRequestLines } from '@/lib/inventory/rules';
+import { flags } from '@/lib/flags';
+import { runAfterResponse } from '@/lib/api/background';
+import { sendOwnerAlert } from '@/lib/inventory/ownerAlerts';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,6 +22,8 @@ const MAX_NOTE = 300;
 //        request can be assigned to). The PATCH route re-checks everything.
 // POST — every counter actor: the "Request stock" button.
 //        Body: { lines: [{ itemId, qty }], note? }
+//        With the warehouse on (docs/WAREHOUSE-SPEC.md) the request is filled
+//        from the warehouse, and the owner is alerted once it is saved.
 
 export async function GET() {
   const gate = await requireInventoryActor();
@@ -38,6 +43,7 @@ export async function GET() {
     actorId: gate.actor.user.id,
     canManage: gate.actor.isManager,
     surface,
+    warehouse: flags.warehouse,
   });
 }
 
@@ -55,11 +61,15 @@ export async function POST(request: Request) {
   if (note.length > MAX_NOTE) return errorResponse(400, `Keep the note under ${MAX_NOTE} characters.`);
 
   const admin = createAdminSupabaseClient();
-  const { data, error } = await admin.rpc('inventory_create_request', {
+  const fromWarehouse = flags.warehouse;
+  const { data, error } = await admin.rpc(fromWarehouse ? 'warehouse_create_request' : 'inventory_create_request', {
     p_actor: gate.actor.user.id,
     p_note: note,
     p_lines: parsed.lines.map((l) => ({ item_id: l.itemId, qty: l.qty })),
   });
   if (error) return inventoryWriteFailure(error, 'Sending the request');
-  return NextResponse.json({ id: data }, { status: 201 });
+  // Tell the owner (WH-D9), after the reply: a slow mail server must not keep
+  // the counter waiting, and an alert that fails never un-sends a request.
+  if (fromWarehouse && typeof data === 'string') runAfterResponse(sendOwnerAlert(admin, 'request_placed', data));
+  return NextResponse.json({ id: data, route: fromWarehouse ? 'from_warehouse' : 'store_room' }, { status: 201 });
 }
