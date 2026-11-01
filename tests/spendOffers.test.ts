@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   billOffers,
   describeSpendOffer,
+  spendOfferBlocks,
   liveSpendOffers,
   mergeSpendSnapshot,
   orderOfferLabel,
@@ -139,7 +140,7 @@ describe('billOffers with a spend offer', () => {
     const r = offersFor([waffles(7), jars(1)]);
     expect(r).toMatchObject({ discountInr: 350, kind: 'spend', label: 'Instant Coffee at ₹49', notes: [] });
     expect(r.offers).toEqual([
-      { menu_item_id: COFFEE, name: 'Instant Coffee at ₹49', units: 1, regular_inr: 399, offer_inr: 49, discount_inr: 350 },
+      { offer_id: SPEND_ID, menu_item_id: COFFEE, name: 'Instant Coffee at ₹49', units: 1, regular_inr: 399, offer_inr: 49, discount_inr: 350 },
     ]);
   });
 
@@ -221,8 +222,38 @@ describe('the bill', () => {
   });
 });
 
+describe('once per customer, by phone number', () => {
+  it('no number: blocked with a note asking for it; a number that had it: blocked with a note saying so', () => {
+    expect(spendOfferBlocks([SPEND], null, new Set())).toEqual(
+      new Map([[SPEND_ID, "Instant Coffee at ₹49: add the customer's phone number to give it (once per customer)."]]),
+    );
+    expect(spendOfferBlocks([SPEND], '+919876543210', new Set([SPEND_ID]))).toEqual(
+      new Map([[SPEND_ID, "Instant Coffee at ₹49 isn't applied: this customer has already had it (once per customer)."]]),
+    );
+    expect(spendOfferBlocks([SPEND], '+919876543210', new Set())).toEqual(new Map());
+  });
+
+  it('a blocked customer gets the multi-buy offer instead, with the note; a bill that does not qualify says nothing', () => {
+    const blocked = spendOfferBlocks([SPEND], null, new Set());
+    const r = billOffers({ lines: linesFor([waffles(7), jars(1)]).lines, spendOffers: [SPEND], spendBlocked: blocked });
+    expect(r).toMatchObject({ kind: 'multi_buy', discountInr: 100 });
+    expect(r.notes).toEqual([blocked.get(SPEND_ID)]);
+    const small = billOffers({ lines: linesFor([waffles(1), jars(1)]).lines, spendOffers: [SPEND], spendBlocked: blocked });
+    expect(small.notes).toEqual([]);
+  });
+
+  it('an empty note blocks silently (a correction on an order that never had it)', () => {
+    const r = billOffers({ lines: linesFor([waffles(7), jars(1)]).lines, spendOffers: [SPEND], spendBlocked: new Map([[SPEND_ID, '']]) });
+    expect(r).toMatchObject({ kind: 'multi_buy', notes: [] });
+  });
+
+  it('the applied offer names its id, for the once-per-customer record', () => {
+    expect(offersFor([waffles(7), jars(1)]).offers[0].offer_id).toBe(SPEND_ID);
+  });
+});
+
 describe('the POS prices it on its own screen exactly as the server does', () => {
-  it('quoteLocally applies the live spend offer', () => {
+  it('a cart that qualifies for a spend offer goes to the server (only it knows who has had it)', () => {
     const q = quoteLocally({
       items: [waffles(7), jars(1)],
       menuItems: [coffee, waffle],
@@ -233,8 +264,22 @@ describe('the POS prices it on its own screen exactly as the server does', () =>
       },
       isDineIn: true,
     });
-    expect(q.ok && q.bill).toMatchObject({ subtotal_inr: 1498, offer_discount_inr: 350 });
-    expect(q.ok && q.offerLabel).toBe('Instant Coffee at ₹49');
+    expect(q).toEqual({ ok: false, error: '', needsServer: true });
+  });
+
+  it('a cart under the minimum still prices on the screen, with the multi-buy offer', () => {
+    const q = quoteLocally({
+      items: [waffles(1), jars(1)],
+      menuItems: [coffee, waffle],
+      pricing: {
+        settings,
+        offers: [{ ...MULTI, menu_item_id: COFFEE, active: true, valid_from: null, valid_to: null }],
+        spendOffers: [{ ...SPEND, active: true, valid_from: null, valid_to: null }],
+      },
+      isDineIn: true,
+    });
+    expect(q.ok && q.bill).toMatchObject({ subtotal_inr: 556, offer_discount_inr: 100 });
+    expect(q.ok && q.offerLabel).toBe('Instant Coffee offer');
   });
 
   it('an older menu answer with no spend offers prices as before', () => {
@@ -277,6 +322,18 @@ describe('corrections re-check the minimum against what remains', () => {
   });
   const dineIn = { settings, orderType: 'dine_in' as const };
 
+  it('an order that never had it (blocked) does not gain it on a correction', () => {
+    const bill = recomputeOrderTotals({
+      ...dineIn,
+      items: [waffleLine(7), jarLine],
+      discountInr: 100,
+      offerDiscountInr: 100,
+      spendOffers: [SPEND],
+      spendBlocked: new Map([[SPEND_ID, '']]),
+    });
+    expect(bill).toMatchObject({ offer_discount_inr: 100, offer_kind: 'multi_buy', spend_offer_id: null });
+  });
+
   it('voiding a waffle takes the rest under ₹1099: the jar goes back to the 1/2/3-jar offer (₹299)', () => {
     const bill = recomputeOrderTotals({
       ...dineIn,
@@ -296,7 +353,13 @@ describe('corrections re-check the minimum against what remains', () => {
       offerDiscountInr: 350,
       spendOffers: [SPEND],
     });
-    expect(bill).toMatchObject({ subtotal_inr: 1498, offer_discount_inr: 350, offer_kind: 'spend', offer_label: 'Instant Coffee at ₹49' });
+    expect(bill).toMatchObject({
+      subtotal_inr: 1498,
+      offer_discount_inr: 350,
+      offer_kind: 'spend',
+      offer_label: 'Instant Coffee at ₹49',
+      spend_offer_id: SPEND_ID,
+    });
   });
 
   it('a coupon on the order keeps it off, as at creation', () => {

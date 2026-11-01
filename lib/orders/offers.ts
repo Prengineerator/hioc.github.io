@@ -32,7 +32,8 @@
 // Spend offers (supabase/2026-11-spend-offers.sql) are the second kind: "spend
 // ₹1099, get one Instant Coffee jar at ₹49". One unit of the item drops to the
 // offer price when everything ELSE on the bill reaches the minimum (before GST
-// and packaging, not counting what Ritual cups pay for). It can't be combined:
+// and packaging, not counting what Ritual cups pay for). Once per customer, by
+// phone number (spend_offer_redemptions; no number, no offer). It can't be combined:
 // with a coupon or Beanies on the bill it stays off (and says so), and against
 // the multi-buy offers the bill takes whichever saves more, never both. The
 // live spend offers whose item is on a bill are kept on the order
@@ -176,6 +177,8 @@ export interface OfferLine {
 
 /** One offer on a bill: which item, how many units, and what came off. */
 export interface AppliedOffer {
+  /** The spend offer's id (spend offers only): what its once-per-customer record points at. */
+  offer_id?: string;
   menu_item_id: string;
   name: string;
   units: number;
@@ -397,6 +400,12 @@ export interface BillOffersInput {
   passCoveredInr?: number;
   /** A coupon or Beanies discount is on the bill: a spend offer can't be combined with it. */
   otherDiscountApplied?: boolean;
+  /**
+   * Spend offers this customer can't have, by offer id, with the note to show
+   * should the bill qualify ('' = say nothing). Once per customer: no phone on
+   * the order, or the number has had it already (spendOfferBlocks).
+   */
+  spendBlocked?: ReadonlyMap<string, string>;
 }
 
 export interface BillOffersResult extends OfferResult {
@@ -432,6 +441,7 @@ function spendSaving(
   const discount = best.unit - offer.price_inr;
   if (discount <= 0) return null;
   return {
+    offer_id: offer.id,
     menu_item_id: offer.menu_item_id,
     name: offer.name,
     units: 1,
@@ -458,9 +468,17 @@ export function billOffers(input: BillOffersInput): BillOffersResult {
   const liveSubtotal = live.reduce((sum, l) => sum + Math.max(0, l.line_total_inr), 0);
 
   let bestSpend: AppliedOffer | null = null;
+  const blockedNotes: string[] = [];
   for (const offer of input.spendOffers ?? []) {
     const saving = spendSaving(offer, live, liveSubtotal, input.passCoveredInr ?? 0);
-    if (saving && (!bestSpend || saving.discount_inr > bestSpend.discount_inr)) bestSpend = saving;
+    if (!saving) continue;
+    const blocked = input.spendBlocked?.get(offer.id);
+    if (blocked !== undefined) {
+      // The bill qualifies but this customer can't have it: say why (once per customer).
+      if (blocked !== '') blockedNotes.push(blocked);
+      continue;
+    }
+    if (!bestSpend || saving.discount_inr > bestSpend.discount_inr) bestSpend = saving;
   }
 
   const multiResult = (notes: string[]): BillOffersResult => ({
@@ -470,7 +488,7 @@ export function billOffers(input: BillOffersInput): BillOffersResult {
     kind: multi.offers.length > 0 ? 'multi_buy' : 'none',
   });
 
-  if (!bestSpend) return multiResult([]);
+  if (!bestSpend) return multiResult(blockedNotes);
   if (input.otherDiscountApplied) {
     return multiResult([
       `${bestSpend.name} isn't applied: it can't be combined with a coupon or ${LOYALTY_UNIT.many}.`,
@@ -487,4 +505,36 @@ export function orderOfferLabel(order: {
 }): string {
   const stored = (order.offer_name ?? '').trim();
   return stored !== '' ? stored : offerLabelForLines(order.items);
+}
+
+// ---------------------------------------------------------------------------
+// Once per customer
+// ---------------------------------------------------------------------------
+
+/** The note when a bill qualifies for a spend offer but no phone number is on the order. */
+export function spendNeedsPhoneNote(name: string): string {
+  return `${name}: add the customer's phone number to give it (once per customer).`;
+}
+
+/** The note when the customer's number has had the spend offer already. */
+export function spendAlreadyUsedNote(name: string): string {
+  return `${name} isn't applied: this customer has already had it (once per customer).`;
+}
+
+/**
+ * Which spend offers this customer can't have, for billOffers' spendBlocked:
+ * every one when there is no phone number, else the ones `usedOfferIds` says
+ * the number has had (a redemption on an order that wasn't cancelled).
+ */
+export function spendOfferBlocks(
+  offers: readonly SpendOffer[],
+  phone: string | null,
+  usedOfferIds: ReadonlySet<string>,
+): Map<string, string> {
+  const blocked = new Map<string, string>();
+  for (const offer of offers) {
+    if (!phone) blocked.set(offer.id, spendNeedsPhoneNote(offer.name));
+    else if (usedOfferIds.has(offer.id)) blocked.set(offer.id, spendAlreadyUsedNote(offer.name));
+  }
+  return blocked;
 }

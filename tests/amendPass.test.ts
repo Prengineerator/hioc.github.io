@@ -172,6 +172,7 @@ describe('recomputeOrderTotals with HIOC Ritual cover', () => {
       offer_discount_inr: 0,
       offer_label: '',
       offer_kind: 'none',
+      spend_offer_id: null,
     });
   });
 });

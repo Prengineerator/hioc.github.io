@@ -34,6 +34,8 @@ const state: {
   offerRows?: Record<string, unknown>[];
   /** What a read of spend_offers answers. */
   spendRows?: Record<string, unknown>[];
+  /** The once-per-customer record written for a spend offer. */
+  redemptionInsert?: Record<string, unknown>;
   orderInsert?: Record<string, unknown>;
   /** The order_items bulk insert (one row per line). */
   itemsInsert?: Record<string, unknown>[];
@@ -60,13 +62,16 @@ vi.mock('@/lib/supabase-server', () => ({
                 ? (state.offerRows ?? [])
                 : table === 'spend_offers'
                   ? (state.spendRows ?? [])
-                  : state.menuRows,
+                  : table === 'spend_offer_redemptions'
+                    ? []
+                    : state.menuRows,
             error: null,
           }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
           if (table === 'order_items') state.itemsInsert = payload as unknown as Record<string, unknown>[];
           if (table === 'order_status_events') state.eventRow = payload;
+          if (table === 'spend_offer_redemptions') state.redemptionInsert = payload;
           // orders / order_items chain on into `.select().single()`; the addon
           // and event inserts are awaited directly and resolve here.
           if (table === 'orders' || table === 'order_items') {
@@ -172,6 +177,7 @@ beforeEach(() => {
   state.couponCtx = undefined;
   state.offerRows = undefined;
   state.spendRows = undefined;
+  state.redemptionInsert = undefined;
   state.tableRow = { id: TABLE_ID, label: 'T1', is_active: true };
   state.menuRows = [
     {
@@ -333,7 +339,7 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
       { menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 1, addon_option_ids: [] },
       { menu_item_id: JAR, variant_id: JAR_V, quantity: 1, addon_option_ids: [] },
     ];
-    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items }));
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items, customer_phone: '9876543210' }));
     expect(res.status).toBe(201);
     expect(state.orderInsert).toMatchObject({
       subtotal_inr: 1498,
@@ -343,6 +349,38 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
       spend_offers: [spend],
     });
     expect(state.itemsInsert?.[1]).toMatchObject({ offer_unit_inr: 399, line_total_inr: 399 });
+    // Once per customer: the number is recorded against the order.
+    expect(state.redemptionInsert).toEqual({ spend_offer_id: spend.id, phone: '+919876543210', order_id: ORDER_ID });
+  });
+
+  it('a spend offer with no phone number on the order is not given (once per customer)', async () => {
+    const JAR = '77777777-7777-4777-8777-777777777777';
+    const JAR_V = '77777777-7777-4777-8777-7777777777a1';
+    state.menuRows = [
+      { ...state.menuRows[0], menu_item_variants: [{ id: VARIANT_ID, label: 'Regular', price_inr: 1099, sort_order: 0 }] },
+      {
+        id: JAR,
+        name: 'Instant Coffee',
+        category: 'In-store',
+        is_available: true,
+        unavailable_until: null,
+        gst_exempt: true,
+        menu_item_variants: [{ id: JAR_V, label: 'Classic', price_inr: 399, sort_order: 0 }],
+        menu_item_addon_groups: [],
+      },
+    ];
+    state.spendRows = [
+      { id: '66666666-6666-4666-8666-666666666666', name: 'Instant Coffee at ₹49', menu_item_id: JAR, min_spend_inr: 1099, price_inr: 49, active: true, valid_from: null, valid_to: null },
+    ];
+    const items = [
+      { menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 1, addon_option_ids: [] },
+      { menu_item_id: JAR, variant_id: JAR_V, quantity: 1, addon_option_ids: [] },
+    ];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({ subtotal_inr: 1498, discount_inr: 0, total_inr: 1498 + 55 });
+    expect(state.orderInsert).not.toHaveProperty('offer_name');
+    expect(state.redemptionInsert).toBeUndefined();
   });
 
   it('an order with no offer item never sends the offer columns (pre-migration safe)', async () => {

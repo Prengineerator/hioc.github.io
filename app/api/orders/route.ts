@@ -44,7 +44,12 @@ import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
 import { allocateOrderPass, afterOffers, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
 import { billOffers, type SpendOffer } from '@/lib/orders/offers';
-import { loadActiveOffers, loadActiveSpendOffers } from '@/lib/orders/offersServer';
+import {
+  loadActiveOffers,
+  loadActiveSpendOffers,
+  loadSpendOfferBlocks,
+  recordSpendRedemption,
+} from '@/lib/orders/offersServer';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { parsePassDrinks, passRedeemMessage, passShortfallMessage } from '@/lib/passes/rules';
 import { redeemPassDrinks } from '@/lib/passes/server';
@@ -591,7 +596,10 @@ export async function POST(request: Request) {
   // First without a spend offer — it can't be combined with a coupon or
   // Beanies — so the coupon and Beanies are worked out on what the multi-buy
   // offers leave; if neither ends up applied, the spend offer is tried below.
-  const offerInput = { lines: resolvedLines, spendOffers, passCoveredInr };
+  // Once per customer, by phone: no number on the order, or a number that has
+  // had a spend offer already, keeps that offer off (with a note on the quote).
+  const spendBlocked = await loadSpendOfferBlocks(admin, spendOffers, trimmedPhone || null);
+  const offerInput = { lines: resolvedLines, spendOffers, passCoveredInr, spendBlocked };
   let offers = billOffers({ ...offerInput, otherDiscountApplied: true });
   // What a coupon and Beanies are computed on (CP-D12), after the offers.
   const payableAfterOffers = afterOffers(afterPass(subtotal_inr, passCoveredInr), offers.discountInr);
@@ -967,6 +975,12 @@ export async function POST(request: Request) {
       }
       return errorResponse(409, `${passRedeemMessage(redeemed)} Please review your bill and try again.`);
     }
+  }
+
+  // The spend offer this customer just had (once per customer, by phone).
+  const appliedSpend = offers.kind === 'spend' ? offers.offers[0]?.offer_id : undefined;
+  if (appliedSpend && trimmedPhone) {
+    await recordSpendRedemption(admin, { offerId: appliedSpend, phone: trimmedPhone, orderId: orderRow.id as string });
   }
 
   // Snapshot the coupon redemption ATOMICALLY (FND-3 / H1): try_redeem_coupon

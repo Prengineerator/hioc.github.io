@@ -18,7 +18,7 @@ import {
 } from '@/lib/orders/lines';
 import { afterOffers, afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
 import { billOffers, type BillOffersResult, type SpendOffer } from '@/lib/orders/offers';
-import { loadActiveOffers, loadActiveSpendOffers } from '@/lib/orders/offersServer';
+import { loadActiveOffers, loadActiveSpendOffers, loadSpendOfferBlocks } from '@/lib/orders/offersServer';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
 import { indianE164HonouringPlus } from '@/lib/phone';
@@ -223,8 +223,13 @@ export async function POST(request: Request) {
   // without a spend offer (it can't be combined with a coupon or Beanies), and
   // tried once neither turns out to be applied.
   const noOffers: BillOffersResult = { discountInr: 0, offers: [], label: '', notes: [], kind: 'none' };
+  // Once per customer, by phone (the number typed at the counter, or the web
+  // checkout's): no number, or one that has had it, keeps a spend offer off.
+  const spendBlocked = await loadSpendOfferBlocks(admin(), spendOffers, toStoredPhone(customer_phone));
   const priceOffers = (otherDiscountApplied: boolean) =>
-    resolvedLines ? billOffers({ lines: resolvedLines, spendOffers, passCoveredInr, otherDiscountApplied }) : noOffers;
+    resolvedLines
+      ? billOffers({ lines: resolvedLines, spendOffers, passCoveredInr, otherDiscountApplied, spendBlocked })
+      : noOffers;
   let offerResult = priceOffers(true);
   const payableAfterOffers = afterOffers(afterPass(subtotalInr, passCoveredInr), offerResult.discountInr);
 

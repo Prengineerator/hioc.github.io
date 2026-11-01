@@ -6,7 +6,8 @@
 // reaches the minimum (before GST), one unit of the item comes at the offer
 // price, shown as its own discount row. It can't be combined: not with a
 // coupon or Beanies, and the bill takes it or the multi-buy offer, whichever
-// saves more. Talks to app/api/spend-offers + app/api/spend-offers/[id].
+// saves more. Once per customer, by phone number (spend_offer_redemptions).
+// Talks to app/api/spend-offers + app/api/spend-offers/[id].
 
 import { useEffect, useMemo, useState } from 'react';
 import { Spinner } from '@/components/ui/Spinner';
@@ -179,8 +180,9 @@ export function SpendOfferManager() {
     <div>
       <p className="mb-3 text-sm text-muted">
         Spend this much, get one item at a special price — e.g. spend ₹1099, get an Instant Coffee jar at ₹49. Everything
-        else on the bill counts, before GST. It can&rsquo;t be combined with a coupon, {LOYALTY_UNIT.many} or another offer: the
-        bill takes whichever offer saves the customer more.
+        else on the bill counts, before GST. Once per customer, by phone number: the counter needs the customer&rsquo;s number
+        to give it. It can&rsquo;t be combined with a coupon, {LOYALTY_UNIT.many} or another offer: the bill takes whichever
+        offer saves the customer more.
       </p>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted">{offers.length} spend offer(s)</p>
@@ -398,7 +400,9 @@ function SpendOfferForm({
           <input type="datetime-local" value={form.valid_to} onChange={(e) => set({ valid_to: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
       </div>
-      <p className="mt-2 text-xs text-muted">One per bill. Not with a coupon, {LOYALTY_UNIT.many} or another offer.</p>
+      <p className="mt-2 text-xs text-muted">
+        One per bill, once per customer (by phone number). Not with a coupon, {LOYALTY_UNIT.many} or another offer.
+      </p>
       <label className="mt-3 flex items-center gap-2 text-sm text-charcoal">
         <input type="checkbox" checked={form.active} onChange={(e) => set({ active: e.target.checked })} />
         Switched on

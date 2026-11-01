@@ -1685,10 +1685,11 @@ async function checkItemOffers() {
 // Promotions → Offers → Spend & get answers with the migration hint. Reads only.
 // ---------------------------------------------------------------------------
 async function checkSpendOffers() {
-  heading('Spend offers: spend_offers + orders.spend_offers / offer_name', '2026-11-spend-offers.sql');
+  heading('Spend offers: spend_offers + spend_offer_redemptions + orders.spend_offers / offer_name', '2026-11-spend-offers.sql');
   const hint = 'apply supabase/2026-11-spend-offers.sql';
   for (const [table, col] of [
     ['spend_offers', 'min_spend_inr'],
+    ['spend_offer_redemptions', 'phone'],
     ['orders', 'spend_offers'],
     ['orders', 'offer_name'],
   ]) {

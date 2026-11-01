@@ -56,7 +56,7 @@ export interface PosPricingContext {
 
 export type LocalQuote =
   | { ok: true; bill: ReturnType<typeof composeOrderBill>; offers: AppliedOffer[]; offerLabel: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; needsServer?: boolean };
 
 /** The pricing settings out of a full settings row (GET /api/menu?pos=true). */
 export function pricingSettingsOf(settings: StoreSettings): PosPricingSettings {
@@ -136,6 +136,10 @@ export function quoteLocally(input: {
   if (!resolved.ok) return { ok: false, error: resolved.error };
   // No coupon or Beanies here (those carts go to the server), so a spend offer may apply.
   const priced = billOffers({ lines: resolved.lines, spendOffers, otherDiscountApplied: false });
+  // A spend offer is once per customer: whether THIS customer can have it is
+  // the server's to say (it holds who has had it), so a cart that qualifies is
+  // priced there. A cart that doesn't qualify prices here exactly as before.
+  if (priced.kind === 'spend') return { ok: false, error: '', needsServer: true };
   const offers = priced.offers;
   const offerDiscountInr = priced.discountInr;
   const bill = composeOrderBill({

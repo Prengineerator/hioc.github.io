@@ -69,6 +69,8 @@ export interface RecomputeInput {
   offerDiscountInr?: number;
   /** The spend offers kept on the order (orders.spend_offers), re-checked against what remains. */
   spendOffers?: readonly SpendOffer[];
+  /** Spend offers this customer can't have here (once per customer), as billOffers takes them. */
+  spendBlocked?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -98,7 +100,15 @@ export function recomputeOrderTotals({
   discountInr,
   offerDiscountInr = 0,
   spendOffers = [],
-}: RecomputeInput): BillBreakdown & { pass_discount_inr: number; offer_discount_inr: number; offer_label: string; offer_kind: 'spend' | 'multi_buy' | 'none' } {
+  spendBlocked,
+}: RecomputeInput): BillBreakdown & {
+  pass_discount_inr: number;
+  offer_discount_inr: number;
+  offer_label: string;
+  offer_kind: 'spend' | 'multi_buy' | 'none';
+  /** The spend offer on the bill, when there is one: what its once-per-customer record names. */
+  spend_offer_id: string | null;
+} {
   const remaining = items.filter((item) => !item.voided);
   const subtotalInr = remaining.reduce((sum, item) => sum + item.line_total_inr, 0);
   // GST only on the lines that weren't GST-exempt when sold — the snapshot,
@@ -144,6 +154,7 @@ export function recomputeOrderTotals({
     spendOffers,
     passCoveredInr,
     otherDiscountApplied: otherDiscount > 0,
+    spendBlocked,
   });
   const offer = Math.min(offers.discountInr, payable);
   const discount = offer + Math.min(otherDiscount, payable - offer);
@@ -155,7 +166,13 @@ export function recomputeOrderTotals({
     { subtotalInr, taxableSubtotalInr, discountInr: discount, passCoveredInr, passCoveredTaxableInr },
     orderType === 'dine_in' ? { ...settings, packaging_charge_inr: 0 } : settings,
   );
-  return { ...bill, offer_discount_inr: offer, offer_label: offers.label, offer_kind: offers.kind };
+  return {
+    ...bill,
+    offer_discount_inr: offer,
+    offer_label: offers.label,
+    offer_kind: offers.kind,
+    spend_offer_id: offers.kind === 'spend' ? (offers.offers[0]?.offer_id ?? null) : null,
+  };
 }
 
 /**
