@@ -3,6 +3,7 @@
 // The crypto and cookie-shape half is lib/api/deviceCookie.ts (pure, tested).
 // This half needs the database and next/headers, so it is server-only.
 
+import { requestCache as cache } from '@/lib/api/requestCache';
 import 'server-only';
 import { cookies } from 'next/headers';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
@@ -49,7 +50,7 @@ export function isMissingTableError(error: { code?: string; message?: string } |
  * identify. It is never the thing granting access, so failing open is not a
  * thing this function can do.
  */
-export async function getEnrolledDevice(): Promise<PosDevice | null> {
+async function getEnrolledDeviceUncached(): Promise<PosDevice | null> {
   const token = cookies().get(DEVICE_COOKIE)?.value;
   if (!token) return null;
 
@@ -130,3 +131,9 @@ export async function touchDeviceSeen(device: PosDevice): Promise<void> {
     .eq('id', device.id);
   if (error) console.error('touchDeviceSeen: update failed', error);
 }
+
+
+/** Per-request memo: a page render (layout + page + helpers) reads this
+ * once instead of up to three times. Outside a React render (Route
+ * Handlers) cache() simply calls through, so behaviour there is unchanged. */
+export const getEnrolledDevice = cache(getEnrolledDeviceUncached);
