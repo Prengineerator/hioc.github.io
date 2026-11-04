@@ -10,6 +10,7 @@ import { sendBillNotification, sendOrderNotification } from '@/lib/notifications
 import { enqueueFeedbackRequest } from '@/lib/feedback/enqueue';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
+import { runAfterResponse } from '@/lib/api/background';
 import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
 import { consumeStockForOrder } from '@/lib/inventory/server';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
@@ -202,77 +203,59 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
   const order = updated as Order;
 
-  // Fire the customer notification this transition maps to (accepted/ready/
-  // rejected/cancelled). Awaited but non-throwing so the send is logged before
-  // the function returns; failures never fail the transition. The D7 dine-in
-  // 'ready' suppression lives in the engine (caller-agnostic) — `order` is the
-  // post-update select('*') row, so it carries order_type for that rule.
-  if (check.rule?.notify) {
-    await sendOrderNotification(order, check.rule.notify);
-  }
-
-  // Loyalty ledger hooks (FND-4): earn Beanies when an order completes, reverse
-  // them if it's rejected/cancelled. No-ops until the Loyalty engine is wired.
-  //
-  // A HIOC Ritual pass sale never gets here (refused above), and this is the
-  // belt to those braces: a pass is already the discount (CP-D13), so its sale
-  // earns no Beanies, uses no stock and asks for no feedback, however it came to
-  // be completed.
-  if (to === 'completed' && current.order_kind !== 'coffee_pass') {
+  // Ledger writes stay inline: they decide the order's points balance and must
+  // land before we reply.
+  const completedSale = to === 'completed' && current.order_kind !== 'coffee_pass';
+  if (completedSale) {
     await earnForOrder(id);
-
-    // Inventory (docs/INVENTORY-SPEC.md): take the order's recipe usage off
-    // stock. Never throws and never fails the transition; a no-op while the
-    // inventory flag is off.
-    await consumeStockForOrder(id, actor.user.id);
-
-    // RCT-1: deliver the settled bill on WhatsApp/email at settle. A staff dine-in
-    // order skipped the placement send (it's settled here), so this is its bill; a
-    // web order whose bill already sent at placement no-ops via the engine's
-    // per-(order,event,channel) idempotency, and a no-phone/no-email order skips
-    // cleanly (FND3-5).
-    // Issue-3: only when the order is actually PAID by the time it completes —
-    // most order types (takeaway/delivery) have no settlement guard on this
-    // transition, so an unpaid counter order could otherwise complete and get
-    // a bill for money never collected. `order` is the just-guarded UPDATE
-    // result, so it carries the current payment_status — including the
-    // FND3-5 manager-comp override above, which sets it to 'paid' BEFORE this
-    // transition lands, so a comped dine-in still bills here.
-    // Best-effort — the whole block is wrapped so a slow or failing send never
-    // fails the settle transition (the printed bill is the guaranteed copy).
-    // We reload the order with its lines so the bill's item count ({{4}}) is
-    // accurate — `order` above is a plain select('*') row and carries the
-    // payment fields but not the embedded items.
-    if (order.payment_status === 'paid') {
-      try {
-        const { data: full } = await admin
-          .from('orders')
-          .select('*, order_items(*, order_item_addons(*))')
-          .eq('id', id)
-          .single();
-        await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : order);
-      } catch (billError) {
-        console.error('settle bill notification failed', billError);
-      }
-    }
-
-    // Post-order feedback: queue the WhatsApp feedback request for ~30 min
-    // (store-configurable) from now. Best-effort and never able to fail the
-    // transition — the cron (app/api/cron/feedback-requests) re-checks every
-    // skip rule (opt-out, disabled, no phone) again at send time, so queueing
-    // here only has to get the row + token created, not decide eligibility
-    // for good.
-    await enqueueFeedbackRequest({
-      orderId: id,
-      customerPhone: order.customer_phone,
-      customerName: order.customer_name,
-    });
   } else if (to === 'rejected' || to === 'cancelled') {
     await reverseForOrder(id);
   }
 
-  // Push the change to any live customer status page (< 2s, F2).
-  await broadcastOrderEvent(id, to);
+  // Everything below is best-effort and never fails the transition, so it runs
+  // after the response is sent (runAfterResponse keeps the function alive until
+  // it finishes). Previously the counter waited on external WhatsApp/email
+  // providers here before seeing its status change land. Order of the steps
+  // and every rule inside them is unchanged.
+  runAfterResponse(
+    (async () => {
+      // Customer notification for this transition (accepted/ready/rejected/
+      // cancelled). D7 dine-in 'ready' suppression lives in the engine.
+      if (check.rule?.notify) {
+        await sendOrderNotification(order, check.rule.notify);
+      }
+
+      if (completedSale) {
+        // Inventory (docs/INVENTORY-SPEC.md): never throws; no-op while the flag is off.
+        await consumeStockForOrder(id, actor.user.id);
+
+        // RCT-1 / Issue-3: deliver the settled bill only when the order is
+        // actually paid. Reload with lines so the bill's item count is right.
+        if (order.payment_status === 'paid') {
+          try {
+            const { data: full } = await admin
+              .from('orders')
+              .select('*, order_items(*, order_item_addons(*))')
+              .eq('id', id)
+              .single();
+            await sendBillNotification(full ? toOrderResponse(full as OrderRowWithItems) : order);
+          } catch (billError) {
+            console.error('settle bill notification failed', billError);
+          }
+        }
+
+        // Post-order feedback request (cron re-checks every skip rule at send time).
+        await enqueueFeedbackRequest({
+          orderId: id,
+          customerPhone: order.customer_phone,
+          customerName: order.customer_name,
+        });
+      }
+
+      // Push the change to any live customer status page (< 2s, F2).
+      await broadcastOrderEvent(id, to);
+    })(),
+  );
 
   return NextResponse.json({ order });
 }

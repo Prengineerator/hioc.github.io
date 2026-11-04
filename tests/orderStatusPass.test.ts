@@ -76,7 +76,16 @@ vi.mock('@/lib/loyalty/ledger', () => ({ earnForOrder: spies.earnForOrder, rever
 vi.mock('@/lib/inventory/server', () => ({ consumeStockForOrder: spies.consumeStockForOrder }));
 vi.mock('@/lib/feedback/enqueue', () => ({ enqueueFeedbackRequest: spies.enqueueFeedbackRequest }));
 
-const { PATCH } = await import('@/app/api/orders/[id]/status/route');
+// Best-effort hooks now run after the response (runAfterResponse); collect them
+// and let each call finish its background work before assertions.
+const background: Promise<unknown>[] = [];
+vi.mock('@/lib/api/background', () => ({ runAfterResponse: (p: Promise<unknown>) => background.push(p) }));
+const route = await import('@/app/api/orders/[id]/status/route');
+const PATCH: typeof route.PATCH = async (...args) => {
+  const res = await route.PATCH(...args);
+  await Promise.all(background.splice(0));
+  return res;
+};
 
 const UUID = '3642e4aa-a517-4885-99bd-543376074602';
 const params = { params: { id: UUID } };
