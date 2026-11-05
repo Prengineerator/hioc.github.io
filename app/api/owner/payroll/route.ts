@@ -5,7 +5,11 @@ import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
 import { loadEmploymentRows, employmentOnDate, toDayEmployment } from '@/lib/attendance/employment';
 import { rollUpDay, dayOfWeekFor, type DaySession, type DayMark } from '@/lib/attendance/day';
-import { computePayrollLine, type PayrollDayInput } from '@/lib/payroll/compute';
+import {
+  computePayrollLine,
+  DEFAULT_PAID_LEAVES_PER_MONTH,
+  type PayrollDayInput,
+} from '@/lib/payroll/compute';
 import { sendPayslipsForRun } from '@/lib/payroll/payslipEmail';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, PayrollRun, StaffEmployment } from '@/lib/types';
@@ -196,6 +200,7 @@ async function computePeriod(month: string) {
       rules: {
         otMultiplier: Number(settings.ot_multiplier),
         lateMarksPerHalfday: settings.late_marks_per_halfday,
+        paidLeavesPerMonth: DEFAULT_PAID_LEAVES_PER_MONTH,
       },
       cashShortageInr: shortageByUser.get(person.id) ?? 0,
     });
@@ -218,6 +223,8 @@ async function computePeriod(month: string) {
     // consumed) — not part of the public GET shape, see the GET handler.
     shortageRows,
     rulesSnapshot: {
+      // Expected hours = (days in month − this) × contracted hours.
+      paid_leaves_per_month: DEFAULT_PAID_LEAVES_PER_MONTH,
       ot_multiplier: Number(settings.ot_multiplier),
       late_marks_per_halfday: settings.late_marks_per_halfday,
       grace_period_min: settings.grace_period_min,
@@ -346,6 +353,7 @@ export async function POST(request: Request) {
             rules: {
               otMultiplier: computed.rulesSnapshot.ot_multiplier,
               lateMarksPerHalfday: computed.rulesSnapshot.late_marks_per_halfday,
+              paidLeavesPerMonth: computed.rulesSnapshot.paid_leaves_per_month,
             },
             adjustmentsInr: adj.amount,
             // Recomputing for a manual adjustment must not drop the cash
