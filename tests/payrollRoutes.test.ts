@@ -438,6 +438,18 @@ describe('payroll route — finalize ONE staffer', () => {
     expect(state.insertedLines?.[0].net_pay_inr as number).toBeGreaterThan(0);
   });
 
+  it("freezes each day's counted clock-in and clock-out for the payslip's day-by-day table", async () => {
+    employ('staff-1');
+    workedDay('staff-1'); // 10:00–19:00 IST on 2026-08-03
+    await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    const detail = state.insertedLines![0].detail as { days: Row[]; net_before_deductions_inr: number };
+    const day = detail.days.find((d) => d.date === '2026-08-03')!;
+    expect(day.in).toBe('2026-08-03T04:30:00.000Z');
+    expect(day.out).toBe('2026-08-03T13:30:00.000Z');
+    expect(day.worked).toBe(540);
+    expect(typeof detail.net_before_deductions_inr).toBe('number');
+  });
+
   it('freezes the rules snapshot with the run', async () => {
     employ('staff-1');
     await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));

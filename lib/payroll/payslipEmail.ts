@@ -80,10 +80,100 @@ interface PayslipRow {
   negative?: boolean;
 }
 
+/** One day as frozen into payroll_run_lines.detail.days at finalize. */
+interface FrozenDay {
+  date: string;
+  status: string;
+  worked: number;
+  /** When the day started counting (after early-clock-in rounding), ISO. */
+  in?: string | null;
+  /** The last clock-out, ISO. */
+  out?: string | null;
+}
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/** Instant (ms) -> IST 'HH:MM', rounded to the nearest minute. */
+function istClockMs(ms: number): string {
+  return new Date(Math.round((ms + IST_OFFSET_MS) / 60_000) * 60_000).toISOString().slice(11, 16);
+}
+
+/** Rounded to the minute, the way the hours are. */
+function toMinuteMs(ms: number): number {
+  return Math.round(ms / 60_000) * 60_000;
+}
+
+/** A clock-out this close to "in + hours" is the same punch, shown so the row adds up. */
+const SAME_PUNCH_MS = 2 * 60_000;
+
+/** '2026-10-01' -> 'Thu 1 Oct'. */
+function dayLabel(date: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date ?? '');
+  if (!match) return date ?? '';
+  const d = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  const weekday = d.toLocaleDateString('en-IN', { weekday: 'short', timeZone: 'UTC' });
+  const month = d.toLocaleDateString('en-IN', { month: 'short', timeZone: 'UTC' });
+  return `${weekday} ${d.getUTCDate()} ${month}`;
+}
+
+const DAY_OFF_LABEL: Record<string, string> = {
+  absent: 'Absent',
+  weekly_off: 'Weekly off',
+  paid_leave: 'Paid leave',
+  unpaid_leave: 'Unpaid leave',
+};
+
+interface DayRow {
+  day: string;
+  in: string;
+  out: string;
+  hours: string;
+}
+
+/**
+ * The day-by-day table: every employed day of the month with its counted
+ * clock-in, clock-out and hours, so the staffer can check the total
+ * themselves. A day with no work shows why (absent, weekly off, leave).
+ */
+function dayRows(days: FrozenDay[]): DayRow[] {
+  return days
+    .filter((d) => d.status !== 'not_employed')
+    .map((d) => {
+      const off = DAY_OFF_LABEL[d.status];
+      if (d.worked <= 0) {
+        return { day: dayLabel(d.date), in: '—', out: '—', hours: off ?? '0h 0m' };
+      }
+      const inMs = d.in ? Date.parse(d.in) : NaN;
+      const outMs = d.out ? Date.parse(d.out) : NaN;
+      // Hours are counted from exact seconds and rounded once, so rounding the
+      // in and out times separately can leave a row a minute off (15:02:17 →
+      // 00:09:33 is 9h 7m, but rounds to 15:02 → 00:10). When the clock-out is
+      // the punch that ends those hours, show it as in + hours so every row
+      // adds up. A day with a real break keeps its actual last clock-out.
+      let outLabel = Number.isFinite(outMs) ? istClockMs(outMs) : '—';
+      if (Number.isFinite(inMs) && Number.isFinite(outMs)) {
+        const derived = toMinuteMs(inMs) + d.worked * 60_000;
+        if (Math.abs(derived - outMs) <= SAME_PUNCH_MS) outLabel = istClockMs(derived);
+      }
+      return {
+        day: dayLabel(d.date),
+        in: Number.isFinite(inMs) ? istClockMs(inMs) : '—',
+        out: outLabel,
+        hours: off ? `${hm(d.worked)} (${off.toLowerCase()})` : hm(d.worked),
+      };
+    });
+}
+
 /**
  * Pure: render one staffer's payslip email from their FROZEN run line. Reads
- * only payroll_run_lines columns (+ the frozen adjustment reason in `detail`)
- * and the run's period — never recomputes anything.
+ * only payroll_run_lines columns (+ the frozen adjustment reason, day-by-day
+ * clock times and pre-deduction total in `detail`) and the run's period —
+ * never recomputes anything.
+ *
+ * Shows hours and pay, a day-by-day table of when each day started and ended,
+ * and only the deductions the owner chose to take. Overtime and late marks are
+ * deliberately NOT broken out (the owner's choice): overtime is paid at the
+ * same rate and is simply part of the hours.
  */
 export function renderPayslipEmail(
   line: PayrollRunLine,
@@ -93,9 +183,22 @@ export function renderPayslipEmail(
   const month = formatMonth(run.period_start);
   const name = (staffName || 'Staff').trim() || 'Staff';
   const first = name.split(' ')[0] || 'there';
-  const detail = (line.detail ?? {}) as { adjustment_reason?: unknown };
+  const detail = (line.detail ?? {}) as {
+    adjustment_reason?: unknown;
+    days?: unknown;
+    net_before_deductions_inr?: unknown;
+  };
   const adjustmentReason =
     typeof detail.adjustment_reason === 'string' ? detail.adjustment_reason.trim() : '';
+  const days = Array.isArray(detail.days) ? dayRows(detail.days as FrozenDay[]) : [];
+  // Pay for the hours worked, as ONE figure — overtime is paid at the same
+  // rate and is not broken out. Taken from the frozen pre-deduction total so
+  // the payslip adds up to net pay exactly; older runs without it fall back
+  // to base + overtime.
+  const earned =
+    typeof detail.net_before_deductions_inr === 'number'
+      ? detail.net_before_deductions_inr - line.adjustments_inr
+      : line.base_pay_inr + line.ot_pay_inr;
 
   const attendanceRows: PayslipRow[] = [
     { label: 'Days present', value: String(line.days_present) },
@@ -105,13 +208,12 @@ export function renderPayslipEmail(
     { label: 'Weekly off', value: String(line.days_off) },
     { label: 'Hours worked', value: hm(line.worked_minutes) },
   ];
-  if (line.ot_minutes > 0) attendanceRows.push({ label: 'Overtime', value: hm(line.ot_minutes) });
-  if (line.late_marks > 0) {
-    attendanceRows.push({ label: 'Late marks', value: String(line.late_marks) });
-  }
 
-  const moneyRows: PayslipRow[] = [{ label: 'Base pay', value: rupees(line.base_pay_inr) }];
-  if (line.ot_pay_inr > 0) moneyRows.push({ label: 'Overtime pay', value: rupees(line.ot_pay_inr) });
+  // No separate overtime or late-mark lines — the owner's choice. The hours
+  // are explained by the day-by-day table instead.
+  const moneyRows: PayslipRow[] = [
+    { label: `Pay for hours worked (${hm(line.worked_minutes)})`, value: rupees(earned) },
+  ];
   if (line.deductions_inr > 0) {
     moneyRows.push({
       label: 'Deductions (lateness)',
@@ -143,10 +245,29 @@ export function renderPayslipEmail(
       r.negative ? 'color:#b42318;' : ''
     }">${escapeHtml(r.value)}</td></tr>`;
 
+  const cell = 'padding:3px 0;font-size:12px;border-bottom:1px solid #f3f0eb;';
+  const head = 'padding:4px 0;font-size:11px;color:#8a8a8a;text-align:left;font-weight:normal;';
+  const daysHtml =
+    days.length === 0
+      ? ''
+      : `<hr style="border:none;border-top:1px solid #eee;margin:16px 0;" />
+     <p style="font-size:13px;font-weight:bold;margin:0 0 6px;">Day by day</p>
+     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+       <tr><th style="${head}">Day</th><th style="${head}">In</th><th style="${head}">Out</th><th style="${head}text-align:right;">Hours</th></tr>
+       ${days
+         .map(
+           (d) =>
+             `<tr><td style="${cell}">${escapeHtml(d.day)}</td><td style="${cell}">${escapeHtml(d.in)}</td><td style="${cell}">${escapeHtml(d.out)}</td><td style="${cell}text-align:right;">${escapeHtml(d.hours)}</td></tr>`,
+         )
+         .join('')}
+       <tr><td colspan="3" style="padding:6px 0 0;font-size:12px;font-weight:bold;">Total</td><td style="padding:6px 0 0;font-size:12px;font-weight:bold;text-align:right;">${escapeHtml(hm(line.worked_minutes))}</td></tr>
+     </table>`;
+
   const html = staffEmailShell(
     `Payslip — ${escapeHtml(month)}`,
     `<p style="font-size:14px;line-height:1.5;">Hi ${escapeHtml(first)}, here is your payslip for <strong>${escapeHtml(month)}</strong>.</p>
      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;">${attendanceRows.map(rowHtml).join('')}</table>
+     ${daysHtml}
      <hr style="border:none;border-top:1px solid #eee;margin:16px 0;" />
      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${moneyRows.map(rowHtml).join('')}
        <tr><td style="padding:10px 0 0;font-weight:bold;font-size:15px;">Net pay</td><td style="padding:10px 0 0;text-align:right;font-weight:bold;font-size:15px;">${rupees(line.net_pay_inr)}</td></tr>
@@ -158,6 +279,16 @@ export function renderPayslipEmail(
     `Payslip for ${name} — ${month}`,
     '',
     ...attendanceRows.map((r) => `${r.label}: ${r.value}`),
+    ...(days.length > 0
+      ? [
+          '',
+          'Day by day:',
+          ...days.map((d) =>
+            d.in === '—' ? `${d.day}: ${d.hours}` : `${d.day}: ${d.in} – ${d.out} = ${d.hours}`,
+          ),
+          `Total: ${hm(line.worked_minutes)}`,
+        ]
+      : []),
     '',
     ...moneyRows.map((r) => `${r.label}: ${r.value}`),
     '',

@@ -146,6 +146,12 @@ export interface DayRollup {
   lateMinutes: number;
   isLate: boolean;
   firstIn: string | null;
+  /**
+   * When the day started COUNTING: firstIn after the early-clock-in rounding
+   * (09:59 → 10:00). What a payslip shows as "in", so in → out matches the
+   * hours counted.
+   */
+  countedFirstIn: string | null;
   lastOut: string | null;
   sessionCount: number;
   /** True while any session is unresolved — the day contributes ZERO until an owner acts. */
@@ -229,6 +235,7 @@ export function rollUpDay(params: {
     lateMinutes: 0,
     isLate: false,
     firstIn: null,
+    countedFirstIn: null,
     lastOut: null,
     sessionCount: live.length,
     needsApproval: false,
@@ -254,6 +261,7 @@ export function rollUpDay(params: {
 
   const intervals: Interval[] = [];
   const counted: Interval[] = [];
+  let countedFirstStart: number | null = null;
   for (const s of live) {
     if (!s.clockOutAt) continue;
     const start = Date.parse(s.clockInAt);
@@ -274,6 +282,7 @@ export function rollUpDay(params: {
           })
         : start;
     if (countedStart < end) counted.push({ start: countedStart, end });
+    if (s === firstSession) countedFirstStart = countedStart;
   }
 
   const { merged, hadOverlap } = mergeIntervals(intervals);
@@ -298,6 +307,10 @@ export function rollUpDay(params: {
     .filter(Number.isFinite);
   const firstIn = starts.length ? new Date(Math.min(...starts)).toISOString() : null;
   const lastOut = ends.length ? new Date(Math.max(...ends)).toISOString() : null;
+  const countedFirstIn =
+    countedFirstStart !== null && Number.isFinite(countedFirstStart)
+      ? new Date(countedFirstStart).toISOString()
+      : firstIn;
 
   // Lateness is measured from the first punch of the day against the contracted
   // shift start, with the grace period subtracted.
@@ -347,6 +360,7 @@ export function rollUpDay(params: {
     lateMinutes,
     isLate: lateMinutes > 0,
     firstIn,
+    countedFirstIn,
     lastOut,
     sessionCount: live.length,
     needsApproval: unresolved,
