@@ -5,10 +5,28 @@
 // arguable in a meeting — which matters because the output is what someone
 // gets paid.
 //
-// THE MODEL (D5-2): a monthly salary plus a contracted day length. The month's
-// expected minutes are `working days × contracted hours × 60`, and pay is that
-// salary scaled by the fraction of those minutes actually worked. Time beyond
-// the contracted day is overtime at its own multiplier.
+// THE MODEL (D5-2, as the owner runs it): every month carries a fixed allowance
+// of paid leaves (4). The monthly salary buys `days in month − 4` days, each
+// of the contracted length — so the month's expected hours are
+// `(days in month − 4) × contracted hours`, and pay is the salary scaled by
+// the hours actually worked against that:
+//
+//     expected hours = (days in month − 4) × contracted hours
+//     pay            = salary × hours worked ÷ expected hours
+//
+// e.g. ₹19,934 on a 9-hour day in a 31-day month: 27 × 9 = 243 expected hours,
+// so 230 hours worked pays 19,934 × 230 ÷ 243 = ₹18,868.
+//
+// The 4 leaves are not recorded or counted anywhere: they are already "paid"
+// by the divisor. Work all but 4 days of the month and the result is EXACTLY
+// the monthly salary; take a 5th day off and it costs one day; work through a
+// leave day and it earns one more day at the same rate. That makes the
+// divisor independent of the roster — a staffer with no weekly off and one
+// off every Wednesday are priced identically, whether the month happens to
+// have four Wednesdays or five.
+//
+// Time beyond the contracted day is overtime at its own multiplier, priced
+// from the same per-minute rate.
 //
 // TWO THINGS THAT WOULD SILENTLY DOUBLE-CHARGE SOMEONE, avoided deliberately:
 //
@@ -28,11 +46,20 @@
 
 import type { DayStatus } from '@/lib/attendance/day';
 
+/** Paid leaves built into every month: expected hours = (days in month − this) × contracted hours. */
+export const DEFAULT_PAID_LEAVES_PER_MONTH = 4;
+
 export interface PayrollRules {
   /** 0 = OT unpaid, 1 = normal rate, 1.5 = time and a half. */
   otMultiplier: number;
   /** This many late arrivals costs half a day's pay. */
   lateMarksPerHalfday: number;
+  /**
+   * Leaves the monthly salary already pays for. Expected hours are
+   * `(days in month − paidLeavesPerMonth) × contracted hours`. Defaults to
+   * DEFAULT_PAID_LEAVES_PER_MONTH.
+   */
+  paidLeavesPerMonth?: number;
 }
 
 export interface PayrollDayInput {
@@ -56,7 +83,13 @@ export interface PayrollSegmentBreakdown {
   employmentKey: string;
   monthlySalaryInr: number;
   contractedHoursPerDay: number;
-  workingDays: number;
+  /** Calendar days in the month this segment falls in (28–31). */
+  daysInMonth: number;
+  /** Leaves the salary already covers that month. */
+  paidLeaves: number;
+  /** daysInMonth − paidLeaves. The salary buys this many contracted days. */
+  payableDays: number;
+  /** payableDays × contracted hours, in minutes — working this much earns exactly the salary. */
   expectedMinutes: number;
   paidMinutes: number;
   otMinutes: number;
@@ -122,23 +155,28 @@ export function paiseToRupees(paise: number): number {
   return Math.sign(paise) * Math.round(Math.abs(paise) / 100);
 }
 
-/** Statuses that consume one of the month's working days. */
-function isWorkingDay(status: DayStatus): boolean {
-  return status !== 'weekly_off' && status !== 'not_employed';
+/** Calendar days in the month of an ISO date ('2026-10-02' → 31). */
+export function daysInMonthOf(isoDate: string): number {
+  const [y, m] = isoDate.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
 /**
  * Minutes this day contributes to base pay, capped at the contracted day.
  *
- * The cap is what keeps overtime out of base pay. Paid leave pays a full
- * contracted day (D5-6); unpaid leave and absence pay nothing, and an
- * unresolved day already arrived with zero.
+ * Overtime minutes are taken out FIRST, then the cap applies — which is what
+ * keeps overtime out of base pay. That matters most on a worked weekly off,
+ * where rollUpDay marks every minute as OT (D5-5): those minutes are paid once,
+ * as OT, and not a second time here. Paid leave pays a full contracted day
+ * (D5-6); unpaid leave and absence pay nothing, and an unresolved day already
+ * arrived with zero.
  */
 function payableMinutes(day: PayrollDayInput, contractedMinutes: number): number {
   if (day.status === 'paid_leave') return contractedMinutes;
   if (day.status === 'absent' || day.status === 'unpaid_leave') return 0;
   if (day.status === 'needs_approval' || day.status === 'not_employed') return 0;
-  return Math.min(day.workedMinutes, contractedMinutes);
+  if (day.status === 'weekly_off') return 0;
+  return Math.min(Math.max(0, day.workedMinutes - day.otMinutes), contractedMinutes);
 }
 
 export function computePayrollLine(params: {
@@ -187,14 +225,25 @@ export function computePayrollLine(params: {
     };
   }
 
-  // Group by employment record so each day is priced at the rate in force on
-  // it. One segment is the ordinary case; more than one means the salary or
-  // shift changed mid-period.
+  const paidLeaves = Math.max(
+    0,
+    Math.floor(rules.paidLeavesPerMonth ?? DEFAULT_PAID_LEAVES_PER_MONTH),
+  );
+
+  // Group by employment record AND calendar month, so each day is priced at
+  // the rate in force on it and against its own month's divisor. One segment
+  // is the ordinary case; more than one means the salary or shift changed
+  // mid-period.
+  //
+  // Because expected hours come from the WHOLE month's payable days (not just
+  // the days a record covered), a mid-month joiner or raise needs no special
+  // handling: 10 full days at ₹27,000 in a 31-day month is 27,000 × 10 ÷ 27.
   const byKey = new Map<string, PayrollDayInput[]>();
   for (const d of employed) {
-    const list = byKey.get(d.employmentKey!) ?? [];
+    const groupKey = `${d.employmentKey!}|${d.date.slice(0, 7)}`;
+    const list = byKey.get(groupKey) ?? [];
     list.push(d);
-    byKey.set(d.employmentKey!, list);
+    byKey.set(groupKey, list);
   }
 
   const segments: PayrollSegmentBreakdown[] = [];
@@ -202,20 +251,20 @@ export function computePayrollLine(params: {
   let otPaise = 0;
   let deductionPaise = 0;
 
-  for (const [key, segDays] of byKey) {
+  for (const segDays of byKey.values()) {
+    const key = segDays[0].employmentKey!;
     const salaryPaise = segDays[0].monthlySalaryInr * 100;
     const contractedMinutes = Math.round(segDays[0].contractedHoursPerDay * 60);
 
-    const workingDays = segDays.filter((d) => isWorkingDay(d.status)).length;
-    const expectedMinutes = workingDays * contractedMinutes;
-    const paidMinutes = segDays
-      .filter((d) => isWorkingDay(d.status))
-      .reduce((a, d) => a + payableMinutes(d, contractedMinutes), 0);
+    const daysInMonth = daysInMonthOf(segDays[0].date);
+    const payableDays = Math.max(0, daysInMonth - paidLeaves);
+    const expectedMinutes = payableDays * contractedMinutes;
+    const paidMinutes = segDays.reduce((a, d) => a + payableMinutes(d, contractedMinutes), 0);
     const segOtMinutes = segDays.reduce((a, d) => a + d.otMinutes, 0);
     const segLateMarks = segDays.filter((d) => d.isLate).length;
 
-    // A period made entirely of weekly offs has no expected minutes. Guard the
-    // division rather than emitting NaN money.
+    // Only reachable with a nonsensical leave allowance (≥ the month's days) or
+    // a zero-hour contract. Guard the division rather than emitting NaN money.
     const segBasePaise =
       expectedMinutes > 0 ? (salaryPaise * paidMinutes) / expectedMinutes : 0;
 
@@ -239,7 +288,9 @@ export function computePayrollLine(params: {
       employmentKey: key,
       monthlySalaryInr: segDays[0].monthlySalaryInr,
       contractedHoursPerDay: segDays[0].contractedHoursPerDay,
-      workingDays,
+      daysInMonth,
+      paidLeaves,
+      payableDays,
       expectedMinutes,
       paidMinutes,
       otMinutes: segOtMinutes,

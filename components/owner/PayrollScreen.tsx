@@ -13,7 +13,9 @@ import { DataTable } from '@/components/ui/DataTable';
 interface Segment {
   monthlySalaryInr: number;
   contractedHoursPerDay: number;
-  workingDays: number;
+  daysInMonth: number;
+  paidLeaves: number;
+  payableDays: number;
   expectedMinutes: number;
   paidMinutes: number;
   otMinutes: number;
@@ -510,8 +512,9 @@ function Derivation({ line }: { line: Line }) {
     <div>
       {line.segments.map((s, i) => (
         <p key={i} className="text-sm text-charcoal">
-          {rupees(s.monthlySalaryInr)}/month over <strong>{s.workingDays}</strong> working days ×{' '}
-          {s.contractedHoursPerDay}h = {hm(s.expectedMinutes)} expected · {hm(s.paidMinutes)} paid
+          {rupees(s.monthlySalaryInr)}/month over <strong>{s.payableDays}</strong> days ({s.daysInMonth}{' '}
+          − {s.paidLeaves} paid leaves) × {s.contractedHoursPerDay}h = {hm(s.expectedMinutes)} expected ·{' '}
+          {hm(s.paidMinutes)} paid
           {s.otMinutes ? ` · ${hm(s.otMinutes)} OT` : ''}
           {s.lateMarks ? ` · ${s.lateMarks} late` : ''}
         </p>

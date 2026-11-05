@@ -361,7 +361,7 @@ Three independently launchable milestones. Each leaves the cafe better off even 
 | # | Decision | Choice | Rationale |
 |---|---|---|---|
 | **D5-1** | Punch device and anti-cheat strength | **Own phone + GPS geofence + accuracy/staleness checks**, with tamper *flagging* (GEO-2) | Cheapest to ship, no hardware, no new identity. Its limits are stated plainly in-product and in §3, and the stronger options remain available without rework (§11) |
-| **D5-2** | Salary basis | **Monthly salary + contracted hours/day → derived per-minute rate**; shortfall deducts, excess is OT | Matches how the owner already thinks (₹/month, "9-hour shift"), and handles 9h vs 10h staff in one model |
+| **D5-2** | Salary basis | **Monthly salary + contracted hours/day → derived per-minute rate**, with 4 paid leaves built into every month: expected hours = (days in month − 4) × contracted hours, pay = salary × hours worked ÷ expected hours; shortfall deducts, excess is OT | Matches how the owner already thinks (₹/month, "9-hour shift"), and handles 9h vs 10h staff in one model |
 | **D5-3** | Configurable rules | **All four**: late grace + late marks; OT threshold + multiplier; auto-deducted unpaid break; half-day/absent thresholds + weekly off | Owner-configurable from day one; defaults chosen so an owner who configures nothing still gets sane output |
 | **D5-4** | Missed clock-out | **Auto-close at shift end + grace, flag, exclude from payroll until approved** | Never pays a guessed number; never loses the day either |
 
