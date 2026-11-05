@@ -76,18 +76,20 @@ export async function PATCH(request: Request) {
 
   // PAY-4: a finalized payroll run froze this day's numbers. Letting an edit
   // through now would mean the sheet and the payslip disagree about a month
-  // someone has already been paid for.
-  const { data: lockingRun } = await admin
+  // someone has already been paid for. Payroll is finalized per staffer, so
+  // only THIS person's finalized run locks their day.
+  const { data: lockingRuns } = await admin
     .from('payroll_runs')
     .select('id, period_start, period_end')
     .eq('status', 'finalized')
+    .eq('user_id', session.user_id)
     .lte('period_start', session.business_date)
     .gte('period_end', session.business_date)
-    .maybeSingle();
-  if (lockingRun) {
+    .limit(1);
+  if ((lockingRuns ?? []).length > 0) {
     return errorResponse(
       409,
-      'That day is inside a finalized payroll run. Reverse the run first if it genuinely needs correcting.',
+      "That day is inside this person's finalized payroll. Reverse their payroll for the month first if it genuinely needs correcting.",
     );
   }
 

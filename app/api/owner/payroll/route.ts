@@ -12,20 +12,24 @@ import {
 } from '@/lib/payroll/compute';
 import { sendPayslipsForRun } from '@/lib/payroll/payslipEmail';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
-import type { AttendanceSession, PayrollRun, StaffEmployment } from '@/lib/types';
+import type { AttendanceSession, PayrollRun, PayrollRunLine, StaffEmployment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-// PAY-3 / PAY-4 — compute a payroll period, and finalize it.
+// PAY-3 / PAY-4 — compute a payroll month, and finalize it ONE STAFFER AT A TIME.
 //
 // OWNER ONLY (D5-8). Managers run the floor and clear the attendance queue;
 // only the owner sees money. This route is deliberately absent from the
 // permission matrix — there is no key that could widen it by accident.
 //
 // A draft is computed FRESH on every request from attendance + rules, never
-// cached. A finalized run is the opposite: it is read back from its frozen
-// snapshot and never recomputed, so a later rule change cannot restate a month
-// somebody has already been paid for.
+// cached. A finalized staffer is the opposite: read back from their frozen run
+// and never recomputed, so a later rule change cannot restate a month somebody
+// has already been paid for.
+//
+// Deductions (late-mark half-days, approved cash shortages) are PROPOSED on
+// the draft and taken only when the owner ticks them for that person at
+// finalize (lib/payroll/compute.ts).
 
 function monthBounds(month: string): { from: string; to: string } | null {
   if (!/^\d{4}-\d{2}$/.test(month)) return null;
@@ -237,6 +241,76 @@ async function computePeriod(month: string) {
   };
 }
 
+type ComputedPeriod = Awaited<ReturnType<typeof computePeriod>>;
+type DraftLine = ComputedPeriod['lines'][number];
+
+function rulesFromSnapshot(snapshot: ComputedPeriod['rulesSnapshot']) {
+  return {
+    otMultiplier: snapshot.ot_multiplier,
+    lateMarksPerHalfday: snapshot.late_marks_per_halfday,
+    paidLeavesPerMonth: snapshot.paid_leaves_per_month,
+  };
+}
+
+/**
+ * A FROZEN payroll_run_lines row, reshaped into the same fields a draft line
+ * carries, so the screen renders draft and finalized staff in one table. Every
+ * number comes from the frozen row — nothing here is recomputed.
+ */
+function frozenLine(row: PayrollRunLine, run: PayrollRun, liveName: string | undefined) {
+  const d = (row.detail ?? {}) as Record<string, unknown>;
+  const days = Array.isArray(d.days)
+    ? (d.days as { date: string; status: string; worked: number; ot: number; late: boolean }[])
+    : [];
+  return {
+    user_id: row.user_id,
+    name: liveName ?? (typeof d.name === 'string' ? d.name : 'Unknown staff'),
+    finalized: true as const,
+    run: { id: run.id, finalized_at: run.finalized_at },
+    daysPresent: row.days_present,
+    daysHalf: row.days_half,
+    daysAbsent: row.days_absent,
+    daysOff: row.days_off,
+    daysPaidLeave: row.days_paid_leave,
+    daysNeedingApproval: 0,
+    workedMinutes: row.worked_minutes,
+    otMinutes: row.ot_minutes,
+    lateMarks: row.late_marks,
+    basePayInr: row.base_pay_inr,
+    otPayInr: row.ot_pay_inr,
+    deductionsInr: row.deductions_inr,
+    cashShortageInr: row.cash_shortage_inr,
+    adjustmentsInr: row.adjustments_inr,
+    proposedDeductions:
+      (d.proposed_deductions as { lateInr: number; cashShortageInr: number } | undefined) ?? {
+        lateInr: row.deductions_inr,
+        cashShortageInr: row.cash_shortage_inr,
+      },
+    appliedDeductions:
+      (d.applied_deductions as { late: boolean; cashShortage: boolean } | undefined) ?? {
+        late: row.deductions_inr > 0,
+        cashShortage: row.cash_shortage_inr > 0,
+      },
+    netBeforeDeductionsInr:
+      typeof d.net_before_deductions_inr === 'number'
+        ? d.net_before_deductions_inr
+        : row.net_pay_inr + row.deductions_inr + row.cash_shortage_inr,
+    deductionsClamped: Boolean(d.deductions_clamped ?? d.cash_shortage_clamped),
+    adjustmentReason: typeof d.adjustment_reason === 'string' ? d.adjustment_reason : '',
+    netPayInr: row.net_pay_inr,
+    unconfigured: false,
+    blocked: false,
+    segments: Array.isArray(d.segments) ? d.segments : [],
+    days: days.map((x) => ({
+      date: x.date,
+      status: x.status,
+      workedMinutes: x.worked,
+      otMinutes: x.ot,
+      isLate: x.late,
+    })),
+  };
+}
+
 export async function GET(request: Request) {
   const owner = await getOwnerUser();
   if (!owner) return errorResponse(403, 'Owner access required');
@@ -248,38 +322,113 @@ export async function GET(request: Request) {
 
   const admin = createAdminSupabaseClient();
 
-  // A finalized run is served from its FROZEN snapshot, never recomputed —
-  // otherwise a rule changed in November would silently restate October.
-  const { data: runRow } = await admin
-    .from('payroll_runs')
-    .select('*')
-    .eq('period_start', bounds.from)
-    .eq('period_end', bounds.to)
-    .neq('status', 'reversed')
-    .maybeSingle();
-  const run = runRow as PayrollRun | null;
+  // Payroll is finalized per staffer. A finalized person is served from their
+  // FROZEN snapshot, never recomputed — otherwise a rule changed in November
+  // would silently restate an October someone has already been paid for.
+  // Everyone else is a draft, computed fresh, with every deduction proposed
+  // but none taken until the owner chooses.
+  const [{ data: runRows }, computed] = await Promise.all([
+    admin
+      .from('payroll_runs')
+      .select('*')
+      .eq('period_start', bounds.from)
+      .eq('period_end', bounds.to)
+      .eq('status', 'finalized'),
+    computePeriod(month),
+  ]);
+  const runs = ((runRows ?? []) as PayrollRun[]).filter((r) => r.user_id);
 
-  if (run?.status === 'finalized') {
+  const frozenByUser = new Map<string, ReturnType<typeof frozenLine>>();
+  if (runs.length > 0) {
     const { data: lineRows } = await admin
       .from('payroll_run_lines')
       .select('*')
-      .eq('run_id', run.id);
-    return NextResponse.json({ month, finalized: true, run, lines: lineRows ?? [] });
+      .in(
+        'run_id',
+        runs.map((r) => r.id),
+      );
+    const runById = new Map(runs.map((r) => [r.id, r]));
+    const liveNames = new Map(computed.lines.map((l) => [l.user_id, l.name]));
+    for (const row of (lineRows ?? []) as PayrollRunLine[]) {
+      const run = runById.get(row.run_id);
+      if (run) frozenByUser.set(row.user_id, frozenLine(row, run, liveNames.get(row.user_id)));
+    }
   }
 
-  const computed = await computePeriod(month);
+  const lines = [
+    ...computed.lines.map((l) => {
+      const frozen = frozenByUser.get(l.user_id);
+      if (frozen) return frozen;
+      return { ...l, finalized: false as const, run: null, adjustmentReason: '' };
+    }),
+    // Someone finalized this month who is no longer on the staff list (role
+    // changed) must still show — what they were paid doesn't go away.
+    ...[...frozenByUser.values()].filter((f) => !computed.lines.some((l) => l.user_id === f.user_id)),
+  ];
+
   return NextResponse.json({
     month: computed.month,
     bounds: computed.bounds,
-    lines: computed.lines,
-    blocked: computed.blocked,
+    lines,
+    finalizedCount: lines.filter((l) => l.finalized).length,
+    blocked: lines.some((l) => !l.finalized && l.blocked),
     rulesSnapshot: computed.rulesSnapshot,
-    finalized: false,
-    run,
   });
 }
 
-// POST { month, adjustments?: { user_id, amount_inr, reason }[] } — finalize.
+/** The frozen payroll_run_lines row for one staffer's finalized run. */
+function runLineRow(
+  runId: string,
+  draft: DraftLine,
+  line: ReturnType<typeof computePayrollLine>,
+  adjustmentReason: string,
+) {
+  const seg = line.segments[0];
+  return {
+    run_id: runId,
+    user_id: draft.user_id,
+    monthly_salary_inr: seg?.monthlySalaryInr ?? 0,
+    contracted_hours_per_day: seg?.contractedHoursPerDay ?? 0,
+    per_minute_paise: seg && seg.expectedMinutes > 0 ? (seg.monthlySalaryInr * 100) / seg.expectedMinutes : 0,
+    days_present: line.daysPresent,
+    days_half: line.daysHalf,
+    days_absent: line.daysAbsent,
+    days_off: line.daysOff,
+    days_paid_leave: line.daysPaidLeave,
+    worked_minutes: line.workedMinutes,
+    ot_minutes: line.otMinutes,
+    late_marks: line.lateMarks,
+    base_pay_inr: line.basePayInr,
+    ot_pay_inr: line.otPayInr,
+    // Only what the owner CHOSE to deduct reaches these columns — and so the
+    // payslip. What was proposed but let go is kept in `detail`.
+    deductions_inr: line.deductionsInr,
+    cash_shortage_inr: line.cashShortageInr,
+    adjustments_inr: line.adjustmentsInr,
+    net_pay_inr: line.netPayInr,
+    // The day-by-day derivation is frozen with the run. PAY-3 renders it, and
+    // it is what makes the number trusted rather than re-checked.
+    detail: {
+      name: draft.name,
+      segments: line.segments,
+      adjustment_reason: adjustmentReason,
+      proposed_deductions: line.proposedDeductions,
+      applied_deductions: line.appliedDeductions,
+      net_before_deductions_inr: line.netBeforeDeductionsInr,
+      deductions_clamped: line.deductionsClamped,
+      days: draft.days.map((d) => ({
+        date: d.date,
+        status: d.status,
+        worked: d.workedMinutes,
+        ot: d.otMinutes,
+        late: d.isLate,
+      })),
+    },
+  };
+}
+
+// POST { month, user_id, apply?: { late?, cash_shortage? }, adjustment?: { amount_inr, reason } }
+// — finalize ONE staffer's month, taking only the deductions the owner ticked.
 export async function POST(request: Request) {
   const owner = await getOwnerUser();
   if (!owner) return errorResponse(403, 'Owner access required');
@@ -289,50 +438,73 @@ export async function POST(request: Request) {
   const month = typeof body.month === 'string' ? body.month : '';
   const bounds = monthBounds(month);
   if (!bounds) return errorResponse(400, 'month must look like 2026-08');
+  const userId = typeof body.user_id === 'string' ? body.user_id : '';
+  if (!userId) {
+    return errorResponse(400, 'user_id is required — payroll is finalized one staffer at a time.');
+  }
+
+  // Both default to NO: a deduction is taken only when the owner ticked it.
+  const applyRaw = (body.apply ?? {}) as { late?: unknown; cash_shortage?: unknown };
+  const apply = { late: applyRaw.late === true, cashShortage: applyRaw.cash_shortage === true };
+
+  let adjustment: { amount: number; reason: string } | null = null;
+  if (body.adjustment !== undefined && body.adjustment !== null) {
+    const a = body.adjustment as { amount_inr?: unknown; reason?: unknown };
+    if (typeof a.amount_inr !== 'number' || !Number.isInteger(a.amount_inr)) {
+      return errorResponse(400, 'Adjustments must be whole rupees.');
+    }
+    const reason = typeof a.reason === 'string' ? a.reason.trim() : '';
+    if (!reason) return errorResponse(400, 'Every adjustment needs a reason.');
+    if (a.amount_inr !== 0) adjustment = { amount: a.amount_inr, reason };
+  }
 
   const admin = createAdminSupabaseClient();
 
-  const { data: existing } = await admin
+  const { data: existingRows } = await admin
     .from('payroll_runs')
-    .select('id, status')
+    .select('id')
     .eq('period_start', bounds.from)
     .eq('period_end', bounds.to)
-    .neq('status', 'reversed')
-    .maybeSingle();
-  if ((existing as { status?: string } | null)?.status === 'finalized') {
-    return errorResponse(409, 'That month is already finalized. Reverse it first to change anything.');
+    .eq('user_id', userId)
+    .eq('status', 'finalized')
+    .limit(1);
+  if ((existingRows ?? []).length > 0) {
+    return errorResponse(409, 'This person is already finalized for that month. Reverse it first to change anything.');
   }
 
   const computed = await computePeriod(month);
+  const draft = computed.lines.find((l) => l.user_id === userId);
+  if (!draft) return errorResponse(404, "That person isn't on this month's payroll.");
 
   // Refusing to finalize over unresolved days is the point of the whole
   // approval queue — a run that included a guessed day would freeze the guess.
-  if (computed.blocked) {
+  // Only THIS person's days matter now.
+  if (draft.blocked) {
     return errorResponse(
       409,
-      'Some days still need approval on the attendance sheet. Clear those before finalizing.',
+      `Some of ${draft.name}'s days still need approval on the attendance sheet. Clear those before finalizing.`,
     );
   }
-
-  const adjustments = new Map<string, { amount: number; reason: string }>();
-  if (Array.isArray(body.adjustments)) {
-    for (const a of body.adjustments as { user_id?: string; amount_inr?: number; reason?: string }[]) {
-      if (typeof a?.user_id !== 'string' || typeof a?.amount_inr !== 'number') continue;
-      if (!Number.isInteger(a.amount_inr)) {
-        return errorResponse(400, 'Adjustments must be whole rupees.');
-      }
-      if (!a.reason?.trim()) {
-        return errorResponse(400, 'Every adjustment needs a reason.');
-      }
-      adjustments.set(a.user_id, { amount: a.amount_inr, reason: a.reason.trim() });
-    }
+  if (draft.unconfigured && !adjustment) {
+    return errorResponse(409, `${draft.name} has no salary set for this month, so there is nothing to finalize.`);
   }
+
+  const line = computePayrollLine({
+    days: draft.days,
+    rules: rulesFromSnapshot(computed.rulesSnapshot),
+    adjustmentsInr: adjustment?.amount ?? 0,
+    // The same summed shortage the draft proposed — finalize may take it or
+    // let it go, but never sees a different number.
+    cashShortageInr: draft.proposedDeductions.cashShortageInr,
+    apply,
+  });
 
   const { data: runRow, error: runErr } = await admin
     .from('payroll_runs')
     .insert({
       period_start: bounds.from,
       period_end: bounds.to,
+      user_id: userId,
       status: 'finalized',
       rules_snapshot: computed.rulesSnapshot,
       generated_by: owner.id,
@@ -340,93 +512,32 @@ export async function POST(request: Request) {
     })
     .select('*')
     .single();
-  if (runErr) return errorResponse(500, runErr.message);
+  if (runErr) {
+    // The one-active-run-per-staffer index lost a race to a second tap.
+    if ((runErr as { code?: string }).code === '23505') {
+      return errorResponse(409, 'This person is already finalized for that month.');
+    }
+    return errorResponse(500, runErr.message);
+  }
   const run = runRow as PayrollRun;
 
-  const lines = computed.lines
-    .filter((l) => !l.unconfigured || adjustments.has(l.user_id))
-    .map((l) => {
-      const adj = adjustments.get(l.user_id);
-      const withAdj = adj
-        ? computePayrollLine({
-            days: l.days,
-            rules: {
-              otMultiplier: computed.rulesSnapshot.ot_multiplier,
-              lateMarksPerHalfday: computed.rulesSnapshot.late_marks_per_halfday,
-              paidLeavesPerMonth: computed.rulesSnapshot.paid_leaves_per_month,
-            },
-            adjustmentsInr: adj.amount,
-            // Recomputing for a manual adjustment must not drop the cash
-            // shortage that was already priced into `l` — otherwise adding
-            // any adjustment would silently waive an approved shortage.
-            cashShortageInr: l.cashShortageInr,
-          })
-        : l;
-
-      return {
-        run_id: run.id,
-        user_id: l.user_id,
-        monthly_salary_inr: withAdj.segments[0]?.monthlySalaryInr ?? 0,
-        contracted_hours_per_day: withAdj.segments[0]?.contractedHoursPerDay ?? 0,
-        per_minute_paise:
-          withAdj.segments[0] && withAdj.segments[0].expectedMinutes > 0
-            ? (withAdj.segments[0].monthlySalaryInr * 100) / withAdj.segments[0].expectedMinutes
-            : 0,
-        days_present: withAdj.daysPresent,
-        days_half: withAdj.daysHalf,
-        days_absent: withAdj.daysAbsent,
-        days_off: withAdj.daysOff,
-        days_paid_leave: withAdj.daysPaidLeave,
-        worked_minutes: withAdj.workedMinutes,
-        ot_minutes: withAdj.otMinutes,
-        late_marks: withAdj.lateMarks,
-        base_pay_inr: withAdj.basePayInr,
-        ot_pay_inr: withAdj.otPayInr,
-        deductions_inr: withAdj.deductionsInr,
-        cash_shortage_inr: withAdj.cashShortageInr,
-        adjustments_inr: withAdj.adjustmentsInr,
-        net_pay_inr: withAdj.netPayInr,
-        // The day-by-day derivation is frozen with the run. PAY-3 renders it,
-        // and it is what makes the number trusted rather than re-checked.
-        detail: {
-          name: l.name,
-          segments: withAdj.segments,
-          adjustment_reason: adj?.reason ?? '',
-          cash_shortage_clamped: withAdj.cashShortageClamped,
-          days: l.days.map((d) => ({
-            date: d.date,
-            status: d.status,
-            worked: d.workedMinutes,
-            ot: d.otMinutes,
-            late: d.isLate,
-          })),
-        },
-      };
-    });
-
-  if (lines.length > 0) {
-    const { error: lineErr } = await admin.from('payroll_run_lines').insert(lines);
-    if (lineErr) {
-      // Leave no half-written run behind: a finalized run with missing lines
-      // would read as "everyone was paid nothing".
-      await admin.from('payroll_runs').delete().eq('id', run.id);
-      return errorResponse(500, `Could not write payroll lines: ${lineErr.message}`);
-    }
+  const row = runLineRow(run.id, draft, line, adjustment?.reason ?? '');
+  const { error: lineErr } = await admin.from('payroll_run_lines').insert([row]);
+  if (lineErr) {
+    // Leave no half-written run behind: a finalized run with no line would
+    // read as "this person was paid nothing".
+    await admin.from('payroll_runs').delete().eq('id', run.id);
+    return errorResponse(500, `Could not write the payroll line: ${lineErr.message}`);
   }
 
-  // CC-5: the run and its lines are written — cash_shortage_inr is frozen
-  // into each line above. Now mark exactly those shortage rows consumed
-  // (payroll_run_id = run.id) so a later month's finalize never deducts them
-  // again. Scoped to the users who actually got a payroll_run_line here —
-  // computed.shortageRows came from the SAME query that produced each line's
-  // cashShortageInr, so this can't drift from what was frozen. The run and
-  // its lines already stand at this point; a failure here must not undo them
-  // (that would double-charge nobody but silently un-freeze correct numbers),
-  // so it is reported in the response instead of failing the request.
-  const paidUserIds = new Set(lines.map((l) => l.user_id));
-  const shortageIdsToMark = computed.shortageRows
-    .filter((r) => paidUserIds.has(r.user_id))
-    .map((r) => r.id);
+  // CC-5: mark this person's shortage rows consumed — but ONLY if the owner
+  // chose to deduct them. A shortage they let go stays unconsumed: it is not
+  // on any payslip, and it is month-scoped, so no later month picks it up.
+  // The run and line already stand here; a failure must not undo them, so it
+  // is reported in the response instead of failing the request.
+  const shortageIdsToMark = line.appliedDeductions.cashShortage
+    ? computed.shortageRows.filter((r) => r.user_id === userId).map((r) => r.id)
+    : [];
 
   let cashShortagesMarked = 0;
   let cashShortageMarkError: string | null = null;
@@ -448,9 +559,9 @@ export async function POST(request: Request) {
     }
   }
 
-  // SA-5: one payslip email per line, to the personal email on file. This is
-  // best-effort — a finalized run must stand even if every email fails, so
-  // sendPayslipsForRun never throws and any failure here is swallowed too.
+  // SA-5: the payslip email, to the personal email on file. Best-effort — a
+  // finalized run must stand even if the email fails, so sendPayslipsForRun
+  // never throws and any failure here is swallowed too.
   let payslips: Awaited<ReturnType<typeof sendPayslipsForRun>> = [];
   try {
     payslips = await sendPayslipsForRun(admin, run.id);
@@ -460,14 +571,14 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     run,
-    lines: lines.length,
+    line: row,
     payslips,
     cashShortagesMarked,
     ...(cashShortageMarkError ? { cashShortageMarkError } : {}),
   });
 }
 
-// PATCH { month, reason } — reverse a finalized run.
+// PATCH { month, user_id, reason } — reverse ONE staffer's finalized month.
 export async function PATCH(request: Request) {
   const owner = await getOwnerUser();
   if (!owner) return errorResponse(403, 'Owner access required');
@@ -476,8 +587,10 @@ export async function PATCH(request: Request) {
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
   const month = typeof body.month === 'string' ? body.month : '';
   const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+  const userId = typeof body.user_id === 'string' ? body.user_id : '';
   const bounds = monthBounds(month);
   if (!bounds) return errorResponse(400, 'month must look like 2026-08');
+  if (!userId) return errorResponse(400, 'user_id is required — payroll is reversed one staffer at a time.');
   if (!reason) return errorResponse(400, 'A reason is required to reverse a payroll run.');
 
   const admin = createAdminSupabaseClient();
@@ -492,19 +605,20 @@ export async function PATCH(request: Request) {
     })
     .eq('period_start', bounds.from)
     .eq('period_end', bounds.to)
+    .eq('user_id', userId)
     .eq('status', 'finalized')
     .select('*')
     .maybeSingle();
 
   if (error) return errorResponse(500, error.message);
-  if (!data) return errorResponse(404, 'No finalized run for that month.');
+  if (!data) return errorResponse(404, "That person's payroll isn't finalized for that month.");
   const run = data as PayrollRun;
 
   // CC-5: this run's shortages were marked payroll_run_id = run.id at
   // finalize so they'd never be deducted twice. Reversing without undoing
-  // that mark would strand them forever — no future month's compute would
-  // ever pick them up again (they're not "unconsumed" any more). Clear it so
-  // the next finalize (for this month or any other) re-includes them.
+  // that mark would strand them forever — no future compute would ever pick
+  // them up again (they're not "unconsumed" any more). Clear it so the next
+  // finalize re-includes them.
   let cashShortagesCleared = 0;
   let cashShortageClearError: string | null = null;
   try {

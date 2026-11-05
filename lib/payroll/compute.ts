@@ -28,6 +28,11 @@
 // Time beyond the contracted day is overtime at its own multiplier, priced
 // from the same per-minute rate.
 //
+// DEDUCTIONS ARE PROPOSALS. The late-mark half-days and an approved cash
+// shortage are worked out and reported (proposedDeductions), but nothing comes
+// off net pay unless the caller passes `apply` — the owner ticks each one per
+// staffer before finalizing. Earnings are never touched by this.
+//
 // TWO THINGS THAT WOULD SILENTLY DOUBLE-CHARGE SOMEONE, avoided deliberately:
 //
 //   * There is NO separate deduction for absence. An absent day already
@@ -38,7 +43,8 @@
 //   * Minutes are capped at the contracted day BEFORE they reach base pay, so
 //     an hour of overtime cannot be paid once as base and again as OT.
 //
-// MONEY: integer paise throughout, rounded exactly once, half-up, at net pay.
+// MONEY: integer paise throughout, rounded exactly once, half-up, at earnings
+// (base + OT + adjustments); any chosen deductions are whole rupees off that.
 // The standing assertion is that perfect attendance nets EXACTLY the monthly
 // salary — which is why base pay is computed as a RATIO of the salary rather
 // than by materialising a per-minute rate and multiplying back up. A rate
@@ -111,21 +117,31 @@ export interface PayrollLine {
   lateMarks: number;
   basePayInr: number;
   otPayInr: number;
+  /** The late-mark deduction ACTUALLY taken off net pay (0 unless chosen). */
   deductionsInr: number;
   adjustmentsInr: number;
   /**
-   * CC-5: approved, not-yet-consumed cash-drawer shortages (docs/PHASE-5-
-   * CASH-COUNTS.md) charged to this person for the month, in whole rupees.
-   * Already reflected in netPayInr — kept separate from deductionsInr because
-   * that field is specifically the lateness deduction (see the file header).
+   * CC-5: the approved cash-drawer shortage (docs/PHASE-5-CASH-COUNTS.md)
+   * ACTUALLY taken off net pay, in whole rupees (0 unless chosen). Kept
+   * separate from deductionsInr because that field is specifically lateness.
    */
   cashShortageInr: number;
   /**
-   * True when cashShortageInr was larger than what was left to pay, so net
-   * pay was clamped at 0 rather than going negative. Carrying the remainder
-   * into a future run is out of scope — this just flags that it happened.
+   * What the rules WOULD deduct, whether or not the owner chose to. Nothing
+   * is deducted on its own: these are shown, and the owner picks which ones
+   * to take at finalize.
    */
-  cashShortageClamped: boolean;
+  proposedDeductions: { lateInr: number; cashShortageInr: number };
+  /** Which proposals were actually taken (only ever true when the amount is > 0). */
+  appliedDeductions: { late: boolean; cashShortage: boolean };
+  /** Base + OT + adjustments, before either deduction. */
+  netBeforeDeductionsInr: number;
+  /**
+   * True when the chosen deductions were larger than what was left to pay, so
+   * net pay was clamped at 0 rather than going negative. Carrying the
+   * remainder into a future run is out of scope — this just flags it.
+   */
+  deductionsClamped: boolean;
   netPayInr: number;
   /** True when no employment record covered any day — report, never pay zero silently. */
   unconfigured: boolean;
@@ -134,23 +150,48 @@ export interface PayrollLine {
   segments: PayrollSegmentBreakdown[];
 }
 
-/**
- * Subtract a whole-rupee cash shortage from net pay, in paise, clamping at 0.
- * Shared by the unconfigured and employed branches so the clamp+warning rule
- * cannot drift between them.
- */
-function applyCashShortage(
-  netPaiseBeforeShortage: number,
-  cashShortageInr: number,
-): { netPaise: number; cashShortageClamped: boolean } {
-  const shortagePaise = Math.round(Math.max(0, cashShortageInr) * 100);
-  if (shortagePaise <= 0) return { netPaise: netPaiseBeforeShortage, cashShortageClamped: false };
-  const netPaiseRaw = netPaiseBeforeShortage - shortagePaise;
-  if (netPaiseRaw < 0) return { netPaise: 0, cashShortageClamped: true };
-  return { netPaise: netPaiseRaw, cashShortageClamped: false };
+/** Which proposed deductions the owner has chosen to take. Both default to NO. */
+export interface DeductionChoices {
+  /** Take the late-mark deduction off net pay. */
+  late?: boolean;
+  /** Take the approved cash shortage off net pay. */
+  cashShortage?: boolean;
 }
 
-/** Round half-up to whole rupees. Applied exactly once, to net pay. */
+/**
+ * Take the CHOSEN whole-rupee deductions off net pay, clamping at 0. Shared by
+ * the unconfigured and employed branches so the clamp rule cannot drift
+ * between them.
+ *
+ * Works in whole rupees on purpose: the screen previews "net if I tick this"
+ * as netBeforeDeductions − the ticked amounts, and that preview must be the
+ * exact number finalize then freezes — not a rupee off from rounding.
+ */
+function settleDeductions(
+  netBeforeDeductionsInr: number,
+  proposed: { lateInr: number; cashShortageInr: number },
+  choices: DeductionChoices,
+): Pick<
+  PayrollLine,
+  'deductionsInr' | 'cashShortageInr' | 'appliedDeductions' | 'netPayInr' | 'deductionsClamped'
+> {
+  const late = Boolean(choices.late) && proposed.lateInr > 0;
+  const cash = Boolean(choices.cashShortage) && proposed.cashShortageInr > 0;
+  const deductionsInr = late ? proposed.lateInr : 0;
+  const cashShortageInr = cash ? proposed.cashShortageInr : 0;
+  const taken = deductionsInr + cashShortageInr;
+  const raw = netBeforeDeductionsInr - taken;
+  const deductionsClamped = taken > 0 && raw < 0;
+  return {
+    deductionsInr,
+    cashShortageInr,
+    appliedDeductions: { late, cashShortage: cash },
+    netPayInr: deductionsClamped ? 0 : raw,
+    deductionsClamped,
+  };
+}
+
+/** Round half-up to whole rupees. */
 export function paiseToRupees(paise: number): number {
   return Math.sign(paise) * Math.round(Math.abs(paise) / 100);
 }
@@ -186,8 +227,14 @@ export function computePayrollLine(params: {
   adjustmentsInr?: number;
   /** CC-5: approved, unconsumed cash-drawer shortages for the month, whole rupees. */
   cashShortageInr?: number;
+  /**
+   * Which proposed deductions to actually take. Omitted = take NONE: every
+   * deduction is a proposal the owner confirms per staffer at finalize.
+   */
+  apply?: DeductionChoices;
 }): PayrollLine {
-  const { days, rules, adjustmentsInr = 0, cashShortageInr = 0 } = params;
+  const { days, rules, adjustmentsInr = 0, apply = {} } = params;
+  const proposedCashShortageInr = Math.max(0, Math.round(params.cashShortageInr ?? 0));
 
   const employed = days.filter((d) => d.employmentKey !== null);
   const blocked = days.some((d) => d.status === 'needs_approval');
@@ -208,17 +255,16 @@ export function computePayrollLine(params: {
   };
 
   if (employed.length === 0) {
-    const unconfigured = applyCashShortage(adjustmentsInr * 100, cashShortageInr);
+    const proposedDeductions = { lateInr: 0, cashShortageInr: proposedCashShortageInr };
     return {
       ...counts,
       ...totals,
       basePayInr: 0,
       otPayInr: 0,
-      deductionsInr: 0,
       adjustmentsInr,
-      cashShortageInr: Math.max(0, cashShortageInr),
-      cashShortageClamped: unconfigured.cashShortageClamped,
-      netPayInr: paiseToRupees(unconfigured.netPaise),
+      proposedDeductions,
+      netBeforeDeductionsInr: adjustmentsInr,
+      ...settleDeductions(adjustmentsInr, proposedDeductions, apply),
       unconfigured: true,
       blocked,
       segments: [],
@@ -273,8 +319,9 @@ export function computePayrollLine(params: {
     const perMinutePaise = expectedMinutes > 0 ? salaryPaise / expectedMinutes : 0;
     const segOtPaise = segOtMinutes * perMinutePaise * rules.otMultiplier;
 
-    // Late marks: every Nth one costs half a contracted day. This is the ONLY
-    // deduction — absence is already unpaid by virtue of contributing no
+    // Late marks: every Nth one PROPOSES half a contracted day's deduction —
+    // taken only if the owner chooses to at finalize. It is the only rule
+    // deduction: absence is already unpaid by virtue of contributing no
     // minutes, and deducting for it again would charge twice.
     const halfDays =
       rules.lateMarksPerHalfday > 0 ? Math.floor(segLateMarks / rules.lateMarksPerHalfday) : 0;
@@ -301,21 +348,24 @@ export function computePayrollLine(params: {
     });
   }
 
-  // Components are rounded for DISPLAY, but net pay is computed from the
-  // unrounded paise so the components cannot drift a rupee away from the total.
-  const netPaiseBeforeShortage = basePaise + otPaise - deductionPaise + adjustmentsInr * 100;
-  const { netPaise, cashShortageClamped } = applyCashShortage(netPaiseBeforeShortage, cashShortageInr);
+  // Earnings are summed in unrounded paise and rounded once, so base + OT
+  // cannot drift a rupee away from the total. The deductions are then whole
+  // rupees taken off that — see settleDeductions for why.
+  const netBeforeDeductionsInr = paiseToRupees(basePaise + otPaise + adjustmentsInr * 100);
+  const proposedDeductions = {
+    lateInr: paiseToRupees(deductionPaise),
+    cashShortageInr: proposedCashShortageInr,
+  };
 
   return {
     ...counts,
     ...totals,
     basePayInr: paiseToRupees(basePaise),
     otPayInr: paiseToRupees(otPaise),
-    deductionsInr: paiseToRupees(deductionPaise),
     adjustmentsInr,
-    cashShortageInr: Math.max(0, cashShortageInr),
-    cashShortageClamped,
-    netPayInr: paiseToRupees(netPaise),
+    proposedDeductions,
+    netBeforeDeductionsInr,
+    ...settleDeductions(netBeforeDeductionsInr, proposedDeductions, apply),
     unconfigured: false,
     blocked,
     segments,
