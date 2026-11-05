@@ -15,7 +15,7 @@
 //     punched out for their break, deducting a notional break on top charges
 //     them for it twice.
 
-import { istMinutesOfDay, parseTimeToMinutes } from '@/lib/attendance/businessDate';
+import { istBusinessDate, istMinutesOfDay, parseTimeToMinutes } from '@/lib/attendance/businessDate';
 
 export interface DayRules {
   gracePeriodMin: number;
@@ -24,6 +24,82 @@ export interface DayRules {
   autoBreakAfterMin: number;
   halfDayMinMinutes: number;
   absentBelowMinutes: number;
+  /** IST times the café's shifts begin. Defaults to CAFE_SHIFT_STARTS. */
+  shiftStartTimes?: string[];
+  /** How early a clock-in may be and still round up to a shift start. Defaults to EARLY_CLOCK_IN_ROUND_MIN. */
+  earlyClockInRoundMin?: number;
+}
+
+/**
+ * When the café's shifts begin, IST: the 10:00 opening (morning shift), the
+ * 10-hour 14:00 shift and the 9-hour 15:00 shift. The first is also opening
+ * time — nothing before it counts.
+ */
+export const CAFE_SHIFT_STARTS = ['10:00', '14:00', '15:00'];
+
+/** A clock-in up to this many minutes before a shift start counts from the start. */
+export const EARLY_CLOCK_IN_ROUND_MIN = 30;
+
+/**
+ * The instant a clock-in starts COUNTING from (the owner's rule):
+ *
+ *   * before opening (10:00) → 10:00, however early. The café isn't open.
+ *   * up to 30 minutes before a later shift start → that start. 13:58 counts
+ *     from 14:00, 14:58 from 15:00.
+ *   * anything else → the punch itself. Someone called in at 13:06 genuinely
+ *     started at 13:06.
+ *
+ * The rounding targets are the CAFÉ's shift starts, not just the staffer's own,
+ * because people swap: a 15:00 staffer covering the morning shift clocks in at
+ * 09:58 and must count from 10:00, not from 15:00.
+ *
+ * One exception, so rounding never costs someone twice: a clock-in that is
+ * already LATE for the staffer's own shift (after their own start but before
+ * the next café start) is left alone. A 14:00 staffer arriving at 14:40 is
+ * marked late; rounding them on to 15:00 as well would also dock 20 minutes
+ * they did work.
+ *
+ * Rounding only ever moves a start LATER and never past the clock-out, so it
+ * can shorten a day but cannot invent time.
+ */
+export function countedClockInMs(params: {
+  clockInAt: string;
+  clockOutAt: string | null;
+  ownShiftStart: string | null;
+  shiftStartTimes?: string[];
+  earlyClockInRoundMin?: number;
+}): number {
+  const inMs = Date.parse(params.clockInAt);
+  if (!Number.isFinite(inMs)) return inMs;
+
+  const starts = (params.shiftStartTimes ?? CAFE_SHIFT_STARTS)
+    .map(parseTimeToMinutes)
+    .filter((m): m is number => m !== null)
+    .sort((a, b) => a - b);
+  if (starts.length === 0) return inMs;
+
+  const windowMs = Math.max(0, params.earlyClockInRoundMin ?? EARLY_CLOCK_IN_ROUND_MIN) * 60_000;
+  const dayStartMs = Date.parse(`${istBusinessDate(inMs)}T00:00:00+05:30`);
+  const at = (minutes: number) => dayStartMs + minutes * 60_000;
+
+  let target: number | null = null;
+  if (inMs < at(starts[0])) {
+    target = at(starts[0]);
+  } else {
+    const own = params.ownShiftStart ? parseTimeToMinutes(params.ownShiftStart) : null;
+    if (own !== null) {
+      const nextAfterOwn = starts.find((s) => s > own);
+      const lateForOwn = inMs >= at(own) && (nextAfterOwn === undefined || inMs < at(nextAfterOwn));
+      if (lateForOwn) return inMs;
+    }
+    const next = starts.find((s) => at(s) > inMs);
+    if (next !== undefined && at(next) - inMs <= windowMs) target = at(next);
+  }
+
+  if (target === null) return inMs;
+  const outMs = params.clockOutAt ? Date.parse(params.clockOutAt) : NaN;
+  if (Number.isFinite(outMs) && target >= outMs) return inMs;
+  return target;
 }
 
 export interface DayEmployment {
@@ -60,8 +136,10 @@ export interface DayRollup {
   status: DayStatus;
   /** Minutes that COUNT, after merging overlaps and deducting any auto-break. */
   workedMinutes: number;
-  /** Before the auto-break deduction — what the punches literally say. */
+  /** Before rounding and the auto-break — what the punches literally say. */
   rawMinutes: number;
+  /** Minutes of an early first clock-in that don't count (rounded up to the shift start). */
+  earlyMinutes: number;
   autoBreakMinutes: number;
   /** Minutes beyond the contracted day (or all of them on a weekly off, D5-5). */
   otMinutes: number;
@@ -145,6 +223,7 @@ export function rollUpDay(params: {
     status: 'absent',
     workedMinutes: 0,
     rawMinutes: 0,
+    earlyMinutes: 0,
     autoBreakMinutes: 0,
     otMinutes: 0,
     lateMinutes: 0,
@@ -166,7 +245,15 @@ export function rollUpDay(params: {
     (s) => s.status === 'open' || (s.status === 'auto_closed' && !s.approvedAt),
   );
 
+  // Only the day's FIRST clock-in is rounded up to a shift start — coming back
+  // from a break at 14:58 is not "arriving early for the 15:00 shift".
+  const firstSession = live.reduce<DaySession | null>(
+    (first, s) => (!first || Date.parse(s.clockInAt) < Date.parse(first.clockInAt) ? s : first),
+    null,
+  );
+
   const intervals: Interval[] = [];
+  const counted: Interval[] = [];
   for (const s of live) {
     if (!s.clockOutAt) continue;
     const start = Date.parse(s.clockInAt);
@@ -176,19 +263,34 @@ export function rollUpDay(params: {
     // interval set — otherwise "needs approval" would still quietly pay.
     if (s.status === 'auto_closed' && !s.approvedAt) continue;
     intervals.push({ start, end });
+    const countedStart =
+      s === firstSession
+        ? countedClockInMs({
+            clockInAt: s.clockInAt,
+            clockOutAt: s.clockOutAt,
+            ownShiftStart: employment.shiftStartTime,
+            shiftStartTimes: rules.shiftStartTimes,
+            earlyClockInRoundMin: rules.earlyClockInRoundMin,
+          })
+        : start;
+    if (countedStart < end) counted.push({ start: countedStart, end });
   }
 
   const { merged, hadOverlap } = mergeIntervals(intervals);
   if (hadOverlap) flags.push('overlapping_sessions');
 
-  const rawMinutes = Math.round(merged.reduce((acc, i) => acc + (i.end - i.start), 0) / 60_000);
+  const minutesIn = (list: Interval[]) =>
+    Math.round(list.reduce((acc, i) => acc + (i.end - i.start), 0) / 60_000);
+  const rawMinutes = minutesIn(merged);
+  const countedMinutes = minutesIn(mergeIntervals(counted).merged);
+  const earlyMinutes = Math.max(0, rawMinutes - countedMinutes);
 
   // Auto-break: single-session days only (see the header note).
   const autoBreakMinutes =
-    live.length === 1 && rules.autoBreakMin > 0 && rawMinutes > rules.autoBreakAfterMin
-      ? Math.min(rules.autoBreakMin, rawMinutes)
+    live.length === 1 && rules.autoBreakMin > 0 && countedMinutes > rules.autoBreakAfterMin
+      ? Math.min(rules.autoBreakMin, countedMinutes)
       : 0;
-  const workedMinutes = Math.max(0, rawMinutes - autoBreakMinutes);
+  const workedMinutes = Math.max(0, countedMinutes - autoBreakMinutes);
 
   const starts = live.map((s) => Date.parse(s.clockInAt)).filter(Number.isFinite);
   const ends = live
@@ -239,6 +341,7 @@ export function rollUpDay(params: {
     status: 'absent',
     workedMinutes: payable,
     rawMinutes,
+    earlyMinutes,
     autoBreakMinutes,
     otMinutes: unresolved ? 0 : otMinutes,
     lateMinutes,
