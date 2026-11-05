@@ -1277,6 +1277,11 @@ async function checkCashCounts() {
   if (line.ok) pass('payroll_run_lines.cash_shortage_inr exists');
   else fail('payroll_run_lines.cash_shortage_inr exists', errKind(line) === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(line));
 
+  // Payroll is finalized per staffer: the per-staff code writes payroll_runs.user_id.
+  const perStaff = await rest('/payroll_runs?select=user_id&limit=1');
+  if (perStaff.ok) pass('payroll_runs.user_id exists (payroll finalized per staffer)');
+  else fail('payroll_runs.user_id exists (payroll finalized per staffer)', errKind(perStaff) === 'no_column' ? 'apply supabase/2026-11-payroll-per-staff.sql' : errText(perStaff));
+
   for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages']) {
     const r = await rest(`/${table}?select=id&limit=1`);
     if (!r.ok) {

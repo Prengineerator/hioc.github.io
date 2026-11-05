@@ -1000,6 +1000,11 @@ export interface PayrollRun {
   id: string;
   period_start: string;
   period_end: string;
+  /**
+   * Whose run it is — payroll is finalized per staffer
+   * (supabase/2026-11-payroll-per-staff.sql). Null only on reversed history.
+   */
+  user_id: string | null;
   status: PayrollRunStatus;
   /** The rules and rates actually used, frozen at finalize (PAY-4). */
   rules_snapshot: Record<string, unknown>;
@@ -1065,13 +1070,17 @@ export interface PayrollRunLine {
   late_marks: number;
   base_pay_inr: number;
   ot_pay_inr: number;
+  /**
+   * The late-mark deduction the owner CHOSE to take (0 when they didn't). The
+   * proposed amount, taken or not, is in detail.proposed_deductions.
+   */
   deductions_inr: number;
   /** Signed: advances/loans/corrections (D5-7). Negative reduces net pay. */
   adjustments_inr: number;
   /**
-   * CC-5 (docs/PHASE-5-CASH-COUNTS.md): approved cash-drawer shortages frozen
-   * into this run, already reflected in net_pay_inr (clamped at 0, never
-   * negative — see detail.cash_shortage_clamped for whether it was clamped).
+   * CC-5 (docs/PHASE-5-CASH-COUNTS.md): the approved cash-drawer shortage the
+   * owner CHOSE to deduct (0 when they didn't), already reflected in
+   * net_pay_inr (clamped at 0, never negative — see detail.deductions_clamped).
    */
   cash_shortage_inr: number;
   net_pay_inr: number;
