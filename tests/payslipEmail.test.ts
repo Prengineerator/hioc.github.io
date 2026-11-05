@@ -76,19 +76,111 @@ describe('renderPayslipEmail', () => {
     expect(text).toContain('Hours worked: 9h 30m');
   });
 
-  it('omits OT and late-mark lines when there are none, and shows them when present', () => {
-    const clean = renderPayslipEmail(line(), run, 'Ravi').text;
-    expect(clean).not.toMatch(/Overtime/);
-    expect(clean).not.toMatch(/Late marks/);
-
-    const withOt = renderPayslipEmail(
-      line({ ot_minutes: 90, ot_pay_inr: 500, late_marks: 2 }),
+  it('never breaks out overtime or late marks — one pay line for all hours worked', () => {
+    const { html, text } = renderPayslipEmail(
+      line({ worked_minutes: 600, ot_minutes: 90, base_pay_inr: 24_000, ot_pay_inr: 500, late_marks: 2, net_pay_inr: 24_500 }),
       run,
       'Ravi',
-    ).text;
-    expect(withOt).toContain('Overtime: 1h 30m');
-    expect(withOt).toContain('Overtime pay: ₹500');
-    expect(withOt).toContain('Late marks: 2');
+    );
+    for (const out of [html, text]) {
+      expect(out).not.toMatch(/Overtime/i);
+      expect(out).not.toMatch(/Late marks/i);
+      expect(out).not.toMatch(/Base pay/);
+    }
+    // Older runs without the frozen pre-deduction total fall back to base + OT.
+    expect(text).toContain('Pay for hours worked (10h 0m): ₹24,500');
+  });
+
+  it('takes the pay line from the frozen pre-deduction total so it adds up to net', () => {
+    const { text } = renderPayslipEmail(
+      line({
+        base_pay_inr: 18_163,
+        ot_pay_inr: 3_990,
+        deductions_inr: 369,
+        adjustments_inr: -500,
+        net_pay_inr: 21_284,
+        detail: { net_before_deductions_inr: 21_653, adjustment_reason: 'Advance' },
+      }),
+      run,
+      'Umesh Kumar',
+    );
+    // 22,153 earned − 500 advance − 369 lateness = 21,284.
+    expect(text).toContain('₹22,153');
+    expect(text).toContain('Deductions (lateness): −₹369');
+    expect(text).toContain('Adjustment — Advance: −₹500');
+    expect(text).toContain('Net pay: ₹21,284');
+  });
+
+  it('lists every day with its counted clock-in, clock-out and hours, in IST', () => {
+    const { html, text } = renderPayslipEmail(
+      line({
+        worked_minutes: 648 + 549,
+        detail: {
+          days: [
+            // 09:59 punch rounded to 10:00 IST; out 20:47:51 IST shows as 20:48.
+            { date: '2026-10-03', status: 'present', worked: 648, in: '2026-10-03T04:30:00.000Z', out: '2026-10-03T15:17:51.384Z' },
+            // Shift past midnight: 15:03:02 → 00:11:54 IST shows as 15:03 → 00:12.
+            { date: '2026-10-01', status: 'present', worked: 549, in: '2026-10-01T09:33:02.786Z', out: '2026-10-01T18:41:54.113Z' },
+            { date: '2026-10-23', status: 'absent', worked: 0, in: null, out: null },
+            { date: '2026-10-07', status: 'weekly_off', worked: 0, in: null, out: null },
+            { date: '2026-09-30', status: 'not_employed', worked: 0, in: null, out: null },
+          ],
+        },
+      }),
+      run,
+      'Umesh',
+    );
+    expect(text).toContain('Day by day:');
+    // Each row adds up: in – out = the hours counted.
+    expect(text).toContain('Sat 3 Oct: 10:00 – 20:48 = 10h 48m');
+    expect(text).toContain('Thu 1 Oct: 15:03 – 00:12 = 9h 9m');
+    expect(text).toContain('Fri 23 Oct: Absent');
+    expect(text).toContain('Wed 7 Oct: Weekly off');
+    expect(text).not.toContain('30 Sept');
+    expect(text).toContain('Total: 19h 57m');
+    expect(html).toContain('Day by day');
+    expect(html).toContain('20:48');
+  });
+
+  it('makes every row add up even when rounding the two ends separately would not', () => {
+    // 15:02:17 → 00:09:33 IST is 9h 7m 16s, counted as 9h 7m. Rounding each end
+    // alone would print 15:02 → 00:10 (9h 8m).
+    const { text } = renderPayslipEmail(
+      line({
+        worked_minutes: 547,
+        detail: {
+          days: [
+            { date: '2026-10-10', status: 'present', worked: 547, in: '2026-10-10T09:32:16.945Z', out: '2026-10-10T18:39:32.646Z' },
+          ],
+        },
+      }),
+      run,
+      'Umesh',
+    );
+    expect(text).toContain('Sat 10 Oct: 15:02 – 00:09 = 9h 7m');
+  });
+
+  it('keeps the real last clock-out on a day with a break, rather than inventing one', () => {
+    // 10:00 → 19:00 with an hour's break: 8h counted.
+    const { text } = renderPayslipEmail(
+      line({
+        worked_minutes: 480,
+        detail: {
+          days: [
+            { date: '2026-10-05', status: 'present', worked: 480, in: '2026-10-05T04:30:00.000Z', out: '2026-10-05T13:30:00.000Z' },
+          ],
+        },
+      }),
+      run,
+      'Ravi',
+    );
+    expect(text).toContain('Mon 5 Oct: 10:00 – 19:00 = 8h 0m');
+  });
+
+  it('leaves the day-by-day table out for a run frozen before it existed', () => {
+    const { html, text } = renderPayslipEmail(line({ detail: {} }), run, 'Ravi');
+    expect(text).not.toContain('Day by day');
+    expect(html).not.toContain('Day by day');
   });
 
   it('shows deductions as a negative amount', () => {

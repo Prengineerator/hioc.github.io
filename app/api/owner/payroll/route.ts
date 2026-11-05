@@ -92,6 +92,9 @@ function isMissingRelation(error: { code?: string; message?: string } | null | u
   return /relation .* does not exist|could not find the table|schema cache/i.test(error.message ?? '');
 }
 
+/** A priced day plus the clock times the payslip's day-by-day table shows. */
+type PayrollDay = PayrollDayInput & { firstIn: string | null; lastOut: string | null };
+
 async function computePeriod(month: string) {
   const bounds = monthBounds(month)!;
   const admin = createAdminSupabaseClient();
@@ -161,7 +164,7 @@ async function computePeriod(month: string) {
   const dates = eachDate(bounds.from, bounds.to);
 
   const lines = people.map((person) => {
-    const dayInputs: PayrollDayInput[] = dates.map((date) => {
+    const dayInputs: PayrollDay[] = dates.map((date) => {
       const raw = byUserDate.get(key(person.id, date)) ?? [];
       const daySessions: DaySession[] = raw.map((s) => ({
         id: s.id,
@@ -196,6 +199,10 @@ async function computePeriod(month: string) {
         employmentKey: record?.id ?? null,
         monthlySalaryInr: record?.monthly_salary_inr ?? 0,
         contractedHoursPerDay: record ? Number(record.contracted_hours_per_day) : 0,
+        // For the payslip's day-by-day table: when the day started counting
+        // (after early-clock-in rounding) and the last clock-out.
+        firstIn: rollup.countedFirstIn,
+        lastOut: rollup.lastOut,
       };
     });
 
@@ -422,6 +429,9 @@ function runLineRow(
         worked: d.workedMinutes,
         ot: d.otMinutes,
         late: d.isLate,
+        // ISO instants; the payslip renders them in IST.
+        in: d.firstIn,
+        out: d.lastOut,
       })),
     },
   };
