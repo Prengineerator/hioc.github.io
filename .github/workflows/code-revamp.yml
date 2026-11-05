@@ -47,9 +47,12 @@ on:
         type: choice
         options: [fix, audit]
         default: fix
-  schedule:
-    # Mondays 03:40 UTC = 09:10 IST, before the cafe opens. Audit only.
-    - cron: '40 3 * * 1'
+  # The weekly audit is paused during the Servly restructure
+  # (docs/REPO-PLAN.md Q11): its findings would target paths that are
+  # moving. "Run workflow" still works. To resume, restore:
+  # schedule:
+  #   # Mondays 03:40 UTC = 09:10 IST, before the cafe opens. Audit only.
+  #   - cron: '40 3 * * 1'
   pull_request:
     paths:
       - 'app/**'
