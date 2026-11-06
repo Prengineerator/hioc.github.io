@@ -35,10 +35,14 @@ const state: {
   tables: Record<string, Row[]>;
   rpcCalls: { name: string; args: Row }[];
   rpcResult: { data: unknown; error: { message: string; code?: string } | null };
+  /** Answers for the next rpc calls, in order; rpcResult once it runs out. */
+  rpcQueue: { data: unknown; error: { message: string; code?: string } | null }[];
   updates: { table: string; patch: Row; filters: [string, string, unknown][] }[];
   menuEdit: boolean;
   /** Make the ranged read of `table` that starts at row `from` fail (a later page). */
   failRange: { table: string; from: number } | null;
+  /** Columns a table doesn't have yet (a migration not applied): selecting one answers 42703. */
+  missingColumns: Record<string, string[]>;
 } = {
   flag: true,
   actor: null,
@@ -49,9 +53,11 @@ const state: {
   tables: {},
   rpcCalls: [],
   rpcResult: { data: null, error: null },
+  rpcQueue: [],
   updates: [],
   menuEdit: true,
   failRange: null,
+  missingColumns: {},
 };
 
 /** PostgREST's default cap on the rows one request returns. */
@@ -79,13 +85,14 @@ function makeAdmin() {
   return {
     rpc: (name: string, args: Row) => {
       state.rpcCalls.push({ name, args });
-      return Promise.resolve(state.rpcResult);
+      return Promise.resolve(state.rpcQueue.shift() ?? state.rpcResult);
     },
     from: (table: string) => {
       const filters: [string, string, unknown][] = [];
       let patch: Row | null = null;
       let ordered = false;
       let window: [number, number] | null = null;
+      let selected = '';
       const rows = (): Row[] => {
         if (table === 'stock_requests') return state.tables.stock_requests ?? (state.request ? [state.request] : []);
         if (table === 'inventory_items') return state.items;
@@ -107,7 +114,10 @@ function makeAdmin() {
           ),
         );
       const chain: Record<string, unknown> = {
-        select: () => chain,
+        select: (cols?: string) => {
+          selected = cols ?? '';
+          return chain;
+        },
         order: () => {
           ordered = true;
           return chain;
@@ -154,6 +164,11 @@ function makeAdmin() {
         },
         then: (resolve: (v: unknown) => void) => {
           if (patch) state.updates.push({ table, patch, filters: [...filters] });
+          const missing = (state.missingColumns[table] ?? []).find((c) => selected.split(',').map((x) => x.trim()).includes(c));
+          if (missing) {
+            resolve({ data: null, error: { message: `column ${table}.${missing} does not exist`, code: '42703' } });
+            return;
+          }
           if (state.failRange && state.failRange.table === table && window?.[0] === state.failRange.from) {
             resolve({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } });
             return;
@@ -198,6 +213,7 @@ beforeEach(() => {
   ];
   state.tables = {};
   state.failRange = null;
+  state.missingColumns = {};
   state.profiles = [
     { id: MANAGER, name: 'Boss', role: 'manager' },
     { id: ASHA, name: 'Asha', role: 'staff' },
@@ -214,6 +230,7 @@ beforeEach(() => {
   };
   state.rpcCalls = [];
   state.rpcResult = { data: null, error: null };
+  state.rpcQueue = [];
   state.updates = [];
   state.menuEdit = true;
   sendStockAssignedEmail.mockClear();
@@ -404,29 +421,156 @@ describe('cancel', () => {
   });
 });
 
-describe('POST /api/inventory/receipts — a delivery with no request', () => {
-  const body = { lines: [{ itemId: MILK, qty: 5, expiryDate: '2026-10-01' }] };
+describe('POST /api/inventory/receipts — stock from a vendor, no request', () => {
+  const lines = [{ itemId: MILK, qty: 5, expiryDate: '2026-10-01' }];
+  const body = { vendor: 'Sharma Dairy', billRef: '1043', note: 'Paid cash', lines };
+  const post = (b: unknown) => receiptsRoute.POST(json('/api/inventory/receipts', 'POST', b));
+  const atPos = () => {
+    state.actor = as(MANAGER, 'manager');
+    state.device = { id: DEVICE };
+  };
 
   it('is for a manager', async () => {
     state.actor = as(MEERA);
     state.device = { id: DEVICE };
-    expect((await receiptsRoute.POST(json('/api/inventory/receipts', 'POST', body))).status).toBe(403);
+    expect((await post(body)).status).toBe(403);
+    expect(state.rpcCalls).toEqual([]);
   });
 
   it('is at the POS only', async () => {
     state.actor = as(MANAGER, 'manager');
-    expect((await receiptsRoute.POST(json('/api/inventory/receipts', 'POST', body))).status).toBe(403);
+    expect((await post(body)).status).toBe(403);
+    expect(state.rpcCalls).toEqual([]);
   });
 
-  it('receives with no request id', async () => {
-    state.actor = as(MANAGER, 'manager');
-    state.device = { id: DEVICE };
-    const res = await receiptsRoute.POST(json('/api/inventory/receipts', 'POST', body));
-    expect(res.status).toBe(201);
-    expect(state.rpcCalls[0]).toEqual({
-      name: 'inventory_receive',
-      args: { p_request_id: null, p_actor: MANAGER, p_device_id: DEVICE, p_lines: [{ item_id: MILK, qty: 5, expiry_date: '2026-10-01' }] },
+  it('needs the vendor’s name, before anything reaches the database', async () => {
+    atPos();
+    for (const vendor of [undefined, '', '   ', 'A', 42]) {
+      const res = await post({ ...body, vendor });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/vendor/i);
+    }
+    expect(state.rpcCalls).toEqual([]);
+  });
+
+  it('refuses an over-long vendor, bill number or note', async () => {
+    atPos();
+    expect((await post({ ...body, vendor: 'x'.repeat(81) })).status).toBe(400);
+    expect((await post({ ...body, billRef: 'x'.repeat(41) })).status).toBe(400);
+    expect((await post({ ...body, note: 'x'.repeat(201) })).status).toBe(400);
+    expect(state.rpcCalls).toEqual([]);
+  });
+
+  it('still demands the expiry date of a perishable', async () => {
+    atPos();
+    const res = await post({ ...body, lines: [{ itemId: MILK, qty: 5 }] });
+    expect(res.status).toBe(400);
+    expect(state.rpcCalls).toEqual([]);
+  });
+
+  it('receives through inventory_receive_vendor, with the vendor, bill and note trimmed', async () => {
+    atPos();
+    const res = await post({
+      vendor: '  Sharma Dairy ',
+      billRef: ' 1043 ',
+      note: 'Paid cash ',
+      lines: [...lines, { itemId: CUPS, qty: 0 }],
     });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ ok: true, batches: 1, vendorRecorded: true });
+    expect(state.rpcCalls).toEqual([
+      {
+        name: 'inventory_receive_vendor',
+        args: {
+          p_actor: MANAGER,
+          p_device_id: DEVICE,
+          p_supplier: 'Sharma Dairy',
+          p_bill_ref: '1043',
+          p_note: 'Paid cash',
+          p_lines: [{ item_id: MILK, qty: 5, expiry_date: '2026-10-01' }],
+        },
+      },
+    ]);
+  });
+
+  it('sends empty strings for a missing bill number and note', async () => {
+    atPos();
+    expect((await post({ vendor: 'Sharma Dairy', lines })).status).toBe(201);
+    expect(state.rpcCalls[0].args).toMatchObject({ p_bill_ref: '', p_note: '' });
+  });
+
+  it('falls back to inventory_receive before the vendor migration, so the stock still goes in', async () => {
+    vi.spyOn(console, 'warn').mockImplementationOnce(() => {});
+    atPos();
+    state.rpcQueue = [
+      { data: null, error: { code: 'PGRST202', message: 'Could not find the function public.inventory_receive_vendor' } },
+      { data: { batches: 1 }, error: null },
+    ];
+    const res = await post(body);
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({ ok: true, batches: 1, vendorRecorded: false });
+    expect(state.rpcCalls.map((c) => c.name)).toEqual(['inventory_receive_vendor', 'inventory_receive']);
+    expect(state.rpcCalls[1].args).toEqual({
+      p_request_id: null,
+      p_actor: MANAGER,
+      p_device_id: DEVICE,
+      p_lines: [{ item_id: MILK, qty: 5, expiry_date: '2026-10-01' }],
+    });
+  });
+
+  it('falls back on Postgres’s own "function does not exist" too', async () => {
+    vi.spyOn(console, 'warn').mockImplementationOnce(() => {});
+    atPos();
+    state.rpcQueue = [{ data: null, error: { code: '42883', message: 'function inventory_receive_vendor does not exist' } }];
+    expect((await post(body)).status).toBe(201);
+    expect(state.rpcCalls.map((c) => c.name)).toEqual(['inventory_receive_vendor', 'inventory_receive']);
+  });
+
+  it('answers the database function’s own refusal as a 409, without falling back', async () => {
+    atPos();
+    state.rpcQueue = [{ data: null, error: { code: 'P0001', message: "inventory: enter the vendor's name" } }];
+    const res = await post(body);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("Enter the vendor's name");
+    expect(state.rpcCalls.map((c) => c.name)).toEqual(['inventory_receive_vendor']);
+  });
+});
+
+describe('GET /api/inventory/items — the vendor on a batch', () => {
+  const batch = (extra: Row = {}) => ({
+    id: '00000000-0000-4000-8000-0000000000c1',
+    item_id: CUPS,
+    qty_received: 100,
+    qty_remaining: 100,
+    expiry_date: null,
+    received_at: '2026-09-20T05:00:00Z',
+    source: 'receive',
+    ...extra,
+  });
+
+  it('shows who delivered each batch', async () => {
+    state.actor = as(ASHA);
+    state.tables = { inventory_batches: [batch({ supplier: 'Sharma Dairy' })] };
+    const res = await itemsRoute.GET();
+    expect(res.status).toBe(200);
+    const cups = (await res.json()).items.find((i: { id: string }) => i.id === CUPS);
+    expect(cups.batches[0]).toMatchObject({ supplier: 'Sharma Dairy', qtyRemaining: 100 });
+  });
+
+  it('still loads the Stock screen before the vendor migration', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      state.actor = as(ASHA);
+      state.missingColumns = { inventory_batches: ['supplier'] };
+      state.tables = { inventory_batches: [batch()] };
+      const res = await itemsRoute.GET();
+      expect(res.status).toBe(200);
+      const cups = (await res.json()).items.find((i: { id: string }) => i.id === CUPS);
+      expect(cups.batches[0]).toMatchObject({ supplier: '', qtyRemaining: 100 });
+      expect(cups.onHand).toBe(100);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

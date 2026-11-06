@@ -54,6 +54,11 @@
 #      shortfall rather than a refusal), count-in at the store, each
 #      settlement, a return and its settlements, counts and write-offs — and
 #      the grants, in one rolled-back transaction.
+#      (5e) Stock from vendor (supabase/2026-11-vendor-stock-in.sql, applied
+#      strictly twice after the warehouse file): a delivery keeps the vendor on
+#      its batches and in the ledger's reason, a 0 line adds nothing, each
+#      refusal (no vendor, nothing to receive, a perishable with no expiry)
+#      changes nothing, and the grants.
 #   6. With --seed <file.sql> (a generated seed.sql: `select
 #      inventory_apply_book(...)`): applies that seed twice with ON_ERROR_STOP=1
 #      and prints what it loaded. The harness assumes nothing about the seed's
@@ -298,7 +303,7 @@ step "3/6" "Applying supabase/*.sql (tolerant pass), then the inventory migratio
 TOLERANT_FILES=(supabase/schema.sql supabase/phase1-migration.sql supabase/phase2-migration.sql supabase/phase2-hardening.sql supabase/phase3-migration.sql supabase/security-rls-fix.sql)
 while IFS= read -r f; do
   case "$(basename "$f" .sql)" in
-    2026-10-inventory|2026-10-inventory-addon-scopes|2026-10-inventory-apply-book|2026-10-inventory-seed*|2026-11-warehouse) continue ;;  # strict pass / seeds
+    2026-10-inventory|2026-10-inventory-addon-scopes|2026-10-inventory-apply-book|2026-10-inventory-seed*|2026-11-warehouse|2026-11-vendor-stock-in) continue ;;  # strict pass / seeds
   esac
   TOLERANT_FILES+=("$f")
 done < <(ls supabase/2026-*.sql 2>/dev/null | LC_ALL=C sort)
@@ -378,6 +383,10 @@ fi
 # goes after them. Its assertions are step 5d.
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse.sql applies cleanly (fresh)" supabase/2026-11-warehouse.sql || STRICT_OK=0; }
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse.sql re-applies cleanly (idempotent)" supabase/2026-11-warehouse.sql || STRICT_OK=0; }
+
+# Stock from vendor (INV-D14): the vendor on a direct delivery. Assertions: 5e.
+[ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-vendor-stock-in.sql applies cleanly (fresh)" supabase/2026-11-vendor-stock-in.sql || STRICT_OK=0; }
+[ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-vendor-stock-in.sql re-applies cleanly (idempotent)" supabase/2026-11-vendor-stock-in.sql || STRICT_OK=0; }
 
 # ── [4/6] The live menu ──────────────────────────────────────────────────────
 MENU_OK=0
@@ -1592,6 +1601,96 @@ SQL
   run_assertions "" "$BASE/warehouse.sql"
 else
   step "5d/6" "The warehouse — skipped (the migrations or the menu did not load)"
+fi
+
+# ── [5e/6] Stock from vendor ─────────────────────────────────────────────────
+# supabase/2026-11-vendor-stock-in.sql (docs/INVENTORY-SPEC.md, INV-D14), after
+# 5b/5d re-ran the older files: the column must still be there. One rolled-back
+# transaction; each refusal runs in its own sub-transaction and must change
+# nothing.
+if [ $MENU_OK = 1 ]; then
+  step "5e/6" "Assertions: stock from vendor (2026-11-vendor-stock-in.sql)"
+  apply_strict "supabase/2026-11-vendor-stock-in.sql re-applies cleanly after the other files are re-run" supabase/2026-11-vendor-stock-in.sql
+  { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/vendor.sql"
+create function smoke.v_on_hand(p uuid) returns numeric language sql as $$
+  select coalesce(sum(qty_remaining), 0) from inventory_batches where item_id = p $$;
+
+do $$
+declare
+  v_mgr uuid := gen_random_uuid();
+  v_milk uuid; v_cups uuid;
+  v_res jsonb; v_n int; v_t text;
+  d0 date := current_date;
+begin
+  insert into auth.users (id) values (v_mgr);
+  insert into inventory_items (name, unit, tracks_expiry) values ('Vendor smoke milk', 'l', true) returning id into v_milk;
+  insert into inventory_items (name, unit, tracks_expiry) values ('Vendor smoke cups', 'pcs', false) returning id into v_cups;
+
+  v_res := inventory_receive_vendor(v_mgr, null, '  Sharma Dairy ', ' 1043 ', 'Paid cash', jsonb_build_array(
+    jsonb_build_object('item_id', v_milk, 'qty', 12, 'expiry_date', (d0 + 4)::text),
+    jsonb_build_object('item_id', v_cups, 'qty', 0)));
+  perform smoke.expect('a vendor delivery answers how many batches it added', (v_res->>'batches')::int = 1, v_res::text);
+  perform smoke.expect('...the stock went up by what arrived', smoke.v_on_hand(v_milk) = 12 and smoke.v_on_hand(v_cups) = 0,
+    format('milk %s, cups %s', smoke.v_on_hand(v_milk), smoke.v_on_hand(v_cups)));
+  select supplier into v_t from inventory_batches where item_id = v_milk;
+  perform smoke.expect('...the batch keeps the vendor''s name, trimmed', v_t = 'Sharma Dairy', v_t);
+  perform smoke.expect('...as an ordinary delivery: source receive, no request, with its expiry',
+    (select source = 'receive' and request_id is null and expiry_date = d0 + 4 and received_by = v_mgr from inventory_batches where item_id = v_milk));
+  select reason into v_t from inventory_movements where item_id = v_milk and kind = 'receive';
+  perform smoke.expect('...the ledger says who sold it and on which bill', v_t = 'Vendor: Sharma Dairy · Bill 1043 · Paid cash', v_t);
+  perform smoke.expect('...a line of 0 wrote nothing', not exists (select 1 from inventory_movements where item_id = v_cups));
+
+  perform inventory_receive_vendor(v_mgr, null, 'Bakery', '', '  ', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 50)));
+  select reason into v_t from inventory_movements where item_id = v_cups and kind = 'receive';
+  perform smoke.expect('a delivery with no bill number or note leaves them out of the reason', v_t = 'Vendor: Bakery', v_t);
+  perform smoke.expect('...and other batches keep supplier ''''',
+    not exists (select 1 from inventory_batches where supplier is null));
+
+  -- Refusals: nothing is written.
+  select count(*) into v_n from inventory_batches;
+  begin
+    perform inventory_receive_vendor(v_mgr, null, '   ', '', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 1)));
+    perform smoke.expect('a blank vendor is refused', false, 'it was accepted');
+  exception when others then
+    perform smoke.expect('a blank vendor is refused', sqlerrm like 'inventory: enter the vendor%', sqlerrm);
+  end;
+  begin
+    perform inventory_receive_vendor(v_mgr, null, 'Bakery', '', '', '[]'::jsonb);
+    perform smoke.expect('an empty delivery is refused', false, 'it was accepted');
+  exception when others then
+    perform smoke.expect('an empty delivery is refused', sqlerrm like 'inventory: nothing to receive%', sqlerrm);
+  end;
+  begin
+    perform inventory_receive_vendor(v_mgr, null, 'Bakery', '', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', 0)));
+    perform smoke.expect('a delivery of only zeros is refused', false, 'it was accepted');
+  exception when others then
+    perform smoke.expect('a delivery of only zeros is refused', sqlerrm like 'inventory: nothing to receive%', sqlerrm);
+  end;
+  begin
+    perform inventory_receive_vendor(v_mgr, null, 'Sharma Dairy', '', '', jsonb_build_array(jsonb_build_object('item_id', v_milk, 'qty', 3)));
+    perform smoke.expect('a perishable with no expiry date is refused', false, 'it was accepted');
+  exception when others then
+    perform smoke.expect('a perishable with no expiry date is refused', sqlerrm like 'inventory: enter the expiry date for Vendor smoke milk%', sqlerrm);
+  end;
+  begin
+    perform inventory_receive_vendor(v_mgr, null, 'Sharma Dairy', '', '', jsonb_build_array(jsonb_build_object('item_id', v_cups, 'qty', -1)));
+    perform smoke.expect('a negative quantity is refused', false, 'it was accepted');
+  exception when others then
+    perform smoke.expect('a negative quantity is refused', sqlerrm like 'inventory: a received quantity cannot be negative%', sqlerrm);
+  end;
+  perform smoke.expect('...and the refusals wrote nothing', (select count(*) from inventory_batches) = v_n);
+
+  perform smoke.expect('anon and authenticated cannot run inventory_receive_vendor; the service role can',
+    not has_function_privilege('anon', 'inventory_receive_vendor(uuid, uuid, text, text, text, jsonb)', 'execute')
+    and not has_function_privilege('authenticated', 'inventory_receive_vendor(uuid, uuid, text, text, text, jsonb)', 'execute')
+    and has_function_privilege('service_role', 'inventory_receive_vendor(uuid, uuid, text, text, text, jsonb)', 'execute'));
+exception when others then
+  perform smoke.expect('the vendor walk-through ran to the end', false, sqlerrm);
+end $$;
+SQL
+  run_assertions "" "$BASE/vendor.sql"
+else
+  step "5e/6" "Stock from vendor — skipped (the migrations or the menu did not load)"
 fi
 
 # ── [6/6] Optional: a recipe-book seed ───────────────────────────────────────

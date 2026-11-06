@@ -117,3 +117,27 @@ Two things to check while you are talking to them: whether the API is included i
 - **Q2** — Does the cafe want a **cash drawer** that opens on settle? It is the cheapest single trigger for the helper app, and worth knowing now rather than after the printer is mounted.
 - **Q3** — On a terminal decline, should the order sit unpaid on the board, or drop back into the payment panel for another tender? (Recommend: back to the panel — the customer is standing there.)
 - **Q4** — Tips on the terminal: supported by most Plutus flows. Out of scope unless wanted, and it changes the amount the terminal reports back versus the order total, which the reconciliation in PAY7-4 has to expect.
+
+## 9. Round off (±₹5) — built 2026-11-06
+
+**Status:** built. No migration: it uses the settle adjustment from `supabase/2026-09-settle-adjustments.sql`.
+
+A customer is a rupee or two short of change, or the counter has no ₹2 to give back. Before this, "Collect now" refused anything but the exact bill ("That's less than the bill"), so the staffer had to place the order unpaid and settle it later from Orders → **Different amount…**.
+
+Now the payment step has a **Round off** stepper, from −₹5 to +₹5, on the method choice, the cash step and the split step, both when taking a new order and on the Settle screen.
+
+| | What happens |
+|---|---|
+| **Minus** (customer pays less) | Recorded as `orders.settle_discount_inr`, the same as a short settle. Revenue shows what was actually received. |
+| **Plus** (customer pays more) | Recorded as `orders.tip_inr`. It is cash or UPI in the drawer, but not a sale. |
+| **Reason** | Always required (3 or more characters). Chips: *Rounded off · No change · Customer short / Tip · Other*. Every button that takes the money waits for it. |
+| **Amount taken** | Cash, UPI, card and the split are all sized on bill ± round-off, and `order_payments` stores what was actually taken, so the cash day balances. |
+| **Shortcuts in the cash step** | Type ₹200 on a ₹203 bill and it offers **Settle ₹3 short**. Type ₹200 on a ₹198 bill and it offers **Keep ₹2 extra**. The staffer still picks a reason. |
+| **Not offered** | Dining apps (the app paid the exact bill). The minus side is also off for the sale of a HIOC Ritual pass, because the pass is issued in full and the server refuses a short settle on it. |
+| **Re-priced cart** | The round-off goes back to ₹0 when the bill total changes. |
+
+Who: any counter staffer. ₹5 is well inside the ₹50 a staffer may write off alone (`STAFF_SETTLE_SHORT_LIMIT_INR`). Anything bigger still goes through **Different amount…** on the Settle screen, where more than ₹50 needs a manager.
+
+Where it shows: the receipt prints *Settlement discount* or the tip and *Received*. The POS confirmation reads e.g. "CASH · ₹3 short (No change)". Owner reports already net `settle_discount_inr` off revenue and keep `tip_inr` out of it.
+
+Code: `ROUND_OFF_LIMIT_INR`, `clampRoundOff`, `roundOffAdjustment`, `roundOffReasonValid` and `describeSettleAdjustment` in `lib/orders/payments.ts`; `RoundOffControl` in `components/staff/PosPaymentModal.tsx`; the adjustment rides with `settlement` on `POST /api/orders` (`components/staff/PosOrderEntry.tsx`) and with the `PATCH /api/orders/[id]/payment` body (`components/staff/SettlePaymentDialog.tsx`). Tests: `tests/settleRoundOff.test.ts` and a case in `tests/ordersCreateSettle.test.ts`.

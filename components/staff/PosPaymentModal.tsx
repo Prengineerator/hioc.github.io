@@ -5,10 +5,14 @@ import { Modal } from '@/components/ui/Modal';
 import { normalizeIndianMobile } from '@/lib/phone';
 import {
   changeDueInr,
+  clampRoundOff,
   COUNTER_PAYMENT_METHODS,
   isAppPaymentMethod,
   parsePaymentReference,
   PAYMENT_REFERENCE_LABEL,
+  ROUND_OFF_LIMIT_INR,
+  roundOffAdjustment,
+  roundOffReasonValid,
   shortNeedsManager,
   STAFF_SETTLE_SHORT_LIMIT_INR,
   type PaymentPart,
@@ -108,8 +112,10 @@ interface PaymentStepProps {
    */
   stale?: boolean;
   // null → create unpaid (collect later); otherwise settle with these parts.
-  // `adjustment` is only ever passed in settle mode ("Different amount…"); the
-  // place-mode caller can keep ignoring the second argument.
+  // `adjustment` comes with the parts whenever the amount taken differs from the
+  // bill: the ±₹5 "Round off" (both modes) or settle mode's "Different amount…".
+  // The parts then sum to the bill minus the shortfall / plus the extra, and the
+  // caller must send both, or the server's exact-sum check refuses the settle.
   onSubmit: (parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) => void;
   onClose: () => void;
   /**
@@ -119,6 +125,12 @@ interface PaymentStepProps {
    * already has its customer) and no "collect later" (it already is unpaid).
    */
   mode?: 'place' | 'settle';
+  /**
+   * Whether the bill may be settled for LESS than its total (the round-off's
+   * minus side). False for the sale of a HIOC Ritual pass: the pass is issued
+   * in full, so the server refuses a short settle on it. Extra is still fine.
+   */
+  allowShort?: boolean;
 }
 
 /** The pre-FLOW-1 takeover. Kept until POS_V2 is verified at Gate 6B (spec E10). */
@@ -153,6 +165,7 @@ export function PosPaymentPanel({
   onClose,
   docked = false,
   mode = 'place',
+  allowShort = true,
 }: PaymentStepProps & { docked?: boolean }) {
   const isDineIn = orderType === 'dine_in';
   const settling = mode === 'settle';
@@ -179,16 +192,50 @@ export function PosPaymentPanel({
       if (err) setDrawerNote(err);
     });
   }
-  const [pending, setPending] = useState<{ parts: PaymentPart[] | null } | null>(null);
+  const [pending, setPending] = useState<{
+    parts: PaymentPart[] | null;
+    adjustment?: SettleAdjustmentInput;
+  } | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [suggestOpen, setSuggestOpen] = useState(false);
   const phoneMatches = useCustomerSuggestions(phone, !settling);
 
+  // Round off (±₹5): the customer is a rupee or two short of change, or leaves
+  // a rupee or two over. Negative = take less (settlement discount), positive =
+  // take more (tip), always with a reason. `due` is what is actually taken, and
+  // every in-hand tender below (cash, UPI, card, split) is sized on it. The
+  // dining apps pay the exact bill, so their step ignores it.
+  const [roundOff, setRoundOffRaw] = useState(0);
+  const [roundOffReason, setRoundOffReason] = useState('');
+  // Never down to ₹0 (a payment part must be at least ₹1), and never short on a
+  // pass sale.
+  const minRoundOff = allowShort ? -Math.max(0, Math.min(ROUND_OFF_LIMIT_INR, total - 1)) : 0;
+  const setRoundOff = (value: number) => setRoundOffRaw(Math.max(minRoundOff, clampRoundOff(value)));
+  // A round-off belongs to the bill it was chosen for: a re-priced cart starts
+  // from the exact total again.
+  useEffect(() => {
+    setRoundOffRaw(0);
+    setRoundOffReason('');
+  }, [total]);
+  const due = total + roundOff;
+  const roundOffOk = roundOffReasonValid(roundOff, roundOffReason);
+  const roundOffAdj: SettleAdjustmentInput | undefined = roundOffAdjustment(roundOff, roundOffReason) ?? undefined;
+  // Every in-hand commit waits for the round-off's reason.
+  const busyRound = busy || !roundOffOk;
+
   // Cash step
   const [tendered, setTendered] = useState('');
   const tenderedNum = Number.parseInt(tendered, 10);
-  const tenderedValid = Number.isFinite(tenderedNum) && tenderedNum >= total;
-  const change = tenderedValid ? changeDueInr(tenderedNum, total) : 0;
+  const tenderedValid = Number.isFinite(tenderedNum) && tenderedNum >= due;
+  const change = tenderedValid ? changeDueInr(tenderedNum, due) : 0;
+  // One-tap round-offs from what the customer actually handed over: a little
+  // under the bill ("Settle ₹2 short") or a little over with no change to give
+  // ("Keep ₹2 extra"). Both still need a reason before anything is taken.
+  const tenderedTyped = tendered.trim().length > 0 && Number.isFinite(tenderedNum) && tenderedNum > 0;
+  const cashShortBy = tenderedTyped && tenderedNum < due ? total - tenderedNum : 0;
+  const canSettleShort = cashShortBy > 0 && -cashShortBy >= minRoundOff;
+  const cashOverBy = tenderedTyped && tenderedNum > due ? tenderedNum - total : 0;
+  const canKeepExtra = cashOverBy > 0 && cashOverBy <= ROUND_OFF_LIMIT_INR;
 
   // Split step — two parts: a first method for a chosen amount, the rest on a second.
   const [firstMethod, setFirstMethod] = useState<PaymentMethod>('cash');
@@ -198,8 +245,8 @@ export function PosPaymentPanel({
   const [firstRef, setFirstRef] = useState('');
   const [secondRef, setSecondRef] = useState('');
   const firstNum = Number.parseInt(firstAmount, 10);
-  const firstValid = Number.isFinite(firstNum) && firstNum > 0 && firstNum < total;
-  const remainder = firstValid ? total - firstNum : 0;
+  const firstValid = Number.isFinite(firstNum) && firstNum > 0 && firstNum < due;
+  const remainder = firstValid ? due - firstNum : 0;
 
   // Custom step (settle only) — the amount actually received, which may differ
   // from the bill: short → settlement discount, extra → tip.
@@ -261,10 +308,10 @@ export function PosPaymentPanel({
         return;
       }
       setPhoneError(null);
-      onSubmit(parts);
+      onSubmit(parts, adjustment);
       return;
     }
-    setPending({ parts });
+    setPending({ parts, adjustment });
   }
 
   const splitParts = useMemo((): PaymentPart[] | null => {
@@ -437,9 +484,9 @@ export function PosPaymentPanel({
                 disabled={busy}
                 onClick={() => {
                   if (stale) return;
-                  const { parts } = pending;
+                  const { parts, adjustment } = pending;
                   setPending(null);
-                  onSubmit(parts);
+                  onSubmit(parts, adjustment);
                 }}
                 className="rounded-md border border-line px-3 py-3 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:opacity-50"
               >
@@ -451,7 +498,10 @@ export function PosPaymentPanel({
           /* ---- Cash: tendered → change ------------------------------------ */
           <div className="rounded-md border border-line px-4 py-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-bold text-charcoal">Cash — ₹{total}</p>
+              <p className="text-sm font-bold text-charcoal">
+                Cash — ₹{due}
+                {roundOff !== 0 ? <span className="ml-1 font-normal text-muted">(bill ₹{total})</span> : null}
+              </p>
               <button
                 type="button"
                 onClick={() => {
@@ -472,19 +522,19 @@ export function PosPaymentPanel({
               value={tendered}
               onChange={(e) => setTendered(e.target.value.replace(/[^0-9]/g, ''))}
               inputMode="numeric"
-              placeholder={String(total)}
+              placeholder={String(due)}
               autoFocus
               className="mt-1 w-full rounded-md border border-line px-3 py-3 text-lg font-bold outline-none focus:border-tan"
             />
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setTendered(String(total))}
+                onClick={() => setTendered(String(due))}
                 className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
               >
-                Exact ₹{total}
+                Exact ₹{due}
               </button>
-              {TENDER_CHIPS.filter((c) => c >= total).map((c) => (
+              {TENDER_CHIPS.filter((c) => c >= due).map((c) => (
                 <button
                   key={c}
                   type="button"
@@ -497,10 +547,45 @@ export function PosPaymentPanel({
             </div>
 
             {tendered.trim() && !tenderedValid ? (
-              <p role="alert" className="mt-2 text-xs text-red-700">
-                That&rsquo;s less than the bill of ₹{total}.
-              </p>
+              canSettleShort ? (
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md bg-amber-50 px-3 py-2">
+                  <span className="text-xs font-bold text-amber-900">
+                    ₹{cashShortBy} less than the bill of ₹{total}.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setRoundOff(-cashShortBy)}
+                    className="rounded-md border border-amber-400 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 hover:border-amber-600"
+                  >
+                    Settle ₹{cashShortBy} short
+                  </button>
+                </div>
+              ) : (
+                <p role="alert" className="mt-2 text-xs text-red-700">
+                  That&rsquo;s less than {roundOff !== 0 ? `the ₹${due} to take` : `the bill of ₹${total}`}.
+                </p>
+              )
+            ) : canKeepExtra ? (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md bg-surface px-3 py-2">
+                <span className="text-xs text-charcoal">No ₹{tenderedNum - due} change to give?</span>
+                <button
+                  type="button"
+                  onClick={() => setRoundOff(cashOverBy)}
+                  className="rounded-md border border-line bg-white px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                >
+                  Keep ₹{cashOverBy} extra
+                </button>
+              </div>
             ) : null}
+
+            <RoundOffControl
+              total={total}
+              value={roundOff}
+              min={minRoundOff}
+              onChange={setRoundOff}
+              reason={roundOffReason}
+              onReasonChange={setRoundOffReason}
+            />
 
             <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
               <span className="text-sm font-bold text-charcoal">Change due</span>
@@ -509,13 +594,14 @@ export function PosPaymentPanel({
 
             <button
               type="button"
-              disabled={busy || !tenderedValid}
+              disabled={busyRound || !tenderedValid}
               onClick={() =>
-                attempt([{ method: 'cash', amount_inr: total, tendered_inr: tenderedNum }])
+                attempt([{ method: 'cash', amount_inr: due, tendered_inr: tenderedNum }], roundOffAdj)
               }
               className="mt-3 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Take ₹{total} cash
+              Take ₹{due} cash
+              {roundOff < 0 ? ` (₹${-roundOff} short)` : roundOff > 0 ? ` (₹${roundOff} extra)` : ''}
             </button>
           </div>
         ) : step === 'custom' ? (
@@ -711,7 +797,10 @@ export function PosPaymentPanel({
           /* ---- Split across two methods ----------------------------------- */
           <div className="rounded-md border border-line px-4 py-3">
             <div className="flex items-center justify-between">
-              <p className="text-sm font-bold text-charcoal">Split ₹{total}</p>
+              <p className="text-sm font-bold text-charcoal">
+                Split ₹{due}
+                {roundOff !== 0 ? <span className="ml-1 font-normal text-muted">(bill ₹{total})</span> : null}
+              </p>
               <button
                 type="button"
                 onClick={() => {
@@ -747,7 +836,7 @@ export function PosPaymentPanel({
             />
             {firstAmount.trim() && !firstValid ? (
               <p role="alert" className="mt-1 text-xs text-red-700">
-                Enter an amount between ₹1 and ₹{total - 1}.
+                Enter an amount between ₹1 and ₹{due - 1}.
               </p>
             ) : null}
 
@@ -776,6 +865,15 @@ export function PosPaymentPanel({
               <ReferenceField id="pos-split-ref-1" method={firstMethod} value={firstRef} onChange={setFirstRef} />
             ) : null}
 
+            <RoundOffControl
+              total={total}
+              value={roundOff}
+              min={minRoundOff}
+              onChange={setRoundOff}
+              reason={roundOffReason}
+              onReasonChange={setRoundOffReason}
+            />
+
             {firstValid ? (
               <>
                 <p className="mt-4 text-xs font-bold uppercase tracking-wide text-muted">
@@ -799,12 +897,12 @@ export function PosPaymentPanel({
 
             <button
               type="button"
-              disabled={busy || !firstValid || splitCashShort || !splitParts}
+              disabled={busyRound || !firstValid || splitCashShort || !splitParts}
               onClick={() => {
                 if (!splitParts || stale) return;
                 // A cash part goes in the drawer, so it opens with this tap.
                 openDrawerFor(splitParts);
-                attempt(splitParts);
+                attempt(splitParts, roundOffAdj);
               }}
               className="mt-4 w-full rounded-md bg-tan-dark px-3 py-3 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -842,24 +940,37 @@ export function PosPaymentPanel({
                   <button
                     key={m.value}
                     type="button"
-                    disabled={busy || !bill}
+                    // Cash only opens its step (the reason can still be picked
+                    // there); UPI / card commit on this tap, so they wait for it.
+                    disabled={(m.value === 'cash' ? busy : busyRound) || !bill}
                     onClick={() => {
-                      // Cash gets the tendered/change step; the others are exact.
+                      // Cash gets the tendered/change step; the others are exact
+                      // (to the round-off, when there is one).
                       // DRW-1: the drawer opens now, so the staffer can take the
                       // notes and count change while the step is on screen.
                       if (m.value === 'cash') {
-                        openDrawerFor([{ method: 'cash', amount_inr: total, tendered_inr: null }]);
+                        openDrawerFor([{ method: 'cash', amount_inr: due, tendered_inr: null }]);
                         setStep('cash');
                       } else {
-                        attempt([{ method: m.value, amount_inr: total, tendered_inr: null }]);
+                        attempt([{ method: m.value, amount_inr: due, tendered_inr: null }], roundOffAdj);
                       }
                     }}
                     className="rounded-md bg-tan-dark px-3 py-4 text-base font-bold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {m.label}
+                    {roundOff !== 0 ? <span className="block text-xs font-semibold">₹{due}</span> : null}
                   </button>
                 ))}
               </div>
+              <RoundOffControl
+                total={total}
+                value={roundOff}
+                min={minRoundOff}
+                onChange={setRoundOff}
+                reason={roundOffReason}
+                onReasonChange={setRoundOffReason}
+                disabled={!bill}
+              />
             </div>
 
             <div>
@@ -887,7 +998,7 @@ export function PosPaymentPanel({
 
             <button
               type="button"
-              disabled={busy || !bill || total <= 1}
+              disabled={busy || !bill || due <= 1}
               onClick={() => setStep('split')}
               className="rounded-md border border-line px-4 py-2.5 text-sm font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -971,6 +1082,121 @@ function ReferenceField({
           Check it on the diner&rsquo;s app or the partner app — it&rsquo;s how the payout is matched.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * Round off (±₹5): a stepper for taking a few rupees less or more than the
+ * bill, and the reason it needs. Short reads as a settlement discount, extra as
+ * a tip, the same as "Different amount…" (lib/orders/payments.ts).
+ */
+function RoundOffControl({
+  total,
+  value,
+  min,
+  onChange,
+  reason,
+  onReasonChange,
+  disabled = false,
+}: {
+  total: number;
+  value: number;
+  /** The lowest step allowed: −₹5, less on a tiny bill, 0 when short isn't allowed. */
+  min: number;
+  onChange: (value: number) => void;
+  reason: string;
+  onReasonChange: (reason: string) => void;
+  disabled?: boolean;
+}) {
+  const due = total + value;
+  // Chips that fit the direction; "Other" clears the field for typing.
+  const chips = SETTLE_REASON_CHIPS.filter((c) => (value < 0 ? c !== 'Tip' : c !== 'Customer short'));
+  const stepButton =
+    'flex h-9 w-9 items-center justify-center rounded-md border border-line text-lg font-bold text-charcoal ' +
+    'transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-40';
+  return (
+    <div className="mt-3 rounded-md border border-line px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-bold uppercase tracking-wide text-muted">
+          Round off <span className="normal-case tracking-normal">(up to ±₹{ROUND_OFF_LIMIT_INR})</span>
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Take ₹1 less"
+            disabled={disabled || value <= min}
+            onClick={() => onChange(value - 1)}
+            className={stepButton}
+          >
+            −
+          </button>
+          <span className="w-14 text-center text-sm font-bold tabular-nums text-charcoal" aria-live="polite">
+            {value === 0 ? '₹0' : value > 0 ? `+₹${value}` : `−₹${-value}`}
+          </span>
+          <button
+            type="button"
+            aria-label="Take ₹1 more"
+            disabled={disabled || value >= ROUND_OFF_LIMIT_INR}
+            onClick={() => onChange(value + 1)}
+            className={stepButton}
+          >
+            +
+          </button>
+        </div>
+      </div>
+      {value !== 0 ? (
+        <>
+          <div
+            className={
+              'mt-2 flex items-center justify-between gap-2 rounded-md px-3 py-1.5 text-xs font-bold ' +
+              (value < 0 ? 'bg-amber-50 text-amber-900' : 'bg-green-50 text-green-800')
+            }
+          >
+            <span>
+              Take ₹{due} —{' '}
+              {value < 0 ? `₹${-value} less, settlement discount` : `₹${value} more, tip`}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onChange(0);
+                onReasonChange('');
+              }}
+              className="font-bold underline"
+            >
+              Clear
+            </button>
+          </div>
+          <p className="mt-2 text-xs font-bold uppercase tracking-wide text-muted">Reason (required)</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {chips.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => onReasonChange(chip === 'Other' ? '' : chip)}
+                className={
+                  'rounded-md border px-3 py-1.5 text-xs font-bold transition-colors ' +
+                  (reason === chip ? 'border-tan bg-tan-dark text-cream' : 'border-line text-charcoal hover:border-tan')
+                }
+              >
+                {chip}
+              </button>
+            ))}
+          </div>
+          <input
+            value={reason}
+            onChange={(e) => onReasonChange(e.target.value)}
+            maxLength={200}
+            placeholder="Reason"
+            aria-label="Reason for the round-off"
+            className="mt-2 w-full rounded-md border border-line px-3 py-2 text-base outline-none focus:border-tan"
+          />
+          {reason.trim().length < 3 ? (
+            <p className="mt-1 text-xs text-muted">Pick or type a reason to take the payment.</p>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }

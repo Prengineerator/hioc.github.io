@@ -4,7 +4,7 @@
 // on the shelf, flagged when low, expiring, expired, or when sales ran past
 // the records ("count needed"). Anyone can tap "Request stock"; a manager or
 // the owner also adds/edits items, counts, writes off, and — at the POS —
-// receives a delivery that had no request behind it.
+// adds stock bought straight from a vendor ("Stock from vendor", INV-D14).
 
 import { useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
@@ -13,6 +13,10 @@ import {
   formatQty,
   INVENTORY_UNITS,
   UNIT_LABELS,
+  VENDOR_BILL_REF_MAX,
+  VENDOR_NAME_MAX,
+  VENDOR_NAME_MIN,
+  VENDOR_NOTE_MAX,
   type InventoryUnit,
 } from '@/lib/inventory/rules';
 import {
@@ -140,7 +144,7 @@ export function StockTab({
         ) : null}
         {data.canManage && surface === 'pos' ? (
           <button type="button" className={secondaryButton} onClick={() => setDeliveryOpen(true)}>
-            Receive delivery
+            Stock from vendor
           </button>
         ) : null}
         {data.canManage ? (
@@ -254,7 +258,11 @@ export function StockTab({
                               <span>
                                 {formatQty(b.qtyRemaining, i.unit)}
                                 <span className="ml-2 text-xs text-muted">
-                                  {b.source === 'count' ? 'from a count' : `received ${shortDate(b.receivedAt)}`}
+                                  {b.source === 'count'
+                                    ? 'from a count'
+                                    : b.supplier
+                                      ? `from ${b.supplier} · received ${shortDate(b.receivedAt)}`
+                                      : `received ${shortDate(b.receivedAt)}`}
                                 </span>
                               </span>
                               <span
@@ -351,12 +359,13 @@ export function StockTab({
         />
       ) : null}
       {deliveryOpen ? (
-        <DeliveryModal
+        <VendorStockModal
           items={data.items.filter((i) => i.isActive)}
           today={data.today}
           onClose={() => setDeliveryOpen(false)}
-          onDone={async () => {
+          onDone={async (message) => {
             setDeliveryOpen(false);
+            setNotice(message);
             await reload();
           }}
         />
@@ -430,9 +439,9 @@ function AutoHidePanel({ data, reload }: { data: ItemsPayload; reload: () => Pro
   );
 }
 
-// ── Receive a delivery (no request) ─────────────────────────────────────────
+// ── Stock from vendor (no request, INV-D14) ─────────────────────────────────
 
-function DeliveryModal({
+function VendorStockModal({
   items,
   today,
   onClose,
@@ -441,24 +450,41 @@ function DeliveryModal({
   items: InventoryItemView[];
   today: string;
   onClose: () => void;
-  onDone: () => Promise<void>;
+  onDone: (message: string) => Promise<void>;
 }) {
+  const [vendor, setVendor] = useState('');
+  const [billRef, setBillRef] = useState('');
+  const [note, setNote] = useState('');
   const [rows, setRows] = useState<Record<string, { qty: string; expiry: string }>>({});
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const chosen = Object.keys(rows);
   const shown = items.filter((i) => chosen.includes(i.id) || (query.trim() && i.name.toLowerCase().includes(query.trim().toLowerCase())));
+  const vendorName = vendor.trim();
+  const canSubmit = vendorName.length >= VENDOR_NAME_MIN && chosen.length > 0;
 
   async function submit() {
     setError('');
+    if (vendorName.length < VENDOR_NAME_MIN) return setError('Enter the vendor’s name.');
     const lines = chosen.map((id) => ({ itemId: id, qty: Number(rows[id].qty), expiryDate: rows[id].expiry || null }));
     if (lines.length === 0) return setError('Add what arrived.');
     setBusy(true);
-    const res = await api('/api/inventory/receipts', 'POST', { lines });
+    const res = await api<{ batches?: number; vendorRecorded?: boolean }>('/api/inventory/receipts', 'POST', {
+      vendor: vendorName,
+      billRef: billRef.trim(),
+      note: note.trim(),
+      lines,
+    });
     setBusy(false);
     if (!res.ok) return setError(res.error);
-    await onDone();
+    const count = res.data.batches ?? lines.filter((l) => l.qty > 0).length;
+    const what = `${count} item${count === 1 ? '' : 's'}`;
+    await onDone(
+      res.data.vendorRecorded === false
+        ? `Added ${what} to stock. The vendor’s name was not saved — apply supabase/2026-11-vendor-stock-in.sql.`
+        : `Added ${what} from ${vendorName} to stock.`,
+    );
   }
 
   return (
@@ -466,18 +492,54 @@ function DeliveryModal({
       open
       onClose={onClose}
       size="lg"
-      title="Receive delivery"
-      subtitle="For stock that arrived without a request. Count each item and enter its expiry date."
+      title="Stock from vendor"
+      subtitle="For stock bought straight from a vendor — not a warehouse or store-room request. Count each item and enter its expiry date."
       footer={
         <div className="flex items-center justify-between gap-2">
           {error ? <p className="text-sm text-red-700">{error}</p> : <span />}
-          <button type="button" className={primaryButton} onClick={submit} disabled={busy}>
+          <button type="button" className={primaryButton} onClick={submit} disabled={busy || !canSubmit}>
             {busy ? 'Saving…' : 'Add to stock'}
           </button>
         </div>
       }
     >
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find an item" className={inputClass} aria-label="Find an item" />
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <label className="block text-sm sm:col-span-2">
+          <span className="text-muted">Vendor name</span>
+          <input
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+            maxLength={VENDOR_NAME_MAX}
+            placeholder="e.g. Sharma Dairy"
+            className={`${inputClass} mt-1`}
+            aria-label="Vendor name"
+            autoFocus
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-muted">Bill / invoice no. (optional)</span>
+          <input
+            value={billRef}
+            onChange={(e) => setBillRef(e.target.value)}
+            maxLength={VENDOR_BILL_REF_MAX}
+            className={`${inputClass} mt-1`}
+            aria-label="Bill or invoice number"
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-muted">Note (optional)</span>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={VENDOR_NOTE_MAX}
+            placeholder="e.g. Paid cash"
+            className={`${inputClass} mt-1`}
+            aria-label="Note"
+          />
+        </label>
+      </div>
+      <p className="mt-4 text-xs font-bold uppercase tracking-[0.15em] text-muted">What arrived</p>
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find an item" className={`${inputClass} mt-2`} aria-label="Find an item" />
       <ul className="mt-3 divide-y divide-[#eee]">
         {shown.map((i) => {
           const row = rows[i.id];

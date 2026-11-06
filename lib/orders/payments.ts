@@ -94,6 +94,62 @@ const MIN_SETTLE_REASON_LENGTH = 3;
 const MAX_SETTLE_REASON_LENGTH = 200;
 
 /**
+ * The counter's quick "Round off": a customer short of change pays a rupee or
+ * two less, or leaves a rupee or two more. Any staffer can settle up to this
+ * many rupees under or over the bill, at Collect now or on the Settle screen,
+ * always with a reason. It is the same adjustment the server already takes
+ * (short = settlement discount, extra = tip), just one tap away. Bigger
+ * differences go through "Different amount…" and its manager rule.
+ */
+export const ROUND_OFF_LIMIT_INR = 5;
+
+/** Keeps a round-off a whole number of rupees within ±ROUND_OFF_LIMIT_INR. */
+export function clampRoundOff(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const whole = Math.trunc(value);
+  return Math.max(-ROUND_OFF_LIMIT_INR, Math.min(ROUND_OFF_LIMIT_INR, whole)) || 0;
+}
+
+/** Whether a round-off's reason is enough for the server (parseSettleAdjustment). */
+export function roundOffReasonValid(roundOffInr: number, reason: string): boolean {
+  if (roundOffInr === 0) return true;
+  const text = reason.trim();
+  return text.length >= MIN_SETTLE_REASON_LENGTH && text.length <= MAX_SETTLE_REASON_LENGTH;
+}
+
+/** The settle route's `adjustment` body for a round-off. */
+export interface RoundOffAdjustment {
+  short_inr?: number;
+  tip_inr?: number;
+  reason: string;
+}
+
+/**
+ * The `adjustment` to send for a round-off: negative = the customer paid less
+ * (`short_inr`), positive = more (`tip_inr`), 0 = none (null). Clamped, so a
+ * stale value can never send more than the limit.
+ */
+export function roundOffAdjustment(roundOffInr: number, reason: string): RoundOffAdjustment | null {
+  const r = clampRoundOff(roundOffInr);
+  if (r === 0) return null;
+  return r < 0 ? { short_inr: -r, reason: reason.trim() } : { tip_inr: r, reason: reason.trim() };
+}
+
+/**
+ * "₹3 short (No change)" / "₹2 extra (Tip)": how a settled adjustment reads on
+ * the counter's confirmation. Empty when there is none.
+ */
+export function describeSettleAdjustment(adj: { short_inr?: number; tip_inr?: number; reason?: string } | null | undefined): string {
+  if (!adj) return '';
+  const short = adj.short_inr ?? 0;
+  const tip = adj.tip_inr ?? 0;
+  if (short <= 0 && tip <= 0) return '';
+  const what = short > 0 ? `₹${short} short` : `₹${tip} extra`;
+  const why = (adj.reason ?? '').trim();
+  return why ? `${what} (${why})` : what;
+}
+
+/**
  * A validated settlement adjustment: the customer paid `shortInr` LESS than the
  * bill (recorded as a settlement discount) or `tipInr` MORE (kept as a tip).
  * At most one of the two is non-zero.
