@@ -13,6 +13,7 @@ import { RitualTeaser } from '@/components/passes/RitualTeaser';
 // data, handles empty/error states, per-session dismiss) — mounting it is
 // this file's job (app/page.tsx is customer-chrome), building it is theirs.
 import { AnnouncementBanner } from '@/components/promotions/AnnouncementBanner';
+import { InstantCoffeePopup } from '@/components/promotions/InstantCoffeePopup';
 
 export const metadata: Metadata = {
   title: 'Home',
@@ -24,7 +25,8 @@ export default function HomePage() {
   return (
     <CartProvider>
       <AnnouncementBanner />
-      <InstantCoffeePromo />
+      {/* Launch poster as a popup over the landing page, once per visit. */}
+      <InstantCoffeePopup />
       <HeroSection />
       <MeetCoffey />
       {/* HIOC Ritual teaser: renders nothing until the feature is on and a plan is on sale. */}
@@ -33,91 +35,6 @@ export default function HomePage() {
       <VisitStrip />
       <AboutTeaser />
     </CartProvider>
-  );
-}
-
-// New-launch promotion banner: the owner's poster for HIOC. Premium Instant
-// Coffee (owner request 2026-11-06), at the top of the home page. The jars are
-// sold at the counter, not on the online menu, so the banner has no "add to
-// cart". Like the poster, it sends people to the counter. To take it down when
-// the offer ends, delete <InstantCoffeePromo /> from HomePage along with
-// public/images/promo-instant-coffee.jpg.
-const INSTANT_COFFEE_FLAVOURS = ['Signature Classic', 'Nutty Hazelnut', 'French Vanilla'];
-const INSTANT_COFFEE_OFFERS = [
-  { label: '1 jar', price: '₹299' },
-  { label: '2 jars', price: '₹499' },
-  { label: '3 jars', price: '₹599' },
-];
-
-function InstantCoffeePromo() {
-  return (
-    <section
-      aria-labelledby="instant-coffee-promo-heading"
-      className="mx-auto max-w-6xl px-4 pt-6 md:pt-10"
-    >
-      <Card padding="none" className="mx-auto max-w-sm overflow-hidden md:flex md:max-w-none">
-        {/* self-start: in the md+ row the card would otherwise stretch the
-            image to the text column's height and distort the poster. */}
-        <Image
-          src="/images/promo-instant-coffee.jpg"
-          alt="HIOC. Premium Instant Coffee poster: three 50 g jars, Nutty Hazelnut, French Vanilla and Classic, on a wooden board beside a cup of coffee."
-          width={1024}
-          height={1536}
-          priority
-          sizes="(min-width: 1024px) 384px, (min-width: 768px) 320px, (min-width: 416px) 384px, calc(100vw - 2rem)"
-          className="h-auto w-full md:w-80 md:shrink-0 md:self-start lg:w-96"
-        />
-        <div className="flex max-w-xl flex-col justify-center gap-3 p-4 md:self-center md:p-8 lg:p-12">
-          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">
-            New launch
-          </span>
-          <h2
-            id="instant-coffee-promo-heading"
-            className="text-xl font-bold text-charcoal md:text-3xl"
-          >
-            HIOC. Premium Instant Coffee
-          </h2>
-          {/* On a phone the poster right above says all of this in large type,
-              and repeating it underneath would double the banner's height. So
-              the details show from md up, beside the poster, and stay in the
-              accessibility tree at every width. */}
-          <div className="sr-only md:not-sr-only md:flex md:flex-col md:gap-4">
-            <p className="text-muted">
-              Café-quality coffee, instantly. 100% Arabica, freeze-dried to lock
-              in the rich aroma and flavour. 50 g jars in three flavours:
-            </p>
-            <ul role="list" className="flex flex-wrap gap-2">
-              {INSTANT_COFFEE_FLAVOURS.map((flavour) => (
-                <li
-                  key={flavour}
-                  className="rounded-full border border-tan px-3 py-1 text-sm font-semibold text-charcoal"
-                >
-                  {flavour}
-                </li>
-              ))}
-            </ul>
-            <div>
-              <p className="text-sm text-muted">
-                Regular <s className="font-mono tabular-nums">₹399</s> a jar. Launch offer:
-              </p>
-              <ul role="list" className="mt-2 grid grid-cols-3 gap-2">
-                {INSTANT_COFFEE_OFFERS.map((offer) => (
-                  <li key={offer.label} className="rounded-md bg-surface px-3 py-2 text-center">
-                    <span className="block text-sm text-muted">{offer.label}</span>
-                    <span className="font-mono text-lg font-bold tabular-nums text-charcoal">
-                      {offer.price}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-          <p className="font-semibold text-charcoal">
-            Ask at the counter for a free trial cup!
-          </p>
-        </div>
-      </Card>
-    </section>
   );
 }
 
