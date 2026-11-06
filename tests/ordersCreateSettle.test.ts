@@ -209,6 +209,16 @@ describe('POST /api/orders — settlement with the order', () => {
     expect(data.order.payment_status).toBe('unpaid');
   });
 
+  it('hands a ±₹5 round-off to the settle untouched, with its reason', async () => {
+    const roundOff = {
+      parts: [{ method: 'cash', amount_inr: 98, tendered_inr: 100 }],
+      adjustment: { short_inr: 2, reason: 'No change' },
+    };
+    const res = await POST(req({ ...counterOrder, settlement: roundOff }));
+    expect(res.status).toBe(201);
+    expect(riders.settle).toHaveBeenCalledWith(state.actor, ORDER_ID, roundOff);
+  });
+
   it('keeps the order when the settle is refused, and says why', async () => {
     riders.settle.mockResolvedValue({ ok: false, status: 400, error: 'Parts must add up to ₹230' });
     const res = await POST(req({ ...counterOrder, settlement: cash }));

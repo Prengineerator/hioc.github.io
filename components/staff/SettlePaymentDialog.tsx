@@ -116,6 +116,9 @@ export function SettlePaymentDialog({
         itemCount={itemCount}
         phone=""
         onPhoneChange={() => {}}
+        // A pass is issued in full, so its sale can't be settled short (the
+        // server refuses it); the round-off keeps only its plus side there.
+        allowShort={!ritualSale}
         submitting={submitting}
         error={error}
         onSubmit={(parts, adjustment) => void submit(parts, adjustment)}

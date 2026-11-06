@@ -34,7 +34,7 @@ import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import { useShortcutHandler } from '@/components/staff/PosShortcuts';
 import { useStaffShell } from '@/components/staff/StaffShell';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
-import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentModal';
+import { PosPaymentModal, PosPaymentPanel, type SettleAdjustmentInput } from '@/components/staff/PosPaymentModal';
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
@@ -89,7 +89,7 @@ import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
 import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
-import type { PaymentPart } from '@/lib/orders/payments';
+import { describeSettleAdjustment, type PaymentPart } from '@/lib/orders/payments';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
@@ -248,12 +248,16 @@ type SettlementAnswer =
   | null;
 
 /** The pre-combined path: settle the just-created order through its payment route. */
-async function settleSeparately(orderId: string, parts: PaymentPart[]): Promise<SettlementAnswer> {
+async function settleSeparately(
+  orderId: string,
+  parts: PaymentPart[],
+  adjustment?: SettleAdjustmentInput,
+): Promise<SettlementAnswer> {
   try {
     const res = await fetch(`/api/orders/${orderId}/payment`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ parts }),
+      body: JSON.stringify(adjustment ? { parts, adjustment } : { parts }),
     });
     if (!res.ok) return { ok: false };
     const data = (await res.json().catch(() => ({}))) as {
@@ -1315,7 +1319,10 @@ export function PosOrderEntry({
   // POS4-1: settlement arrives as PARTS (a single-method payment is just one
   // part), so cash tendered and splits persist truthfully in order_payments and
   // the cash day counts only the cash that actually entered the drawer.
-  async function placeOrder(parts: PaymentPart[] | null) {
+  // `adjustment` is the ±₹5 round-off (short = settlement discount, extra =
+  // tip, with its reason): the parts then sum to the bill minus / plus it, and
+  // both go to the server together.
+  async function placeOrder(parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) {
     // Double-submit guard: the ref blocks a second entry even before the
     // `submitting` state has flushed to disable the buttons.
     if (inFlight.current) return;
@@ -1379,7 +1386,7 @@ export function PosOrderEntry({
       // it exists, by the payment route's own rules, in the same call. And
       // when anything may print, the answer carries the ticket data too, so
       // the KOT and receipt print without a request each.
-      if (parts) body.settlement = { parts };
+      if (parts) body.settlement = adjustment ? { parts, adjustment } : { parts };
       if (autoPrint.kot || autoPrint.bill) body.include_print_order = true;
       // The total on screen — priced here or by the quote route. The server
       // prices the order again and refuses it, before creating anything, if
@@ -1471,7 +1478,7 @@ export function PosOrderEntry({
         // A server from before settlement-with-the-order ignores the field:
         // settle the old way, through the payment route.
         const answer: SettlementAnswer =
-          settlement !== undefined ? settlement : await settleSeparately(order.id, parts);
+          settlement !== undefined ? settlement : await settleSeparately(order.id, parts, adjustment);
         if (answer?.ok) {
           changeDue = answer.change_due_inr ?? 0;
           if (answer.order) totalInr = answer.order.total_inr ?? answer.order.subtotal_inr;
@@ -1501,7 +1508,7 @@ export function PosOrderEntry({
         totalInr,
         paidAs:
           settled && parts && !createdPaid
-            ? describePaymentParts(parts)
+            ? [describePaymentParts(parts), describeSettleAdjustment(adjustment)].filter(Boolean).join(' · ')
             : createdPaid
               ? freeBillPaidAs(quotedPass?.applied ?? 0)
               : null,
