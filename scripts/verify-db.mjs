@@ -1425,6 +1425,30 @@ async function checkInventory() {
   } else {
     pass('inventory_set_addon_recipe_scopes is not callable by the anon key');
   }
+
+  // ── Stock from vendor (supabase/2026-11-vendor-stock-in.sql, INV-D14)
+  heading('INV-13 · stock from vendor', '2026-11-vendor-stock-in.sql');
+  const vendorHint = 'apply supabase/2026-11-vendor-stock-in.sql';
+
+  const supplierCol = await rest('/inventory_batches?select=supplier&limit=1');
+  if (supplierCol.ok) pass('inventory_batches.supplier exists');
+  else fail('inventory_batches.supplier exists', errKind(supplierCol) === 'no_column' ? vendorHint : errText(supplierCol));
+
+  // An empty delivery is refused before anything is written: the service role
+  // must reach that refusal, and anon must not reach the function at all.
+  const emptyDelivery = { p_actor: null, p_device_id: null, p_supplier: 'verify-db', p_bill_ref: '', p_note: '', p_lines: [] };
+  const vendorSvc = await rest('/rpc/inventory_receive_vendor', { method: 'POST', body: emptyDelivery });
+  if (!vendorSvc.ok && errKind(vendorSvc) === 'raised' && /nothing to receive/i.test(errText(vendorSvc))) {
+    pass('inventory_receive_vendor is installed', 'an empty delivery was refused');
+  } else {
+    fail('inventory_receive_vendor is installed', vendorSvc.ok ? `unexpected result ${JSON.stringify(vendorSvc.body)}` : `${vendorHint} — ${errText(vendorSvc)}`);
+  }
+  const vendorAnon = await rest('/rpc/inventory_receive_vendor', { method: 'POST', body: emptyDelivery, key: ANON });
+  if (vendorAnon.ok || errKind(vendorAnon) === 'raised') {
+    fail('inventory_receive_vendor is not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
+  } else {
+    pass('inventory_receive_vendor is not callable by the anon key');
+  }
 }
 
 // ---------------------------------------------------------------------------

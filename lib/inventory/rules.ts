@@ -455,6 +455,44 @@ export function parseReceiveLines(
   return { ok: true, lines };
 }
 
+// ── Stock from vendor (INV-D14) ─────────────────────────────────────────────
+
+export const VENDOR_NAME_MIN = 2;
+export const VENDOR_NAME_MAX = 80;
+export const VENDOR_BILL_REF_MAX = 40;
+export const VENDOR_NOTE_MAX = 200;
+
+export interface VendorHeader {
+  vendor: string;
+  billRef: string;
+  note: string;
+}
+
+/**
+ * Who a direct delivery came from: `{ vendor, billRef?, note? }`. The vendor's
+ * name is required, so a delivery with no request behind it still says where
+ * the stock came from. The bill number and note are optional. All trimmed.
+ */
+export function parseVendorHeader(raw: unknown): { ok: true; header: VendorHeader } | { ok: false; message: string } {
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const text = (v: unknown): string | null => (v === undefined || v === null ? '' : typeof v === 'string' ? v.trim() : null);
+
+  const vendor = text(body.vendor);
+  if (vendor === null || vendor.length === 0) return { ok: false, message: 'Enter the vendor’s name.' };
+  if (vendor.length < VENDOR_NAME_MIN) return { ok: false, message: `The vendor’s name needs at least ${VENDOR_NAME_MIN} letters.` };
+  if (vendor.length > VENDOR_NAME_MAX) return { ok: false, message: `Keep the vendor’s name to ${VENDOR_NAME_MAX} characters.` };
+
+  const billRef = text(body.billRef);
+  if (billRef === null) return { ok: false, message: 'The bill number must be text.' };
+  if (billRef.length > VENDOR_BILL_REF_MAX) return { ok: false, message: `Keep the bill number to ${VENDOR_BILL_REF_MAX} characters.` };
+
+  const note = text(body.note);
+  if (note === null) return { ok: false, message: 'The note must be text.' };
+  if (note.length > VENDOR_NOTE_MAX) return { ok: false, message: `Keep the note to ${VENDOR_NOTE_MAX} characters.` };
+
+  return { ok: true, header: { vendor, billRef, note } };
+}
+
 /** A line whose received quantity differs from what was picked. */
 export function lineHasDiscrepancy(line: { qty_picked: number | null; qty_received: number | null }): boolean {
   if (line.qty_received === null || line.qty_received === undefined) return false;

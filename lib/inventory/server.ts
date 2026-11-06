@@ -52,6 +52,8 @@ export interface BatchView {
   expiryDate: string | null;
   receivedAt: string;
   source: 'receive' | 'count';
+  /** The vendor a direct delivery came from ('' for anything else, INV-D14). */
+  supplier: string;
   state: ExpiryState;
 }
 
@@ -116,16 +118,21 @@ export async function loadInventoryItems(
 ): Promise<{ items: InventoryItemView[]; error: boolean }> {
   // All three grow without a fixed limit (a batch per delivery, a request per
   // top-up), so they are paged (selectAll), not read in one go.
-  const [itemsRes, batchesRes, openRes] = await Promise.all([
-    selectAll<InventoryItemRow>(() => admin.from('inventory_items').select(ITEM_COLUMNS).order('name').order('id')),
+  // `supplier` arrives with 2026-11-vendor-stock-in.sql; before it, the
+  // batches are read without it rather than the Stock screen failing.
+  const readBatches = (columns: string) =>
     selectAll<Record<string, unknown>>(() =>
       admin
         .from('inventory_batches')
-        .select('id, item_id, qty_received, qty_remaining, expiry_date, received_at, source')
+        .select(columns)
         .gt('qty_remaining', 0)
         .order('expiry_date', { ascending: true, nullsFirst: false })
         .order('id'),
-    ),
+    );
+  const BATCH_COLUMNS = 'id, item_id, qty_received, qty_remaining, expiry_date, received_at, source';
+  const [itemsRes, firstBatchesRes, openRes] = await Promise.all([
+    selectAll<InventoryItemRow>(() => admin.from('inventory_items').select(ITEM_COLUMNS).order('name').order('id')),
+    readBatches(`${BATCH_COLUMNS}, supplier`),
     selectAll<{ request_number: number; status: string; stock_request_lines: { item_id: string }[] | null }>(() =>
       admin
         .from('stock_requests')
@@ -135,6 +142,8 @@ export async function loadInventoryItems(
         .order('id'),
     ),
   ]);
+  const batchesRes =
+    firstBatchesRes.error && isMissingColumnError(firstBatchesRes.error) ? await readBatches(BATCH_COLUMNS) : firstBatchesRes;
   if (itemsRes.error || batchesRes.error) return { items: [], error: true };
 
   const batchesByItem = new Map<string, Record<string, unknown>[]>();
@@ -161,6 +170,7 @@ export async function loadInventoryItems(
       expiryDate: (b.expiry_date as string | null) ?? null,
       receivedAt: b.received_at as string,
       source: (b.source as 'receive' | 'count') ?? 'receive',
+      supplier: typeof b.supplier === 'string' ? b.supplier : '',
       state: expiryState((b.expiry_date as string | null) ?? null, today),
     }));
     const summary = summarizeStock(
