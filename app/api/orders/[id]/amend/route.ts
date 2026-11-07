@@ -29,7 +29,10 @@ import {
 import {
   PAID_BILL_LOCKED,
   balanceOf,
+  changeableState,
   isPaidBill,
+  lastLineMessage,
+  notChangeableMessage,
   nextBalance,
   originalTenderRow,
   paidChangeAudit,
@@ -49,10 +52,10 @@ export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: { id: string } };
 
-// The non-terminal, pre-settle states in which an order can still be corrected
-// (FND3-4). Terminal (completed/rejected/cancelled) and pre-accept (placed)
-// orders are not open for a void.
-const OPEN_STATUSES: OrderStatus[] = ['accepted', 'preparing', 'ready'];
+// Which orders can still be corrected (FND3-4) is lib/orders/paidChange.ts
+// changeableState: the open states (accepted / preparing / ready), plus a paid
+// dine-in bill marked Completed earlier the same day. Other terminal
+// (completed / rejected / cancelled) and pre-accept (placed) orders are not.
 
 // The subset of the loaded order + lines the recompute + preconditions need.
 type OrderLine = {
@@ -90,6 +93,8 @@ type LoadedOrder = {
   balance_due_inr?: number;
   /** When the paid bill was first changed; absent before 2026-11-paid-order-changes.sql. */
   paid_amended_at?: string | null;
+  /** When the order was placed: a completed paid bill can be changed only that day. */
+  created_at: string;
   /** 'coffee_pass' for the sale of a HIOC Ritual; absent before 2026-10-coffee-pass.sql (= a menu order). */
   order_kind?: string;
   discount_inr: number;
@@ -392,8 +397,10 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   // Preconditions — each a 409 (a conflict with the order's current state).
-  if (!OPEN_STATUSES.includes(order.status)) {
-    return errorResponse(409, 'This order can no longer be corrected — it is not open.');
+  // Open, or a paid dine-in bill marked Completed earlier today (lib/orders/
+  // paidChange.ts completedPaidChangeable).
+  if (!changeableState(order)) {
+    return errorResponse(409, notChangeableMessage(order, 'This order can no longer be corrected — it is not open.'));
   }
   // A paid bill: only a dine-in bill paid at the counter, and then the void
   // leaves a balance to give back — never a silent change to what was paid.
@@ -413,7 +420,10 @@ export async function POST(request: Request, { params }: RouteParams) {
   // voiding it would leave zero lines.
   const nonVoidedCount = items.filter((line) => !line.voided).length;
   if (nonVoidedCount <= 1) {
-    return errorResponse(409, 'Void would empty the order — cancel the order instead.');
+    return errorResponse(
+      409,
+      isPaidBill(order) ? lastLineMessage(order) : 'Void would empty the order — cancel the order instead.',
+    );
   }
 
   // Void the line (never delete — snapshot rule; a fired KOT may reference it).
@@ -576,8 +586,8 @@ async function addLines(
   if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
   const existingItems: OrderLine[] = order.order_items ?? [];
 
-  if (!OPEN_STATUSES.includes(order.status)) {
-    return errorResponse(409, 'This order can no longer be changed — it is not open.');
+  if (!changeableState(order)) {
+    return errorResponse(409, notChangeableMessage(order, 'This order can no longer be changed — it is not open.'));
   }
   // A paid bill: a dine-in bill paid at the counter takes the items, and what
   // they cost becomes a balance to collect. Any other paid order stays as it was
@@ -860,7 +870,7 @@ async function editLines(
   const paid = paidCheck.plan;
 
   const items: OrderLine[] = order.order_items ?? [];
-  const plan = planSettleEdit(items, body.changes);
+  const plan = planSettleEdit(items, body.changes, lastLineMessage(order));
   if (!plan.ok) return errorResponse(plan.status, plan.error);
 
   // Write the lines, tracking what landed so a failure or a lost version race can

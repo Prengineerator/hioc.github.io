@@ -5,8 +5,10 @@ or to take the brownie off. Until now every change refused a paid bill ("This
 order is already paid — start a new order"), so the counter had to cancel the
 order and punch a new one.
 
-Now a **paid dine-in bill** can be changed like an unpaid one. The difference is
-kept on the bill as a **balance** and settled later.
+Now a **paid dine-in bill** can be changed like an unpaid one — while it is
+open, **and after it has been marked Completed, on the same day it was placed**
+(tables are usually marked Completed once served, and ask for more after). The
+difference is kept on the bill as a **balance** and settled later.
 
 ## Setup (once)
 
@@ -16,11 +18,21 @@ that names the file. Nothing else changes.
 
 ## How the counter uses it
 
-| The table wants…            | Do this                                                                 | Result on the bill                          |
-| --------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- |
-| one more item               | Tables → the table → **+ Add items** (or Orders → the order → **+ Add items**) | Kitchen gets a ticket for just the new items · **balance to collect** |
-| an item taken off           | Orders → the order → **Void** on the line, or Settle → the bill → **Remove** | **To give back**                            |
-| fewer of something          | Settle → the bill → **−**                                               | **To give back**                            |
+Open the order from **Orders** (the "Orders" list shows Completed ones too —
+use its Completed filter) or from **Tables**, then:
+
+| The table wants…            | Do this                                                   | Result on the bill                          |
+| --------------------------- | --------------------------------------------------------- | ------------------------------------------- |
+| one more item               | **+ Add items**                                           | Kitchen gets a ticket for just the new items · **balance to collect**. A Completed order goes back to Preparing. |
+| an item taken off           | **Void** on the line, or **Edit order** → **Remove**      | **To give back**                            |
+| fewer of something          | **Edit order** → **−**                                    | **To give back**                            |
+| a different item instead    | **+ Add items** (the new one) first, then remove the old one | The difference either way               |
+
+The only item on a bill can't be removed on its own (that would empty it):
+add the replacement first, then remove it — or cancel the order and refund it.
+
+If these buttons don't show on a counter screen that has been open since
+before the update, use **Reload app** (account menu, or Ctrl+R).
 
 The bill is recalculated (GST, offers, discounts) exactly as it is for an unpaid
 order. Several changes add up into one balance: +₹150 then −₹120 leaves ₹30 to
@@ -47,6 +59,11 @@ its "unpaid" warnings.
 
 ## What is not covered
 
+- **Completed bills from an earlier day** stay locked: a closed day's sales,
+  cash and GST are not rewritten.
+- On a **Completed** bill, what completing did stays as it was: the stock its
+  items used stays taken (removing one later doesn't put it back), the Beanies
+  earned stay earned, and its bill/feedback messages aren't sent again.
 - **Takeaway and delivery** bills stay locked once paid, as before.
 - **Bills paid online** (website / table QR, through the payment gateway) stay
   locked: that payment can only be refunded through the gateway.

@@ -17,7 +17,13 @@
 import { isUuid } from '@/lib/api/constants';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { billOffers, parseSpendSnapshot, splitOrderDiscount, type BillOfferLine } from '@/lib/orders/offers';
-import { isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
+import {
+  COMPLETED_PAID_LATE,
+  completedPaidChangeable,
+  isPaidBill,
+  paidChangeBlockReason,
+  type PaidChangeOrder,
+} from '@/lib/orders/paidChange';
 import type { OrderStatus } from '@/lib/types';
 
 /**
@@ -90,6 +96,10 @@ export function settleEditBlockReason(order: SettleEditOrder): string | null {
   if (isPaidBill(order)) {
     const paidBlock = paidChangeBlockReason(order);
     if (paidBlock) return paidBlock;
+    // A paid dine-in bill marked Completed once served can still be changed
+    // that day; from an earlier day it stays (COMPLETED_PAID_LATE).
+    if (completedPaidChangeable(order)) return null;
+    if (order.status === 'completed') return COMPLETED_PAID_LATE;
   }
   if (SETTLE_EDIT_STATUSES.includes(order.status)) return null;
   if (order.status === 'received') return 'Accept this order on Orders before changing it.';
@@ -109,7 +119,12 @@ export function canReduceLine(line: Pick<SettleEditLine, 'voided' | 'quantity' |
  * write. Quantities only go down (0 removes the line); unchanged lines are
  * dropped; the order must keep at least one line.
  */
-export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): SettleEditPlan {
+export function planSettleEdit(
+  lines: SettleEditLine[],
+  rawChanges: unknown,
+  /** What to say when the edit would remove every line (lib/orders/paidChange.ts lastLineMessage). */
+  emptyMessage = 'That would empty the order — cancel the order instead.',
+): SettleEditPlan {
   if (!Array.isArray(rawChanges) || rawChanges.length === 0) {
     return { ok: false, status: 400, error: 'changes must be a non-empty array' };
   }
@@ -163,7 +178,7 @@ export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): Se
 
   const removed = new Set(changes.filter((c) => c.remove).map((c) => c.item_id));
   if (!lines.some((l) => !l.voided && !removed.has(l.id))) {
-    return { ok: false, status: 409, error: 'That would empty the order — cancel the order instead.' };
+    return { ok: false, status: 409, error: emptyMessage };
   }
 
   return { ok: true, changes };

@@ -19,6 +19,8 @@ import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import { SettleBalanceDialog } from '@/components/staff/SettleBalanceDialog';
+import { SettleOrderSheet } from '@/components/staff/SettleOrderSheet';
+import { hasBalanceToSettle, isSettleable } from '@/lib/orders/settleList';
 import { describeOrderPayment } from '@/lib/orders/settleList';
 import { acceptPrintPlan, settlePrintPlan } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
@@ -83,6 +85,8 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
   // A paid bill changed afterwards, its balance being settled (lib/orders/paidChange.ts).
   const [settlingBalance, setSettlingBalance] = useState<OrderWithItems | null>(null);
+  // The bill open in the item editor (the Settle sheet), from "Edit order".
+  const [editing, setEditing] = useState<OrderWithItems | null>(null);
 
   // Today's orders come from the shared feed (lib/staff/ordersFeed.ts): the
   // staff shell's one realtime channel fetches them once per change for this
@@ -566,6 +570,37 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           onOpenBalance={(o) => {
             closeDetail();
             setSettlingBalance(o);
+          }}
+          onEditOrder={(o) => {
+            closeDetail();
+            setEditing(o);
+          }}
+        />
+      ) : null}
+
+      {editing ? (
+        <SettleOrderSheet
+          order={editing}
+          // Offered to everyone here; the amend route checks settle_edit_order
+          // and its refusal shows in the sheet. Add items has its own checks.
+          canEdit
+          canAddItems
+          onClose={() => setEditing(null)}
+          onUpdated={(updated) => {
+            setEditing(updated);
+            const balance = updated.balance_due_inr ?? 0;
+            showToast(
+              `#${formatOrderNumber(updated.order_number)} updated · new total ₹${updated.total_inr ?? updated.subtotal_inr}` +
+                (updated.payment_status === 'paid' && balance !== 0
+                  ? ` · ₹${Math.abs(balance)} ${balance > 0 ? 'to collect' : 'to give back'}`
+                  : ''),
+            );
+            void fetchOrders();
+          }}
+          onSettle={(o) => {
+            setEditing(null);
+            if (isSettleable(o)) setPaying({ order: o, intent: 'settle' });
+            else if (hasBalanceToSettle(o)) setSettlingBalance(o);
           }}
         />
       ) : null}

@@ -4,12 +4,11 @@ import { PosOrderEntry, type AddToOrderTarget } from '@/components/staff/PosOrde
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isUuid } from '@/lib/api/constants';
 import { TakeOrdersGate } from '@/components/staff/TakeOrdersGate';
-import { isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
+import { changeableState, isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
 
-// The states in which an order can still take more items (mirrors the amend
-// route's OPEN_STATUSES — the route is the real gate; this just avoids offering
-// a flow that would 409).
-const OPEN_STATUSES = ['accepted', 'preparing', 'ready'];
+// Which orders can still take more items is lib/orders/paidChange.ts
+// changeableState, the amend route's own rule — the route is the real gate;
+// this just avoids offering a flow that would 409.
 
 /**
  * TAB-2: resolves `?add=<orderId>` into the target the entry screen needs.
@@ -40,7 +39,9 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
     // inferred type is an array — accept either rather than guess.
     tables?: { label: string } | { label: string }[] | null;
   };
-  if (!OPEN_STATUSES.includes(row.status)) return null;
+  // Open, or a paid dine-in bill marked Completed earlier today (it reopens to
+  // Preparing when the items are added — lib/orders/paidChange.ts).
+  if (!changeableState(row)) return null;
   // A paid bill takes more items only when it is a dine-in bill paid at the
   // counter: what they cost becomes a balance to collect (lib/orders/paidChange).
   const paid = isPaidBill(row);

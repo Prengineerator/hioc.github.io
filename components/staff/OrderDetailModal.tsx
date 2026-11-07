@@ -38,7 +38,7 @@ import type { PrintType } from '@/lib/staff/autoPrint';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 import { lineSizeSuffix } from '@/lib/menu/weight';
 import { MANUAL_DISCOUNT_LABEL } from '@/lib/orders/manualDiscount';
-import { balanceOf, paidChangeBlockReason, settledInr } from '@/lib/orders/paidChange';
+import { balanceOf, completedPaidChangeable, paidChangeBlockReason, settledInr } from '@/lib/orders/paidChange';
 import { SurfaceLink } from '@/components/SurfaceLink';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -71,6 +71,7 @@ export function OrderDetailModal({
   onComp,
   onOpenPayment,
   onOpenBalance,
+  onEditOrder,
 }: {
   order: OrderWithItems;
   defaultPrepMin?: number;
@@ -122,6 +123,12 @@ export function OrderDetailModal({
    * owes. Omit to hide those buttons.
    */
   onOpenBalance?: (o: OrderWithItems) => void;
+  /**
+   * Open the bill's item editor (lower a quantity, remove a line, add items) —
+   * the Settle sheet, reachable from here so a paid bill with nothing owed can
+   * be changed too. Omit to hide the button.
+   */
+  onEditOrder?: (o: OrderWithItems) => void;
 }) {
   useModalDismiss(onClose);
   const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp' | 'appRef'>(
@@ -206,13 +213,18 @@ export function OrderDetailModal({
   // paidChange.ts): the difference becomes a balance settled later.
   const paidChangeable = isPaid && paidChangeBlockReason(order) === null;
   const balance = isPaid ? balanceOf(order) : 0;
+  // Still changeable: open, or a paid dine-in bill marked Completed earlier
+  // today (served, but the table is still here — lib/orders/paidChange.ts).
+  const changeable = isOpen || completedPaidChangeable(order);
   // A line is voidable when the order is open and unpaid (POS-4), or paid but
   // changeable as above. The /amend route re-checks this + the manager
   // permission; the button is a convenience.
-  const canVoidLine = Boolean(onVoid) && isOpen && (!isPaid || paidChangeable) && !ritualSale;
-  // More items onto this bill (the running-tab add, TAB-2): an open dine-in
-  // order, unpaid or changeable once paid. The add screen re-checks it.
-  const canAddItems = !ritualSale && isDineIn && isOpen && (!isPaid || paidChangeable);
+  const canVoidLine = Boolean(onVoid) && changeable && (!isPaid || paidChangeable) && !ritualSale;
+  // More items onto this bill (the running-tab add, TAB-2): a changeable
+  // dine-in order, unpaid or paid at the counter. The add screen re-checks it.
+  const canAddItems = !ritualSale && isDineIn && changeable && (!isPaid || paidChangeable);
+  // The item editor (quantities down, lines off, Add items) for the same orders.
+  const canEditOrder = Boolean(onEditOrder) && !ritualSale && changeable && (!isPaid || paidChangeable);
   // Voided lines survive for audit but drop out of the checklist denominator.
   const activeItems = order.items.filter((i) => !i.voided);
   const voidTarget = voidItemId ? order.items.find((i) => i.id === voidItemId) : undefined;
@@ -616,6 +628,15 @@ export function OrderDetailModal({
           ) : null}
           {/* BILL-4: the resend route has existed since RCT-1 with nothing calling
               it. Shown only when there's somewhere to send. */}
+          {canEditOrder ? (
+            <button
+              type="button"
+              onClick={() => onEditOrder?.(order)}
+              className="rounded-md border border-tan px-3 py-1.5 text-xs font-bold text-tan-dark hover:bg-surface"
+            >
+              Edit order
+            </button>
+          ) : null}
           {canAddItems ? (
             <SurfaceLink
               href={`/staff/orders/new?add=${order.id}`}

@@ -1,9 +1,10 @@
 'use client';
 
-// One unpaid bill, opened from the Settle list: what is on it, what it comes
+// One bill, opened from the Settle list (unpaid, or paid with a balance left)
+// or from an order's "Edit order" (any bill that can still be changed — a paid
+// dine-in one included, lib/orders/paidChange.ts): what is on it, what it comes
 // to, and — for a person the owner has allowed (`settle_edit_order`, Team →
-// Permissions) — lowering it before it is settled: a quantity down, a line off,
-// each with a reason. "Add items" hands over to the running-tab add flow (the
+// Permissions) — lowering it: a quantity down, a line off, each with a reason. "Add items" hands over to the running-tab add flow (the
 // kitchen gets a ticket for exactly what was added); "Settle" goes on to the
 // payment step with whatever the bill now is.
 //

@@ -205,7 +205,11 @@ export function recomputeOrderTotals({
  * to be made, so an order the kitchen had marked Ready is back to Preparing —
  * it can't be handed over or completed without them. Accepted/Preparing
  * orders are already with the kitchen and stay as they are.
+ *
+ * A COMPLETED order only takes items when it is a paid dine-in bill from today
+ * (lib/orders/paidChange.ts completedPaidChangeable); it reopens to Preparing
+ * too, so the new items show on the kitchen's board and the table.
  */
 export function statusAfterAdd(status: OrderStatus): OrderStatus {
-  return status === 'ready' ? 'preparing' : status;
+  return status === 'ready' || status === 'completed' ? 'preparing' : status;
 }

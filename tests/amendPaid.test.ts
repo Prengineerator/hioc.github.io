@@ -157,6 +157,7 @@ beforeEach(() => {
     discount_inr: 0,
     total_inr: 315,
     paid_at: PAID_AT,
+    created_at: '2026-11-07T08:20:00Z',
     balance_due_inr: 0,
     paid_amended_at: null,
     order_items: [
@@ -366,5 +367,83 @@ describe('every other paid order is still refused, writing nothing', () => {
     expect(ordersUpdate().filters).toContainEqual(['payment_status', 'unpaid']);
     expect(opsOn('order_payments')).toHaveLength(0);
     expect(auditPayload()).not.toHaveProperty('paid_bill');
+  });
+});
+
+describe('a paid dine-in bill marked Completed once served (same day)', () => {
+  const today = () => new Date().toISOString();
+
+  it('void: works on a completed bill from today, which stays completed', async () => {
+    state.order = { ...state.order!, status: 'completed', created_at: today() };
+
+    const res = await POST(req(voidB), params);
+
+    expect(res.status).toBe(200);
+    expect(ordersUpdate().payload).toMatchObject({ total_inr: 210, balance_due_inr: -105 });
+    expect(ordersUpdate().payload).not.toHaveProperty('status');
+  });
+
+  it('add: reopens a completed bill from today to Preparing, with a status event', async () => {
+    state.order = { ...state.order!, status: 'completed', created_at: today() };
+
+    const res = await POST(req(addTwoLattes), params);
+
+    expect(res.status).toBe(200);
+    expect(ordersUpdate().payload).toMatchObject({ status: 'preparing', balance_due_inr: 315 });
+    expect(opsOn('order_status_events', 'insert')[0].payload).toMatchObject({
+      from_status: 'completed',
+      to_status: 'preparing',
+      reason: 'Items added',
+    });
+  });
+
+  it('edit: works on a completed bill from today', async () => {
+    state.order = { ...state.order!, status: 'completed', created_at: today() };
+    const res = await POST(req(editAToOne), params);
+    expect(res.status).toBe(200);
+    expect(ordersUpdate().payload).toMatchObject({ balance_due_inr: -105 });
+  });
+
+  it.each([
+    ['void', voidB],
+    ['add', addTwoLattes],
+    ['edit', editAToOne],
+  ])('%s: refuses a completed bill from an earlier day, writing nothing', async (_op, body) => {
+    state.order = { ...state.order!, status: 'completed', created_at: '2026-01-01T06:00:00Z' };
+
+    const res = await POST(req(body), params);
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('on the day it was placed') });
+    expect(state.ops.filter((o) => o.op !== 'select')).toHaveLength(0);
+  });
+
+  it('a completed takeaway stays locked with the old answer', async () => {
+    state.order = { ...state.order!, status: 'completed', order_type: 'takeaway', created_at: today() };
+    const res = await POST(req(voidB), params);
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('not open') });
+  });
+});
+
+describe('removing the only item on a paid bill', () => {
+  it('void says to add the replacement first', async () => {
+    state.order = {
+      ...state.order!,
+      order_items: [{ id: LINE_B, voided: false, quantity: 1, price_inr_snapshot: 100, line_total_inr: 100 }],
+    };
+    const res = await POST(req(voidB), params);
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('add the new item first') });
+  });
+
+  it('edit says the same', async () => {
+    state.order = {
+      ...state.order!,
+      order_items: [{ id: LINE_B, voided: false, quantity: 1, price_inr_snapshot: 100, line_total_inr: 100 }],
+    };
+    const res = await POST(req({ op: 'edit', changes: [{ item_id: LINE_B, quantity: 0 }], reason: 'Swap' }), params);
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining('add the new item first') });
   });
 });
