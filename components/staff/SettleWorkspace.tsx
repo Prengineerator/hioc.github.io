@@ -13,6 +13,11 @@
 // (`settle_edit_order`, Team → Permissions) the sheet also lowers it before it
 // is settled — a quantity down, a line off, with a reason — and offers the
 // running-tab "Add items"; the amend route re-checks all of it.
+//
+// PAID dine-in bills changed after they were paid (lib/orders/paidChange.ts)
+// are listed here too while a difference is left: "Collect ₹130" when the
+// table owes more, "Give back ₹105" when the café owes some back. Their sheet
+// can still be changed; the balance follows.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
@@ -21,9 +26,11 @@ import { RITUAL_SALE_LABEL, isRitualSale } from '@/lib/pos/ritual';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettleOrderSheet, whereOf } from '@/components/staff/SettleOrderSheet';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
+import { SettleBalanceDialog } from '@/components/staff/SettleBalanceDialog';
 import { Spinner } from '@/components/ui/Spinner';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
-import { describeOrderPayment, groupForSettle, isSettleable } from '@/lib/orders/settleList';
+import { describeOrderPayment, groupForSettle, hasBalanceToSettle, isSettleable } from '@/lib/orders/settleList';
+import { balanceOf } from '@/lib/orders/paidChange';
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
@@ -38,6 +45,10 @@ const JUST_SETTLED_LIMIT = 8;
 
 const rupees = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 const totalOf = (o: Order) => o.total_inr ?? o.subtotal_inr;
+/** On this screen: an unpaid bill, or a paid one with a difference left to settle. */
+const onSettle = (o: Order) => isSettleable(o) || hasBalanceToSettle(o);
+/** What this bill still brings in: the whole bill when unpaid, its balance owed when paid (0 for a give-back). */
+const toCollectOf = (o: Order) => (isSettleable(o) ? totalOf(o) : Math.max(0, balanceOf(o)));
 
 function timeIst(iso: string): string {
   return new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
@@ -69,6 +80,7 @@ export function SettleWorkspace({
   // the sheet follows every refetch instead of showing a stale copy.
   const [viewingId, setViewingId] = useState<string | null>(null);
   const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
+  const [settlingBalance, setSettlingBalance] = useState<OrderWithItems | null>(null);
   const [justSettled, setJustSettled] = useState<OrderWithItems[]>([]);
   const [toast, setToast] = useState('');
   const printDock = usePrintDock();
@@ -76,10 +88,19 @@ export function SettleWorkspace({
 
   const fetchUnpaid = useCallback(async () => {
     try {
-      const res = await fetchWithTimeout('/api/orders?payment=unpaid', { cache: 'no-store' });
+      // Unpaid bills, and paid bills with a balance left. The balance list is a
+      // bonus: if it can't be read, the unpaid bills still show.
+      const [res, balanceRes] = await Promise.all([
+        fetchWithTimeout('/api/orders?payment=unpaid', { cache: 'no-store' }),
+        fetchWithTimeout('/api/orders?payment=balance', { cache: 'no-store' }).catch(() => null),
+      ]);
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { orders?: OrderWithItems[] };
-      setOrders((data.orders ?? []).filter(isSettleable));
+      const withBalance =
+        balanceRes && balanceRes.ok
+          ? (((await balanceRes.json().catch(() => ({}))) as { orders?: OrderWithItems[] }).orders ?? [])
+          : [];
+      setOrders([...(data.orders ?? []).filter(isSettleable), ...withBalance.filter(hasBalanceToSettle)]);
       setLoadError(false);
     } catch {
       setLoadError(true);
@@ -109,7 +130,8 @@ export function SettleWorkspace({
   }, [toast]);
 
   const groups = useMemo(() => groupForSettle(orders), [orders]);
-  const owed = orders.reduce((sum, o) => sum + totalOf(o), 0);
+  const owed = orders.reduce((sum, o) => sum + toCollectOf(o), 0);
+  const toGiveBack = orders.reduce((sum, o) => sum + Math.max(0, -balanceOf(o)), 0);
   const viewing = viewingId ? (orders.find((o) => o.id === viewingId) ?? null) : null;
 
   // Settled (or cancelled) on another till while it was open: the sheet closes.
@@ -120,8 +142,27 @@ export function SettleWorkspace({
   // The amend route returns the whole order: swap it in, so the row, the "still
   // to collect" figure and the sheet all show the new total at once.
   function handleEdited(updated: OrderWithItems) {
-    setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)).filter(isSettleable));
-    setToast(`#${formatOrderNumber(updated.order_number)} updated · new total ${rupees(totalOf(updated))}`);
+    setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)).filter(onSettle));
+    const balance = balanceOf(updated);
+    const balanceNote =
+      updated.payment_status === 'paid' && balance !== 0
+        ? ` · ${rupees(Math.abs(balance))} ${balance > 0 ? 'to collect' : 'to give back'}`
+        : '';
+    setToast(`#${formatOrderNumber(updated.order_number)} updated · new total ${rupees(totalOf(updated))}${balanceNote}`);
+  }
+
+  function handleBalanceDone(updated: OrderWithItems, message: string) {
+    setSettlingBalance(null);
+    setOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)).filter(onSettle));
+    setToast(message);
+    void fetchUnpaid();
+  }
+
+  // A bill opened from the list: the payment step for an unpaid one, the
+  // balance step for a paid one with a difference left.
+  function startSettle(o: OrderWithItems) {
+    if (isSettleable(o)) setPaying({ order: o, intent: 'settle' });
+    else setSettlingBalance(o);
   }
 
   function handleDone(updated: Order) {
@@ -148,7 +189,10 @@ export function SettleWorkspace({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-charcoal">Settle</h1>
-          <p className="text-sm text-muted">Every bill still to be paid, from any day. Oldest first.</p>
+          <p className="text-sm text-muted">
+            Every bill still to be paid — and paid bills changed since, with a difference left — from any day. Oldest
+            first.
+          </p>
         </div>
         <div
           className={
@@ -158,6 +202,7 @@ export function SettleWorkspace({
         >
           <p className={`text-xs ${owed > 0 ? 'font-bold text-red-800' : 'text-muted'}`}>Still to collect</p>
           <p className={`text-xl font-bold ${owed > 0 ? 'text-red-800' : 'text-charcoal'}`}>{rupees(owed)}</p>
+          {toGiveBack > 0 ? <p className="text-xs font-bold text-charcoal">{rupees(toGiveBack)} to give back</p> : null}
           <p className="text-xs text-muted">
             {orders.length} bill{orders.length === 1 ? '' : 's'}
           </p>
@@ -184,13 +229,13 @@ export function SettleWorkspace({
             orders={groups.earlier}
             showDate
             onOpen={(o) => setViewingId(o.id)}
-            onSettle={(o) => setPaying({ order: o, intent: 'settle' })}
+            onSettle={startSettle}
           />
           <SettleGroup
             title="Today"
             orders={groups.today}
             onOpen={(o) => setViewingId(o.id)}
-            onSettle={(o) => setPaying({ order: o, intent: 'settle' })}
+            onSettle={startSettle}
           />
         </>
       )}
@@ -245,8 +290,16 @@ export function SettleWorkspace({
           onUpdated={handleEdited}
           onSettle={(o) => {
             setViewingId(null);
-            setPaying({ order: o, intent: 'settle' });
+            startSettle(o);
           }}
+        />
+      ) : null}
+
+      {settlingBalance ? (
+        <SettleBalanceDialog
+          order={settlingBalance}
+          onClose={() => setSettlingBalance(null)}
+          onDone={handleBalanceDone}
         />
       ) : null}
 
@@ -287,7 +340,7 @@ function SettleGroup({
   onSettle: (o: OrderWithItems) => void;
 }) {
   if (orders.length === 0) return null;
-  const sum = orders.reduce((s, o) => s + totalOf(o), 0);
+  const sum = orders.reduce((s, o) => s + toCollectOf(o), 0);
   return (
     <section>
       <h2 className="mb-2 flex items-baseline justify-between text-xs font-bold uppercase tracking-wide text-muted">
@@ -297,10 +350,17 @@ function SettleGroup({
         <span className="font-mono tabular-nums">{rupees(sum)}</span>
       </h2>
       <ul className="flex flex-col gap-2">
-        {orders.map((o) => (
+        {orders.map((o) => {
+          // A paid bill with a difference left: its balance, not its total.
+          const balance = isSettleable(o) ? 0 : balanceOf(o);
+          const givesBack = balance < 0;
+          return (
           <li
             key={o.id}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-red-200 border-l-4 border-l-red-500 bg-white px-4 py-3"
+            className={
+              'flex flex-wrap items-center justify-between gap-3 rounded-md border border-l-4 bg-white px-4 py-3 ' +
+              (givesBack ? 'border-line border-l-tan' : 'border-red-200 border-l-red-500')
+            }
           >
             {/* The info block opens the bill (what is on it, and — with the
                 owner's permission — lowering it before it is settled). Spans, not
@@ -319,6 +379,9 @@ function SettleGroup({
                 </span>
                 {isRitualSale(o) ? null : <span className="font-bold text-charcoal">{whereOf(o)}</span>}
                 {o.customer_name ? <span className="text-charcoal">{o.customer_name}</span> : null}
+                {balance !== 0 ? (
+                  <Badge variant="tan">{givesBack ? 'Paid · changed, give back' : 'Paid · changed, balance due'}</Badge>
+                ) : null}
                 {isRitualSale(o) ? (
                   // The sale sits 'accepted' until it is paid, which says nothing
                   // to a cashier: the label says what is being collected.
@@ -332,17 +395,24 @@ function SettleGroup({
               <span className="mt-1 block truncate text-xs text-muted">{itemsSummary(o)}</span>
             </button>
             <div className="flex items-center gap-3">
-              <span className="font-mono text-lg font-bold tabular-nums text-red-800">{rupees(totalOf(o))}</span>
+              <span
+                className={
+                  'font-mono text-lg font-bold tabular-nums ' + (givesBack ? 'text-charcoal' : 'text-red-800')
+                }
+              >
+                {rupees(balance !== 0 ? Math.abs(balance) : totalOf(o))}
+              </span>
               <button
                 type="button"
                 onClick={() => onSettle(o)}
                 className="min-h-[44px] rounded-md bg-tan-dark px-5 text-sm font-bold text-cream hover:bg-tan-darker"
               >
-                Settle
+                {balance > 0 ? 'Collect' : givesBack ? 'Give back' : 'Settle'}
               </button>
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </section>
   );

@@ -1297,6 +1297,27 @@ export async function GET(request: Request) {
     return NextResponse.json({ orders: (data ?? []).map((row) => toOrderResponse(row as OrderRowWithItems)) });
   }
 
+  // ?payment=balance — the Settle screen's other half: PAID bills changed after
+  // they were paid with a difference still to settle either way (more to
+  // collect, or some to give back — lib/orders/paidChange.ts), from ANY day,
+  // oldest first. A database without 2026-11-paid-order-changes.sql has no such
+  // bills: the missing column reads as an empty list, not an error.
+  if (searchParams.get('payment') === 'balance') {
+    const { data, error } = await admin
+      .from('orders')
+      .select('*, order_items(*, order_item_addons(*))')
+      .eq('payment_status', 'paid')
+      .neq('balance_due_inr', 0)
+      .not('status', 'in', '(cancelled,rejected)')
+      .order('created_at', { ascending: true })
+      .limit(MAX_ALL_ORDERS_ROWS);
+    if (error) {
+      if ((error as { code?: string }).code === '42703') return NextResponse.json({ orders: [] });
+      return errorResponse(500, 'Failed to load bills with a balance');
+    }
+    return NextResponse.json({ orders: (data ?? []).map((row) => toOrderResponse(row as OrderRowWithItems)) });
+  }
+
   let query = admin
     .from('orders')
     .select(`*, order_items(*, order_item_addons(*)), ${ORDER_PAYMENTS_EMBED}`)

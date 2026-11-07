@@ -16,6 +16,8 @@ import { consumeStockForOrder } from '@/lib/inventory/server';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { Order, OrderType, PaymentStatus } from '@/lib/types';
 
+import { balanceOf } from '@/lib/orders/paidChange';
+
 export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: { id: string } };
@@ -139,6 +141,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     orderType: current.order_type as OrderType,
     paymentStatus: current.payment_status as PaymentStatus,
     isComp,
+    // A paid bill changed afterwards with money still owed (2026-11-paid-order-
+    // changes.sql); absent before that migration = nothing owed.
+    balanceDueInr: balanceOf(current),
   });
   if (!check.ok) {
     if (check.code === 'forbidden_actor') return errorResponse(403, check.message!);

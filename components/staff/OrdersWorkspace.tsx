@@ -18,6 +18,7 @@ import { TodayOrdersList } from '@/components/staff/TodayOrdersList';
 import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
+import { SettleBalanceDialog } from '@/components/staff/SettleBalanceDialog';
 import { describeOrderPayment } from '@/lib/orders/settleList';
 import { acceptPrintPlan, settlePrintPlan } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
@@ -80,6 +81,8 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const { autoPrint } = useCounterDefaults();
   // The full payment step for one order (split, cash change, change payment).
   const [paying, setPaying] = useState<{ order: OrderWithItems; intent: SettleIntent } | null>(null);
+  // A paid bill changed afterwards, its balance being settled (lib/orders/paidChange.ts).
+  const [settlingBalance, setSettlingBalance] = useState<OrderWithItems | null>(null);
 
   // Today's orders come from the shared feed (lib/staff/ordersFeed.ts): the
   // staff shell's one realtime channel fetches them once per change for this
@@ -559,6 +562,22 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           onOpenPayment={(o, intent) => {
             closeDetail();
             setPaying({ order: o, intent });
+          }}
+          onOpenBalance={(o) => {
+            closeDetail();
+            setSettlingBalance(o);
+          }}
+        />
+      ) : null}
+
+      {settlingBalance ? (
+        <SettleBalanceDialog
+          order={settlingBalance}
+          onClose={() => setSettlingBalance(null)}
+          onDone={(_updated, message) => {
+            setSettlingBalance(null);
+            showToast(message);
+            void fetchOrders();
           }}
         />
       ) : null}

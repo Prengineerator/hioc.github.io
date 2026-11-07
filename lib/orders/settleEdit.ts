@@ -17,6 +17,7 @@
 import { isUuid } from '@/lib/api/constants';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { billOffers, parseSpendSnapshot, splitOrderDiscount, type BillOfferLine } from '@/lib/orders/offers';
+import { isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
 import type { OrderStatus } from '@/lib/types';
 
 /**
@@ -43,7 +44,7 @@ export interface SettleEditChange {
 }
 
 /** What the rules need from an order. */
-export interface SettleEditOrder {
+export interface SettleEditOrder extends PaidChangeOrder {
   status: OrderStatus;
   payment_status: string;
   /** 'coffee_pass' for a HIOC Ritual sale; absent = a menu order. */
@@ -80,10 +81,16 @@ export type SettleEditPlan =
 /**
  * Why this order can't be edited right now, or null when it can. The order's
  * state only — whether this person may edit is the permission's business.
+ *
+ * A PAID bill can be edited too when it is a dine-in bill paid at the counter
+ * (lib/orders/paidChange.ts): the difference becomes a balance settled later.
  */
 export function settleEditBlockReason(order: SettleEditOrder): string | null {
   if (order.order_kind === 'coffee_pass') return `A ${PASS_PROGRAM_NAME} sale can't be changed — cancel it instead.`;
-  if (order.payment_status === 'paid') return 'This bill is already paid.';
+  if (isPaidBill(order)) {
+    const paidBlock = paidChangeBlockReason(order);
+    if (paidBlock) return paidBlock;
+  }
   if (SETTLE_EDIT_STATUSES.includes(order.status)) return null;
   if (order.status === 'received') return 'Accept this order on Orders before changing it.';
   if (order.status === 'completed') return 'A completed order can’t be changed — its stock has already been used.';

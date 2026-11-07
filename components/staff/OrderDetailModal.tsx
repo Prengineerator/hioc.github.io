@@ -38,6 +38,8 @@ import type { PrintType } from '@/lib/staff/autoPrint';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
 import { lineSizeSuffix } from '@/lib/menu/weight';
 import { MANUAL_DISCOUNT_LABEL } from '@/lib/orders/manualDiscount';
+import { balanceOf, paidChangeBlockReason, settledInr } from '@/lib/orders/paidChange';
+import { SurfaceLink } from '@/components/SurfaceLink';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -68,6 +70,7 @@ export function OrderDetailModal({
   onVoid,
   onComp,
   onOpenPayment,
+  onOpenBalance,
 }: {
   order: OrderWithItems;
   defaultPrepMin?: number;
@@ -113,6 +116,12 @@ export function OrderDetailModal({
    * hide both buttons.
    */
   onOpenPayment?: (o: OrderWithItems, intent: SettleIntent) => void;
+  /**
+   * Settle the balance of a paid bill changed after it was paid
+   * (lib/orders/paidChange.ts): collect what is owed, or give back what the café
+   * owes. Omit to hide those buttons.
+   */
+  onOpenBalance?: (o: OrderWithItems) => void;
 }) {
   useModalDismiss(onClose);
   const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp' | 'appRef'>(
@@ -193,9 +202,17 @@ export function OrderDetailModal({
   const isDineIn = order.order_type === 'dine_in';
   const isPaid = order.payment_status === 'paid';
   const isOpen = OPEN_STATUSES.includes(order.status);
-  // A line is voidable when the order is open and unpaid (POS-4). The /amend
-  // route re-checks this + the manager permission; the button is a convenience.
-  const canVoidLine = Boolean(onVoid) && isOpen && !isPaid && !ritualSale;
+  // A dine-in bill paid at the counter can still be changed (lib/orders/
+  // paidChange.ts): the difference becomes a balance settled later.
+  const paidChangeable = isPaid && paidChangeBlockReason(order) === null;
+  const balance = isPaid ? balanceOf(order) : 0;
+  // A line is voidable when the order is open and unpaid (POS-4), or paid but
+  // changeable as above. The /amend route re-checks this + the manager
+  // permission; the button is a convenience.
+  const canVoidLine = Boolean(onVoid) && isOpen && (!isPaid || paidChangeable) && !ritualSale;
+  // More items onto this bill (the running-tab add, TAB-2): an open dine-in
+  // order, unpaid or changeable once paid. The add screen re-checks it.
+  const canAddItems = !ritualSale && isDineIn && isOpen && (!isPaid || paidChangeable);
   // Voided lines survive for audit but drop out of the checklist denominator.
   const activeItems = order.items.filter((i) => !i.voided);
   const voidTarget = voidItemId ? order.items.find((i) => i.id === voidItemId) : undefined;
@@ -552,6 +569,19 @@ export function OrderDetailModal({
           <span className="font-bold text-charcoal">Total</span>
           <span className="font-bold text-tan-dark">₹{order.total_inr ?? order.subtotal_inr}</span>
         </div>
+        {/* A paid bill changed afterwards: what was paid, and the difference left. */}
+        {balance !== 0 ? (
+          <div className="text-sm text-charcoal">
+            <div className="flex justify-between">
+              <span>Already paid</span>
+              <span className="font-mono tabular-nums">₹{settledInr(order)}</span>
+            </div>
+            <div className="flex justify-between font-bold text-red-800">
+              <span>{balance > 0 ? 'Balance to collect' : 'To give back'}</span>
+              <span className="font-mono tabular-nums">₹{Math.abs(balance)}</span>
+            </div>
+          </div>
+        ) : null}
         {order.notes ? <p className="mt-2 text-sm italic text-muted">Order note: {order.notes}</p> : null}
 
         {/* Print row (KOT-1 / KOT-2). Unobtrusive — sits above the transition
@@ -586,6 +616,14 @@ export function OrderDetailModal({
           ) : null}
           {/* BILL-4: the resend route has existed since RCT-1 with nothing calling
               it. Shown only when there's somewhere to send. */}
+          {canAddItems ? (
+            <SurfaceLink
+              href={`/staff/orders/new?add=${order.id}`}
+              className="rounded-md border border-line px-3 py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
+            >
+              + Add items
+            </SurfaceLink>
+          ) : null}
           {canResendBill ? (
             <button
               type="button"
@@ -844,15 +882,50 @@ export function OrderDetailModal({
                 <div className="rounded-md border border-line p-4">
                   <p className="text-sm font-bold text-charcoal">Settle &amp; complete</p>
                   <p className="text-xs text-muted">
-                    {order.table_label ? `Table ${order.table_label} · ` : ''}₹{order.total_inr ?? order.subtotal_inr} due
+                    {order.table_label ? `Table ${order.table_label} · ` : ''}
+                    {isPaid && balance > 0
+                      ? `₹${balance} balance due`
+                      : isPaid
+                        ? 'paid'
+                        : `₹${order.total_inr ?? order.subtotal_inr} due`}
                   </p>
-                  {isPaid ? (
-                    <button
-                      onClick={() => onTransition(order, 'completed')}
-                      className="mt-3 w-full rounded-md bg-green-600 py-2.5 font-bold text-cream hover:bg-green-700"
-                    >
-                      Complete
-                    </button>
+                  {isPaid && balance > 0 ? (
+                    // Changed after it was paid and more is owed: collect it (or
+                    // let it go) before completing — the server holds it too.
+                    <>
+                      {onOpenBalance ? (
+                        <button
+                          onClick={() => onOpenBalance(order)}
+                          className="mt-3 w-full rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker"
+                        >
+                          Collect ₹{balance} balance
+                        </button>
+                      ) : null}
+                      <button
+                        disabled
+                        title="Collect the balance first"
+                        className="mt-2 w-full cursor-not-allowed rounded-md bg-tan/40 py-2.5 font-bold text-cream"
+                      >
+                        Complete (collect the balance first)
+                      </button>
+                    </>
+                  ) : isPaid ? (
+                    <>
+                      {balance < 0 && onOpenBalance ? (
+                        <button
+                          onClick={() => onOpenBalance(order)}
+                          className="mt-3 w-full rounded-md border border-tan py-2 text-sm font-bold text-tan-dark hover:bg-surface"
+                        >
+                          Give back ₹{-balance}
+                        </button>
+                      ) : null}
+                      <button
+                        onClick={() => onTransition(order, 'completed')}
+                        className="mt-3 w-full rounded-md bg-green-600 py-2.5 font-bold text-cream hover:bg-green-700"
+                      >
+                        Complete
+                      </button>
+                    </>
                   ) : (
                     <>
                       <p className="mt-2 text-xs text-muted">Collect payment to settle, then complete.</p>
@@ -1017,6 +1090,16 @@ export function OrderDetailModal({
                   className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
                 >
                   Split or cash with change…
+                </button>
+              ) : null}
+              {/* A paid bill changed afterwards: settle the difference (the
+                  ready dine-in panel above has its own button for it). */}
+              {onOpenBalance && balance !== 0 && !(order.status === 'ready' && isDineIn) ? (
+                <button
+                  onClick={() => onOpenBalance(order)}
+                  className="mt-2 w-full rounded-md border border-tan py-1.5 text-xs font-bold text-tan-dark hover:bg-surface"
+                >
+                  {balance > 0 ? `Collect ₹${balance} balance…` : `Give back ₹${-balance}…`}
                 </button>
               ) : null}
               {onOpenPayment && canChangePayment(order) ? (

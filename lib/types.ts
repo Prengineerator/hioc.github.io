@@ -251,6 +251,13 @@ export interface Order {
   manual_discount_inr?: number;
   manual_discount_reason?: string;
   manual_discount_by?: string | null;
+  // 2026-11-paid-order-changes.sql: a PAID dine-in bill changed afterwards
+  // (lib/orders/paidChange.ts). balance_due_inr is the difference still to
+  // settle — > 0 the customer owes it, < 0 the café gives it back, 0 nothing
+  // outstanding. paid_amended_at is when the paid bill was first changed.
+  // Optional: absent before the migration (= 0 / null).
+  balance_due_inr?: number;
+  paid_amended_at?: string | null;
 }
 
 export interface OrderItemAddon {

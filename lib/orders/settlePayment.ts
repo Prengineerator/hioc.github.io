@@ -14,6 +14,7 @@ import {
   type PaymentPart,
 } from '@/lib/orders/payments';
 import { runAfterResponse } from '@/lib/api/background';
+import { changedAfterPayment, type PaidChangeOrder } from '@/lib/orders/paidChange';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -153,6 +154,19 @@ export async function settleOrderPayment(
     return fail(409, 'This order has a refund, so how it was paid can no longer be changed.');
   }
 
+  // Same idea for a paid bill that was changed afterwards (lib/orders/
+  // paidChange.ts): its tenders were taken at different times, and a balance
+  // may have been given back. Re-recording them as one set summing to the new
+  // total would lose the original payment from the drawer, or count a give-back
+  // twice. Absent columns (before 2026-11-paid-order-changes.sql) read as never
+  // changed, so this is inert there.
+  if (existing.payment_status === 'paid' && changedAfterPayment(existing as PaidChangeOrder)) {
+    return fail(
+      409,
+      'This bill was changed after it was paid, so how it was paid can no longer be changed. Settle any balance on the Settle screen.',
+    );
+  }
+
   // POS4-1: validate the split against the authoritative total before touching
   // anything. The parts must sum exactly — a gap would surface later as an
   // unexplained cash-drawer variance nobody can reconstruct.
@@ -205,47 +219,9 @@ export async function settleOrderPayment(
   }
 
   // The same booking settled on two bills is either a typo or the platform's
-  // money being claimed twice — refuse it before anything is written. A dead
-  // order (cancelled, rejected, fully refunded) doesn't hold its ID: that
-  // booking can legitimately be billed again.
-  const referenced = (parts ?? []).filter((p) => p.reference);
-  if (referenced.length > 0) {
-    const { data: sameRef, error: refError } = await admin
-      .from('order_payments')
-      .select('order_id, method, reference')
-      .in(
-        'reference',
-        referenced.map((p) => p.reference as string),
-      )
-      .neq('order_id', id);
-    if (refError) {
-      console.error('booking ID check failed — is supabase/2026-10-aggregator-payments.sql applied?', refError);
-      return fail(500, 'Could not check the booking ID. Try again.');
-    }
-    const clashes = ((sameRef ?? []) as { order_id: string; method: string; reference: string }[]).filter((r) =>
-      referenced.some((p) => p.method === r.method && p.reference === r.reference),
-    );
-    if (clashes.length > 0) {
-      const { data: others } = await admin
-        .from('orders')
-        .select('id, order_number, status, payment_status')
-        .in(
-          'id',
-          clashes.map((c) => c.order_id),
-        );
-      const live = ((others ?? []) as { id: string; order_number: number; status: string; payment_status: string }[]).find(
-        (o) => !['cancelled', 'rejected'].includes(o.status) && o.payment_status !== 'refunded',
-      );
-      if (live) {
-        const clash = clashes.find((c) => c.order_id === live.id)!;
-        return fail(
-          409,
-          `${PAYMENT_METHOD_LABEL[clash.method] ?? clash.method} ID ${clash.reference} is already recorded on order ` +
-            `${formatOrderNumber(live.order_number)}. Check the ID in the app.`,
-        );
-      }
-    }
-  }
+  // money being claimed twice — refuse it before anything is written.
+  const clash = await bookingReferenceClash(admin, id, parts ?? []);
+  if (clash) return fail(clash.status, clash.error);
 
   const methodToStore = parts ? dominantMethod(parts) : (body.payment_method as PaymentMethod);
 
@@ -372,5 +348,56 @@ export async function settleOrderPayment(
       },
       change_due_inr: changeInr,
     },
+  };
+}
+
+/**
+ * The same dining-app booking ID already recorded on ANOTHER live order — a
+ * typo, or the platform's money being claimed twice — as the refusal to give,
+ * or null when every referenced part is clear. A dead order (cancelled,
+ * rejected, fully refunded) doesn't hold its ID: that booking can legitimately
+ * be billed again. Shared with the balance settlement
+ * (app/api/orders/[id]/balance) so both refuse the same IDs.
+ */
+export async function bookingReferenceClash(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  orderId: string,
+  parts: readonly PaymentPart[],
+): Promise<{ status: number; error: string } | null> {
+  const referenced = parts.filter((p) => p.reference);
+  if (referenced.length === 0) return null;
+  const { data: sameRef, error: refError } = await admin
+    .from('order_payments')
+    .select('order_id, method, reference')
+    .in(
+      'reference',
+      referenced.map((p) => p.reference as string),
+    )
+    .neq('order_id', orderId);
+  if (refError) {
+    console.error('booking ID check failed — is supabase/2026-10-aggregator-payments.sql applied?', refError);
+    return { status: 500, error: 'Could not check the booking ID. Try again.' };
+  }
+  const clashes = ((sameRef ?? []) as { order_id: string; method: string; reference: string }[]).filter((r) =>
+    referenced.some((p) => p.method === r.method && p.reference === r.reference),
+  );
+  if (clashes.length === 0) return null;
+  const { data: others } = await admin
+    .from('orders')
+    .select('id, order_number, status, payment_status')
+    .in(
+      'id',
+      clashes.map((c) => c.order_id),
+    );
+  const live = ((others ?? []) as { id: string; order_number: number; status: string; payment_status: string }[]).find(
+    (o) => !['cancelled', 'rejected'].includes(o.status) && o.payment_status !== 'refunded',
+  );
+  if (!live) return null;
+  const clash = clashes.find((c) => c.order_id === live.id)!;
+  return {
+    status: 409,
+    error:
+      `${PAYMENT_METHOD_LABEL[clash.method] ?? clash.method} ID ${clash.reference} is already recorded on order ` +
+      `${formatOrderNumber(live.order_number)}. Check the ID in the app.`,
   };
 }

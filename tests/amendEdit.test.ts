@@ -297,11 +297,12 @@ describe('POST /api/orders/[id]/amend { op: edit } — happy paths', () => {
       version: 4, // optimistic bump
     });
     // The write only lands if nobody changed the order since it was read, and
-    // never on a bill settled in the meantime (settling doesn't bump version).
+    // never on a bill settled in the meantime (settling doesn't bump version):
+    // the payment status must still be the one it was read with.
     expect(state.orderEqs).toEqual([
       ['id', ORDER_ID],
       ['version', 3],
-      ['payment_status !=', 'paid'],
+      ['payment_status', 'unpaid'],
     ]);
 
     expect(state.amendmentRows).toEqual([
