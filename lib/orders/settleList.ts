@@ -1,6 +1,7 @@
 // The Settle screen (/staff/settle) and "Change payment" — the pure rules, so
 // every screen agrees on what can be settled or re-recorded.
 
+import { changedAfterPayment, hasOpenBalance } from '@/lib/orders/paidChange';
 import type { Order } from '@/lib/types';
 
 export { describeOrderPayment, describePaymentMethod } from '@/lib/orders/paymentLabel';
@@ -24,12 +25,29 @@ export function isSettleable(order: Pick<Order, 'status' | 'payment_status'>): b
 }
 
 /**
- * A paid bill whose tenders may be recorded again (cash → UPI…). Not an
- * online payment (the gateway owns it) and not once anything was refunded
- * (the refund was taken off a specific tender). Same rule as the server.
+ * A paid bill with a difference still to settle (lib/orders/paidChange.ts):
+ * changed after it was paid, so more is owed, or some is owed back. It sits on
+ * the Settle screen beside the unpaid bills until the balance is settled.
  */
-export function canChangePayment(order: Pick<Order, 'status' | 'payment_status' | 'payment_method'>): boolean {
+export function hasBalanceToSettle(
+  order: Pick<Order, 'status' | 'payment_status' | 'balance_due_inr'>,
+): boolean {
+  return hasOpenBalance(order);
+}
+
+/**
+ * A paid bill whose tenders may be recorded again (cash → UPI…). Not an
+ * online payment (the gateway owns it), not once anything was refunded
+ * (the refund was taken off a specific tender), and not once the paid bill
+ * was changed (its tenders were taken at different times — lib/orders/
+ * paidChange.ts). Same rule as the server.
+ */
+export function canChangePayment(
+  order: Pick<Order, 'status' | 'payment_status' | 'payment_method'> &
+    Partial<Pick<Order, 'balance_due_inr' | 'paid_amended_at'>>,
+): boolean {
   if (order.status === 'cancelled' || order.status === 'rejected') return false;
+  if (changedAfterPayment(order)) return false;
   return order.payment_status === 'paid' && order.payment_method !== 'online';
 }
 

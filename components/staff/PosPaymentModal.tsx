@@ -131,6 +131,13 @@ interface PaymentStepProps {
    * in full, so the server refuses a short settle on it. Extra is still fine.
    */
   allowShort?: boolean;
+  /**
+   * Collecting the BALANCE of a paid bill changed afterwards (lib/orders/
+   * paidChange.ts). `bill.total_inr` is then the balance — every tender step
+   * works on it as on any total — and the bill box reads "Bill now / Already
+   * paid / Balance to collect" instead of the bill's own rows.
+   */
+  balanceOf?: { billInr: number; paidInr: number } | null;
 }
 
 /** The pre-FLOW-1 takeover. Kept until POS_V2 is verified at Gate 6B (spec E10). */
@@ -166,6 +173,7 @@ export function PosPaymentPanel({
   docked = false,
   mode = 'place',
   allowShort = true,
+  balanceOf = null,
 }: PaymentStepProps & { docked?: boolean }) {
   const isDineIn = orderType === 'dine_in';
   const settling = mode === 'settle';
@@ -425,7 +433,16 @@ export function PosPaymentPanel({
 
         {docked ? null : (
           <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">
-            {bill ? (
+            {bill && balanceOf ? (
+              <>
+                <BillRow label="Bill now" value={balanceOf.billInr} />
+                <BillRow label="Already paid" value={-balanceOf.paidInr} />
+                <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
+                  <span className="font-bold text-charcoal">Balance to collect</span>
+                  <span className="text-lg font-bold text-tan-dark">₹{bill.total_inr}</span>
+                </div>
+              </>
+            ) : bill ? (
               <>
                 <BillRow label="Subtotal" value={bill.subtotal_inr} />
                 {bill.tax_inr > 0 ? <BillRow label="GST" value={bill.tax_inr} /> : null}

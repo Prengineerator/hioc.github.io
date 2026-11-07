@@ -260,6 +260,17 @@ function buildKotSlipBlocks(
 // only. Starts with the brandHeader placeholder — logo + "हाईओक" / "HIOC."
 // — resolved to a raster image by printExecutor.ts's resolveBrandHeader; see
 // ticketDoc.ts for the fallback if that resolution ever fails.
+/** The difference left on a paid bill changed after it was paid (0 when none). Shared with ReceiptTicket. */
+export function receiptBalance(order: Pick<StaffPrintOrder, 'payment_status' | 'balance_due_inr'>): number {
+  return order.payment_status === 'paid' ? (order.balance_due_inr ?? 0) : 0;
+}
+
+/** The receipt's top banner: PAID / UNPAID / …, or BALANCE DUE on a paid bill that still owes. Shared with ReceiptTicket. */
+export function receiptBanner(order: Pick<StaffPrintOrder, 'payment_status' | 'balance_due_inr'>): string {
+  if (receiptBalance(order) > 0) return 'BALANCE DUE';
+  return PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase();
+}
+
 function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   const isDineIn = order.order_type === 'dine_in';
   const activeItems = order.items.filter((i) => !i.voided);
@@ -274,7 +285,7 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
     { kind: 'brandHeader' },
     {
       kind: 'text',
-      text: PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase(),
+      text: receiptBanner(order),
       align: 'center',
       bold: true,
     },
@@ -397,8 +408,20 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   if (tip > 0) {
     blocks.push({ kind: 'row', left: 'Tip', right: formatMoney(tip) });
   }
+  // A paid bill changed after it was paid (lib/orders/paidChange.ts): what was
+  // paid, and the difference still to settle. Same rows in ReceiptTicket (HTML).
+  const balance = receiptBalance(order);
   if (settleDiscount > 0 || tip > 0) {
-    blocks.push({ kind: 'row', left: 'Received', right: formatMoney(total - settleDiscount + tip), bold: true });
+    blocks.push({ kind: 'row', left: 'Received', right: formatMoney(total - balance - settleDiscount + tip), bold: true });
+  }
+  if (balance !== 0) {
+    blocks.push({ kind: 'row', left: 'Paid', right: formatMoney(total - balance) });
+    blocks.push({
+      kind: 'row',
+      left: balance > 0 ? 'Balance due' : 'To refund',
+      right: formatMoney(Math.abs(balance)),
+      bold: true,
+    });
   }
 
   if (order.payment_status === 'paid' && order.payment_method) {

@@ -239,6 +239,12 @@ export interface AddToOrderTarget {
   id: string;
   orderNumber: number;
   tableLabel: string | null;
+  /**
+   * The bill is already paid (a dine-in bill paid at the counter —
+   * lib/orders/paidChange.ts): what is added becomes a balance to collect on
+   * Settle. Absent = an unpaid running tab.
+   */
+  paid?: boolean;
 }
 
 /** POST /api/orders' `settlement` (lib/orders/settlePayment), as this screen reads it. */
@@ -1592,8 +1598,13 @@ export function PosOrderEntry({
         return;
       }
 
-      const data = (await res.json().catch(() => ({}))) as { added_item_ids?: string[] };
+      const data = (await res.json().catch(() => ({}))) as {
+        added_item_ids?: string[];
+        order?: { balance_due_inr?: number };
+      };
       const label = formatOrderNumber(addToOrder.orderNumber);
+      // A paid bill: say what is now owed, so the staffer knows to collect it.
+      const owed = data.order?.balance_due_inr ?? 0;
       setCart([]);
       setBill(null);
       setSearch('');
@@ -1603,7 +1614,9 @@ export function PosOrderEntry({
       const addedIds = data.added_item_ids ?? [];
       const printsKot = autoPrint.kot && addedIds.length > 0;
       if (printsKot) printDock.enqueue([{ orderId: addToOrder.id, type: 'kot', itemIds: addedIds }]);
-      showToast(`Added to order #${label}${printsKot ? ' · KOT printing' : ''}.`);
+      showToast(
+        `Added to order #${label}${owed > 0 ? ` · ₹${owed} balance to collect` : ''}${printsKot ? ' · KOT printing' : ''}.`,
+      );
       // Back to where the staffer came from (Tables, or the bill on Settle) so
       // the running total is visible in context — once the KOT has gone: the
       // print dock lives on this page, and leaving mid-print would cancel the
@@ -1721,6 +1734,11 @@ export function PosOrderEntry({
                 } — one table, one bill.`
               : 'Punch in a dine-in or walk-in order.'}
           </p>
+          {isAddMode && addToOrder.paid ? (
+            <p className="mt-1 inline-block rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-900">
+              This bill is already paid — what you add here becomes a balance to collect on Settle.
+            </p>
+          ) : null}
         </div>
         {draftHasContent && !submitting ? (
           <button

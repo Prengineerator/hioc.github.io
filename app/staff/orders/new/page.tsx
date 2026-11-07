@@ -4,6 +4,7 @@ import { PosOrderEntry, type AddToOrderTarget } from '@/components/staff/PosOrde
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isUuid } from '@/lib/api/constants';
 import { TakeOrdersGate } from '@/components/staff/TakeOrdersGate';
+import { isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
 
 // The states in which an order can still take more items (mirrors the amend
 // route's OPEN_STATUSES — the route is the real gate; this just avoids offering
@@ -20,14 +21,17 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
   if (!orderId || !isUuid(orderId)) return null;
 
   const admin = createAdminSupabaseClient();
+  // `*` rather than a column list: the paid-bill columns (2026-11-paid-order-
+  // changes.sql) are read by paidChangeBlockReason, and naming them would fail
+  // the lookup on a database without them.
   const { data } = await admin
     .from('orders')
-    .select('id, order_number, status, payment_status, tables(label)')
+    .select('*, tables(label)')
     .eq('id', orderId)
     .maybeSingle();
 
   if (!data) return null;
-  const row = data as unknown as {
+  const row = data as unknown as PaidChangeOrder & {
     id: string;
     order_number: number;
     status: string;
@@ -36,11 +40,15 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
     // inferred type is an array — accept either rather than guess.
     tables?: { label: string } | { label: string }[] | null;
   };
-  if (!OPEN_STATUSES.includes(row.status) || row.payment_status === 'paid') return null;
+  if (!OPEN_STATUSES.includes(row.status)) return null;
+  // A paid bill takes more items only when it is a dine-in bill paid at the
+  // counter: what they cost becomes a balance to collect (lib/orders/paidChange).
+  const paid = isPaidBill(row);
+  if (paid && paidChangeBlockReason(row)) return null;
 
   const table = Array.isArray(row.tables) ? row.tables[0] : row.tables;
 
-  return { id: row.id, orderNumber: row.order_number, tableLabel: table?.label ?? null };
+  return { id: row.id, orderNumber: row.order_number, tableLabel: table?.label ?? null, paid };
 }
 
 // Staff POS-lite order entry (POS-1). The /staff/** layout already gates this

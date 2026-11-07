@@ -633,6 +633,52 @@ describe('buildTicketDoc — receipt settle adjustments', () => {
   });
 });
 
+describe('buildTicketDoc — receipt of a paid bill changed afterwards (balance)', () => {
+  it('says BALANCE DUE, what was paid and what is still owed', () => {
+    const doc = buildTicketDoc(
+      order({ payment_status: 'paid', payment_method: 'cash', total_inr: 630, balance_due_inr: 130 }),
+      'receipt',
+    );
+    const rows = rowBlocks(doc);
+    const lefts = rows.map((r) => r.left);
+    expect(allText(doc)).toContain('BALANCE DUE');
+    expect(rows.find((r) => r.left === 'Paid')?.right).toBe('Rs. 500.00');
+    expect(rows.find((r) => r.left === 'Balance due')?.right).toBe('Rs. 130.00');
+    expect(lefts.indexOf('Grand Total')).toBeLessThan(lefts.indexOf('Paid'));
+  });
+
+  it('says what is to be refunded when the café owes some back, under a plain PAID banner', () => {
+    const doc = buildTicketDoc(
+      order({ payment_status: 'paid', payment_method: 'cash', total_inr: 395, balance_due_inr: -105 }),
+      'receipt',
+    );
+    const rows = rowBlocks(doc);
+    expect(allText(doc)).not.toContain('BALANCE DUE');
+    expect(rows.find((r) => r.left === 'Paid')?.right).toBe('Rs. 500.00');
+    expect(rows.find((r) => r.left === 'To refund')?.right).toBe('Rs. 105.00');
+  });
+
+  it('counts only what was received so far beside a round-off', () => {
+    const doc = buildTicketDoc(
+      order({ payment_status: 'paid', total_inr: 630, balance_due_inr: 130, settle_discount_inr: 2 }),
+      'receipt',
+    );
+    expect(rowBlocks(doc).find((r) => r.left === 'Received')?.right).toBe('Rs. 498.00');
+  });
+
+  it('prints none of it once settled up, or on an unpaid bill', () => {
+    for (const o of [
+      order({ payment_status: 'paid', total_inr: 630, balance_due_inr: 0 }),
+      order({ payment_status: 'unpaid', total_inr: 630, balance_due_inr: 130 }),
+    ]) {
+      const lefts = rowBlocks(buildTicketDoc(o, 'receipt')).map((r) => r.left);
+      expect(lefts).not.toContain('Balance due');
+      expect(lefts).not.toContain('To refund');
+      expect(allText(buildTicketDoc(o, 'receipt'))).not.toContain('BALANCE DUE');
+    }
+  });
+});
+
 describe('buildTicketDoc — receipt customer notes', () => {
   it('prints "Customer Notes: …" behind its own divider only when the order has notes', () => {
     const withNotes = buildTicketDoc(order({ notes: 'Extra napkins please' }), 'receipt');

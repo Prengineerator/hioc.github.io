@@ -98,7 +98,7 @@ export function OrderCard({
             >
               {STATUS_LABELS[order.status]}
             </span>
-            <PaymentBadge status={order.payment_status} />
+            <PaymentBadge status={order.payment_status} balanceInr={order.balance_due_inr ?? 0} />
             <span className="rounded-full bg-[#f2efe9] px-2 py-0.5 text-[11px] font-bold text-charcoal">
               {TYPE_LABEL[order.order_type]}
             </span>

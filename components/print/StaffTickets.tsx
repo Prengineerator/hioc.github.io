@@ -11,7 +11,6 @@ import { BUSINESS } from '@/lib/legal';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import {
   ORDER_TYPE_LABEL,
-  PAYMENT_BANNER_LABEL,
   formatIstDateTime,
   formatIstDateShort,
 } from '@/lib/print/labels';
@@ -20,7 +19,7 @@ import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/ko
 import { describeOrderPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel } from '@/lib/pos/ritual';
-import { passCoveredNote, passValidTillText } from '@/lib/print/ticketModel';
+import { passCoveredNote, passValidTillText, receiptBalance, receiptBanner } from '@/lib/print/ticketModel';
 import { lineSizeSuffix } from '@/lib/menu/weight';
 import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
 
@@ -322,6 +321,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   const billNo = formatOrderNumber(order.order_number);
   const settleDiscount = order.settle_discount_inr ?? 0;
   const tip = order.tip_inr ?? 0;
+  const balance = receiptBalance(order);
   const hasPointsRows = redeemed > 0 || points > 0 || (order.points_balance !== null && order.points_balance !== undefined);
   // HIOC Ritual — mirrors buildReceiptBlocks: the cups' cover as its own row
   // after Discount, "(Ritual ×N)" under a covered line, and "Valid till …" under
@@ -334,7 +334,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
       <div className="text-center">
         <BrandHeader />
         <p className="mt-1 text-sm font-bold">
-          {PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase()}
+          {receiptBanner(order)}
         </p>
         <p className="text-[11px]">RETAIL INVOICE</p>
         <p className="text-xs font-bold">{BUSINESS.legalName}</p>
@@ -428,8 +428,18 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         {settleDiscount > 0 || tip > 0 ? (
           <div className="flex items-center justify-between font-bold">
             <span>Received</span>
-            <span>{money(total - settleDiscount + tip)}</span>
+            <span>{money(total - balance - settleDiscount + tip)}</span>
           </div>
+        ) : null}
+        {/* A paid bill changed after it was paid — mirrors buildReceiptBlocks. */}
+        {balance !== 0 ? (
+          <>
+            <BillRow label="Paid" value={money(total - balance)} />
+            <div className="flex items-center justify-between font-bold">
+              <span>{balance > 0 ? 'Balance due' : 'To refund'}</span>
+              <span>{money(Math.abs(balance))}</span>
+            </div>
+          </>
         ) : null}
         {order.payment_status === 'paid' && order.payment_method ? (
           <p className="text-center">
