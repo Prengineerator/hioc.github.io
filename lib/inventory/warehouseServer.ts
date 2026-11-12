@@ -10,7 +10,7 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse } from '@/lib/api/http';
 import { flags } from '@/lib/flags';
 import { istBusinessDate } from '@/lib/cash/date';
-import { expiryState, summarizeStock, type ExpiryState, type InventoryUnit } from '@/lib/inventory/rules';
+import { expiryState, isManagerRole, summarizeStock, type ExpiryState, type InventoryUnit } from '@/lib/inventory/rules';
 import {
   loadAssignees,
   loadInventoryItems,
@@ -30,6 +30,27 @@ export async function requireWarehouseOwner(): Promise<{ owner: User } | { respo
   if (!owner) return { response: errorResponse(403, 'Owner access required') };
   if (!flags.inventory || !flags.warehouse) return { response: errorResponse(404, WAREHOUSE_OFF_MESSAGE) };
   return { owner };
+}
+
+/**
+ * Whether this counter actor works the warehouse side (WH-D16): a manager or
+ * the owner by role, or a staffer whose staff_accounts.warehouse_access the
+ * owner has switched on (supabase/2026-11-warehouse-access.sql). Fails closed:
+ * no row, a deactivated account, a read error, or a database without the
+ * column (the error says so) all read as false, which is the behaviour before
+ * the switch existed.
+ */
+export async function hasWarehouseAccess(admin: SupabaseClient, userId: string, role: string): Promise<boolean> {
+  if (isManagerRole(role)) return true;
+  if (role !== 'staff') return false;
+  const { data, error } = await admin
+    .from('staff_accounts')
+    .select('warehouse_access, status')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data) return false;
+  const row = data as { warehouse_access?: boolean | null; status?: string | null };
+  return row.warehouse_access === true && row.status === 'active';
 }
 
 export type WarehouseBatchSource = 'purchase' | 'return' | 'count' | 'transit_back';

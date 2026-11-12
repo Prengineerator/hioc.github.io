@@ -19,6 +19,9 @@ export interface RequestsPayload {
   assignees: PersonRef[];
   actorId: string;
   canManage: boolean;
+  /** Works the warehouse side: records what left the warehouse and sends
+   * stock back to it (a manager, or a staffer with warehouse access, WH-D16). */
+  warehouseAccess?: boolean;
   surface: StaffSurface;
   /** New requests are filled from the warehouse (docs/WAREHOUSE-SPEC.md). */
   warehouse?: boolean;

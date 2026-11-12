@@ -102,34 +102,43 @@ type StaffAccountRow = {
   status: AccountStatus;
   role_before_deactivation?: string | null;
   handles_cash?: boolean;
+  warehouse_access?: boolean;
 };
 
 const STAFF_ACCOUNT_BASE_COLUMNS = 'login_id, personal_email, phone, status, role_before_deactivation';
 
 /**
- * Reads one staff_accounts row, including handles_cash
- * (supabase/2026-09-cash-counts.sql) when that column exists. Falls back to
- * the pre-cash-counts column set if the migration hasn't been applied yet —
+ * The optional per-person switches on staff_accounts, newest migration first:
+ * warehouse_access (supabase/2026-11-warehouse-access.sql), then handles_cash
+ * (supabase/2026-09-cash-counts.sql). A read tries them all, then drops the
+ * newest until one works, so a missing migration only costs its own switch.
+ */
+export const STAFF_ACCOUNT_SWITCH_SETS = ['handles_cash, warehouse_access', 'handles_cash', ''] as const;
+
+/**
+ * Reads one staff_accounts row, including handles_cash and warehouse_access
+ * when those columns exist. Falls back column set by column set
+ * (STAFF_ACCOUNT_SWITCH_SETS) if a migration hasn't been applied yet —
  * without this, an unknown-column error on the COMBINED select would fail
  * the whole row and wipe out loginId/personalEmail/phone/status (which have
- * nothing to do with cash counts) back to their empty defaults. Only
- * handles_cash itself degrades (to true, via buildMember below) when the
- * migration is missing.
+ * nothing to do with either switch) back to their empty defaults. Only the
+ * missing switch itself degrades (handles_cash to true, warehouse_access to
+ * false, via buildMember below).
  */
 async function selectStaffAccountRow(
   admin: SupabaseClient,
   id: string,
 ): Promise<{ data: StaffAccountRow | null; error: PgError }> {
-  const withCash = await admin
-    .from('staff_accounts')
-    .select(`${STAFF_ACCOUNT_BASE_COLUMNS}, handles_cash`)
-    .eq('user_id', id)
-    .maybeSingle();
-  if (!withCash.error || !isMissingTable(withCash.error)) {
-    return { data: withCash.data as StaffAccountRow | null, error: withCash.error };
+  let last: { data: unknown; error: PgError } = { data: null, error: null };
+  for (const extra of STAFF_ACCOUNT_SWITCH_SETS) {
+    last = await admin
+      .from('staff_accounts')
+      .select(extra ? `${STAFF_ACCOUNT_BASE_COLUMNS}, ${extra}` : STAFF_ACCOUNT_BASE_COLUMNS)
+      .eq('user_id', id)
+      .maybeSingle();
+    if (!last.error || !isMissingTable(last.error)) break;
   }
-  const base = await admin.from('staff_accounts').select(STAFF_ACCOUNT_BASE_COLUMNS).eq('user_id', id).maybeSingle();
-  return { data: base.data as StaffAccountRow | null, error: base.error };
+  return { data: last.data as StaffAccountRow | null, error: last.error };
 }
 
 /**
@@ -160,6 +169,7 @@ export async function buildMember(admin: SupabaseClient, id: string): Promise<Te
   let status: AccountStatus = 'active';
   let roleBeforeDeactivation: string | null | undefined = null;
   let handlesCash = true; // default: everyone counts cash unless the owner exempts them
+  let warehouseAccess = false; // default: the warehouse side is a manager's unless the owner says otherwise
 
   const { data: account, error: accountError } = await selectStaffAccountRow(admin, id);
   if (accountError && !isMissingTable(accountError)) {
@@ -173,6 +183,7 @@ export async function buildMember(admin: SupabaseClient, id: string): Promise<Te
     status = row.status;
     roleBeforeDeactivation = row.role_before_deactivation;
     handlesCash = row.handles_cash ?? true;
+    warehouseAccess = row.warehouse_access === true;
   }
 
   const deletable = !(await hasHistory(admin, id));
@@ -197,6 +208,7 @@ export async function buildMember(admin: SupabaseClient, id: string): Promise<Te
     lastSignInAt,
     deletable,
     handlesCash,
+    warehouseAccess,
   };
 }
 

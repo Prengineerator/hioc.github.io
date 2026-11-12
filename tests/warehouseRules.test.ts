@@ -5,6 +5,7 @@ import {
   canReceive,
   cancellableStatuses,
   requestStatusLabel,
+  worksWarehouseSide,
   type RequestActor,
   type RequestFacts,
 } from '@/lib/inventory/rules';
@@ -75,6 +76,41 @@ describe('dispatch (pick) from the warehouse', () => {
     expect(canPick(req({ route: 'store_room' }), at(VIK, 'staff')).ok).toBe(true);
     expect(canPick(req({ route: undefined }), at(VIK, 'staff')).ok).toBe(true);
     expect(canPick(req({ route: 'store_room' }), at(ASHA, 'staff')).ok).toBe(false);
+  });
+});
+
+describe('warehouse access for a staffer (WH-D16)', () => {
+  const runner = (userId: string, surface: 'pos' | 'web' = 'web'): RequestActor => ({ ...at(userId, 'staff', surface), warehouseAccess: true });
+
+  it('works the warehouse side: a manager or the owner by role, a staffer only when switched on', () => {
+    expect(worksWarehouseSide({ role: 'owner' })).toBe(true);
+    expect(worksWarehouseSide({ role: 'manager' })).toBe(true);
+    expect(worksWarehouseSide({ role: 'staff' })).toBe(false);
+    expect(worksWarehouseSide({ role: 'staff', warehouseAccess: false })).toBe(false);
+    expect(worksWarehouseSide({ role: 'staff', warehouseAccess: true })).toBe(true);
+    expect(worksWarehouseSide({ role: 'customer', warehouseAccess: true })).toBe(false);
+  });
+
+  it('may record what left the warehouse, including a transfer they carry', () => {
+    expect(canPick(req(), runner(VIK)).ok).toBe(true);
+    expect(canPick(req({ assigned_to: MGR }), runner(VIK)).ok).toBe(true);
+  });
+
+  it('still needs a delivery person chosen first, and a return still has no pick step', () => {
+    expect(canPick(req({ status: 'requested', assigned_to: null }), runner(VIK))).toMatchObject({ ok: false, status: 409 });
+    expect(canPick(req({ route: 'to_warehouse', status: 'picked' }), runner(VIK))).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it('can’t count in at the POS what they sent or carried — someone else checks it', () => {
+    const sentByVik = req({ status: 'picked', picked_by: VIK });
+    expect(canReceive(sentByVik, runner(VIK, 'pos'))).toMatchObject({ ok: false, status: 403 });
+    expect(canReceive(req({ status: 'picked', picked_by: MGR }), runner(VIK, 'pos'))).toMatchObject({ ok: false, status: 403 });
+    expect(canReceive(sentByVik, at(MEERA, 'staff')).ok).toBe(true);
+  });
+
+  it('gives nothing else: no assigning, no cancelling once assigned, no store-room pick for someone else', () => {
+    expect(canPick(req({ route: 'store_room' }), runner(ASHA)).ok).toBe(false);
+    expect(canCancel(req(), runner(VIK)).ok).toBe(false);
   });
 });
 

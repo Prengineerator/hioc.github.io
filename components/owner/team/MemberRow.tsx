@@ -64,6 +64,7 @@ export function MemberRow({ member, busy, onEdit, onPassword, onPin, onDeactivat
         <div className="flex flex-wrap items-center gap-1">
           <Badge variant={roleBadgeVariant(member.role)}>{label}</Badge>
           {member.handlesCash === false ? <Badge variant="outline">No cash</Badge> : null}
+          {member.warehouseAccess && member.role === 'staff' ? <Badge variant="outline">Warehouse</Badge> : null}
         </div>
         <p className="text-sm text-muted">{lastSignIn}</p>
         <div className="flex justify-end">{actions}</div>
@@ -82,6 +83,7 @@ export function MemberRow({ member, busy, onEdit, onPassword, onPin, onDeactivat
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={roleBadgeVariant(member.role)}>{label}</Badge>
           {member.handlesCash === false ? <Badge variant="outline">No cash</Badge> : null}
+          {member.warehouseAccess && member.role === 'staff' ? <Badge variant="outline">Warehouse</Badge> : null}
           <span className="text-xs text-muted">Last sign-in: {lastSignIn}</span>
         </div>
       </div>

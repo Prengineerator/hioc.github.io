@@ -22,6 +22,7 @@ import {
   isMissingTable,
   loadAuthUserMap,
   performDeactivate,
+  STAFF_ACCOUNT_SWITCH_SETS,
 } from './_lib';
 
 export const dynamic = 'force-dynamic';
@@ -103,10 +104,21 @@ export async function GET() {
   const allIds = allProfiles.map((p) => p.id);
   if (allIds.length === 0) return NextResponse.json({ members: [] });
 
-  const { data: accountRows, error: accountsError } = await admin
-    .from('staff_accounts')
-    .select('user_id, login_id, personal_email, phone, status, role_before_deactivation')
-    .in('user_id', allIds);
+  // The per-person switches too (handles_cash, warehouse_access), so the edit
+  // form opens on what is saved rather than the defaults — dropping the newest
+  // one whose migration isn't applied yet (STAFF_ACCOUNT_SWITCH_SETS).
+  const baseColumns = 'user_id, login_id, personal_email, phone, status, role_before_deactivation';
+  let accountRows: unknown[] | null = null;
+  let accountsError: { code?: string; message: string } | null = null;
+  for (const extra of STAFF_ACCOUNT_SWITCH_SETS) {
+    const res = await admin
+      .from('staff_accounts')
+      .select(extra ? `${baseColumns}, ${extra}` : baseColumns)
+      .in('user_id', allIds);
+    accountRows = res.data;
+    accountsError = res.error;
+    if (!accountsError || !isMissingTable(accountsError)) break;
+  }
   if (accountsError && !isMissingTable(accountsError)) return errorResponse(500, accountsError.message);
   const accountById = new Map(
     (
@@ -117,6 +129,8 @@ export async function GET() {
         phone: string | null;
         status: string;
         role_before_deactivation: string | null;
+        handles_cash?: boolean | null;
+        warehouse_access?: boolean | null;
       }[]
     ).map((r) => [r.user_id, r]),
   );
@@ -149,6 +163,8 @@ export async function GET() {
       status: (account?.status as TeamMember['status']) ?? 'active',
       lastSignInAt: auth?.lastSignInAt ?? null,
       deletable: deletableById.get(p.id) ?? false,
+      handlesCash: account?.handles_cash ?? true,
+      warehouseAccess: account?.warehouse_access === true,
     };
   });
 

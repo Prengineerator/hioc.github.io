@@ -67,18 +67,23 @@ export function StockTab({
   onRequested,
   assignees = [],
   actorId,
+  canSendBack,
 }: {
   data: ItemsPayload;
   surface: StaffSurface;
   reload: () => Promise<void>;
   onRequested: () => void;
-  /** Who can carry a return to the warehouse (managers get the list). */
+  /** Who can carry a return to the warehouse (managers, and staff with
+   * warehouse access, get the list). */
   assignees?: PersonRef[];
   /** Whose request draft this is (each person, each PIN operator, keeps their own). */
   actorId?: string;
+  /** May send stock back to the warehouse: a manager, or a staffer with
+   * warehouse access (WH-D16). Absent = managers only. */
+  canSendBack?: boolean;
 }) {
   // docs/WAREHOUSE-SPEC.md: requests are filled from the warehouse, and a
-  // manager can send stock back to it.
+  // manager (or a staffer with warehouse access) can send stock back to it.
   const warehouse = flags.warehouse;
   const [returnOpen, setReturnOpen] = useState(false);
   const [notice, setNotice] = useState('');
@@ -137,7 +142,7 @@ export function StockTab({
           {warehouse ? 'Request from warehouse' : 'Request stock'}
           {inRequest > 0 ? ` (${inRequest})` : ''}
         </button>
-        {warehouse && data.canManage ? (
+        {warehouse && (canSendBack ?? data.canManage) ? (
           <button type="button" className={secondaryButton} onClick={() => setReturnOpen(true)}>
             Send back to warehouse
           </button>

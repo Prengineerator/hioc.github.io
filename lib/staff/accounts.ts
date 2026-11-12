@@ -102,6 +102,13 @@ export interface TeamMember {
    * applied yet.
    */
   handlesCash?: boolean;
+  /**
+   * staff_accounts.warehouse_access (docs/WAREHOUSE-SPEC.md, WH-D16) — true
+   * lets a staffer do the warehouse run: record what left the warehouse and
+   * send stock back to it. Managers have it by role. MISSING MEANS FALSE (the
+   * column's default, and before supabase/2026-11-warehouse-access.sql).
+   */
+  warehouseAccess?: boolean;
 }
 
 /** POST /api/owner/staff */
@@ -125,6 +132,8 @@ export interface UpdateStaffBody {
   role?: ManageableRole;
   /** staff_accounts.handles_cash — see TeamMember.handlesCash. */
   handlesCash?: boolean;
+  /** staff_accounts.warehouse_access — see TeamMember.warehouseAccess. */
+  warehouseAccess?: boolean;
 }
 
 /** POST /api/owner/staff/[id]/password */
