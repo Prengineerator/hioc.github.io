@@ -283,6 +283,23 @@ describe('approve', () => {
     await expect(C.approveCampaign('camp', 'owner-1')).rejects.toThrow();
     expect(campaign('camp')).toMatchObject({ status: 'pending_approval', approved_by: null });
   });
+
+  it('…back to exactly where it came from: a draft goes back to draft', async () => {
+    campaign('camp').status = 'draft';
+    db().failNext('update marketing_recipients');
+    await expect(C.approveCampaign('camp', 'owner-1')).rejects.toThrow();
+    expect(campaign('camp')).toMatchObject({ status: 'draft', approved_by: null });
+  });
+
+  it('is a compare-and-set on the status it read: a cancel landing in between wins, and nothing is queued', async () => {
+    db().beforeNext('update marketing_campaigns', () => {
+      campaign('camp').status = 'cancelled';
+    });
+    const r = await C.approveCampaign('camp', 'owner-1');
+    expect(r).toMatchObject({ ok: false, code: 'invalid_state', status: 'cancelled' });
+    expect(campaign('camp').status).toBe('cancelled');
+    expect(recipients((x) => x.id === 't1')[0].status).toBe('pending');
+  });
 });
 
 describe('cancel', () => {
@@ -325,6 +342,76 @@ describe('cancel', () => {
     await C.cancelCampaign('camp');
     expect(await C.approveCampaign('camp', 'owner-1')).toMatchObject({ ok: false, code: 'invalid_state' });
   });
+
+  it('refuses a terminal campaign without writing anything', async () => {
+    campaign('camp').status = 'completed';
+    db().log.length = 0;
+    await C.cancelCampaign('camp');
+    expect(db().log).toEqual([]);
+  });
+
+  // The cancel is two writes. The campaign row is what stops sending, so once it moved the cancel HAS happened: a
+  // failing second write used to answer 500 (a retry then said "already cancelled") and left the rows pending/queued
+  // for good. Now it answers success and the sweep finishes the job.
+  it('when the recipients cannot be cancelled, the cancel still stands and the sweep finishes it', async () => {
+    db().failNext('update marketing_recipients');
+    const r = await C.cancelCampaign('camp', NOW_SEND);
+    expect(r.ok).toBe(true);
+    expect(campaign('camp').status).toBe('cancelled');
+    expect(recipients((x) => x.id === 'q')[0].status).toBe('queued');
+
+    expect(await C.cancelOrphanedRecipients(db().client as never)).toBe(2);
+    expect(recipients((x) => x.id === 'p')[0].status).toBe('cancelled');
+    expect(recipients((x) => x.id === 'q')[0].status).toBe('cancelled');
+    expect(recipients((x) => x.id === 's')[0].status).toBe('sent');
+    expect(recipients((x) => x.id === 'sg')[0].status).toBe('sending');
+    expect(recipients((x) => x.id === 'h')[0].status).toBe('holdout');
+  });
+});
+
+describe('cancelOrphanedRecipients', () => {
+  const sweep = () => C.cancelOrphanedRecipients(db().client as never);
+  const status = (id: string) => recipients((x) => x.id === id)[0].status;
+
+  it('cancels the unsent rows of every ENDED campaign and leaves open campaigns alone', async () => {
+    for (const [id, s] of [['c', 'cancelled'], ['e', 'expired'], ['d', 'completed'], ['dr', 'draft'], ['pa', 'pending_approval'], ['ap', 'approved'], ['sd', 'sending']] as const) {
+      seedCampaignRow({ id, status: s });
+      seedRec({ id: `${id}-p`, campaign_id: id, status: 'pending' });
+      seedRec({ id: `${id}-q`, campaign_id: id, status: 'queued' });
+    }
+    seedRec({ id: 'c-sent', campaign_id: 'c', status: 'sent' });
+    seedRec({ id: 'c-h', campaign_id: 'c', arm: 'holdout', status: 'holdout' });
+
+    expect(await sweep()).toBe(6);
+    for (const id of ['c', 'e', 'd']) {
+      expect([status(`${id}-p`), status(`${id}-q`)]).toEqual(['cancelled', 'cancelled']);
+    }
+    for (const id of ['dr', 'pa', 'ap', 'sd']) {
+      expect([status(`${id}-p`), status(`${id}-q`)]).toEqual(['pending', 'queued']);
+    }
+    expect(status('c-sent')).toBe('sent');
+    expect(status('c-h')).toBe('holdout');
+  });
+
+  it('writes nothing when there is nothing to tidy', async () => {
+    seedCampaignRow({ id: 'ap', status: 'approved' });
+    seedRec({ campaign_id: 'ap', status: 'queued' });
+    db().log.length = 0;
+    expect(await sweep()).toBe(0);
+    expect(db().log).toEqual([]);
+  });
+
+  it('never touches a campaign created between its two reads (its rows are written after the campaign row)', async () => {
+    seedCampaignRow({ id: 'ended', status: 'cancelled' });
+    seedRec({ id: 'old', campaign_id: 'ended', status: 'pending' });
+    db().beforeNext('select marketing_recipients', () => {
+      seedCampaignRow({ id: 'brand-new', status: 'pending_approval' });
+      seedRec({ id: 'new', campaign_id: 'brand-new', status: 'pending' });
+    });
+    expect(await sweep()).toBe(1);
+    expect(status('old')).toBe('cancelled');
+    expect(status('new')).toBe('pending');
+  });
 });
 
 describe('expireStale', () => {
@@ -338,6 +425,24 @@ describe('expireStale', () => {
     expect(campaign('new').status).toBe('pending_approval');
     expect(recipients((x) => x.id === 'ro')[0].status).toBe('cancelled');
     expect(recipients((x) => x.id === 'rn')[0].status).toBe('pending');
+  });
+
+  it('expires exactly the statuses the state machine lets expire', async () => {
+    const { campaignFrom } = await import('@/lib/marketing/lifecycle');
+    expect(Object.keys(C.EXPIRY_DAYS).sort()).toEqual(campaignFrom('expire').sort());
+  });
+
+  // A failing cascade used to throw — aborting the whole planner run after the campaigns had already expired, so the
+  // next run never saw them again and their rows stayed pending for good.
+  it('a failing recipients write does not undo or abort the expiry; the sweep finishes it', async () => {
+    seedCampaignRow({ id: 'old', status: 'pending_approval', created_at: daysAgo(2.1) });
+    seedRec({ id: 'ro', campaign_id: 'old' });
+    db().failNext('update marketing_recipients');
+    expect(await C.expireStale(NOW_SEND)).toBe(1);
+    expect(campaign('old').status).toBe('expired');
+    expect(recipients((x) => x.id === 'ro')[0].status).toBe('pending');
+    await C.cancelOrphanedRecipients(db().client as never);
+    expect(recipients((x) => x.id === 'ro')[0].status).toBe('cancelled');
   });
 });
 
@@ -527,6 +632,28 @@ describe('insertCampaign', () => {
       expect(r).toMatchObject({ ok: false });
       expect(campaign('stuck').status).toBe('cancelled');
       expect(recipients().every((x) => x.status === 'cancelled' || x.status === 'holdout')).toBe(true);
+    });
+
+    // The fallback cancel used to be an UNGUARDED update: whatever the campaign had become meanwhile (it sits in
+    // Approvals while its rows are written, so it can be approved, sent from and completed), it was rewritten to cancelled.
+    it('the fallback cancel is a guarded transition: an ENDED campaign is not rewritten', async () => {
+      db().failNext('insert marketing_recipients', undefined, 1);
+      db().failNext('delete marketing_campaigns');
+      db().beforeNext('update marketing_campaigns', () => {
+        campaign('ended').status = 'completed';
+      });
+      await C.insertCampaign(db().client as never, { ...base, id: 'ended' }, people(600), 'pending', 10);
+      expect(campaign('ended').status).toBe('completed');
+    });
+
+    it('…while one that is still open (here: approved meanwhile) is cancelled', async () => {
+      db().failNext('insert marketing_recipients', undefined, 1);
+      db().failNext('delete marketing_campaigns');
+      db().beforeNext('update marketing_campaigns', () => {
+        campaign('open').status = 'approved';
+      });
+      await C.insertCampaign(db().client as never, { ...base, id: 'open' }, people(600), 'pending', 10);
+      expect(campaign('open').status).toBe('cancelled');
     });
 
     it('sets treated_count / holdout_count from the rows that actually landed, and reports those', async () => {

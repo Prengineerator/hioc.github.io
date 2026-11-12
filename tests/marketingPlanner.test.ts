@@ -252,6 +252,35 @@ describe('who is left out', () => {
     expect((await runDailyPlan(NOW_PLAN)).planned).toEqual([]);
   });
 
+  // Cancelling or expiring a campaign is two writes: the campaign, then its unsent rows. When the second failed those
+  // rows stayed pending/queued under an ENDED campaign, nothing ever cleaned them up, and they counted as "in flight"
+  // forever — the customers were never planned again.
+  describe('unsent rows an ended campaign left behind', () => {
+    function leftovers(status: string) {
+      db().tables.marketing_campaigns = [{ id: 'ended', kind: 'manual', playbook_key: null, status, created_at: daysAgo(5, NOW_PLAN) }];
+      db().tables.marketing_recipients = [0, 1, 2].map((i) => ({
+        id: `e${i}`, campaign_id: 'ended', phone: phone(i), arm: 'treatment', status: i === 2 ? 'queued' : 'pending', created_at: daysAgo(5, NOW_PLAN),
+      }));
+    }
+
+    it.each(['cancelled', 'expired', 'completed'])('are cancelled by the tidy step, and their customers are planned again (%s)', async (status) => {
+      lapsed(3);
+      leftovers(status);
+      const result = await runDailyPlan(NOW_PLAN);
+      expect(result.planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 3 }]);
+      expect(recipients((r) => r.campaign_id === 'ended').map((r) => r.status)).toEqual(['cancelled', 'cancelled', 'cancelled']);
+    });
+
+    it('…and even when the tidy step itself fails, they no longer hold anyone in flight', async () => {
+      lapsed(3);
+      leftovers('cancelled');
+      db().failNext('update marketing_recipients'); // the sweep's write (nothing else updates recipients before planning here)
+      const result = await runDailyPlan(NOW_PLAN);
+      expect(result.planned).toEqual([{ key: 'winback_1', status: 'pending_approval', eligible: 3 }]);
+      expect(recipients((r) => r.campaign_id === 'ended').map((r) => r.status)).toEqual(['pending', 'pending', 'queued']);
+    });
+  });
+
   it('gives a customer to the HIGHEST-priority playbook only, once a day', async () => {
     seedPlaybooks(db(), { winback_1: 'review', points_expiring: 'review' });
     // Lapsed (winback_1) AND holding points that expire in 2 days (points_expiring, priority 1).

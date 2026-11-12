@@ -29,6 +29,7 @@ import { isMissingColumnError, type PostgrestLikeError } from '@/lib/api/postgre
 import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
 import type { ExpiryRow } from '@/lib/loyalty/expiry';
 import type { FoodCostLine, FreeItemVariantInput } from '@/lib/marketing/economics';
+import { COMMITTED_RECIPIENT_STATUSES, IN_FLIGHT_RECIPIENT_STATUSES } from '@/lib/marketing/lifecycle';
 import {
   DEFAULT_SETTINGS,
   PLAYBOOK_KEYS,
@@ -602,7 +603,7 @@ export async function loadSendHistory(
     admin
       .from('marketing_recipients')
       .select(cols)
-      .in('status', ['pending', 'queued', 'sending'])
+      .in('status', [...IN_FLIGHT_RECIPIENT_STATUSES])
       .lt('created_at', since)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -934,7 +935,7 @@ export async function countCommittedSends(admin: Admin): Promise<number> {
   const { count, error } = await admin
     .from('marketing_recipients')
     .select('id', { count: 'exact', head: true })
-    .in('status', ['queued', 'sending']);
+    .in('status', [...COMMITTED_RECIPIENT_STATUSES]);
   assertOk('marketing_recipients count', error);
   return count ?? 0;
 }

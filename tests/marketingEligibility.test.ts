@@ -240,6 +240,17 @@ describe('evaluateContact — rules 1–7 (spec §1.5)', () => {
     expect(evaluateContact(contact(), [entry({ status: 'pending' })], ctx())).toEqual({ eligible: false, reason: 'in_flight' });
   });
 
+  // Ending a campaign is two writes (the campaign, then its unsent rows). When the second failed, the rows stayed
+  // pending/queued under a cancelled or expired campaign and were counted here forever: the customer was excluded
+  // from every future campaign. Rows of an ENDED campaign can never be claimed, so they never hold anyone in flight.
+  it('7 in_flight: unsent rows left under an ENDED campaign do not count', () => {
+    for (const campaign_status of ['cancelled', 'expired', 'completed'] as const) {
+      for (const status of ['pending', 'queued'] as const) {
+        expect(evaluateContact(contact(), [entry({ status, campaign_status })], ctx())).toEqual({ eligible: true });
+      }
+    }
+  });
+
   // Holdout contamination: handledSince only blocks the SAME playbook and rule 7 ignored 'holdout' rows, so
   // a control-group member could be messaged the next day by another playbook or a manual campaign, inside
   // the attribution window — ruining the lift measurement and letting one order convert two campaigns' rows.

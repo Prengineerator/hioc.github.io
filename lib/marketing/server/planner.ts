@@ -2,7 +2,8 @@
 //
 //   1 MEASURE   attribute returns to recipients whose window is open (attribution.ts)
 //   2 LEARN     fold closed campaigns' results into their playbook's conversion rate
-//   3 TIDY      expire campaigns nobody approved in two days
+//   3 TIDY      expire campaigns nobody approved in two days, and cancel unsent rows an
+//               ended campaign left behind (cancelOrphanedRecipients)
 //   4 STOP      if the kill switch is off, that is all this run does
 //   5 OBSERVE   join orders, points, consent and history into contacts (audience.ts)
 //   6 DECIDE    deal each contact to at most one playbook (assignPlaybooks)
@@ -43,6 +44,7 @@ import { attributeRecipients } from './attribution';
 import { buildContacts, type AudienceSnapshot } from './audience';
 import {
   aggregateRecipients,
+  cancelOrphanedRecipients,
   expireStale,
   insertCampaign,
   loadAggregates,
@@ -277,6 +279,12 @@ async function run(now: Date): Promise<PlanCronResult> {
     console.error('marketing planner: learning failed', err);
   }
   const expired = await expireStale(now, admin);
+  try {
+    await cancelOrphanedRecipients(admin);
+  } catch (err) {
+    if (isMigrationMissingError(err)) throw err;
+    console.error('marketing planner: orphaned-recipient sweep failed', err);
+  }
 
   // 4: the kill switch.
   if (!stored || !stored.enabled) return zeroResult({ attributed, expired });

@@ -14,6 +14,7 @@
 //                     playbook they qualify for. Rule 9.
 
 import { DAY_MS } from './ist';
+import { holdsRecipientsInFlight } from './lifecycle';
 import {
   IN_FLIGHT_STATUSES,
   SENT_STATUSES,
@@ -159,8 +160,12 @@ export function evaluateContact(
     if (allUnread && nowMs - lastN[0].at < UNREAD_PAUSE_MAX_AGE_DAYS * DAY_MS) return fail('unread_pause');
   }
 
+  // In flight = an unsent row of a campaign that is still open and not a draft (lifecycle's
+  // IN_FLIGHT_CAMPAIGN_STATUSES). An ENDED campaign's unsent rows never count: they can never be
+  // claimed, and when a failed cancel/expire cascade left some behind, counting them excluded the
+  // customer from every future campaign.
   const inFlight = history.some(
-    (e) => isInFlightStatus(e.status) && e.campaign_status !== 'draft' && e.campaign_id !== ctx.ignore_campaign_id,
+    (e) => isInFlightStatus(e.status) && holdsRecipientsInFlight(e.campaign_status) && e.campaign_id !== ctx.ignore_campaign_id,
   );
   if (inFlight) return fail('in_flight');
 

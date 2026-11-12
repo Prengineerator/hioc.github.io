@@ -22,6 +22,16 @@ import {
 } from '@/lib/marketing/economics';
 import { evaluateContact } from '@/lib/marketing/eligibility';
 import { DAY_MS, istDate, istMonthStart } from '@/lib/marketing/ist';
+import {
+  CANCELLABLE_CAMPAIGN_STATUSES,
+  CANCELLABLE_RECIPIENT_STATUSES,
+  campaignFrom,
+  canTransitionCampaign,
+  isAwaitingApproval,
+  isInFlightRecipient,
+  isTerminalCampaign,
+  recipientFrom,
+} from '@/lib/marketing/lifecycle';
 import { couponPrefixFor, needsCoupon, offerText, validTill, validityDays, secureRng } from '@/lib/marketing/offers';
 import { matchesAudience } from '@/lib/marketing/segments';
 import {
@@ -38,7 +48,6 @@ import {
   DRAFT_EXPIRY_DAYS,
   MANUAL_PRIOR_PCT,
   RECIPIENT_PAGE_SIZE,
-  TERMINAL_CAMPAIGN_STATUSES,
 } from '@/lib/marketing/types';
 import type {
   AudienceFilter,
@@ -70,6 +79,7 @@ import {
   assertOk,
   chunk,
   countCommittedSends,
+  isMigrationMissing,
   isUniqueViolation,
   loadCampaign,
   marketingAdmin,
@@ -307,18 +317,27 @@ const RECIPIENT_INSERT_CHUNK = 500;
  * that delete fails, the campaign is CANCELLED instead (and its unsent rows with it), so at the very
  * least nobody can approve it with a partial audience. Never throws: the caller is already reporting
  * the failure that got us here.
+ *
+ * The cancel is a guarded 'cancel' transition like the owner's: the half-made campaign sat in
+ * Approvals while its rows were being written, so it may have been approved, sent from and even
+ * completed meanwhile, and an ended campaign must not be rewritten to 'cancelled'. If the
+ * recipients' write fails, cancelOrphanedRecipients tidies them on the next cron tick.
  */
 async function discardCampaign(admin: Admin, id: string): Promise<void> {
   const { error } = await admin.from('marketing_campaigns').delete().eq('id', id);
   if (!error) return;
   console.error('marketing campaign: could not remove a half-made campaign — cancelling it', id, error.message);
-  const { error: cancelError } = await admin.from('marketing_campaigns').update({ status: 'cancelled' }).eq('id', id);
+  const { error: cancelError } = await admin
+    .from('marketing_campaigns')
+    .update({ status: 'cancelled' })
+    .eq('id', id)
+    .in('status', campaignFrom('cancel'));
   if (cancelError) console.error('marketing campaign: could not cancel a half-made campaign', id, cancelError.message);
   const { error: rowsError } = await admin
     .from('marketing_recipients')
     .update({ status: 'cancelled' })
     .eq('campaign_id', id)
-    .in('status', ['pending', 'queued']);
+    .in('status', [...CANCELLABLE_RECIPIENT_STATUSES]);
   if (rowsError) console.error('marketing campaign: could not cancel the recipients of a half-made campaign', id, rowsError.message);
 }
 
@@ -436,7 +455,7 @@ export async function insertCampaign(
       .from('marketing_campaigns')
       .update({ status: 'approved', approved_at: campaign.approved_at ?? new Date().toISOString() })
       .eq('id', campaign.id)
-      .eq('status', 'pending_approval')
+      .in('status', campaignFrom('auto_approve'))
       .select('id');
     if (flipError || !flipped || flipped.length === 0) {
       // Not a failure of the plan: the campaign is complete, it just waits in Approvals for a human.
@@ -553,46 +572,50 @@ export async function createManualDraft(
 // ---------------------------------------------------------------------------
 
 /**
- * Approve: only a draft or pending_approval campaign. The status change is a guarded
- * UPDATE (…where status in ('draft','pending_approval')), so two taps of the button, or
- * an approve racing a cancel, cannot both win. Then its pending recipients become
- * queued — the sender picks them up on its next tick, still re-checking consent, caps
- * and the send window for every single message.
+ * Approve: only a draft or pending_approval campaign (lifecycle 'approve'). The status change
+ * is a compare-and-set on the status just read (…where status = <it>), so two taps of the
+ * button, or an approve racing a cancel, cannot both win — and the approval knows exactly
+ * which status to put back if it has to. Then its pending recipients become queued — the
+ * sender picks them up on its next tick, still re-checking consent, caps and the send
+ * window for every single message.
  */
 export async function approveCampaign(id: string, userId: string, now: Date = new Date()): Promise<CampaignActionResult<CampaignDetail>> {
   const admin = marketingAdmin();
   const current = await loadCampaign(admin, id);
   if (!current) return { ok: false, code: 'not_found', message: 'Campaign not found.' };
+  const refused = (status: CampaignStatus): CampaignActionResult<CampaignDetail> => ({
+    ok: false,
+    code: 'invalid_state',
+    message: `This campaign is already ${status}, so it can't be approved.`,
+    status,
+  });
+  if (!canTransitionCampaign(current.status, 'approved', { actor: 'owner' }).ok) return refused(current.status);
 
   const { data: moved, error } = await admin
     .from('marketing_campaigns')
     .update({ status: 'approved', approved_by: userId, approved_at: now.toISOString() })
     .eq('id', id)
-    .in('status', ['draft', 'pending_approval'])
+    .eq('status', current.status)
     .select('id');
   assertOk('marketing_campaigns write', error);
   if (!moved || moved.length === 0) {
     const fresh = await loadCampaign(admin, id);
-    return {
-      ok: false,
-      code: 'invalid_state',
-      message: `This campaign is already ${fresh?.status ?? current.status}, so it can't be approved.`,
-      status: fresh?.status ?? current.status,
-    };
+    return refused(fresh?.status ?? current.status);
   }
 
   const { error: queueError } = await admin
     .from('marketing_recipients')
     .update({ status: 'queued' })
     .eq('campaign_id', id)
-    .eq('status', 'pending');
+    .in('status', recipientFrom('queue'));
   if (queueError) {
     // Put the campaign back so the owner can retry, rather than leave it approved with nothing queued.
+    // `current.status` is exactly the status the compare-and-set above moved it from ('unapprove').
     await admin
       .from('marketing_campaigns')
       .update({ status: current.status, approved_by: null, approved_at: null })
       .eq('id', id)
-      .eq('status', 'approved');
+      .in('status', campaignFrom('unapprove'));
     assertOk('marketing_recipients write', queueError);
   }
 
@@ -605,39 +628,56 @@ export async function approveCampaign(id: string, userId: string, now: Date = ne
  * cancelled; a message already handed to the sender ('sending') is past recall, and
  * one already sent stays sent. The sender re-reads the campaign's status before every
  * message, so a cancel takes effect within the batch.
+ *
+ * The campaign row is the source of truth: once it is cancelled nothing more can be
+ * claimed from it (claim_marketing_recipients only takes rows of a live campaign). The
+ * recipients' write that follows is a second statement — if IT fails the cancel has still
+ * happened, so this answers success and cancelOrphanedRecipients finishes the job on the
+ * next cron tick (and until then eligibility no longer counts those rows as in flight).
  */
 export async function cancelCampaign(id: string, now: Date = new Date()): Promise<CampaignActionResult<CampaignDetail>> {
   const admin = marketingAdmin();
   const current = await loadCampaign(admin, id);
   if (!current) return { ok: false, code: 'not_found', message: 'Campaign not found.' };
+  const refused = (status: CampaignStatus): CampaignActionResult<CampaignDetail> => ({
+    ok: false,
+    code: 'invalid_state',
+    message: `This campaign is already ${status}.`,
+    status,
+  });
+  if (!canTransitionCampaign(current.status, 'cancelled', { actor: 'owner' }).ok) return refused(current.status);
 
   const { data: moved, error } = await admin
     .from('marketing_campaigns')
     .update({ status: 'cancelled' })
     .eq('id', id)
-    .in('status', ['draft', 'pending_approval', 'approved', 'sending'])
+    .in('status', campaignFrom('cancel'))
     .select('id');
   assertOk('marketing_campaigns write', error);
   if (!moved || moved.length === 0) {
     const fresh = await loadCampaign(admin, id);
-    return {
-      ok: false,
-      code: 'invalid_state',
-      message: `This campaign is already ${fresh?.status ?? current.status}.`,
-      status: fresh?.status ?? current.status,
-    };
+    return refused(fresh?.status ?? current.status);
   }
 
   const { error: recipientsError } = await admin
     .from('marketing_recipients')
     .update({ status: 'cancelled' })
     .eq('campaign_id', id)
-    .in('status', ['pending', 'queued']);
-  assertOk('marketing_recipients write', recipientsError);
+    .in('status', [...CANCELLABLE_RECIPIENT_STATUSES]);
+  if (recipientsError) {
+    if (isMigrationMissing(recipientsError)) assertOk('marketing_recipients write', recipientsError);
+    console.error('marketing campaign: cancelled, but its unsent recipients were not; cancelOrphanedRecipients will', id, recipientsError.message);
+  }
 
   const detail = await getCampaignDetail(id, 1, now);
   return detail ? { ok: true, campaign: detail } : { ok: false, code: 'error', message: 'Cancelled, but the campaign could not be read back.' };
 }
+
+/** How long each expirable status may wait. Its keys are exactly lifecycle's 'expire' sources (a test pins that). */
+export const EXPIRY_DAYS: Readonly<Partial<Record<CampaignStatus, number>>> = {
+  pending_approval: APPROVAL_EXPIRY_DAYS,
+  draft: DRAFT_EXPIRY_DAYS,
+};
 
 /**
  * Campaigns still awaiting approval after APPROVAL_EXPIRY_DAYS are expired, and their
@@ -648,10 +688,7 @@ export async function cancelCampaign(id: string, now: Date = new Date()): Promis
  */
 export async function expireStale(now: Date = new Date(), admin: Admin = marketingAdmin()): Promise<number> {
   const ids: string[] = [];
-  for (const [status, days] of [
-    ['pending_approval', APPROVAL_EXPIRY_DAYS],
-    ['draft', DRAFT_EXPIRY_DAYS],
-  ] as const) {
+  for (const [status, days] of Object.entries(EXPIRY_DAYS) as [CampaignStatus, number][]) {
     const cutoff = new Date(now.getTime() - days * DAY_MS).toISOString();
     const { data, error } = await admin
       .from('marketing_campaigns')
@@ -662,15 +699,81 @@ export async function expireStale(now: Date = new Date(), admin: Admin = marketi
     assertOk('marketing_campaigns write', error);
     ids.push(...((data ?? []) as { id: string }[]).map((r) => r.id));
   }
+  // The campaigns have expired whatever happens next: a failed cascade is logged, not thrown (which
+  // would abort the whole planner run), and cancelOrphanedRecipients finishes it.
   for (const part of chunk(ids, IN_CHUNK)) {
     const { error: recipientsError } = await admin
       .from('marketing_recipients')
       .update({ status: 'cancelled' })
       .in('campaign_id', part)
-      .in('status', ['pending', 'queued']);
-    assertOk('marketing_recipients write', recipientsError);
+      .in('status', [...CANCELLABLE_RECIPIENT_STATUSES]);
+    if (recipientsError) {
+      if (isMigrationMissing(recipientsError)) assertOk('marketing_recipients write', recipientsError);
+      console.error('marketing campaign: expired, but their unsent recipients were not; cancelOrphanedRecipients will', recipientsError.message);
+    }
   }
   return ids.length;
+}
+
+/** Open campaigns the orphan sweep will name in its exclusion filter; beyond this it reads every unsent row instead. */
+const SWEEP_EXCLUDE_MAX = 200;
+
+/**
+ * Cancels the unsent (pending / queued) recipients of campaigns that have ENDED — cancelled,
+ * expired or completed — and returns how many it cancelled.
+ *
+ * Ending a campaign is two writes with no transaction between them (the campaign row, then its
+ * rows: cancelCampaign, expireStale, discardCampaign). When the second failed, those rows used to
+ * stay pending/queued for good: never sendable (the claim only takes a live campaign's rows), but
+ * counted as committed spend, as the campaign's "in flight" (so it was never learned from), and —
+ * worst — as the phone being in flight, which excluded the customer from every future campaign.
+ * Runs on every planner run and every sender tick, so a failed cascade heals within minutes.
+ *
+ * Cheap when there is nothing to do: one read of the open campaigns (a handful), then the unsent
+ * rows that belong to none of them (normally zero). A campaign is only swept once it has been
+ * re-read as ended: one created between the two reads is open, and its rows must stay. Ended is
+ * final (no transition leaves it), so a re-read that says "ended" cannot go stale.
+ */
+export async function cancelOrphanedRecipients(admin: Admin = marketingAdmin()): Promise<number> {
+  const { data: open, error: openError } = await admin
+    .from('marketing_campaigns')
+    .select('id')
+    .in('status', [...CANCELLABLE_CAMPAIGN_STATUSES]);
+  assertOk('marketing_campaigns read', openError);
+  const openIds = ((open ?? []) as { id: string }[]).map((c) => c.id);
+
+  const strays = await pageAll<{ id: string; campaign_id: string }>('marketing_recipients read', (from, to) => {
+    let q = admin.from('marketing_recipients').select('id, campaign_id').in('status', [...CANCELLABLE_RECIPIENT_STATUSES]);
+    // The exclusion is only an optimisation (the re-read below decides), so an unusually long list of
+    // open campaigns is simply not sent rather than risk an over-long request URL.
+    if (openIds.length > 0 && openIds.length <= SWEEP_EXCLUDE_MAX) q = q.not('campaign_id', 'in', `(${openIds.join(',')})`);
+    return q.order('id', { ascending: true }).range(from, to);
+  });
+  const candidates = [...new Set(strays.map((r) => r.campaign_id))];
+  if (candidates.length === 0) return 0;
+
+  const ended: string[] = [];
+  for (const part of chunk(candidates, IN_CHUNK)) {
+    const { data, error } = await admin.from('marketing_campaigns').select('id, status').in('id', part);
+    assertOk('marketing_campaigns read', error);
+    for (const c of (data ?? []) as { id: string; status: CampaignStatus }[]) {
+      if (isTerminalCampaign(c.status)) ended.push(c.id);
+    }
+  }
+
+  let cancelled = 0;
+  for (const part of chunk(ended, IN_CHUNK)) {
+    const { data, error } = await admin
+      .from('marketing_recipients')
+      .update({ status: 'cancelled' })
+      .in('campaign_id', part)
+      .in('status', [...CANCELLABLE_RECIPIENT_STATUSES])
+      .select('id');
+    assertOk('marketing_recipients write', error);
+    cancelled += (data ?? []).length;
+  }
+  if (cancelled > 0) console.warn(`marketing campaign: cancelled ${cancelled} unsent recipient(s) left behind by ended campaigns`);
+  return cancelled;
 }
 
 // ---------------------------------------------------------------------------
@@ -751,7 +854,7 @@ export function aggregateRecipients(rows: readonly AggRow[]): RecipientAggregate
     if (r.clicked_at) a.clicked += 1;
     if (r.status === 'failed') a.failed += 1;
     if (r.status === 'skipped') a.skipped += 1;
-    if (r.status === 'pending' || r.status === 'queued' || r.status === 'sending') a.in_flight += 1;
+    if (isInFlightRecipient(r.status)) a.in_flight += 1;
     if (r.converted_at) {
       a.returned += 1;
       a.revenue_inr += Number(r.conversion_revenue_inr) || 0;
@@ -817,7 +920,7 @@ export function totalsOf(a: RecipientAggregate): CampaignTotals {
 
 /** The first three treated recipients of an unsent campaign, rendered. Empty for a campaign that is already running. */
 async function loadSamples(admin: Admin, row: CampaignRow, now: Date): Promise<RecipientPreview[]> {
-  if (row.status !== 'draft' && row.status !== 'pending_approval') return [];
+  if (!isAwaitingApproval(row.status)) return [];
   const { data, error } = await admin
     .from('marketing_recipients')
     .select('first_name, vars')
@@ -987,7 +1090,7 @@ export async function getCampaignDetail(id: string, page = 1, now: Date = new Da
   };
 }
 
-/** True for a status nothing more will happen to. */
+/** True for a status nothing more will happen to (lifecycle's terminal states). */
 export function isTerminalStatus(status: CampaignStatus): boolean {
-  return (TERMINAL_CAMPAIGN_STATUSES as readonly string[]).includes(status);
+  return isTerminalCampaign(status);
 }

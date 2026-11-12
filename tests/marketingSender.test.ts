@@ -723,6 +723,50 @@ describe('campaign lifecycle', () => {
     expect(db().tables.marketing_campaigns[0]).toMatchObject({ status: 'completed', started_at: null });
   });
 
+  it('never completes a live campaign while a recipient is still pending (an approval mid-way through queueing)', async () => {
+    db().tables.marketing_recipients = [];
+    queue(db(), ph(1), { status: 'pending' });
+    await run(NOW_SEND);
+    expect(db().tables.marketing_campaigns[0]).toMatchObject({ status: 'approved', completed_at: null });
+    expect(rec('rec-1').status).toBe('pending');
+  });
+
+  // An ended campaign's cascade (campaign row, then its unsent rows) is two writes; when the second failed, the rows
+  // stayed queued/pending under it forever — counted as committed spend and as their customers being "in flight".
+  it('cancels unsent rows a failed cascade left under an ENDED campaign, and still sends the live ones', async () => {
+    seedCampaign(db(), { id: 'gone', status: 'cancelled' });
+    seedCampaign(db(), { id: 'old', status: 'expired' });
+    queue(db(), ph(1), { campaign_id: 'gone' });
+    queue(db(), ph(2), { campaign_id: 'old', status: 'pending' });
+    queue(db(), ph(3)); // camp-1, approved
+    const r = await run(NOW_SEND);
+    expect(r).toMatchObject({ claimed: 1, sent: 1 });
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(rec('rec-1').status).toBe('cancelled');
+    expect(rec('rec-2').status).toBe('cancelled');
+    expect(rec('rec-3').status).toBe('sent');
+  });
+
+  it('tidies them outside the send window too, and leaves an open campaign’s rows alone', async () => {
+    seedCampaign(db(), { id: 'gone', status: 'cancelled' });
+    seedCampaign(db(), { id: 'waiting', status: 'pending_approval' });
+    queue(db(), ph(1), { campaign_id: 'gone' });
+    queue(db(), ph(2), { campaign_id: 'waiting', status: 'pending' });
+    queue(db(), ph(3)); // camp-1, approved: waits for the window
+    expect(await run(NOW_NIGHT)).toMatchObject({ outside_window: true });
+    expect(rec('rec-1').status).toBe('cancelled');
+    expect(rec('rec-2').status).toBe('pending');
+    expect(rec('rec-3').status).toBe('queued');
+  });
+
+  it('a failing tidy-up never fails the send run', async () => {
+    seedCampaign(db(), { id: 'gone', status: 'cancelled' });
+    queue(db(), ph(1), { campaign_id: 'gone' });
+    db().failNext('update marketing_recipients', undefined, 1); // let markInterrupted through, fail the sweep's write
+    await expect(run(NOW_NIGHT)).resolves.toMatchObject({ enabled: true, outside_window: true });
+    expect(rec('rec-1').status).toBe('queued');
+  });
+
   it('claims recipients of the higher-priority campaign first', async () => {
     seedSettings(db(), { daily_send_cap: 1 });
     seedCampaign(db(), { id: 'camp-hi', priority: 1 });

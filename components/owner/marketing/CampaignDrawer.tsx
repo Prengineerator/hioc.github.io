@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/Button';
 import { DataTable, type DataTableColumn } from '@/components/ui/DataTable';
 import { Spinner } from '@/components/ui/Spinner';
+import { canCancelCampaign } from '@/lib/marketing/lifecycle';
 import {
   MANUAL_CAMPAIGN_LABEL,
   PLAYBOOK_LABELS,
@@ -73,7 +74,8 @@ function DrawerBody({ id, onChanged, onClose }: { id: string; onChanged: () => v
     );
   }
 
-  const stoppable = c.status === 'draft' || c.status === 'pending_approval' || c.status === 'approved' || c.status === 'sending';
+  // The same rule POST …/cancel enforces (lib/marketing/lifecycle.ts): any campaign that has not ended.
+  const stoppable = canCancelCampaign(c.status);
   const stop = async () => {
     setStopping(true);
     setStopError(null);

@@ -21,6 +21,15 @@
 // "Nullable" is used deliberately: a null means "unknown / not applicable yet",
 // never "zero". The comment on each nullable field says which.
 
+// The status groupings below (in flight, terminal, the list views) are DERIVED from the
+// campaign/recipient state machines in ./lifecycle, which only type-imports this file.
+import {
+  AWAITING_APPROVAL_STATUSES,
+  IN_FLIGHT_RECIPIENT_STATUSES,
+  LIVE_CAMPAIGN_STATUSES,
+  TERMINAL_CAMPAIGN_STATUSES as LIFECYCLE_TERMINAL_CAMPAIGN_STATUSES,
+} from './lifecycle';
+
 // ---------------------------------------------------------------------------
 // Small shared shapes
 // ---------------------------------------------------------------------------
@@ -746,8 +755,8 @@ export const RECIPIENT_STATUSES: readonly RecipientStatus[] = [
 
 /** Statuses meaning a message actually left (forward-only: sent < delivered < read). */
 export const SENT_STATUSES: readonly RecipientStatus[] = ['sent', 'delivered', 'read'];
-/** Statuses meaning the recipient is still in an open campaign's pipeline. */
-export const IN_FLIGHT_STATUSES: readonly RecipientStatus[] = ['pending', 'queued', 'sending'];
+/** Statuses meaning the recipient is still in an open campaign's pipeline (pending / queued / sending — lib/marketing/lifecycle.ts). */
+export const IN_FLIGHT_STATUSES: readonly RecipientStatus[] = IN_FLIGHT_RECIPIENT_STATUSES;
 
 /** Why a contact was (or would be) skipped. These are spec §1.5 rules 1–9, in order. */
 export const ELIGIBILITY_REASONS = [
@@ -801,7 +810,8 @@ export interface SendHistoryEntry {
   /**
    * The status of the campaign this row belongs to, when the loader knows it (undefined/null
    * otherwise, and then the row is treated as belonging to a live campaign). A DRAFT campaign's
-   * pending rows are not "in flight" and a cancelled/expired campaign's holdout never held anyone out.
+   * pending rows are not "in flight", nor are the unsent leftovers of an ended (cancelled / expired /
+   * completed) one, and a cancelled/expired campaign's holdout never held anyone out.
    */
   campaign_status?: CampaignStatus | null;
 }
@@ -925,15 +935,18 @@ export const CAMPAIGN_STATUSES: readonly CampaignStatus[] = [
   'expired',
 ];
 
-/** Statuses from which nothing more will happen. */
-export const TERMINAL_CAMPAIGN_STATUSES: readonly CampaignStatus[] = ['completed', 'cancelled', 'expired'];
+/** Statuses from which nothing more will happen (completed / cancelled / expired: no transition leaves them — lib/marketing/lifecycle.ts). */
+export const TERMINAL_CAMPAIGN_STATUSES: readonly CampaignStatus[] = LIFECYCLE_TERMINAL_CAMPAIGN_STATUSES;
 
 /** GET /campaigns?status= — the three list views. */
 export type CampaignListFilter = 'pending_approval' | 'active' | 'history';
-/** pending_approval → draft + pending_approval; active → approved + sending; history → the terminal statuses. */
+/**
+ * pending_approval → the approvable statuses (draft + pending_approval); active → the live ones
+ * the sender works on (approved + sending); history → the terminal statuses.
+ */
 export const CAMPAIGN_LIST_STATUSES: Record<CampaignListFilter, readonly CampaignStatus[]> = {
-  pending_approval: ['draft', 'pending_approval'],
-  active: ['approved', 'sending'],
+  pending_approval: AWAITING_APPROVAL_STATUSES,
+  active: LIVE_CAMPAIGN_STATUSES,
   history: TERMINAL_CAMPAIGN_STATUSES,
 };
 

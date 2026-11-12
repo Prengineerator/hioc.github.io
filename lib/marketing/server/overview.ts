@@ -5,6 +5,7 @@
 import 'server-only';
 import { computeLift, rankFreeItems } from '@/lib/marketing/economics';
 import { DAY_MS, istMonthStart } from '@/lib/marketing/ist';
+import { AWAITING_APPROVAL_STATUSES } from '@/lib/marketing/lifecycle';
 import { optinUrl } from '@/lib/marketing/optin';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { detectDrop, weeklyActive } from '@/lib/marketing/segments';
@@ -204,7 +205,7 @@ export async function getOverviewSummary(now: Date = new Date()): Promise<Market
   const [stored, monthSpend, pendingRes, orders] = await Promise.all([
     loadSettings(admin),
     sumSpendSince(admin, istMonthStart(now).toISOString()),
-    admin.from('marketing_campaigns').select('id', { count: 'exact', head: true }).in('status', ['draft', 'pending_approval']),
+    admin.from('marketing_campaigns').select('id', { count: 'exact', head: true }).in('status', [...AWAITING_APPROVAL_STATUSES]),
     loadValidOrders(sinceOrders),
   ]);
   assertOk('marketing_campaigns count', pendingRes.error);
@@ -236,7 +237,7 @@ export async function getOverview(now: Date = new Date()): Promise<MarketingOver
   const [monthSpend, recent, pendingRes] = await Promise.all([
     sumSpendSince(admin, istMonthStart(now).toISOString()),
     loadRecent30(admin, since30),
-    admin.from('marketing_campaigns').select('id', { count: 'exact', head: true }).in('status', ['draft', 'pending_approval']),
+    admin.from('marketing_campaigns').select('id', { count: 'exact', head: true }).in('status', [...AWAITING_APPROVAL_STATUSES]),
   ]);
   assertOk('marketing_campaigns count', pendingRes.error);
 

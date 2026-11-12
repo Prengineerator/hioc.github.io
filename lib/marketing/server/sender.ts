@@ -25,6 +25,13 @@ import 'server-only';
 import { evaluateContact } from '@/lib/marketing/eligibility';
 import { isWithinSendWindow, istDayStart, istMonthStart } from '@/lib/marketing/ist';
 import {
+  IN_FLIGHT_RECIPIENT_STATUSES,
+  LIVE_CAMPAIGN_STATUSES,
+  campaignFrom,
+  canTransitionCampaign,
+  isLiveCampaign,
+} from '@/lib/marketing/lifecycle';
+import {
   couponFieldsFor,
   couponPrefixFor,
   generateCouponCode,
@@ -38,6 +45,7 @@ import { COUPON_CODE_MAX_ATTEMPTS, STALE_SENDING_MINUTES } from '@/lib/marketing
 import type { MarketingSettings, SendCronResult } from '@/lib/marketing/types';
 import { whatsappAdapter } from '@/lib/notifications/adapters';
 import { whatsappReminderHealth } from '@/lib/notifications/health';
+import { cancelOrphanedRecipients } from './campaigns';
 import { loadConsentState, recordOptOut } from './consent';
 import {
   assertOk,
@@ -110,26 +118,45 @@ async function markInterrupted(admin: Admin, now: Date): Promise<number> {
 
 /**
  * Step 8b: a campaign with nothing left pending / queued / sending is complete. Swept
- * over every approved or sending campaign (not only the ones touched this run), so a
- * campaign whose last queued messages were cancelled by an opt-out still closes.
+ * over every live (approved or sending) campaign (not only the ones touched this run), so
+ * a campaign whose last queued messages were cancelled by an opt-out still closes.
+ *
+ * The count and the conditional UPDATE are two statements, which is safe because the
+ * in-flight set of a LIVE campaign can only shrink: its rows are all written while it is
+ * still pending_approval/draft (insertCampaign inserts first and flips to approved last;
+ * approveCampaign only re-labels rows that were already pending, and so already counted),
+ * and the only way back into the set — the sender releasing a claimed row to 'queued' —
+ * starts from 'sending', which the count includes. So a zero here stays zero. Should that
+ * ever stop holding, cancelOrphanedRecipients (run right after this) cancels a row left
+ * queued under a completed campaign rather than leave it stuck.
  */
 async function completeFinishedCampaigns(admin: Admin, now: Date): Promise<void> {
-  const { data, error } = await admin.from('marketing_campaigns').select('id').in('status', ['approved', 'sending']);
+  const { data, error } = await admin.from('marketing_campaigns').select('id, status').in('status', [...LIVE_CAMPAIGN_STATUSES]);
   assertOk('marketing_campaigns read', error);
-  for (const c of (data ?? []) as { id: string }[]) {
+  for (const c of (data ?? []) as { id: string; status: CampaignRow['status'] }[]) {
     const { count, error: countError } = await admin
       .from('marketing_recipients')
       .select('id', { count: 'exact', head: true })
       .eq('campaign_id', c.id)
-      .in('status', ['pending', 'queued', 'sending']);
+      .in('status', [...IN_FLIGHT_RECIPIENT_STATUSES]);
     assertOk('marketing_recipients count', countError);
-    if ((count ?? 0) > 0) continue;
+    if (!canTransitionCampaign(c.status, 'completed', { actor: 'sender', inFlight: count ?? 0 }).ok) continue;
     const { error: doneError } = await admin
       .from('marketing_campaigns')
       .update({ status: 'completed', completed_at: now.toISOString() })
       .eq('id', c.id)
-      .in('status', ['approved', 'sending']);
+      .in('status', campaignFrom('complete'));
     if (doneError) console.error('marketing sender: could not complete campaign', doneError.message);
+  }
+}
+
+/** Step 8c: unsent rows a failed cascade left under an ended campaign. Bookkeeping: a failure is logged, never fails the run. */
+async function tidyOrphans(admin: Admin): Promise<void> {
+  try {
+    await cancelOrphanedRecipients(admin);
+  } catch (err) {
+    if (isMigrationMissingError(err)) throw err;
+    console.error('marketing sender: orphaned-recipient sweep failed', err);
   }
 }
 
@@ -141,7 +168,7 @@ async function markCampaignStarted(admin: Admin, campaign: CampaignRow, nowIso: 
     .eq('id', campaign.id)
     .is('started_at', null)
     .select('started_at');
-  await admin.from('marketing_campaigns').update({ status: 'sending' }).eq('id', campaign.id).eq('status', 'approved');
+  await admin.from('marketing_campaigns').update({ status: 'sending' }).eq('id', campaign.id).in('status', campaignFrom('start'));
 
   const startedAt = (stamped as { started_at?: string }[] | null)?.[0]?.started_at ?? campaign.started_at ?? nowIso;
   // A holdout recipient's clock starts when the campaign does (set once: `reference_at is null`).
@@ -244,7 +271,7 @@ async function processRow(ctx: RunContext, row: RecipientDbRow): Promise<Outcome
   try {
     // ---- the campaign is still live? ---------------------------------------
     const campaign = await loadCampaign(admin, row.campaign_id);
-    if (!campaign || (campaign.status !== 'approved' && campaign.status !== 'sending')) {
+    if (!campaign || !isLiveCampaign(campaign.status)) {
       await setRecipient(admin, row.id, { status: 'cancelled', skip_reason: '' });
       return 'skipped';
     }
@@ -401,6 +428,7 @@ async function run(startNow: Date, opts: SendBatchOptions): Promise<SendCronResu
   // 3. The IST send window.
   if (!isWithinSendWindow(startNow, settings.send_window_start_hour, settings.send_window_end_hour)) {
     await completeFinishedCampaigns(admin, startNow);
+    await tidyOrphans(admin);
     return zero({ outside_window: true, interrupted });
   }
 
@@ -465,7 +493,8 @@ async function run(startNow: Date, opts: SendBatchOptions): Promise<SendCronResu
     if (claimed.length < take) break;
   }
 
-  // 8. Close out campaigns with nothing left to send.
+  // 8. Close out campaigns with nothing left to send, and tidy what ended campaigns left behind.
   await completeFinishedCampaigns(admin, nowFn());
+  await tidyOrphans(admin);
   return result;
 }
