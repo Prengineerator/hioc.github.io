@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { isMenuItemAvailable } from '@/lib/menu/availability';
+import { isMenuItemAvailable, menuItemAvailability, type SnoozeDuration } from '@/lib/menu/availability';
 import { formatIstTime } from '@/lib/store/hours';
 import { MENU_CATEGORIES } from '@/lib/constants';
 import type { MenuItem } from '@/lib/types';
@@ -10,10 +10,10 @@ import { isSoldByWeight } from '@/lib/menu/weight';
 import { DataTable } from '@/components/ui/DataTable';
 import type { MenuChangeAction } from '@/lib/menu/changeRequestTypes';
 
-// S6 86/snooze durations the table offers. Page-level handler turns these
-// into the actual { is_available, unavailable_until } PATCH body — see
-// app/staff/menu/page.tsx's handleSnooze.
-export type SnoozeDuration = '2h' | 'eod' | 'indefinite';
+// S6 86/snooze durations the table offers. The page turns these into the
+// { is_available, unavailable_until } PATCH body with manualAvailabilityBody
+// (lib/menu/availability.ts), the same for the POS and the owner's menu.
+export type { SnoozeDuration };
 
 function variantSummary(item: MenuItem): string {
   // A sold-by-weight item's prices are per kg (lib/menu/weight.ts).
@@ -23,16 +23,23 @@ function variantSummary(item: MenuItem): string {
     .join(' / ');
 }
 
-// Live availability label — trusts isMenuItemAvailable (not the raw
+// Live availability label — reads menuItemAvailability (not the raw
 // is_available/unavailable_until columns) so an expired timed-86 shows as
 // "Available" immediately, with no cron needed to clear the stale column.
 function availabilityLabel(item: MenuItem): string {
-  if (isMenuItemAvailable(item)) return 'Available';
-  // Hidden by inventory auto-hide (an ingredient ran out); comes back by
-  // itself when stock is received, or now via Re-enable.
-  if (!item.is_available && item.stock_out_auto) return 'Out of stock';
-  if (!item.is_available) return 'Sold out';
-  return `Sold out until ${formatIstTime(new Date(item.unavailable_until as string))}`;
+  const { state, until } = menuItemAvailability(item);
+  switch (state) {
+    case 'available':
+      return 'Available';
+    // Hidden by inventory auto-hide (an ingredient ran out); comes back by
+    // itself when stock is received, or now via Re-enable.
+    case 'out_of_stock':
+      return 'Out of stock';
+    case 'sold_out':
+      return 'Sold out';
+    case 'snoozed':
+      return `Sold out until ${formatIstTime(new Date(until as string))}`;
+  }
 }
 
 export function MenuItemTable({

@@ -18,9 +18,11 @@ import { Modal } from '@/components/ui/Modal';
 import {
   canAssign,
   canCancel,
+  cancelNeedsReason,
   canPick,
   canReceive,
   formatQty,
+  isOpenRequestStatus,
   isWarehouseRoute,
   lineHasDiscrepancy,
   requestStatusLabel,
@@ -94,8 +96,8 @@ export function RequestsTab({
     surface: data.surface,
     warehouseAccess: data.warehouseAccess === true,
   };
-  const open = data.requests.filter((r) => r.status !== 'received' && r.status !== 'cancelled');
-  const closed = data.requests.filter((r) => r.status === 'received' || r.status === 'cancelled');
+  const open = data.requests.filter((r) => isOpenRequestStatus(r.status));
+  const closed = data.requests.filter((r) => !isOpenRequestStatus(r.status));
 
   async function assign(r: StockRequestView, assigneeId: string) {
     if (!assigneeId) return;
@@ -322,7 +324,7 @@ export function RequestsTab({
       {cancelling ? (
         <CancelModal
           request={cancelling}
-          reasonRequired={!(cancelling.requestedBy.id === data.actorId && cancelling.status === 'requested')}
+          reasonRequired={cancelNeedsReason(facts(cancelling), actor)}
           onClose={() => setCancelling(null)}
           onDone={async () => {
             setCancelling(null);

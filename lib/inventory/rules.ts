@@ -153,7 +153,15 @@ export function suggestedRequestQty(item: { par_level: number; reorder_qty: numb
 
 export const REQUEST_STATUSES = ['requested', 'assigned', 'picked', 'received', 'cancelled'] as const;
 export type StockRequestStatus = (typeof REQUEST_STATUSES)[number];
-export const OPEN_REQUEST_STATUSES: readonly StockRequestStatus[] = ['requested', 'assigned', 'picked'];
+/** No step leaves these (STOCK_REQUEST_TRANSITIONS below). */
+export const FINAL_REQUEST_STATUSES: readonly StockRequestStatus[] = ['received', 'cancelled'];
+export const OPEN_REQUEST_STATUSES: readonly StockRequestStatus[] = REQUEST_STATUSES.filter(
+  (s) => !FINAL_REQUEST_STATUSES.includes(s),
+);
+
+export function isOpenRequestStatus(status: StockRequestStatus): boolean {
+  return OPEN_REQUEST_STATUSES.includes(status);
+}
 
 export const REQUEST_STATUS_LABELS: Record<StockRequestStatus, string> = {
   requested: 'Requested',
@@ -204,6 +212,106 @@ export function requestStatusLabel(status: StockRequestStatus, route?: StockRout
   return isWarehouseRoute(route) ? WAREHOUSE_STATUS_LABELS[route][status] : REQUEST_STATUS_LABELS[status];
 }
 
+// ── The stock request lifecycle ─────────────────────────────────────────────
+//
+// Every move a request can make, by route — the one table the guards below
+// (canAssign / canPick / canReceive / canCancel, and canReceiveReturn in
+// lib/inventory/warehouse.ts) check the status against, that the app's own
+// writes take their compare-and-set guard from, that picks the database
+// function a step goes through (lib/inventory/requestActions.ts), and that the
+// warehouse screens group transfers by (warehouse.ts transferPhase).
+//
+//              store_room              from_warehouse           to_warehouse (a return)
+//   create     → requested             → requested              → picked (it leaves at once)
+//   assign     requested|assigned → assigned                    —
+//   pick       assigned → picked       assigned → picked        —
+//              inventory_pick          warehouse_dispatch
+//   receive    picked → received       picked → received        picked → received
+//              inventory_receive       inventory_receive        warehouse_receive_return (owner)
+//   cancel     requested|assigned|     requested|assigned       —   (on the road: never —
+//              picked → cancelled      → cancelled                   count it in and settle)
+//
+// received and cancelled are final. A received warehouse transfer that arrived
+// different then waits to be settled (warehouse.ts needsSettling); settling
+// stamps resolved_at and the status stays received. The database functions
+// re-check the status under a row lock, and — with
+// supabase/2026-11-menu-inventory-state-machine.sql — the route too.
+
+export type StockRequestStep = 'create' | 'assign' | 'pick' | 'receive' | 'receive_return' | 'cancel';
+
+export interface StockRequestTransition {
+  step: StockRequestStep;
+  /** null = the request is being created. */
+  from: StockRequestStatus | null;
+  to: StockRequestStatus;
+  routes: readonly StockRoute[];
+  /** The database function that makes the move, or 'app' for a guarded update from lib/inventory. */
+  writer: string;
+}
+
+const TO_THE_STORE: readonly StockRoute[] = ['store_room', 'from_warehouse'];
+
+export const STOCK_REQUEST_TRANSITIONS: readonly StockRequestTransition[] = [
+  { step: 'create', from: null, to: 'requested', routes: ['store_room'], writer: 'inventory_create_request' },
+  { step: 'create', from: null, to: 'requested', routes: ['from_warehouse'], writer: 'warehouse_create_request' },
+  { step: 'create', from: null, to: 'picked', routes: ['to_warehouse'], writer: 'warehouse_create_return' },
+  { step: 'assign', from: 'requested', to: 'assigned', routes: TO_THE_STORE, writer: 'app' },
+  { step: 'assign', from: 'assigned', to: 'assigned', routes: TO_THE_STORE, writer: 'app' },
+  { step: 'pick', from: 'assigned', to: 'picked', routes: ['store_room'], writer: 'inventory_pick' },
+  { step: 'pick', from: 'assigned', to: 'picked', routes: ['from_warehouse'], writer: 'warehouse_dispatch' },
+  { step: 'receive', from: 'picked', to: 'received', routes: TO_THE_STORE, writer: 'inventory_receive' },
+  { step: 'receive_return', from: 'picked', to: 'received', routes: ['to_warehouse'], writer: 'warehouse_receive_return' },
+  // A return is never requested or assigned; these two cover it only so the
+  // cancel guard reads the same for every route, as it always has.
+  { step: 'cancel', from: 'requested', to: 'cancelled', routes: STOCK_ROUTES, writer: 'app' },
+  { step: 'cancel', from: 'assigned', to: 'cancelled', routes: STOCK_ROUTES, writer: 'app' },
+  { step: 'cancel', from: 'picked', to: 'cancelled', routes: ['store_room'], writer: 'app' },
+];
+
+const routeOf = (route: StockRoute | null | undefined): StockRoute => route ?? 'store_room';
+
+/** The move `step` makes from `status` on `route`, if it is one. */
+export function stockRequestTransition(
+  step: StockRequestStep,
+  status: StockRequestStatus | null,
+  route: StockRoute | null | undefined,
+): StockRequestTransition | undefined {
+  const r = routeOf(route);
+  return STOCK_REQUEST_TRANSITIONS.find((t) => t.step === step && t.from === status && t.routes.includes(r));
+}
+
+/** The statuses `step` may move a request out of on `route` — a write's compare-and-set guard. */
+export function stepFromStatuses(step: StockRequestStep, route: StockRoute | null | undefined): StockRequestStatus[] {
+  const r = routeOf(route);
+  const out: StockRequestStatus[] = [];
+  for (const t of STOCK_REQUEST_TRANSITIONS) {
+    if (t.step === step && t.from !== null && t.routes.includes(r) && !out.includes(t.from)) out.push(t.from);
+  }
+  return out;
+}
+
+/**
+ * The database function a step goes through on a route, or null when the step
+ * has none there — so a caller can never send a warehouse transfer through a
+ * store-room function, or the other way round.
+ */
+export function stepWriter(step: StockRequestStep, route: StockRoute | null | undefined): string | null {
+  const r = routeOf(route);
+  return STOCK_REQUEST_TRANSITIONS.find((t) => t.step === step && t.routes.includes(r))?.writer ?? null;
+}
+
+/**
+ * The step that moves a request on from where it is: not a cancel, not a
+ * re-assign. null once it is final.
+ */
+export function nextStep(status: StockRequestStatus, route: StockRoute | null | undefined): StockRequestStep | null {
+  const r = routeOf(route);
+  const t = STOCK_REQUEST_TRANSITIONS.find(
+    (x) => x.from === status && x.to !== status && x.step !== 'cancel' && x.routes.includes(r),
+  );
+  return t?.step ?? null;
+}
+
 export interface RequestActor {
   userId: string;
   role: string;
@@ -248,7 +356,7 @@ export const RECEIVE_POS_ONLY_MESSAGE =
 /** Assign (or re-assign) who picks: a manager or the owner, before picking. */
 export function canAssign(req: RequestFacts, actor: RequestActor): Verdict {
   if (!isManagerRole(actor.role)) return { ok: false, status: 403, message: 'Only a manager or the owner can assign a request.' };
-  if (req.status !== 'requested' && req.status !== 'assigned') {
+  if (!stockRequestTransition('assign', req.status, req.route)) {
     return { ok: false, status: 409, message: `This request is already ${req.status}.` };
   }
   return OK;
@@ -271,11 +379,12 @@ export const SEND_BACK_WAREHOUSE_SIDE_MESSAGE =
  * return is dispatched when it is sent, so it has no pick step.
  */
 export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
-  if (req.route === 'to_warehouse') {
+  if (stepFromStatuses('pick', req.route).length === 0) {
     return { ok: false, status: 409, message: 'A return leaves the store when it is sent — there is nothing to pick.' };
   }
+  const pickable = Boolean(stockRequestTransition('pick', req.status, req.route));
   if (req.route === 'from_warehouse') {
-    if (req.status !== 'assigned') {
+    if (!pickable) {
       return {
         ok: false,
         status: 409,
@@ -285,7 +394,7 @@ export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
     if (!worksWarehouseSide(actor)) return { ok: false, status: 403, message: DISPATCH_WAREHOUSE_SIDE_MESSAGE };
     return OK;
   }
-  if (req.status !== 'assigned') {
+  if (!pickable) {
     return { ok: false, status: 409, message: req.status === 'requested' ? 'Assign this request before picking it.' : `This request is already ${req.status}.` };
   }
   if (req.assigned_to !== actor.userId && !isManagerRole(actor.role)) {
@@ -300,11 +409,12 @@ export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
  * small team can't always have two people on).
  */
 export function canReceive(req: RequestFacts, actor: RequestActor): Verdict {
-  if (req.route === 'to_warehouse') {
+  // A return is counted in at the warehouse (receive_return), never at the POS.
+  if (stepFromStatuses('receive', req.route).length === 0) {
     return { ok: false, status: 403, message: RECEIVE_AT_WAREHOUSE_MESSAGE };
   }
   if (actor.surface !== 'pos') return { ok: false, status: 403, message: RECEIVE_POS_ONLY_MESSAGE };
-  if (req.status !== 'picked') {
+  if (!stockRequestTransition('receive', req.status, req.route)) {
     return { ok: false, status: 409, message: req.status === 'received' ? 'This request has already been received.' : 'Only a picked request can be received.' };
   }
   if (req.picked_by === actor.userId && !isManagerRole(actor.role)) {
@@ -323,18 +433,42 @@ export const RECEIVE_AT_WAREHOUSE_MESSAGE = 'The owner counts a return in at the
 /** Cancel: the requester while nobody has been assigned yet; a manager or
  * the owner any time before it is received. */
 export function canCancel(req: RequestFacts, actor: RequestActor): Verdict {
-  if (req.status === 'received' || req.status === 'cancelled') {
+  if (FINAL_REQUEST_STATUSES.includes(req.status)) {
     return { ok: false, status: 409, message: `This request is already ${req.status}.` };
   }
   // A warehouse transfer that is on the road has moved stock: it can't just
   // vanish. Count it in (0 for whatever did not come) and settle the
   // difference — "back to the warehouse" (or "back on the shelf") undoes it.
-  if (isWarehouseRoute(req.route) && req.status === 'picked') {
-    return { ok: false, status: 409, message: TRANSIT_CANCEL_MESSAGE[req.route] };
+  if (!cancellableStatuses(req.route).includes(req.status)) {
+    return {
+      ok: false,
+      status: 409,
+      message: isWarehouseRoute(req.route) ? TRANSIT_CANCEL_MESSAGE[req.route] : `This request is already ${req.status}.`,
+    };
   }
-  if (isManagerRole(actor.role)) return OK;
-  if (req.requested_by === actor.userId && req.status === 'requested') return OK;
+  if (cancelGuardStatuses(req, actor).includes(req.status)) return OK;
   return { ok: false, status: 403, message: 'Only a manager or the owner can cancel this now.' };
+}
+
+/**
+ * The statuses THIS actor's cancel may move the request out of — the cancel
+ * write's guard, and what canCancel allows: a manager or the owner, any status
+ * a cancel may leave on the route; the requester, only while it is still
+ * requested (nobody chosen to pick it yet); anyone else, none.
+ */
+export function cancelGuardStatuses(
+  req: Pick<RequestFacts, 'requested_by' | 'route'>,
+  actor: Pick<RequestActor, 'userId' | 'role'>,
+): StockRequestStatus[] {
+  const statuses = cancellableStatuses(req.route);
+  if (isManagerRole(actor.role)) return statuses;
+  if (req.requested_by === actor.userId) return statuses.filter((s) => s === 'requested');
+  return [];
+}
+
+/** A cancel needs a reason, except the requester withdrawing their own before anyone was assigned. */
+export function cancelNeedsReason(req: Pick<RequestFacts, 'requested_by' | 'status'>, actor: Pick<RequestActor, 'userId'>): boolean {
+  return !(req.requested_by === actor.userId && req.status === 'requested');
 }
 
 const TRANSIT_CANCEL_MESSAGE: Record<'from_warehouse' | 'to_warehouse', string> = {
@@ -344,9 +478,9 @@ const TRANSIT_CANCEL_MESSAGE: Record<'from_warehouse' | 'to_warehouse', string> 
     'It has left the store. The owner counts it in at the warehouse (0 for anything that didn’t come) and settles the difference.',
 };
 
-/** Statuses a cancel may move a request out of (the cancel write's guard). */
+/** Statuses a cancel may move a request out of on its route, whoever asks (STOCK_REQUEST_TRANSITIONS). */
 export function cancellableStatuses(route?: StockRoute | null): StockRequestStatus[] {
-  return isWarehouseRoute(route) ? ['requested', 'assigned'] : [...OPEN_REQUEST_STATUSES];
+  return stepFromStatuses('cancel', route);
 }
 
 // ── Line validation ─────────────────────────────────────────────────────────

@@ -16,11 +16,15 @@ import {
   isIsoDate,
   isWarehouseRoute,
   MAX_LINES,
+  nextStep,
   parseQty,
+  REQUEST_STATUSES,
   roundQty,
+  stockRequestTransition,
   type ReceivableItem,
   type RequestActor,
   type StockRequestStatus,
+  type StockRequestStep,
   type StockRoute,
   type Verdict,
 } from '@/lib/inventory/rules';
@@ -45,7 +49,7 @@ export interface TransferFacts {
 export function canReceiveReturn(req: TransferFacts, actor: Pick<RequestActor, 'role'>): Verdict {
   if (!isOwnerRole(actor.role)) return { ok: false, status: 403, message: 'Only the owner counts stock in at the warehouse.' };
   if (req.route !== 'to_warehouse') return { ok: false, status: 409, message: 'This is not a return to the warehouse.' };
-  if (req.status !== 'picked') {
+  if (!stockRequestTransition('receive_return', req.status, req.route)) {
     return { ok: false, status: 409, message: req.status === 'received' ? 'This return has already been counted in.' : `This return is ${req.status}.` };
   }
   return OK;
@@ -64,6 +68,68 @@ export function canResolve(req: TransferFacts, actor: Pick<RequestActor, 'role'>
 /** Waiting to be settled: received different, not settled yet. */
 export function needsSettling(req: TransferFacts): boolean {
   return isWarehouseRoute(req.route) && req.status === 'received' && req.hasDiscrepancy && !req.resolvedAt;
+}
+
+// ── Where a transfer stands ─────────────────────────────────────────────────
+
+/**
+ * What a warehouse transfer is waiting for — the groups on the owner's
+ * Warehouse page, its header badge, and what counts as "on the road".
+ *   to_assign    asked for; nobody chosen to deliver it yet
+ *   to_dispatch  delivery person chosen; the warehouse hasn't recorded what it sent
+ *   on_road      sent from the warehouse; to be counted in at the POS
+ *   to_count_in  a return on its way; the owner counts it in at the warehouse
+ *   to_settle    arrived different from what was sent; not settled
+ *   closed       received as sent (or settled), or cancelled
+ */
+export const TRANSFER_PHASES = ['to_assign', 'to_dispatch', 'on_road', 'to_count_in', 'to_settle', 'closed'] as const;
+export type TransferPhase = (typeof TRANSFER_PHASES)[number];
+
+// The phase is the step the transfer is waiting on (rules.ts nextStep, from
+// STOCK_REQUEST_TRANSITIONS), so it can't drift from what the steps allow.
+const PHASE_BY_STEP: Partial<Record<StockRequestStep, TransferPhase>> = {
+  assign: 'to_assign',
+  pick: 'to_dispatch',
+  receive: 'on_road',
+  receive_return: 'to_count_in',
+};
+
+/** The phase of a warehouse transfer; null for a store-room request (not the warehouse's). */
+export function transferPhase(t: TransferFacts): TransferPhase | null {
+  if (!isWarehouseRoute(t.route)) return null;
+  if (needsSettling(t)) return 'to_settle';
+  const step = nextStep(t.status, t.route);
+  return (step && PHASE_BY_STEP[step]) || 'closed';
+}
+
+/** Stock on the road between the two, either way: it has left one side and not reached the other. */
+export function isInTransit(t: TransferFacts): boolean {
+  const phase = transferPhase(t);
+  return phase === 'on_road' || phase === 'to_count_in';
+}
+
+/** Asked of the warehouse and not sent yet (its lines are "asked for, not yet sent" on the sheet). */
+export function awaitingDispatch(t: TransferFacts): boolean {
+  const phase = transferPhase(t);
+  return phase === 'to_assign' || phase === 'to_dispatch';
+}
+
+/**
+ * The (route, status) rows each phase is made of, for counting in the database
+ * (lib/inventory/warehouseServer.ts countOwnerWaiting). `unsettled` = only
+ * those received different and not settled.
+ */
+export function phaseRows(phase: TransferPhase): { route: 'from_warehouse' | 'to_warehouse'; status: StockRequestStatus; unsettled: boolean }[] {
+  const out: { route: 'from_warehouse' | 'to_warehouse'; status: StockRequestStatus; unsettled: boolean }[] = [];
+  for (const route of ['from_warehouse', 'to_warehouse'] as const) {
+    for (const status of REQUEST_STATUSES) {
+      const asSent = transferPhase({ route, status, hasDiscrepancy: false, resolvedAt: null });
+      const different = transferPhase({ route, status, hasDiscrepancy: true, resolvedAt: null });
+      if (asSent === phase && different === phase) out.push({ route, status, unsettled: false });
+      else if (different === phase) out.push({ route, status, unsettled: true });
+    }
+  }
+  return out;
 }
 
 // ── Settlements ─────────────────────────────────────────────────────────────
@@ -264,7 +330,7 @@ export interface TransitLine {
 export function transitLines(transfers: TransferLike[]): TransitLine[] {
   const out: TransitLine[] = [];
   for (const t of transfers) {
-    if (!isWarehouseRoute(t.route) || t.status !== 'picked') continue;
+    if (!isWarehouseRoute(t.route) || !isInTransit(t)) continue;
     for (const l of t.lines) {
       const qty = roundQty(Number(l.qtyPicked) || 0);
       if (qty <= 0) continue;
@@ -359,10 +425,11 @@ export function ownerWaiting(transfers: Pick<TransferLike, 'route' | 'status' | 
   let toReceive = 0;
   let toSettle = 0;
   for (const t of transfers) {
-    if (t.route === 'from_warehouse' && t.status === 'requested') toAssign += 1;
-    else if (t.route === 'from_warehouse' && t.status === 'assigned') toDispatch += 1;
-    else if (t.route === 'to_warehouse' && t.status === 'picked') toReceive += 1;
-    else if (needsSettling(t)) toSettle += 1;
+    const phase = transferPhase(t);
+    if (phase === 'to_assign') toAssign += 1;
+    else if (phase === 'to_dispatch') toDispatch += 1;
+    else if (phase === 'to_count_in') toReceive += 1;
+    else if (phase === 'to_settle') toSettle += 1;
   }
   return { toAssign, toDispatch, toReceive, toSettle, total: toAssign + toDispatch + toReceive + toSettle };
 }

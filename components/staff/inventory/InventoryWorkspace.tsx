@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Spinner } from '@/components/ui/Spinner';
-import { canAssign, canPick, canReceive, type RequestActor } from '@/lib/inventory/rules';
+import { canAssign, canPick, canReceive, nextStep, type RequestActor } from '@/lib/inventory/rules';
 import { api, type ItemsPayload, type RecipesPayload, type RequestsPayload } from '@/components/staff/inventory/client';
 import { StockTab } from '@/components/staff/inventory/StockTab';
 import { RequestsTab } from '@/components/staff/inventory/RequestsTab';
@@ -73,7 +73,8 @@ export function InventoryWorkspace() {
           route: r.route,
         };
         return (
-          (r.status === 'requested' && canAssign(f, actor).ok) ||
+          // Waiting to be assigned (not a re-assign of one already assigned).
+          (nextStep(r.status, r.route) === 'assign' && canAssign(f, actor).ok) ||
           // The picker's own pick; a warehouse dispatch is the warehouse
           // side's (any manager, or a staffer with warehouse access), so it
           // counts for each of them.

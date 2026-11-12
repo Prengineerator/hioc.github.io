@@ -12,6 +12,10 @@
 // Add-on groups use the same requests (2026-10-addon-change-requests.sql,
 // target 'addon_group'): stored, listed, cancelled and decided here exactly like
 // an item's, and applied through lib/menu/addonChanges.ts.
+//
+// Which status may follow which, and who may move it, is
+// lib/menu/changeRequestStatus.ts. Every status write below names its
+// transition there and is a compare-and-set on the transition's from-status.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isInStoreOnly } from '@/lib/menu/inStore';
@@ -20,25 +24,28 @@ import {
   ADDON_CHANGE_MIGRATION_HINT,
   ADDON_GROUP_GONE_MESSAGE,
   applyAddonCreate,
-  applyAddonUpdate,
+  loadAddonGroup,
   loadAddonSnapshot,
   staleAddonFailure,
   staleAddonFields,
   validateAddonGroupBody,
+  writeAddonUpdate,
   type AddonGroupValues,
 } from '@/lib/menu/addonChanges';
 import {
   applyMenuCreate,
   applyMenuDelete,
-  applyMenuUpdate,
   failure,
+  loadMenuItem,
   validateCreateBody,
   validateUpdateBody,
   type Failure,
   type MenuCreateValues,
   type MenuUpdateValues,
   type Outcome,
+  writeMenuUpdate,
 } from '@/lib/menu/applyMenuChange';
+import { checkMenuChange, menuChangeTransition, type MenuChangeTransitionName } from '@/lib/menu/changeRequestStatus';
 import type {
   AddonGroupChangePayload,
   AddonGroupChangeRequest,
@@ -291,6 +298,9 @@ export function toMenuChangeRequest(row: Record<string, unknown>): MenuChangeReq
     decided_by: (row.decided_by as string | null | undefined) ?? null,
     decided_at: (row.decided_at as string | null | undefined) ?? null,
     decision_note: (row.decision_note as string | null | undefined) ?? null,
+    // Left out (not null) on a database without the column, so
+    // approvalUnconfirmed can tell "never stamped" from "cannot be stamped".
+    ...('applied_at' in row ? { applied_at: (row.applied_at as string | null) ?? null } : {}),
   };
   if (row.target === 'addon_group') {
     return {
@@ -411,17 +421,18 @@ async function storeRequest(
 
   const created = toMenuChangeRequest(data as Record<string, unknown>);
 
+  const supersede = menuChangeTransition('supersede');
   if (isAddon && subjectId && input.action === 'update') {
     // As for an item below: after the insert, best effort.
     const { error: supersedeError } = await admin
       .from('menu_change_requests')
       .update({
-        status: 'cancelled',
+        status: supersede.to,
         decided_at: new Date().toISOString(),
         decision_note: 'Replaced by a newer request',
       })
       .eq('addon_group_id', subjectId)
-      .eq('status', 'pending')
+      .eq('status', supersede.from)
       .eq('action', 'update')
       .neq('id', created.id);
     if (supersedeError) console.error('menu change requests: could not replace older add-on requests', supersedeError);
@@ -433,12 +444,12 @@ async function storeRequest(
     const { error: supersedeError } = await admin
       .from('menu_change_requests')
       .update({
-        status: 'cancelled',
+        status: supersede.to,
         decided_at: new Date().toISOString(),
         decision_note: 'Replaced by a newer request',
       })
       .eq('menu_item_id', subjectId)
-      .eq('status', 'pending')
+      .eq('status', supersede.from)
       .in('action', ['update', 'delete'])
       .neq('id', created.id);
     if (supersedeError) console.error('menu change requests: could not replace older requests', supersedeError);
@@ -473,32 +484,30 @@ export async function countPendingRequests(admin: Admin): Promise<Outcome<number
   return { ok: true, value: (data ?? []).length };
 }
 
-function alreadyDecided(status: MenuChangeStatus): Failure {
-  return failure(409, `This request was already ${status}.`);
-}
-
 /**
- * Moves a PENDING request to a final status. The update is conditional on the
- * row still being pending, so two people deciding at once cannot both win: the
+ * Moves a request along a person's transition (approve, reject or cancel —
+ * each leaves pending). The update is conditional on the row still being in the
+ * transition's from-status, so two people deciding at once cannot both win: the
  * loser gets a 409.
  */
 async function closeRequest(
   admin: Admin,
   id: string,
-  status: Exclude<MenuChangeStatus, 'pending'>,
+  name: Extract<MenuChangeTransitionName, 'approve' | 'reject' | 'cancel'>,
   decidedBy: string,
   note: string | null,
 ): Promise<Outcome<MenuChangeRequest>> {
+  const transition = menuChangeTransition(name);
   const { data, error } = await admin
     .from('menu_change_requests')
     .update({
-      status,
+      status: transition.to,
       decided_by: decidedBy,
       decided_at: new Date().toISOString(),
       decision_note: note,
     })
     .eq('id', id)
-    .eq('status', 'pending')
+    .eq('status', transition.from)
     .select(REQUEST_COLUMNS)
     .maybeSingle();
   if (error) return dbFailure(error, 'Failed to update the change request');
@@ -508,7 +517,7 @@ async function closeRequest(
 
 /** Withdraws a pending request (the requester, a manager or the owner). */
 export async function cancelChangeRequest(admin: Admin, id: string, cancelledBy: string): Promise<Outcome<MenuChangeRequest>> {
-  return closeRequest(admin, id, 'cancelled', cancelledBy, null);
+  return closeRequest(admin, id, 'cancel', cancelledBy, null);
 }
 
 export async function rejectChangeRequest(
@@ -517,7 +526,7 @@ export async function rejectChangeRequest(
   rejectedBy: string,
   note: string | null,
 ): Promise<Outcome<MenuChangeRequest>> {
-  return closeRequest(admin, id, 'rejected', rejectedBy, note);
+  return closeRequest(admin, id, 'reject', rejectedBy, note);
 }
 
 /**
@@ -528,15 +537,16 @@ export async function rejectChangeRequest(
  * at all, so it is left alone.
  */
 export async function cancelOrphanedRequests(admin: Admin): Promise<void> {
+  const itemDeleted = menuChangeTransition('item_deleted');
   const run = (itemsOnly: boolean) => {
     let query = admin
       .from('menu_change_requests')
       .update({
-        status: 'cancelled',
+        status: itemDeleted.to,
         decided_at: new Date().toISOString(),
         decision_note: 'The item was deleted',
       })
-      .eq('status', 'pending')
+      .eq('status', itemDeleted.from)
       .in('action', ['update', 'delete'])
       .is('menu_item_id', null);
     if (itemsOnly) query = query.neq('target', 'addon_group');
@@ -570,10 +580,14 @@ async function itemExists(admin: Admin, id: string): Promise<Outcome<boolean>> {
 /**
  * Approves a pending request: claims it (pending -> approved, conditional, so a
  * double click or two owners cannot apply it twice), then applies it with the
- * menu routes' own write logic. If applying fails the request goes back to
- * pending with its decision cleared and the error is returned, so nothing is
- * lost and the owner can retry or reject. A create gets the new item's id as
- * menu_item_id.
+ * menu routes' own write logic. If applying fails, the writers leave the item as
+ * it was (applyMenuCreate deletes a half-made item, writeMenuUpdate undoes its
+ * earlier steps) and the request goes back to pending with its decision cleared
+ * and the error is returned, so nothing is lost and the owner can retry or
+ * reject. Once applied the request is stamped applied_at (when the database has
+ * the column), so an approval interrupted between the claim and that stamp shows
+ * as unconfirmed (changeRequestStatus.ts approvalUnconfirmed). A create gets the
+ * new item's id as menu_item_id.
  *
  * An update replays whole size and add-on lists, so if the item was edited
  * directly after the request was made it would put the old values back. Before
@@ -591,7 +605,8 @@ export async function approveChangeRequest(
   const loaded = await loadChangeRequest(admin, id);
   if (!loaded.ok) return loaded;
   const request = loaded.value;
-  if (request.status !== 'pending') return alreadyDecided(request.status);
+  const allowed = checkMenuChange('approve', request, { id: ownerId, role: 'owner' });
+  if (!allowed.ok) return failure(allowed.status, allowed.message);
   if (request.target === 'addon_group') return approveAddonRequest(admin, request, ownerId, note, force);
 
   // Check everything that can be checked before claiming the row.
@@ -619,7 +634,7 @@ export async function approveChangeRequest(
     if (stale.length > 0) return staleFailure(stale);
   }
 
-  const claimed = await closeRequest(admin, id, 'approved', ownerId, note);
+  const claimed = await closeRequest(admin, id, 'approve', ownerId, note);
   if (!claimed.ok) return claimed;
 
   let applied: Outcome<{ item?: MenuItem }>;
@@ -627,8 +642,16 @@ export async function approveChangeRequest(
     const created = await applyMenuCreate(admin, createValues as MenuCreateValues);
     applied = created.ok ? { ok: true, value: { item: created.value } } : created;
   } else if (request.action === 'update') {
-    const updated = await applyMenuUpdate(admin, request.menu_item_id as string, updateValues as MenuUpdateValues);
-    applied = updated.ok ? { ok: true, value: { item: updated.value } } : updated;
+    const written = await writeMenuUpdate(admin, request.menu_item_id as string, updateValues as MenuUpdateValues);
+    if (written.ok) {
+      // The change is in. Failing only to read it back must not put the request
+      // back to pending (the next approval would apply it a second time): the
+      // answer just carries no item, and the owner's list reloads it.
+      const item = await loadMenuItem(admin, request.menu_item_id as string);
+      applied = { ok: true, value: item.ok ? { item: item.value } : {} };
+    } else {
+      applied = written;
+    }
   } else {
     const deleted = await applyMenuDelete(admin, request.menu_item_id as string);
     applied = deleted.ok ? { ok: true, value: {} } : deleted;
@@ -642,12 +665,11 @@ export async function approveChangeRequest(
 
   const item = applied.value.item;
   let finished = claimed.value as MenuItemChangeRequest;
-  if (request.action === 'create' && item) {
-    // The item exists either way; only the link back to it can be lost.
-    const { error: linkError } = await admin.from('menu_change_requests').update({ menu_item_id: item.id }).eq('id', id);
-    if (linkError) console.error('menu change requests: could not link the created item', linkError);
-    finished = { ...finished, menu_item_id: item.id };
-  }
+  // The item exists either way; only the link back to it (a create) and the
+  // applied stamp can be lost, and a lost one shows as unconfirmed.
+  const appliedAt = await markApplied(admin, id, request.action === 'create' && item ? { menu_item_id: item.id } : {});
+  if (appliedAt !== undefined) finished = { ...finished, applied_at: appliedAt };
+  if (request.action === 'create' && item) finished = { ...finished, menu_item_id: item.id };
   if (request.action === 'delete') {
     // The item is gone, and so is the link to it (on delete set null).
     finished = { ...finished, menu_item_id: null };
@@ -657,14 +679,47 @@ export async function approveChangeRequest(
   return { ok: true, value: { request: finished, ...(item ? { item } : {}) } };
 }
 
-/** An approval whose change could not be applied goes back to pending, undecided. */
-async function putBackToPending(admin: Admin, id: string): Promise<void> {
-  const { error } = await admin
+/**
+ * After a successful apply: stamps applied_at, together with `link` (a create's
+ * new item / group id). Returns the stamp, or undefined when it could not be
+ * written — on a database without the column (supabase/2026-11-menu-inventory-
+ * state-machine.sql) the link alone is written, as before. Best effort: the
+ * change is already applied; an unstamped approval only shows as unconfirmed.
+ */
+async function markApplied(admin: Admin, id: string, link: Record<string, string>): Promise<string | undefined> {
+  const appliedAt = new Date().toISOString();
+  const approved = menuChangeTransition('approve').to;
+  let { error } = await admin
     .from('menu_change_requests')
-    .update({ status: 'pending', decided_by: null, decided_at: null, decision_note: null })
+    .update({ ...link, applied_at: appliedAt })
     .eq('id', id)
-    .eq('status', 'approved');
+    .eq('status', approved);
+  if (!error) return appliedAt;
+  if (isMissingColumnError(error) && Object.keys(link).length > 0) {
+    ({ error } = await admin.from('menu_change_requests').update(link).eq('id', id).eq('status', approved));
+  }
+  if (error && !isMissingColumnError(error)) console.error('menu change requests: could not record the applied change', error);
+  return undefined;
+}
+
+/**
+ * An approval whose change could not be applied goes back to pending,
+ * undecided (the system's put_back). The writers have already left the item as
+ * it was. If this write fails the request stays approved without an applied
+ * stamp, which approvalUnconfirmed reports to the owner.
+ */
+async function putBackToPending(admin: Admin, id: string): Promise<void> {
+  const putBack = menuChangeTransition('put_back');
+  const { data, error } = await admin
+    .from('menu_change_requests')
+    .update({ status: putBack.to, decided_by: null, decided_at: null, decision_note: null })
+    .eq('id', id)
+    .eq('status', putBack.from)
+    .select('id');
   if (error) console.error('menu change requests: could not put a failed approval back to pending', error);
+  else if (((data as unknown[] | null) ?? []).length === 0) {
+    console.error('menu change requests: a failed approval was no longer approved when putting it back', id);
+  }
 }
 
 /**
@@ -703,27 +758,35 @@ async function approveAddonRequest(
     }
   }
 
-  const claimed = await closeRequest(admin, request.id, 'approved', ownerId, note);
+  const claimed = await closeRequest(admin, request.id, 'approve', ownerId, note);
   if (!claimed.ok) return claimed;
 
-  const applied =
-    request.action === 'create'
-      ? await applyAddonCreate(admin, createValues as AddonGroupValues)
-      : await applyAddonUpdate(admin, request.addon_group_id as string, request.payload as AddonGroupChangePayload);
+  let applied: Outcome<{ id: string; group?: AddonGroup }>;
+  if (request.action === 'create') {
+    const created = await applyAddonCreate(admin, createValues as AddonGroupValues);
+    applied = created.ok ? { ok: true, value: { id: created.value.id, group: created.value } } : created;
+  } else {
+    const groupId = request.addon_group_id as string;
+    const written = await writeAddonUpdate(admin, groupId, request.payload as AddonGroupChangePayload);
+    if (written.ok) {
+      // Applied. As for an item: failing only to read it back must not put the
+      // request back to pending, or approving again would add new options twice.
+      const group = await loadAddonGroup(admin, groupId);
+      applied = { ok: true, value: { id: groupId, ...(group.ok ? { group: group.value } : {}) } };
+    } else {
+      applied = written;
+    }
+  }
   if (!applied.ok) {
     await putBackToPending(admin, request.id);
     return applied.status === 404 ? failure(409, ADDON_GROUP_GONE_MESSAGE) : applied;
   }
 
   let finished = claimed.value as AddonGroupChangeRequest;
-  if (request.action === 'create') {
-    // The group exists either way; only the link back to it can be lost.
-    const { error: linkError } = await admin
-      .from('menu_change_requests')
-      .update({ addon_group_id: applied.value.id })
-      .eq('id', request.id);
-    if (linkError) console.error('menu change requests: could not link the created add-on group', linkError);
-    finished = { ...finished, addon_group_id: applied.value.id };
-  }
-  return { ok: true, value: { request: finished, addonGroup: applied.value } };
+  // The group exists either way; only the link back to it (a create) and the
+  // applied stamp can be lost.
+  const appliedAt = await markApplied(admin, request.id, request.action === 'create' ? { addon_group_id: applied.value.id } : {});
+  if (appliedAt !== undefined) finished = { ...finished, applied_at: appliedAt };
+  if (request.action === 'create') finished = { ...finished, addon_group_id: applied.value.id };
+  return { ok: true, value: { request: finished, ...(applied.value.group ? { addonGroup: applied.value.group } : {}) } };
 }

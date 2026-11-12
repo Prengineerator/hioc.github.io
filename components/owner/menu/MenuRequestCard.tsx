@@ -18,6 +18,7 @@ import { Textarea } from '@/components/ui/Textarea';
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import { Notice, Pill } from '@/components/owner/marketing/ui';
 import { isAddonRequest, type MenuChangeRequest } from '@/lib/menu/changeRequestTypes';
+import { approvalUnconfirmed, canDecideMenuChange } from '@/lib/menu/changeRequestStatus';
 import { AddonChangeDiff } from './AddonChangeDiff';
 import { MenuChangeDiff } from './MenuChangeDiff';
 import {
@@ -65,7 +66,9 @@ export function MenuRequestCard({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [note, setNote] = useState('');
 
-  const pending = request.status === 'pending';
+  // Approve / Reject are open (lib/menu/changeRequestStatus.ts) — i.e. pending.
+  const pending = canDecideMenuChange(request);
+  const unconfirmed = approvalUnconfirmed(request);
   const addon = isAddonRequest(request);
   const itemName = request.item_name || (addon ? 'Untitled add-on group' : 'Untitled item');
   const actionLabel = requestActionLabel(request);
@@ -145,7 +148,9 @@ export function MenuRequestCard({
               {pending
                 ? 'Will be deleted'
                 : request.status === 'approved'
-                  ? 'Deleted from the menu'
+                  ? unconfirmed
+                    ? 'Approved for deletion'
+                    : 'Deleted from the menu'
                   : 'Not deleted'}
             </span>
             {pending ? ' if you approve. This is what is on the menu now:' : null}
@@ -160,6 +165,16 @@ export function MenuRequestCard({
           <MenuChangeDiff request={request} addonNames={addonNames} />
         )}
       </div>
+
+      {unconfirmed ? (
+        <div className="mt-3">
+          <Notice tone="warn" role="alert">
+            <span className="font-bold">Approved, but not confirmed as applied.</span> Saving it was interrupted
+            part-way, so the menu may not show this change. Check the {addon ? 'add-on group' : 'item'} — if the
+            change is missing, make it again.
+          </Notice>
+        </div>
+      ) : null}
 
       {error && !rejectOpen ? (
         <p role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-800">

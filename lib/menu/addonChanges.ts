@@ -334,25 +334,46 @@ export async function applyAddonCreate(admin: Admin, values: AddonGroupValues): 
 }
 
 /**
- * Applies an edit: the group's own fields that `changes` names, and — when it
+ * Writes an edit: the group's own fields that `changes` names, and — when it
  * carries `options` — each listed option in place (existing ones by id: name,
  * price, position; new ones inserted). Options the list leaves out are left
  * exactly as they are; nothing is deleted. Every option id must belong to the
  * group (a 409 otherwise, before anything is written).
+ *
+ * One statement per row and no transaction across them, so a failure part-way
+ * puts back what was already written — the group's fields and each option as
+ * read first, and any option this edit inserted is removed again (it is
+ * moments old, so nothing points at it yet). Without that, an approval that
+ * failed half-way would go back to pending with some options already added,
+ * and approving it again would add them twice.
  */
-export async function applyAddonUpdate(
+export async function writeAddonUpdate(
   admin: Admin,
   groupId: string,
   changes: AddonGroupChangePayload,
-): Promise<Outcome<AddonGroup>> {
+): Promise<Outcome<{ id: string }>> {
   const current = await loadAddonGroup(admin, groupId);
   if (!current.ok) return current;
+  const before = current.value;
 
   if (changes.options) {
-    const ids = new Set(current.value.options.map((o) => o.id));
+    const ids = new Set(before.options.map((o) => o.id));
     const foreign = foreignOptionId({ options: changes.options }, ids);
     if (foreign) return failure(409, 'An option in this change is no longer in the group. Reload and try again.');
   }
+
+  const undos: { what: string; run: () => PromiseLike<{ error: unknown }> }[] = [];
+  const fail = async (f: Failure): Promise<Failure> => {
+    let clean = true;
+    for (const undo of [...undos].reverse()) {
+      const { error } = await undo.run();
+      if (error) {
+        clean = false;
+        console.error(`add-on group edit: could not put back ${undo.what}`, error);
+      }
+    }
+    return clean ? f : { ...f, message: `${f.message}. Some of the edit could not be undone — check this add-on group.` };
+  };
 
   const updates: Record<string, unknown> = {};
   for (const key of SCALAR_KEYS) {
@@ -361,9 +382,13 @@ export async function applyAddonUpdate(
   if (Object.keys(updates).length > 0) {
     const { error } = await admin.from('addon_groups').update(updates).eq('id', groupId);
     if (error) return failure(500, 'Failed to update the add-on group');
+    const previous: Record<string, unknown> = {};
+    for (const key of Object.keys(updates)) previous[key] = (before as unknown as Record<string, unknown>)[key];
+    undos.push({ what: "the group's own fields", run: () => admin.from('addon_groups').update(previous).eq('id', groupId) });
   }
 
   if (changes.options) {
+    const byId = new Map(before.options.map((o) => [o.id, o]));
     for (const [i, option] of changes.options.entries()) {
       if (option.id) {
         const { error } = await admin
@@ -371,18 +396,49 @@ export async function applyAddonUpdate(
           .update({ name: option.name, price_inr: option.price_inr, sort_order: i * 10 })
           .eq('id', option.id)
           .eq('addon_group_id', groupId);
-        if (error) return failure(500, 'Failed to update the add-on options');
+        if (error) return fail(failure(500, 'Failed to update the add-on options'));
+        const was = byId.get(option.id);
+        if (was) {
+          undos.push({
+            what: `option ${was.name}`,
+            run: () =>
+              admin
+                .from('addon_options')
+                .update({ name: was.name, price_inr: was.price_inr, sort_order: was.sort_order })
+                .eq('id', was.id)
+                .eq('addon_group_id', groupId),
+          });
+        }
       } else {
-        const { error } = await admin.from('addon_options').insert({
-          addon_group_id: groupId,
-          name: option.name,
-          price_inr: option.price_inr,
-          sort_order: i * 10,
-        });
-        if (error) return failure(500, 'Failed to add the new add-on option');
+        const { data, error } = await admin
+          .from('addon_options')
+          .insert({
+            addon_group_id: groupId,
+            name: option.name,
+            price_inr: option.price_inr,
+            sort_order: i * 10,
+          })
+          .select('id')
+          .maybeSingle();
+        if (error) return fail(failure(500, 'Failed to add the new add-on option'));
+        const newId = (data as { id?: string } | null)?.id;
+        if (newId) {
+          undos.push({ what: `new option ${option.name}`, run: () => admin.from('addon_options').delete().eq('id', newId) });
+        }
       }
     }
   }
 
+  return { ok: true, value: { id: groupId } };
+}
+
+/** writeAddonUpdate, then the group as it now stands (what the add-on routes answer with). */
+export async function applyAddonUpdate(
+  admin: Admin,
+  groupId: string,
+  changes: AddonGroupChangePayload,
+): Promise<Outcome<AddonGroup>> {
+  const written = await writeAddonUpdate(admin, groupId, changes);
+  if (!written.ok) return written;
   return loadAddonGroup(admin, groupId);
 }

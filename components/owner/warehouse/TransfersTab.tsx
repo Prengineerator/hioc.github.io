@@ -10,7 +10,8 @@
 //   On the way          sent, waiting to be counted in at the store's POS
 //
 // The buttons follow the same rules the API enforces (lib/inventory/rules.ts,
-// lib/inventory/warehouse.ts); the API re-checks every one.
+// lib/inventory/warehouse.ts); the API re-checks every one. The groups are
+// warehouse.ts transferPhase, the same phases as the header badge.
 
 import { useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
@@ -25,13 +26,15 @@ import {
   type RequestActor,
 } from '@/lib/inventory/rules';
 import {
+  awaitingDispatch,
   canReceiveReturn,
   canResolve,
   lineDifference,
-  needsSettling,
   resolutionLabel,
   resolutionOptions,
+  transferPhase,
   type Resolution,
+  type TransferPhase,
 } from '@/lib/inventory/warehouse';
 import {
   api,
@@ -82,15 +85,14 @@ export function TransfersTab({ data, reload }: { data: WarehousePayload; reload:
 
   const groups = useMemo(() => {
     const rs = data.requests;
+    const inPhase = (phase: TransferPhase) => rs.filter((r) => transferPhase(r) === phase);
     return {
-      toAssign: rs.filter((r) => r.route === 'from_warehouse' && r.status === 'requested'),
-      toDispatch: rs.filter((r) => r.route === 'from_warehouse' && r.status === 'assigned'),
-      toReceive: rs.filter((r) => r.route === 'to_warehouse' && r.status === 'picked'),
-      toSettle: rs.filter((r) => needsSettling(r)),
-      onRoad: rs.filter((r) => r.route === 'from_warehouse' && r.status === 'picked'),
-      closed: rs
-        .filter((r) => (r.status === 'received' && !needsSettling(r)) || r.status === 'cancelled')
-        .sort((a, b) => (b.receivedAt ?? b.createdAt).localeCompare(a.receivedAt ?? a.createdAt)),
+      toAssign: inPhase('to_assign'),
+      toDispatch: inPhase('to_dispatch'),
+      toReceive: inPhase('to_count_in'),
+      toSettle: inPhase('to_settle'),
+      onRoad: inPhase('on_road'),
+      closed: inPhase('closed').sort((a, b) => (b.receivedAt ?? b.createdAt).localeCompare(a.receivedAt ?? a.createdAt)),
     };
   }, [data.requests]);
 
@@ -112,7 +114,7 @@ export function TransfersTab({ data, reload }: { data: WarehousePayload; reload:
     const mayReceive = canReceiveReturn(tf, actor).ok;
     const maySettle = canResolve(tf, actor).ok;
     const mayCancel = canCancel(f, actor).ok;
-    const notSent = r.route === 'from_warehouse' && (r.status === 'requested' || r.status === 'assigned');
+    const notSent = awaitingDispatch(r);
     const deliverer = delivererLabel(r);
 
     return (

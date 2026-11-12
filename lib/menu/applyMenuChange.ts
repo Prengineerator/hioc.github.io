@@ -17,6 +17,7 @@ import { isInStoreOnlyCategory } from '@/lib/menu/inStore';
 import { flags } from '@/lib/flags';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { SELL_BY_WEIGHT_MIGRATION_HINT } from '@/lib/menu/weight';
+import { clearsStaleSnooze } from '@/lib/menu/availability';
 import type { MenuChangeVariant } from '@/lib/menu/changeRequestTypes';
 import type { AddonGroup, MenuItem } from '@/lib/types';
 
@@ -416,7 +417,7 @@ export function validateUpdateBody(body: Record<string, unknown>): Outcome<MenuU
 // Writing
 // ---------------------------------------------------------------------------
 
-async function loadMenuItem(admin: Admin, id: string): Promise<Outcome<MenuItem>> {
+export async function loadMenuItem(admin: Admin, id: string): Promise<Outcome<MenuItem>> {
   const { data, error } = await admin
     .from('menu_items')
     .select(MENU_ITEM_SELECT)
@@ -507,23 +508,101 @@ export async function applyMenuCreate(admin: Admin, values: MenuCreateValues): P
   return full;
 }
 
+/** The item as it stood before an edit: what a failed step is put back to. */
+interface ItemBefore {
+  row: Record<string, unknown>;
+  addonGroupIds: string[];
+}
+
+async function loadItemBefore(admin: Admin, id: string): Promise<Outcome<ItemBefore>> {
+  const { data, error } = await admin
+    .from('menu_items')
+    .select('*, menu_item_addon_groups(addon_group_id)')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) return failure(500, 'Failed to load menu item');
+  if (!data) return failure(404, 'Not found');
+  const { menu_item_addon_groups, ...row } = data as Record<string, unknown>;
+  return {
+    ok: true,
+    value: {
+      row,
+      addonGroupIds: ((menu_item_addon_groups as { addon_group_id: string }[] | null) ?? []).map((l) => l.addon_group_id),
+    },
+  };
+}
+
+/** A write already made, and how to take it back. */
+interface Undo {
+  what: string;
+  run: () => PromiseLike<{ error: unknown }>;
+}
+
+/** Takes back the writes made so far, newest first. False if any of them failed. */
+async function undoAll(undos: Undo[]): Promise<boolean> {
+  let clean = true;
+  for (const undo of [...undos].reverse()) {
+    const { error } = await undo.run();
+    if (error) {
+      clean = false;
+      console.error(`menu item edit: could not put back ${undo.what}`, error);
+    }
+  }
+  return clean;
+}
+
+const quotedList = (ids: string[]) => `(${ids.map((v) => `"${v}"`).join(',')})`;
+
 /**
- * Applies an edit. `variants`, if present, fully replaces the item's variant
+ * Writes an edit. `variants`, if present, fully replaces the item's variant
  * list; `addonGroupIds`, if present, fully replaces its add-on links.
+ *
+ * Several statements and no transaction across them (PostgREST gives one per
+ * statement), so the order is chosen for what a failure leaves behind:
+ *   1. the item's own columns            put back from the row read first
+ *   2. the new sizes, beside the old     put back by deleting the new ones
+ *   3. the add-on links the edit adds    put back by deleting them
+ *   4. the add-on links the edit drops   put back by inserting them again
+ *   5. the old sizes deleted             the one step that can't be walked
+ *                                        back losslessly, so it goes last
+ * When a step fails every earlier one is taken back, so the item is as it was
+ * (an approval that fails then goes back to pending with nothing half-done —
+ * lib/menu/changeRequests.ts). If taking a step back fails too, the error says
+ * the item needs checking.
  */
-export async function applyMenuUpdate(
+export async function writeMenuUpdate(
   admin: Admin,
   id: string,
   values: MenuUpdateValues,
-): Promise<Outcome<MenuItem>> {
+): Promise<Outcome<{ id: string }>> {
   const updates: MenuItemUpdates = { ...values.updates };
   const { variants, addonGroupIds } = values;
+
+  const loaded = await loadItemBefore(admin, id);
+  if (!loaded.ok) return loaded;
+  const before = loaded.value;
 
   // Inventory auto-hide (docs/INVENTORY-SPEC.md): a person setting
   // availability by hand takes the item out of stock's hands — it is no
   // longer "hidden by stock", so stock returning won't flip it back on.
   if ('is_available' in updates && flags.inventory) updates.stock_out_auto = false;
+  // Switching a sold-out item back on also clears a snooze left over from
+  // before it was sold out, or it would stay hidden until that old time
+  // (lib/menu/availability.ts clearsStaleSnooze).
+  if (clearsStaleSnooze(before.row as Pick<MenuItem, 'is_available' | 'unavailable_until'>, updates)) {
+    updates.unavailable_until = null;
+  }
 
+  const undos: Undo[] = [];
+  const fail = async (f: Failure): Promise<Failure> => {
+    if (await undoAll(undos)) return f;
+    return {
+      ...f,
+      message: `${f.message}. Some of the edit could not be undone — check this item's details, sizes and add-on groups.`,
+    };
+  };
+
+  // 1. The item's own columns.
   if (Object.keys(updates).length > 0) {
     let { error: updateError, data: updated } = await admin
       .from('menu_items')
@@ -562,47 +641,105 @@ export async function applyMenuUpdate(
     if (!updated) {
       return failure(404, 'Not found');
     }
+    const previous: Record<string, unknown> = {};
+    for (const key of Object.keys(updates)) previous[key] = before.row[key] ?? null;
+    undos.push({
+      what: "the item's own fields",
+      run: () => admin.from('menu_items').update(previous).eq('id', id),
+    });
   }
 
+  // 2. The new sizes, written beside the old ones.
+  let newVariantIds: string[] = [];
+  if (variants) {
+    const { data: inserted, error: insertError } = await admin
+      .from('menu_item_variants')
+      .insert(
+        variants.map((v, i) => ({
+          menu_item_id: id,
+          label: v.label,
+          price_inr: v.price_inr,
+          sort_order: i * 10,
+        })),
+      )
+      .select('id');
+    if (insertError) {
+      return fail(failure(500, 'Failed to replace menu item variants'));
+    }
+    newVariantIds = ((inserted as { id: string }[] | null) ?? []).map((v) => v.id);
+    const added = newVariantIds;
+    undos.push({
+      what: 'the new sizes',
+      run: () => admin.from('menu_item_variants').delete().in('id', added),
+    });
+    // Step 5 keeps exactly these rows, so it must know every one of them.
+    if (newVariantIds.length !== variants.length) {
+      return fail(failure(500, 'Failed to replace menu item variants'));
+    }
+  }
+
+  // 3 + 4. Add-on links: only the difference is written, so a link the edit
+  // keeps is never missing, not even for a moment.
+  if (addonGroupIds) {
+    const wanted = new Set(addonGroupIds);
+    const had = new Set(before.addonGroupIds);
+    const toAdd = [...wanted].filter((g) => !had.has(g));
+    const toRemove = [...had].filter((g) => !wanted.has(g));
+
+    if (toAdd.length > 0) {
+      const { error: insertError } = await admin
+        .from('menu_item_addon_groups')
+        .insert(toAdd.map((addon_group_id) => ({ menu_item_id: id, addon_group_id })));
+      if (insertError) {
+        return fail(failure(500, 'Failed to replace addon group associations'));
+      }
+      undos.push({
+        what: 'the add-on groups it added',
+        run: () => admin.from('menu_item_addon_groups').delete().eq('menu_item_id', id).in('addon_group_id', toAdd),
+      });
+    }
+
+    if (toRemove.length > 0) {
+      const { error: deleteError } = await admin
+        .from('menu_item_addon_groups')
+        .delete()
+        .eq('menu_item_id', id)
+        .in('addon_group_id', toRemove);
+      if (deleteError) {
+        return fail(failure(500, 'Failed to replace addon group associations'));
+      }
+      undos.push({
+        what: 'the add-on groups it removed',
+        run: () =>
+          admin.from('menu_item_addon_groups').insert(toRemove.map((addon_group_id) => ({ menu_item_id: id, addon_group_id }))),
+      });
+    }
+  }
+
+  // 5. Last: every size of the item that is not one just written. One
+  // statement, so if it fails nothing was deleted and the steps above are undone.
   if (variants) {
     const { error: deleteError } = await admin
       .from('menu_item_variants')
       .delete()
-      .eq('menu_item_id', id);
+      .eq('menu_item_id', id)
+      .not('id', 'in', quotedList(newVariantIds));
     if (deleteError) {
-      return failure(500, 'Failed to replace menu item variants');
-    }
-    const { error: insertError } = await admin.from('menu_item_variants').insert(
-      variants.map((v, i) => ({
-        menu_item_id: id,
-        label: v.label,
-        price_inr: v.price_inr,
-        sort_order: i * 10,
-      })),
-    );
-    if (insertError) {
-      return failure(500, 'Failed to replace menu item variants');
+      return fail(failure(500, 'Failed to replace menu item variants'));
     }
   }
 
-  if (addonGroupIds) {
-    const { error: deleteError } = await admin
-      .from('menu_item_addon_groups')
-      .delete()
-      .eq('menu_item_id', id);
-    if (deleteError) {
-      return failure(500, 'Failed to replace addon group associations');
-    }
-    if (addonGroupIds.length > 0) {
-      const { error: insertError } = await admin.from('menu_item_addon_groups').insert(
-        addonGroupIds.map((addon_group_id) => ({ menu_item_id: id, addon_group_id })),
-      );
-      if (insertError) {
-        return failure(500, 'Failed to replace addon group associations');
-      }
-    }
-  }
+  return { ok: true, value: { id } };
+}
 
+/** writeMenuUpdate, then the item as it now stands (what the menu routes answer with). */
+export async function applyMenuUpdate(
+  admin: Admin,
+  id: string,
+  values: MenuUpdateValues,
+): Promise<Outcome<MenuItem>> {
+  const written = await writeMenuUpdate(admin, id, values);
+  if (!written.ok) return written;
   return loadMenuItem(admin, id);
 }
 

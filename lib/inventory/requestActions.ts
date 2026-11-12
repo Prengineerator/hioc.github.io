@@ -14,8 +14,13 @@
 //   resolve         settle a transfer that arrived different   the owner
 //
 // Who-may-do-what is lib/inventory/rules.ts (route-aware) and
-// lib/inventory/warehouse.ts; the database functions re-check the status
-// under a row lock, so two screens racing the same request can't both win.
+// lib/inventory/warehouse.ts. Which status a step may leave, and which database
+// function it goes through on the request's route, is rules.ts
+// STOCK_REQUEST_TRANSITIONS: the writes here are guarded on its from-statuses
+// and the functions are picked from it, so a warehouse transfer never goes
+// through a store-room function or the other way round. The database functions
+// re-check the status under a row lock, so two screens racing the same request
+// can't both win.
 // Owner alerts go out after the response (lib/api/background.ts) and never
 // fail the action.
 
@@ -36,7 +41,8 @@ import {
   canCancel,
   canPick,
   canReceive,
-  cancellableStatuses,
+  cancelGuardStatuses,
+  cancelNeedsReason,
   isWarehouseRoute,
   parsePickLines,
   parseReceiveLines,
@@ -46,6 +52,8 @@ import {
   type StockRequestStatus,
   type StockRoute,
   type Verdict,
+  stepFromStatuses,
+  stepWriter,
 } from '@/lib/inventory/rules';
 import {
   canReceiveReturn,
@@ -179,7 +187,7 @@ export async function patchStockRequest(
       .from('stock_requests')
       .update(patch)
       .eq('id', id)
-      .in('status', ['requested', 'assigned'])
+      .in('status', stepFromStatuses('assign', route))
       .select('id')
       .maybeSingle();
     if (error) return inventoryWriteFailure(error, 'Assigning the request');
@@ -210,7 +218,8 @@ export async function patchStockRequest(
     const parsed = parsePickLines(body.lines, lineItemIds);
     if (!parsed.ok) return errorResponse(400, parsed.message);
     const pLines = parsed.lines.map((l) => ({ item_id: l.itemId, qty: l.qty }));
-    if (route === 'from_warehouse') {
+    const writer = stepWriter('pick', route);
+    if (writer === 'warehouse_dispatch') {
       const { data, error } = await admin.rpc('warehouse_dispatch', { p_request_id: id, p_actor: actor.userId, p_lines: pLines });
       if (error) return inventoryWriteFailure(error, 'Recording the dispatch');
       const short = (((data ?? {}) as { short?: { item_id: string; shortfall: number }[] }).short ?? []).map((s) => ({
@@ -219,6 +228,8 @@ export async function patchStockRequest(
       }));
       return NextResponse.json({ ok: true, short });
     }
+    // canPick has already refused a route with no pick step (a return).
+    if (writer !== 'inventory_pick') return errorResponse(409, 'This request has nothing to pick.');
     const { error } = await admin.rpc('inventory_pick', {
       p_request_id: id,
       p_actor: actor.userId,
@@ -233,6 +244,8 @@ export async function patchStockRequest(
   if (action === 'receive') {
     const denied = refuse(canReceive(facts, ruleActor));
     if (denied) return denied;
+    // Only the store-bound routes are counted in at the POS (canReceive refuses a return).
+    if (stepWriter('receive', route) !== 'inventory_receive') return errorResponse(403, 'This is not counted in at the POS.');
     const items = await receivableItems(admin, lineItemIds);
     if ('response' in items) return items.response;
     const parsed = parseReceiveLines(body.lines, items.map, istBusinessDate(), lineItemIds);
@@ -300,8 +313,7 @@ export async function patchStockRequest(
   const denied = refuse(canCancel(facts, ruleActor));
   if (denied) return denied;
   const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
-  const ownUnassigned = row.requested_by === actor.userId && row.status === 'requested';
-  if (!ownUnassigned && reason.length < 3) return errorResponse(400, 'Say why it is being cancelled.');
+  if (cancelNeedsReason(facts, ruleActor) && reason.length < 3) return errorResponse(400, 'Say why it is being cancelled.');
   if (reason.length > MAX_REASON) return errorResponse(400, `Keep the reason under ${MAX_REASON} characters.`);
 
   const { data: cancelled, error } = await admin
@@ -313,7 +325,9 @@ export async function patchStockRequest(
       updated_at: new Date().toISOString(),
     })
     .eq('id', id)
-    .in('status', ownUnassigned && !actor.isManager ? ['requested'] : cancellableStatuses(route))
+    // Exactly what canCancel allowed this actor: the requester only while it
+    // is still requested, a manager any status a cancel may leave on its route.
+    .in('status', cancelGuardStatuses(facts, ruleActor))
     .select('id')
     .maybeSingle();
   if (error) return inventoryWriteFailure(error, 'Cancelling the request');

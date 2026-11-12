@@ -14,6 +14,7 @@ import { fetchAll, type PageResult } from '@/lib/reports/reconcileServer';
 import {
   expiryState,
   orderUsage,
+  FINAL_REQUEST_STATUSES,
   OPEN_REQUEST_STATUSES,
   summarizeStock,
   type AddonRecipeLineLike,
@@ -422,7 +423,7 @@ async function readRequestRows(
         .order('created_at', { ascending: true })
         .order('id'),
     ),
-    scoped(admin.from('stock_requests').select(select).in('status', ['received', 'cancelled']))
+    scoped(admin.from('stock_requests').select(select).in('status', FINAL_REQUEST_STATUSES as string[]))
       .order('updated_at', { ascending: false })
       .limit(RECENT_CLOSED_LIMIT),
     options.includeUnsettled

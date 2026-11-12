@@ -19,7 +19,15 @@ import {
   type PersonRef,
   type StockRequestView,
 } from '@/lib/inventory/server';
-import { ownerWaiting, transitByItem, warehouseLow, type OwnerWaiting } from '@/lib/inventory/warehouse';
+import {
+  awaitingDispatch,
+  ownerWaiting,
+  phaseRows,
+  transitByItem,
+  warehouseLow,
+  type OwnerWaiting,
+  type TransferPhase,
+} from '@/lib/inventory/warehouse';
 
 export const WAREHOUSE_MIGRATION_HINT = 'is supabase/2026-11-warehouse.sql applied?';
 export const WAREHOUSE_OFF_MESSAGE = 'The warehouse is not switched on for this environment.';
@@ -134,7 +142,7 @@ export async function loadWarehouseSheet(
   const transit = transitByItem(transfers);
   const awaiting = new Map<string, number>();
   for (const t of transfers) {
-    if (t.route !== 'from_warehouse' || (t.status !== 'requested' && t.status !== 'assigned')) continue;
+    if (!awaitingDispatch(t)) continue;
     for (const l of t.lines) awaiting.set(l.itemId, (awaiting.get(l.itemId) ?? 0) + l.qtyRequested);
   }
 
@@ -223,13 +231,17 @@ export async function countOwnerWaiting(admin: SupabaseClient): Promise<OwnerWai
     const { count: n, error } = await q;
     return error ? 0 : n ?? 0;
   };
-  const [toAssign, toDispatch, toReceive, settleIn, settleOut] = await Promise.all([
-    count('from_warehouse', 'requested'),
-    count('from_warehouse', 'assigned'),
-    count('to_warehouse', 'picked'),
-    count('from_warehouse', 'received', true),
-    count('to_warehouse', 'received', true),
+  // The same phases ownerWaiting reads from loaded rows (warehouse.ts
+  // transferPhase), as the (route, status) rows the database can count.
+  const countPhase = async (phase: TransferPhase) => {
+    const ns = await Promise.all(phaseRows(phase).map((r) => count(r.route, r.status, r.unsettled)));
+    return ns.reduce((a, b) => a + b, 0);
+  };
+  const [toAssign, toDispatch, toReceive, toSettle] = await Promise.all([
+    countPhase('to_assign'),
+    countPhase('to_dispatch'),
+    countPhase('to_count_in'),
+    countPhase('to_settle'),
   ]);
-  const toSettle = settleIn + settleOut;
   return { toAssign, toDispatch, toReceive, toSettle, total: toAssign + toDispatch + toReceive + toSettle };
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MenuItemTable, type SnoozeDuration } from '@/components/staff/MenuItemTable';
+import { manualAvailabilityBody, type ManualAvailabilityAction } from '@/lib/menu/availability';
 import {
   MenuItemFormModal,
   type MenuItemFormValues,
@@ -28,20 +29,6 @@ const isSentForApproval = (res: Response) => res.status === 202;
 async function errorMessage(res: Response, fallback: string): Promise<string> {
   const data = (await res.json().catch(() => null)) as { error?: string } | null;
   return data?.error ?? fallback;
-}
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-
-// Today's 24:00 IST ("end of day") expressed as a UTC ISO instant — mirrors
-// the IST wall-clock convention in lib/store/hours.ts (that file's helpers
-// are private, so this small piece is duplicated rather than exported).
-function endOfDayIstIso(now: Date): string {
-  const ist = new Date(now.getTime() + IST_OFFSET_MS);
-  const y = ist.getUTCFullYear();
-  const mo = ist.getUTCMonth();
-  const d = ist.getUTCDate();
-  const nextMidnightUtcMs = Date.UTC(y, mo, d + 1, 0, 0, 0) - IST_OFFSET_MS;
-  return new Date(nextMidnightUtcMs).toISOString();
 }
 
 export default function StaffMenuPage() {
@@ -142,7 +129,10 @@ export default function StaffMenuPage() {
 
   // Sold-out changes apply at once. If the server held one for approval anyway
   // (202), put the row back as it was and say so; if it refused, do the same.
-  async function patchAvailability(item: MenuItem, body: Partial<MenuItem>) {
+  // S6 86/snooze — the body is manualAvailabilityBody (lib/menu/availability.ts),
+  // shared with the owner's menu, so both write the same columns for a click.
+  async function patchAvailability(item: MenuItem, action: ManualAvailabilityAction) {
+    const body = manualAvailabilityBody(action);
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...body } : i)));
     try {
       const res = await fetch(`/api/menu/${item.id}`, {
@@ -164,25 +154,12 @@ export default function StaffMenuPage() {
     }
   }
 
-  // S6 86/snooze — see lib/menu/availability.ts for the semantics this
-  // implements: a timed snooze keeps is_available true and sets
-  // unavailable_until; an indefinite 86 just flips is_available off.
   async function handleSnooze(item: MenuItem, duration: SnoozeDuration) {
-    const body =
-      duration === 'indefinite'
-        ? { is_available: false }
-        : {
-            is_available: true,
-            unavailable_until:
-              duration === '2h'
-                ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
-                : endOfDayIstIso(new Date()),
-          };
-    await patchAvailability(item, body);
+    await patchAvailability(item, duration);
   }
 
   async function handleReenable(item: MenuItem) {
-    await patchAvailability(item, { is_available: true, unavailable_until: null });
+    await patchAvailability(item, 'back_on');
   }
 
   // Edits, new items and deletes: the owner's own POS applies them at once

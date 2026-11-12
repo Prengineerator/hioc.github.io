@@ -5,8 +5,8 @@ import { canCancelMenuRequest, parseMenuRequestViewer } from '@/components/staff
 // (DELETE /api/menu/requests/[id]) makes the real decision; this only mirrors it
 // so staff aren't offered a button that answers 403.
 
-const mine = { requested_by: 'ravi' };
-const theirs = { requested_by: 'kiran' };
+const mine = { requested_by: 'ravi', status: 'pending' as const };
+const theirs = { requested_by: 'kiran', status: 'pending' as const };
 
 describe('canCancelMenuRequest', () => {
   it('lets staff cancel their own requests only', () => {
@@ -27,7 +27,16 @@ describe('canCancelMenuRequest', () => {
   });
 
   it('never matches a request with no requester to a viewer', () => {
-    expect(canCancelMenuRequest({ requested_by: null }, { id: 'ravi', role: 'staff' }, true)).toBe(false);
+    expect(canCancelMenuRequest({ requested_by: null, status: 'pending' }, { id: 'ravi', role: 'staff' }, true)).toBe(false);
+  });
+
+  // The cancel route answers 409 for these, so no button either
+  // (lib/menu/changeRequestStatus.ts).
+  it('offers nothing once the owner has decided, for anyone', () => {
+    for (const status of ['approved', 'rejected', 'cancelled'] as const) {
+      expect(canCancelMenuRequest({ ...mine, status }, { id: 'ravi', role: 'staff' }, true)).toBe(false);
+      expect(canCancelMenuRequest({ ...theirs, status }, { id: 'owner-1', role: 'owner' }, true)).toBe(false);
+    }
   });
 });
 

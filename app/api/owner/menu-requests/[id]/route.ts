@@ -10,6 +10,7 @@ import {
   MAX_NOTE_LENGTH,
   rejectChangeRequest,
 } from '@/lib/menu/changeRequests';
+import { checkMenuChange } from '@/lib/menu/changeRequestStatus';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,13 +19,14 @@ type RouteParams = { params: { id: string } };
 // PATCH /api/owner/menu-requests/[id] — owner only. Body
 // { action: 'approve' | 'reject', note?: string, force?: boolean }.
 //
-//  - Only a PENDING request can be decided; a decided one is a 409, and so is
-//    losing a race with another click (the claim is a conditional update).
+//  - Only a PENDING request can be decided (lib/menu/changeRequestStatus.ts);
+//    a decided one is a 409, and so is losing a race with another click (the
+//    claim is a conditional update).
 //  - approve applies the change with the menu routes' own write logic (sizes and
 //    add-on links are replaced whole, a code already in use is a 409…). If it
-//    cannot be applied the request stays PENDING and the error is returned: a
-//    4xx for a validation or code conflict, a 409 when the item has since been
-//    deleted, a 500 otherwise.
+//    cannot be applied the item is left as it was, the request stays PENDING
+//    and the error is returned: a 4xx for a validation or code conflict, a 409
+//    when the item has since been deleted, a 500 otherwise.
 //  - approve of an edit whose item was changed after the request was made is a
 //    409 { error, stale: true, fields } and the request stays PENDING; send
 //    force: true to approve it anyway.
@@ -68,9 +70,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
   const loaded = await loadChangeRequest(admin, id);
   if (!loaded.ok) return failureResponse(loaded);
-  if (loaded.value.status !== 'pending') {
-    return errorResponse(409, `This request was already ${loaded.value.status}.`);
-  }
+  const allowed = checkMenuChange('reject', loaded.value, { id: owner.id, role: 'owner' });
+  if (!allowed.ok) return errorResponse(allowed.status, allowed.message);
   const rejected = await rejectChangeRequest(admin, id, owner.id, note || null);
   if (!rejected.ok) return failureResponse(rejected);
 

@@ -417,6 +417,51 @@ describe('what the Stock screen is told about warehouse access (WH-D16)', () => 
   });
 });
 
+// The store-room functions (inventory_pick / inventory_receive) don't check the
+// route unless supabase/2026-11-menu-inventory-state-machine.sql is applied, so
+// the app must never send a transfer through the wrong one
+// (lib/inventory/rules.ts stepWriter).
+describe('routes never cross', () => {
+  const lines = [
+    { itemId: MILK, qty: 2, expiryDate: '2026-11-05' },
+    { itemId: CUPS, qty: 50 },
+  ];
+
+  it('a return is never picked, by anyone', async () => {
+    setRequest({ route: 'to_warehouse', status: 'picked', requested_by: MANAGER, picked_by: MANAGER, deliverer_name: 'Raju' });
+    state.actor = as(MANAGER, 'manager');
+    expect((await staffPatch({ action: 'pick', lines })).status).toBe(409);
+    state.owner = { id: OWNER };
+    expect((await ownerPatch({ action: 'pick', lines })).status).toBe(409);
+    expect(state.rpcCalls).toEqual([]);
+  });
+
+  it('a return is never counted in at the POS (only at the warehouse)', async () => {
+    setRequest({ route: 'to_warehouse', status: 'picked', requested_by: MANAGER, picked_by: MANAGER, deliverer_name: 'Raju' });
+    state.device = { id: DEVICE };
+    state.actor = as(MEERA);
+    expect((await staffPatch({ action: 'receive', lines })).status).toBe(403);
+    state.actor = as(OWNER, 'owner');
+    expect((await staffPatch({ action: 'receive', lines })).status).toBe(403);
+    expect(state.rpcCalls).toEqual([]);
+  });
+
+  it('a request filled from the warehouse is dispatched, never picked from the store room', async () => {
+    setRequest({ status: 'assigned', assigned_to: VIKRAM });
+    state.actor = as(MANAGER, 'manager');
+    state.rpcResult = { data: { short: [] }, error: null };
+    await staffPatch({ action: 'pick', lines: lines.map(({ itemId, qty }) => ({ itemId, qty })) });
+    expect(state.rpcCalls.map((c) => c.name)).toEqual(['warehouse_dispatch']);
+  });
+
+  it('a requester cancelling their own is guarded to requested only', async () => {
+    setRequest({ status: 'requested' });
+    state.actor = as(ASHA);
+    expect((await staffPatch({ action: 'cancel' })).status).toBe(200);
+    expect(state.updates[0].filters).toContainEqual(['in', 'status', ['requested']]);
+  });
+});
+
 describe('the staff route does not offer the owner’s steps', () => {
   it('receive_return and resolve are 400 there', async () => {
     state.actor = as(MANAGER, 'manager');

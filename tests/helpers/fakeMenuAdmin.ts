@@ -7,7 +7,7 @@
 // an injected error, so the real validate / write / rollback / claim code runs.
 
 export type Row = Record<string, unknown>;
-type Filter = { op: 'eq' | 'neq' | 'is' | 'in'; col: string; val: unknown };
+type Filter = { op: 'eq' | 'neq' | 'is' | 'in' | 'not_in'; col: string; val: unknown };
 type DbError = { code?: string; message: string };
 type Op = 'select' | 'insert' | 'update' | 'delete';
 
@@ -36,6 +36,8 @@ function matches(row: Row, filters: Filter[]): boolean {
         return f.val === null ? v === null || v === undefined : v === f.val;
       case 'in':
         return Array.isArray(f.val) && f.val.includes(v);
+      case 'not_in':
+        return Array.isArray(f.val) && !f.val.includes(v);
     }
   });
 }
@@ -168,6 +170,17 @@ export function makeFakeMenuAdmin(tables: Record<string, Row[]>, opts: FakeMenuA
         neq: (col: string, val: unknown) => (filters.push({ op: 'neq', col, val }), chain),
         is: (col: string, val: unknown) => (filters.push({ op: 'is', col, val }), chain),
         in: (col: string, val: unknown[]) => (filters.push({ op: 'in', col, val }), chain),
+        // PostgREST's `.not(col, 'in', '("a","b")')` — the only `not` the menu code uses.
+        not: (col: string, operator: string, list: string) => {
+          if (operator !== 'in') throw new Error(`fakeMenuAdmin: not(${operator}) is not supported`);
+          const val = list
+            .replace(/^\(|\)$/g, '')
+            .split(',')
+            .map((v) => v.trim().replace(/^"|"$/g, ''))
+            .filter((v) => v !== '');
+          filters.push({ op: 'not_in', col, val });
+          return chain;
+        },
         order: (col: string, o?: { ascending?: boolean }) => {
           order = { col, asc: o?.ascending !== false };
           return chain;

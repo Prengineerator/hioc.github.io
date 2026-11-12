@@ -14,16 +14,7 @@ import { MenuItemFormModal, type MenuItemFormValues } from '@/components/staff/M
 import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
 import type { MenuItem } from '@/lib/types';
 import type { MenuChangeAction } from '@/lib/menu/changeRequestTypes';
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-
-// Today's 24:00 IST ("end of day") as a UTC ISO instant — the same IST
-// wall-clock convention as lib/store/hours.ts and the staff menu page.
-function endOfDayIstIso(now: Date): string {
-  const ist = new Date(now.getTime() + IST_OFFSET_MS);
-  const nextMidnightUtcMs = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() + 1, 0, 0, 0) - IST_OFFSET_MS;
-  return new Date(nextMidnightUtcMs).toISOString();
-}
+import { manualAvailabilityBody, type ManualAvailabilityAction } from '@/lib/menu/availability';
 
 async function readError(res: Response, fallback: string): Promise<string> {
   const data = await res.json().catch(() => ({}));
@@ -72,10 +63,11 @@ export function OwnerMenuItems({
     void fetchItems();
   }, [fetchItems]);
 
-  // 86 / snooze — see lib/menu/availability.ts: a timed snooze keeps
-  // is_available true and sets unavailable_until; an indefinite 86 flips
-  // is_available off. The row updates at once and is put right if the save fails.
-  async function patchAvailability(item: MenuItem, body: { is_available: boolean; unavailable_until?: string | null }) {
+  // 86 / snooze — the body is manualAvailabilityBody (lib/menu/availability.ts),
+  // the same as the POS menu page's. The row updates at once and is put right
+  // if the save fails.
+  async function patchAvailability(item: MenuItem, action: ManualAvailabilityAction) {
+    const body = manualAvailabilityBody(action);
     setActionError(null);
     setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, ...body } : i)));
     try {
@@ -92,22 +84,11 @@ export function OwnerMenuItems({
   }
 
   function handleSnooze(item: MenuItem, duration: SnoozeDuration) {
-    void patchAvailability(
-      item,
-      duration === 'indefinite'
-        ? { is_available: false }
-        : {
-            is_available: true,
-            unavailable_until:
-              duration === '2h'
-                ? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
-                : endOfDayIstIso(new Date()),
-          },
-    );
+    void patchAvailability(item, duration);
   }
 
   function handleReenable(item: MenuItem) {
-    void patchAvailability(item, { is_available: true, unavailable_until: null });
+    void patchAvailability(item, 'back_on');
   }
 
   // The form shows the API's message itself when this throws.

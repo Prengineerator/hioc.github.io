@@ -10,6 +10,7 @@ export type MenuChangeAction = 'create' | 'update' | 'delete';
 /** What a request is about. Absent on rows from before add-on requests = a menu item. */
 export type MenuChangeTarget = 'menu_item' | 'addon_group';
 
+/** Which status may follow which, and who moves it: lib/menu/changeRequestStatus.ts. */
 export type MenuChangeStatus = 'pending' | 'approved' | 'rejected' | 'cancelled';
 
 export interface MenuChangeVariant {
@@ -74,6 +75,13 @@ interface ChangeRequestBase {
   decided_by: string | null;
   decided_at: string | null;
   decision_note: string | null;
+  /**
+   * When an approved change finished applying (2026-11-menu-inventory-state-machine.sql).
+   * Absent on a database without that column; null while pending, decided
+   * otherwise, or approved but never finished (lib/menu/changeRequestStatus.ts
+   * approvalUnconfirmed).
+   */
+  applied_at?: string | null;
 }
 
 /** A menu item create / edit / delete. */

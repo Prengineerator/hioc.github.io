@@ -17,6 +17,7 @@ import type {
   MenuItemChangePayload,
   MenuItemChangeRequest,
 } from '@/lib/menu/changeRequestTypes';
+import { isPendingMenuChange } from '@/lib/menu/changeRequestStatus';
 
 // ---------------------------------------------------------------------------
 // Tabs and filters
@@ -84,7 +85,7 @@ export function statusTone(status: MenuChangeStatus): Tone {
 export function pendingByItemId(requests: MenuChangeRequest[]): Record<string, MenuChangeAction> {
   const out: Record<string, MenuChangeAction> = {};
   for (const r of requests) {
-    if (r.status !== 'pending' || !r.menu_item_id) continue;
+    if (!isPendingMenuChange(r) || !r.menu_item_id) continue;
     if (r.action !== 'update' && r.action !== 'delete') continue;
     if (out[r.menu_item_id] === 'delete') continue;
     out[r.menu_item_id] = r.action;
