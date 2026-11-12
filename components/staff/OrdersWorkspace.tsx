@@ -243,7 +243,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         });
       }
     },
-    [fetchOrders, autoPrint, enqueuePrint],
+    [fetchOrders, autoPrint, enqueuePrint, showToast],
   );
 
   // The corner button and "⋯" menu on a card. A one-tap move goes straight to
