@@ -1,14 +1,18 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useReducer, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import {
+  INITIAL_LOGIN_FLOW,
+  loginFlowReducer,
+  loginLocked,
+  type LoginMode,
+  type LoginRequest,
+} from './loginFlow';
 
 // Customers sign in with a one-time code only — WhatsApp or email (owner
 // rule). Staff keep their password login at /staff/login.
-type Mode = 'otp' | 'phone';
-type OtpStep = 'email' | 'code';
-type PhoneStep = 'phone' | 'code';
 
 // Guest-order claim (ACC-4) — fired once, right after ANY successful login
 // path below (email-OTP or phone-OTP), so a
@@ -38,10 +42,10 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
 
   // WhatsApp is the default (and first-offered) way in — it's the channel
   // guests already verify at checkout (VERIFY-2), so it's the one most
-  // returning customers already have a code path for.
-  const [mode, setMode] = useState<Mode>('phone');
-  const [otpStep, setOtpStep] = useState<OtpStep>('email');
-  const [phoneStep, setPhoneStep] = useState<PhoneStep>('phone');
+  // returning customers already have a code path for. The tabs, steps and the
+  // request in flight are one reducer (./loginFlow.ts).
+  const [flow, dispatchFlow] = useReducer(loginFlowReducer, INITIAL_LOGIN_FLOW);
+  const { mode, emailStep: otpStep, phoneStep } = flow;
 
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
@@ -50,116 +54,140 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
 
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const submitting = loginLocked(flow);
+  // One request at a time, even for a second Enter before the re-render.
+  const inFlight = useRef(false);
+  const requestId = useRef(0);
 
   function resetMessages() {
     setError(null);
     setInfo(null);
   }
 
-  function switchMode(m: Mode) {
+  function switchMode(m: LoginMode) {
+    if (inFlight.current) return;
     resetMessages();
-    setMode(m);
-    setOtpStep('email');
+    dispatchFlow({ type: 'switch_mode', mode: m });
     setCode('');
-    setPhoneStep('phone');
     setPhoneCode('');
   }
 
-  async function handleOtpRequest(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  function backToEntry() {
+    if (inFlight.current) return;
+    dispatchFlow({ type: 'back_to_entry' });
     resetMessages();
-    setSubmitting(true);
+  }
+
+  /**
+   * Runs one request. `target` is the number or address it is for, captured
+   * now: the code is later checked against where it was actually sent.
+   */
+  async function runRequest(
+    request: LoginRequest,
+    target: string,
+    send: () => Promise<Response>,
+    onOk: () => Promise<void> | void,
+    failMessage: (res: Response) => Promise<string>,
+  ) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    const id = ++requestId.current;
+    resetMessages();
+    dispatchFlow({ type: 'request_started', id, request, target });
+    let ok = false;
     try {
-      const res = await fetch('/api/auth/customer/otp/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
+      const res = await send();
       if (res.ok) {
-        setOtpStep('code');
-        setInfo(`We sent a 6-digit code to ${email}.`);
+        ok = true;
+        await onOk();
       } else {
-        const data = await res.json().catch(() => ({ error: 'Could not send code' }));
-        setError(data.error ?? 'Could not send code');
+        setError(await failMessage(res));
       }
     } catch {
       setError('Network error — please try again.');
     } finally {
-      setSubmitting(false);
+      inFlight.current = false;
+      dispatchFlow({ type: ok ? 'request_succeeded' : 'request_failed', id });
     }
+  }
+
+  const sendFailed = async (res: Response) => {
+    const data = await res.json().catch(() => ({ error: 'Could not send code' }));
+    return data.error ?? 'Could not send code';
+  };
+  const verifyFailed = async () => 'Invalid or expired code. Please try again.';
+  const signedIn = async () => {
+    await claimGuestOrders();
+    router.push(next);
+    router.refresh();
+  };
+
+  async function handleOtpRequest(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const target = email;
+    await runRequest(
+      'email_request',
+      target,
+      () =>
+        fetch('/api/auth/customer/otp/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: target }),
+        }),
+      () => setInfo(`We sent a 6-digit code to ${target}.`),
+      sendFailed,
+    );
   }
 
   async function handleOtpVerify(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    resetMessages();
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/customer/otp/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, token: code }),
-      });
-      if (res.ok) {
-        await claimGuestOrders();
-        router.push(next);
-        router.refresh();
-        return;
-      }
-      setError('Invalid or expired code. Please try again.');
-    } catch {
-      setError('Network error — please try again.');
-    } finally {
-      setSubmitting(false);
-    }
+    const target = flow.emailSentTo;
+    await runRequest(
+      'email_verify',
+      target,
+      () =>
+        fetch('/api/auth/customer/otp/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: target, token: code }),
+        }),
+      signedIn,
+      verifyFailed,
+    );
   }
 
   async function handlePhoneRequest(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    resetMessages();
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/customer/phone-otp/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
-      });
-      if (res.ok) {
-        setPhoneStep('code');
-        setInfo(`We sent a WhatsApp code to ${phone}.`);
-      } else {
-        const data = await res.json().catch(() => ({ error: 'Could not send code' }));
-        setError(data.error ?? 'Could not send code');
-      }
-    } catch {
-      setError('Network error — please try again.');
-    } finally {
-      setSubmitting(false);
-    }
+    const target = phone;
+    await runRequest(
+      'phone_request',
+      target,
+      () =>
+        fetch('/api/auth/customer/phone-otp/request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: target }),
+        }),
+      () => setInfo(`We sent a WhatsApp code to ${target}.`),
+      sendFailed,
+    );
   }
 
   async function handlePhoneVerify(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    resetMessages();
-    setSubmitting(true);
-    try {
-      const res = await fetch('/api/auth/customer/phone-otp/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, token: phoneCode }),
-      });
-      if (res.ok) {
-        await claimGuestOrders();
-        router.push(next);
-        router.refresh();
-        return;
-      }
-      setError('Invalid or expired code. Please try again.');
-    } catch {
-      setError('Network error — please try again.');
-    } finally {
-      setSubmitting(false);
-    }
+    const target = flow.phoneSentTo;
+    await runRequest(
+      'phone_verify',
+      target,
+      () =>
+        fetch('/api/auth/customer/phone-otp/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: target, token: phoneCode }),
+        }),
+      signedIn,
+      verifyFailed,
+    );
   }
 
   return (
@@ -177,6 +205,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
           <button
             type="button"
             onClick={() => switchMode('phone')}
+            disabled={submitting}
             className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-semibold transition-colors ${
               mode === 'phone' ? 'bg-tan-dark text-cream' : 'text-charcoal'
             }`}
@@ -186,6 +215,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
           <button
             type="button"
             onClick={() => switchMode('otp')}
+            disabled={submitting}
             className={`min-w-[6.5rem] flex-1 rounded px-3 py-1.5 font-semibold transition-colors ${
               mode === 'otp' ? 'bg-tan-dark text-cream' : 'text-charcoal'
             }`}
@@ -262,10 +292,8 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setOtpStep('email');
-                resetMessages();
-              }}
+              onClick={backToEntry}
+              disabled={submitting}
               className="text-sm text-tan-dark hover:underline"
             >
               Use a different email
@@ -331,10 +359,8 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setPhoneStep('phone');
-                resetMessages();
-              }}
+              onClick={backToEntry}
+              disabled={submitting}
               className="text-sm text-tan-dark hover:underline"
             >
               Use a different number

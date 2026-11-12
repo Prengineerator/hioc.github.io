@@ -101,45 +101,104 @@ async function verifyPayment(response: RazorpaySuccessResponse, path: string): P
 }
 
 /**
+ * How a checkout ended. The promise openRazorpayCheckout() returns settles with
+ * exactly one of these, once — never when the window merely opens:
+ *   paid         the gateway reported success and the signature verified
+ *   unverified   the gateway reported success but verifying it failed (a network
+ *                blip, a server error). Money has most likely moved, so a caller
+ *                must not start a second payment for the same thing without
+ *                asking the server first.
+ *   dismissed    the window closed without a success; `lastFailure` is set if an
+ *                attempt inside it failed. Nothing was charged.
+ *   unavailable  the window never opened (Checkout.js didn't load, no key).
+ */
+export type RazorpayOutcome =
+  | { kind: 'paid' }
+  | { kind: 'unverified'; message: string }
+  | { kind: 'dismissed'; lastFailure?: string }
+  | { kind: 'unavailable'; message: string };
+
+/** True when the customer may have been charged: the gateway said the payment succeeded. */
+export function outcomeMayHaveCharged(outcome: RazorpayOutcome): boolean {
+  return outcome.kind === 'paid' || outcome.kind === 'unverified';
+}
+
+const LOAD_FAILED = 'Could not load the payment window.';
+
+/**
  * Opens Razorpay's hosted checkout modal for a previously-created payment
  * intent. On success the payment signature is verified server-side
  * (POST /api/payments/verify) before `onSuccess` fires. Callers should still
  * land on the order status page either way — the actual payment_status is
  * server-reconciled there (verify + webhook + poll).
+ *
+ * The returned promise settles when the checkout is OVER (see RazorpayOutcome),
+ * not when the window opens. It used to resolve right after rzp.open(), so a
+ * caller that awaited it and then cleared its "paying" flag re-enabled its
+ * buttons while the window was still up. The callbacks fire exactly as before;
+ * the outcome carries the same news for a caller that would rather await it.
  */
 export async function openRazorpayCheckout(
   intent: CreatedPaymentIntent,
   opts: OpenCheckoutOptions,
-): Promise<void> {
+): Promise<RazorpayOutcome> {
   const loaded = await loadRazorpayScript();
-  if (!loaded || !window.Razorpay || !intent.keyId) {
-    opts.onFailure?.('Could not load the payment window.');
-    return;
+  const Razorpay = typeof window === 'undefined' ? undefined : window.Razorpay;
+  if (!loaded || !Razorpay || !intent.keyId) {
+    opts.onFailure?.(LOAD_FAILED);
+    return { kind: 'unavailable', message: LOAD_FAILED };
   }
 
-  let lastFailure: string | undefined;
-  const rzp = new window.Razorpay({
-    key: intent.keyId,
-    amount: Math.round(intent.amountInr) * 100,
-    currency: 'INR',
-    name: 'Hioc',
-    description: opts.description ?? 'Order payment',
-    order_id: intent.gatewayOrderId,
-    prefill: { name: opts.name, contact: opts.phone, ...(opts.email ? { email: opts.email } : {}) },
-    theme: { color: '#8a6446' }, // tan-dark: Razorpay puts white text on it (brand tan is 3.4:1)
-    handler: async (response: RazorpaySuccessResponse) => {
-      const error = await verifyPayment(response, opts.verifyPath ?? DEFAULT_VERIFY_PATH);
-      if (error) {
-        opts.onFailure?.(error);
-        return;
-      }
-      opts.onSuccess();
-    },
-    modal: { ondismiss: () => opts.onDismiss(lastFailure) },
+  return new Promise<RazorpayOutcome>((resolve) => {
+    let lastFailure: string | undefined;
+    // Once the success handler starts, it decides the checkout: a dismiss that
+    // arrives while the signature is being verified must not also report
+    // "cancelled", and a caller must never hear two endings.
+    let decided = false;
+
+    try {
+      const rzp = new Razorpay({
+        key: intent.keyId,
+        amount: Math.round(intent.amountInr) * 100,
+        currency: 'INR',
+        name: 'Hioc',
+        description: opts.description ?? 'Order payment',
+        order_id: intent.gatewayOrderId,
+        prefill: { name: opts.name, contact: opts.phone, ...(opts.email ? { email: opts.email } : {}) },
+        theme: { color: '#8a6446' }, // tan-dark: Razorpay puts white text on it (brand tan is 3.4:1)
+        handler: async (response: RazorpaySuccessResponse) => {
+          if (decided) return;
+          decided = true;
+          const error = await verifyPayment(response, opts.verifyPath ?? DEFAULT_VERIFY_PATH);
+          if (error) {
+            opts.onFailure?.(error);
+            resolve({ kind: 'unverified', message: error });
+            return;
+          }
+          opts.onSuccess();
+          resolve({ kind: 'paid' });
+        },
+        modal: {
+          ondismiss: () => {
+            if (decided) return;
+            decided = true;
+            opts.onDismiss(lastFailure);
+            resolve({ kind: 'dismissed', lastFailure });
+          },
+        },
+      });
+      rzp.on('payment.failed', (response) => {
+        lastFailure = response.error?.description || 'Payment failed.';
+        opts.onPaymentFailed?.(lastFailure);
+      });
+      rzp.open();
+    } catch {
+      // Checkout.js loaded but refused the options or could not open: nothing
+      // was shown, so nothing can have been charged.
+      if (decided) return;
+      decided = true;
+      opts.onFailure?.(LOAD_FAILED);
+      resolve({ kind: 'unavailable', message: LOAD_FAILED });
+    }
   });
-  rzp.on('payment.failed', (response) => {
-    lastFailure = response.error?.description || 'Payment failed.';
-    opts.onPaymentFailed?.(lastFailure);
-  });
-  rzp.open();
 }

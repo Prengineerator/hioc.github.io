@@ -12,6 +12,7 @@ import { BUSINESS } from '@/lib/legal';
 import { jarsLabel, rupees } from '@/lib/shop/pricing';
 import { CUSTOMER_STATUS_LABEL, shopOrderRef } from '@/lib/shop/status';
 import type { ShopOrderPublicView, ShopOrderStatus as Status } from '@/lib/shop/types';
+import { nextShopOrderPoll, type ShopOrderRead } from '@/components/shop/shopCheckout';
 
 const POLL_MS = 3000;
 /** Stop polling a still-unpaid order after this long; a reload starts again. */
@@ -45,24 +46,24 @@ export function ShopOrderStatus({ orderId }: { orderId: string }) {
   const [gaveUp, setGaveUp] = useState(false);
   const startedAt = useRef(Date.now());
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<ShopOrderRead> => {
     try {
       const res = await fetch(`/api/shop/orders/${orderId}`, { cache: 'no-store' });
       if (res.status === 404) {
         setError("We couldn't find that order. Check the link in your email.");
-        return null;
+        return { kind: 'not_found' };
       }
       const data = (await res.json().catch(() => ({}))) as { order?: ShopOrderPublicView; error?: string };
       if (!res.ok || !data.order) {
         setError(data.error ?? 'Could not load your order just now.');
-        return null;
+        return { kind: 'error' };
       }
       setError(null);
       setOrder(data.order);
-      return data.order;
+      return { kind: 'order', status: data.order.status };
     } catch {
       setError('Network error — retrying…');
-      return null;
+      return { kind: 'error' };
     }
   }, [orderId]);
 
@@ -70,11 +71,13 @@ export function ShopOrderStatus({ orderId }: { orderId: string }) {
     let timer: ReturnType<typeof setTimeout>;
     let stopped = false;
     const tick = async () => {
-      const o = await load();
+      const read = await load();
       if (stopped) return;
-      const waiting = !o || o.status === 'payment_pending';
-      if (!waiting) return;
-      if (Date.now() - startedAt.current > POLL_FOR_MS) {
+      // A missing order is final (./shopCheckout.ts nextShopOrderPoll): it no
+      // longer counts as "still waiting for the payment".
+      const next = nextShopOrderPoll(read, Date.now() - startedAt.current, POLL_FOR_MS);
+      if (next === 'stop') return;
+      if (next === 'gave_up') {
         setGaveUp(true);
         return;
       }

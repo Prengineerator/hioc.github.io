@@ -10,10 +10,15 @@ import {
   useState,
 } from 'react';
 import { computeCartKey } from '@/lib/cart/cartKey';
+import {
+  CART_STORAGE_KEY as STORAGE_KEY,
+  cartFromStorageEvent,
+  parseStoredCart,
+  serializeCart,
+  shouldWriteCart,
+} from '@/lib/cart/cartStorage';
 import { computeBill, type BillBreakdown } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
-
-const STORAGE_KEY = 'hioc.cart.v2';
 
 export interface CartAddonSelection {
   optionId: string;
@@ -96,13 +101,7 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 function readFromStorage(): CartState {
   if (typeof window === 'undefined') return { items: [] };
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { items: [] };
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed?.items)) {
-      return { items: parsed.items };
-    }
-    return { items: [] };
+    return parseStoredCart<CartItem>(window.localStorage.getItem(STORAGE_KEY));
   } catch {
     return { items: [] };
   }
@@ -111,7 +110,11 @@ function readFromStorage(): CartState {
 function writeToStorage(state: CartState) {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // Only a change is written (lib/cart/cartStorage.ts): a tab that just took
+    // another tab's cart writes nothing back, so tabs can't echo each other.
+    const next = serializeCart(state);
+    if (!shouldWriteCart(window.localStorage.getItem(STORAGE_KEY), next)) return;
+    window.localStorage.setItem(STORAGE_KEY, next);
   } catch {
     // localStorage may be unavailable (private browsing, quota) — cart
     // simply won't persist across reloads in that case, which is an
@@ -156,6 +159,25 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (!hydrated) return;
     writeToStorage({ items });
   }, [items, hydrated]);
+
+  // Follow the cart another tab stored (the browser fires `storage` only in
+  // the OTHER tabs). Without this, a tab still showing the old cart wrote it
+  // back on its next change — resurrecting a cart just ordered and cleared in
+  // another tab.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onStorage = (event: StorageEvent) => {
+      try {
+        if (event.storageArea && event.storageArea !== window.localStorage) return;
+      } catch {
+        return; // storage unavailable: nothing to follow
+      }
+      const next = cartFromStorageEvent<CartItem>(event);
+      if (next) setItems(next);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const addItem = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
     const key = computeCartKey(

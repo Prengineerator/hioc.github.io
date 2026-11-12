@@ -22,6 +22,12 @@ import {
 } from '@/lib/passes/ui';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
+import {
+  EARLIER_SALE_UNKNOWN_MSG,
+  afterEarlierSaleCheck,
+  saleMayBePaid,
+  type MaybePaidSale,
+} from '@/components/passes/ritualSaleGuard';
 
 // After the payment window reports success the pass is issued by the database
 // the moment the order is paid (CP-D6), which is normally within a second or
@@ -44,6 +50,22 @@ type MineState = { status: 'loading' } | { status: 'error' } | { status: 'ready'
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/**
+ * The earlier sale's payment_status, after the server has checked with the
+ * gateway; 'not_found' when there is no such order; null when it couldn't be asked.
+ */
+async function readSalePaymentStatus(orderId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`/api/payments/${orderId}/status`, { cache: 'no-store' });
+    if (res.status === 404) return 'not_found';
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as { payment_status?: unknown } | null;
+    return typeof data?.payment_status === 'string' ? data.payment_status : null;
+  } catch {
+    return null;
+  }
+}
+
 const notePanel = 'rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal';
 
 /**
@@ -57,6 +79,9 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
   const [signedIn, setSignedIn] = useState(signedInAtLoad);
   const [mine, setMine] = useState<MineState>({ status: 'loading' });
   const [buy, setBuy] = useState<BuyState>({ phase: 'idle' });
+  // A sale whose payment window reported success, until its Ritual shows up or
+  // the server says it was not paid (./ritualSaleGuard.ts). Buy checks it first.
+  const maybePaid = useRef<MaybePaidSale | null>(null);
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -150,6 +175,7 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
         if (!mounted.current) return;
         const pass = latest ? findPassForOrder(latest.passes, orderId) : null;
         if (pass) {
+          if (maybePaid.current?.orderId === orderId) maybePaid.current = null;
           setBuy({ phase: 'done', pass });
           return;
         }
@@ -162,6 +188,21 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
   const startPurchase = useCallback(
     async ({ plan, menu_item_id, variant_id, drinkLabel }: RitualPurchase) => {
       setBuy({ phase: 'starting' });
+      // An earlier sale may already be paid: settle that before selling again.
+      const earlier = maybePaid.current;
+      if (earlier) {
+        const decision = afterEarlierSaleCheck(await readSalePaymentStatus(earlier.orderId));
+        if (!mounted.current) return;
+        if (decision === 'wait_for_pass') {
+          void confirmPurchase(earlier.orderId, earlier.planName);
+          return;
+        }
+        if (decision === 'blocked') {
+          setBuy({ phase: 'error', message: EARLIER_SALE_UNKNOWN_MSG, action: 'retry' });
+          return;
+        }
+        maybePaid.current = null;
+      }
       try {
         // The drink and size go with the plan (CP-D22): the server prices the cup
         // again from the live menu, so what the page showed is only a preview.
@@ -184,7 +225,8 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
         setBuy({ phase: 'paying' });
         // Every outcome is handled here rather than on another page: a success
         // waits for the pass, a closed window says so and leaves Buy available.
-        await openRazorpayCheckout(data.payment, {
+        // Settles when the window closes (lib/payments/razorpayCheckout.ts).
+        const outcome = await openRazorpayCheckout(data.payment, {
           name: prefill.current.name,
           phone: prefill.current.phone,
           description: `${PASS_PROGRAM_NAME} — ${plan.name} · ${drinkLabel}`,
@@ -205,6 +247,11 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
             void fetchMine(true);
           },
         });
+        // The window said the payment went through (verified or not): until
+        // its Ritual appears, Buy asks about this sale before starting another.
+        // The wait loop onSuccess started clears this when the Ritual shows up;
+        // that takes a network round trip, so it can't run before this line.
+        if (saleMayBePaid(outcome)) maybePaid.current = { orderId, planName: plan.name };
       } catch {
         setBuy({ phase: 'error', message: 'Network error — please check your connection.', action: 'retry' });
       }

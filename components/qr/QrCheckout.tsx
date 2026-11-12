@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
@@ -11,6 +11,18 @@ import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel
 import { normalizeEmail } from '@/lib/email';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
+import {
+  QR_FINGERPRINT_FIELDS,
+  isPlacementBusy,
+  keyAfterResponse,
+  keyForAttempt,
+  newPlacementKey,
+  placementFingerprint,
+  placementReducer,
+  type AttemptKey,
+  type PlacementEvent,
+  type PlacementState,
+} from '@/components/checkout/placement';
 import type { BillBreakdown, StoreOpenState } from '@/lib/store/hours';
 import type { StoreSettings } from '@/lib/types';
 import type { ResolvedQrTable } from '@/lib/tables/resolveTableByToken';
@@ -60,7 +72,12 @@ export function QrCheckout({
   const [emailError, setEmailError] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
   const [bill, setBill] = useState<QuotedBill | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  // The same placement machine as the web checkout (components/checkout/placement.ts).
+  const [placement, setPlacement] = useState<PlacementState>({ phase: 'idle' });
+  const dispatchPlacement = (event: PlacementEvent) => setPlacement((s) => placementReducer(s, event));
+  const submitting = isPlacementBusy(placement);
+  const placingRef = useRef(false);
+  const attemptKey = useRef<AttemptKey | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
 
   // Who is scanning. Only needed to decide whether the OTP step applies — a
@@ -145,6 +162,7 @@ export function QrCheckout({
   };
 
   async function placeOrder() {
+    if (placingRef.current) return;
     setServerError(null);
 
     // Contact was optional when a QR diner could stay anonymous. Once the
@@ -171,69 +189,93 @@ export function QrCheckout({
       return;
     }
 
-    setSubmitting(true);
+    placingRef.current = true;
+    const body: Record<string, unknown> = {
+      // The scanned token is the ONLY table proof sent — resolved
+      // server-side; order_type is forced dine_in there too (belt + braces).
+      qr_token: token,
+      order_type: 'dine_in',
+      customer_name: name.trim() || undefined,
+      customer_phone: phone.trim() || undefined,
+      customer_email: email.trim() || undefined,
+      notes: notes.trim() || undefined,
+      items: items.map((i) => ({
+        menu_item_id: i.menuItemId,
+        variant_id: i.variantId,
+        quantity: i.qty,
+        addon_option_ids: i.addons.map((a) => a.optionId),
+        special_instructions: i.specialInstructions,
+        ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
+      })),
+    };
+    // Same table and cart as the last attempt → same key, so a retry after a
+    // lost answer replays the order instead of sending the kitchen a second one.
+    const attempt = keyForAttempt(
+      attemptKey.current,
+      placementFingerprint(body, QR_FINGERPRINT_FIELDS),
+      () => newPlacementKey('qr'),
+    );
+    attemptKey.current = attempt;
+    const fail = (message: string) => {
+      setServerError(message);
+      dispatchPlacement({ type: 'failed', message });
+      placingRef.current = false;
+    };
+
+    dispatchPlacement({ type: 'submit' });
+    let res: Response;
     try {
-      const res = await fetch('/api/orders', {
+      res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          // The scanned token is the ONLY table proof sent — resolved
-          // server-side; order_type is forced dine_in there too (belt + braces).
-          qr_token: token,
-          order_type: 'dine_in',
-          customer_name: name.trim() || undefined,
-          customer_phone: phone.trim() || undefined,
-          customer_email: email.trim() || undefined,
-          notes: notes.trim() || undefined,
-          items: items.map((i) => ({
-            menu_item_id: i.menuItemId,
-            variant_id: i.variantId,
-            quantity: i.qty,
-            addon_option_ids: i.addons.map((a) => a.optionId),
-            special_instructions: i.specialInstructions,
-            ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
-          })),
-        }),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': attempt.key },
+        body: JSON.stringify(body),
       });
+    } catch {
+      // No answer: the order may exist. The key is kept for the retry.
+      fail('Network error — please check your connection.');
+      return;
+    }
 
-      if (res.status === 201) {
-        const data: {
-          order: { id: string };
-          payment: CreatedPaymentIntent | null;
-          payment_unavailable?: boolean;
-        } = await res.json();
-        clearCart();
+    if (res.status === 201) {
+      const data = (await res.json().catch(() => null)) as {
+        order?: { id?: string };
+        payment?: CreatedPaymentIntent | null;
+        payment_unavailable?: boolean;
+      } | null;
+      const orderId = data?.order?.id;
+      if (!orderId) {
+        fail('Network error — please check your connection.');
+        return;
+      }
+      if (attemptKey.current === attempt && keyAfterResponse(201) === 'rotate') attemptKey.current = null;
+      clearCart();
+      dispatchPlacement({ type: 'created', orderId, payOnline: Boolean(data?.payment) });
 
-        // Pay online first (D6): open Razorpay's hosted checkout for the intent
-        // the server created. Both success and dismiss land on the live order
-        // page, which server-reconciles the real payment_status. If the gateway
-        // is unconfigured or failing the server falls back to pay-at-counter
-        // (payment null, payment_unavailable set) and the order page says so.
-        if (data.payment) {
-          openRazorpayCheckout(data.payment, {
-            name,
-            phone,
-            description: `HIOC · Table ${table.label}`,
-            onSuccess: () => router.push(`/order/${data.order.id}`),
-            onDismiss: () => router.push(`/order/${data.order.id}`),
-            onFailure: () => router.push(`/order/${data.order.id}`),
-          });
-          return;
-        }
-
-        router.push(
-          `/order/${data.order.id}${data.payment_unavailable ? '?payment=unavailable' : ''}`,
-        );
+      // Pay online first (D6): open Razorpay's hosted checkout for the intent
+      // the server created. Both success and dismiss land on the live order
+      // page, which server-reconciles the real payment_status. If the gateway
+      // is unconfigured or failing the server falls back to pay-at-counter
+      // (payment null, payment_unavailable set) and the order page says so.
+      if (data?.payment) {
+        await openRazorpayCheckout(data.payment, {
+          name,
+          phone,
+          description: `HIOC · Table ${table.label}`,
+          onSuccess: () => router.push(`/order/${orderId}`),
+          onDismiss: () => router.push(`/order/${orderId}`),
+          onFailure: () => router.push(`/order/${orderId}`),
+        });
+        dispatchPlacement({ type: 'payment_closed' });
         return;
       }
 
-      const data = await res.json().catch(() => ({ error: 'Unknown error' }));
-      setServerError(data.error ?? 'Unknown error');
-    } catch {
-      setServerError('Network error — please check your connection.');
-    } finally {
-      setSubmitting(false);
+      router.push(`/order/${orderId}${data?.payment_unavailable ? '?payment=unavailable' : ''}`);
+      return;
     }
+
+    const data = ((await res.json().catch(() => null)) ?? {}) as { error?: string; code?: string };
+    if (attemptKey.current === attempt && keyAfterResponse(res.status, data) === 'rotate') attemptKey.current = null;
+    fail(data.error ?? 'Unknown error');
   }
 
   if (items.length === 0) {
@@ -298,6 +340,8 @@ export function QrCheckout({
                 type="button"
                 aria-label={`Remove ${item.name}`}
                 onClick={() => removeItem(item.key)}
+                // The cart being placed is the one on screen.
+                disabled={submitting}
                 className="shrink-0 text-sm text-muted hover:text-charcoal"
               >
                 Remove
@@ -309,6 +353,7 @@ export function QrCheckout({
                   type="button"
                   aria-label="Decrease quantity"
                   onClick={() => decrement(item.key)}
+                  disabled={submitting}
                   className="flex h-5 w-5 items-center justify-center rounded-full bg-charcoal text-xs text-cream"
                 >
                   &minus;
@@ -320,6 +365,7 @@ export function QrCheckout({
                   type="button"
                   aria-label="Increase quantity"
                   onClick={() => increment(item.key)}
+                  disabled={submitting}
                   className="flex h-5 w-5 items-center justify-center rounded-full bg-tan-dark text-xs text-cream"
                 >
                   +

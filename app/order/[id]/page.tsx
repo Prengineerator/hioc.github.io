@@ -32,6 +32,14 @@ import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/payme
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
 import { lineSizeSuffix } from '@/lib/menu/weight';
 import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
+import { newestApplied } from '@/lib/hooks/requestSequence';
+import {
+  actionsLocked,
+  nextAction,
+  paymentPollDelay,
+  paymentWaitingHint,
+  type OrderPageAction,
+} from './orderPageState';
 
 type OrderWithItems = Order & { items: OrderItem[]; coupon_code?: string | null };
 
@@ -56,9 +64,6 @@ const STATUS_HEADLINE: Record<string, { title: string; body: string }> = {
   completed: { title: 'Collected — enjoy!', body: 'Thanks for ordering with us.' },
 };
 
-const PAYMENT_POLL_MS = 4000;
-const PAYMENT_POLL_MAX_ATTEMPTS = 30; // ~2 minutes bounded reconciliation window
-
 // Set by the checkout pages when the customer chose to pay online but the
 // gateway was unavailable, so the server placed the order as pay-at-counter.
 const PAYMENT_UNAVAILABLE_MSG =
@@ -73,10 +78,19 @@ export default function OrderStatusPage() {
   const [order, setOrder] = useState<OrderWithItems | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
-  const [paying, setPaying] = useState(false);
-  const [switching, setSwitching] = useState(false);
+  // The one customer action in flight (./orderPageState.ts): Retry, Switch to
+  // pay at counter and Cancel never run together. The ref answers a second tap
+  // that lands before the re-render disables the buttons.
+  const [action, setActionState] = useState<OrderPageAction>('idle');
+  const actionRef = useRef<OrderPageAction>('idle');
+  const moveAction = useCallback((to: OrderPageAction): boolean => {
+    const next = nextAction(actionRef.current, to);
+    if (next !== to) return false;
+    actionRef.current = next;
+    setActionState(next);
+    return true;
+  }, []);
   const [paymentActionError, setPaymentActionError] = useState('');
   // The ?payment= flag's message is only a fallback for paymentActionError
   // (below) — once the customer has actually taken an action (retry or
@@ -84,24 +98,33 @@ export default function OrderStatusPage() {
   // must not reappear just because paymentActionError was cleared back to ''
   // for the new attempt.
   const [flagDismissed, setFlagDismissed] = useState(false);
-  const pollAttempts = useRef(0);
   // Bumped whenever a retry starts or a Razorpay attempt succeeds, so the
   // reconciliation-poll effect below tears down and restarts with a fresh
   // budget instead of quietly staying exhausted from an earlier failed
   // attempt (PAY-2 issue-2: a retry's poll window must never inherit a spent
   // one from a previous failed/abandoned attempt on the same order).
   const [pollEpoch, setPollEpoch] = useState(0);
+  // The poll's budget is spent: the page stops promising automatic updates.
+  const [pollStopped, setPollStopped] = useState(false);
 
+  // The realtime loop, the payment poll and every action all refetch the
+  // order, and their answers can come back out of order. Only an answer newer
+  // than the last one shown may replace it (lib/hooks/requestSequence.ts), so
+  // a slow read from before a payment landed never puts "Waiting on payment"
+  // back over "Paid".
+  const fetchOrdering = useRef(newestApplied());
   const fetchOrder = useCallback(async () => {
     if (!orderId) return;
+    const id = fetchOrdering.current.begin();
     try {
       const res = await fetch(`/api/orders/${orderId}`, { cache: 'no-store' });
       if (res.status === 404) {
-        setNotFound(true);
+        if (fetchOrdering.current.accept(id)) setNotFound(true);
         return;
       }
       if (!res.ok) return;
       const data = await res.json();
+      if (!fetchOrdering.current.accept(id)) return;
       setOrder(data.order as OrderWithItems);
     } catch {
       // Keep last-known-good; the poll/realtime will retry.
@@ -116,37 +139,52 @@ export default function OrderStatusPage() {
     fetchOrder();
   }, [fetchOrder]);
 
-  // Bounded reconciliation poll (PAY-2/FND-1 "webhook delayed" edge case):
-  // while payment is pending, ask the server to check with the gateway
-  // directly, then refetch the order to pick up any change.
+  // Reconciliation poll (PAY-2/FND-1 "webhook delayed" edge case): while
+  // payment is pending, ask the server to check with the gateway directly,
+  // then refetch the order to pick up any change. Fast for ~2 minutes, then
+  // slower, then stopped (./orderPageState.ts paymentPollDelay). Each poll
+  // waits for the last to finish, so slow answers never pile up.
   useEffect(() => {
     if (!orderId || order?.payment_status !== 'payment_pending') {
-      pollAttempts.current = 0;
+      setPollStopped(false);
       return;
     }
-    // A fresh window every time this effect (re)starts — including on a
-    // pollEpoch bump — so a retry always gets its own ~2 minutes rather than
-    // continuing to spend down whatever budget a prior failed attempt left.
-    pollAttempts.current = 0;
-    const interval = setInterval(async () => {
-      if (pollAttempts.current >= PAYMENT_POLL_MAX_ATTEMPTS) {
-        clearInterval(interval);
+    // A fresh budget every time this effect (re)starts — including on a
+    // pollEpoch bump — so a retry always gets its own window rather than
+    // continuing to spend down whatever a prior failed attempt left.
+    setPollStopped(false);
+    let attempts = 0;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const schedule = () => {
+      const delay = paymentPollDelay(attempts);
+      if (delay === null) {
+        setPollStopped(true);
         return;
       }
-      pollAttempts.current += 1;
+      timer = setTimeout(tick, delay);
+    };
+    const tick = async () => {
+      attempts += 1;
       try {
         await fetch(`/api/payments/${orderId}/status`, { cache: 'no-store' });
       } catch {
         // Ignore — next tick (or the webhook) will catch it up.
       }
-      fetchOrder();
-    }, PAYMENT_POLL_MS);
-    return () => clearInterval(interval);
+      if (stopped) return;
+      await fetchOrder();
+      if (!stopped) schedule();
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [orderId, order?.payment_status, pollEpoch, fetchOrder]);
 
   const handleCancel = useCallback(async () => {
     if (!orderId) return;
-    setCancelling(true);
+    if (!moveAction('cancelling')) return;
     setCancelError('');
     try {
       const res = await fetch(`/api/orders/${orderId}/cancel`, { method: 'POST' });
@@ -158,13 +196,13 @@ export default function OrderStatusPage() {
     } catch {
       setCancelError('Could not cancel — please call the cafe.');
     } finally {
-      setCancelling(false);
+      moveAction('idle');
     }
-  }, [orderId, fetchOrder]);
+  }, [orderId, fetchOrder, moveAction]);
 
   const handleRetryPayment = useCallback(async () => {
     if (!orderId || !order) return;
-    setPaying(true);
+    if (!moveAction('retrying')) return;
     setPaymentActionError('');
     setFlagDismissed(true);
     // Issue-2: a retry always gets a fresh reconciliation-poll budget, even if
@@ -172,7 +210,6 @@ export default function OrderStatusPage() {
     // sitting on the "waiting on payment" screen — otherwise a payment that
     // captures on THIS attempt could go unnoticed until the webhook (if any)
     // arrives, and the order would never enter the queue or get its bill.
-    pollAttempts.current = 0;
     setPollEpoch((e) => e + 1);
     const allowCounter = canPayAtCounter(order);
     try {
@@ -186,6 +223,9 @@ export default function OrderStatusPage() {
         setPaymentActionError(data.error ?? 'Could not start payment — please try again.');
         return;
       }
+      moveAction('paying');
+      // Settles when the window closes (lib/payments/razorpayCheckout.ts), so
+      // the buttons stay off for as long as it is up.
       await openRazorpayCheckout(data.payment, {
         name: order.customer_name,
         phone: order.customer_phone,
@@ -195,7 +235,6 @@ export default function OrderStatusPage() {
           // 'authorized' (not yet captured) — see app/api/payments/verify —
           // so re-arm the poll here too: this is exactly the moment a fresh
           // reconciliation window matters most.
-          pollAttempts.current = 0;
           setPollEpoch((e) => e + 1);
           fetchOrder();
         },
@@ -218,13 +257,13 @@ export default function OrderStatusPage() {
     } catch {
       setPaymentActionError('Network error — please try again.');
     } finally {
-      setPaying(false);
+      moveAction('idle');
     }
-  }, [orderId, order, fetchOrder]);
+  }, [orderId, order, fetchOrder, moveAction]);
 
   const handleSwitchToCounter = useCallback(async () => {
     if (!orderId) return;
-    setSwitching(true);
+    if (!moveAction('switching')) return;
     setPaymentActionError('');
     setFlagDismissed(true);
     try {
@@ -241,9 +280,9 @@ export default function OrderStatusPage() {
     } catch {
       setPaymentActionError('Network error — please try again.');
     } finally {
-      setSwitching(false);
+      moveAction('idle');
     }
-  }, [orderId, fetchOrder]);
+  }, [orderId, fetchOrder, moveAction]);
 
   if (loading) {
     return (
@@ -311,7 +350,7 @@ export default function OrderStatusPage() {
             {isPassSale
               ? `Your ${PASS_PROGRAM_NAME} will be ready as soon as payment is confirmed`
               : 'Your order will join the kitchen queue as soon as payment is confirmed'}{' '}
-            — this updates automatically, usually within a few seconds.
+            {paymentWaitingHint(pollStopped)}
           </p>
           {displayedPaymentError ? (
             <p className="mt-3 text-sm font-semibold text-red-700">{displayedPaymentError}</p>
@@ -320,19 +359,19 @@ export default function OrderStatusPage() {
             <button
               type="button"
               onClick={handleRetryPayment}
-              disabled={paying}
+              disabled={actionsLocked(action)}
               className="min-h-[44px] rounded-md bg-tan-dark px-5 py-2.5 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
             >
-              {paying ? 'Opening payment…' : 'Retry payment'}
+              {action === 'retrying' || action === 'paying' ? 'Opening payment…' : 'Retry payment'}
             </button>
             {allowCounter ? (
               <button
                 type="button"
                 onClick={handleSwitchToCounter}
-                disabled={switching}
+                disabled={actionsLocked(action)}
                 className="min-h-[44px] rounded-md border border-line px-5 py-2.5 font-semibold text-charcoal transition-colors hover:border-tan disabled:opacity-60"
               >
-                {switching ? 'Switching…' : 'Switch to pay at counter'}
+                {action === 'switching' ? 'Switching…' : 'Switch to pay at counter'}
               </button>
             ) : null}
           </div>
@@ -464,10 +503,10 @@ export default function OrderStatusPage() {
           <button
             type="button"
             onClick={handleCancel}
-            disabled={cancelling}
+            disabled={actionsLocked(action)}
             className="min-h-[44px] rounded-md border border-line px-5 py-2 text-sm font-semibold text-muted transition-colors hover:border-red-300 hover:text-red-700 disabled:opacity-50"
           >
-            {cancelling ? 'Cancelling…' : 'Cancel order'}
+            {action === 'cancelling' ? 'Cancelling…' : 'Cancel order'}
           </button>
           {cancelError ? <p className="mt-2 text-sm text-red-700">{cancelError}</p> : null}
         </div>

@@ -11,6 +11,10 @@
 // ACC-1). Once Supabase confirms the new phone, PATCH /api/account/me
 // mirrors it into `profiles.phone`/`phone_verified` (the route only accepts
 // a `phone` that already matches the caller's Supabase-Auth-verified phone).
+// That flow is usePhoneOtp({ linkToAccount: true }) — the same one checkout
+// uses for a signed-in customer — rather than a second copy here, so its
+// one-request-at-a-time rule and "an answer is only for the number it was
+// asked for" hold on this page too.
 //
 // Email works the same way: `updateUser({ email })` + `verifyOtp({ type:
 // 'email_change' })` adds a verified email to the SAME account (typically a
@@ -22,6 +26,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { createClient } from '@/lib/supabase';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
+import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
 import { Spinner } from '@/components/ui/Spinner';
 import type { OrderType } from '@/lib/types';
 
@@ -60,12 +65,28 @@ export default function ProfilePage() {
   const [saveMsg, setSaveMsg] = useState('');
   const [saveErr, setSaveErr] = useState('');
 
-  // Phone-change sub-flow.
-  const [phoneStep, setPhoneStep] = useState<'idle' | 'entering' | 'code'>('idle');
-  const [newPhone, setNewPhone] = useState('');
-  const [phoneCode, setPhoneCode] = useState('');
-  const [phoneBusy, setPhoneBusy] = useState(false);
+  // PATCH responses carry only the stable profile shape; keep the GET extras.
+  const mergeMe = (data: MeResponse) => setMe((prev) => ({ ...(prev ?? {}), ...data }));
+
+  // Phone-change sub-flow: closed, or open on the hook's own steps (entering
+  // the number while `phoneOtp.step` is 'idle', the code once it is 'sent').
+  const [phoneFormOpen, setPhoneFormOpen] = useState(false);
   const [phoneErr, setPhoneErr] = useState('');
+  const phoneOtp = usePhoneOtp({
+    linkToAccount: true,
+    onVerified: ({ profile }) => {
+      if (profile && typeof profile === 'object') mergeMe(profile as MeResponse);
+      setPhoneFormOpen(false);
+      phoneOtp.setPhone('');
+    },
+  });
+  const phoneStep: 'idle' | 'entering' | 'code' = !phoneFormOpen
+    ? 'idle'
+    : phoneOtp.step === 'sent'
+      ? 'code'
+      : 'entering';
+  const phoneBusy = phoneOtp.busy;
+  const phoneError = phoneErr || phoneOtp.error || '';
 
   // Email-link sub-flow (same shape as the phone one above).
   const [emailStep, setEmailStep] = useState<'idle' | 'entering' | 'code'>('idle');
@@ -74,9 +95,6 @@ export default function ProfilePage() {
   const [emailBusy, setEmailBusy] = useState(false);
   const [emailErr, setEmailErr] = useState('');
   const [emailMsg, setEmailMsg] = useState('');
-
-  // PATCH responses carry only the stable profile shape; keep the GET extras.
-  const mergeMe = (data: MeResponse) => setMe((prev) => ({ ...(prev ?? {}), ...data }));
 
   useEffect(() => {
     (async () => {
@@ -143,62 +161,23 @@ export default function ProfilePage() {
   async function handlePhoneRequest(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setPhoneErr('');
-    const normalized = normalizeIndianMobile(newPhone);
-    if (!normalized) {
+    if (!normalizeIndianMobile(phoneOtp.phone)) {
       setPhoneErr('Enter a valid 10-digit Indian mobile number.');
       return;
     }
-    setPhoneBusy(true);
-    try {
-      const supabase = createClient();
-      const { error } = await supabase.auth.updateUser({ phone: `+91${normalized}` });
-      if (error) {
-        setPhoneErr(error.message);
-        return;
-      }
-      setPhoneStep('code');
-    } finally {
-      setPhoneBusy(false);
-    }
+    await phoneOtp.sendOtp();
   }
 
   async function handlePhoneVerify(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setPhoneErr('');
-    const normalized = normalizeIndianMobile(newPhone);
-    if (!normalized) {
-      setPhoneErr('Enter a valid 10-digit Indian mobile number.');
-      return;
-    }
-    setPhoneBusy(true);
-    try {
-      const supabase = createClient();
-      const { error } = await supabase.auth.verifyOtp({
-        phone: `+91${normalized}`,
-        token: phoneCode.trim(),
-        type: 'phone_change',
-      });
-      if (error) {
-        setPhoneErr('Invalid or expired code.');
-        return;
-      }
-      const res = await fetch('/api/account/me', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: `+91${normalized}` }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        mergeMe(data);
-        setPhoneStep('idle');
-        setNewPhone('');
-        setPhoneCode('');
-      } else {
-        setPhoneErr(data.error ?? 'Verified, but could not update your profile.');
-      }
-    } finally {
-      setPhoneBusy(false);
-    }
+    await phoneOtp.verifyOtp();
+  }
+
+  function closePhoneForm() {
+    phoneOtp.cancel();
+    setPhoneFormOpen(false);
+    setPhoneErr('');
   }
 
   async function handleEmailRequest(e: FormEvent<HTMLFormElement>) {
@@ -377,7 +356,7 @@ export default function ProfilePage() {
         {phoneStep === 'idle' ? (
           <button
             type="button"
-            onClick={() => setPhoneStep('entering')}
+            onClick={() => setPhoneFormOpen(true)}
             className="mt-3 text-sm font-semibold text-tan-dark hover:underline"
           >
             {me?.phone ? 'Change phone number' : 'Add a phone number'}
@@ -390,12 +369,15 @@ export default function ProfilePage() {
               type="tel"
               inputMode="numeric"
               required
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
+              value={phoneOtp.phone}
+              onChange={(e) => {
+                phoneOtp.setPhone(e.target.value);
+                setPhoneErr('');
+              }}
               placeholder="10-digit mobile number"
               className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
-            {phoneErr ? <p className="text-sm text-red-700">{phoneErr}</p> : null}
+            {phoneError ? <p className="text-sm text-red-700">{phoneError}</p> : null}
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -406,10 +388,7 @@ export default function ProfilePage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setPhoneStep('idle');
-                  setPhoneErr('');
-                }}
+                onClick={closePhoneForm}
                 className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
@@ -426,12 +405,12 @@ export default function ProfilePage() {
               pattern="[0-9]*"
               maxLength={6}
               required
-              value={phoneCode}
-              onChange={(e) => setPhoneCode(e.target.value)}
+              value={phoneOtp.code}
+              onChange={(e) => phoneOtp.setCode(e.target.value)}
               placeholder="6-digit code"
               className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
-            {phoneErr ? <p className="text-sm text-red-700">{phoneErr}</p> : null}
+            {phoneError ? <p className="text-sm text-red-700">{phoneError}</p> : null}
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -442,10 +421,7 @@ export default function ProfilePage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setPhoneStep('idle');
-                  setPhoneErr('');
-                }}
+                onClick={closePhoneForm}
                 className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel

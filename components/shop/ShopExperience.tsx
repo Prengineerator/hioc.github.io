@@ -15,6 +15,15 @@ import { Select } from '@/components/ui/Select';
 import { LocationPin } from '@/components/shop/LocationPin';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
+import {
+  afterEarlierShopCheck,
+  pendingAfterOutcome,
+  shopCheckoutBody,
+  shopPayStep,
+  shopPendingKey,
+  type EarlierShopCheck,
+  type PendingShopPayment,
+} from '@/components/shop/shopCheckout';
 import { INDIAN_STATES, validateShopAddress, type AddressField } from '@/lib/shop/address';
 import { FALLBACK_FLAVOUR_STYLE, FLAVOUR_STYLE } from '@/lib/shop/catalog';
 import type { ShopLocation } from '@/lib/shop/location';
@@ -45,10 +54,18 @@ const EMPTY_FORM: Form = {
 
 const STATE_OPTIONS = INDIAN_STATES.map((s) => ({ value: s, label: s }));
 
-interface PendingPayment {
-  key: string;
-  orderId: string;
-  payment: CreatedPaymentIntent;
+/** Where an earlier, possibly-paid order stands — its page route also asks Razorpay. */
+async function checkShopOrder(orderId: string): Promise<EarlierShopCheck> {
+  try {
+    const res = await fetch(`/api/shop/orders/${orderId}`, { cache: 'no-store' });
+    if (res.status === 404) return { kind: 'not_found' };
+    if (!res.ok) return { kind: 'error' };
+    const data = (await res.json().catch(() => null)) as { order?: { status?: unknown } } | null;
+    const status = data?.order?.status;
+    return typeof status === 'string' ? { kind: 'status', status } : { kind: 'error' };
+  } catch {
+    return { kind: 'error' };
+  }
 }
 
 function Stepper({
@@ -119,7 +136,10 @@ export function ShopExperience({
   const [error, setError] = useState<string | null>(null);
   const [orderLink, setOrderLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const pending = useRef<PendingPayment | null>(null);
+  // The checkout whose payment window can be reopened (./shopCheckout.ts).
+  const pending = useRef<PendingShopPayment | null>(null);
+  // One Pay at a time: a second submit can land before `busy` re-renders.
+  const paying = useRef(false);
   const formRef = useRef<HTMLFormElement>(null);
 
   const items = useMemo(
@@ -151,6 +171,7 @@ export function ShopExperience({
 
   async function pay(e: React.FormEvent) {
     e.preventDefault();
+    if (paying.current) return;
     setError(null);
     setOrderLink(null);
     if (!quote || !quote.ok) {
@@ -164,67 +185,98 @@ export function ShopExperience({
       return;
     }
 
+    paying.current = true;
     setBusy(true);
     setPinError(null);
-    const key = JSON.stringify({ items, address: checked.address, pin });
-    let current = pending.current;
-    if (!current || current.key !== key) {
-      let res: Response;
-      let data: Record<string, unknown> = {};
-      try {
-        res = await fetch('/api/shop/checkout', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items, address: form, location: pin, expected_total_inr: quote.total_inr }),
-        });
-        data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      } catch {
-        setBusy(false);
-        setError('Network error — check your connection and try again.');
-        return;
-      }
-      if (!res.ok) {
-        setBusy(false);
-        const message = typeof data.error === 'string' ? data.error : 'Could not start your order — please try again.';
-        const field = data.field as AddressField | 'location' | undefined;
-        if (field === 'location') {
-          setPinError(message);
-        } else if (field && field in EMPTY_FORM) {
-          setFieldError({ field, error: message });
-          focusField(field);
-        } else {
-          setError(message);
-        }
-        // Prices or stock changed since the page loaded: load them again.
-        if (res.status === 409 || (res.status === 400 && !field)) router.refresh();
-        return;
-      }
-      current = { key, orderId: String(data.order_id), payment: data.payment as CreatedPaymentIntent };
-      pending.current = current;
-    }
+    try {
+      const body = shopCheckoutBody(items, form, pin, quote.total_inr);
+      const key = shopPendingKey(body);
+      let current = pending.current;
 
-    const orderPath = `/shop/order/${current.orderId}`;
-    await openRazorpayCheckout(current.payment, {
-      name: checked.address.customer_name,
-      phone: checked.address.phone.replace(/^\+91/, ''),
-      email: checked.address.email,
-      description: `Instant Coffee — ${jarsLabel(quote.jar_count)}`,
-      verifyPath: '/api/shop/verify',
-      onSuccess: () => router.push(orderPath),
-      onDismiss: (lastFailure) => {
-        setBusy(false);
-        setError(
-          lastFailure
-            ? `The payment didn't go through (${lastFailure}). You can try again.`
-            : 'Payment not completed, so nothing was charged. You can try again.',
-        );
-      },
-      onFailure: (description) => {
-        setBusy(false);
-        setError(`${description} If money has left your account, your order page will update within a few minutes.`);
-        setOrderLink(orderPath);
-      },
-    });
+      if (current && shopPayStep(current, key) === 'check_earlier') {
+        // The last window said the payment succeeded but it couldn't be
+        // verified. Ask before offering to take money again.
+        const earlierPath = `/shop/order/${current.orderId}`;
+        const decision = afterEarlierShopCheck(await checkShopOrder(current.orderId));
+        if (decision === 'go_to_order') {
+          router.push(earlierPath); // stays busy: leaving the page
+          return;
+        }
+        if (decision === 'blocked') {
+          setBusy(false);
+          setError(
+            "We couldn't check on your last payment just now, so nothing new was charged. Please try again in a moment.",
+          );
+          setOrderLink(earlierPath);
+          return;
+        }
+        current = decision === 'forget' ? null : { ...current, mayBePaid: false };
+        pending.current = current;
+      }
+
+      if (!current || shopPayStep(current, key) === 'create') {
+        let res: Response;
+        let data: Record<string, unknown> = {};
+        try {
+          res = await fetch('/api/shop/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        } catch {
+          setBusy(false);
+          setError('Network error — check your connection and try again.');
+          return;
+        }
+        if (!res.ok) {
+          setBusy(false);
+          const message = typeof data.error === 'string' ? data.error : 'Could not start your order — please try again.';
+          const field = data.field as AddressField | 'location' | undefined;
+          if (field === 'location') {
+            setPinError(message);
+          } else if (field && field in EMPTY_FORM) {
+            setFieldError({ field, error: message });
+            focusField(field);
+          } else {
+            setError(message);
+          }
+          // Prices or stock changed since the page loaded: load them again.
+          if (res.status === 409 || (res.status === 400 && !field)) router.refresh();
+          return;
+        }
+        current = { key, orderId: String(data.order_id), payment: data.payment as CreatedPaymentIntent, mayBePaid: false };
+        pending.current = current;
+      }
+
+      const opened = current;
+      const orderPath = `/shop/order/${opened.orderId}`;
+      // Settles when the window closes (lib/payments/razorpayCheckout.ts).
+      const outcome = await openRazorpayCheckout(opened.payment, {
+        name: checked.address.customer_name,
+        phone: checked.address.phone.replace(/^\+91/, ''),
+        email: checked.address.email,
+        description: `Instant Coffee — ${jarsLabel(quote.jar_count)}`,
+        verifyPath: '/api/shop/verify',
+        onSuccess: () => router.push(orderPath),
+        onDismiss: (lastFailure) => {
+          setBusy(false);
+          setError(
+            lastFailure
+              ? `The payment didn't go through (${lastFailure}). You can try again.`
+              : 'Payment not completed, so nothing was charged. You can try again.',
+          );
+        },
+        onFailure: (description) => {
+          setBusy(false);
+          setError(`${description} If money has left your account, your order page will update within a few minutes.`);
+          setOrderLink(orderPath);
+        },
+      });
+      if (pending.current === opened) pending.current = pendingAfterOutcome(opened, outcome);
+    } finally {
+      paying.current = false;
+    }
   }
 
   const err = (f: AddressField) => (fieldError?.field === f ? fieldError.error : undefined);

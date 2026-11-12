@@ -11,10 +11,11 @@
 // tab rather than being computed over the whole unfiltered history and then
 // sliced client-side.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { CartProvider } from '@/lib/cart/CartContext';
+import { latestOnly } from '@/lib/hooks/requestSequence';
 import { useReorder } from '@/lib/account/useReorder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
@@ -115,21 +116,30 @@ function AccountOrdersContent() {
     setPhoneVerified(Boolean(data.phoneVerified));
   }, []);
 
+  // Only the tab/page asked for LAST may fill the list (lib/hooks/requestSequence.ts).
+  // applyPage sets the tab from the request it answers, so a slow "Active"
+  // answer arriving after the customer moved to "Past" used to switch them
+  // back to Active; and an older load finishing turned the spinner off while
+  // the newer one was still on its way.
+  const loads = useRef(latestOnly());
+
   const load = useCallback(
     async (t: Tab, p: number) => {
+      const id = loads.current.begin();
       setLoading(true);
       setError('');
       try {
         const data = await fetchPage(t, p);
+        if (!loads.current.isCurrent(id)) return;
         if (!data) {
           setError('Could not load your orders.');
           return;
         }
         applyPage(t, p, data);
       } catch {
-        setError('Network error — please try again.');
+        if (loads.current.isCurrent(id)) setError('Network error — please try again.');
       } finally {
-        setLoading(false);
+        if (loads.current.isCurrent(id)) setLoading(false);
       }
     },
     [applyPage, fetchPage],
@@ -137,15 +147,18 @@ function AccountOrdersContent() {
 
   // Initial load: default to the Active tab if it has anything in it, else
   // Past — so a customer with an order in flight lands straight on it, and
-  // one with no active orders isn't shown an empty "Active" tab first.
+  // one with no active orders isn't shown an empty "Active" tab first. A tab
+  // tapped before this answers takes over (it is a later load).
   useEffect(() => {
-    let cancelled = false;
+    const seq = loads.current;
+    const id = seq.begin();
+    const current = () => seq.isCurrent(id);
     (async () => {
       setLoading(true);
       setError('');
       try {
         const activeData = await fetchPage('active', 1);
-        if (cancelled) return;
+        if (!current()) return;
         if (!activeData) {
           setError('Could not load your orders.');
           return;
@@ -155,16 +168,16 @@ function AccountOrdersContent() {
           return;
         }
         const pastData = await fetchPage('past', 1);
-        if (cancelled) return;
+        if (!current()) return;
         applyPage('past', 1, pastData ?? activeData);
       } catch {
-        if (!cancelled) setError('Network error — please try again.');
+        if (current()) setError('Network error — please try again.');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       }
     })();
     return () => {
-      cancelled = true;
+      seq.invalidate();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

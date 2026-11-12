@@ -28,12 +28,30 @@
 // Verifying is NOT placing. They stay separate actions so a validation failure
 // at placement never drops someone back into re-entering a code that has since
 // expired.
+//
+// The state itself is a pure reducer (lib/hooks/phoneOtpMachine.ts): one
+// request at a time, and an answer only lands for the number it was asked for.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useReducer, useRef } from 'react';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { createClient } from '@/lib/supabase';
+import {
+  initialPhoneOtpState,
+  phoneOtpBusy,
+  phoneOtpReducer,
+  samePhoneNumber,
+  type PhoneOtpStep,
+} from '@/lib/hooks/phoneOtpMachine';
 
-export type PhoneOtpStep = 'idle' | 'sent';
+export type { PhoneOtpStep };
+
+/** What a successful verification hands `onVerified`. */
+export interface PhoneOtpVerified {
+  /** The number that was verified, as entered. */
+  phone: string;
+  /** linkToAccount: the profile PATCH /api/account/me answered with; null otherwise. */
+  profile: unknown;
+}
 
 export interface PhoneOtp {
   phone: string;
@@ -57,34 +75,31 @@ export interface PhoneOtp {
 
 export function usePhoneOtp(options?: {
   initialPhone?: string;
-  /** Runs once, after a code checks out. The checkout uses it to claim the
-   *  guest's past orders now that they are signed in. */
-  onVerified?: () => void;
+  /** Runs once, after a code checks out for the number still on screen. The
+   *  checkout uses it to claim the guest's past orders now that they are
+   *  signed in; the Profile page to show the number it just saved. */
+  onVerified?: (verified: PhoneOtpVerified) => void;
   /** Signed-in customer: add the number to THIS account instead of signing in. */
   linkToAccount?: boolean;
 }): PhoneOtp {
-  const [phone, setPhoneState] = useState(options?.initialPhone ?? '');
-  const [verified, setVerified] = useState(false);
-  const [step, setStep] = useState<PhoneOtpStep>('idle');
-  const [code, setCode] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(phoneOtpReducer, options?.initialPhone ?? '', initialPhoneOtpState);
 
   const onVerified = options?.onVerified;
   const linkToAccount = Boolean(options?.linkToAccount);
 
+  // What is on screen right now, for the async calls below: the number (an
+  // answer is only for the number it was asked for) and whether a request is
+  // out (one at a time, even for a second tap before the re-render).
+  const phoneRef = useRef(state.phone);
+  const inFlight = useRef(false);
+  const requestId = useRef(0);
+
   const setPhone = useCallback((value: string) => {
-    // Editing the number resets the whole flow, unconditionally. Without this,
-    // a guest could verify one number, swap in another, and place the order
-    // against a number nobody confirmed. Unconditional rather than guarded on
-    // "was it verified?" because React bails out of a re-render when a value is
-    // already what it is being set to, and a guard here is one more branch that
-    // can be wrong.
-    setPhoneState(value);
-    setVerified(false);
-    setStep('idle');
-    setCode('');
-    setError(null);
+    // Editing the number resets the whole flow, unconditionally (the reducer's
+    // 'phone_changed'). Without this, a guest could verify one number, swap in
+    // another, and place the order against a number nobody confirmed.
+    phoneRef.current = value;
+    dispatch({ type: 'phone_changed', value });
   }, []);
 
   // Profile prefill. Fills ONLY an empty field, so a number someone has already
@@ -93,105 +108,124 @@ export function usePhoneOtp(options?: {
   // on every keystroke — which is why it is here rather than a `setPhone` call
   // guarded at the call site.
   const prefillPhone = useCallback((value: string) => {
-    setPhoneState((current) => current || value);
+    if (!phoneRef.current) phoneRef.current = value;
+    dispatch({ type: 'prefill', value });
   }, []);
 
-  const sendOtp = useCallback(async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      if (linkToAccount) {
-        const normalized = normalizeIndianMobile(phone);
-        if (!normalized) throw new Error('Enter a valid 10-digit mobile number.');
-        const { error: linkError } = await createClient().auth.updateUser({ phone: `+91${normalized}` });
-        if (linkError) {
-          throw new Error(
-            /already|registered|exists/i.test(linkError.message)
-              ? 'This number already has its own login. Log out and log in with your mobile number instead.'
-              : linkError.message,
-          );
-        }
-      } else {
-        const res = await fetch('/api/auth/customer/phone-otp/request', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error ?? 'Could not send the verification code.');
-      }
-      setStep('sent');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not send the verification code.');
-    } finally {
-      setBusy(false);
-    }
-  }, [phone, linkToAccount]);
+  const setCode = useCallback((value: string) => dispatch({ type: 'code_changed', value }), []);
 
+  /** Runs one request for the number on screen now; false if another is still out. */
+  const run = useCallback(
+    async (kind: 'send' | 'verify', work: (phone: string) => Promise<unknown>, fallback: string) => {
+      if (inFlight.current) return;
+      inFlight.current = true;
+      const id = ++requestId.current;
+      const asked = phoneRef.current;
+      dispatch({ type: 'request_started', id, kind, phone: asked });
+      try {
+        const result = await work(asked);
+        dispatch({ type: 'request_succeeded', id });
+        if (kind === 'verify' && samePhoneNumber(asked, phoneRef.current)) {
+          onVerified?.({ phone: asked, profile: result ?? null });
+        }
+      } catch (err) {
+        dispatch({ type: 'request_failed', id, message: err instanceof Error ? err.message : fallback });
+      } finally {
+        inFlight.current = false;
+      }
+    },
+    [onVerified],
+  );
+
+  const sendOtp = useCallback(
+    () =>
+      run(
+        'send',
+        async (phone) => {
+          if (linkToAccount) {
+            const normalized = normalizeIndianMobile(phone);
+            if (!normalized) throw new Error('Enter a valid 10-digit mobile number.');
+            const { error: linkError } = await createClient().auth.updateUser({ phone: `+91${normalized}` });
+            if (linkError) {
+              throw new Error(
+                /already|registered|exists/i.test(linkError.message)
+                  ? 'This number already has its own login. Log out and log in with your mobile number instead.'
+                  : linkError.message,
+              );
+            }
+            return null;
+          }
+          const res = await fetch('/api/auth/customer/phone-otp/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error ?? 'Could not send the verification code.');
+          return null;
+        },
+        'Could not send the verification code.',
+      ),
+    [run, linkToAccount],
+  );
+
+  const code = state.code;
   const verifyOtp = useCallback(async () => {
-    if (!code.trim()) {
-      setError('Enter the code sent to your WhatsApp.');
+    const token = code.trim();
+    if (!token) {
+      dispatch({ type: 'invalid', message: 'Enter the code sent to your WhatsApp.' });
       return;
     }
-    setError(null);
-    setBusy(true);
-    try {
-      if (linkToAccount) {
-        const normalized = normalizeIndianMobile(phone);
-        if (!normalized) throw new Error('Enter a valid 10-digit mobile number.');
-        const e164 = `+91${normalized}`;
-        const { error: otpError } = await createClient().auth.verifyOtp({
-          phone: e164,
-          token: code.trim(),
-          type: 'phone_change',
-        });
-        if (otpError) throw new Error('Invalid or expired code.');
-        // Supabase now holds the number on this account; mirror it into
-        // profiles (what POST /api/orders checks).
-        const res = await fetch('/api/account/me', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone: e164 }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error ?? 'Verified, but could not save the number to your account.');
-      } else {
+    await run(
+      'verify',
+      async (phone) => {
+        if (linkToAccount) {
+          const normalized = normalizeIndianMobile(phone);
+          if (!normalized) throw new Error('Enter a valid 10-digit mobile number.');
+          const e164 = `+91${normalized}`;
+          const { error: otpError } = await createClient().auth.verifyOtp({
+            phone: e164,
+            token,
+            type: 'phone_change',
+          });
+          if (otpError) throw new Error('Invalid or expired code.');
+          // Supabase now holds the number on this account; mirror it into
+          // profiles (what POST /api/orders checks).
+          const res = await fetch('/api/account/me', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: e164 }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error ?? 'Verified, but could not save the number to your account.');
+          return data;
+        }
         const res = await fetch('/api/auth/customer/phone-otp/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, token: code.trim() }),
+          body: JSON.stringify({ phone, token }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error ?? 'Invalid or expired code.');
-      }
-      setVerified(true);
-      setStep('idle');
-      setCode('');
-      onVerified?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid or expired code.');
-    } finally {
-      setBusy(false);
-    }
-  }, [phone, code, onVerified, linkToAccount]);
+        return null;
+      },
+      'Invalid or expired code.',
+    );
+  }, [run, code, linkToAccount]);
 
-  const cancel = useCallback(() => {
-    setStep('idle');
-    setCode('');
-    setError(null);
-  }, []);
+  const cancel = useCallback(() => dispatch({ type: 'cancel' }), []);
 
   return {
-    phone,
+    phone: state.phone,
     setPhone,
     prefillPhone,
-    verified,
-    step,
-    code,
+    verified: state.verified,
+    step: state.step,
+    code: state.code,
     setCode,
-    busy,
-    error,
-    phoneIsValid: normalizeIndianMobile(phone) !== null,
+    busy: phoneOtpBusy(state),
+    error: state.error,
+    phoneIsValid: normalizeIndianMobile(state.phone) !== null,
     sendOtp,
     verifyOtp,
     cancel,

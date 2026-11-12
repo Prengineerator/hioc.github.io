@@ -15,6 +15,18 @@ import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { createClient } from '@/lib/supabase';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
+import {
+  CHECKOUT_FINGERPRINT_FIELDS,
+  isPlacementBusy,
+  keyAfterResponse,
+  keyForAttempt,
+  newPlacementKey,
+  placementFingerprint,
+  placementReducer,
+  type AttemptKey,
+  type PlacementEvent,
+  type PlacementState,
+} from '@/components/checkout/placement';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
 import { LOYALTY_UNIT, beaniesUnit } from '@/lib/loyalty/brand';
 import { flags } from '@/lib/flags';
@@ -77,6 +89,18 @@ interface QuoteResponse {
   pass?: PassQuote | null;
 }
 
+// What a quote call came back with. 'superseded': a newer quote started while
+// this one was out, so the screen shows THAT one and this answer must not be
+// acted on (an Apply that marked a coupon applied off a superseded answer left
+// "applied" next to a bill without it, and the order then sent a coupon the
+// customer never saw priced).
+type QuoteResult =
+  | { status: 'ok'; data: QuoteResponse }
+  | { status: 'failed' }
+  | { status: 'superseded' };
+
+const QUOTE_SUPERSEDED_MSG = 'Your order changed while that was being checked — tap Apply again.';
+
 export function CheckoutForm({
   settings,
   openState,
@@ -121,7 +145,15 @@ export function CheckoutForm({
   const [emailError, setEmailError] = useState<string | null>(null);
   const [slotStart, setSlotStart] = useState<string | null>(null); // null = not yet picked
   const [notes, setNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  // The placement (components/checkout/placement.ts): idle → placing →
+  // awaiting_payment → done, or error. `submitting` is "not idle/error".
+  const [placement, setPlacement] = useState<PlacementState>({ phase: 'idle' });
+  const dispatchPlacement = (event: PlacementEvent) => setPlacement((s) => placementReducer(s, event));
+  const submitting = isPlacementBusy(placement);
+  // A second tap (or Enter) lands before React re-renders the disabled button.
+  const placingRef = useRef(false);
+  // The Idempotency-Key for this placement and the cart/bill it was minted for.
+  const attemptKey = useRef<AttemptKey | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
   const [unavailableNames, setUnavailableNames] = useState<string[]>([]);
   // The error banner sits at the top of the form, but the button that
@@ -198,6 +230,9 @@ export function CheckoutForm({
   const passTouched = useRef(false);
   const [passSettled, setPassSettled] = useState(false);
   const [passBusy, setPassBusy] = useState(false);
+  // A coupon, Beanies or Ritual change is being priced: the bill on screen is
+  // about to change, so Place Order waits for it (and only one is asked at a time).
+  const offersBusy = couponBusy || pointsBusy || passBusy;
   // Only the newest quote may update the screen: with a stepper in play two can
   // be in flight, and a slow older answer must not overwrite a newer one.
   const quoteSeq = useRef(0);
@@ -328,7 +363,7 @@ export function CheckoutForm({
     nextCoupon: string,
     nextPoints: number,
     nextPassCups?: number,
-  ): Promise<QuoteResponse | null> {
+  ): Promise<QuoteResult> {
     const seq = ++quoteSeq.current;
     const withPass = passEnabled;
     const base = {
@@ -363,9 +398,10 @@ export function CheckoutForm({
         priced = false;
       }
       if (withPass && seq === quoteSeq.current) setPassSettled(true);
-      if (!res.ok) return null;
+      if (seq !== quoteSeq.current) return { status: 'superseded' };
+      if (!res.ok) return { status: 'failed' };
       const data = (await res.json()) as QuoteResponse;
-      if (seq !== quoteSeq.current) return data;
+      if (seq !== quoteSeq.current) return { status: 'superseded' };
       setBill(data.bill);
       setBalance(data.balance);
       // Keep the itemized discount lines in sync with whatever was actually
@@ -382,10 +418,11 @@ export function CheckoutForm({
         passDrinksRef.current = applied;
         setPassDrinks(applied);
       }
-      return data;
+      return { status: 'ok', data };
     } catch {
-      if (withPass && seq === quoteSeq.current) setPassSettled(true);
-      return null;
+      if (seq !== quoteSeq.current) return { status: 'superseded' };
+      if (withPass) setPassSettled(true);
+      return { status: 'failed' };
     }
   }
 
@@ -407,8 +444,11 @@ export function CheckoutForm({
   // (CP-D12), so changing the cups can make an applied one stop applying. Drop
   // such an offer (with the reason) instead of leaving the customer to place an
   // order the server would refuse.
-  function dropOffersThatNoLongerApply(data: QuoteResponse | null) {
-    if (!data) return;
+  function dropOffersThatNoLongerApply(result: QuoteResult) {
+    // Only the quote on screen may drop an offer: a superseded one was priced
+    // for a cart or a cup count that is no longer there.
+    if (result.status !== 'ok') return;
+    const data = result.data;
     if (couponApplied && !data.coupon?.ok) {
       setCouponApplied(null);
       setCouponInput('');
@@ -429,8 +469,8 @@ export function CheckoutForm({
     passDrinksRef.current = next;
     setPassDrinks(next);
     setPassBusy(true);
-    const data = await refreshQuote(couponApplied ?? '', pointsApplied ?? 0, next);
-    dropOffersThatNoLongerApply(data);
+    const result = await refreshQuote(couponApplied ?? '', pointsApplied ?? 0, next);
+    dropOffersThatNoLongerApply(result);
     setPassBusy(false);
   }
 
@@ -439,13 +479,16 @@ export function CheckoutForm({
     if (!code) return;
     setCouponBusy(true);
     setCouponError(null);
-    const data = await refreshQuote(code, pointsApplied ?? 0);
-    if (data?.coupon?.ok) {
+    const result = await refreshQuote(code, pointsApplied ?? 0);
+    if (result.status === 'superseded') {
+      // The bill on screen is a newer quote that did not ask for this code.
+      setCouponError(QUOTE_SUPERSEDED_MSG);
+    } else if (result.status === 'ok' && result.data.coupon?.ok) {
       setCouponApplied(code);
       setCouponError(null);
     } else {
       setCouponApplied(null);
-      setCouponError(data?.coupon?.reason ?? 'This coupon could not be applied.');
+      setCouponError((result.status === 'ok' ? result.data.coupon?.reason : null) ?? 'This coupon could not be applied.');
       await refreshQuote('', pointsApplied ?? 0);
     }
     setCouponBusy(false);
@@ -466,13 +509,17 @@ export function CheckoutForm({
     }
     setPointsBusy(true);
     setPointsError(null);
-    const data = await refreshQuote(couponApplied ?? '', pts);
-    if (data?.points?.ok) {
-      setPointsApplied(data.points.points);
+    const result = await refreshQuote(couponApplied ?? '', pts);
+    if (result.status === 'superseded') {
+      setPointsError(QUOTE_SUPERSEDED_MSG);
+    } else if (result.status === 'ok' && result.data.points?.ok) {
+      setPointsApplied(result.data.points.points);
       setPointsError(null);
     } else {
       setPointsApplied(null);
-      setPointsError(data?.points?.reason ?? `${LOYALTY_UNIT.many} could not be redeemed.`);
+      setPointsError(
+        (result.status === 'ok' ? result.data.points?.reason : null) ?? `${LOYALTY_UNIT.many} could not be redeemed.`,
+      );
       await refreshQuote(couponApplied ?? '', 0);
     }
     setPointsBusy(false);
@@ -562,96 +609,132 @@ export function CheckoutForm({
   }
 
   async function placeOrder() {
+    // One placement at a time. Released only when it fails: once an order
+    // exists the screen just leaves for the order page.
+    if (placingRef.current) return;
+    placingRef.current = true;
     const selectedSlot = slots.find((s) => s.start === slotStart) ?? slots[0];
     // Ritual cups ride along only when the latest quote applied them and that is
     // the number on screen — the same rule the coupon and Beanies follow, so the
     // order never asks for cups the customer did not see priced.
     const passToSend = passEnabled ? passCupsToSend(passQuote, passDrinksRef.current) : undefined;
 
-    setSubmitting(true);
+    const body: Record<string, unknown> = {
+      customer_name: name,
+      // A guest gives no contact details (the server ignores any anyway).
+      customer_phone: isGuest ? '' : phone,
+      customer_email: isGuest ? undefined : email.trim() || undefined,
+      order_type: orderType,
+      pickup_slot_label: selectedSlot?.label ?? 'ASAP',
+      pickup_slot_start:
+        selectedSlot && !selectedSlot.isAsap ? selectedSlot.start : undefined,
+      notes,
+      items: orderItemsPayload(),
+      payment_mode: ONLINE_PAYMENT_AVAILABLE ? effectivePaymentMode : 'counter',
+      require_online: isGuest,
+      coupon_code: couponApplied ?? undefined,
+      redeem_points: pointsApplied ?? undefined,
+      ...(passToSend !== undefined ? { pass_drinks: passToSend } : {}),
+      // Phase-7 (SUG-8): omitted entirely (not sent as []) when no cart
+      // line came from a /suggest session.
+      ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
+      // Coffey checkout pairings: same rule, omitted when no line came from the card.
+      ...(pairingLines ? { pairing_lines: pairingLines } : {}),
+    };
+    // Same cart and bill as the last attempt → same key, so a retry after a
+    // lost answer replays the order the server already made (see placement.ts).
+    const attempt = keyForAttempt(
+      attemptKey.current,
+      placementFingerprint(body, CHECKOUT_FINGERPRINT_FIELDS),
+      () => newPlacementKey('web'),
+    );
+    attemptKey.current = attempt;
+
+    const fail = (message: string) => {
+      setServerError(message);
+      dispatchPlacement({ type: 'failed', message });
+      placingRef.current = false;
+    };
+
+    dispatchPlacement({ type: 'submit' });
+    let res: Response;
     try {
-      const res = await fetch('/api/orders', {
+      res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_name: name,
-          // A guest gives no contact details (the server ignores any anyway).
-          customer_phone: isGuest ? '' : phone,
-          customer_email: isGuest ? undefined : email.trim() || undefined,
-          order_type: orderType,
-          pickup_slot_label: selectedSlot?.label ?? 'ASAP',
-          pickup_slot_start:
-            selectedSlot && !selectedSlot.isAsap ? selectedSlot.start : undefined,
-          notes,
-          items: orderItemsPayload(),
-          payment_mode: ONLINE_PAYMENT_AVAILABLE ? effectivePaymentMode : 'counter',
-          require_online: isGuest,
-          coupon_code: couponApplied ?? undefined,
-          redeem_points: pointsApplied ?? undefined,
-          ...(passToSend !== undefined ? { pass_drinks: passToSend } : {}),
-          // Phase-7 (SUG-8): omitted entirely (not sent as []) when no cart
-          // line came from a /suggest session.
-          ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
-          // Coffey checkout pairings: same rule, omitted when no line came from the card.
-          ...(pairingLines ? { pairing_lines: pairingLines } : {}),
-        }),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': attempt.key },
+        body: JSON.stringify(body),
       });
+    } catch {
+      // No answer: the order may well exist. The key is kept, so tapping again
+      // gets that order back instead of placing a second one.
+      fail('Network error — please check your connection.');
+      return;
+    }
 
-      if (res.status === 201) {
-        const data: {
-          order: { id: string };
-          payment: CreatedPaymentIntent | null;
-          payment_unavailable?: boolean;
-        } = await res.json();
-        clearCart();
+    if (res.status === 201) {
+      const data = (await res.json().catch(() => null)) as {
+        order?: { id?: string };
+        payment?: CreatedPaymentIntent | null;
+        payment_unavailable?: boolean;
+      } | null;
+      const orderId = data?.order?.id;
+      if (!orderId) {
+        // Placed, but the answer was cut off: keep the key so a retry replays it.
+        fail('Network error — please check your connection.');
+        return;
+      }
+      if (attemptKey.current === attempt && keyAfterResponse(201) === 'rotate') attemptKey.current = null;
+      clearCart();
+      dispatchPlacement({ type: 'created', orderId, payOnline: Boolean(data?.payment) });
 
-        if (data.payment) {
-          // Online payment intent created — open Razorpay's hosted checkout.
-          // Every outcome lands on the status page, which server-reconciles
-          // the real payment_status (verify + webhook + poll); the `payment`
-          // flag just tells it which message to show on arrival.
-          const statusUrl = `/order/${data.order.id}`;
-          openRazorpayCheckout(data.payment, {
-            name,
-            phone,
-            description: 'HIOC order payment',
-            onSuccess: () => router.push(statusUrl),
-            onDismiss: (lastFailure) =>
-              router.push(`${statusUrl}?payment=${lastFailure ? 'failed' : 'cancelled'}`),
-            onFailure: () => router.push(`${statusUrl}?payment=failed`),
-          });
-          return;
-        }
-
-        // Redirect to the live order-status page (not just the confirmation
-        // page) so the customer can track accept/prep/ready in real time. If
-        // they chose to pay online but the gateway failed, the server placed it
-        // as pay-at-counter — the flag makes the status page say so.
-        router.push(
-          `/order/${data.order.id}${data.payment_unavailable ? '?payment=unavailable' : ''}`,
-        );
+      if (data?.payment) {
+        // Online payment intent created — open Razorpay's hosted checkout.
+        // Every outcome lands on the status page, which server-reconciles
+        // the real payment_status (verify + webhook + poll); the `payment`
+        // flag just tells it which message to show on arrival. Awaited, so
+        // nothing on this screen comes back to life while the window is up.
+        const statusUrl = `/order/${orderId}`;
+        await openRazorpayCheckout(data.payment, {
+          name,
+          phone,
+          description: 'HIOC order payment',
+          onSuccess: () => router.push(statusUrl),
+          onDismiss: (lastFailure) =>
+            router.push(`${statusUrl}?payment=${lastFailure ? 'failed' : 'cancelled'}`),
+          onFailure: () => router.push(`${statusUrl}?payment=failed`),
+        });
+        dispatchPlacement({ type: 'payment_closed' });
         return;
       }
 
-      const data = await res.json().catch(() => ({ error: 'Unknown error' }));
-      setServerError(data.error ?? 'Unknown error');
-      // The Ritual changed between the quote and the order (a cup spent on
-      // another device, the pass expired): 409, or a 400 when fewer cups can be
-      // applied than were asked for. The message says why; quote again so the
-      // stepper and the bill show what is possible now.
-      if (passToSend !== undefined && (res.status === 409 || res.status === 400)) {
-        const requote = await refreshQuote(couponApplied ?? '', pointsApplied ?? 0, passDrinksRef.current);
-        dropOffersThatNoLongerApply(requote);
-      }
-    } catch {
-      setServerError('Network error — please check your connection.');
-    } finally {
-      setSubmitting(false);
+      // Redirect to the live order-status page (not just the confirmation
+      // page) so the customer can track accept/prep/ready in real time. If
+      // they chose to pay online but the gateway failed, the server placed it
+      // as pay-at-counter — the flag makes the status page say so. (A replay of
+      // an earlier attempt comes back with no payment intent; its order page
+      // offers the payment if one is still owed.)
+      router.push(`/order/${orderId}${data?.payment_unavailable ? '?payment=unavailable' : ''}`);
+      return;
+    }
+
+    const data = ((await res.json().catch(() => null)) ?? {}) as { error?: string; code?: string };
+    if (attemptKey.current === attempt && keyAfterResponse(res.status, data) === 'rotate') attemptKey.current = null;
+    fail(data.error ?? 'Unknown error');
+    // The Ritual changed between the quote and the order (a cup spent on
+    // another device, the pass expired): 409, or a 400 when fewer cups can be
+    // applied than were asked for. The message says why; quote again so the
+    // stepper and the bill show what is possible now.
+    if (passToSend !== undefined && (res.status === 409 || res.status === 400)) {
+      const requote = await refreshQuote(couponApplied ?? '', pointsApplied ?? 0, passDrinksRef.current);
+      dropOffersThatNoLongerApply(requote);
     }
   }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // Enter in a field submits even while the button is disabled: placing, or
+    // an offer still being priced (the bill on screen is about to change).
+    if (submitting || offersBusy) return;
     setServerError(null);
 
     if (!authChecked || !canSubmit) return;
@@ -825,6 +908,8 @@ export function CheckoutForm({
                   type="button"
                   aria-pressed={orderType === opt.value}
                   onClick={() => setOrderType(opt.value)}
+                  // The bill being placed is the one on screen: no switching mid-placement.
+                  disabled={submitting}
                   className={
                     'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
                     (orderType === opt.value
@@ -920,7 +1005,7 @@ export function CheckoutForm({
                         type="button"
                         aria-label="Use one fewer cup"
                         onClick={() => void changePassCups(-1)}
-                        disabled={passBusy || passApplied <= 0}
+                        disabled={offersBusy || submitting || passApplied <= 0}
                         className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-line bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         &minus;
@@ -932,7 +1017,7 @@ export function CheckoutForm({
                         type="button"
                         aria-label="Use one more cup"
                         onClick={() => void changePassCups(1)}
-                        disabled={passBusy || passApplied >= passQuote.max_usable}
+                        disabled={offersBusy || submitting || passApplied >= passQuote.max_usable}
                         className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-line bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         +
@@ -984,7 +1069,7 @@ export function CheckoutForm({
                     <span className="font-mono font-bold uppercase tabular-nums">{couponApplied}</span> applied · You
                     save <span className="font-mono tabular-nums">₹{couponDiscountInr}</span>
                   </span>
-                  <button type="button" onClick={removeCoupon} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
+                  <button type="button" onClick={removeCoupon} disabled={offersBusy || submitting} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
                     Remove
                   </button>
                 </div>
@@ -1005,7 +1090,7 @@ export function CheckoutForm({
                   <button
                     type="button"
                     onClick={applyCoupon}
-                    disabled={couponBusy || !couponInput.trim()}
+                    disabled={offersBusy || submitting || !couponInput.trim()}
                     className="min-h-[44px] shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
                   >
                     {couponBusy ? '…' : 'Apply'}
@@ -1040,7 +1125,7 @@ export function CheckoutForm({
                         <span className="font-mono tabular-nums">{pointsApplied}</span> {beaniesUnit(pointsApplied)} applied · You save{' '}
                         <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>
                       </span>
-                      <button type="button" onClick={removePoints} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
+                      <button type="button" onClick={removePoints} disabled={offersBusy || submitting} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
                         Remove
                       </button>
                     </div>
@@ -1059,7 +1144,7 @@ export function CheckoutForm({
                       <button
                         type="button"
                         onClick={applyPoints}
-                        disabled={pointsBusy || !pointsInput.trim()}
+                        disabled={offersBusy || submitting || !pointsInput.trim()}
                         className="min-h-[44px] shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
                       >
                         {pointsBusy ? '…' : 'Apply'}
@@ -1235,9 +1320,10 @@ export function CheckoutForm({
               guestCannotPay ||
               !authChecked ||
               // Wait for the Ritual row to be known (a moment after sign-in) and for a
-              // stepper tap to be priced, so the bill the customer sees is what is sent.
+              // stepper tap or a coupon/Beanies Apply to be priced, so the bill the
+              // customer sees is what is sent.
               (passEnabled && !passSettled) ||
-              passBusy
+              offersBusy
             }
             className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
           >

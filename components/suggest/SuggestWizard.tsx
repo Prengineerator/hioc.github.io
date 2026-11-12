@@ -26,6 +26,7 @@ import { SweetnessScale } from '@/components/suggest/SweetnessScale';
 import { ResultsSkeleton, ThinkingCopy } from '@/components/suggest/ResultsSkeleton';
 import { fetchSuggestions, getAnonId, postSuggestEvent } from '@/components/suggest/api';
 import { buttonVariants } from '@/components/ui/Button';
+import { latestOnly } from '@/lib/hooks/requestSequence';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from '@/lib/suggest/traitVocabulary';
 import {
   BODY_PREFS,
@@ -313,8 +314,20 @@ export function SuggestWizard() {
     [moods, kinds, wantsDrink, temperature, coffee, sweetness, body, flavours, budget, note],
   );
 
+  // Only the newest request may show its picks (lib/hooks/requestSequence.ts).
+  // Back from a request still thinking, a change, and "Ask Coffey" again used
+  // to leave the first request running: whichever answered LAST won, so the
+  // screen could show picks for the answers the customer had just changed. A
+  // newer request now also aborts the older one's fetch.
+  const runs = useRef(latestOnly());
+  const runAbort = useRef<AbortController | null>(null);
+
   const runSuggest = useCallback(
     async (inputs: SuggestInputs, opts: { refineOf?: string; exclude?: string[] } = {}) => {
+      const run = runs.current.begin();
+      runAbort.current?.abort();
+      const superseded = new AbortController();
+      runAbort.current = superseded;
       setStep('results');
       setLoading(true);
       setErrorMsg(null);
@@ -323,6 +336,8 @@ export function SuggestWizard() {
       const attempt = () => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), SUGGEST_TIMEOUT_MS);
+        const onSuperseded = () => controller.abort();
+        superseded.signal.addEventListener('abort', onSuperseded);
         return fetchSuggestions(
           {
             inputs,
@@ -331,7 +346,10 @@ export function SuggestWizard() {
             excludeItemIds: opts.exclude?.slice(0, SUGGEST_LIMITS.excludeMax),
           },
           { signal: controller.signal },
-        ).finally(() => clearTimeout(timer));
+        ).finally(() => {
+          clearTimeout(timer);
+          superseded.signal.removeEventListener('abort', onSuperseded);
+        });
       };
 
       try {
@@ -339,9 +357,12 @@ export function SuggestWizard() {
         try {
           result = await attempt();
         } catch {
+          // Superseded (and aborted): the newer request owns the screen.
+          if (!runs.current.isCurrent(run)) return;
           // One retry on timeout/network error, per §3.3.
           result = await attempt();
         }
+        if (!runs.current.isCurrent(run)) return;
         setResponse(result);
         engagedRef.current = false;
         const shown = [
@@ -350,11 +371,13 @@ export function SuggestWizard() {
         ];
         setShownIds((prev) => Array.from(new Set([...prev, ...shown])));
       } catch {
+        if (!runs.current.isCurrent(run)) return;
         setErrorMsg(
           "We couldn't quite get suggestions together just now. Please try again in a moment, or head straight to the menu.",
         );
       } finally {
-        setLoading(false);
+        // A superseded run leaves the spinner to the run that replaced it.
+        if (runs.current.isCurrent(run)) setLoading(false);
       }
     },
     [],
