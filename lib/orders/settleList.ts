@@ -1,7 +1,8 @@
 // The Settle screen (/staff/settle) and "Change payment" — the pure rules, so
 // every screen agrees on what can be settled or re-recorded.
 
-import { changedAfterPayment, hasOpenBalance } from '@/lib/orders/paidChange';
+import { hasOpenBalance } from '@/lib/orders/paidChange';
+import { canReSettle, canSettleAtCounter } from '@/lib/orders/paymentStateMachine';
 import type { Order } from '@/lib/types';
 
 export { describeOrderPayment, describePaymentMethod } from '@/lib/orders/paymentLabel';
@@ -17,11 +18,13 @@ export function istDateKey(iso: string | Date): string {
 /**
  * An order still owed at the counter: unpaid, and not cancelled/rejected.
  * 'payment_pending' is excluded on purpose — that is an online order waiting
- * on the gateway, and settling it at the counter could charge twice.
+ * on the gateway, and settling it at the counter could charge twice. The
+ * payment state machine's own rule (canSettleAtCounter), which the payment
+ * route enforces with the order's gateway rows in hand; a screen has only the
+ * order, so it treats every 'payment_pending' as waiting on a live payment.
  */
 export function isSettleable(order: Pick<Order, 'status' | 'payment_status'>): boolean {
-  if (order.status === 'cancelled' || order.status === 'rejected') return false;
-  return order.payment_status === 'unpaid';
+  return order.payment_status === 'unpaid' && canSettleAtCounter(order);
 }
 
 /**
@@ -40,15 +43,16 @@ export function hasBalanceToSettle(
  * online payment (the gateway owns it), not once anything was refunded
  * (the refund was taken off a specific tender), and not once the paid bill
  * was changed (its tenders were taken at different times — lib/orders/
- * paidChange.ts). Same rule as the server.
+ * paidChange.ts). The payment state machine's re-settle rule (canReSettle),
+ * which the server enforces with the order's gateway rows — so a bill a UPI
+ * capture paid is refused there even where this screen-side answer (it only
+ * sees payment_method) would offer it.
  */
 export function canChangePayment(
   order: Pick<Order, 'status' | 'payment_status' | 'payment_method'> &
     Partial<Pick<Order, 'balance_due_inr' | 'paid_amended_at'>>,
 ): boolean {
-  if (order.status === 'cancelled' || order.status === 'rejected') return false;
-  if (changedAfterPayment(order)) return false;
-  return order.payment_status === 'paid' && order.payment_method !== 'online';
+  return canReSettle(order);
 }
 
 export interface SettleGroups<T> {

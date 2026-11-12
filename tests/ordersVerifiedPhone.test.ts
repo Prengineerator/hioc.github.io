@@ -68,9 +68,17 @@ vi.mock('@/lib/supabase-server', () => ({
         eq: () => chain,
         not: () => chain,
         in: () => Promise.resolve({ data: state.menuRows, error: null }),
-        // Gateway-failure paths: the counter fallback (update) and the guest
-        // withdrawal (delete) both end in .eq('id', …).
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // Gateway-failure paths: the counter fallback (update — a
+        // compare-and-set, so it chains several guards before it is awaited)
+        // and the guest withdrawal (delete, .eq('id', …)).
+        update: () => {
+          const guarded: Record<string, unknown> = {};
+          Object.assign(guarded, {
+            eq: () => guarded,
+            then: (resolve: (v: unknown) => void) => resolve({ error: null }),
+          });
+          return guarded;
+        },
         delete: () => ({
           eq: () => {
             if (table === 'orders') state.orderDeleted = true;

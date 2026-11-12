@@ -29,7 +29,9 @@ vi.mock('@/lib/supabase-server', () => ({
         limit: () => chain,
         update: (patch: Record<string, unknown>) => {
           ctx.isUpdate = true;
-          state.updatedPatch = patch;
+          // The order's own write; the gateway rows abandoned after a switch
+          // are a separate payments update.
+          if (table === 'orders') state.updatedPatch = patch;
           return chain;
         },
         insert: (row: Record<string, unknown>) => {

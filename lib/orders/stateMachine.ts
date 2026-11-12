@@ -17,6 +17,27 @@ export function isTerminal(status: OrderStatus): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
+// The two terminal states in which the order never happened: nothing is owed
+// on it, nothing on it can be settled, changed or counted as money received.
+// Every "not a dead order" check (settle lists, balances, received money, the
+// bill, the booking-ID clash, the payment machine) asks this one function.
+export const DEAD_STATUSES: readonly OrderStatus[] = ['cancelled', 'rejected'];
+
+export function isDeadOrder(status: OrderStatus | string | null | undefined): boolean {
+  return DEAD_STATUSES.includes(status as OrderStatus);
+}
+
+/**
+ * The payment states in which the money for an order has been COLLECTED —
+ * whether or not some or all of it has since gone back. This is what the
+ * ready → completed guard means by "settled": the risk it guards against is
+ * an order handed over with the money never collected, and a refund is not
+ * that. (Before, a part- or fully-refunded open order could never complete:
+ * the only way out was a manager comp, which wiped the refund marker by
+ * writing 'paid' over it.) lib/orders/paymentStateMachine.ts re-exports it.
+ */
+export const MONEY_COLLECTED_STATUSES: readonly PaymentStatus[] = ['paid', 'partially_refunded', 'refunded'];
+
 // Actors permitted to drive an order. 'system' performs the implicit
 // (create)→received transition; 'owner' inherits every staff permission
 // (OWN-002) plus the manager cancel override.
@@ -26,6 +47,11 @@ type TransitionActor = ActorRole;
 // optional so pure state-machine callers (the UIs, most tests) can omit it —
 // only the settlement guard needs them.
 export interface TransitionContext {
+  /**
+   * The operation asking, for a rule that only exists inside one (`onlyVia`).
+   * The status route never sets it, so such a rule is never a standalone move.
+   */
+  via?: TransitionVia;
   orderType?: OrderType;
   paymentStatus?: PaymentStatus;
   isComp?: boolean;
@@ -37,12 +63,26 @@ export interface TransitionContext {
   balanceDueInr?: number;
 }
 
+// Operations that move an order's status as a side effect of something else.
+//   'add_items'  POST /api/orders/[id]/amend { op: 'add' } (lib/orders/amend.ts
+//                statusAfterAdd): new items on a Ready order have to be made.
+export type TransitionVia = 'add_items';
+
+const VIA_LABEL: Record<TransitionVia, string> = { add_items: 'items are added to the order' };
+
 export interface TransitionRule {
   // `null` = a create/entry transition (there is no prior status). FND3-3/5
   // moved order entry into the table so the machine — not the route — owns it.
   from: OrderStatus | null;
   to: OrderStatus;
   actors: readonly TransitionActor[];
+  /**
+   * Only legal as part of this operation, never as a status change on its own
+   * (canTransition refuses it unless `context.via` matches, and the live
+   * board's menu never offers it). Lets the table say truthfully what the
+   * amend route already does without opening a "move it back" button.
+   */
+  onlyVia?: TransitionVia;
   requiresReason?: boolean;
   // Which customer notification (if any) fires on this transition (F4).
   notify?: NotificationEvent;
@@ -87,8 +127,17 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // A paid bill changed afterwards that still has money owed on it is held
     // the same way: completing it would let the table leave without paying the
     // difference. Collect it, or let it go with a reason, on Settle.
+    //
+    // "Settled" is MONEY_COLLECTED_STATUSES: paid, or paid and then part or
+    // fully refunded — the money was collected, so nothing is left to collect.
     guard: (ctx) => {
-      if (!(ctx.paymentStatus === undefined || ctx.paymentStatus === 'paid' || !!ctx.isComp)) {
+      if (
+        !(
+          ctx.paymentStatus === undefined ||
+          MONEY_COLLECTED_STATUSES.includes(ctx.paymentStatus) ||
+          !!ctx.isComp
+        )
+      ) {
         return { ok: false, code: 'payment_required', message: 'Collect payment before completing this order' };
       }
       if ((ctx.balanceDueInr ?? 0) > 0 && !ctx.isComp) {
@@ -104,10 +153,16 @@ export const TRANSITIONS: readonly TransitionRule[] = [
   // A ready order nobody collects can be cancelled by a manager (H4) rather
   // than wrongly force-completed (which would earn loyalty on an uncollected order).
   { from: 'ready', to: 'cancelled', actors: ['owner'], requiresReason: true, notify: 'cancelled' },
+  // Items added to a Ready order (TAB-1): they have to be made, so it goes back
+  // to Preparing and can't be handed over without them. Only as part of the
+  // add (onlyVia) — the amend route has always done this; the table now says so.
+  { from: 'ready', to: 'preparing', actors: ['staff'], onlyVia: 'add_items' },
   // 'placed' = online-payment order not yet captured. System promotes it to
-  // 'received' on capture; the customer may abandon it, and a manager (or the
-  // auto-expiry sweep) may cancel it (H4/H5).
-  { from: 'placed', to: 'received', actors: ['system'] },
+  // 'received' on capture (or when the gateway is unavailable at checkout); the
+  // CUSTOMER moves it there by switching to pay at the counter (PAY-2) — the
+  // event log has always attributed that one to them. The customer may abandon
+  // it, and a manager (or the auto-expiry sweep) may cancel it (H4/H5).
+  { from: 'placed', to: 'received', actors: ['system', 'customer'] },
   { from: 'placed', to: 'cancelled', actors: ['owner', 'customer', 'system'], requiresReason: true, notify: 'cancelled' },
 ];
 
@@ -158,6 +213,14 @@ export function canTransition(
       ok: false,
       code: 'forbidden_actor',
       message: `A ${actorRole} may not perform ${from} → ${to}`,
+      rule,
+    };
+  }
+  if (rule.onlyVia && context?.via !== rule.onlyVia) {
+    return {
+      ok: false,
+      code: 'not_allowed',
+      message: `${from} → ${to} only happens when ${VIA_LABEL[rule.onlyVia]}`,
       rule,
     };
   }

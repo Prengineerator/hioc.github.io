@@ -23,13 +23,28 @@
 // screens use the same ones to decide what to offer.
 
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import type { OrderStatus, PaymentMethod } from '@/lib/types';
+import { gatewayOwnsPayment, isDeadOrder, REFUND_PAYMENT_STATUSES, type GatewayEvidence } from '@/lib/orders/paymentStateMachine';
+import type { OrderStatus, PaymentMethod, PaymentStatus } from '@/lib/types';
 
 /** The file that adds the columns this needs — named in the refusal before it is applied. */
 export const PAID_CHANGE_MIGRATION = 'supabase/2026-11-paid-order-changes.sql';
 
 /** What a paid bill that can't be changed is told (the pre-feature wording). */
 export const PAID_BILL_LOCKED = 'This bill is already paid.';
+
+/** What a bill money has gone back on is told: it is not an unpaid bill to change freely. */
+export const REFUNDED_BILL_LOCKED = 'Money has been refunded on this order, so it can’t be changed — start a new order instead.';
+
+/**
+ * Why a bill with a refund on it can't be changed, or null. A part- or fully
+ * refunded order used to be treated as unpaid here: its total moved with no
+ * balance to settle, the payment route then refused it (it has a refund) and
+ * completion waited forever. The balance machinery only knows a paid bill, so
+ * a refunded one is changed by starting a new order.
+ */
+export function refundedChangeBlockReason(order: Pick<PaidChangeOrder, 'payment_status'>): string | null {
+  return REFUND_PAYMENT_STATUSES.includes(order.payment_status as PaymentStatus) ? REFUNDED_BILL_LOCKED : null;
+}
 
 /** What the rules need from an order. Fields are optional where old rows lack them. */
 export interface PaidChangeOrder {
@@ -70,10 +85,18 @@ export function hasBalanceColumns(order: object): boolean {
  *    can't be handed back at the counter against it;
  *  - not before the migration is applied (the balance has nowhere to live).
  */
-export function paidChangeBlockReason(order: PaidChangeOrder): string | null {
+//
+// `evidence` is the order's gateway payments (lib/payments/evidence.ts): the
+// routes always pass it, because a UPI or card capture stores 'upi' / 'card'
+// as payment_method, the same as the counter. A screen without it falls back to
+// payment_method 'online' (lib/orders/paymentStateMachine.ts gatewayOwnsPayment).
+export function paidChangeBlockReason(
+  order: PaidChangeOrder,
+  evidence?: Pick<GatewayEvidence, 'gatewayPaid'> | null,
+): string | null {
   if (order.order_kind === 'coffee_pass') return `A ${PASS_PROGRAM_NAME} sale can't be changed — cancel it instead.`;
   if (order.order_type !== 'dine_in') return PAID_BILL_LOCKED;
-  if (order.payment_method === 'online') {
+  if (gatewayOwnsPayment(order, evidence)) {
     return 'This bill was paid online, so it can’t be changed here — start a new order for anything more.';
   }
   if (!hasBalanceColumns(order)) {
@@ -105,7 +128,7 @@ export function settledInr(order: { total_inr: number | null; subtotal_inr: numb
 
 /** A bill with a difference still to settle: paid, a balance either way, and not a dead order. */
 export function hasOpenBalance(order: PaidChangeOrder): boolean {
-  if (order.status === 'cancelled' || order.status === 'rejected') return false;
+  if (isDeadOrder(order.status)) return false;
   return isPaidBill(order) && balanceOf(order) !== 0;
 }
 

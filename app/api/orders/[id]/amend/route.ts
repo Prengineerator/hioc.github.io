@@ -34,8 +34,12 @@ import {
   originalTenderRow,
   paidChangeAudit,
   paidChangeBlockReason,
+  refundedChangeBlockReason,
   type OriginalTender,
 } from '@/lib/orders/paidChange';
+import { checkExpectedVersion } from '@/lib/orders/concurrency';
+import { canTransition } from '@/lib/orders/stateMachine';
+import { loadGatewayEvidence } from '@/lib/payments/evidence';
 import { getStoreSettings } from '@/lib/store/settings';
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
@@ -215,8 +219,19 @@ async function planPaidChange(
   order: LoadedOrder,
   lockedMessage: string,
 ): Promise<{ ok: true; plan: PaidPlan } | { ok: false; response: NextResponse }> {
+  // Money has gone back on it: not an unpaid bill (that is how it used to be
+  // treated — its total moved with no balance, and it could then never be
+  // settled or completed), and not a paid one the balance machinery knows.
+  const refunded = refundedChangeBlockReason(order);
+  if (refunded) return { ok: false, response: errorResponse(409, refunded) };
   if (!isPaidBill(order)) return { ok: true, plan: { paid: false } };
-  const blocked = paidChangeBlockReason(order);
+  // Whether the GATEWAY took this bill's money is read from its payments rows:
+  // a UPI or card capture stores 'upi' / 'card' as payment_method, exactly like
+  // the counter, so payment_method alone let those bills be changed and their
+  // difference handed back from the drawer.
+  const evidence = await loadGatewayEvidence(admin, order.id);
+  if (!evidence.ok) return { ok: false, response: errorResponse(500, 'Failed to check how the bill was paid') };
+  const blocked = paidChangeBlockReason(order, evidence.evidence);
   if (blocked) {
     return { ok: false, response: errorResponse(409, blocked === PAID_BILL_LOCKED ? lockedMessage : blocked) };
   }
@@ -306,6 +321,15 @@ const TENDER_WRITE_FAILED = 'Could not record how the bill was paid — nothing 
 //
 // `op` defaults to 'void' so the existing POS-4 contract is unchanged.
 //
+// Safe to retry (all three ops): the body may carry `expected_version`, the
+// order `version` the screen was showing (lib/orders/concurrency.ts). Absent,
+// nothing changes. Present, it must equal the order's current version or the
+// request is refused — 409 { error, code: 'stale_version', version } — before
+// anything is written. Every successful change bumps `version`, so a retry of
+// a request that already went through (its answer lost on the way back) meets
+// a newer version and is refused instead of adding the items, or lowering the
+// bill, a second time. A non-integer is a 400.
+//
 // All three refuse a HIOC Ritual sale (order_kind 'coffee_pass') outright (409).
 //
 // All three share the same invariants: the order must be open and unpaid —
@@ -383,6 +407,8 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  const fresh = staleRetry(body, order);
+  if (fresh) return fresh;
   if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
 
   const items: OrderLine[] = order.order_items ?? [];
@@ -573,6 +599,8 @@ async function addLines(
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  const fresh = staleRetry(body, order);
+  if (fresh) return fresh;
   if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
   const existingItems: OrderLine[] = order.order_items ?? [];
 
@@ -694,6 +722,16 @@ async function addLines(
   // to Preparing, so it can't be handed over (or completed) without them.
   // Accepted/Preparing orders are already with the kitchen and stay as they are.
   const nextStatus = statusAfterAdd(order.status);
+  if (nextStatus !== order.status) {
+    // Ready → Preparing is a rule of the state machine that only exists as part
+    // of adding items (onlyVia), so the table says what this route does.
+    const move = canTransition(order.status, nextStatus, actorRoleFor(roleHint), undefined, { via: 'add_items' });
+    if (!move.ok) {
+      await rollbackLines(admin, insertedIds);
+      await removeOriginalTender(admin, tender.id);
+      return errorResponse(409, move.message ?? 'This order can no longer take items.');
+    }
+  }
 
   const { data: guarded, error: updateError } = await admin
     .from('orders')
@@ -849,6 +887,8 @@ async function editLines(
   if (readError) return errorResponse(500, 'Failed to load the order');
   if (!data) return notFound();
   const order = data as LoadedOrder;
+  const fresh = staleRetry(body, order);
+  if (fresh) return fresh;
 
   // A Ritual sale, a paid bill that can't be changed, or an order that isn't
   // open — one message each. A dine-in bill paid at the counter can be lowered:
@@ -1009,6 +1049,20 @@ async function editLines(
   }
 
   return NextResponse.json({ order: toOrderResponse(full as OrderRowWithItems) });
+}
+
+/**
+ * The optional retry guard (lib/orders/concurrency.ts): a body that says which
+ * version of the order the staffer saw is refused once the order has moved on —
+ * including by this very request's first attempt — rather than applied twice.
+ */
+function staleRetry(body: Record<string, unknown>, order: LoadedOrder): NextResponse | null {
+  const check = checkExpectedVersion(body.expected_version, order.version);
+  if (check.ok) return null;
+  return NextResponse.json(
+    { error: check.error, ...(check.code ? { code: check.code, version: order.version } : {}) },
+    { status: check.status },
+  );
 }
 
 /** Best-effort removal of just-inserted lines (addons cascade). */

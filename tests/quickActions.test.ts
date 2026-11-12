@@ -35,10 +35,24 @@ describe('quickActionsFor — corner action', () => {
     expect(corner?.to).toBeUndefined();
   });
 
-  it('Ready + a payment state that is not a counter settle → opens the detail', () => {
-    for (const p of ['payment_pending', 'refunded', 'partially_refunded'] as const) {
-      expect(quickActionsFor(at('ready', p)).corner).toMatchObject({ kind: 'open_detail' });
+  it('Ready + waiting on the gateway → opens the detail (not a counter settle)', () => {
+    expect(quickActionsFor(at('ready', 'payment_pending')).corner).toMatchObject({ kind: 'open_detail' });
+  });
+
+  // The server's completion guard counts a refunded bill as settled (the money
+  // was collected); before, such an order had no Complete and its only way out
+  // was a comp that wrote 'paid' over the refund.
+  it('Ready + refunded or part-refunded → Complete, like the server allows', () => {
+    for (const p of ['refunded', 'partially_refunded'] as const) {
+      expect(quickActionsFor(at('ready', p)).corner).toMatchObject({ key: 'complete', to: 'completed' });
     }
+  });
+
+  it('Ready + paid but a balance still owed → no Complete the server would bounce', () => {
+    const owed = { ...at('ready', 'paid'), balance_due_inr: 150 };
+    expect(quickActionsFor(owed).corner).toMatchObject({ kind: 'open_detail' });
+    // Money owed BACK does not hold the order.
+    expect(quickActionsFor({ ...owed, balance_due_inr: -40 }).corner).toMatchObject({ key: 'complete' });
   });
 
   it('has nothing for orders that are not on the board', () => {

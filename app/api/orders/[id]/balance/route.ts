@@ -24,6 +24,9 @@ import {
   settledInr,
   type BalanceAction,
 } from '@/lib/orders/paidChange';
+import { checkExpectedVersion } from '@/lib/orders/concurrency';
+import { gatewayOwnsPayment, isDeadOrder, type GatewayEvidence } from '@/lib/orders/paymentStateMachine';
+import { loadGatewayEvidence } from '@/lib/payments/evidence';
 import type { OrderStatus, UserRole } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -85,6 +88,20 @@ const RACED = 'This bill was changed or settled by someone else — please re-ch
 // so a change to the bill racing the settlement loses cleanly too. Audited in
 // order_amendments ('settle_balance').
 //
+// Safe to retry: the body may carry `expected_version`, the order `version` the
+// Settle screen was showing (lib/orders/concurrency.ts). Absent, nothing
+// changes. Present, it must equal the order's current version, or the request
+// is refused — 409 { error, code: 'stale_version', version } — before any money
+// record is written. Every settlement bumps `version`, so the retry of one
+// whose answer was lost is refused even after a later change has put a new
+// balance on the bill (which the amount check alone would let through). A
+// non-integer is a 400.
+//
+// A bill the payment GATEWAY took (a paid `payments` row — lib/payments/
+// evidence.ts — not payment_method 'online' alone: a UPI or card capture stores
+// 'upi' / 'card') can't have money handed back from the drawer: that goes back
+// through the refund, to the customer's own account.
+//
 // PIN-3: gated by getCounterActor() — classic session first, an enrolled-device
 // PIN operator only when there is no session at all; the operator's role is the
 // one every permission check below is asked about.
@@ -104,10 +121,18 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (!data) return notFound();
   const order = data as BalanceOrder;
 
+  const fresh = checkExpectedVersion(body.expected_version, order.version);
+  if (!fresh.ok) {
+    return NextResponse.json(
+      { error: fresh.error, ...(fresh.code ? { code: fresh.code, version: order.version } : {}) },
+      { status: fresh.status },
+    );
+  }
+
   if (!hasBalanceColumns(order)) {
     return errorResponse(409, `Settling a balance needs the database update ${PAID_CHANGE_MIGRATION}.`);
   }
-  if (order.status === 'cancelled' || order.status === 'rejected') {
+  if (isDeadOrder(order.status)) {
     return errorResponse(409, 'This order is no longer live — there is no balance to settle.');
   }
   if (order.payment_status !== 'paid') {
@@ -120,7 +145,11 @@ export async function POST(request: Request, { params }: RouteParams) {
   const action = body.action as BalanceAction;
 
   if (action === 'collect') return collect(admin, order, balance, body, actor.user.id, actor.role);
-  if (action === 'give_back') return giveBack(admin, order, balance, body, actor.user, actor.role);
+  if (action === 'give_back') {
+    const evidence = await loadGatewayEvidence(admin, order.id);
+    if (!evidence.ok) return errorResponse(500, 'Failed to check how the bill was paid');
+    return giveBack(admin, order, balance, body, actor.user, actor.role, evidence.evidence);
+  }
   return writeOff(admin, order, balance, body, actor.user.id, actor.role);
 }
 
@@ -206,10 +235,14 @@ async function giveBack(
   body: Record<string, unknown>,
   user: { id: string },
   role: UserRole,
+  evidence: GatewayEvidence,
 ) {
   // Money leaving the till — the same gate as a refund.
   if (!(await hasPermission(user as never, 'refund', role))) {
     return errorResponse(403, 'Manager permission required to give money back');
+  }
+  if (gatewayOwnsPayment(order, evidence)) {
+    return errorResponse(409, 'This bill was paid online — give the difference back through a refund, not from the drawer.');
   }
   const owed = -balance;
   if (body.amount_inr !== owed) return errorResponse(409, STALE(balance));
@@ -227,7 +260,7 @@ async function giveBack(
   ]);
   if (partsError || priorError) return errorResponse(500, 'Failed to load how the bill was paid');
   let parts = (partRows ?? []) as TenderPart[];
-  if (parts.length === 0 && order.payment_method && order.payment_method !== 'online') {
+  if (parts.length === 0 && order.payment_method) {
     // Not expected after a paid change (it writes the original tender), but a
     // bill settled before tender rows existed still has one tender: its method,
     // for what was taken (the bill as it is now, plus what is owed back).

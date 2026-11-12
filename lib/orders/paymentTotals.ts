@@ -8,6 +8,7 @@
 // paid). Fully refunded, unpaid/pending, cancelled and rejected orders add
 // nothing.
 
+import { isDeadOrder } from '@/lib/orders/stateMachine';
 import type { Order, PaymentMethod } from '@/lib/types';
 
 export const PAYMENT_METHODS: readonly PaymentMethod[] = [
@@ -33,7 +34,7 @@ type ReceivedOrder = Pick<
 
 /** Money actually taken on this order: paid (or part-refunded), and not a dead order. */
 export function isReceived(o: Pick<Order, 'status' | 'payment_status'>): boolean {
-  if (o.status === 'cancelled' || o.status === 'rejected') return false;
+  if (isDeadOrder(o.status)) return false;
   return o.payment_status === 'paid' || o.payment_status === 'partially_refunded';
 }
 

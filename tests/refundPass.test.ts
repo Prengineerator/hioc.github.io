@@ -12,10 +12,12 @@ const state: {
   payment: Record<string, unknown> | null; // a gateway payment row makes it the gateway path
   voidCode: string;
   restoreCode: string;
-  gateway: { id: string } | null;
+  gateway: { id: string } | null | 'unknown';
   refundInsertError: { code?: string; message: string } | null;
   events: string[];
   refundInserts: Record<string, unknown>[];
+  /** Updates to refund rows: the gateway path moves its pending claim to processed / failed. */
+  refundUpdates: Record<string, unknown>[];
   orderSelect: string[];
 } = {
   order: null,
@@ -26,6 +28,7 @@ const state: {
   refundInsertError: null,
   events: [],
   refundInserts: [],
+  refundUpdates: [],
   orderSelect: [],
 };
 
@@ -35,10 +38,16 @@ vi.mock('@/lib/api/auth', () => ({
 vi.mock('@/lib/permissions', () => ({ hasPermission: () => Promise.resolve(true) }));
 vi.mock('@/lib/orders/idempotency', () => ({ readIdempotencyKey: () => null }));
 vi.mock('@/lib/loyalty/ledger', () => ({ reverseForOrder: () => Promise.resolve() }));
+// The route asks requestGatewayRefund, which says how the request ended: a
+// refund id (processed), a definite refusal (rejected) or no trustworthy
+// answer (unknown). `gateway: null` here is the definite refusal.
 vi.mock('@/lib/payments/gateway', () => ({
-  createGatewayRefund: () => {
+  requestGatewayRefund: () => {
     state.events.push('gateway');
-    return Promise.resolve(state.gateway);
+    if (state.gateway === 'unknown') return Promise.resolve({ kind: 'unknown' });
+    return Promise.resolve(
+      state.gateway ? { kind: 'processed', refundId: state.gateway.id } : { kind: 'rejected', httpStatus: 400 },
+    );
   },
 }));
 const passServer = vi.hoisted(() => ({
@@ -66,11 +75,16 @@ vi.mock('@/lib/supabase-server', () => ({
           if (table === 'refunds') {
             state.refundInserts.push(row);
             if (row.status === 'processed') state.events.push('refund_insert');
+            if (row.status === 'pending') state.events.push('claim');
           }
           return chain;
         },
-        update: () => {
+        update: (patch: Record<string, unknown>) => {
           ctx.op = 'update';
+          if (table === 'refunds') {
+            state.refundUpdates.push(patch);
+            state.events.push(`refund_${String(patch.status)}`);
+          }
           return chain;
         },
         maybeSingle: () => {
@@ -121,6 +135,7 @@ beforeEach(() => {
   state.refundInsertError = null;
   state.events = [];
   state.refundInserts = [];
+  state.refundUpdates = [];
   state.orderSelect = [];
   passServer.voidPassForRefund.mockImplementation(() => {
     state.events.push('void');
@@ -209,10 +224,10 @@ describe('refund of a HIOC Ritual sale — the gateway path', () => {
     state.payment = { id: 'pay-row-1', gateway_payment_id: 'pay_1', amount_inr: 788 };
   });
 
-  it('voids the pass before the gateway is asked to move money', async () => {
+  it('voids the pass, then claims the refund, before the gateway is asked to move money', async () => {
     const res = await call();
     expect(res.status).toBe(200);
-    expect(state.events).toEqual(['void', 'gateway', 'refund_insert']);
+    expect(state.events).toEqual(['void', 'claim', 'gateway', 'refund_processed']);
     expect(passServer.restorePassAfterFailedRefund).not.toHaveBeenCalled();
   });
 
@@ -230,12 +245,23 @@ describe('refund of a HIOC Ritual sale — the gateway path', () => {
     expect(state.events).toEqual(['void']);
   });
 
-  it('gives the pass back when THIS call voided it and the gateway then fails (the failed attempt is still logged)', async () => {
+  it('gives the pass back when THIS call voided it and the gateway then refuses (the failed attempt is still logged)', async () => {
     state.gateway = null;
     const res = await call();
     expect(res.status).toBe(502);
-    expect(state.events).toEqual(['void', 'gateway', 'restore']);
-    expect(state.refundInserts[0]).toMatchObject({ status: 'failed', amount_inr: 788 });
+    expect(state.events).toEqual(['void', 'claim', 'gateway', 'refund_failed', 'restore']);
+    expect(state.refundInserts[0]).toMatchObject({ status: 'pending', amount_inr: 788 });
+    expect(state.refundUpdates[0]).toMatchObject({ status: 'failed' });
+  });
+
+  it('keeps the pass void and the refund pending when the gateway gives no answer (the money may have moved)', async () => {
+    state.gateway = 'unknown';
+    const res = await call();
+    expect(res.status).toBe(504);
+    expect(((await res.json()) as { code: string }).code).toBe('refund_unconfirmed');
+    expect(state.events).toEqual(['void', 'claim', 'gateway']);
+    expect(passServer.restorePassAfterFailedRefund).not.toHaveBeenCalled();
+    expect(state.refundUpdates).toHaveLength(0);
   });
 
   it("does not restore a pass an earlier refund voided ('already') when the gateway fails", async () => {

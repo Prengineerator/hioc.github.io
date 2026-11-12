@@ -3,8 +3,10 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { reverseForOrder } from '@/lib/loyalty/ledger';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
-import { fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
-import { captureGatewayPayment } from '@/lib/payments/reconcile';
+import { checkGatewayBeforeCancel } from '@/lib/payments/gatewayCheck';
+import { abandonGatewayPayments } from '@/lib/payments/evidence';
+import { canTransition } from '@/lib/orders/stateMachine';
+import { canTransitionPayment } from '@/lib/orders/paymentStateMachine';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,48 +15,16 @@ export const dynamic = 'force-dynamic';
 // "failed/abandoned online payments … auto-expire").
 const EXPIRE_AFTER_MIN = 30;
 
-type GatewayCheck = 'captured' | 'unpaid' | 'unknown';
+const EXPIRY_REASON = 'Payment not completed in time';
 
-// Before expiring, ask Razorpay whether the order was actually paid — without
-// a webhook (or if it was missed), a customer who paid and closed the tab
-// would otherwise have a paid order cancelled. A captured payment is recorded
-// and the order moves into the staff queue instead. 'unknown' (gateway
-// unreachable/unconfigured, or a payment still only 'authorized') means don't
-// cancel this run; the next run retries.
-async function reconcileWithGateway(
-  admin: ReturnType<typeof createAdminSupabaseClient>,
-  orderId: string,
-): Promise<GatewayCheck> {
-  const { data: payments, error } = await admin
-    .from('payments')
-    .select('gateway_order_id')
-    .eq('order_id', orderId)
-    .eq('gateway', 'razorpay');
-  if (error) return 'unknown';
-
-  let result: GatewayCheck = 'unpaid';
-  for (const p of payments ?? []) {
-    if (!p.gateway_order_id) continue;
-    const attempts = await fetchOrderPaymentAttempts(p.gateway_order_id as string);
-    if (!attempts) {
-      result = 'unknown';
-      continue;
-    }
-    const captured = attempts.find((a) => a.status === 'captured');
-    if (captured) {
-      const capture = await captureGatewayPayment({
-        gatewayOrderId: p.gateway_order_id as string,
-        gatewayPaymentId: captured.id,
-        method: captured.method,
-        signatureOk: false, // reconciled via API poll, not a signed webhook
-        capturedAmountPaise: captured.amount, // M5 cross-check
-      });
-      return capture.ok ? 'captured' : 'unknown';
-    }
-    if (attempts.some((a) => a.status === 'authorized')) result = 'unknown';
-  }
-  return result;
-}
+// Both machines are asked before anything is written: the order's placed →
+// cancelled (system, with a reason) and its payment's payment_pending → unpaid
+// ('expire'). They are constant answers, so a table change that stopped
+// allowing either would stop the sweep rather than let it write a move the
+// machine no longer has.
+const EXPIRY_ALLOWED =
+  canTransition('placed', 'cancelled', 'system', EXPIRY_REASON).ok &&
+  canTransitionPayment('payment_pending', 'unpaid', 'expire', 'system', { orderStatus: 'placed' }).ok;
 
 // /api/cron/expire-orders — runs 4 times a day (12:00, 16:00, 20:00 and
 // 00:00 IST) from Supabase pg_cron + pg_net (supabase/2026-10-expire-orders-cron.sql,
@@ -81,15 +51,22 @@ async function handle(request: Request) {
     .lt('created_at', cutoff);
   if (error) return errorResponse(500, 'Failed to query stale orders');
 
+  if (!EXPIRY_ALLOWED) {
+    console.error('expire-orders: the state machines no longer allow placed → cancelled on expiry — nothing expired');
+    return NextResponse.json({ expired: 0, recovered: 0 });
+  }
+
   let expired = 0;
   let recovered = 0;
   for (const o of stale ?? []) {
-    const check = await reconcileWithGateway(admin, o.id as string);
+    // 'authorized' (money held, capture on its way) or an unreachable gateway
+    // means don't cancel this run; the next run retries.
+    const check = await checkGatewayBeforeCancel(admin, o.id as string);
     if (check === 'captured') {
       recovered++;
       continue;
     }
-    if (check === 'unknown') continue;
+    if (check !== 'unpaid') continue;
 
     // Version-guarded so we never cancel one that just got captured/paid.
     const { data: updated } = await admin
@@ -97,7 +74,7 @@ async function handle(request: Request) {
       .update({
         status: 'cancelled',
         payment_status: 'unpaid',
-        reject_reason: 'Payment not completed in time',
+        reject_reason: EXPIRY_REASON,
         version: (o.version as number) + 1,
       })
       .eq('id', o.id)
@@ -106,6 +83,11 @@ async function handle(request: Request) {
       .select('id')
       .maybeSingle();
     if (!updated) continue;
+
+    // Its Razorpay order(s) are abandoned with it, so a retry can never hand
+    // one out again; a capture that still lands is recorded as an orphan for
+    // a refund (lib/payments/reconcile.ts), never marking the order paid.
+    await abandonGatewayPayments(admin, o.id as string);
 
     await admin.from('order_status_events').insert({
       order_id: o.id,
@@ -116,6 +98,10 @@ async function handle(request: Request) {
       reason: 'Auto-expired: payment not completed',
     });
     await reverseForOrder(o.id);
+    // The machine maps placed → cancelled to the 'cancelled' notification, and
+    // the customer's own cancel sends it. Expiry deliberately does not: the
+    // customer abandoned the payment, and messaging them about it now would be
+    // new behaviour — an owner decision, not a fix.
     await broadcastOrderEvent(o.id, 'cancelled');
     expired++;
   }

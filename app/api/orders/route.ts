@@ -57,7 +57,14 @@ import type { AllocationResult } from '@/lib/passes/types';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
-import { settleOrderPayment, type CounterActor, type CounterSettlement } from '@/lib/orders/settlePayment';
+import {
+  recordedSettlement,
+  settleOrderPayment,
+  type CounterActor,
+  type CounterSettlement,
+} from '@/lib/orders/settlePayment';
+import { canTransition } from '@/lib/orders/stateMachine';
+import { canTransitionPayment } from '@/lib/orders/paymentStateMachine';
 import { getStaffPrintOrder, type StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { canGiveManualDiscount, MANUAL_DISCOUNT_FORBIDDEN, parseManualDiscount } from '@/lib/orders/manualDiscount';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
@@ -736,6 +743,19 @@ export async function POST(request: Request) {
       : 'unpaid';
   const initialPaymentMethod: PaymentMethod | null = needsOnlinePayment ? 'online' : null;
 
+  // Both entry points belong to the state machines (FND3-3/5): the order's
+  // (create) → initial status, and its payment's (create) → initial state. They
+  // always agree today; asking makes a table change that stopped allowing one
+  // refuse here, before anything is written, instead of creating an order the
+  // machine has no state for.
+  const entryActor = actor ? actorRoleFor(actor.role) : 'system';
+  const entry = canTransition(null, initialStatus, entryActor);
+  const paymentEntry = canTransitionPayment(null, initialPaymentStatus, 'create', actor ? 'counter' : 'system');
+  if (!entry.ok || !paymentEntry.ok) {
+    console.error('orders create: the state machines refuse the entry state', entry, paymentEntry);
+    return errorResponse(500, 'This order could not be placed. Please try again.');
+  }
+
   // POS4-2: claim the idempotency key immediately before creating. Claiming here
   // rather than at the top of the handler means the many validation early-returns
   // above don't burn a key the staffer will legitimately retry with.
@@ -754,12 +774,15 @@ export async function POST(request: Request) {
       if (prior) {
         const priorOrder = toOrderResponse(prior as OrderRowWithItems);
         // The first attempt may have settled before its answer was lost, or
-        // not; settling again with the same parts is a re-settle (it replaces
-        // them, and the bill send is idempotent), so the retry ends in the same
-        // state either way.
+        // not. Still unpaid: settle it now, exactly as the first attempt would
+        // have. Already settled (or since refunded): answer with what was
+        // recorded and write nothing — settling again would delete and
+        // re-insert the tenders (moving them to now, possibly into a day already
+        // closed) and overwrite a Change payment made since.
         const extras = actor
           ? await counterExtras(actor, priorOrder.id, {
               createdPaid: (priorOrder.total_inr ?? priorOrder.subtotal_inr) === 0,
+              alreadySettled: priorOrder.payment_status !== 'unpaid',
               settlementRequest,
               wantsPrintOrder,
             })
@@ -1093,10 +1116,28 @@ export async function POST(request: Request) {
       );
     }
     if (!paymentIntent) {
-      const { error: fallbackError } = await admin
+      // placed → received and payment_pending → unpaid ('gateway_unavailable'),
+      // both machine moves, compare-and-set on the state the order was created
+      // in (and its version bumped like every other status move).
+      const fallbackAllowed =
+        canTransition('placed', 'received', 'system').ok &&
+        canTransitionPayment('payment_pending', 'unpaid', 'gateway_unavailable', 'system', { orderStatus: 'placed' }).ok;
+      const createdVersion = typeof orderRow.version === 'number' ? (orderRow.version as number) : null;
+      let fallback = admin
         .from('orders')
-        .update({ status: 'received', payment_status: 'unpaid', payment_method: null })
-        .eq('id', orderRow.id);
+        .update({
+          status: 'received',
+          payment_status: 'unpaid',
+          payment_method: null,
+          ...(createdVersion !== null ? { version: createdVersion + 1 } : {}),
+        })
+        .eq('id', orderRow.id)
+        .eq('status', 'placed')
+        .eq('payment_status', 'payment_pending');
+      if (createdVersion !== null) fallback = fallback.eq('version', createdVersion);
+      const { error: fallbackError } = fallbackAllowed
+        ? await fallback
+        : { error: { message: 'the state machines no longer allow the pay-at-counter fallback' } };
       if (fallbackError) {
         console.error('orders fallback-to-counter update failed', fallbackError);
       } else {
@@ -1221,7 +1262,13 @@ export async function POST(request: Request) {
 async function counterExtras(
   actor: CounterActor,
   orderId: string,
-  opts: { createdPaid: boolean; settlementRequest: Record<string, unknown> | null; wantsPrintOrder: boolean },
+  opts: {
+    createdPaid: boolean;
+    /** A replay whose order is no longer unpaid: report the settle, don't redo it. */
+    alreadySettled?: boolean;
+    settlementRequest: Record<string, unknown> | null;
+    wantsPrintOrder: boolean;
+  },
 ): Promise<{ settlement?: CounterSettlement; print_order?: StaffPrintOrder | null }> {
   const extras: { settlement?: CounterSettlement; print_order?: StaffPrintOrder | null } = {};
   if (opts.settlementRequest) {
@@ -1229,7 +1276,9 @@ async function counterExtras(
       extras.settlement = null;
     } else {
       try {
-        const outcome = await settleOrderPayment(actor, orderId, opts.settlementRequest);
+        const outcome = opts.alreadySettled
+          ? await recordedSettlement(orderId)
+          : await settleOrderPayment(actor, orderId, opts.settlementRequest);
         extras.settlement = outcome.ok
           ? { ok: true, ...outcome.body }
           : { ok: false, status: outcome.status, error: outcome.error };

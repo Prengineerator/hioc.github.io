@@ -129,11 +129,13 @@ vi.mock('@/lib/loyalty/customerLink', () => ({
 
 const riders: {
   settle: ReturnType<typeof vi.fn>;
+  recorded: ReturnType<typeof vi.fn>;
   printOrder: ReturnType<typeof vi.fn>;
   release: ReturnType<typeof vi.fn>;
   claim: { state: string; orderId?: string };
 } = {
   settle: vi.fn(),
+  recorded: vi.fn(),
   printOrder: vi.fn(),
   release: vi.fn(),
   claim: { state: 'claimed' },
@@ -141,6 +143,7 @@ const riders: {
 
 vi.mock('@/lib/orders/settlePayment', () => ({
   settleOrderPayment: (...args: unknown[]) => riders.settle(...args),
+  recordedSettlement: (...args: unknown[]) => riders.recorded(...args),
 }));
 vi.mock('@/lib/orders/getStaffPrintOrder', () => ({
   getStaffPrintOrder: (...args: unknown[]) => riders.printOrder(...args),
@@ -192,6 +195,8 @@ beforeEach(() => {
   ];
   riders.settle.mockReset();
   riders.settle.mockResolvedValue(settled);
+  riders.recorded.mockReset();
+  riders.recorded.mockResolvedValue(settled);
   riders.printOrder.mockReset();
   riders.printOrder.mockResolvedValue({ id: ORDER_ID, items: [], cashier_name: 'Asha' });
   riders.claim = { state: 'claimed' };
@@ -257,15 +262,37 @@ describe('POST /api/orders — settlement with the order', () => {
     expect(data).not.toHaveProperty('print_order');
   });
 
-  it('settles a replayed order again: the first answer may have been lost after the settle', async () => {
+  // The first attempt settled before its answer was lost: the replay reports
+  // that settle and writes nothing. Settling again used to delete and re-insert
+  // the tenders (moving them to now — possibly into a day already closed) and
+  // overwrite a Change payment made in between.
+  it('reports, and does not redo, the settle of a replayed order that is already paid', async () => {
     riders.claim = { state: 'replay', orderId: ORDER_ID };
     state.orderInsert = { total_inr: 230, subtotal_inr: 200, payment_status: 'paid', status: 'accepted' };
     const res = await POST(req({ ...counterOrder, settlement: cash }, 'key-1'));
     expect(res.status).toBe(201);
     const data = await res.json();
     expect(data.replayed).toBe(true);
-    expect(riders.settle).toHaveBeenCalledWith(state.actor, ORDER_ID, cash);
+    expect(riders.settle).not.toHaveBeenCalled();
+    expect(riders.recorded).toHaveBeenCalledWith(ORDER_ID);
     expect(data.settlement.ok).toBe(true);
+    expect(data.settlement.change_due_inr).toBe(70);
+  });
+
+  it('settles a replayed order that is still unpaid: the first attempt never got that far', async () => {
+    riders.claim = { state: 'replay', orderId: ORDER_ID };
+    state.orderInsert = { total_inr: 230, subtotal_inr: 200, payment_status: 'unpaid', status: 'accepted' };
+    const data = await (await POST(req({ ...counterOrder, settlement: cash }, 'key-1'))).json();
+    expect(riders.settle).toHaveBeenCalledWith(state.actor, ORDER_ID, cash);
+    expect(riders.recorded).not.toHaveBeenCalled();
+    expect(data.settlement.ok).toBe(true);
+  });
+
+  it('never re-settles a replayed order that has been refunded since', async () => {
+    riders.claim = { state: 'replay', orderId: ORDER_ID };
+    state.orderInsert = { total_inr: 230, subtotal_inr: 200, payment_status: 'refunded', status: 'accepted' };
+    await POST(req({ ...counterOrder, settlement: cash }, 'key-1'));
+    expect(riders.settle).not.toHaveBeenCalled();
   });
 
   it('has nothing to settle on a replayed ₹0 order', async () => {

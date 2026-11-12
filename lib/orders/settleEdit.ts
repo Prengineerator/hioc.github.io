@@ -17,7 +17,8 @@
 import { isUuid } from '@/lib/api/constants';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { billOffers, parseSpendSnapshot, splitOrderDiscount, type BillOfferLine } from '@/lib/orders/offers';
-import { isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
+import { isPaidBill, paidChangeBlockReason, refundedChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
+import type { GatewayEvidence } from '@/lib/orders/paymentStateMachine';
 import type { OrderStatus } from '@/lib/types';
 
 /**
@@ -85,10 +86,15 @@ export type SettleEditPlan =
  * A PAID bill can be edited too when it is a dine-in bill paid at the counter
  * (lib/orders/paidChange.ts): the difference becomes a balance settled later.
  */
-export function settleEditBlockReason(order: SettleEditOrder): string | null {
+export function settleEditBlockReason(
+  order: SettleEditOrder,
+  evidence?: Pick<GatewayEvidence, 'gatewayPaid'> | null,
+): string | null {
   if (order.order_kind === 'coffee_pass') return `A ${PASS_PROGRAM_NAME} sale can't be changed — cancel it instead.`;
+  const refundBlock = refundedChangeBlockReason(order);
+  if (refundBlock) return refundBlock;
   if (isPaidBill(order)) {
-    const paidBlock = paidChangeBlockReason(order);
+    const paidBlock = paidChangeBlockReason(order, evidence);
     if (paidBlock) return paidBlock;
   }
   if (SETTLE_EDIT_STATUSES.includes(order.status)) return null;

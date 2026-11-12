@@ -5,6 +5,7 @@ import { isPaymentMethod, PAYMENT_METHODS } from '@/lib/api/constants';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { sendBillNotification } from '@/lib/notifications/engine';
 import {
+  changeDueInr,
   dominantMethod,
   isAppPaymentMethod,
   parseSettleAdjustment,
@@ -14,7 +15,9 @@ import {
   type PaymentPart,
 } from '@/lib/orders/payments';
 import { runAfterResponse } from '@/lib/api/background';
-import { changedAfterPayment, type PaidChangeOrder } from '@/lib/orders/paidChange';
+import { checkCounterSettle, isDeadOrder, type SettleOrder } from '@/lib/orders/paymentStateMachine';
+import { loadGatewayEvidence } from '@/lib/payments/evidence';
+import { NO_GATEWAY_EVIDENCE } from '@/lib/payments/paymentRowStateMachine';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -48,6 +51,9 @@ export interface SettledBody {
 }
 
 export type SettleOutcome = { ok: true; body: SettledBody } | { ok: false; status: number; error: string };
+
+/** The settle lost a race: the order's payment changed while it was being recorded. */
+export const SETTLE_RACED = 'This order’s payment changed while it was being recorded — please re-check it and try again.';
 
 /**
  * POST /api/orders' `settlement` answer: how the counter's own settle went,
@@ -103,69 +109,50 @@ export async function settleOrderPayment(
 
   const admin = createAdminSupabaseClient();
 
-  // Don't let a manual "mark payment" clobber a gateway-verified online payment
-  // (M6) — those are reconciled against Razorpay and may only change via the
-  // refund flow. Guard against overwriting an online paid/refunded record.
   // `total_inr` comes along because a split must be validated against the
-  // SERVER's total, never a total the client tells us.
-  // select('*') rather than a column list: the settle-adjustment columns
-  // (2026-09-settle-adjustments.sql) must not make a plain settle fail on a
-  // database that hasn't had that migration applied yet.
+  // SERVER's total, never a total the client tells us. select('*') rather than
+  // a column list: the settle-adjustment columns (2026-09-settle-adjustments.sql)
+  // must not make a plain settle fail on a database that hasn't had that
+  // migration applied yet.
   const { data: existing } = await admin
     .from('orders')
     .select('*')
     .eq('id', id)
     .maybeSingle();
   if (!existing) return fail(404, 'Not found');
-  if (
-    existing.payment_method === 'online' &&
-    ['paid', 'refunded', 'partially_refunded'].includes(existing.payment_status as string)
-  ) {
-    return fail(
-      409,
-      'This order was paid online — its payment is managed by the gateway and can only change via a refund.',
-    );
-  }
 
-  // The SALE of a HIOC Ritual pass is what issued the pass the moment it turned
-  // 'paid' (a database trigger does it, CP-D6). Moving it off 'paid' from here
-  // would leave a live pass behind an order that says the customer never paid
-  // for it, so the way back is the refund, which voids the pass first (CP-D15).
-  // Re-recording HOW it was paid while it stays paid (cash → UPI, a corrected
-  // split) is an ordinary re-settle and is fine. `order_kind` is absent before
-  // 2026-10-coffee-pass.sql (existing is select('*')), which reads as a menu
-  // order, so this is inert there.
-  if (
-    existing.order_kind === 'coffee_pass' &&
-    existing.payment_status === 'paid' &&
-    paymentStatus !== 'paid'
-  ) {
-    return fail(
-      409,
-      `A ${PASS_PROGRAM_NAME} has been issued for this sale — refund it instead.`,
-    );
-  }
-
-  // Changing how a bill was paid (cash → UPI…) is a re-settle and allowed —
-  // but not once money has gone back: the refund was taken off a specific
-  // tender, and re-recording the tenders would detach it from what it refunded
-  // (and flip a refunded order back to 'paid').
-  if (['refunded', 'partially_refunded'].includes(existing.payment_status as string)) {
-    return fail(409, 'This order has a refund, so how it was paid can no longer be changed.');
-  }
-
-  // Same idea for a paid bill that was changed afterwards (lib/orders/
-  // paidChange.ts): its tenders were taken at different times, and a balance
-  // may have been given back. Re-recording them as one set summing to the new
-  // total would lose the original payment from the drawer, or count a give-back
-  // twice. Absent columns (before 2026-11-paid-order-changes.sql) read as never
-  // changed, so this is inert there.
-  if (existing.payment_status === 'paid' && changedAfterPayment(existing as PaidChangeOrder)) {
-    return fail(
-      409,
-      'This bill was changed after it was paid, so how it was paid can no longer be changed. Settle any balance on the Settle screen.',
-    );
-  }
+  // Whether the counter may record this at all is the payment state machine's
+  // call (lib/orders/paymentStateMachine.ts checkCounterSettle) — the same rule
+  // the Settle and Change payment buttons ask, now with the facts only the
+  // server has: the order's gateway payments. In the order it refuses:
+  //  - a cancelled or rejected order (nothing is owed on it);
+  //  - an order still waiting on an open Razorpay order (the customer could
+  //    pay it too — they switch to the counter first);
+  //  - a payment the GATEWAY took (M6): it changes only through a refund. That
+  //    is a paid `payments` row, not payment_method === 'online' alone — a UPI
+  //    or card capture stores 'upi' / 'card', and those used to slip through;
+  //  - moving the SALE of a HIOC Ritual pass off 'paid': paying it issued the
+  //    pass (a trigger, CP-D6), so the way back is the refund, which voids the
+  //    pass first (CP-D15). Re-recording HOW it was paid is fine;
+  //  - a bill with a refund: the refund was taken off a specific tender, and
+  //    re-recording the tenders would detach it (and flip it back to 'paid');
+  //  - a paid bill changed afterwards (lib/orders/paidChange.ts): its tenders
+  //    were taken at different times;
+  //  - taking a completed order off 'paid' (completion required it).
+  // `order_kind` and the paid-change columns are absent before their
+  // migrations (existing is select('*')), which reads as a menu order never
+  // changed, so those checks are inert there.
+  //
+  // An unpaid bill (every "Collect now") needs no gateway facts — nothing on
+  // it can be the gateway's or waiting on it — so the payments rows are read
+  // only for the other states, and the counter's hot path keeps its latency.
+  const evidence =
+    existing.payment_status === 'unpaid'
+      ? ({ ok: true, evidence: NO_GATEWAY_EVIDENCE } as const)
+      : await loadGatewayEvidence(admin, id);
+  if (!evidence.ok) return fail(500, 'Could not check this order’s online payment. Try again.');
+  const allowed = checkCounterSettle(existing as SettleOrder, paymentStatus, evidence.evidence);
+  if (!allowed.ok) return fail(409, allowed.message ?? 'This order can’t be settled now.');
 
   // POS4-1: validate the split against the authoritative total before touching
   // anything. The parts must sum exactly — a gap would surface later as an
@@ -241,18 +228,31 @@ export async function settleOrderPayment(
         }
       : {};
 
-  const { data, error } = await admin
+  // Compare-and-set: only from the payment status (and version) it was read
+  // in, and the version is bumped. A refund or a gateway capture landing while
+  // this request ran is never overwritten, and a change to the bill racing it
+  // (the amend route guards on version) loses cleanly instead of leaving the
+  // bill paid with tenders that sum to the old total. A database row always
+  // has a version; a test fixture may not, and then only the status guards.
+  const hasVersion = typeof existing.version === 'number';
+  let write = admin
     .from('orders')
-    .update({ payment_method: methodToStore, payment_status: paymentStatus, ...adjustmentColumns })
+    .update({
+      payment_method: methodToStore,
+      payment_status: paymentStatus,
+      ...adjustmentColumns,
+      ...(hasVersion ? { version: (existing.version as number) + 1 } : {}),
+    })
     .eq('id', id)
-    .select('*')
-    .maybeSingle();
+    .eq('payment_status', existing.payment_status);
+  if (hasVersion) write = write.eq('version', existing.version);
+  const { data, error } = await write.select('*').maybeSingle();
 
   if (error) {
     return fail(500, 'Failed to record payment');
   }
   if (!data) {
-    return fail(404, 'Not found');
+    return fail(409, SETTLE_RACED);
   }
 
   // POS4-1: persist the parts. Written AFTER the order update so a failed
@@ -260,8 +260,9 @@ export async function settleOrderPayment(
   // re-settle (staff correcting how it was paid) doesn't double-count cash.
   // A single-method re-settle clears them too: otherwise a bill first split
   // cash + UPI and then changed to "all UPI" would keep its old cash part, and
-  // the drawer would still expect that cash.
-  if (!parts && paymentStatus === 'paid') {
+  // the drawer would still expect that cash. So does taking a bill off 'paid':
+  // an unpaid bill has no tenders, and old ones would still read as taken.
+  if (!parts) {
     await admin.from('order_payments').delete().eq('order_id', id);
   }
   if (parts) {
@@ -352,6 +353,51 @@ export async function settleOrderPayment(
 }
 
 /**
+ * The settle answer for an order whose payment is ALREADY recorded, read back
+ * from what is stored — for POST /api/orders replaying an Idempotency-Key
+ * whose first attempt settled before its answer was lost. Settling again would
+ * delete and re-insert the tenders (moving them to "now", possibly into a day
+ * already closed) and overwrite a Change payment made since; this only reads.
+ */
+export async function recordedSettlement(orderId: string): Promise<SettleOutcome> {
+  const admin = createAdminSupabaseClient();
+  const { data: order } = await admin.from('orders').select('*').eq('id', orderId).maybeSingle();
+  if (!order) return fail(404, 'Not found');
+  const { data: rows } = await admin
+    .from('order_payments')
+    .select('method, amount_inr, tendered_inr, reference')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true });
+  const tenders = (rows ?? []) as {
+    method: PaymentMethod;
+    amount_inr: number;
+    tendered_inr?: number | null;
+    reference?: string | null;
+  }[];
+  const change = tenders.reduce(
+    (sum, t) => sum + (t.method === 'cash' && typeof t.tendered_inr === 'number' ? changeDueInr(t.tendered_inr, t.amount_inr) : 0),
+    0,
+  );
+  return {
+    ok: true,
+    body: {
+      order: {
+        ...(order as Order),
+        settle_discount_inr: (order.settle_discount_inr as number | undefined) ?? 0,
+        tip_inr: (order.tip_inr as number | undefined) ?? 0,
+        settle_reason: (order.settle_reason as string | null | undefined) ?? '',
+        payments: tenders.map((t) => ({
+          method: t.method,
+          amount_inr: t.amount_inr,
+          ...(t.reference ? { reference: t.reference } : {}),
+        })),
+      },
+      change_due_inr: change,
+    },
+  };
+}
+
+/**
  * The same dining-app booking ID already recorded on ANOTHER live order — a
  * typo, or the platform's money being claimed twice — as the refusal to give,
  * or null when every referenced part is clear. A dead order (cancelled,
@@ -390,7 +436,7 @@ export async function bookingReferenceClash(
       clashes.map((c) => c.order_id),
     );
   const live = ((others ?? []) as { id: string; order_number: number; status: string; payment_status: string }[]).find(
-    (o) => !['cancelled', 'rejected'].includes(o.status) && o.payment_status !== 'refunded',
+    (o) => !isDeadOrder(o.status) && o.payment_status !== 'refunded',
   );
   if (!live) return null;
   const clash = clashes.find((c) => c.order_id === live.id)!;

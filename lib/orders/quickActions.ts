@@ -6,7 +6,7 @@
 // Corner button = the ONE obvious next step, done in a single tap. The menu
 // holds everything else that is legal from the current status.
 
-import { PRIMARY_NEXT, STATUS_LABELS, TRANSITIONS, type TransitionRule } from '@/lib/orders/stateMachine';
+import { canTransition, PRIMARY_NEXT, STATUS_LABELS, TRANSITIONS, type TransitionRule } from '@/lib/orders/stateMachine';
 import { isSettleable } from '@/lib/orders/settleList';
 import type { Order, OrderStatus } from '@/lib/types';
 
@@ -43,7 +43,7 @@ export interface QuickActions {
   menu: QuickAction[];
 }
 
-type QuickActionOrder = Pick<Order, 'status' | 'payment_status'>;
+type QuickActionOrder = Pick<Order, 'status' | 'payment_status'> & Partial<Pick<Order, 'balance_due_inr'>>;
 
 const CORNER_LABEL: Partial<Record<OrderStatus, string>> = {
   received: 'Accept',
@@ -53,8 +53,11 @@ const CORNER_LABEL: Partial<Record<OrderStatus, string>> = {
 };
 
 // Anyone at the counter may act as 'staff'; 'owner' inherits staff. A rule that
-// names neither (customer/system-only) is not for the live board at all.
+// names neither (customer/system-only) is not for the live board at all, and
+// nor is one that only happens inside another operation (onlyVia: Ready →
+// Preparing when items are added).
 function staffMayDo(rule: TransitionRule): boolean {
+  if (rule.onlyVia) return false;
   return rule.actors.includes('staff') || rule.actors.includes('owner');
 }
 
@@ -64,12 +67,20 @@ function cornerFor(order: QuickActionOrder): QuickAction | null {
   if (!next || !label) return null;
 
   if (order.status === 'ready') {
-    if (order.payment_status === 'paid') {
+    // The server's own completion guard (the state machine's ready → completed
+    // rule, with the facts this card has): settled — paid, or paid and then
+    // refunded — and no balance still owed on a paid bill changed afterwards.
+    // Asking anything narrower put a Complete button on a bill with ₹150 still
+    // to collect, and the server bounced it with a 409.
+    const complete = canTransition('ready', 'completed', 'staff', undefined, {
+      paymentStatus: order.payment_status,
+      balanceDueInr: order.balance_due_inr ?? 0,
+    });
+    if (complete.ok) {
       return { key: 'complete', label, kind: 'transition', to: next, tone: 'complete' };
     }
-    // The server refuses to complete an unpaid order, so a Complete tap would
-    // only bounce. Unpaid → collect first; anything else (payment_pending,
-    // refunded…) is not a counter settle, so hand it to the detail view.
+    // Unpaid → collect first; a balance owed or anything else (payment_pending…)
+    // is not a one-tap settle, so hand it to the detail view.
     return isSettleable(order)
       ? { key: 'settle', label: 'Settle', kind: 'settle', tone: 'primary' }
       : { key: 'details', label: 'Details', kind: 'open_detail', tone: 'primary' };

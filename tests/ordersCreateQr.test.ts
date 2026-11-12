@@ -37,8 +37,17 @@ vi.mock('@/lib/supabase-server', () => ({
         select: () => chain,
         eq: () => chain,
         not: () => chain,
-        // Gateway-failure fallback: orders.update(...).eq('id', …) back to counter.
-        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        // Gateway-failure fallback: orders.update(...).eq('id', …) back to
+        // counter — compare-and-set on the state it was created in, so the
+        // stub chains any number of guards before it is awaited.
+        update: () => {
+          const guarded: Record<string, unknown> = {};
+          Object.assign(guarded, {
+            eq: () => guarded,
+            then: (resolve: (v: unknown) => void) => resolve({ error: null }),
+          });
+          return guarded;
+        },
         in: () => Promise.resolve({ data: state.menuRows, error: null }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;

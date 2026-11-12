@@ -5,6 +5,8 @@ import { isUuid } from '@/lib/api/constants';
 import { createPaymentIntent, fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
 import { captureGatewayPayment } from '@/lib/payments/reconcile';
 import { canTransition } from '@/lib/orders/stateMachine';
+import { canPayOnline, canTransitionPayment } from '@/lib/orders/paymentStateMachine';
+import { abandonGatewayPayments } from '@/lib/payments/evidence';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { Order } from '@/lib/types';
@@ -103,6 +105,12 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (current.payment_status === 'paid') {
     return errorResponse(409, 'This order is already paid.');
   }
+  // A cancelled, rejected, completed or refunded order is never handed a
+  // Razorpay order to pay (the money would land on nothing), and is not
+  // switched anywhere either.
+  if (!canPayOnline(current)) {
+    return errorResponse(409, 'This order is no longer waiting on payment.');
+  }
 
   // Issue-1: a web GUEST (no session — see POST /api/orders' isWebGuest) has
   // no pay-at-counter flow at all — a guest order carries no verified phone,
@@ -135,6 +143,10 @@ export async function POST(request: Request, { params }: RouteParams) {
     // H2: reuse an existing pending gateway order rather than minting a second
     // one. Two open Razorpay orders for the same HIOC order could each be paid
     // once → double-charge. A single reused order can only be paid once.
+    // Only one still open (payment_pending — switch-to-counter, expiry and a
+    // cancel abandon theirs) and only for what the bill is now: an open one for
+    // a different amount is never handed out again.
+    const amount = current.total_inr ?? 0;
     const { data: pending } = await admin
       .from('payments')
       .select('gateway_order_id, amount_inr')
@@ -144,7 +156,7 @@ export async function POST(request: Request, { params }: RouteParams) {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (pending?.gateway_order_id) {
+    if (pending?.gateway_order_id && pending.amount_inr === amount) {
       const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID || '';
       return NextResponse.json({
         payment: {
@@ -156,7 +168,11 @@ export async function POST(request: Request, { params }: RouteParams) {
       });
     }
 
-    const amount = current.total_inr ?? 0;
+    if (pending?.gateway_order_id) {
+      // The bill changed since that Razorpay order was made: abandon it so it
+      // is never paid for the old amount, then mint one for the bill as it is.
+      await abandonGatewayPayments(admin, orderId);
+    }
     const intent = await createPaymentIntent(orderId, amount);
     if (!intent) {
       return errorResponse(
@@ -172,8 +188,13 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (from !== 'placed') {
     return errorResponse(409, 'This order is no longer waiting on payment.');
   }
-  const check = canTransition(from, 'received', 'system');
-  if (!check.ok) {
+  // The customer moves it (the event below has always said so); the payment
+  // leaves the gateway with it (payment_pending → unpaid, 'switch_to_counter').
+  const check = canTransition(from, 'received', 'customer');
+  const payCheck = canTransitionPayment(current.payment_status, 'unpaid', 'switch_to_counter', 'customer', {
+    orderStatus: from,
+  });
+  if (!check.ok || !payCheck.ok) {
     return errorResponse(409, 'This order can no longer switch to pay at the counter.');
   }
 
@@ -187,10 +208,17 @@ export async function POST(request: Request, { params }: RouteParams) {
     })
     .eq('id', orderId)
     .eq('version', current.version)
+    .eq('payment_status', current.payment_status)
     .select('*')
     .maybeSingle();
   if (updateError) return errorResponse(500, 'Failed to switch to pay at counter');
   if (!updated) return errorResponse(409, 'Order was updated by someone else — please refresh.');
+
+  // Its open Razorpay order is abandoned, so retry never hands it out again; a
+  // payment still in flight on it is recorded when it lands — it marks this
+  // order paid if the counter hasn't collected yet, and is kept as an orphan to
+  // refund if it has (lib/payments/reconcile.ts).
+  await abandonGatewayPayments(admin, orderId);
 
   await admin.from('order_status_events').insert({
     order_id: orderId,

@@ -5,6 +5,7 @@
 // try) — and so the two related decisions (can this order pay at counter? what
 // does the payment-flag banner say?) live in one obviously-paired place.
 
+import { isDeadOrder } from '@/lib/orders/stateMachine';
 import type { Order } from '@/lib/types';
 
 // Issue-1: a web guest (no session, no verified phone) has no pay-at-counter
@@ -41,5 +42,5 @@ export function paymentFlagMessage(flag: string | null, allowCounter: boolean): 
 // paid before cancellation, since a refund would move payment_status off
 // 'paid' anyway; a merely 'completed'-but-never-paid order has no bill.
 export function hasBill(order: Pick<Order, 'status' | 'payment_status'>): boolean {
-  return order.payment_status === 'paid' && order.status !== 'cancelled' && order.status !== 'rejected';
+  return order.payment_status === 'paid' && !isDeadOrder(order.status);
 }

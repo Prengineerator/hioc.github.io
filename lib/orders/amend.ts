@@ -204,7 +204,9 @@ export function recomputeOrderTotals({
  * Where an order goes when items are added to it (TAB-1): the new items have
  * to be made, so an order the kitchen had marked Ready is back to Preparing —
  * it can't be handed over or completed without them. Accepted/Preparing
- * orders are already with the kitchen and stay as they are.
+ * orders are already with the kitchen and stay as they are. The move is the
+ * state machine's Ready → Preparing rule, which exists only `onlyVia:
+ * 'add_items'` (lib/orders/stateMachine.ts); the amend route checks it.
  */
 export function statusAfterAdd(status: OrderStatus): OrderStatus {
   return status === 'ready' ? 'preparing' : status;

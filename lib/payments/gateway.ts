@@ -12,6 +12,7 @@ import 'server-only';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import type { PaymentMethod } from '@/lib/types';
+import type { GatewayRefundOutcome } from '@/lib/orders/refundStateMachine';
 import type { CreatedPaymentIntent } from './types';
 
 export type { CreatedPaymentIntent } from './types';
@@ -226,6 +227,56 @@ export async function createGatewayRefund(
     method: 'POST',
     body: JSON.stringify({ amount: Math.round(amountInr) * 100, notes }),
   });
+}
+
+/**
+ * The refund route's version of createGatewayRefund: the same request, but it
+ * says HOW it ended, because a refund that timed out is not a refund that
+ * failed (lib/orders/refundStateMachine.ts):
+ *
+ *   'processed'  a 2xx with the refund's id — the gateway accepted it
+ *   'rejected'   the gateway answered 4xx (bad amount, already refunded, auth…),
+ *                or the request was never sent (keys unset, bad amount): no
+ *                money moved
+ *   'unknown'    no answer, a 408/5xx, or a 2xx that could not be read: the
+ *                money MAY have moved, so the caller must not record a failure
+ *                or give anything back
+ */
+export async function requestGatewayRefund(
+  gatewayPaymentId: string,
+  amountInr: number,
+  notes: Record<string, string>,
+): Promise<GatewayRefundOutcome> {
+  if (!Number.isFinite(amountInr) || amountInr <= 0) return { kind: 'rejected', httpStatus: null };
+  const creds = credentials();
+  if (!creds) return { kind: 'rejected', httpStatus: null };
+  const path = `/payments/${gatewayPaymentId}/refund`;
+  let res: Response;
+  try {
+    res = await fetch(`${RAZORPAY_API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader(creds.keyId, creds.keySecret) },
+      body: JSON.stringify({ amount: Math.round(amountInr) * 100, notes }),
+      cache: 'no-store',
+    });
+  } catch (err) {
+    console.error(`Razorpay ${path} request error — the refund outcome is UNKNOWN`, err);
+    return { kind: 'unknown' };
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    console.error(`Razorpay ${path} failed (${res.status})`, body);
+    const definite = res.status >= 400 && res.status < 500 && res.status !== 408;
+    return definite ? { kind: 'rejected', httpStatus: res.status } : { kind: 'unknown' };
+  }
+  try {
+    const refund = (await res.json()) as Partial<RazorpayRefundResult>;
+    if (typeof refund.id === 'string' && refund.id) return { kind: 'processed', refundId: refund.id };
+  } catch {
+    // fall through: accepted, but we can't say which refund it is
+  }
+  console.error(`Razorpay ${path} answered ${res.status} without a readable refund — the refund outcome is UNKNOWN`);
+  return { kind: 'unknown' };
 }
 
 /** Maps a Razorpay payment `method` string onto our narrower PaymentMethod enum. */

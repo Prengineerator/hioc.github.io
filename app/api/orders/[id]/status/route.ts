@@ -17,6 +17,8 @@ import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { Order, OrderType, PaymentStatus } from '@/lib/types';
 
 import { balanceOf } from '@/lib/orders/paidChange';
+import { canTransitionPayment } from '@/lib/orders/paymentStateMachine';
+import { abandonGatewayPayments, loadGatewayEvidence } from '@/lib/payments/evidence';
 
 export const dynamic = 'force-dynamic';
 
@@ -110,30 +112,45 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // (see lib/permissions.ts's own note on this). actor.role already carries
   // the right answer either way (classic session or capped device operator).
   let isComp = false;
+  let compReason = '';
   const compBody = body.comp as { reason?: string } | undefined;
   // Every order type now has to be settled before it completes (see the
   // ready → completed guard in lib/orders/stateMachine.ts), so the comp
-  // override applies to every type too, not just dine-in.
-  const isUnpaidCompletion = from === 'ready' && to === 'completed' && current.payment_status !== 'paid';
+  // override applies to every type too, not just dine-in. Only a bill with
+  // nothing collected yet is comped: a refunded or part-refunded one WAS
+  // settled (the guard lets it complete as it is), and comping it used to
+  // write 'paid' over the refund marker.
+  const isUnpaidCompletion =
+    from === 'ready' &&
+    to === 'completed' &&
+    (current.payment_status === 'unpaid' || current.payment_status === 'payment_pending');
 
   if (isUnpaidCompletion && compBody) {
     if (!(await hasPermission(actor.user, 'comp_order', actor.role))) {
       return errorResponse(403, 'A manager is required to comp an order');
     }
-    const compReason = typeof compBody.reason === 'string' ? compBody.reason.trim() : '';
+    compReason = typeof compBody.reason === 'string' ? compBody.reason.trim() : '';
     if (!compReason) {
       return errorResponse(400, 'A comp requires a reason');
     }
-    // Set a paid-equivalent (payment_method left as-is/null) + audit trail
-    // BEFORE the transition so the guard passes. Not version-guarded: it only
-    // sets payment_status and never races the status column.
-    await admin.from('orders').update({ payment_status: 'paid' }).eq('id', id);
-    await admin.from('order_amendments').insert({
-      order_id: id,
-      staff_id: actor.user.id,
-      kind: 'comp',
-      payload: { reason: compReason },
+    // The payment machine's comp rule (lib/orders/paymentStateMachine.ts): a
+    // Ready order, and — if it is waiting on the gateway — no Razorpay order
+    // still open for it (the customer could pay it as well as being comped).
+    let gatewayLive = false;
+    if (current.payment_status === 'payment_pending') {
+      const evidence = await loadGatewayEvidence(admin, id);
+      if (!evidence.ok) return errorResponse(500, 'Could not check this order’s online payment. Try again.');
+      gatewayLive = evidence.evidence.gatewayLive;
+    }
+    const comp = canTransitionPayment(current.payment_status as PaymentStatus, 'paid', 'comp', 'counter', {
+      orderStatus: from,
+      gatewayLive,
     });
+    if (!comp.ok) return errorResponse(409, comp.message!);
+    // The paid-equivalent (payment_method left as-is/null) is written IN the
+    // guarded transition below, and the audit row only once that commits: a
+    // comp that loses the race leaves the order exactly as it was, never paid
+    // with a comp row and still not completed.
     isComp = true;
   }
 
@@ -173,16 +190,33 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (to === 'accepted') {
     patch.promised_ready_at = await resolveEta(body.promised_ready_at);
   }
+  if (isComp) {
+    patch.payment_status = 'paid';
+  }
+  // A 'placed' order cancelled before it was paid stops waiting on the gateway
+  // (the payment machine's cancel_placed rule): it reads unpaid, like an
+  // expired one, so a capture that lands later is recorded as an orphan for a
+  // refund instead of marking a cancelled order paid.
+  const cancelsPlacedPayment =
+    from === 'placed' &&
+    to === 'cancelled' &&
+    current.payment_status === 'payment_pending' &&
+    canTransitionPayment('payment_pending', 'unpaid', 'cancel_placed', 'counter', { orderStatus: from }).ok;
+  if (cancelsPlacedPayment) {
+    patch.payment_status = 'unpaid';
+  }
 
   // Guarded update: `eq('version', current.version)` makes the write itself the
   // race arbiter — if another transition landed first, zero rows update → 409.
-  const { data: updated, error: updateError } = await admin
+  // A payment change rides with it only from the payment status it was read
+  // in (settling and refunding have not always bumped the version).
+  let guardedWrite = admin
     .from('orders')
     .update(patch)
     .eq('id', id)
-    .eq('version', current.version)
-    .select('*')
-    .maybeSingle();
+    .eq('version', current.version);
+  if (isComp || cancelsPlacedPayment) guardedWrite = guardedWrite.eq('payment_status', current.payment_status);
+  const { data: updated, error: updateError } = await guardedWrite.select('*').maybeSingle();
 
   if (updateError) {
     return errorResponse(500, 'Failed to update order status');
@@ -205,6 +239,20 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     // the request, but log it — the event log feeds SLA metrics (OWN-008).
     console.error('order_status_events insert failed', eventError);
   }
+
+  if (isComp) {
+    // The comp's audit trail (2026-11-paid-order-changes.sql kind 'comp'),
+    // after the write it explains. Logged loudly if it fails: the order is
+    // already completed on the house.
+    const { error: compAuditError } = await admin.from('order_amendments').insert({
+      order_id: id,
+      staff_id: actor.user.id,
+      kind: 'comp',
+      payload: { reason: compReason },
+    });
+    if (compAuditError) console.error(`comp audit row FAILED for order ${id} (completed on the house)`, compAuditError);
+  }
+  if (cancelsPlacedPayment) await abandonGatewayPayments(admin, id);
 
   const order = updated as Order;
 

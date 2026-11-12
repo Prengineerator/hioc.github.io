@@ -2,6 +2,7 @@
 // order cards, the day's Orders list and its "still to collect" total. Pure
 // so the rules are tested once and every staff screen agrees.
 
+import { isDeadOrder } from '@/lib/orders/stateMachine';
 import type { Order, PaymentStatus } from '@/lib/types';
 
 export type PaymentTone = 'paid' | 'due' | 'pending' | 'refunded';
@@ -21,7 +22,7 @@ export const PAYMENT_BADGE: Record<PaymentStatus, { label: string; tone: Payment
  * order can't be completed yet.
  */
 export function isPaymentDue(order: Pick<Order, 'status' | 'payment_status'>): boolean {
-  if (order.status === 'cancelled' || order.status === 'rejected') return false;
+  if (isDeadOrder(order.status)) return false;
   return order.payment_status === 'unpaid' || order.payment_status === 'payment_pending';
 }
 

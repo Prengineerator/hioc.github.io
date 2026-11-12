@@ -196,7 +196,9 @@ describe('PATCH /api/orders/[id]/status', () => {
     state.updated = { ...readyTakeaway, payment_status: 'paid', status: 'completed', version: 4 };
     const res = await PATCH(req({ status: 'completed', comp: { reason: 'Regular, on the house' } }), params);
     expect(res.status).toBe(200);
-    expect(state.compPatch?.payment_status).toBe('paid');
+    // The comp is written IN the guarded transition (one write), not ahead of it.
+    expect(state.compPatch).toBeUndefined();
+    expect(state.patch).toMatchObject({ status: 'completed', payment_status: 'paid' });
     expect(state.amendmentRow?.kind).toBe('comp');
   });
 
@@ -260,13 +262,15 @@ describe('PATCH /api/orders/[id]/status', () => {
         params,
       );
       expect(res.status).toBe(200);
-      expect(state.compPatch?.payment_status).toBe('paid'); // paid-equivalent set
+      // The paid-equivalent rides IN the guarded transition: one write, so a
+      // lost race can't leave a comped-but-not-completed order behind.
+      expect(state.compPatch).toBeUndefined();
+      expect(state.patch).toMatchObject({ status: 'completed', payment_status: 'paid' });
       expect(state.amendmentRow?.kind).toBe('comp'); // audit row written
       expect(state.amendmentRow?.staff_id).toBe('mgr-1');
       expect((state.amendmentRow?.payload as { reason: string }).reason).toBe('VIP on the house');
-      expect(state.patch?.status).toBe('completed'); // then the transition lands
-      // The comp set payment_status='paid' before the transition, so the
-      // completed-transition bill gate (issue-3) still fires for it.
+      // The completed order reads paid, so the completed-transition bill gate
+      // (issue-3) still fires for it.
       expect(sendBillNotification).toHaveBeenCalledTimes(1);
     });
 
