@@ -11,7 +11,8 @@ import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Textarea';
 import { StarRating } from '@/components/reviews/StarRating';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
-import type { FeedbackMessage, FeedbackRequest, FeedbackThreadStatus } from '@/lib/types';
+import { THREAD_STATUS_OPTIONS } from '@/lib/feedback/threadState';
+import type { FeedbackMessage, FeedbackRequest } from '@/lib/types';
 
 interface OrderLite {
   order_number: number;
@@ -27,11 +28,8 @@ interface ThreadData {
   canReplyFreeform: boolean;
 }
 
-const STATUS_OPTIONS: { value: FeedbackThreadStatus; label: string }[] = [
-  { value: 'open', label: 'Open' },
-  { value: 'in_progress', label: 'In progress' },
-  { value: 'resolved', label: 'Resolved' },
-];
+// The statuses the picker offers come from the thread machine the PATCH route enforces.
+const STATUS_OPTIONS = THREAD_STATUS_OPTIONS;
 
 export function FeedbackThread({ requestId }: { requestId: string }) {
   const [data, setData] = useState<ThreadData | null>(null);

@@ -59,13 +59,21 @@ vi.mock('@/lib/supabase-server', () => ({
           (db[table] as Row[]).push(withId);
           return Promise.resolve({ error: null });
         },
-        update: (patch: Record<string, unknown>) => ({
-          eq: (col: string, val: unknown) => {
-            const target = rows().find((r) => r[col] === val);
-            if (target) Object.assign(target, patch);
-            return Promise.resolve({ error: null });
-          },
-        }),
+        // Chainable filters (.eq / .in) so a guarded write — the thread reopen is
+        // `.eq(id).in(thread_status, [resolved])` — only lands on a row that matches.
+        update: (patch: Record<string, unknown>) => {
+          const conds: { col: string; vals: unknown[] }[] = [];
+          const u: Record<string, unknown> = {
+            eq: (col: string, val: unknown) => (conds.push({ col, vals: [val] }), u),
+            in: (col: string, vals: unknown[]) => (conds.push({ col, vals }), u),
+            then: (resolve: (v: unknown) => unknown) => {
+              const target = rows().find((r) => conds.every((c) => c.vals.includes(r[c.col])));
+              if (target) Object.assign(target, patch);
+              return resolve({ error: null });
+            },
+          };
+          return u;
+        },
         then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: matched(), error: null }).then(resolve),
       });
       return chain;

@@ -4,6 +4,7 @@
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { whereNeedsAttention } from '@/lib/feedback/threadState';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -29,11 +30,8 @@ export async function getFeedbackSummary(): Promise<FeedbackSummary> {
       .select('rating, responded_at, sent_at')
       .eq('status', 'sent')
       .gte('sent_at', since30),
-    admin
-      .from('feedback_requests')
-      .select('id', { count: 'exact', head: true })
-      .neq('thread_status', 'resolved')
-      .or('unread.eq.true,rating.lte.3'),
+    // The inbox's own "Needs attention" rule, not a copy of it (lib/feedback/threadState.ts).
+    whereNeedsAttention(admin.from('feedback_requests').select('id', { count: 'exact', head: true })),
   ]);
 
   const rows = sent30 ?? [];

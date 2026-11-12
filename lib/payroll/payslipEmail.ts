@@ -17,6 +17,9 @@ import 'server-only';
 // would violate the unique index, so a forced resend logs under a distinct
 // ref (`${runId}:resend:<timestamp>`) instead. Both refs are treated as the
 // same run's payslip history when reading status back (getPayslipStatuses).
+// Either way the 'sent' row is written as a CLAIM before the email goes, and
+// stepped down to 'failed' if it did not (sendPayslipOnce) — so the index stops
+// the second EMAIL, not just the second log row.
 //
 // Nothing here throws: a finalize, or an owner clicking Resend, must never
 // break because an email did. A missing staff_accounts/staff_emails table
@@ -25,6 +28,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { CAFE_NAME } from '@/lib/constants';
+import { emailAdapter } from '@/lib/notifications/adapters';
 import { sendStaffEmail, staffEmailShell, escapeHtml } from '@/lib/staff/emails';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { PayrollRun, PayrollRunLine } from '@/lib/types';
@@ -326,6 +330,82 @@ function refBelongsToRun(ref: string, runId: string): boolean {
 }
 
 /**
+ * What a claim row says while its payslip email is in flight — and keeps saying
+ * if the process dies before the outcome is written, so the Payslips section
+ * shows an honest "we don't know" rather than a clean 'sent'.
+ */
+export const PAYSLIP_CLAIM_NOTE = 'claimed — outcome not recorded';
+
+function payslipFrom(): string | undefined {
+  return process.env.RESEND_FROM_STAFF || undefined; // same sender as lib/staff/emails.ts; adapter falls back to RESEND_FROM
+}
+
+/**
+ * One payslip email under `ref`, sent at most once: CLAIM the ref's one 'sent'
+ * slot (staff_emails_payslip_once covers kind='payslip' AND status='sent', and
+ * the table knows only sent/failed/skipped, so the claim IS a 'sent' row), then
+ * send, then step the row down to 'failed' if the provider refused. Reading
+ * "already sent?" and inserting the log only after the send (what this
+ * replaced) let a finalize and a "send all" racing each other both email the
+ * same person; the index only rejected the second log row, after the email.
+ *
+ * `taken` when the slot is already claimed or sent. No address → logged
+ * 'skipped' exactly as sendStaffEmail always did. If the log will not take even
+ * the claim (a fault other than the unique index), the email still goes via
+ * sendStaffEmail, which logs it afterwards — as before this existed.
+ */
+async function sendPayslipOnce(
+  admin: SupabaseClient,
+  args: { userId: string; ref: string; to: string | null; subject: string; html: string; text: string },
+): Promise<{ status: PayslipEmailStatus; detail: string; taken: boolean }> {
+  const to = (args.to ?? '').trim();
+  if (!to) {
+    const outcome = await sendStaffEmail(admin, { ...args, kind: 'payslip', to: null });
+    return { status: outcome.status, detail: outcome.detail, taken: false };
+  }
+
+  const { data: claimRow, error: claimError } = await admin
+    .from('staff_emails')
+    .insert({
+      user_id: args.userId,
+      kind: 'payslip',
+      ref: args.ref,
+      to_email: to,
+      status: 'sent',
+      provider_ref: '',
+      error: PAYSLIP_CLAIM_NOTE,
+    })
+    .select('id')
+    .maybeSingle();
+  if (claimError?.code === '23505') return { status: 'skipped', detail: 'already sent', taken: true };
+  if (claimError && isMissingRelation(claimError)) return { status: 'skipped', detail: MIGRATION_NOT_APPLIED, taken: false };
+  if (claimError || !claimRow) {
+    console.error('staff_emails payslip claim failed', args.userId, args.ref, claimError);
+    const outcome = await sendStaffEmail(admin, { ...args, kind: 'payslip' });
+    return { status: outcome.status, detail: outcome.detail, taken: false };
+  }
+
+  const res = await emailAdapter.send({
+    to,
+    channel: 'email',
+    body: args.text,
+    subject: args.subject,
+    html: args.html,
+    from: payslipFrom(),
+  });
+  const detail = res.ok ? '' : res.error || 'send failed';
+  const patch = res.ok
+    ? { error: '', provider_ref: res.providerRef }
+    : { status: 'failed' as const, error: detail, provider_ref: res.providerRef };
+  const { error: settleError } = await admin
+    .from('staff_emails')
+    .update(patch)
+    .eq('id', (claimRow as { id: string }).id);
+  if (settleError) console.error('staff_emails payslip outcome update failed', args.userId, args.ref, settleError);
+  return { status: res.ok ? 'sent' : 'failed', detail, taken: false };
+}
+
+/**
  * Email every staffer on a FINALIZED run their payslip. Idempotent: a
  * staffer who already has a 'sent' payslip row for this run is skipped.
  * Never throws — a bad lookup, a missing migration, or a send failure all
@@ -403,15 +483,8 @@ export async function sendPayslipsForRun(
       const to = emailByUser.get(line.user_id) ?? null;
       const name = names.get(line.user_id) ?? 'Staff';
       const { subject, html, text } = renderPayslipEmail(line, run, name);
-      const outcome = await sendStaffEmail(admin, {
-        userId: line.user_id,
-        kind: 'payslip',
-        ref: baseRef(runId),
-        to,
-        subject,
-        html,
-        text,
-      });
+      // The read above is only a fast path; the claim is what makes the send once-only.
+      const outcome = await sendPayslipOnce(admin, { userId: line.user_id, ref: baseRef(runId), to, subject, html, text });
       outcomes.push({ userId: line.user_id, toEmail: to ?? '', status: outcome.status, detail: outcome.detail });
     }
     return outcomes;
@@ -470,13 +543,19 @@ export async function resendPayslip(
     if (isMissingRelation(sentErr)) {
       return { userId, toEmail: '', status: 'skipped', detail: MIGRATION_NOT_APPLIED };
     }
-    const ref = sentRow ? forcedResendRef(runId) : baseRef(runId);
-
     const names = await getStaffDisplayNames(admin, [userId]);
     const name = names.get(userId) ?? 'Staff';
     const { subject, html, text } = renderPayslipEmail(line, run, name);
 
-    const outcome = await sendStaffEmail(admin, { userId, kind: 'payslip', ref, to, subject, html, text });
+    // A resend always sends. Under the run's base ref while that slot is free; if it is
+    // taken — already sent, or claimed by a concurrent send since the read above — under a
+    // distinct resend ref instead, which never collides with the once-only index.
+    let outcome = sentRow
+      ? null
+      : await sendPayslipOnce(admin, { userId, ref: baseRef(runId), to, subject, html, text });
+    if (!outcome || outcome.taken) {
+      outcome = await sendPayslipOnce(admin, { userId, ref: forcedResendRef(runId), to, subject, html, text });
+    }
     return { userId, toEmail: to ?? '', status: outcome.status, detail: outcome.detail };
   } catch (err) {
     console.error('resendPayslip failed', runId, userId, err);

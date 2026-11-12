@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // distinct ref instead of colliding with a prior 'sent' row.
 
 interface FakeEmailRow {
+  id: string;
   user_id: string;
   kind: string;
   ref: string;
@@ -55,14 +56,25 @@ function missingRelationError(table: string) {
 }
 
 interface QueryCtx {
-  op: 'select' | 'insert';
+  op: 'select' | 'insert' | 'update';
   filters: Record<string, unknown>;
   inCol?: string;
   inVals?: unknown[];
+  /** What the insert answered: the new row's id, or the unique index's 23505. */
+  insertResult?: { data: unknown; error: unknown };
+  patch?: Record<string, unknown>;
 }
 
 function resolveQuery(table: string, ctx: QueryCtx): { data: unknown; error: unknown } {
-  if (ctx.op === 'insert') return { data: null, error: null };
+  if (ctx.op === 'insert') return ctx.insertResult ?? { data: null, error: null };
+  if (ctx.op === 'update') {
+    // The claim holder's verdict: an update of the claim row by id.
+    if (table === 'staff_emails') {
+      const row = state.emails.find((e) => e.id === ctx.filters.id);
+      if (row) Object.assign(row, ctx.patch);
+    }
+    return { data: null, error: null };
+  }
 
   if (table === 'payroll_runs') {
     const id = ctx.filters.id as string;
@@ -129,10 +141,28 @@ function makeAdmin() {
         },
         or: () => chain,
         order: () => chain,
+        update: (patch: Record<string, unknown>) => {
+          ctx.op = 'update';
+          ctx.patch = patch;
+          return chain;
+        },
         insert: (payload: Record<string, unknown>) => {
           ctx.op = 'insert';
           if (table === 'staff_emails') {
+            // staff_emails_payslip_once: one 'sent' payslip row per (user_id, ref). The payslip
+            // is CLAIMED as that row before it is sent, so this index is what stops a second send.
+            const clash =
+              payload.kind === 'payslip' &&
+              payload.status === 'sent' &&
+              state.emails.some((e) => e.kind === 'payslip' && e.status === 'sent' && e.user_id === payload.user_id && e.ref === payload.ref);
+            if (clash) {
+              ctx.insertResult = { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+              return chain;
+            }
+            const id = `email-${state.emails.length + 1}`;
+            ctx.insertResult = { data: { id }, error: null };
             state.emails.push({
+              id,
               user_id: payload.user_id as string,
               kind: payload.kind as string,
               ref: (payload.ref as string) ?? '',
@@ -324,5 +354,53 @@ describe('resendPayslip', () => {
     // Same (user_id, ref) as the first row would violate staff_emails_payslip_once.
     expect(state.emails[1].ref).not.toBe('run-1');
     expect(state.emails[1].ref).toMatch(/^run-1:resend:\d+$/);
+  });
+});
+
+// The 'sent' row is a CLAIM written before the email goes (sendPayslipOnce): reading
+// "already sent?" and inserting the log afterwards used to let a finalize and a
+// "send all" racing each other both email the same person.
+describe('payslip send-once claim', () => {
+  const setup = () => {
+    state.runs['run-1'] = finalizedRun('run-1');
+    state.lines['run-1'] = [payslipLine('run-1', 'u1')];
+    state.accounts = { u1: { personal_email: 'ravi@example.com' } };
+    state.profiles = [{ id: 'u1', name: 'Ravi' }];
+  };
+
+  it('claims the run ref before sending, then settles the row', async () => {
+    setup();
+    const { emailAdapter } = await import('@/lib/notifications/adapters');
+    const { PAYSLIP_CLAIM_NOTE } = await import('@/lib/payroll/payslipEmail');
+    let atSend: unknown = null;
+    vi.mocked(emailAdapter.send).mockImplementationOnce(async () => {
+      atSend = state.emails.map((e) => ({ status: e.status, error: e.error }));
+      return { ok: true, providerRef: 'prov-x', error: '' };
+    });
+    await sendPayslipsForRun(makeAdmin(), 'run-1');
+    expect(atSend).toEqual([{ status: 'sent', error: PAYSLIP_CLAIM_NOTE }]);
+    expect(state.emails).toHaveLength(1);
+    expect(state.emails[0]).toMatchObject({ status: 'sent', error: '', ref: 'run-1' });
+  });
+
+  it('two overlapping runs email the person once', async () => {
+    setup();
+    const { emailAdapter } = await import('@/lib/notifications/adapters');
+    vi.mocked(emailAdapter.send).mockClear();
+    const [a, b] = await Promise.all([sendPayslipsForRun(makeAdmin(), 'run-1'), sendPayslipsForRun(makeAdmin(), 'run-1')]);
+    expect(vi.mocked(emailAdapter.send)).toHaveBeenCalledTimes(1);
+    expect([a[0].status, b[0].status].sort()).toEqual(['sent', 'skipped']);
+    expect(state.emails.filter((e) => e.status === 'sent')).toHaveLength(1);
+  });
+
+  it('a refused email steps its claim down to failed, so the next run sends it', async () => {
+    setup();
+    state.sendFailures['ravi@example.com'] = 'mailbox full';
+    const first = await sendPayslipsForRun(makeAdmin(), 'run-1');
+    expect(first[0]).toMatchObject({ status: 'failed', detail: 'mailbox full' });
+    expect(state.emails[0]).toMatchObject({ status: 'failed', error: 'mailbox full' });
+    delete state.sendFailures['ravi@example.com'];
+    const second = await sendPayslipsForRun(makeAdmin(), 'run-1');
+    expect(second[0].status).toBe('sent');
   });
 });

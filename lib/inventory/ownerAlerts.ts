@@ -372,17 +372,53 @@ async function buildAlert(admin: SupabaseClient, event: OwnerAlertEvent, request
   };
 }
 
-async function alreadySent(admin: SupabaseClient, event: OwnerAlertEvent, requestId: string, channel: AlertChannel, to: string) {
-  const { data } = await admin
+/**
+ * What a claim row says while its send is in flight — and keeps saying if the
+ * process dies before the outcome is written, so the Alerts tab shows an honest
+ * "we don't know" instead of a clean 'sent'.
+ */
+export const ALERT_CLAIM_DETAIL = 'claimed — outcome not recorded';
+
+type AlertClaim = { kind: 'claimed'; id: string } | { kind: 'taken' } | { kind: 'unlogged' };
+
+/**
+ * Takes this alert's one 'sent' slot for the address BEFORE sending. The table
+ * only knows sent/failed/skipped and its unique index (warehouse_alerts_sent_once)
+ * only covers status='sent', so the claim IS a 'sent' row — written first, and
+ * stepped down to 'failed' if the provider refuses. Check-then-send-then-insert
+ * (what this replaced) let two overlapping calls both pass the check and both
+ * send; the index only rejected the second LOG row, after the second message.
+ */
+async function claimAlert(
+  admin: SupabaseClient,
+  row: { event: OwnerAlertEvent; requestId: string; channel: AlertChannel; to: string },
+): Promise<AlertClaim> {
+  const { data, error } = await admin
     .from('warehouse_alerts')
+    .insert({
+      event: row.event,
+      request_id: row.requestId,
+      channel: row.channel,
+      to_address: row.to,
+      status: 'sent',
+      detail: ALERT_CLAIM_DETAIL,
+      provider_ref: '',
+    })
     .select('id')
-    .eq('event', event)
-    .eq('request_id', requestId)
-    .eq('channel', channel)
-    .eq('to_address', to)
-    .eq('status', 'sent')
-    .limit(1);
-  return Array.isArray(data) && data.length > 0;
+    .maybeSingle();
+  if (!error && data) return { kind: 'claimed', id: (data as { id: string }).id };
+  if (error?.code === '23505') return { kind: 'taken' };
+  console.error('warehouse_alerts claim failed', row.event, error);
+  return { kind: 'unlogged' };
+}
+
+/** The claim holder's verdict: keep 'sent' (and clear the claim note), or step down to 'failed'. */
+async function settleAlert(admin: SupabaseClient, id: string, res: { ok: boolean; error: string; providerRef: string }) {
+  const patch = res.ok
+    ? { detail: '', provider_ref: res.providerRef }
+    : { status: 'failed' as const, detail: (res.error || 'send failed').slice(0, 500), provider_ref: res.providerRef };
+  const { error } = await admin.from('warehouse_alerts').update(patch).eq('id', id);
+  if (error) console.error('warehouse_alerts outcome update failed', id, error);
 }
 
 async function logAlert(
@@ -402,6 +438,26 @@ async function logAlert(
 }
 
 /**
+ * One alert to one address: claim, send, settle. 'already_sent' when another
+ * call holds (or already used) the slot. If the log will not take even the
+ * claim, the alert still goes and is logged afterwards, as before — the log
+ * must not be able to stop the owner hearing about a stock request.
+ */
+async function sendOnce(
+  admin: SupabaseClient,
+  key: { event: OwnerAlertEvent; requestId: string; channel: AlertChannel; to: string },
+  send: () => Promise<{ ok: boolean; error: string; providerRef: string }>,
+): Promise<AlertOutcome> {
+  const claim = await claimAlert(admin, key);
+  if (claim.kind === 'taken') return { channel: key.channel, to: key.to, status: 'already_sent', detail: '' };
+  const res = await send();
+  const status: AlertStatus = res.ok ? 'sent' : 'failed';
+  if (claim.kind === 'claimed') await settleAlert(admin, claim.id, res);
+  else await logAlert(admin, { ...key, status, detail: res.error, providerRef: res.providerRef });
+  return { channel: key.channel, to: key.to, status, detail: res.error };
+}
+
+/**
  * Tell the owner. Never throws; returns what happened per address. A no-op
  * with the warehouse switched off, or with alerts switched off on the Alerts tab.
  */
@@ -416,21 +472,18 @@ export async function sendOwnerAlert(admin: SupabaseClient, event: OwnerAlertEve
     const outcomes: AlertOutcome[] = [];
 
     for (const to of emails) {
-      if (await alreadySent(admin, event, requestId, 'email', to)) {
-        outcomes.push({ channel: 'email', to, status: 'already_sent', detail: '' });
-        continue;
-      }
-      const res = await emailAdapter.send({
-        to,
-        channel: 'email',
-        subject: content.subject,
-        html: content.html,
-        body: content.text,
-        from: process.env.RESEND_FROM_REPORTS || undefined,
-      });
-      const status: AlertStatus = res.ok ? 'sent' : 'failed';
-      await logAlert(admin, { event, requestId, channel: 'email', to, status, detail: res.error, providerRef: res.providerRef });
-      outcomes.push({ channel: 'email', to, status, detail: res.error });
+      outcomes.push(
+        await sendOnce(admin, { event, requestId, channel: 'email', to }, () =>
+          emailAdapter.send({
+            to,
+            channel: 'email',
+            subject: content.subject,
+            html: content.html,
+            body: content.text,
+            from: process.env.RESEND_FROM_REPORTS || undefined,
+          }),
+        ),
+      );
     }
 
     const template = process.env[STOCK_ALERT_TEMPLATE_ENV];
@@ -441,21 +494,18 @@ export async function sendOwnerAlert(admin: SupabaseClient, event: OwnerAlertEve
         outcomes.push({ channel: 'whatsapp', to, status: 'skipped', detail });
         continue;
       }
-      if (await alreadySent(admin, event, requestId, 'whatsapp', to)) {
-        outcomes.push({ channel: 'whatsapp', to, status: 'already_sent', detail: '' });
-        continue;
-      }
-      const res = await whatsappAdapter.send({
-        to,
-        channel: 'whatsapp',
-        body: content.text,
-        templateName: template,
-        templateLang: process.env.WHATSAPP_TPL_STOCK_ALERT_LANG || undefined,
-        templateVars: content.whatsappVars,
-      });
-      const status: AlertStatus = res.ok ? 'sent' : 'failed';
-      await logAlert(admin, { event, requestId, channel: 'whatsapp', to, status, detail: res.error, providerRef: res.providerRef });
-      outcomes.push({ channel: 'whatsapp', to, status, detail: res.error });
+      outcomes.push(
+        await sendOnce(admin, { event, requestId, channel: 'whatsapp', to }, () =>
+          whatsappAdapter.send({
+            to,
+            channel: 'whatsapp',
+            body: content.text,
+            templateName: template,
+            templateLang: process.env.WHATSAPP_TPL_STOCK_ALERT_LANG || undefined,
+            templateVars: content.whatsappVars,
+          }),
+        ),
+      );
     }
 
     if (emails.length === 0 && phones.length === 0) {

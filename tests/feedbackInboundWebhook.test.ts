@@ -127,15 +127,25 @@ vi.mock('@/lib/supabase-server', () => ({
           }
           return Promise.resolve({ error: null });
         },
-        update: (patch: Record<string, unknown>) => ({
-          eq: (col: string, val: unknown) => {
-            if (table === 'feedback_requests') {
-              const row = db.requests.find((r) => r[col as keyof FeedbackRequestRow] === val);
-              if (row) Object.assign(row, patch);
-            }
-            return Promise.resolve({ error: null });
-          },
-        }),
+        // Chainable filters (.eq / .in) so a guarded write — the thread reopen is
+        // `.eq(id).in(thread_status, [resolved])` — only lands on a row that matches.
+        update: (patch: Record<string, unknown>) => {
+          const conds: { col: string; vals: unknown[] }[] = [];
+          const u: Record<string, unknown> = {
+            eq: (col: string, val: unknown) => (conds.push({ col, vals: [val] }), u),
+            in: (col: string, vals: unknown[]) => (conds.push({ col, vals }), u),
+            then: (resolve: (v: unknown) => unknown) => {
+              if (table === 'feedback_requests') {
+                const row = db.requests.find((r) =>
+                  conds.every((c) => c.vals.includes((r as unknown as Record<string, unknown>)[c.col])),
+                );
+                if (row) Object.assign(row, patch);
+              }
+              return resolve({ error: null });
+            },
+          };
+          return u;
+        },
         upsert: (row: Record<string, unknown>) => {
           if (table === 'whatsapp_opt_outs') {
             const existing = db.optOuts.find((o) => o.phone === row.phone);

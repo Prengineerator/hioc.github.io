@@ -50,10 +50,37 @@ function makeAdmin() {
         gt: () => chain,
         limit: () => chain,
         order: () => chain,
+        // The alert is CLAIMED before it is sent: an insert of a 'sent' row that
+        // warehouse_alerts_sent_once (event, request_id, channel, to_address where
+        // status = 'sent') would reject answers 23505, and the claim holder's
+        // verdict is an update by id.
         insert: (row: Record<string, unknown>) => {
-          state.inserted.push({ table, ...row });
-          return Promise.resolve({ error: null });
+          const sentBefore = [...state.sentRows, ...state.inserted.filter((r) => r.table === 'warehouse_alerts' && r.status === 'sent')];
+          const clash =
+            table === 'warehouse_alerts' &&
+            row.status === 'sent' &&
+            sentBefore.some((r) => r.event === row.event && r.request_id === row.request_id && r.channel === row.channel && r.to_address === row.to_address);
+          let result: { data: unknown; error: unknown };
+          if (clash) result = { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+          else {
+            const stored = { table, id: `${table}-${state.inserted.length + 1}`, ...row };
+            state.inserted.push(stored);
+            result = { data: { id: stored.id }, error: null };
+          }
+          const ins: Record<string, unknown> = {
+            select: () => ins,
+            maybeSingle: () => Promise.resolve(result),
+            then: (resolve: (v: unknown) => void) => resolve(result),
+          };
+          return ins;
         },
+        update: (patch: Record<string, unknown>) => ({
+          eq: (c: string, v: unknown) => {
+            const row = state.inserted.find((r) => r.table === table && r[c] === v);
+            if (row) Object.assign(row, patch);
+            return Promise.resolve({ error: null });
+          },
+        }),
         maybeSingle: () => {
           if (table === 'warehouse_alert_settings') {
             return Promise.resolve(state.settingsError ? { data: null, error: { code: '42P01', message: 'missing' } } : { data: state.settings, error: null });
@@ -265,5 +292,44 @@ describe('sendOwnerAlert', () => {
   it('never throws', async () => {
     emailSend.mockRejectedValueOnce(new Error('boom'));
     await expect(sendOwnerAlert(makeAdmin() as never, 'request_placed', REQ)).resolves.toEqual([]);
+  });
+});
+
+// The send-once log is a CLAIM taken before the alert goes (lib/inventory/ownerAlerts.ts
+// sendOnce): check → send → insert used to let two overlapping calls both send, the
+// unique index only stopping the second LOG row.
+describe('sendOwnerAlert — claim before send', () => {
+  const alertRows = () => state.inserted.filter((r) => r.table === 'warehouse_alerts');
+
+  it('the address\'s "sent" slot is claimed before the provider is called', async () => {
+    const seenAtSend: unknown[] = [];
+    emailSend.mockImplementation((input: Record<string, unknown>) => {
+      seenAtSend.push(alertRows().find((r) => r.to_address === input.to)?.detail);
+      return Promise.resolve({ ok: true, providerRef: 're_1', error: '' });
+    });
+    await sendOwnerAlert(makeAdmin() as never, 'request_placed', REQ);
+    expect(seenAtSend).toEqual([alerts.ALERT_CLAIM_DETAIL, alerts.ALERT_CLAIM_DETAIL]);
+    // …and settled afterwards: the claim note is gone from a delivered alert.
+    expect(alertRows().filter((r) => r.channel === 'email').every((r) => r.status === 'sent' && r.detail === '')).toBe(true);
+  });
+
+  it('two overlapping calls email each address once', async () => {
+    const [a, b] = await Promise.all([
+      sendOwnerAlert(makeAdmin() as never, 'request_placed', REQ),
+      sendOwnerAlert(makeAdmin() as never, 'request_placed', REQ),
+    ]);
+    expect(emailSend.mock.calls.map((c) => c[0].to).sort()).toEqual(['owner@hioc.in', 'partner@example.com']);
+    const emailOutcomes = [...a, ...b].filter((o) => o.channel === 'email').map((o) => o.status).sort();
+    expect(emailOutcomes).toEqual(['already_sent', 'already_sent', 'sent', 'sent']);
+  });
+
+  it('a refused send steps its claim down to failed, so a retry can claim the slot again', async () => {
+    emailSend.mockResolvedValueOnce({ ok: false, providerRef: '', error: 'resend credentials missing' });
+    await sendOwnerAlert(makeAdmin() as never, 'request_placed', REQ);
+    emailSend.mockClear();
+    await sendOwnerAlert(makeAdmin() as never, 'request_placed', REQ);
+    expect(emailSend.mock.calls.map((c) => c[0].to)).toEqual(['owner@hioc.in']);
+    const owner = alertRows().filter((r) => r.to_address === 'owner@hioc.in' && r.channel === 'email');
+    expect(owner.map((r) => r.status)).toEqual(['failed', 'sent']);
   });
 });

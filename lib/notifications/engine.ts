@@ -27,22 +27,84 @@ import {
   whatsappBillHealth,
   whatsappReminderHealth,
 } from '@/lib/notifications/health';
-import { hasBeenSent } from '@/lib/notifications/status';
+import {
+  canWrite,
+  failedResendMayReplace,
+  hasBeenSent,
+  sendDecision,
+  skipMayReplace,
+  type LogRowState,
+} from '@/lib/notifications/status';
 import { FEEDBACK_BUTTONS, formatFeedbackButtonPayload } from '@/lib/feedback/payload';
 import { flags } from '@/lib/flags';
-import type { NotificationChannel, NotificationEvent, Order } from '@/lib/types';
+import type { NotificationChannel, NotificationEvent, NotificationStatus, Order } from '@/lib/types';
 
 const MAX_ATTEMPTS = 2; // initial try + one retry (NFR / F4 "retried >=1")
 
 type Admin = ReturnType<typeof createAdminSupabaseClient>;
+
+/** The delivery-log row, as every writer here reads it before deciding (lib/notifications/status.ts). */
+interface LogRow extends LogRowState {
+  id?: string;
+  status: NotificationStatus;
+  attempts: number | null;
+  provider_ref: string | null;
+  sent_at: string | null;
+}
+
+const LOG_COLUMNS = 'id, status, attempts, provider_ref, sent_at';
+
+interface LogKey {
+  orderId: string;
+  event: NotificationEvent;
+  channel: NotificationChannel;
+}
+
+const isUniqueViolation = (error: { code?: string } | null | undefined) => error?.code === '23505';
+
+async function readLog(admin: Admin, key: LogKey): Promise<LogRow | null> {
+  const { data } = await admin
+    .from('notifications')
+    .select(LOG_COLUMNS)
+    .eq('order_id', key.orderId)
+    .eq('event', key.event)
+    .eq('channel', key.channel)
+    .maybeSingle();
+  return (data as LogRow | null) ?? null;
+}
+
+/**
+ * An UPDATE of this key's row that only lands while the row is still exactly
+ * what `seen` says it was — the compare-and-set every writer here goes through.
+ * A 'queued' row is matched on its claim time too: re-claiming a stale claim
+ * leaves the status 'queued', so the status alone could not tell two
+ * re-claimers apart.
+ */
+function updateIfUnchanged(admin: Admin, key: LogKey, seen: LogRow, patch: Record<string, unknown>) {
+  let q = admin
+    .from('notifications')
+    .update(patch)
+    .eq('order_id', key.orderId)
+    .eq('event', key.event)
+    .eq('channel', key.channel)
+    .eq('status', seen.status);
+  if (seen.status === 'queued') q = seen.sent_at ? q.eq('sent_at', seen.sent_at) : q.is('sent_at', null);
+  return q.select('id');
+}
 
 /**
  * BILL-3: records that a channel was deliberately NOT attempted, and why.
  *
  * A skip used to write nothing at all, which made "why didn't this customer get
  * their bill?" unanswerable — the absence of a row was ambiguous between "never
- * tried" and "tried and vanished". Never overwrites a successful send, and never
- * throws: observability must not be able to break delivery.
+ * tried" and "tried and vanished". Never overwrites a successful send — or one
+ * still in flight — and never throws: observability must not be able to break
+ * delivery.
+ *
+ * The write is a compare-and-set against the row it read (an insert when there
+ * was none), so a send that lands between the read and the write wins: it used
+ * to be an unconditional upsert, which stamped 'skipped' over the 'sent' that
+ * had just been recorded.
  */
 async function logSkip(
   admin: Admin,
@@ -51,101 +113,106 @@ async function logSkip(
   channel: NotificationChannel,
   reason: string,
 ): Promise<void> {
+  const key: LogKey = { orderId: order.id, event, channel };
   try {
-    const { data: existing } = await admin
-      .from('notifications')
-      .select('status')
-      .eq('order_id', order.id)
-      .eq('event', event)
-      .eq('channel', channel)
-      .maybeSingle();
+    const fields = {
+      status: 'skipped' as const,
+      provider_ref: '',
+      error: '',
+      skip_reason: reason,
+      attempts: 0,
+      sent_at: null,
+    };
+    // Two passes at most: the second only runs when another writer changed the
+    // row between our read and our write, and is decided against what it wrote.
+    for (let pass = 0; pass < 2; pass++) {
+      const existing = await readLog(admin, key);
 
-    // A bill already delivered (e.g. sent at placement, skipped at settle
-    // because the channel went dormant since) must keep what it achieved.
-    // hasBeenSent, not `=== 'sent'`: WA-4 added 'delivered' and 'read' above
-    // 'sent', and a row the customer demonstrably OPENED is the last thing that
-    // may be overwritten with "never attempted".
-    if (hasBeenSent(existing?.status)) return;
+      // A bill already delivered (e.g. sent at placement, skipped at settle
+      // because the channel went dormant since) must keep what it achieved —
+      // and a send in flight must be left to finish. hasBeenSent, not
+      // `=== 'sent'`: a row the customer demonstrably OPENED is the last thing
+      // that may be overwritten with "never attempted" (status.ts).
+      if (!skipMayReplace(existing, Date.now())) return;
 
-    await admin.from('notifications').upsert(
-      {
-        order_id: order.id,
-        channel,
-        event,
-        status: 'skipped' as const,
-        provider_ref: '',
-        error: '',
-        skip_reason: reason,
-        attempts: 0,
-        sent_at: null,
-      },
-      { onConflict: 'order_id,event,channel' },
-    );
+      if (!existing) {
+        const { error } = await admin
+          .from('notifications')
+          .insert({ order_id: order.id, channel, event, ...fields });
+        if (!error) return;
+        if (isUniqueViolation(error)) continue; // someone wrote the row meanwhile
+        console.error('logSkip: insert failed', error);
+        return;
+      }
+
+      const { data, error } = await updateIfUnchanged(admin, key, existing, fields);
+      if (error) {
+        console.error('logSkip: update failed', error);
+        return;
+      }
+      if ((data ?? []).length > 0) return;
+    }
   } catch (err) {
     console.error('logSkip failed', err);
   }
 }
 
+type Claim =
+  | { kind: 'claimed'; attempts: number; claimedAt: string }
+  /** Another caller holds or changed the row; re-read to say why. */
+  | { kind: 'lost' }
+  /** The log could not be written at all (a DB fault, or an order id the table rejects). */
+  | { kind: 'unlogged' };
+
 /**
- * Sends one message via one adapter and records the result, idempotent per
- * (order_id, event, channel): a prior successful send no-ops, and a retry after
- * an earlier failure updates the row in place. Never throws.
- *
- * `force` (staff "Resend bill", RCT-1) bypasses the already-sent short-circuit
- * and resets the attempt budget so a logged prior send re-delivers; the outcome
- * still upserts on the idempotency key, so the log stays one row per channel.
+ * Takes the (order, event, channel) row as 'queued' BEFORE anything is sent —
+ * the claim the double-send window needed. No row: insert one, and a unique
+ * violation means another caller got there first. A row: compare-and-set from
+ * exactly what was read.
  */
-async function deliverAndLog(
-  admin: Admin,
-  order: Order,
-  event: NotificationEvent,
+async function claimLogRow(admin: Admin, key: LogKey, existing: LogRow | null, nowIso: string): Promise<Claim> {
+  // provider_ref is cleared because the claim is for a NEW message: a late
+  // webhook callback for the previous attempt's message id must not land on
+  // (and fail) the attempt in flight. skip_reason goes too — a queued row was
+  // not skipped, and a stale reason would later describe a failure wrongly.
+  const claimFields = { status: 'queued' as const, provider_ref: '', skip_reason: '', sent_at: nowIso };
+  if (!existing) {
+    const { error } = await admin.from('notifications').insert({
+      order_id: key.orderId,
+      channel: key.channel,
+      event: key.event,
+      error: '',
+      attempts: 0,
+      ...claimFields,
+    });
+    if (!error) return { kind: 'claimed', attempts: 0, claimedAt: nowIso };
+    if (isUniqueViolation(error)) return { kind: 'lost' };
+    console.error('deliverAndLog: could not claim the log row', error);
+    return { kind: 'unlogged' };
+  }
+
+  const { data, error } = await updateIfUnchanged(admin, key, existing, claimFields);
+  if (error) {
+    console.error('deliverAndLog: could not claim the log row', error);
+    return { kind: 'unlogged' };
+  }
+  if ((data ?? []).length === 0) return { kind: 'lost' };
+  return { kind: 'claimed', attempts: existing.attempts ?? 0, claimedAt: nowIso };
+}
+
+type DeliveryResult = { sent: boolean; skipped?: string; error?: string; providerRef?: string };
+
+/** Initial try + retries, resuming from `startAt` spent attempts. Never throws. */
+async function attemptSend(
   adapter: NotificationAdapter,
   input: SendInput,
-  force = false,
-): Promise<{ sent: boolean; skipped?: string; error?: string; providerRef?: string }> {
-  const channel = adapter.channel;
-
-  // Idempotency guard: skip a channel that already sent for this (order,event).
-  // The unique index is the hard backstop; this avoids a wasted send. A forced
-  // resend deliberately skips this so it re-delivers.
-  const { data: existing } = await admin
-    .from('notifications')
-    .select('id, status, attempts, provider_ref')
-    .eq('order_id', order.id)
-    .eq('event', event)
-    .eq('channel', channel)
-    .maybeSingle();
-
-  // hasBeenSent, not `=== 'sent'`: a row Meta's webhook promoted to 'delivered'
-  // or 'read' (WA-4) is MORE proof of a completed send, not less. Testing the
-  // literal would re-fire a billable template at a customer who already read
-  // their bill, and overwrite the receipt that proved it.
-  if (!force && hasBeenSent(existing?.status)) {
-    return { sent: true, skipped: 'already_sent', providerRef: existing?.provider_ref ?? '' };
-  }
-
-  // The attempt budget was already spent by an earlier call for this same
-  // (order, event, channel) — the bill fires at settle AND again on the
-  // 'completed' transition, so this is the ordinary path, not an edge case.
-  //
-  // Falling through here would loop ZERO times (i starts at MAX_ATTEMPTS), leave
-  // lastError as '', and then upsert that empty string over the previous
-  // attempt's message — destroying the only record of WHY the send failed. That
-  // is precisely how a genuine Meta rejection became a blank `failed` row in
-  // production, and it is the same class of bug as the stub reporting success:
-  // the system erasing the evidence of its own failure.
-  if (!force && existing?.status === 'failed' && (existing?.attempts ?? 0) >= MAX_ATTEMPTS) {
-    return { sent: false, skipped: 'attempts_exhausted' };
-  }
-
+  startAt: number,
+): Promise<{ ok: boolean; providerRef: string; lastError: string; attempts: number }> {
   let lastError = '';
   let providerRef = '';
   let ok = false;
-  // A forced resend starts a fresh attempt budget so a previously-maxed row can
-  // still send again; otherwise resume from the prior attempt count.
-  let attempts = force ? 0 : (existing?.attempts ?? 0);
-
-  for (let i = attempts; i < MAX_ATTEMPTS && !ok; i++) {
+  let attempts = startAt;
+  for (let i = startAt; i < MAX_ATTEMPTS && !ok; i++) {
     attempts = i + 1;
     try {
       const res = await adapter.send(input);
@@ -156,27 +223,16 @@ async function deliverAndLog(
       lastError = err instanceof Error ? err.message : 'send threw';
     }
   }
+  return { ok, providerRef, lastError, attempts };
+}
 
-  // The provider's own words, to the console as well as the row. Until now the
-  // rejection existed in exactly ONE place — `notifications.error` — so the
-  // moment anything overwrote that column the reason was gone for good, which
-  // is precisely what happened to a real bill failure here. A log line costs
-  // nothing and means the diagnosis survives losing the row.
-  if (!ok) {
-    console.error(
-      `[notify] ${event}/${channel} FAILED for order ${order.id} after ${attempts} attempt(s): ${
-        lastError || '(provider returned no message)'
-      }`,
-    );
-  }
-
-  const row = {
-    order_id: order.id,
-    channel,
-    event,
+/** The verdict columns of a send that just happened (a fresh message id, so its receipts start empty). */
+function verdictRow(ok: boolean, providerRef: string, lastError: string, attempts: number) {
+  return {
     status: ok ? ('sent' as const) : ('failed' as const),
     provider_ref: providerRef,
     error: ok ? '' : lastError,
+    skip_reason: '',
     attempts,
     sent_at: ok ? new Date().toISOString() : null,
     // WA-4: these are receipts for a SPECIFIC message id. This row is about to
@@ -188,23 +244,167 @@ async function deliverAndLog(
     delivered_at: null,
     read_at: null,
   };
+}
 
-  // Upsert on the idempotency key so a retry after a 'failed' row updates it in
-  // place rather than violating the unique index.
-  const { error: upsertError } = await admin
-    .from('notifications')
-    .upsert(row, { onConflict: 'order_id,event,channel' });
+/**
+ * The provider's own words, to the console as well as the row. Until now the
+ * rejection existed in exactly ONE place — `notifications.error` — so the
+ * moment anything overwrote that column the reason was gone for good, which
+ * is precisely what happened to a real bill failure here. A log line costs
+ * nothing and means the diagnosis survives losing the row.
+ */
+function logFailure(event: NotificationEvent, channel: NotificationChannel, orderId: string, attempts: number, lastError: string) {
+  console.error(
+    `[notify] ${event}/${channel} FAILED for order ${orderId} after ${attempts} attempt(s): ${
+      lastError || '(provider returned no message)'
+    }`,
+  );
+}
 
-  if (upsertError) {
-    console.error('deliverAndLog: failed to log delivery', upsertError);
+/**
+ * Records a FORCED resend's outcome. A success replaces the row whatever it
+ * held — it is a new message, with its own id and (so far) no receipts. A
+ * failure only becomes 'failed' over a row that never recorded a send; over a
+ * sent/delivered/read row the status, provider_ref and receipts stay (that
+ * earlier message still went) and the failed attempt is recorded in `error`
+ * and `attempts` instead.
+ */
+async function recordForcedOutcome(
+  admin: Admin,
+  key: LogKey,
+  outcome: { ok: boolean; providerRef: string; lastError: string; attempts: number },
+): Promise<void> {
+  const row = verdictRow(outcome.ok, outcome.providerRef, outcome.lastError, outcome.attempts);
+  if (outcome.ok) {
+    const { error } = await admin
+      .from('notifications')
+      .upsert({ order_id: key.orderId, channel: key.channel, event: key.event, ...row }, { onConflict: 'order_id,event,channel' });
+    if (error) console.error('deliverAndLog: failed to log delivery', error);
+    return;
   }
 
-  // WA-3: the provider's own words travel back with the verdict, not only into
-  // `notifications.error`. A caller that cannot read that row (the owner's test
-  // send writes no row at all) would otherwise be left with the constant
-  // 'send_failed' — which renders an expired token and a paused template as the
-  // same sentence, and those have completely different remedies.
-  return { sent: ok, error: ok ? '' : lastError, providerRef: ok ? providerRef : '' };
+  for (let pass = 0; pass < 2; pass++) {
+    const current = await readLog(admin, key);
+    if (!current) {
+      const { error } = await admin
+        .from('notifications')
+        .insert({ order_id: key.orderId, channel: key.channel, event: key.event, ...row });
+      if (!error) return;
+      if (isUniqueViolation(error)) continue;
+      console.error('deliverAndLog: failed to log delivery', error);
+      return;
+    }
+    const patch = failedResendMayReplace(current, Date.now())
+      ? row
+      : { error: `Resend failed: ${outcome.lastError || '(provider returned no message)'}`, attempts: outcome.attempts };
+    const { data, error } = await updateIfUnchanged(admin, key, current, patch);
+    if (error) {
+      console.error('deliverAndLog: failed to log delivery', error);
+      return;
+    }
+    if ((data ?? []).length > 0) return;
+  }
+  console.error(`deliverAndLog: ${key.event}/${key.channel} for order ${key.orderId} kept changing; resend failure not logged`);
+}
+
+/**
+ * Sends one message via one adapter and records the result, idempotent per
+ * (order_id, event, channel). Never throws.
+ *
+ * An automatic send CLAIMS the row ('queued', lib/notifications/status.ts)
+ * before contacting the provider, so two concurrent calls for the same key —
+ * the bill at settle and again on 'completed' — cannot both send: the loser
+ * answers 'in_flight' (or 'already_sent' once the winner has finished). A prior
+ * successful send no-ops, and a retry after an earlier failure re-claims the
+ * row in place.
+ *
+ * `force` (staff "Resend bill", RCT-1; the pickup reminder; the owner's feedback
+ * resend) bypasses the already-sent short-circuit and the claim, and resets the
+ * attempt budget so a logged prior send re-delivers. Those callers are an
+ * explicit human action with their own rate limits; the outcome still lands on
+ * the idempotency key, so the log stays one row per channel.
+ */
+async function deliverAndLog(
+  admin: Admin,
+  order: Order,
+  event: NotificationEvent,
+  adapter: NotificationAdapter,
+  input: SendInput,
+  force = false,
+): Promise<DeliveryResult> {
+  const channel = adapter.channel;
+  const key: LogKey = { orderId: order.id, event, channel };
+
+  if (force) {
+    const outcome = await attemptSend(adapter, input, 0);
+    if (!outcome.ok) logFailure(event, channel, order.id, outcome.attempts, outcome.lastError);
+    await recordForcedOutcome(admin, key, outcome);
+    return resultOf(outcome);
+  }
+
+  const existing = await readLog(admin, key);
+
+  // hasBeenSent, not `=== 'sent'`: a row Meta's webhook promoted to 'delivered'
+  // or 'read' (WA-4) is MORE proof of a completed send, not less. Testing the
+  // literal would re-fire a billable template at a customer who already read
+  // their bill, and overwrite the receipt that proved it.
+  //
+  // 'attempts_exhausted': the budget was already spent by an earlier call for
+  // this same key. Falling through would loop ZERO times, leave lastError '',
+  // and write that empty string over the previous attempt's message — which is
+  // precisely how a genuine Meta rejection became a blank `failed` row in
+  // production.
+  const decision = sendDecision(existing, { nowMs: Date.now(), maxAttempts: MAX_ATTEMPTS });
+  if (decision.kind === 'skip') return standDown(decision.reason, existing);
+
+  const claim = await claimLogRow(admin, key, existing, new Date().toISOString());
+  if (claim.kind === 'lost') {
+    // Someone else took or finished the row between our read and our claim.
+    const now = await readLog(admin, key);
+    return standDown(hasBeenSent(now?.status) ? 'already_sent' : 'in_flight', now);
+  }
+
+  // 'unlogged': the log refused even the claim. Delivery still goes ahead — the
+  // log is observability and must not be able to stop a bill (the owner's test
+  // send has no real order row at all) — and the verdict is upserted as before.
+  const outcome = await attemptSend(adapter, input, claim.kind === 'claimed' ? claim.attempts : existing?.attempts ?? 0);
+  if (!outcome.ok) logFailure(event, channel, order.id, outcome.attempts, outcome.lastError);
+  const row = verdictRow(outcome.ok, outcome.providerRef, outcome.lastError, outcome.attempts);
+
+  if (claim.kind === 'claimed') {
+    // Only the claim holder writes the verdict: if a forced resend (or a stale
+    // take-over) replaced the claim meanwhile, ITS record stands.
+    const held: LogRow = { status: 'queued', attempts: claim.attempts, provider_ref: '', sent_at: claim.claimedAt };
+    if (!canWrite('finish', held, row.status, { nowMs: Date.now(), maxAttempts: MAX_ATTEMPTS }).ok) return resultOf(outcome);
+    const { data, error } = await updateIfUnchanged(admin, key, held, row);
+    if (error) console.error('deliverAndLog: failed to log delivery', error);
+    else if ((data ?? []).length === 0) {
+      console.warn(`deliverAndLog: ${event}/${channel} claim for order ${order.id} was taken over before its verdict landed`);
+    }
+  } else {
+    const { error } = await admin
+      .from('notifications')
+      .upsert({ order_id: order.id, channel, event, ...row }, { onConflict: 'order_id,event,channel' });
+    if (error) console.error('deliverAndLog: failed to log delivery', error);
+  }
+
+  return resultOf(outcome);
+}
+
+function standDown(reason: 'already_sent' | 'attempts_exhausted' | 'in_flight', row: LogRow | null): DeliveryResult {
+  if (reason === 'already_sent') return { sent: true, skipped: 'already_sent', providerRef: row?.provider_ref ?? '' };
+  return { sent: false, skipped: reason };
+}
+
+/**
+ * WA-3: the provider's own words travel back with the verdict, not only into
+ * `notifications.error`. A caller that cannot read that row (the owner's test
+ * send writes no row at all) would otherwise be left with the constant
+ * 'send_failed' — which renders an expired token and a paused template as the
+ * same sentence, and those have completely different remedies.
+ */
+function resultOf(outcome: { ok: boolean; providerRef: string; lastError: string }): DeliveryResult {
+  return { sent: outcome.ok, error: outcome.ok ? '' : outcome.lastError, providerRef: outcome.ok ? outcome.providerRef : '' };
 }
 
 /**
@@ -266,8 +466,9 @@ export async function sendOrderNotification(
  * the customer never receives, reported as sent, is worse than an honest error.
  * The caller owns the rate limit (POST /api/orders/[id]/remind).
  *
- * Never throws. The forced outcome upserts the order's one 'ready' row, like a
- * forced bill resend.
+ * Never throws. The forced outcome lands on the order's one 'ready' row, like a
+ * forced bill resend — and a reminder that fails never steps a sent/delivered/read
+ * 'ready' row back to 'failed' (lib/notifications/status.ts).
  */
 export async function sendReadyReminder(
   order: Order,
@@ -375,6 +576,16 @@ export async function sendFeedbackRequestNotification(
 }
 
 /**
+ * The machine reason for a channel that did not send. Everything is
+ * 'send_failed' as before, except a send another request is already making
+ * (the settle and 'completed' bills racing): that one is not a failure, and
+ * calling it one would tell the counter to resend a bill that is on its way.
+ */
+function billReasonFor(r: DeliveryResult): string {
+  return r.skipped === 'in_flight' ? 'in_flight' : 'send_failed';
+}
+
+/**
  * Per-channel outcome of a bill send. The booleans are what existing callers
  * read; `reasons` (BILL-3) carries WHY a channel didn't send — '' when it did —
  * so the resend action and the owner log can state the cause instead of
@@ -468,7 +679,7 @@ export async function sendBillNotification(
       );
       result.email = r.sent;
       if (!r.sent) {
-        result.reasons.email = 'send_failed';
+        result.reasons.email = billReasonFor(r);
         result.errors.email = r.error ?? '';
       }
     }
@@ -508,7 +719,7 @@ export async function sendBillNotification(
       );
       result.whatsapp = r.sent;
       if (!r.sent) {
-        result.reasons.whatsapp = 'send_failed';
+        result.reasons.whatsapp = billReasonFor(r);
         result.errors.whatsapp = r.error ?? '';
       }
     }

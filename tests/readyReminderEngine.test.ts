@@ -10,23 +10,13 @@ const state: {
   upserts: Record<string, unknown>[];
 } = { existing: null, upserts: [] };
 
-vi.mock('@/lib/supabase-server', () => ({
-  createAdminSupabaseClient: () => ({
-    from: () => {
-      const chain: Record<string, unknown> = {};
-      Object.assign(chain, {
-        select: () => chain,
-        eq: () => chain,
-        maybeSingle: () => Promise.resolve({ data: state.existing, error: null }),
-        upsert: (row: Record<string, unknown>) => {
-          state.upserts.push(row);
-          return Promise.resolve({ error: null });
-        },
-      });
-      return chain;
-    },
-  }),
-}));
+// The engine claims, compare-and-sets and inserts its log row now
+// (lib/notifications/status.ts), so the stand-in is the stateful notifications
+// fake — same `state.existing` / `state.upserts` contract as the stub it replaced.
+vi.mock('@/lib/supabase-server', async () => {
+  const { notificationsLogClient } = await import('./helpers/notificationsLog');
+  return { createAdminSupabaseClient: () => notificationsLogClient(state) };
+});
 vi.mock('@/lib/flags', () => ({ flags: { notifications: true } }));
 
 import { sendOrderNotification, sendReadyReminder } from '@/lib/notifications/engine';

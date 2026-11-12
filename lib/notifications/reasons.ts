@@ -8,6 +8,8 @@ const PLAIN: Record<string, string> = {
   no_email: 'No email address on this order',
   notifications_disabled: 'Notifications are turned off',
   send_failed: 'The provider rejected the message',
+  // A concurrent request holds the send (lib/notifications/status.ts claim) — not a failure.
+  in_flight: 'Already being sent',
 };
 
 /**

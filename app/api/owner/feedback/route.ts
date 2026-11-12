@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse } from '@/lib/api/http';
+import { whereNeedsAttention } from '@/lib/feedback/threadState';
 import type { FeedbackRequest } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +17,8 @@ export interface FeedbackThreadRow extends FeedbackRequest {
 
 // GET /api/owner/feedback?filter=attention|all|resolved — the inbox list.
 // Owner-only (getOwnerUser()). "Needs attention" = an unread inbound message
-// OR a low rating (<=3) on a thread that isn't already resolved; every view
+// OR a low rating (<=3) on a thread that isn't already resolved
+// (lib/feedback/threadState.ts — the dashboard count uses the same rule); every view
 // puts a rating <=2 first — that is the signal most likely to need a human
 // today, wherever it's found.
 export async function GET(request: Request) {
@@ -34,7 +36,7 @@ export async function GET(request: Request) {
   if (filter === 'resolved') {
     query = query.eq('thread_status', 'resolved');
   } else if (filter === 'attention') {
-    query = query.neq('thread_status', 'resolved').or('unread.eq.true,rating.lte.3');
+    query = whereNeedsAttention(query);
   }
   // 'all' — no extra filter.
 

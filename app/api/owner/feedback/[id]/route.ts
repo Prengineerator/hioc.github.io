@@ -4,13 +4,12 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { withinCustomerServiceWindow } from '@/lib/feedback/window';
+import { canTransitionThread, isThreadStatus } from '@/lib/feedback/threadState';
 import type { FeedbackMessage, FeedbackRequest, FeedbackThreadStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: { id: string } };
-
-const THREAD_STATUSES: FeedbackThreadStatus[] = ['open', 'in_progress', 'resolved'];
 
 // GET /api/owner/feedback/[id] — one thread: the request, the order it's
 // about, and the full message history (chat order, oldest first).
@@ -66,10 +65,12 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
   const patch: Record<string, unknown> = {};
+  let nextThreadStatus: FeedbackThreadStatus | null = null;
   if (body.thread_status !== undefined) {
-    if (!THREAD_STATUSES.includes(body.thread_status as FeedbackThreadStatus)) {
+    if (!isThreadStatus(body.thread_status)) {
       return errorResponse(400, 'thread_status must be one of open, in_progress, resolved');
     }
+    nextThreadStatus = body.thread_status;
     patch.thread_status = body.thread_status;
   }
   if (body.owner_notes !== undefined) {
@@ -92,15 +93,35 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   const admin = createAdminSupabaseClient();
-  const { data, error } = await admin
-    .from('feedback_requests')
-    .update(patch)
-    .eq('id', params.id)
-    .select('*')
-    .maybeSingle();
+
+  // A status change goes through the thread machine (lib/feedback/threadState.ts)
+  // and lands as a compare-and-set on the status it was decided against: a
+  // customer message that reopened the thread in between is not silently
+  // re-resolved by a decision made without seeing it.
+  let fromThreadStatus: FeedbackThreadStatus | null = null;
+  if (nextThreadStatus) {
+    const { data: current, error: readError } = await admin
+      .from('feedback_requests')
+      .select('thread_status')
+      .eq('id', params.id)
+      .maybeSingle();
+    if (readError) return errorResponse(500, readError.message);
+    if (!current) return notFound();
+    fromThreadStatus = (current as { thread_status: FeedbackThreadStatus }).thread_status;
+    const check = canTransitionThread(fromThreadStatus, nextThreadStatus, { actor: 'owner' });
+    if (!check.ok) return errorResponse(409, check.message);
+  }
+
+  let update = admin.from('feedback_requests').update(patch).eq('id', params.id);
+  if (fromThreadStatus) update = update.eq('thread_status', fromThreadStatus);
+  const { data, error } = await update.select('*').maybeSingle();
 
   if (error) return errorResponse(500, error.message);
-  if (!data) return notFound();
+  if (!data) {
+    return fromThreadStatus
+      ? errorResponse(409, 'This thread changed while you were looking at it — reload and try again.')
+      : notFound();
+  }
 
   return NextResponse.json({ request: data as FeedbackRequest });
 }

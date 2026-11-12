@@ -3,6 +3,8 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { getStoreSettings } from '@/lib/store/settings';
 import { sendFeedbackTemplate } from '@/lib/feedback/send';
+import { deliveryFromStates, type FeedbackSendOutcome } from '@/lib/feedback/deliveryState';
+import { loadOptedOutPhones } from '@/lib/marketing/server/consent';
 import type { FeedbackRequest } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -74,19 +76,36 @@ async function handle(request: Request) {
   }
 
   const orderIds = claimed.map((r) => r.order_id);
-  const phones = [...new Set(claimed.map((r) => r.phone))];
+  const phones = [...new Set(claimed.map((r) => r.phone).filter(Boolean))];
 
-  const [{ data: orderRows }, { data: optOutRows }] = await Promise.all([
+  // "Opted out?" is the ONE predicate every non-transactional sender uses
+  // (lib/marketing/consentState.ts isOptedOut, read by consent.ts): the STOP
+  // table in any stored spelling OR a ledger that says opted_out. A failed read
+  // fails the run closed — the claims expire and the next tick retries — rather
+  // than messaging people whose STOP could not be checked (this used to treat a
+  // failed read as "nobody opted out").
+  const [{ data: orderRows }, optOutRead] = await Promise.all([
     admin.from('orders').select('id, status, order_number, customer_phone').in('id', orderIds),
-    admin.from('whatsapp_opt_outs').select('phone').in('phone', phones),
+    loadOptedOutPhones(admin, phones).then(
+      (set) => ({ ok: true as const, set }),
+      (err: unknown) => ({ ok: false as const, err }),
+    ),
   ]);
+  if (!optOutRead.ok) {
+    console.error('feedback-requests cron: opt-out read failed — sending nothing this run', optOutRead.err);
+    return errorResponse(500, 'Failed to read opt-outs');
+  }
+  const optedOut = optOutRead.set;
 
   const ordersById = new Map((orderRows ?? []).map((o) => [o.id as string, o]));
-  const optedOut = new Set((optOutRows ?? []).map((r) => r.phone as string));
+  // Only a request still 'pending' may be skipped by the cron (deliveryState.ts): one an
+  // owner resend moved on since the claim keeps what that resend recorded.
+  const skippableFrom = deliveryFromStates('skipped', 'cron');
 
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  let deferred = 0;
 
   for (const req of claimed) {
     const order = ordersById.get(req.order_id) as
@@ -104,12 +123,15 @@ async function handle(request: Request) {
             : '';
 
     if (skipReason) {
-      const { error } = await admin
+      const { data: moved, error } = await admin
         .from('feedback_requests')
         .update({ status: 'skipped', skip_reason: skipReason })
-        .eq('id', req.id);
+        .eq('id', req.id)
+        .in('status', skippableFrom)
+        .select('id');
       if (error) console.error('feedback-requests cron: failed to record skip', error);
-      skipped++;
+      else if ((moved ?? []).length === 0) console.info(`feedback-requests cron: ${req.id} moved on before its skip landed`);
+      else skipped++;
       continue;
     }
 
@@ -118,12 +140,21 @@ async function handle(request: Request) {
       order!.order_number,
       { admin },
     );
-    if (result.sent) sent++;
-    else if (result.reason.startsWith('not_configured:') || result.reason === 'notifications_disabled') skipped++;
+    const outcome = result.outcome ?? legacyOutcome(result);
+    if (outcome === 'sent' || outcome === 'already_sent') sent++;
+    else if (outcome === 'skipped') skipped++;
+    else if (outcome === 'deferred') deferred++;
     else failed++;
   }
 
-  return NextResponse.json({ enabled: true, claimed: claimed.length, sent, skipped, failed });
+  return NextResponse.json({ enabled: true, claimed: claimed.length, sent, skipped, failed, deferred });
+}
+
+/** For a result that does not carry its outcome: the classification this route always used. */
+function legacyOutcome(result: { sent: boolean; reason: string }): FeedbackSendOutcome {
+  if (result.sent) return 'sent';
+  if (result.reason.startsWith('not_configured:') || result.reason === 'notifications_disabled') return 'skipped';
+  return 'failed';
 }
 
 // GET — manual triggering (curl, a Vercel-style cron trigger, an owner "run it

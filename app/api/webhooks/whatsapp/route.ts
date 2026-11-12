@@ -58,7 +58,7 @@ import { NextResponse } from 'next/server';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
-import { replaceableBy } from '@/lib/notifications/status';
+import { replaceableBy, replaceableVia } from '@/lib/notifications/status';
 import { whatsappAdapter } from '@/lib/notifications/adapters';
 import {
   isOptOutKeyword,
@@ -76,6 +76,8 @@ import {
 import { isMigrationMissing } from '@/lib/marketing/server/repo';
 import { getStoreSettings } from '@/lib/store/settings';
 import { resolveGoogleReviewUrl } from '@/lib/feedback/reviewLink';
+import { recordInboundOnThread } from '@/lib/feedback/inbound';
+import type { RecipientStatus } from '@/lib/marketing/types';
 import type { FeedbackRequest, NotificationStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -419,12 +421,7 @@ async function applyInboundMessage(
       const subscribed = await applyConsent('START opt-in', () =>
         recordOptIn({ phone: msg.fromPhone, source: 'whatsapp_keyword' }),
       );
-      if (request) {
-        await admin
-          .from('feedback_requests')
-          .update({ unread: true, last_inbound_at: msg.at })
-          .eq('id', request.id);
-      }
+      if (request) await recordInboundOnThread(admin, request.id, { last_inbound_at: msg.at });
       // Only confirm what actually happened: with the marketing tables absent nothing was
       // recorded, and "you're subscribed" would be a lie (the message is then just stored).
       if (subscribed) {
@@ -453,20 +450,16 @@ async function applyInboundMessage(
         }
         return;
       }
-      // STOP is also a marketing opt-out. Recorded BEFORE the legacy upsert below so that row
-      // keeps the source it has always had ('stop_keyword'); the ledger and its audit event are
-      // what the marketing agent reads. A failure here (migration not applied) never blocks the
-      // legacy opt-out that the feedback cron honours.
-      await applyConsent('STOP opt-out', () => recordOptOut({ phone: msg.fromPhone, source: 'stop_keyword' }));
-      await admin
-        .from('whatsapp_opt_outs')
-        .upsert({ phone: msg.fromPhone, source: 'stop_keyword' }, { onConflict: 'phone' });
-      if (request) {
-        await admin
-          .from('feedback_requests')
-          .update({ unread: true, last_inbound_at: msg.at })
-          .eq('id', request.id);
-      }
+      // STOP is the feedback product's opt-out AND a marketing opt-out, recorded in ONE place
+      // (lib/marketing/server/consent.ts). recordOptOut writes the whatsapp_opt_outs row the
+      // feedback cron honours FIRST — before the marketing ledger — so a missing marketing
+      // migration or a failed ledger write still leaves exactly the opt-out this branch always
+      // wrote, keeping the source it always had ('stop_keyword'). Safe to route through it:
+      // the phone is '+' and Meta's digits-only wa_id, which toE164 always accepts.
+      await applyConsent('STOP opt-out', () =>
+        recordOptOut({ phone: msg.fromPhone, source: 'stop_keyword', optOutRowSource: 'stop_keyword' }),
+      );
+      if (request) await recordInboundOnThread(admin, request.id, { last_inbound_at: msg.at });
       await sendFollowUp(admin, msg.fromPhone, STOP_CONFIRMATION, request?.id ?? null, request?.order_id ?? null);
       return;
     }
@@ -533,13 +526,15 @@ async function applyInboundMessage(
     }
 
     if (request) {
-      const patch: Record<string, unknown> = { unread: true, last_inbound_at: msg.at };
+      // Any inbound message reopens a resolved thread (lib/feedback/threadState.ts) — a low
+      // rating or a typed reply after "resolved" must reach the attention view again.
+      const patch: Record<string, unknown> = { last_inbound_at: msg.at };
       if (rating !== null) {
         patch.rating = rating;
         patch.rating_source = 'whatsapp_button';
         patch.responded_at = msg.at;
       }
-      await admin.from('feedback_requests').update(patch).eq('id', request.id);
+      await recordInboundOnThread(admin, request.id, patch);
     }
 
     if (rating === 5) {
@@ -687,17 +682,48 @@ async function applyStatusUpdate(admin: Admin, update: StatusUpdate): Promise<Ou
 // ---------------------------------------------------------------------------
 
 /**
- * A status callback for a message the MARKETING agent sent (matched by provider_ref, after
- * `notifications` had no such row). Forward-only, like the ladder above:
+ * Where each marketing-recipient status stands on the SHARED delivery ladder
+ * (lib/notifications/status.ts), so a receipt moves a recipient exactly as it moves a
+ * `notifications` row: forward only, 'failed' above 'sent' but below proof of delivery.
+ * This used to be a private copy that disagreed with the shared one (a 'delivered'
+ * after a 'failed' was dropped here and applied there).
  *
- *   sent < delivered < read     the sender itself records 'sent'; a callback only advances
- *   failed                      accepted from 'sending' / 'sent' only. A message that failed
- *                               was not delivered, so its cost is 0; 131050 (the customer
- *                               tapped Meta's "Stop promotions") is also an opt-out.
+ * 'sending' — claimed by the sender, not yet recorded as sent — stands where a
+ * notification's claim does ('queued'). Every pre-send or never-sent status is off the
+ * ladder: a recipient's 'queued' means "approved, waiting for the sender", which is NOT
+ * the notifications 'queued', hence an exhaustive table rather than matching on names.
+ */
+const RECIPIENT_RUNGS: Record<RecipientStatus, NotificationStatus | null> = {
+  pending: null,
+  queued: null,
+  sending: 'queued',
+  sent: 'sent',
+  delivered: 'delivered',
+  read: 'read',
+  failed: 'failed',
+  skipped: null,
+  holdout: null,
+  cancelled: null,
+};
+
+/**
+ * A status callback for a message the MARKETING agent sent (matched by provider_ref, after
+ * `notifications` had no such row). Forward-only on the shared ladder (RECIPIENT_RUNGS):
+ *
+ *   sending < sent < failed < delivered < read
+ *
+ * One actor rule on top: 'sent' is recorded by the SENDER itself (with the cost, the
+ * attribution clock and the coupon), never by a callback — the sender's own write is a
+ * compare-and-set from 'sending', and a callback getting there first would make it miss.
+ * A message that failed was not delivered, so a failure sets its cost to 0; 131050 (the
+ * customer tapped Meta's "Stop promotions") is also an opt-out.
  *
  * Each move is ONE guarded UPDATE (`status in (…)`), so two callbacks in flight cannot let
  * the loser overwrite the winner. 'unknown' when there is no such recipient — or the
  * marketing tables do not exist, which must leave the old behaviour untouched.
+ *
+ * Still dropped: a 'failed' callback that beats the sender's own 'sent' write. The
+ * recipient carries no provider_ref until that write, so there is nothing to match it to.
  */
 async function applyMarketingStatus(admin: Admin, update: StatusUpdate): Promise<Outcome> {
   try {
@@ -726,17 +752,14 @@ async function applyMarketingStatus(admin: Admin, update: StatusUpdate): Promise
     if (update.status === 'sent') return 'ignored';
 
     const patch: Record<string, unknown> = { status: update.status };
-    let from: string[];
+    const from = replaceableVia(RECIPIENT_RUNGS, update.status);
     if (update.status === 'delivered') {
-      from = ['sent'];
       patch.delivered_at = update.at;
     } else if (update.status === 'read') {
-      from = ['sent', 'delivered'];
       patch.read_at = update.at;
       // A read implies delivery; if the 'delivered' callback never came (or is late), stamp it now.
       if (!r.delivered_at) patch.delivered_at = update.at;
     } else {
-      from = ['sending', 'sent'];
       patch.cost_inr = 0;
       patch.error = update.error;
       patch.error_code = update.errorCode;

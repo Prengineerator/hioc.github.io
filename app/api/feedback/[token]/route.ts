@@ -5,6 +5,7 @@ import { rateLimitOk, clientIp } from '@/lib/api/rateLimit';
 import { hashFeedbackToken, looksLikeFeedbackToken } from '@/lib/feedback/token';
 import { withinEditWindow } from '@/lib/feedback/window';
 import { upsertOrderReview } from '@/lib/feedback/reviewSync';
+import { recordInboundOnThread } from '@/lib/feedback/inbound';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { FeedbackRequest, OrderItem, Review } from '@/lib/types';
 
@@ -110,10 +111,13 @@ export async function POST(request: Request, { params }: RouteParams) {
 
   const now = new Date().toISOString();
 
-  const { error: updateError } = await admin
-    .from('feedback_requests')
-    .update({ rating, rating_source: 'web_form', responded_at: now, unread: true })
-    .eq('id', found.request.id);
+  // An inbound event like any WhatsApp reply: unread, and a resolved thread reopens
+  // (lib/feedback/threadState.ts) — a 1★ arriving after "resolved" must not stay hidden.
+  const { error: updateError } = await recordInboundOnThread(admin, found.request.id, {
+    rating,
+    rating_source: 'web_form',
+    responded_at: now,
+  });
   if (updateError) {
     console.error('feedback submit: failed to update request', updateError);
     return errorResponse(500, 'Failed to save your feedback');

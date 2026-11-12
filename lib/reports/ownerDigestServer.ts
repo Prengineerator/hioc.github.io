@@ -152,8 +152,51 @@ function reportsFrom(): string | undefined {
 }
 
 /**
+ * What a cron claim row says while its email is in flight — and keeps saying if
+ * the run dies before the outcome is written, so the send log shows an honest
+ * "we don't know" instead of a clean 'sent'.
+ */
+export const DIGEST_CLAIM_NOTE = 'claimed — outcome not recorded';
+
+type DigestClaim = { kind: 'claimed'; id: string } | { kind: 'taken' } | { kind: 'unlogged' };
+
+/**
+ * A scheduled report's one 'sent' slot per (kind, period, address), taken BEFORE
+ * the email goes. The table only knows sent/failed/skipped, and its unique index
+ * (owner_report_sends_cron_once) only covers status='sent' AND trigger='cron', so
+ * the claim IS a cron 'sent' row — written first, stepped down to 'failed' if the
+ * provider refuses. Read-sent-rows → send → insert (what this replaced) let a
+ * retried or re-triggered cron run that overlapped the first both send; the index
+ * only rejected the second log row, after the second email.
+ */
+async function claimCronSend(admin: SupabaseClient, period: ReportPeriod, to: string): Promise<DigestClaim> {
+  const { data, error } = await admin
+    .from('owner_report_sends')
+    .insert({
+      kind: period.kind,
+      period_start: period.from,
+      period_end: period.to,
+      trigger: 'cron',
+      to_email: to,
+      status: 'sent',
+      provider_ref: '',
+      error: DIGEST_CLAIM_NOTE,
+    })
+    .select('id')
+    .maybeSingle();
+  if (!error && data) return { kind: 'claimed', id: (data as { id: string }).id };
+  if (error?.code === '23505') return { kind: 'taken' };
+  console.error('owner digest: send claim failed', error);
+  return { kind: 'unlogged' };
+}
+
+/**
  * Send one period's email to every recipient and log each attempt. A 'cron'
- * send skips an address that already has this period's report.
+ * send claims each address's slot first and skips one already claimed or sent
+ * ('already sent'). A 'manual' send (the owner's "Send now") is an explicit
+ * request for another copy: it has no unique slot to claim, and logs afterwards.
+ * If the log will not take even the claim, the email still goes and is logged
+ * afterwards, as before.
  */
 export async function sendDigest(
   admin: SupabaseClient,
@@ -162,22 +205,10 @@ export async function sendDigest(
   recipients: string[],
   trigger: 'cron' | 'manual',
 ): Promise<SendOutcome[]> {
-  let alreadySent = new Set<string>();
-  if (trigger === 'cron' && recipients.length) {
-    const { data, error } = await admin
-      .from('owner_report_sends')
-      .select('to_email')
-      .eq('kind', period.kind)
-      .eq('period_start', period.from)
-      .eq('trigger', 'cron')
-      .eq('status', 'sent');
-    if (error) console.error('owner digest: sent check failed', error);
-    alreadySent = new Set(((data ?? []) as { to_email: string }[]).map((r) => r.to_email));
-  }
-
   const outcomes: SendOutcome[] = [];
   for (const to of recipients) {
-    if (alreadySent.has(to)) {
+    const claim: DigestClaim = trigger === 'cron' ? await claimCronSend(admin, period, to) : { kind: 'unlogged' };
+    if (claim.kind === 'taken') {
       outcomes.push({ to, status: 'skipped', detail: 'already sent' });
       continue;
     }
@@ -193,7 +224,15 @@ export async function sendDigest(
       ? { to, status: 'sent', detail: '' }
       : { to, status: 'failed', detail: res.error || 'send failed' };
     outcomes.push(outcome);
-    await logSend(admin, period, trigger, { ...outcome, providerRef: res.providerRef });
+    if (claim.kind === 'claimed') {
+      const patch = res.ok
+        ? { error: '', provider_ref: res.providerRef }
+        : { status: 'failed' as const, error: outcome.detail, provider_ref: res.providerRef };
+      const { error } = await admin.from('owner_report_sends').update(patch).eq('id', claim.id);
+      if (error) console.error('owner_report_sends outcome update failed', claim.id, error);
+    } else {
+      await logSend(admin, period, trigger, { ...outcome, providerRef: res.providerRef });
+    }
   }
   return outcomes;
 }

@@ -19,8 +19,12 @@ const state: {
   claimed: Record<string, unknown>[];
   orders: Record<string, unknown>[];
   optedOutPhones: string[];
+  /** marketing_consent rows — the ledger half of "opted out?". */
+  ledger: { phone: string; status: string }[];
+  optOutReadFails: boolean;
   updates: { id: string; patch: Record<string, unknown> }[];
-} = { feedbackEnabled: true, claimed: [], orders: [], optedOutPhones: [], updates: [] };
+  guards: { col: string; vals: unknown[] }[];
+} = { feedbackEnabled: true, claimed: [], orders: [], optedOutPhones: [], ledger: [], optOutReadFails: false, updates: [], guards: [] };
 
 const { sendFeedbackTemplate } = vi.hoisted(() => ({
   sendFeedbackTemplate: vi.fn(() => Promise.resolve({ sent: true, reason: '' })),
@@ -57,25 +61,34 @@ vi.mock('@/lib/supabase-server', () => ({
         },
         eq: (col: string, val: unknown) => {
           filters.push({ col, vals: [val] });
-          if (op === 'update') {
-            state.updates.push({ id: val as string, patch });
-            return Promise.resolve({ error: null });
-          }
+          // The skip is a compare-and-set now (.eq(id).in(status).select()): record it on
+          // the id filter and let the chain continue to its guard.
+          if (op === 'update' && col === 'id') state.updates.push({ id: val as string, patch });
           return chain;
         },
         in: (col: string, vals: unknown[]) => {
           filters.push({ col, vals });
+          if (op === 'update') {
+            // Every claimed row is still 'pending' here, so the guard matches.
+            state.guards.push({ col, vals });
+            return chain;
+          }
           if (table === 'orders') {
             return Promise.resolve({ data: state.orders.filter((o) => vals.includes(o.id)), error: null });
           }
           if (table === 'whatsapp_opt_outs') {
+            if (state.optOutReadFails) return Promise.resolve({ data: null, error: { code: 'XX000', message: 'injected' } });
             return Promise.resolve({
               data: state.optedOutPhones.filter((p) => vals.includes(p)).map((phone) => ({ phone })),
               error: null,
             });
           }
+          if (table === 'marketing_consent') {
+            return Promise.resolve({ data: state.ledger.filter((r) => vals.includes(r.phone)), error: null });
+          }
           return Promise.resolve({ data: [], error: null });
         },
+        then: (resolve: (v: unknown) => unknown) => resolve({ data: op === 'update' ? [{ id: 'moved' }] : [], error: null }),
       });
       return chain;
     },
@@ -115,7 +128,10 @@ beforeEach(() => {
   state.claimed = [];
   state.orders = [{ id: 'order-1', status: 'completed', order_number: 1089, customer_phone: '+919876543210' }];
   state.optedOutPhones = [];
+  state.ledger = [];
+  state.optOutReadFails = false;
   state.updates = [];
+  state.guards = [];
   sendFeedbackTemplate.mockClear();
   sendFeedbackTemplate.mockResolvedValue({ sent: true, reason: '' });
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -256,5 +272,44 @@ describe('GET /api/cron/feedback-requests — skip rules re-checked at send time
     state.claimed = [claimRow()];
     const res = await run();
     expect(await res.json()).toMatchObject({ sent: 0, skipped: 1, failed: 0 });
+  });
+});
+
+describe('GET /api/cron/feedback-requests — one "opted out?" predicate, guarded writes', () => {
+  it('skips a phone whose STOP survives only in the marketing ledger (the opt-out row was lost)', async () => {
+    state.ledger = [{ phone: '+919876543210', status: 'opted_out' }];
+    state.claimed = [claimRow()];
+    const res = await run();
+    expect(await res.json()).toMatchObject({ skipped: 1, sent: 0 });
+    expect(sendFeedbackTemplate).not.toHaveBeenCalled();
+    expect(state.updates[0].patch.skip_reason).toBe('opted_out');
+  });
+
+  it('honours a legacy opt-out stored without the plus sign', async () => {
+    state.optedOutPhones = ['919876543210'];
+    state.claimed = [claimRow()];
+    expect(await (await run()).json()).toMatchObject({ skipped: 1 });
+  });
+
+  it('fails CLOSED when the opt-out read fails: nothing is sent or marked, the claims expire and retry', async () => {
+    state.optOutReadFails = true;
+    state.claimed = [claimRow()];
+    const res = await run();
+    expect(res.status).toBe(500);
+    expect(sendFeedbackTemplate).not.toHaveBeenCalled();
+    expect(state.updates).toEqual([]);
+  });
+
+  it('the skip only lands on a request that is still pending', async () => {
+    state.orders = [];
+    state.claimed = [claimRow()];
+    await run();
+    expect(state.guards).toEqual([{ col: 'status', vals: ['pending'] }]);
+  });
+
+  it('counts a send another caller holds as deferred, not as a failure', async () => {
+    sendFeedbackTemplate.mockResolvedValueOnce({ sent: false, reason: 'in_flight', outcome: 'deferred' } as never);
+    state.claimed = [claimRow()];
+    expect(await (await run()).json()).toMatchObject({ sent: 0, skipped: 0, failed: 0, deferred: 1 });
   });
 });
