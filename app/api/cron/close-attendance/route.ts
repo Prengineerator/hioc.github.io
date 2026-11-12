@@ -4,6 +4,7 @@ import { errorResponse } from '@/lib/api/http';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
 import { loadEmploymentRows, employmentOnDate } from '@/lib/attendance/employment';
 import { shiftEndInstant } from '@/lib/attendance/businessDate';
+import { findSessionTransition } from '@/lib/attendance/sessionState';
 import type { AttendanceSession } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,9 @@ export const dynamic = 'force-dynamic';
 // forgotten clock-out waits before surfacing in the approval queue. 03:00 IST
 // is past the cafe's midnight close plus the two-hour grace, so one pass clears
 // the whole day.
+
+// open → auto_closed, approval cleared (lib/attendance/sessionState.ts).
+const AUTO_CLOSE = findSessionTransition('auto_close', 'open')!;
 
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -101,18 +105,25 @@ export async function GET(request: Request) {
     // Status-guarded, which is what makes this idempotent AND race-safe: a real
     // clock-out landing at the same moment wins or loses cleanly, and a second
     // cron run finds nothing left open.
+    //
+    // The approval stamp is CLEARED, never inherited. An auto-close is a guess
+    // nobody has looked at yet; a stamp on the row predates the guess (the
+    // correction route once let an OPEN session be approved), and keeping it
+    // would roll the day up as an approved auto-close and pay the guess.
     const { data: updated, error: updErr } = await admin
       .from('attendance_sessions')
       .update({
         clock_out_at: closeAt,
-        status: 'auto_closed',
+        status: AUTO_CLOSE.to,
         flags,
+        approved_by: null,
+        approved_at: null,
         notes: isCap
           ? `Auto-closed at the ${settings.max_session_hours}h maximum — no shift end on record.`
           : 'Auto-closed at the end of the scheduled shift.',
       })
       .eq('id', session.id)
-      .eq('status', 'open')
+      .eq('status', AUTO_CLOSE.from!)
       .select('id')
       .maybeSingle();
 

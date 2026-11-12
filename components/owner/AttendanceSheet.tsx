@@ -12,6 +12,7 @@ import { istDateIso } from '@/lib/api/date';
 import { DataTable } from '@/components/ui/DataTable';
 import type { AttendanceSession } from '@/lib/types';
 import type { DayRollup } from '@/lib/attendance/day';
+import { canApproveSession, canVoidSession, sessionNeedsApproval } from '@/lib/attendance/sessionState';
 
 interface Row {
   user_id: string;
@@ -397,24 +398,30 @@ function DayPanel({
                     </span>
                   ))}
                 </div>
-                {s.status === 'auto_closed' && !s.approved_at ? (
+                {/* The queue's actions, offered exactly where the server's
+                    state machine (lib/attendance/sessionState.ts) allows them. */}
+                {sessionNeedsApproval(s.status, s.approved_at) ? (
                   <div className="mt-2 flex gap-2">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => act(s.id, 'approve')}
-                      className="rounded-md bg-tan-dark px-3 py-1.5 text-xs font-bold text-cream disabled:opacity-50"
-                    >
-                      Approve as-is
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => act(s.id, 'void')}
-                      className="rounded-md border border-[#ddd] px-3 py-1.5 text-xs disabled:opacity-50"
-                    >
-                      Void
-                    </button>
+                    {canApproveSession(s) ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => act(s.id, 'approve')}
+                        className="rounded-md bg-tan-dark px-3 py-1.5 text-xs font-bold text-cream disabled:opacity-50"
+                      >
+                        Approve as-is
+                      </button>
+                    ) : null}
+                    {canVoidSession(s) ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => act(s.id, 'void')}
+                        className="rounded-md border border-[#ddd] px-3 py-1.5 text-xs disabled:opacity-50"
+                      >
+                        Void
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </li>

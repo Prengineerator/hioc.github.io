@@ -213,6 +213,14 @@ export function PayrollScreen() {
         return;
       }
       await load();
+      // The run stands, but the shortage bookkeeping behind it did not fully
+      // land — say so rather than let it pass silently.
+      if (typeof body.cashShortageMarkError === 'string') {
+        setRowError((p) => ({
+          ...p,
+          [l.user_id]: `Finalized, but the deducted cash shortages could not all be marked: ${body.cashShortageMarkError}`,
+        }));
+      }
     } finally {
       setBusyUser(null);
     }
@@ -234,6 +242,12 @@ export function PayrollScreen() {
       }
       setChoice(l.user_id, NO_CHOICE);
       await load();
+      if (typeof body.cashShortageClearError === 'string') {
+        setRowError((p) => ({
+          ...p,
+          [l.user_id]: `Reversed. Its cash shortages could not be released (${body.cashShortageClearError}) — they will still be offered again when you re-finalize.`,
+        }));
+      }
     } finally {
       setBusyUser(null);
     }

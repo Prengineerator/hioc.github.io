@@ -220,11 +220,29 @@ describe('close-attendance cron — closing behaviour', () => {
 
   it('never approves what it closes — an auto-close must not become paid hours', async () => {
     // D5-4: rollUpDay gives an unapproved auto-close zero payable minutes. If
-    // this job approved its own guess, that protection would evaporate.
+    // this job approved its own guess, that protection would evaporate. The
+    // patch now actively CLEARS the stamp (see the next test), so "unapproved"
+    // is asserted as null rather than as an absent key.
     state.open = [openSession({ clock_in_at: new Date(Date.now() - 30 * HOUR).toISOString() })];
     await GET(cronReq('topsecret'));
-    expect(state.updates[0].patch).not.toHaveProperty('approved_at');
-    expect(state.updates[0].patch).not.toHaveProperty('approved_by');
+    expect(state.updates[0].patch.approved_at ?? null).toBeNull();
+    expect(state.updates[0].patch.approved_by ?? null).toBeNull();
+  });
+
+  it('clears an approval stamped while the session was still OPEN instead of inheriting it', async () => {
+    // The old correction route let an open session be "approved"; auto-closing
+    // it with the stamp intact rolled the day up as an approved auto-close and
+    // paid the cron's guess to shift end.
+    state.open = [
+      openSession({
+        clock_in_at: new Date(Date.now() - 30 * HOUR).toISOString(),
+        approved_at: '2026-08-06T05:00:00Z',
+        approved_by: 'manager-1',
+      }),
+    ];
+    await GET(cronReq('topsecret'));
+    expect(state.updates[0].patch).toHaveProperty('approved_at', null);
+    expect(state.updates[0].patch).toHaveProperty('approved_by', null);
   });
 
   it('closes AT the shift end, not at the moment the cron happened to run', async () => {

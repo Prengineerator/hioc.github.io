@@ -28,6 +28,8 @@ const RUN_1 = '00000000-0000-4000-8000-000000000030';
 const NOT_FOUND = '00000000-0000-4000-8000-0000000000ff';
 
 const tables: Record<string, Row[]> = {};
+/** Runs once, right after the route's first single-row read of cash_shortages. */
+let raceAfterRead: (() => void) | null = null;
 
 function resetTables() {
   tables.profiles = [
@@ -139,10 +141,14 @@ function makeAdmin() {
       return r;
     }
 
+    // Like PostgREST, an UPDATE returns the rows it changed (matched BEFORE the
+    // change). Re-filtering after the change would hide a compare-and-set
+    // update such as `.eq('status', 'pending')` that moved the row to approved.
     function applyUpdateAndReturn(): { data: Row[]; error: null } {
       if (updatePayload) {
         const targets = (tables[table] ?? []).filter((row) => matches(row, filters));
         for (const row of targets) Object.assign(row, updatePayload);
+        return { data: targets, error: null };
       }
       return { data: currentRows(), error: null };
     }
@@ -179,8 +185,16 @@ function makeAdmin() {
         return chain;
       },
       maybeSingle: () => {
+        const isRead = !updatePayload;
         const { data } = applyUpdateAndReturn();
-        return Promise.resolve({ data: data[0] ?? null, error: null });
+        const row = data[0] ? { ...data[0] } : null; // what the caller read
+        // A concurrent writer landing between the route's read and its write.
+        if (isRead && table === 'cash_shortages' && raceAfterRead) {
+          const race = raceAfterRead;
+          raceAfterRead = null;
+          race();
+        }
+        return Promise.resolve({ data: row, error: null });
       },
       then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
         return Promise.resolve(applyUpdateAndReturn()).then(resolve, reject);
@@ -225,6 +239,8 @@ function ctx(id: string) {
 
 beforeEach(() => {
   resetTables();
+  tables.payroll_runs = [];
+  raceAfterRead = null;
   state.owner = { id: OWNER };
 });
 
@@ -347,5 +363,68 @@ describe('PATCH /api/owner/cash-shortages/[id] — decision rules', () => {
   it('404s an id that does not exist', async () => {
     const res = await PATCH(patchReq({ action: 'approve' }), ctx(NOT_FOUND));
     expect(res.status).toBe(404);
+  });
+});
+
+describe('PATCH /api/owner/cash-shortages/[id] — compare-and-set + payroll lock', () => {
+  const pending = () => tables.cash_shortages.find((r) => r.id === S_PENDING)!;
+
+  it('a reassign that loses the race to an approve is a 409 and does NOT re-attribute the approved shortage', async () => {
+    // The owner opened the reassign dialog on a pending row; meanwhile it was
+    // approved (another tab). The old route checked status in its read and
+    // then updated by id alone, moving an approved, deductible shortage.
+    raceAfterRead = () => Object.assign(pending(), { status: 'approved', decided_by: OWNER, decided_at: 'now' });
+    const res = await PATCH(
+      patchReq({ action: 'reassign', userId: VIKRAM, note: 'Vikram was on the register' }),
+      ctx(S_PENDING),
+    );
+    expect(res.status).toBe(409);
+    expect(pending().user_id).toBe(ASHA);
+    expect(pending().status).toBe('approved');
+    expect(pending().decision_note).toBe('');
+  });
+
+  it('an approve that loses the race to a waive is a 409, not a silent overwrite', async () => {
+    raceAfterRead = () =>
+      Object.assign(pending(), { status: 'waived', decided_by: OWNER, decided_at: 'now', decision_note: 'forgiven' });
+    const res = await PATCH(patchReq({ action: 'approve', note: 'confirmed' }), ctx(S_PENDING));
+    expect(res.status).toBe(409);
+    expect(pending().status).toBe('waived');
+    expect(pending().decision_note).toBe('forgiven');
+  });
+
+  it('an approve against a row reassigned meanwhile is refused — the owner decided for someone else', async () => {
+    raceAfterRead = () => Object.assign(pending(), { user_id: VIKRAM });
+    const res = await PATCH(patchReq({ action: 'approve' }), ctx(S_PENDING));
+    expect(res.status).toBe(409);
+    expect(pending().status).toBe('pending');
+  });
+
+  it("refuses to APPROVE inside that person's finalized payroll month — it would never be deducted", async () => {
+    tables.payroll_runs = [
+      { id: RUN_1, user_id: ASHA, status: 'finalized', period_start: '2026-09-01', period_end: '2026-09-30' },
+    ];
+    const res = await PATCH(patchReq({ action: 'approve' }), ctx(S_PENDING));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/finalized payroll/i);
+    expect(pending().status).toBe('pending');
+  });
+
+  it("is not locked by someone ELSE's finalized month, or by a reversed run", async () => {
+    tables.payroll_runs = [
+      { id: RUN_1, user_id: VIKRAM, status: 'finalized', period_start: '2026-09-01', period_end: '2026-09-30' },
+      { id: 'r-old', user_id: ASHA, status: 'reversed', period_start: '2026-09-01', period_end: '2026-09-30' },
+    ];
+    const res = await PATCH(patchReq({ action: 'approve' }), ctx(S_PENDING));
+    expect(res.status).toBe(200);
+  });
+
+  it('still lets a pending shortage in a finalized month be WAIVED — that changes nothing that was paid', async () => {
+    tables.payroll_runs = [
+      { id: RUN_1, user_id: ASHA, status: 'finalized', period_start: '2026-09-01', period_end: '2026-09-30' },
+    ];
+    const res = await PATCH(patchReq({ action: 'waive', note: 'month already paid, let it go' }), ctx(S_PENDING));
+    expect(res.status).toBe(200);
+    expect(pending().status).toBe('waived');
   });
 });

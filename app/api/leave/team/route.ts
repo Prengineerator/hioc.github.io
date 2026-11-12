@@ -11,6 +11,8 @@ import {
   formatLeaveDate,
 } from '@/lib/leave/week';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { canLeaveTransition } from '@/lib/leave/state';
+import { findPayrollLock, payrollLockedMessage } from '@/lib/payroll/lock';
 import type { LeaveRequest } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -138,23 +140,47 @@ export async function PATCH(request: Request) {
 
   const admin = createAdminSupabaseClient();
 
-  // Status-guarded so two managers acting at once cannot overwrite each other:
-  // the second one matches zero rows and is told what already happened.
+  const { data: row, error: readErr } = await admin
+    .from('leave_requests')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (readErr) return errorResponse(500, readErr.message);
+  const current = (row ?? null) as LeaveRequest | null;
+  if (!current) return errorResponse(409, 'That request was withdrawn or no longer exists.');
+
+  // The leave state machine (lib/leave/state.ts): requested → approved |
+  // declined, and approved ↔ declined (the team panel offers both). A
+  // withdrawn request is the staffer's to re-open, not the manager's.
+  const check = canLeaveTransition(current.status, action, { note });
+  if (!check.ok) return errorResponse(409, check.message ?? 'That request cannot be decided.');
+
+  // PAY-4: an approved leave day is that week's rostered day off, so deciding
+  // one inside this person's finalized payroll would restate a paid month.
+  const lock = await findPayrollLock(admin, current.user_id, current.leave_date);
+  if (lock.error) return errorResponse(500, `Could not check payroll: ${lock.error}`);
+  if (lock.run) return errorResponse(409, payrollLockedMessage(lock.run, 'That leave day'));
+
+  // Compare-and-set on the status the decision was made against, so two
+  // managers acting at once — or a staffer withdrawing as the manager taps —
+  // cannot overwrite each other: the loser matches zero rows and is told.
   const { data, error } = await admin
     .from('leave_requests')
     .update({
-      status: action === 'approve' ? 'approved' : 'declined',
+      status: check.rule!.to,
       decided_by: account.user.id,
       decided_at: new Date().toISOString(),
       decision_note: note,
     })
     .eq('id', id)
-    .in('status', ['requested', 'approved', 'declined'])
+    .eq('status', current.status)
     .select('*')
     .maybeSingle();
 
   if (error) return errorResponse(500, error.message);
-  if (!data) return errorResponse(409, 'That request was withdrawn or no longer exists.');
+  if (!data) {
+    return errorResponse(409, 'That request changed while you were deciding it (withdrawn, or decided by someone else). Refresh and try again.');
+  }
 
   return NextResponse.json({ request: data });
 }

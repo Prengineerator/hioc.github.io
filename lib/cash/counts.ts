@@ -13,7 +13,8 @@ import type { CashDenoms } from '@/lib/types';
 
 export type CashCountKind = 'clock_in' | 'clock_out' | 'day_open' | 'day_close' | 'manual' | 'override';
 export type PunchType = 'in' | 'out';
-export type ShortageStatus = 'pending' | 'approved' | 'waived';
+export const SHORTAGE_STATUSES = ['pending', 'approved', 'waived'] as const;
+export type ShortageStatus = (typeof SHORTAGE_STATUSES)[number];
 
 /** An override lets one staffer skip one count for this long after it's granted. */
 export const OVERRIDE_TTL_MINUTES = 30;
@@ -104,5 +105,108 @@ export type ShortageDecisionBody =
   | { action: 'approve'; note?: string }
   | { action: 'waive'; note: string }
   | { action: 'reassign'; userId: string; note: string };
+
+// ── Shortage state machine ──────────────────────────────────────────────────
+//
+// A shortage has a stored `status` and, once deducted, a `payroll_run_id`
+// (the run that consumed it, CC-5). Together:
+//
+//   pending ──approve──▶ approved ──consume──▶ approved + payroll_run_id
+//      │  ▲                          ◀──release── (that run reversed)
+//      │  └─reassign (stays pending, user_id moves)
+//      └────waive─────▶ waived
+//
+//   * approve / waive / reassign are the OWNER's, from pending only. A
+//     decision is final from the review screen: an approved shortage may
+//     already be in a payroll draft the owner is reading, and silently
+//     undoing it would make that draft wrong (CC-D4).
+//   * consume / release are PAYROLL's: finalize marks the approved rows it
+//     deducted; reversing that run releases them so the corrected run can
+//     deduct them again. Nothing else ever touches payroll_run_id.
+//
+// Every writer filters its UPDATE on the `from` state below (compare-and-set):
+// the decision route on status = 'pending', payroll on status = 'approved'.
+// Before, the decision route checked status in a read and then updated by id
+// alone, so a reassign racing an approve could re-attribute an approved,
+// deductible shortage to someone else.
+
+export type ShortageAction = 'approve' | 'waive' | 'reassign' | 'consume' | 'release';
+export type ShortageActor = 'owner' | 'payroll';
+
+export interface ShortageFacts {
+  status: ShortageStatus;
+  /** The payroll run that deducted it, if any. */
+  payrollRunId: string | null;
+}
+
+export interface ShortageTransitionRule {
+  action: ShortageAction;
+  from: ShortageStatus;
+  to: ShortageStatus;
+  actor: ShortageActor;
+  requiresNote?: boolean;
+  guard?: (s: ShortageFacts) => { ok: boolean; message?: string };
+}
+
+const notConsumed = (s: ShortageFacts) =>
+  s.payrollRunId
+    ? { ok: false, message: "This shortage has already been paid out and can't be changed." }
+    : { ok: true };
+
+export const SHORTAGE_TRANSITIONS: readonly ShortageTransitionRule[] = [
+  { action: 'approve', from: 'pending', to: 'approved', actor: 'owner', guard: notConsumed },
+  { action: 'waive', from: 'pending', to: 'waived', actor: 'owner', requiresNote: true, guard: notConsumed },
+  { action: 'reassign', from: 'pending', to: 'pending', actor: 'owner', requiresNote: true, guard: notConsumed },
+  { action: 'consume', from: 'approved', to: 'approved', actor: 'payroll', guard: notConsumed },
+  {
+    action: 'release',
+    from: 'approved',
+    to: 'approved',
+    actor: 'payroll',
+    guard: (s) => (s.payrollRunId ? { ok: true } : { ok: false, message: 'That shortage is not on any payroll run.' }),
+  },
+];
+
+/** A consumed shortage has been deducted on a payslip — immutable from the review screen. */
+export function isShortageLocked(s: { payrollRunId?: string | null; payroll_run_id?: string | null }): boolean {
+  return Boolean(s.payrollRunId ?? s.payroll_run_id);
+}
+
+export interface ShortageTransitionCheck {
+  ok: boolean;
+  code?: 'not_allowed' | 'locked' | 'note_required';
+  message?: string;
+  rule?: ShortageTransitionRule;
+}
+
+export function canShortageTransition(
+  s: ShortageFacts,
+  action: ShortageAction,
+  opts: { note?: string } = {},
+): ShortageTransitionCheck {
+  const rule = SHORTAGE_TRANSITIONS.find((t) => t.action === action && t.from === s.status);
+  if (!rule) {
+    // A paid-out shortage gets the specific message whatever is attempted.
+    if (s.payrollRunId) {
+      return { ok: false, code: 'locked', message: "This shortage has already been paid out and can't be changed." };
+    }
+    return {
+      ok: false,
+      code: 'not_allowed',
+      message: s.status === 'pending' ? `A pending shortage cannot be ${action}d.` : `This shortage was already ${s.status}.`,
+    };
+  }
+  const g = rule.guard?.(s);
+  if (g && !g.ok) return { ok: false, code: 'locked', message: g.message, rule };
+  if (rule.requiresNote && opts.note !== undefined && opts.note.trim().length === 0) {
+    return { ok: false, code: 'note_required', message: `A note is required to ${action} a shortage.`, rule };
+  }
+  return { ok: true, rule };
+}
+
+/** UI helper: may the owner still decide (approve / waive / reassign) this shortage? */
+export function canDecideShortage(s: ShortageFacts): boolean {
+  return canShortageTransition(s, 'approve').ok;
+}
 
 export type { CashDenoms };

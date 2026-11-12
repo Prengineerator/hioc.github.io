@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { LeaveRequest } from '@/lib/types';
+import { canApproveLeave, canDeclineLeave, canRequestLeave, canWithdrawLeave } from '@/lib/leave/state';
 
 interface WeekInfo {
   weekStart: string;
@@ -153,8 +154,10 @@ export function LeavePlanner({ canApprove }: { canApprove: boolean }) {
               <button
                 key={date}
                 type="button"
-                disabled={busy || !mine.week.open || status === 'approved'}
-                onClick={() => (req && status !== 'declined' ? withdraw(date) : request(date))}
+                disabled={
+                  busy || !mine.week.open || (!canRequestLeave(status) && !canWithdrawLeave(status))
+                }
+                onClick={() => (canWithdrawLeave(status) ? withdraw(date) : request(date))}
                 className={`rounded-md border px-2 py-3 text-center text-sm transition-colors disabled:opacity-60 ${tone}`}
               >
                 <span className="block font-bold">{mine.week.labels[i].split(' ')[0]}</span>
@@ -289,7 +292,7 @@ function TeamPanel({ team, onChanged }: { team: TeamResponse; onChanged: () => v
                   {r.status}
                 </span>
                 {r.reason ? <span className="text-xs text-muted">“{r.reason}”</span> : null}
-                {r.status !== 'approved' ? (
+                {canApproveLeave(r.status) ? (
                   <button
                     type="button"
                     disabled={busyId === r.id}
@@ -299,7 +302,7 @@ function TeamPanel({ team, onChanged }: { team: TeamResponse; onChanged: () => v
                     Approve
                   </button>
                 ) : null}
-                {r.status !== 'declined' ? (
+                {canDeclineLeave(r.status) ? (
                   <button
                     type="button"
                     disabled={busyId === r.id}

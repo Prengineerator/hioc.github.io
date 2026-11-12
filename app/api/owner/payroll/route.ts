@@ -11,6 +11,13 @@ import {
   type PayrollDayInput,
 } from '@/lib/payroll/compute';
 import { sendPayslipsForRun } from '@/lib/payroll/payslipEmail';
+import { canPayrollRunTransition } from '@/lib/payroll/runState';
+import {
+  loadUnconsumedApprovedShortages,
+  markShortagesConsumed,
+  releaseShortagesForRun,
+  sumShortagesByUser,
+} from '@/lib/payroll/shortages';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, PayrollRun, PayrollRunLine, StaffEmployment } from '@/lib/types';
 
@@ -49,48 +56,10 @@ function eachDate(from: string, to: string): string[] {
 }
 
 // CC-5 (docs/PHASE-5-CASH-COUNTS.md) — cash-drawer shortages the owner has
-// APPROVED but that no payroll run has consumed yet (payroll_run_id IS NULL).
-// The cash_counts / cash_shortages tables come from a migration that may not
-// be applied yet (supabase/2026-09-cash-counts.sql); a missing table just
-// yields no rows here, same as every other optional table this route reads —
-// no error, no special-casing, the month simply shows zero shortages.
-interface CashShortageRow {
-  id: string;
-  user_id: string;
-  amount_inr: number;
-}
-
-async function loadUnconsumedApprovedShortages(
-  admin: ReturnType<typeof createAdminSupabaseClient>,
-  bounds: { from: string; to: string },
-): Promise<CashShortageRow[]> {
-  const { data } = await admin
-    .from('cash_shortages')
-    .select('id, user_id, amount_inr')
-    .eq('status', 'approved')
-    .is('payroll_run_id', null)
-    .gte('business_date', bounds.from)
-    .lte('business_date', bounds.to);
-  return (data ?? []) as CashShortageRow[];
-}
-
-function sumShortagesByUser(rows: CashShortageRow[]): Map<string, number> {
-  const byUser = new Map<string, number>();
-  for (const r of rows) byUser.set(r.user_id, (byUser.get(r.user_id) ?? 0) + r.amount_inr);
-  return byUser;
-}
-
-/**
- * True when `error` means "the relation doesn't exist" — the cash-counts
- * migration hasn't been applied yet. Mirrors the same check duplicated in
- * lib/payroll/payslipEmail.ts and app/api/owner/staff/_lib.ts: PostgREST
- * usually reports it as PGRST205 (schema-cache miss), raw Postgres as 42P01.
- */
-function isMissingRelation(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === '42P01' || error.code === 'PGRST205') return true;
-  return /relation .* does not exist|could not find the table|schema cache/i.test(error.message ?? '');
-}
+// APPROVED but that no active payroll run has consumed yet. Loading, marking
+// and releasing them lives in lib/payroll/shortages.ts (the consume/release
+// half of the shortage state machine in lib/cash/counts.ts). A missing
+// cash-counts table yields no rows, so the month simply shows zero shortages.
 
 /** A priced day plus the clock times the payslip's day-by-day table shows. */
 type PayrollDay = PayrollDayInput & { firstIn: string | null; lastOut: string | null };
@@ -437,6 +406,58 @@ function runLineRow(
   };
 }
 
+type Admin = ReturnType<typeof createAdminSupabaseClient>;
+
+const INCOMPLETE_RUN_REASON = 'Finalize did not complete — no payroll line was written.';
+
+/** finalized → reversed for a run that never got its line (compare-and-set). */
+async function reverseIncompleteRun(admin: Admin, runId: string): Promise<boolean> {
+  const rule = canPayrollRunTransition('finalized', 'reverse', { reason: INCOMPLETE_RUN_REASON }).rule!;
+  const { data, error } = await admin
+    .from('payroll_runs')
+    .update({ status: rule.to, reversed_at: new Date().toISOString(), reversal_reason: INCOMPLETE_RUN_REASON })
+    .eq('id', runId)
+    .eq('status', rule.from!)
+    .select('id')
+    .maybeSingle();
+  if (error) {
+    console.error('payroll: could not retire an incomplete run', runId, error);
+    return false;
+  }
+  return Boolean(data);
+}
+
+/**
+ * Removes the run a failed line insert left behind: delete (retried once),
+ * else reverse it — a reversed run blocks no re-finalize. False only when
+ * neither worked, which the caller reports.
+ */
+async function discardIncompleteRun(admin: Admin, runId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error } = await admin.from('payroll_runs').delete().eq('id', runId);
+    if (!error) return true;
+    console.error('payroll: could not delete an incomplete run', runId, error);
+  }
+  return reverseIncompleteRun(admin, runId);
+}
+
+/** How long a line-less run is left alone — a concurrent finalize may be mid-write. */
+const INCOMPLETE_RUN_GRACE_MS = 2 * 60_000;
+
+/**
+ * True when `run` (finalized) turned out to be debris — no line, and old
+ * enough that no finalize can still be writing one — and is now retired.
+ * Anything uncertain (an unreadable line table, a run with no timestamp) is
+ * left standing: blocking a re-run is recoverable, double payroll is not.
+ */
+async function retireIncompleteRun(admin: Admin, run: { id: string; generated_at?: string | null }): Promise<boolean> {
+  const age = run.generated_at ? Date.now() - Date.parse(run.generated_at) : NaN;
+  if (!Number.isFinite(age) || age < INCOMPLETE_RUN_GRACE_MS) return false;
+  const { data: lines, error } = await admin.from('payroll_run_lines').select('id').eq('run_id', run.id).limit(1);
+  if (error || (lines ?? []).length > 0) return false;
+  return reverseIncompleteRun(admin, run.id);
+}
+
 // POST { month, user_id, apply?: { late?, cash_shortage? }, adjustment?: { amount_inr, reason } }
 // — finalize ONE staffer's month, taking only the deductions the owner ticked.
 export async function POST(request: Request) {
@@ -472,15 +493,20 @@ export async function POST(request: Request) {
 
   const { data: existingRows } = await admin
     .from('payroll_runs')
-    .select('id')
+    .select('id, generated_at')
     .eq('period_start', bounds.from)
     .eq('period_end', bounds.to)
     .eq('user_id', userId)
     .eq('status', 'finalized')
     .limit(1);
-  if ((existingRows ?? []).length > 0) {
-    return errorResponse(409, 'This person is already finalized for that month. Reverse it first to change anything.');
-  }
+  const existingRun = ((existingRows ?? []) as { id: string; generated_at?: string | null }[])[0] ?? null;
+  // A finalized run with NO line is the debris of a finalize that failed
+  // half-way and could not clean up after itself. It would block this person's
+  // month forever (the one-active-run index) while the screen showed them as a
+  // draft with nothing to reverse — so retire it here and carry on.
+  const stillActive = existingRun ? !(await retireIncompleteRun(admin, existingRun)) : false;
+  const finalizeCheck = canPayrollRunTransition(stillActive ? 'finalized' : null, 'finalize');
+  if (!finalizeCheck.ok) return errorResponse(409, finalizeCheck.message!);
 
   const computed = await computePeriod(month);
   const draft = computed.lines.find((l) => l.user_id === userId);
@@ -515,7 +541,8 @@ export async function POST(request: Request) {
       period_start: bounds.from,
       period_end: bounds.to,
       user_id: userId,
-      status: 'finalized',
+      // Straight to 'finalized': a draft is never stored (lib/payroll/runState.ts).
+      status: finalizeCheck.rule!.to,
       rules_snapshot: computed.rulesSnapshot,
       generated_by: owner.id,
       finalized_at: new Date().toISOString(),
@@ -535,39 +562,33 @@ export async function POST(request: Request) {
   const { error: lineErr } = await admin.from('payroll_run_lines').insert([row]);
   if (lineErr) {
     // Leave no half-written run behind: a finalized run with no line would
-    // read as "this person was paid nothing".
-    await admin.from('payroll_runs').delete().eq('id', run.id);
-    return errorResponse(500, `Could not write the payroll line: ${lineErr.message}`);
+    // read as "this person was paid nothing" and block a re-finalize. The
+    // clean-up used to be a single unchecked delete; now it is checked,
+    // retried, falls back to reversing the run (a reversed run blocks
+    // nothing), and says so if even that fails.
+    const cleaned = await discardIncompleteRun(admin, run.id);
+    return errorResponse(
+      500,
+      `Could not write the payroll line: ${lineErr.message}` +
+        (cleaned
+          ? ''
+          : ` The unfinished run could not be removed either — finalizing ${draft.name} again in a minute will retire it.`),
+    );
   }
 
   // CC-5: mark this person's shortage rows consumed — but ONLY if the owner
   // chose to deduct them. A shortage they let go stays unconsumed: it is not
   // on any payslip, and it is month-scoped, so no later month picks it up.
   // The run and line already stand here; a failure must not undo them, so it
-  // is reported in the response instead of failing the request.
-  const shortageIdsToMark = line.appliedDeductions.cashShortage
-    ? computed.shortageRows.filter((r) => r.user_id === userId).map((r) => r.id)
-    : [];
-
-  let cashShortagesMarked = 0;
-  let cashShortageMarkError: string | null = null;
-  if (shortageIdsToMark.length > 0) {
-    try {
-      const { error: markErr } = await admin
-        .from('cash_shortages')
-        .update({ payroll_run_id: run.id })
-        .in('id', shortageIdsToMark);
-      if (markErr) {
-        cashShortageMarkError = markErr.message;
-        console.error('Could not mark cash shortages as consumed by payroll run', run.id, markErr);
-      } else {
-        cashShortagesMarked = shortageIdsToMark.length;
-      }
-    } catch (err) {
-      cashShortageMarkError = err instanceof Error ? err.message : 'Could not mark cash shortages consumed.';
-      console.error('cash_shortages marking threw during finalize', run.id, err);
-    }
-  }
+  // is reported in the response (and on the screen) instead of failing the
+  // request. Compare-and-set + one retry: lib/payroll/shortages.ts.
+  const mark = await markShortagesConsumed(
+    admin,
+    run.id,
+    line.appliedDeductions.cashShortage ? computed.shortageRows.filter((r) => r.user_id === userId) : [],
+  );
+  const cashShortagesMarked = mark.marked;
+  const cashShortageMarkError = mark.error;
 
   // SA-5: the payslip email, to the personal email on file. Best-effort — a
   // finalized run must stand even if the email fails, so sendPayslipsForRun
@@ -603,20 +624,23 @@ export async function PATCH(request: Request) {
   if (!userId) return errorResponse(400, 'user_id is required — payroll is reversed one staffer at a time.');
   if (!reason) return errorResponse(400, 'A reason is required to reverse a payroll run.');
 
+  const reverse = canPayrollRunTransition('finalized', 'reverse', { reason });
+  if (!reverse.ok) return errorResponse(400, reverse.message!);
+
   const admin = createAdminSupabaseClient();
   // Reversal, never deletion: what was paid, and what it was corrected to, is
-  // the entire point of keeping the record.
+  // the entire point of keeping the record. Compare-and-set on 'finalized'.
   const { data, error } = await admin
     .from('payroll_runs')
     .update({
-      status: 'reversed',
+      status: reverse.rule!.to,
       reversed_at: new Date().toISOString(),
       reversal_reason: reason,
     })
     .eq('period_start', bounds.from)
     .eq('period_end', bounds.to)
     .eq('user_id', userId)
-    .eq('status', 'finalized')
+    .eq('status', reverse.rule!.from!)
     .select('*')
     .maybeSingle();
 
@@ -625,32 +649,13 @@ export async function PATCH(request: Request) {
   const run = data as PayrollRun;
 
   // CC-5: this run's shortages were marked payroll_run_id = run.id at
-  // finalize so they'd never be deducted twice. Reversing without undoing
-  // that mark would strand them forever — no future compute would ever pick
-  // them up again (they're not "unconsumed" any more). Clear it so the next
-  // finalize re-includes them.
-  let cashShortagesCleared = 0;
-  let cashShortageClearError: string | null = null;
-  try {
-    const { data: clearedRows, error: clearErr } = await admin
-      .from('cash_shortages')
-      .update({ payroll_run_id: null })
-      .eq('payroll_run_id', run.id)
-      .select('id');
-    if (clearErr) {
-      // A missing cash-counts migration is not a failure worth reporting —
-      // there was nothing to clear either way.
-      if (!isMissingRelation(clearErr)) {
-        cashShortageClearError = clearErr.message;
-        console.error('Could not clear cash_shortage payroll_run_id on reversal', run.id, clearErr);
-      }
-    } else {
-      cashShortagesCleared = (clearedRows ?? []).length;
-    }
-  } catch (err) {
-    cashShortageClearError = err instanceof Error ? err.message : 'Could not clear cash shortages.';
-    console.error('cash_shortages clear threw during reversal', run.id, err);
-  }
+  // finalize so they'd never be deducted twice. Release them so the next
+  // finalize re-includes them. If the release fails it is reported — but it
+  // no longer strands anything: payroll reads a pointer to a reversed run as
+  // unconsumed (lib/payroll/shortages.ts), and the next finalize re-points it.
+  const release = await releaseShortagesForRun(admin, run.id);
+  const cashShortagesCleared = release.cleared;
+  const cashShortageClearError = release.error;
 
   return NextResponse.json({
     run,

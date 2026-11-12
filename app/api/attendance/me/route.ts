@@ -4,6 +4,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, unauthorized } from '@/lib/api/http';
 import { istBusinessDate } from '@/lib/attendance/businessDate';
 import { getAttendanceSettings } from '@/lib/attendance/settings';
+import { sessionNeedsApproval } from '@/lib/attendance/sessionState';
 import { cashRequirementFor } from '@/lib/cash/checkpoints';
 import type { AttendanceSession } from '@/lib/types';
 
@@ -68,7 +69,7 @@ export async function GET() {
     if (s.clock_out_at) entry.minutes += minutesBetween(s.clock_in_at, s.clock_out_at);
     // An auto-closed day is NOT confirmed time — it is a guess awaiting the
     // owner, and must never present itself to the staffer as settled hours.
-    if (s.status === 'auto_closed' && !s.approved_at) entry.needsApproval = true;
+    if (sessionNeedsApproval(s.status, s.approved_at)) entry.needsApproval = true;
     if (s.source === 'manual' || s.approved_at) entry.edited = true;
     byDate.set(s.business_date, entry);
   }

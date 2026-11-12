@@ -4,7 +4,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
-import type { CashCountKind, ShortageStatus } from '@/lib/cash/counts';
+import { isShortageLocked, type CashCountKind, type ShortageStatus } from '@/lib/cash/counts';
 
 type PgError = { code?: string; message?: string } | null | undefined;
 
@@ -156,7 +156,7 @@ export async function buildShortageRows(
       decidedByName: s.decided_by ? (names.get(s.decided_by) ?? 'Unknown staff') : null,
       decidedAt: s.decided_at,
       decisionNote: s.decision_note,
-      locked: Boolean(s.payroll_run_id),
+      locked: isShortageLocked(s),
       count: count
         ? {
             id: count.id,

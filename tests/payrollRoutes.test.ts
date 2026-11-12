@@ -41,6 +41,11 @@ const state: {
   cashShortagesError: PgError | null; // affects reads AND the reversal-clear update
   cashShortageUpdateError: PgError | null; // affects only the finalize mark-consumed update
   cashShortageUpdatePayload: Row | null;
+  // Failure paths of finalize (PAY-4 / CC-5 robustness).
+  lineInsertError: PgError | null;
+  runDeleteErrors: number; // how many deletes of payroll_runs fail before one succeeds
+  shortageUpdateCalls: number;
+  onShortageUpdate: (() => void) | null;
 } = {
   owner: null,
   runs: [],
@@ -60,6 +65,10 @@ const state: {
   cashShortagesError: null,
   cashShortageUpdateError: null,
   cashShortageUpdatePayload: null,
+  lineInsertError: null,
+  runDeleteErrors: 0,
+  shortageUpdateCalls: 0,
+  onShortageUpdate: null,
 };
 
 function baseSettings() {
@@ -119,16 +128,24 @@ vi.mock('@/lib/supabase-server', () => ({
             state.updateFilters = { ...ctx.filters };
             return { data: state.updateResult, error: null };
           }
-          if (ctx.op === 'delete') return { data: null, error: null };
+          if (ctx.op === 'delete') {
+            if (state.runDeleteErrors > 0) {
+              state.runDeleteErrors -= 1;
+              return { data: null, error: { message: 'delete failed' } };
+            }
+            return { data: null, error: null };
+          }
           return { data: state.runs.filter(matches), error: null };
         }
         if (table === 'payroll_run_lines') {
-          if (ctx.op === 'insert') return { data: null, error: null };
+          if (ctx.op === 'insert') return { data: null, error: state.lineInsertError };
           return { data: state.runLines.filter(matches), error: null };
         }
         if (table === 'cash_shortages') {
           const rows = state.cashShortages as unknown as Row[];
           if (ctx.op === 'update') {
+            state.shortageUpdateCalls += 1;
+            state.onShortageUpdate?.();
             if (state.cashShortageUpdateError) return { data: null, error: state.cashShortageUpdateError };
             if (state.cashShortagesError) return { data: null, error: state.cashShortagesError };
             const hit = rows.filter(matches);
@@ -297,6 +314,10 @@ beforeEach(() => {
   state.cashShortagesError = null;
   state.cashShortageUpdateError = null;
   state.cashShortageUpdatePayload = null;
+  state.lineInsertError = null;
+  state.runDeleteErrors = 0;
+  state.shortageUpdateCalls = 0;
+  state.onShortageUpdate = null;
 });
 
 describe('payroll route — authorization', () => {
@@ -653,5 +674,153 @@ describe('payroll route — reverse ONE staffer', () => {
     const res = await PATCH(jsonReq('PATCH', { month: '2026-08', user_id: 'staff-1', reason: 'x' }));
     expect(res.status).toBe(200);
     expect((await res.json()).cashShortageClearError).toBeUndefined();
+  });
+});
+
+describe('payroll run lifecycle — failure paths no longer strand anything', () => {
+  const OLD = new Date(Date.now() - 10 * 60_000).toISOString();
+
+  it('cleans up the run when the line insert fails, and reports it', async () => {
+    employ('staff-1');
+    state.lineInsertError = { message: 'line write failed' };
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/line write failed/);
+    expect(state.deletedRunIds).toEqual(['run-1']);
+  });
+
+  it('retries a failed clean-up delete, then falls back to REVERSING the run (a reversed run blocks no re-finalize)', async () => {
+    employ('staff-1');
+    state.lineInsertError = { message: 'line write failed' };
+    state.runDeleteErrors = 2;
+    state.updateResult = { id: 'run-1' };
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    expect(res.status).toBe(500);
+    expect(state.deletedRunIds).toEqual(['run-1', 'run-1']);
+    expect(state.updatePayload?.status).toBe('reversed');
+    expect(String(state.updatePayload?.reversal_reason)).toMatch(/no payroll line/i);
+    expect((await res.json()).error).not.toMatch(/could not be removed/i);
+  });
+
+  it('says so when even the fallback fails, instead of claiming a clean failure', async () => {
+    employ('staff-1');
+    state.lineInsertError = { message: 'line write failed' };
+    state.runDeleteErrors = 2;
+    state.updateResult = null; // the reversal matched nothing
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/could not be removed/i);
+  });
+
+  it('retires a stale finalized run that has NO line, then finalizes', async () => {
+    // The debris of a finalize that failed half-way: it held the one-active-run
+    // slot forever while the screen showed the person as a draft.
+    employ('staff-1');
+    state.runs = [
+      { id: 'run-0', user_id: 'staff-1', status: 'finalized', period_start: '2026-08-01', period_end: '2026-08-31', generated_at: OLD },
+    ];
+    state.updateResult = { id: 'run-0' };
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    expect(res.status).toBe(200);
+    expect(state.updatePayload?.status).toBe('reversed');
+    expect(state.updateFilters?.id).toBe('run-0');
+    expect(state.insertedRun?.status).toBe('finalized');
+  });
+
+  it('leaves a line-less run alone while a concurrent finalize may still be writing its line', async () => {
+    employ('staff-1');
+    state.runs = [
+      {
+        id: 'run-0',
+        user_id: 'staff-1',
+        status: 'finalized',
+        period_start: '2026-08-01',
+        period_end: '2026-08-31',
+        generated_at: new Date().toISOString(),
+      },
+    ];
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    expect(res.status).toBe(409);
+    expect(state.updatePayload).toBeNull();
+  });
+
+  it('never retires a finalized run that has its line', async () => {
+    employ('staff-1');
+    state.runs = [
+      { id: 'run-0', user_id: 'staff-1', status: 'finalized', period_start: '2026-08-01', period_end: '2026-08-31', generated_at: OLD },
+    ];
+    state.runLines = [{ id: 'line-0', run_id: 'run-0', user_id: 'staff-1' }];
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1' }));
+    expect(res.status).toBe(409);
+    expect(state.updatePayload).toBeNull();
+  });
+
+  it('marks shortages compare-and-set on status approved, and reports a row that changed meanwhile', async () => {
+    employ('staff-1');
+    state.cashShortages = [shortage({ id: 's1', amount_inr: 300 }), shortage({ id: 's2', amount_inr: 200 })];
+    // s2 is no longer an approved, unconsumed shortage by the time we mark.
+    state.onShortageUpdate = () => {
+      state.cashShortages.find((r) => r.id === 's2')!.status = 'waived';
+    };
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1', apply: { cash_shortage: true } }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.cashShortagesMarked).toBe(1);
+    expect(body.cashShortageMarkError).toMatch(/1 of 2/);
+    expect(state.cashShortages.find((r) => r.id === 's2')!.payroll_run_id).toBeNull();
+  });
+
+  it('retries a failed mark once before reporting it', async () => {
+    employ('staff-1');
+    state.cashShortages = [shortage({ id: 's1', amount_inr: 500 })];
+    state.cashShortageUpdateError = { message: 'db exploded' };
+    await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1', apply: { cash_shortage: true } }));
+    expect(state.shortageUpdateCalls).toBe(2);
+  });
+
+  it('a shortage still pointing at a REVERSED run (a failed release) is proposed again and re-pointed', async () => {
+    employ('staff-1');
+    workedDay('staff-1');
+    state.runs = [
+      { id: 'run-old', user_id: 'staff-1', status: 'reversed', period_start: '2026-08-01', period_end: '2026-08-31' },
+    ];
+    state.cashShortages = [shortage({ id: 's1', amount_inr: 400, payroll_run_id: 'run-old' })];
+    const draft = lineFor(await (await getMonth()).json(), 'staff-1');
+    expect((draft.proposedDeductions as Row).cashShortageInr).toBe(400);
+
+    const res = await POST(jsonReq('POST', { month: '2026-08', user_id: 'staff-1', apply: { cash_shortage: true } }));
+    expect((await res.json()).cashShortagesMarked).toBe(1);
+    expect(state.insertedLines![0].cash_shortage_inr).toBe(400);
+    expect(state.cashShortages[0].payroll_run_id).toBe('run-1');
+  });
+
+  it('a shortage pointing at a run that still stands stays consumed', async () => {
+    employ('staff-1');
+    state.runs = [
+      { id: 'run-live', user_id: 'staff-1', status: 'finalized', period_start: '2026-07-01', period_end: '2026-07-31' },
+    ];
+    state.cashShortages = [shortage({ id: 's1', amount_inr: 400, payroll_run_id: 'run-live' })];
+    const draft = lineFor(await (await getMonth()).json(), 'staff-1');
+    expect((draft.proposedDeductions as Row).cashShortageInr).toBe(0);
+  });
+
+  it('a failed release on reversal is retried and reported — and strands nothing', async () => {
+    state.updateResult = { id: 'run-1', status: 'reversed' };
+    state.cashShortages = [shortage({ id: 's1', payroll_run_id: 'run-1' })];
+    state.cashShortagesError = { message: 'db down' };
+    const res = await PATCH(jsonReq('PATCH', { month: '2026-08', user_id: 'staff-1', reason: 'wrong salary used' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).cashShortageClearError).toBe('db down');
+    expect(state.shortageUpdateCalls).toBe(2);
+
+    // The pointer survived, but the run it names is reversed: the next
+    // compute still offers the shortage.
+    state.cashShortagesError = null;
+    state.runs = [
+      { id: 'run-1', user_id: 'staff-1', status: 'reversed', period_start: '2026-08-01', period_end: '2026-08-31' },
+    ];
+    employ('staff-1');
+    const draft = lineFor(await (await getMonth()).json(), 'staff-1');
+    expect((draft.proposedDeductions as Row).cashShortageInr).toBe(500);
   });
 });

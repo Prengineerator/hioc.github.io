@@ -16,6 +16,7 @@
 //     them for it twice.
 
 import { istBusinessDate, istMinutesOfDay, parseTimeToMinutes } from '@/lib/attendance/businessDate';
+import { sessionIsUnresolved, sessionNeedsApproval, type SessionStatus } from '@/lib/attendance/sessionState';
 
 export interface DayRules {
   gracePeriodMin: number;
@@ -113,7 +114,7 @@ export interface DaySession {
   id: string;
   clockInAt: string;
   clockOutAt: string | null;
-  status: 'open' | 'closed' | 'auto_closed' | 'void';
+  status: SessionStatus;
   source: 'punch' | 'manual';
   approvedAt: string | null;
   flags: string[];
@@ -248,9 +249,7 @@ export function rollUpDay(params: {
   // number is the one outcome D5-4 exists to prevent, so the day contributes
   // zero until an owner approves or corrects it — even if other sessions that
   // day are perfectly fine.
-  const unresolved = live.some(
-    (s) => s.status === 'open' || (s.status === 'auto_closed' && !s.approvedAt),
-  );
+  const unresolved = live.some((s) => sessionIsUnresolved(s.status, s.approvedAt));
 
   // Only the day's FIRST clock-in is rounded up to a shift start — coming back
   // from a break at 14:58 is not "arriving early for the 15:00 shift".
@@ -269,7 +268,7 @@ export function rollUpDay(params: {
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
     // An unapproved auto-close contributes nothing, so it must not reach the
     // interval set — otherwise "needs approval" would still quietly pay.
-    if (s.status === 'auto_closed' && !s.approvedAt) continue;
+    if (sessionNeedsApproval(s.status, s.approvedAt)) continue;
     intervals.push({ start, end });
     const countedStart =
       s === firstSession

@@ -4,6 +4,8 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, notFound, parseJsonBody } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
 import { TEAM_ROLES, type TeamRole } from '@/lib/staff/accounts';
+import { canShortageTransition } from '@/lib/cash/counts';
+import { findPayrollLock, payrollLockedMessage } from '@/lib/payroll/lock';
 import { SHORTAGE_COLUMNS, buildShortageRows, isMissingTable, type ShortageRow } from '../_lib';
 
 export const dynamic = 'force-dynamic';
@@ -13,16 +15,15 @@ type RouteParams = { params: { id: string } };
 // PATCH /api/owner/cash-shortages/[id] — ShortageDecisionBody
 // (lib/cash/counts.ts): { action: 'approve' | 'waive' | 'reassign', ... }.
 //
-// Decision rules (docs/PHASE-5-CASH-COUNTS.md CC-D4):
+// Decision rules (docs/PHASE-5-CASH-COUNTS.md CC-D4), all from the shortage
+// state machine in lib/cash/counts.ts:
 //  - Only a PENDING shortage can be decided. Once approved or waived it is
 //    final from this endpoint — there's no "undo" route, by design: an
 //    approved shortage may already be reflected in a payroll draft the owner
 //    is looking at, and a silent reversal would make that draft wrong.
 //  - An approved shortage additionally LOCKS the moment payroll finalize
 //    sets its payroll_run_id (CC-5) — it has been paid out (deducted) by
-//    then, so even re-approving/re-waiving must never be possible. Since
-//    only pending rows reach the update below, this can't fire from here in
-//    practice, but the check stays so the 409 message is specific.
+//    then, so even re-approving/re-waiving must never be possible.
 //  - REASSIGN IS NOT A DECISION: it moves who the shortage is currently
 //    charged to (user_id) but leaves status 'pending' — the owner still has
 //    to separately approve or waive it under the new person. original_user_id
@@ -33,6 +34,15 @@ type RouteParams = { params: { id: string } };
 //    field an eventual approve/waive would set — approve's note is optional
 //    and, when omitted, leaves decision_note (e.g. the reassignment's
 //    reason) as-is rather than clearing it.
+//  - Every write is compare-and-set on status = 'pending' AND the person it
+//    was charged to when the owner looked: a reassign racing an approve can
+//    no longer re-attribute an approved (deductible) shortage, and the loser
+//    gets a 409 rather than a silent last-writer-wins.
+//  - APPROVING is refused inside that person's finalized payroll month
+//    (lib/payroll/lock.ts). Payroll only deducts a month's shortages at that
+//    month's finalize, so a shortage approved afterwards would never be
+//    deducted at all — reverse the month first. Waiving or reassigning a
+//    pending one changes nothing that was paid, so neither is locked.
 export async function PATCH(request: Request, { params }: RouteParams) {
   const owner = await getOwnerUser();
   if (!owner) return errorResponse(403, 'Owner access required');
@@ -59,36 +69,27 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   if (!rowData) return notFound();
   const shortage = rowData as ShortageRow;
 
-  if (shortage.status !== 'pending') {
-    return errorResponse(
-      409,
-      shortage.payroll_run_id
-        ? "This shortage has already been paid out and can't be changed."
-        : `This shortage was already ${shortage.status}.`,
-    );
-  }
+  const check = canShortageTransition({ status: shortage.status, payrollRunId: shortage.payroll_run_id }, action);
+  if (!check.ok) return errorResponse(409, check.message ?? 'This shortage cannot be changed.');
+
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  let patch: Record<string, unknown>;
 
   if (action === 'approve') {
-    const note = typeof body.note === 'string' ? body.note.trim() : '';
-    const patch: Record<string, unknown> = {
-      status: 'approved',
+    const lock = await findPayrollLock(admin, shortage.user_id, shortage.business_date);
+    if (lock.error) return errorResponse(500, `Could not check payroll: ${lock.error}`);
+    if (lock.run) return errorResponse(409, payrollLockedMessage(lock.run, 'That shortage'));
+    patch = {
+      status: check.rule!.to,
       decided_by: owner.id,
       decided_at: new Date().toISOString(),
     };
     if (note) patch.decision_note = note;
-    const { error } = await admin.from('cash_shortages').update(patch).eq('id', id);
-    if (error) return errorResponse(500, error.message);
   } else if (action === 'waive') {
-    const note = typeof body.note === 'string' ? body.note.trim() : '';
     if (!note) return errorResponse(400, 'A note is required to waive a shortage.');
-    const { error } = await admin
-      .from('cash_shortages')
-      .update({ status: 'waived', decided_by: owner.id, decided_at: new Date().toISOString(), decision_note: note })
-      .eq('id', id);
-    if (error) return errorResponse(500, error.message);
+    patch = { status: check.rule!.to, decided_by: owner.id, decided_at: new Date().toISOString(), decision_note: note };
   } else {
     const userId = body.userId;
-    const note = typeof body.note === 'string' ? body.note.trim() : '';
     if (typeof userId !== 'string' || !isUuid(userId)) return errorResponse(400, 'Pick who to reassign this to.');
     if (!note) return errorResponse(400, 'A note is required to reassign a shortage.');
     if (userId === shortage.user_id) return errorResponse(400, 'Already assigned to that person.');
@@ -103,17 +104,24 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     if (!role || !TEAM_ROLES.includes(role as TeamRole)) {
       return errorResponse(400, 'Pick an active team member.');
     }
-
-    const { error } = await admin.from('cash_shortages').update({ user_id: userId, decision_note: note }).eq('id', id);
-    if (error) return errorResponse(500, error.message);
+    patch = { user_id: userId, decision_note: note };
   }
 
-  const { data: updatedRow, error: reloadError } = await admin
+  const { data: updatedRow, error } = await admin
     .from('cash_shortages')
-    .select(SHORTAGE_COLUMNS)
+    .update(patch)
     .eq('id', id)
+    .eq('status', check.rule!.from)
+    .eq('user_id', shortage.user_id)
+    .select(SHORTAGE_COLUMNS)
     .maybeSingle();
-  if (reloadError || !updatedRow) return errorResponse(500, reloadError?.message ?? 'Could not reload the shortage.');
+  if (error) return errorResponse(500, error.message);
+  if (!updatedRow) {
+    return errorResponse(
+      409,
+      'This shortage changed while you were deciding it (decided or reassigned elsewhere). Refresh and try again.',
+    );
+  }
 
   const [enriched] = await buildShortageRows(admin, [updatedRow as ShortageRow]);
   return NextResponse.json({ shortage: enriched });

@@ -3,6 +3,8 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { parseTimeToMinutes } from '@/lib/attendance/businessDate';
+import { planEmploymentChange } from '@/lib/attendance/employmentState';
+import { END_OF_TIME, findPayrollLock, lockedMonthLabel } from '@/lib/payroll/lock';
 import type { StaffEmployment } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -68,6 +70,18 @@ export async function POST(request: Request) {
 
   const admin = createAdminSupabaseClient();
 
+  // PAY-4: a new record prices EVERY day from effective_from on, so a
+  // finalized payroll month anywhere on or after it would be restated — the
+  // sheet and an already-paid payslip would disagree (lib/payroll/lock.ts).
+  const lock = await findPayrollLock(admin, userId, effectiveFrom, END_OF_TIME);
+  if (lock.error) return errorResponse(500, `Could not check payroll: ${lock.error}`);
+  if (lock.run) {
+    return errorResponse(
+      409,
+      `A record starting ${effectiveFrom} would change ${lockedMonthLabel(lock.run)}, which is inside this person's finalized payroll. Reverse that month first, or start the record after it.`,
+    );
+  }
+
   // Close any record still open at the new start date. The DB's exclusion
   // constraint would reject an overlap anyway; doing it here means the owner
   // gets "your new rate starts on the 1st" instead of a raw constraint error.
@@ -78,18 +92,34 @@ export async function POST(request: Request) {
     .is('effective_to', null);
   if (openErr) return errorResponse(500, openErr.message);
 
-  for (const row of (openRows ?? []) as { id: string; effective_from: string }[]) {
-    if (row.effective_from >= effectiveFrom) {
-      return errorResponse(
-        400,
-        `There is already a record starting ${row.effective_from}. A new record must start after it.`,
-      );
-    }
-    const { error: closeErr } = await admin
+  const plan = planEmploymentChange(
+    (openRows ?? []) as { id: string; effective_from: string; effective_to: string | null }[],
+    effectiveFrom,
+  );
+  if (!plan.ok) return errorResponse(400, plan.message!);
+
+  // Close first (the exclusion constraint forbids inserting the new row while
+  // the old one is still open — lib/attendance/employmentState.ts), each close
+  // compare-and-set on effective_to IS NULL so a concurrent change is a 409,
+  // and every close is undone if a later step fails: the person must never be
+  // left with no current rate.
+  const closed: string[] = [];
+  for (const id of plan.toClose) {
+    const { data: closedRow, error: closeErr } = await admin
       .from('staff_employment')
       .update({ effective_to: effectiveFrom })
-      .eq('id', row.id);
-    if (closeErr) return errorResponse(500, `Could not close the previous record: ${closeErr.message}`);
+      .eq('id', id)
+      .is('effective_to', null)
+      .select('id')
+      .maybeSingle();
+    if (closeErr || !closedRow) {
+      const restoreError = await restoreClosed(admin, closed, effectiveFrom);
+      if (closeErr) {
+        return errorResponse(500, `Could not close the previous record: ${closeErr.message}${restoreError}`);
+      }
+      return errorResponse(409, `That person's record changed while you were editing it. Refresh and try again.${restoreError}`);
+    }
+    closed.push(id);
   }
 
   const { data, error } = await admin
@@ -108,14 +138,48 @@ export async function POST(request: Request) {
     .single();
 
   if (error) {
+    // The new rate did not land, so the one we just closed must be current
+    // again — otherwise payroll finds no rate from effectiveFrom on and the
+    // person reads as "not employed".
+    const restoreError = await restoreClosed(admin, closed, effectiveFrom);
     // 23P01 = the exclusion constraint. Two records covering the same day would
     // make "the rate in effect that day" ambiguous, and payroll would silently
     // pick one.
     if ((error as { code?: string }).code === '23P01') {
-      return errorResponse(400, 'That period overlaps an existing record for this person.');
+      return errorResponse(400, `That period overlaps an existing record for this person.${restoreError}`);
     }
-    return errorResponse(500, error.message);
+    return errorResponse(500, `${error.message}${restoreError}`);
   }
 
   return NextResponse.json({ record: data });
+}
+
+/**
+ * Re-opens rows this request closed at `effectiveFrom` (compare-and-set on
+ * that value, so a row someone else has since changed is left alone). Returns
+ * '' on success, or a sentence for the error response naming what is now
+ * wrong — a silent failure here is a person with no current salary.
+ */
+async function restoreClosed(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  ids: string[],
+  effectiveFrom: string,
+): Promise<string> {
+  const stuck: string[] = [];
+  for (const id of ids) {
+    let ok = false;
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      const { error } = await admin
+        .from('staff_employment')
+        .update({ effective_to: null })
+        .eq('id', id)
+        .eq('effective_to', effectiveFrom);
+      ok = !error;
+      if (error) console.error('employment: could not re-open a closed record', id, error);
+    }
+    if (!ok) stuck.push(id);
+  }
+  return stuck.length === 0
+    ? ''
+    : ` The previous record was left closed on ${effectiveFrom} and could not be re-opened — add the new record again, or the person has no rate from that date.`;
 }
