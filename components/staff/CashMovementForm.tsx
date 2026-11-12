@@ -8,9 +8,17 @@
 // category. Its own page, /staff/cash-movements, which renders it only when
 // the server has already decided the signed-in account is manager/owner
 // (see app/staff/cash-movements/page.tsx).
+//
+// Retry safety: each entry carries an `id` this form generates once per
+// attempt (lib/cash/clientRowId.ts) — the same id on a retry, a new one once it
+// is recorded or the form is changed — so a tap whose answer was lost, tapped
+// again, is answered with the entry already recorded instead of taking the
+// cash out twice. One request at a time (components/staff/submitMachine.ts).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CashMovementBody } from '@/lib/cash/counts';
+import { newClientRowId } from '@/lib/cash/clientRowId';
+import { isSubmitting, useSubmitMachine } from '@/components/staff/submitMachine';
 
 interface MovementRaw {
   id?: string;
@@ -55,10 +63,21 @@ function normalize(m: MovementRaw, i: number): MovementView {
 }
 
 export function CashMovementForm() {
-  const [direction, setDirection] = useState<'out' | 'in'>('out');
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [direction, setDirectionRaw] = useState<'out' | 'in'>('out');
+  const [amount, setAmountRaw] = useState('');
+  const [reason, setReasonRaw] = useState('');
+  const { state: submitState, send } = useSubmitMachine();
+  const busy = isSubmitting(submitState);
+  // The id of the entry being recorded: kept across retries of THIS entry,
+  // dropped once it is recorded or the form changes (it is then a new entry).
+  const entryId = useRef<string | null>(null);
+  const edited = <T,>(set: (v: T) => void) => (v: T) => {
+    entryId.current = null;
+    set(v);
+  };
+  const setDirection = edited(setDirectionRaw);
+  const setAmount = edited(setAmountRaw);
+  const setReason = edited(setReasonRaw);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [recent, setRecent] = useState<MovementView[]>([]);
@@ -90,9 +109,16 @@ export function CashMovementForm() {
       setError('Say what this is for (at least 5 characters) — the owner sees this note.');
       return;
     }
-    setBusy(true);
+    // The one in-flight guard (a second tap in the same frame is refused).
+    if (!send({ type: 'submit' })) return;
+    if (!entryId.current) entryId.current = newClientRowId();
     try {
-      const body: CashMovementBody = { direction, amountInr, reason: reason.trim() };
+      const body: CashMovementBody & { id?: string } = {
+        direction,
+        amountInr,
+        reason: reason.trim(),
+        ...(entryId.current ? { id: entryId.current } : {}),
+      };
       const res = await fetch('/api/cash-movements', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -100,17 +126,21 @@ export function CashMovementForm() {
       });
       const data = await res.json().catch(() => ({}) as Record<string, unknown>);
       if (!res.ok) {
+        send({ type: 'failed', message: '' });
         setError((data.error as string) ?? 'Could not record that.');
         return;
       }
+      send({ type: 'succeeded' });
+      send({ type: 'reset' });
+      entryId.current = null;
       setNotice(`Recorded ₹${amountInr} cash ${direction}.`);
-      setAmount('');
-      setReason('');
+      setAmountRaw('');
+      setReasonRaw('');
       await loadRecent();
     } catch {
+      // The same id goes with the retry: if this one landed, it is not recorded twice.
+      send({ type: 'failed', message: '' });
       setError('Network problem — please try again.');
-    } finally {
-      setBusy(false);
     }
   }
 

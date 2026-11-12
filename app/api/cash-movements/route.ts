@@ -4,6 +4,7 @@ import { requireCashManager } from '@/lib/cash/gate';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
+import { ID_TAKEN_MESSAGE, isUniqueViolation, parseClientRowId, sameEntry } from '@/lib/cash/clientRowId';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,7 +31,13 @@ function amountProblem(value: unknown): string | null {
 }
 
 // POST /api/cash-movements — manager/owner only (session or PIN operator).
-// Body: { direction: 'out' | 'in', amountInr, reason }.
+// Body: { direction: 'out' | 'in', amountInr, reason, id? }.
+//
+// `id` (optional, a uuid the form generated for this entry — lib/cash/
+// clientRowId.ts) makes a retry safe: the row is inserted under it, so a retry
+// whose first attempt already landed hits the primary key and is answered with
+// the row already recorded (200) — the same actor's same entry — instead of
+// taking the cash out twice. A different entry under that id is refused (409).
 export async function POST(request: Request) {
   const gate = await requireCashManager(MANAGER_ONLY);
   if (gate.denied) return gate.denied;
@@ -48,18 +55,27 @@ export async function POST(request: Request) {
   if (typeof reason !== 'string' || reason.trim().length < MIN_REASON_LEN) {
     return errorResponse(400, `Give a reason (at least ${MIN_REASON_LEN} characters).`);
   }
+  const clientId = parseClientRowId(body.id);
+  if (!clientId.ok) return errorResponse(400, clientId.error);
 
   const admin = createAdminSupabaseClient();
+  const entry: { direction: string; amount_inr: number; reason: string; recorded_by: string; id?: string } = {
+    direction,
+    amount_inr: amountInr as number,
+    reason: reason.trim(),
+    recorded_by: manager.id,
+  };
   const { data: inserted, error } = await admin
     .from('cash_movements')
-    .insert({
-      direction,
-      amount_inr: amountInr,
-      reason: reason.trim(),
-      recorded_by: manager.id,
-    })
+    .insert(clientId.id ? { ...entry, id: clientId.id } : entry)
     .select('*')
     .single();
+  if (clientId.id && isUniqueViolation(error)) {
+    // Already recorded under this id: a retry of a request that went through.
+    const { data: existing } = await admin.from('cash_movements').select('*').eq('id', clientId.id).maybeSingle();
+    if (existing && sameEntry(existing as typeof entry, entry)) return NextResponse.json({ movement: existing });
+    return errorResponse(409, ID_TAKEN_MESSAGE);
+  }
   if (error || !inserted) {
     return errorResponse(
       500,

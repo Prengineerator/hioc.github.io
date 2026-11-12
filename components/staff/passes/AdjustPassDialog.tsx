@@ -6,8 +6,16 @@
 // bounds are the ones POST /api/passes/[id]/adjust checks, so the form and the
 // route cannot disagree — and the route (403 without `pass_manage`) is the real
 // guard: its message is shown as it is.
+//
+// One request at a time (components/staff/submitMachine.ts: a second tap in the
+// same frame is refused, not sent). The route has no retry key — the change is
+// made by the coffee_pass_adjust database function, which writes the audit row
+// itself, so a client-chosen id has nowhere to go without a database change —
+// so a lost answer is NOT safe to repeat blindly: the message says to check the
+// pass before trying again.
 
 import { useState } from 'react';
+import { isSubmitting, submitMessage, useSubmitMachine } from '@/components/staff/submitMachine';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -45,8 +53,10 @@ export function AdjustPassDialog({
   const extend = kind === 'extend';
   const [amount, setAmount] = useState('1');
   const [reason, setReason] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { state, send } = useSubmitMachine();
+  // Done = closing: nothing more is sent from here.
+  const busy = isSubmitting(state) || state.phase === 'done';
+  const error = submitMessage(state);
 
   const maxCups = Math.max(1, pass.drinks_total);
   const parsed = extend ? validateExtend(amount, reason) : validateCredit(amount, reason, maxCups);
@@ -55,9 +65,7 @@ export function AdjustPassDialog({
   const chips = extend ? EXTEND_REASON_CHIPS : CREDIT_REASON_CHIPS;
 
   async function submit() {
-    if (!parsed.ok || busy) return;
-    setBusy(true);
-    setError(null);
+    if (!parsed.ok || !send({ type: 'submit' })) return;
     try {
       const res = await fetch(`/api/passes/${pass.id}/adjust`, {
         method: 'POST',
@@ -66,9 +74,10 @@ export function AdjustPassDialog({
       });
       const data = (await res.json().catch(() => null)) as { pass?: PassSummary; error?: string } | null;
       if (!res.ok || !data?.pass) {
-        setError(data?.error ?? 'Could not save the change. Try again.');
+        send({ type: 'failed', message: data?.error ?? 'Could not save the change. Try again.' });
         return;
       }
+      send({ type: 'succeeded' });
       onDone(
         data.pass,
         parsed.value.kind === 'extend'
@@ -76,9 +85,12 @@ export function AdjustPassDialog({
           : `Gave back ${cupsLabel(parsed.value.drinks)} on ${passTitle(pass)}.`,
       );
     } catch {
-      setError('Could not reach the server. Check the connection and try again.');
-    } finally {
-      setBusy(false);
+      // The change may have been saved before the answer was lost, and a repeat
+      // would extend (or give back) twice: check first.
+      send({
+        type: 'failed',
+        message: 'Could not reach the server — the change may already be saved. Check the pass before trying again.',
+      });
     }
   }
 

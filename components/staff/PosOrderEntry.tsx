@@ -114,6 +114,7 @@ import {
 } from '@/lib/orders/manualDiscount';
 import { isSoldByWeight, lineSizeLabel } from '@/lib/menu/weight';
 import type { MenuItem, OrderType } from '@/lib/types';
+import { ORDER_CHANGED_MESSAGE, sendOrderWrite, withExpectedVersion } from '@/components/staff/orderWrite';
 
 const DEFAULT_CATEGORY = MENU_CATEGORIES[0].slug;
 // "Quick picks" (items recently punched on this tablet) is its own entry in
@@ -171,6 +172,9 @@ const QUOTE_RETRY_MS = 4000;
  * and a price that moved is caught by the server at Charge (total_changed).
  */
 const REOPEN_REFETCH_AFTER_MS = 60_000;
+
+// Said when a cart change is refused because the cart is being charged.
+const CART_FROZEN_MESSAGE = 'Placing the order — one moment…';
 
 // POS4-2 — a per-attempt key for POST /api/orders. crypto.randomUUID is present
 // in every browser this POS runs on; the timestamp+random fallback keeps an old
@@ -245,6 +249,13 @@ export interface AddToOrderTarget {
    * Settle. Absent = an unpaid running tab.
    */
   paid?: boolean;
+  /**
+   * The order's `version` as this screen loaded it, sent back as
+   * `expected_version` (components/staff/orderWrite.ts): an add whose answer
+   * was lost, tapped again, is refused (409 stale_version) instead of putting
+   * the items — and a second KOT — on the bill twice. Absent = not sent.
+   */
+  version?: number;
 }
 
 /** POST /api/orders' `settlement` (lib/orders/settlePayment), as this screen reads it. */
@@ -437,6 +448,11 @@ export function PosOrderEntry({
     return () => clearTimeout(t);
   }, [addPrints, router, returnTo]);
   const inFlight = useRef(false);
+  // TAB-2 + retry safety: the version of the running order the next add is
+  // judged against — the one the screen loaded, then each add's answer.
+  const addVersion = useRef<number | null>(addToOrder?.version ?? null);
+  // After a stale add: what is on the bill now, so "check it" has something to check.
+  const [addBillNow, setAddBillNow] = useState<{ lines: string; totalInr: number } | null>(null);
   // POS4-2 — identifies THIS order attempt across retries. Rotated only once an
   // order is actually placed, so a retry after a network failure replays rather
   // than creating a duplicate.
@@ -968,6 +984,8 @@ export function PosOrderEntry({
   // sibling mapper instead — it has no quantities/add-ons to resolve and a
   // different, more limited variant-matching rule (lib/pos/repeatOrder.ts).
   function handleRepeatOrder(order: CustomerOrderResponse) {
+    // Not into a cart that is being charged (and not "Added 3 items" for lines refused).
+    if (cartFrozen()) return;
     setRepeatingOrderId(order.id);
     try {
       const { lines, skipped, modified } =
@@ -1139,7 +1157,23 @@ export function PosOrderEntry({
   ]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
+  // The cart is FROZEN while a charge or an add is in flight. The menu grid, the
+  // quick-add bar and the cart's +/− used to stay live during the request, and
+  // its success then ran resetForNextOrder() / setCart([]) — wiping lines the
+  // staffer had already punched for the NEXT customer. Freezing is the simpler
+  // correct choice over snapshot-and-merge: the request is short, and what is
+  // being charged is then exactly what is on screen. Every cart change funnels
+  // through these four (tile tap, quick-add, the customize modal, a repeat
+  // order), so the check lives here; the ref holds even before React re-renders.
+  const cartFrozen = useCallback((): boolean => {
+    if (!inFlight.current) return false;
+    setToast(CART_FROZEN_MESSAGE);
+    setTimeout(() => setToast((cur) => (cur === CART_FROZEN_MESSAGE ? null : cur)), 4000);
+    return true;
+  }, []);
+
   const addLine = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
+    if (cartFrozen()) return;
     const key = computeCartKey(
       line.menuItemId,
       line.variantId,
@@ -1155,19 +1189,22 @@ export function PosOrderEntry({
     // Single funnel for every add (tile tap, quick-add, and the modal's onAdd),
     // so "Quick picks" reflects whatever was actually punched.
     setRecentIds(pushRecent(line.menuItemId));
-  }, []);
+  }, [cartFrozen]);
 
   const increment = useCallback((key: string) => {
+    if (cartFrozen()) return;
     setCart((prev) => prev.map((i) => (i.key === key ? { ...i, qty: i.qty + 1 } : i)));
-  }, []);
+  }, [cartFrozen]);
   const decrement = useCallback((key: string) => {
+    if (cartFrozen()) return;
     setCart((prev) =>
       prev.map((i) => (i.key === key ? { ...i, qty: i.qty - 1 } : i)).filter((i) => i.qty > 0),
     );
-  }, []);
+  }, [cartFrozen]);
   const removeLine = useCallback((key: string) => {
+    if (cartFrozen()) return;
     setCart((prev) => prev.filter((i) => i.key !== key));
-  }, []);
+  }, [cartFrozen]);
 
   const focusBar = useCallback(() => {
     barRef.current?.focus();
@@ -1577,34 +1614,47 @@ export function PosOrderEntry({
   // TAB-2 — append the cart to an existing open order through the amend engine.
   // Totals are recomputed server-side there, so nothing about money is decided
   // here; on success we return to the tables board where the new total shows.
+  //
+  // Retry safety: the add carries `expected_version` (addVersion). If its answer
+  // is lost — the items DID go on — a second tap meets a newer version and is
+  // refused (409 stale_version) instead of adding them, and printing their KOT,
+  // twice. Nothing is retried by itself: the screen fetches the bill, shows what
+  // is on it now, and the staffer decides (a deliberate tap then goes through).
   async function submitAddToOrder() {
     if (!addToOrder || inFlight.current || cart.length === 0) return;
     inFlight.current = true;
     setSubmitting(true);
     setSubmitError(null);
+    setAddBillNow(null);
 
     try {
-      const res = await fetch(`/api/orders/${addToOrder.id}/amend`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          op: 'add',
-          items: orderItemsOf(cart),
-        }),
-      });
+      const result = await sendOrderWrite<{
+        added_item_ids?: string[];
+        order?: { balance_due_inr?: number; version?: number };
+      }>(
+        `/api/orders/${addToOrder.id}/amend`,
+        withExpectedVersion({ op: 'add', items: orderItemsOf(cart) }, addVersion.current),
+        'Could not add the items. Please try again.',
+      );
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        // A 409 here is the version guard: someone settled or changed the order
-        // while this cart was open. The message from the route says so.
-        setSubmitError(data.error ?? 'Could not add the items. Please try again.');
+      if (result.kind === 'stale') {
+        setSubmitError(ORDER_CHANGED_MESSAGE);
+        await refreshAddTarget(addToOrder.id);
+        return;
+      }
+      if (result.kind === 'network') {
+        setSubmitError('Network error — please check the connection and try again.');
+        return;
+      }
+      if (result.kind === 'error') {
+        // Any other 409: someone settled or closed the order while this cart was
+        // open. The message from the route says so.
+        setSubmitError(result.message);
         return;
       }
 
-      const data = (await res.json().catch(() => ({}))) as {
-        added_item_ids?: string[];
-        order?: { balance_due_inr?: number };
-      };
+      const data = result.data;
+      if (typeof data.order?.version === 'number') addVersion.current = data.order.version;
       const label = formatOrderNumber(addToOrder.orderNumber);
       // A paid bill: say what is now owed, so the staffer knows to collect it.
       const owed = data.order?.balance_due_inr ?? 0;
@@ -1629,6 +1679,37 @@ export function PosOrderEntry({
     } finally {
       inFlight.current = false;
       setSubmitting(false);
+    }
+  }
+
+  /**
+   * After a stale add: read the running order again — its version, so the
+   * staffer's next (deliberate) tap is judged against what they now see, and
+   * its lines, shown under the message so they can tell whether their items
+   * are already on it. A failed read leaves the old version: the next tap is
+   * refused again rather than risk adding twice.
+   */
+  async function refreshAddTarget(orderId: string) {
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const { order } = (await res.json()) as {
+        order?: {
+          version?: number;
+          total_inr: number | null;
+          subtotal_inr: number;
+          items?: { name_snapshot: string; quantity: number; voided?: boolean }[];
+        };
+      };
+      if (!order) return;
+      if (typeof order.version === 'number') addVersion.current = order.version;
+      const lines = (order.items ?? [])
+        .filter((i) => !i.voided)
+        .map((i) => `${i.quantity}× ${i.name_snapshot}`)
+        .join(', ');
+      setAddBillNow({ lines, totalInr: order.total_inr ?? order.subtotal_inr });
+    } catch {
+      /* keep the old version: the next tap is refused again */
     }
   }
 
@@ -2037,7 +2118,8 @@ export function PosOrderEntry({
                           type="button"
                           aria-label={`Decrease ${line.name} quantity`}
                           onClick={() => decrement(line.key)}
-                          className="flex h-10 w-10 items-center justify-center rounded-full bg-charcoal text-lg text-cream active:scale-95"
+                          disabled={submitting}
+                          className="flex h-10 w-10 items-center justify-center rounded-full bg-charcoal text-lg text-cream active:scale-95 disabled:opacity-50"
                         >
                           &minus;
                         </button>
@@ -2048,7 +2130,8 @@ export function PosOrderEntry({
                           type="button"
                           aria-label={`Increase ${line.name} quantity`}
                           onClick={() => increment(line.key)}
-                          className="flex h-10 w-10 items-center justify-center rounded-full bg-tan-dark text-lg text-cream active:scale-95"
+                          disabled={submitting}
+                          className="flex h-10 w-10 items-center justify-center rounded-full bg-tan-dark text-lg text-cream active:scale-95 disabled:opacity-50"
                         >
                           +
                         </button>
@@ -2060,7 +2143,8 @@ export function PosOrderEntry({
                         type="button"
                         aria-label={`Remove ${line.name}`}
                         onClick={() => removeLine(line.key)}
-                        className="shrink-0 rounded-full px-1 text-lg leading-none text-muted hover:text-red-700"
+                        disabled={submitting}
+                        className="shrink-0 rounded-full px-1 text-lg leading-none text-muted hover:text-red-700 disabled:opacity-50"
                       >
                         &times;
                       </button>
@@ -2522,6 +2606,11 @@ export function PosOrderEntry({
             {submitError && !paymentOpen ? (
               <p role="alert" className="text-sm text-red-700">
                 {submitError}
+              </p>
+            ) : null}
+            {isAddMode && addBillNow ? (
+              <p className="text-xs text-muted">
+                On the bill now: {addBillNow.lines || 'no items'} · ₹{addBillNow.totalInr}
               </p>
             ) : null}
 

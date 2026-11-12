@@ -19,7 +19,7 @@ import { OrderDetailModal } from '@/components/staff/OrderDetailModal';
 import { usePrintDock } from '@/components/staff/PrintDock';
 import { SettlePaymentDialog, type SettleIntent } from '@/components/staff/SettlePaymentDialog';
 import { SettleBalanceDialog } from '@/components/staff/SettleBalanceDialog';
-import { describeOrderPayment } from '@/lib/orders/settleList';
+import { describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
 import { acceptPrintPlan, settlePrintPlan } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { NewOrderAlert } from '@/components/staff/NewOrderAlert';
@@ -38,6 +38,9 @@ import { isAppPaymentMethod } from '@/lib/orders/payments';
 import { kitchenOrders } from '@/lib/pos/ritual';
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import type { Order, OrderItem, PaymentMethod } from '@/lib/types';
+import { sendOrderWrite, withExpectedVersion } from '@/components/staff/orderWrite';
+import type { DetailOutcome } from '@/components/staff/orderDetailState';
+import { useToastTimer } from '@/components/staff/toastTimer';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -63,7 +66,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
   const [prepMin, setPrepMin] = useState(15);
-  const [toast, setToast] = useState('');
+  // One toast timer, cancelled on unmount (it used to be a bare setTimeout per
+  // toast: an older one cleared a newer toast early, and fired after unmount).
+  const [toast, showToast] = useToastTimer(3500);
   const shell = useStaffShell();
   const { refreshNewOrders } = shell;
   const prevReceivedRef = useRef<Set<string> | null>(null);
@@ -188,11 +193,6 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
     }
   }, [orders, selected]);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(''), 3500);
-  };
-
   const openDetail = useCallback((o: OrderWithItems, mode?: 'reject') => {
     setSelectedMode(mode);
     setSelected(o);
@@ -287,8 +287,11 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
     } catch {
       showToast('Could not send the reminder — check the connection');
     }
-  }, []);
+  }, [showToast]);
 
+  // A one-tap settle from the detail. The server's settle is guarded (it writes
+  // only from the payment status and version it read); the detail sends one at
+  // a time and prints only once this resolves true.
   const handlePayment = useCallback(
     async (o: OrderWithItems, method: PaymentMethod, reference?: string) => {
       try {
@@ -304,19 +307,26 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         }
         return res.ok;
       } catch {
+        showToast('Payment not recorded — check the connection, then look at the order before trying again.');
         return false;
       } finally {
         fetchOrders();
       }
     },
-    [fetchOrders],
+    [fetchOrders, showToast],
   );
 
   // Refund (PAY-3) — the server route is manager/owner-gated (FND-5); a plain
   // staff member sees this fail with a clear message rather than the button
   // being hidden (role isn't plumbed to this client page).
   const handleRefund = useCallback(
-    async (o: OrderWithItems, amountInr: number, reason: string, method?: string, refundKey?: string) => {
+    async (
+      o: OrderWithItems,
+      amountInr: number,
+      reason: string,
+      method?: string,
+      refundKey?: string,
+    ): Promise<DetailOutcome> => {
       try {
         const res = await fetch(`/api/orders/${o.id}/refund`, {
           method: 'POST',
@@ -333,6 +343,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           showToast(d.error ?? 'Refund failed — only managers can issue refunds.');
+          return 'failed';
         } else {
           const d = await res.json().catch(() => ({}));
           const r = d?.refunded as { method?: string; amount_inr?: number } | undefined;
@@ -348,14 +359,16 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
                   ? `Refunded ₹${r.amount_inr} on ${r.method.toUpperCase()} — reverse it on the terminal.`
                   : 'Refund issued.',
           );
+          return 'done';
         }
       } catch {
         showToast('Refund failed — please try again.');
+        return 'failed';
       } finally {
         fetchOrders();
       }
     },
-    [fetchOrders],
+    [fetchOrders, showToast],
   );
 
   // Void a line (POS-4) — POST /amend voids the line, recomputes totals
@@ -363,31 +376,38 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   // ('void_line'), D4): a plain staff member gets a 403 surfaced here rather
   // than the button being hidden (role isn't plumbed to this client page). 409
   // covers paid/terminal/last-line. The corrected total lands on refetch.
+  //
+  // It carries `expected_version`, the version of the order on screen
+  // (components/staff/orderWrite.ts): a void whose answer was lost, tapped
+  // again, is refused (409 stale_version) rather than applied to an order that
+  // has moved on — the screen refetches and says so instead. Never retried here.
   const handleVoid = useCallback(
-    async (o: OrderWithItems, itemId: string, reason: string) => {
+    async (o: OrderWithItems, itemId: string, reason: string): Promise<DetailOutcome> => {
       try {
-        const res = await fetch(`/api/orders/${o.id}/amend`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ item_id: itemId, reason }),
-        });
-        if (!res.ok) {
-          const d = await res.json().catch(() => ({}));
-          showToast(
-            res.status === 403
-              ? 'A manager is required to void a line'
-              : d.error ?? 'Could not void the line.',
-          );
-        } else {
+        const result = await sendOrderWrite(
+          `/api/orders/${o.id}/amend`,
+          withExpectedVersion({ item_id: itemId, reason }, o.version),
+          'Could not void the line.',
+        );
+        if (result.kind === 'ok') {
           showToast('Line voided — total updated.');
+          return 'done';
         }
-      } catch {
-        showToast('Could not void the line — please try again.');
+        if (result.kind === 'stale') {
+          showToast(result.message);
+          return 'stale';
+        }
+        if (result.kind === 'network') {
+          showToast('Could not void the line — please try again.');
+          return 'failed';
+        }
+        showToast(result.status === 403 ? 'A manager is required to void a line' : result.message);
+        return 'failed';
       } finally {
         fetchOrders();
       }
     },
-    [fetchOrders],
+    [fetchOrders, showToast],
   );
 
   // Manager comp (POS-2) — PATCH /status with a comp payload completes an unpaid
@@ -395,7 +415,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
   // Manager-gated server-side: a 403 is surfaced clearly. Version-guarded like
   // any other transition. Success is reflected on refetch.
   const handleComp = useCallback(
-    async (o: OrderWithItems, reason: string) => {
+    async (o: OrderWithItems, reason: string): Promise<DetailOutcome> => {
       try {
         const res = await fetch(`/api/orders/${o.id}/status`, {
           method: 'PATCH',
@@ -409,22 +429,37 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
               ? 'A manager is required to comp'
               : d.error ?? 'Could not comp the order.',
           );
-        } else {
-          showToast('Order comped and completed.');
+          return 'failed';
         }
+        showToast('Order comped and completed.');
+        return 'done';
       } catch {
         showToast('Could not comp the order — please try again.');
+        return 'failed';
       } finally {
         fetchOrders();
       }
     },
-    [fetchOrders],
+    [fetchOrders, showToast],
   );
 
-  const closeModalAfter = (fn: () => void) => {
-    fn();
+  // A status change from the detail closes it; the request's promise goes back
+  // to the detail so its buttons stay disabled until it is answered.
+  const closeModalAfter = (fn: () => Promise<void>) => {
+    const pending = fn();
     closeDetail();
+    return pending;
   };
+
+  // The payment step, reconciled with fresh data: a bill being SETTLED that is
+  // no longer settleable (paid on another till, cancelled) can't be settled
+  // from here. The dialog says so — unless its own request is the one in
+  // flight, whose answer decides.
+  const payingFresh = paying ? orders.find((o) => o.id === paying.order.id) : undefined;
+  const payingGone =
+    paying && paying.intent === 'settle' && payingFresh && !isSettleable(payingFresh)
+      ? `#${formatOrderNumber(paying.order.order_number)} is no longer waiting to be settled — it was settled or cancelled elsewhere.`
+      : null;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -551,6 +586,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
           order={selected}
           defaultPrepMin={prepMin}
           initialMode={selectedMode}
+          busy={busyIds.has(selected.id)}
           onClose={closeDetail}
           onRemind={handleRemind}
           onTransition={(o, to, extra) => closeModalAfter(() => patchStatus(o, to, extra))}
@@ -579,6 +615,13 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
             showToast(message);
             void fetchOrders();
           }}
+          onStale={(message) => {
+            // The order moved on (possibly this very settlement, its answer
+            // lost): close, refetch, and let the staffer look again.
+            setSettlingBalance(null);
+            showToast(message);
+            void fetchOrders();
+          }}
         />
       ) : null}
 
@@ -586,6 +629,7 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
         <SettlePaymentDialog
           order={paying.order}
           intent={paying.intent}
+          goneReason={payingGone}
           onClose={() => setPaying(null)}
           onDone={(updated) => {
             const { order, intent } = paying;

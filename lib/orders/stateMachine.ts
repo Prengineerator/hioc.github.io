@@ -27,6 +27,19 @@ export function isDeadOrder(status: OrderStatus | string | null | undefined): bo
   return DEAD_STATUSES.includes(status as OrderStatus);
 }
 
+// An OPEN order: accepted and not yet finished — still on the rail, so its bill
+// can still be changed (a line voided or lowered, items added) and a dine-in
+// one still holds its table. Not ACTIVE_LANES: a 'received' order hasn't been
+// accepted yet (it is accepted or rejected, not amended), and a staff dine-in
+// order is created 'accepted' and never enters 'received'. The amend route's
+// own list is the same three; every screen that decides what to OFFER on an
+// open order asks this, so they can't drift from each other.
+export const OPEN_STATUSES: readonly OrderStatus[] = ['accepted', 'preparing', 'ready'];
+
+export function isOpenOrder(status: OrderStatus | string | null | undefined): boolean {
+  return OPEN_STATUSES.includes(status as OrderStatus);
+}
+
 /**
  * The payment states in which the money for an order has been COLLECTED —
  * whether or not some or all of it has since gone back. This is what the

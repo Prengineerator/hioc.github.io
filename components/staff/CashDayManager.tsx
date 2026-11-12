@@ -23,7 +23,7 @@
 // same lib/cash/day.ts rules the route enforces); POST/PATCH recompute every
 // stored figure server-side.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { CashCountSheet } from '@/components/staff/CashCountSheet';
 import { CashDayDenomGrid } from '@/components/staff/CashDayDenomGrid';
@@ -33,6 +33,8 @@ import { capDenoms, cashReasonProblem, evaluateClose, evaluateOpen, zeroCountNee
 import { denomsTotalInr } from '@/lib/cash/denoms';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { CashDay, CashDenoms } from '@/lib/types';
+import { createLatestRequest } from '@/components/staff/latestRequest';
+import { useToastTimer } from '@/components/staff/toastTimer';
 
 interface OpenSummary {
   opening_total_inr: number;
@@ -87,8 +89,14 @@ interface CashDayData {
   floatLeft: FloatLeft | null;
   reopenableDay: ReopenableDay | null;
   canOverrideUnpaid: boolean;
-  /** The open day passed its 3 am end without being closed. */
+  /** The open day passed its 3 am end (its figures stop there). */
   overdue: boolean;
+  /**
+   * Ended AND left open — nobody closed it in time. False for a day a manager
+   * reopened after its end (overdue, but never forgotten): the GET's
+   * `open_day_left_open` (lib/cash/dayState.ts). What "Never closed" keys off.
+   */
+  leftOpen: boolean;
   /** When the open day ends on its own. */
   endsAt: string | null;
   history: CashDay[];
@@ -103,6 +111,7 @@ const EMPTY_DATA: CashDayData = {
   reopenableDay: null,
   canOverrideUnpaid: false,
   overdue: false,
+  leftOpen: false,
   endsAt: null,
   history: [],
 };
@@ -116,7 +125,9 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<CashDayData>(EMPTY_DATA);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState('');
+  // One toast timer, cancelled on unmount (a bare setTimeout per toast used to
+  // clear a newer toast early and fire after the screen had gone).
+  const [toast, showToast] = useToastTimer(4500);
 
   // CC-3 — a manual mid-shift count, any staffer, any time (distinct from the
   // day open/close counts above). POST /api/cash-counts {denoms}.
@@ -124,16 +135,19 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState('');
 
-  const showToast = (msg: string, ms = 4500) => {
-    setToast(msg);
-    setTimeout(() => setToast(''), ms);
-  };
+  // Only the newest answer counts (components/staff/latestRequest.ts): the 30 s
+  // refresh started before a close (or open, or reopen) used to answer after it
+  // and put the old day back on screen. Each of those invalidates what is in
+  // flight before its own reload.
+  const latest = useRef(createLatestRequest());
 
   const load = useCallback(async () => {
+    const isLatest = latest.current.begin();
     try {
       const res = await fetch('/api/cash-days', { cache: 'no-store' });
       if (!res.ok) return;
       const d = await res.json();
+      if (!isLatest()) return;
       setData({
         openDay: d.open_day ?? null,
         openSummary: d.open_summary ?? null,
@@ -143,6 +157,8 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
         reopenableDay: d.reopenable_day ?? null,
         canOverrideUnpaid: Boolean(d.can_override_unpaid),
         overdue: Boolean(d.open_day_overdue),
+        // A server from before open_day_left_open: overdue is all it says.
+        leftOpen: typeof d.open_day_left_open === 'boolean' ? d.open_day_left_open : Boolean(d.open_day_overdue),
         endsAt: d.open_day_ends_at ?? null,
         history: d.history ?? [],
       });
@@ -169,6 +185,7 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
   const openTheDay = useCallback(
     async (openingDenoms: CashDenoms, openReason: string): Promise<boolean> => {
       setBusy(true);
+      latest.current.invalidate();
       try {
         const res = await fetch('/api/cash-days', {
           method: 'POST',
@@ -191,12 +208,13 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
         setBusy(false);
       }
     },
-    [load, onDayChange],
+    [load, onDayChange, showToast],
   );
 
   const closeTheDay = useCallback(
     async (payload: Record<string, unknown>): Promise<boolean> => {
       setBusy(true);
+      latest.current.invalidate();
       try {
         const res = await fetch('/api/cash-days', {
           method: 'PATCH',
@@ -224,12 +242,13 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
         setBusy(false);
       }
     },
-    [load, onDayChange],
+    [load, onDayChange, showToast],
   );
 
   const reopenTheDay = useCallback(
     async (id: string, reason: string): Promise<boolean> => {
       setBusy(true);
+      latest.current.invalidate();
       try {
         const res = await fetch('/api/cash-days/reopen', {
           method: 'POST',
@@ -252,7 +271,7 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
         setBusy(false);
       }
     },
-    [load, onDayChange],
+    [load, onDayChange, showToast],
   );
 
   const manualCount = useCallback(
@@ -293,7 +312,7 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
         setManualBusy(false);
       }
     },
-    [load],
+    [load, showToast],
   );
 
   if (loading) {
@@ -316,7 +335,7 @@ export function CashDayManager({ onDayChange }: { onDayChange?: () => void } = {
               ? `Open since ${formatDayTime(openDay.opened_at)} · float ${inr(openDay.opening_total_inr)}`
               : 'Count the opening float to start the day.'}
           </p>
-          {openDay && data.overdue && data.endsAt ? (
+          {openDay && data.leftOpen && data.endsAt ? (
             <p className="mt-1 text-sm font-bold text-red-700">
               Never closed — it ended on its own at {formatDayTime(data.endsAt)}. Count the drawer to close it.
             </p>

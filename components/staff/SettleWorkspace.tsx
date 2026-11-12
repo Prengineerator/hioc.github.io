@@ -19,7 +19,7 @@
 // table owes more, "Give back ₹105" when the café owes some back. Their sheet
 // can still be changed; the balance follows.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PaymentBadge } from '@/components/staff/PaymentBadge';
 import { Badge } from '@/components/ui/Badge';
 import { RITUAL_SALE_LABEL, isRitualSale } from '@/lib/pos/ritual';
@@ -38,6 +38,7 @@ import { usePosRefresh } from '@/lib/staff/posRefresh';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
+import { createLatestRequest } from '@/components/staff/latestRequest';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -86,7 +87,14 @@ export function SettleWorkspace({
   const printDock = usePrintDock();
   const { autoPrint } = useCounterDefaults();
 
+  // Only the newest list counts (components/staff/latestRequest.ts). A fetch
+  // started before a settle — the 15 s poll, a realtime event — used to answer
+  // after it and put the settled bill back on the list, where it could be
+  // settled again. Every write here invalidates what is in flight.
+  const latest = useRef(createLatestRequest());
+
   const fetchUnpaid = useCallback(async () => {
+    const isLatest = latest.current.begin();
     try {
       // Unpaid bills, and paid bills with a balance left. The balance list is a
       // bonus: if it can't be read, the unpaid bills still show.
@@ -100,14 +108,21 @@ export function SettleWorkspace({
         balanceRes && balanceRes.ok
           ? (((await balanceRes.json().catch(() => ({}))) as { orders?: OrderWithItems[] }).orders ?? [])
           : [];
+      if (!isLatest()) return;
       setOrders([...(data.orders ?? []).filter(isSettleable), ...withBalance.filter(hasBalanceToSettle)]);
       setLoadError(false);
     } catch {
-      setLoadError(true);
+      if (isLatest()) setLoadError(true);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  /** A write just landed: drop every list in flight, then fetch afresh. */
+  const refetchAfterWrite = useCallback(() => {
+    latest.current.invalidate();
+    void fetchUnpaid();
+  }, [fetchUnpaid]);
 
   useEffect(() => {
     void fetchUnpaid();
@@ -139,9 +154,28 @@ export function SettleWorkspace({
     if (viewingId && !viewing) setViewingId(null);
   }, [viewingId, viewing]);
 
+  // The payment step, reconciled the same way: a bill being SETTLED that has
+  // left the list (settled on another till, cancelled) can't be settled from
+  // here any more. The dialog says so and offers only Close — unless its own
+  // request is the one in flight, whose answer decides (submitMachine 'gone').
+  // 'change' is for a bill already settled, which is never on this list.
+  const payingGone =
+    paying !== null && paying.intent === 'settle' && !orders.some((o) => o.id === paying.order.id)
+      ? `#${formatOrderNumber(paying.order.order_number)} is no longer waiting to be settled — it was settled or cancelled elsewhere.`
+      : null;
+
+  // The bill moved on under a change (409 stale_version — possibly that very
+  // change, its answer lost): look at it again rather than repeat it.
+  function handleStale(message: string) {
+    setToast(message);
+    refetchAfterWrite();
+  }
+
   // The amend route returns the whole order: swap it in, so the row, the "still
   // to collect" figure and the sheet all show the new total at once.
   function handleEdited(updated: OrderWithItems) {
+    // A list fetched before the edit must not put the old bill back.
+    latest.current.invalidate();
     setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)).filter(onSettle));
     const balance = balanceOf(updated);
     const balanceNote =
@@ -153,9 +187,10 @@ export function SettleWorkspace({
 
   function handleBalanceDone(updated: OrderWithItems, message: string) {
     setSettlingBalance(null);
+    latest.current.invalidate();
     setOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)).filter(onSettle));
     setToast(message);
-    void fetchUnpaid();
+    refetchAfterWrite();
   }
 
   // A bill opened from the list: the payment step for an unpaid one, the
@@ -170,6 +205,8 @@ export function SettleWorkspace({
     const { order, intent } = paying;
     const merged: OrderWithItems = { ...order, ...updated, items: order.items };
     setPaying(null);
+    // A list fetched before the settle must not resurrect the bill.
+    latest.current.invalidate();
     setOrders((prev) => prev.filter((o) => o.id !== order.id));
     setJustSettled((prev) => [merged, ...prev.filter((o) => o.id !== order.id)].slice(0, JUST_SETTLED_LIMIT));
     const label = `#${formatOrderNumber(order.order_number)}`;
@@ -181,7 +218,7 @@ export function SettleWorkspace({
     } else {
       setToast(`${label} changed to ${describeOrderPayment(updated)}`);
     }
-    void fetchUnpaid();
+    refetchAfterWrite();
   }
 
   return (
@@ -288,6 +325,7 @@ export function SettleWorkspace({
           canAddItems={canAddItems}
           onClose={() => setViewingId(null)}
           onUpdated={handleEdited}
+          onStale={refetchAfterWrite}
           onSettle={(o) => {
             setViewingId(null);
             startSettle(o);
@@ -300,6 +338,10 @@ export function SettleWorkspace({
           order={settlingBalance}
           onClose={() => setSettlingBalance(null)}
           onDone={handleBalanceDone}
+          onStale={(message) => {
+            setSettlingBalance(null);
+            handleStale(message);
+          }}
         />
       ) : null}
 
@@ -307,6 +349,7 @@ export function SettleWorkspace({
         <SettlePaymentDialog
           order={paying.order}
           intent={paying.intent}
+          goneReason={payingGone}
           onClose={() => setPaying(null)}
           onDone={handleDone}
         />

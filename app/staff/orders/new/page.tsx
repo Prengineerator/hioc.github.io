@@ -5,11 +5,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isUuid } from '@/lib/api/constants';
 import { TakeOrdersGate } from '@/components/staff/TakeOrdersGate';
 import { isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
-
-// The states in which an order can still take more items (mirrors the amend
-// route's OPEN_STATUSES — the route is the real gate; this just avoids offering
-// a flow that would 409).
-const OPEN_STATUSES = ['accepted', 'preparing', 'ready'];
+import { isOpenOrder } from '@/lib/orders/stateMachine';
 
 /**
  * TAB-2: resolves `?add=<orderId>` into the target the entry screen needs.
@@ -36,11 +32,15 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
     order_number: number;
     status: string;
     payment_status: string;
+    version?: number;
     // PostgREST returns the embed as an object for a many-to-one, but the
     // inferred type is an array — accept either rather than guess.
     tables?: { label: string } | { label: string }[] | null;
   };
-  if (!OPEN_STATUSES.includes(row.status)) return null;
+  // Only an open order can take more items (the order state machine's
+  // OPEN_STATUSES — the amend route is the real gate; this just avoids offering
+  // a flow that would 409).
+  if (!isOpenOrder(row.status)) return null;
   // A paid bill takes more items only when it is a dine-in bill paid at the
   // counter: what they cost becomes a balance to collect (lib/orders/paidChange).
   const paid = isPaidBill(row);
@@ -48,7 +48,16 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
 
   const table = Array.isArray(row.tables) ? row.tables[0] : row.tables;
 
-  return { id: row.id, orderNumber: row.order_number, tableLabel: table?.label ?? null, paid };
+  // `version` is the order as this screen loaded it: the add sends it back as
+  // `expected_version`, so a retried add whose first attempt already landed is
+  // refused (409 stale_version) instead of adding the items twice.
+  return {
+    id: row.id,
+    orderNumber: row.order_number,
+    tableLabel: table?.label ?? null,
+    paid,
+    ...(typeof row.version === 'number' ? { version: row.version } : {}),
+  };
 }
 
 // Staff POS-lite order entry (POS-1). The /staff/** layout already gates this

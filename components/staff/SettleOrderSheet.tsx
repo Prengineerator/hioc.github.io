@@ -12,6 +12,13 @@
 // lines can be changed, what a change would do — are that file's, the same ones
 // the amend route validates with; the sheet only decides what to OFFER. Money is
 // never computed here beyond the preview: the saved bill is the server's.
+//
+// Save sends `expected_version` — the version of the bill on screen
+// (components/staff/orderWrite.ts) — so a save whose answer was lost, tapped
+// again, is refused (409 stale_version) rather than lowering the bill twice;
+// the sheet then says "This order changed — check it and try again" and the
+// screen refetches (`onStale`). One save at a time (submitMachine), never
+// retried by itself.
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import { SurfaceLink } from '@/components/SurfaceLink';
@@ -33,6 +40,8 @@ import { manualDiscountStaffLabel } from '@/lib/orders/manualDiscount';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { balanceOf, describeBalance, settledInr } from '@/lib/orders/paidChange';
 import type { Order, OrderItem } from '@/lib/types';
+import { sendOrderWrite, withExpectedVersion } from '@/components/staff/orderWrite';
+import { isSubmitting, submitMessage, useSubmitMachine } from '@/components/staff/submitMachine';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -58,6 +67,7 @@ export function SettleOrderSheet({
   onClose,
   onUpdated,
   onSettle,
+  onStale,
 }: {
   order: OrderWithItems;
   /** The `settle_edit_order` permission (the route re-checks it). */
@@ -69,6 +79,8 @@ export function SettleOrderSheet({
   onUpdated: (order: OrderWithItems) => void;
   /** Go on to the payment step for this bill. */
   onSettle: (order: OrderWithItems) => void;
+  /** The bill moved on under the save (409 stale_version): refetch it. */
+  onStale?: () => void;
 }) {
   const reasonId = useId();
   // The edit in progress: line id → the quantity it would drop to (0 = remove).
@@ -77,9 +89,11 @@ export function SettleOrderSheet({
   const [draft, setDraft] = useState<Record<string, number>>({});
   const [reasonChoice, setReasonChoice] = useState<string>(EDIT_REASONS[0]);
   const [reasonText, setReasonText] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // idle → submitting → done ("Saved") | error | stale (components/staff/submitMachine).
+  const { state: saveState, send: sendSave } = useSubmitMachine();
+  const saving = isSubmitting(saveState);
+  const saved = saveState.phase === 'done';
+  const error = submitMessage(saveState);
 
   const ritualSale = isRitualSale(order);
   // A paid bill changed after it was paid (lib/orders/paidChange.ts): what is
@@ -121,8 +135,7 @@ export function SettleOrderSheet({
   const canSave = dirty && !saving && plan?.ok === true && reason !== '';
 
   function setLineQty(item: OrderItem, quantity: number) {
-    setSaved(false);
-    setError(null);
+    sendSave({ type: 'reset' });
     setDraft((prev) => {
       const next = { ...prev };
       if (quantity === item.quantity) delete next[item.id];
@@ -135,35 +148,40 @@ export function SettleOrderSheet({
     setDraft({});
     setReasonChoice(EDIT_REASONS[0]);
     setReasonText('');
-    setError(null);
+    sendSave({ type: 'reset' });
   }
 
   async function save() {
-    if (!canSave) return;
-    setSaving(true);
-    setError(null);
-    setSaved(false);
-    try {
-      const res = await fetch(`/api/orders/${order.id}/amend`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ op: 'edit', changes, reason }),
-      });
-      const data = (await res.json().catch(() => null)) as { order?: OrderWithItems; error?: string } | null;
-      if (!res.ok || !data?.order) {
-        setError(data?.error ?? 'Could not save the changes. Please try again.');
-        return;
-      }
-      setDraft({});
-      setReasonChoice(EDIT_REASONS[0]);
-      setReasonText('');
-      setSaved(true);
-      onUpdated(data.order);
-    } catch {
-      setError('Could not save the changes. Check the connection and try again.');
-    } finally {
-      setSaving(false);
+    // The one in-flight guard: a second tap in the same frame is refused here.
+    if (!canSave || !sendSave({ type: 'submit' })) return;
+    const result = await sendOrderWrite<{ order?: OrderWithItems }>(
+      `/api/orders/${order.id}/amend`,
+      withExpectedVersion({ op: 'edit', changes, reason }, order.version),
+      'Could not save the changes. Please try again.',
+    );
+    if (result.kind === 'stale') {
+      // Possibly this very save, its answer lost: look at the bill again (the
+      // refetch prunes a draft that already landed) rather than lowering it twice.
+      sendSave({ type: 'stale', message: result.message });
+      onStale?.();
+      return;
     }
+    if (result.kind === 'network') {
+      sendSave({ type: 'failed', message: 'Could not save the changes. Check the connection and try again.' });
+      return;
+    }
+    if (result.kind === 'error' || !result.data.order) {
+      sendSave({
+        type: 'failed',
+        message: result.kind === 'error' ? result.message : 'Could not save the changes. Please try again.',
+      });
+      return;
+    }
+    setDraft({});
+    setReasonChoice(EDIT_REASONS[0]);
+    setReasonText('');
+    sendSave({ type: 'succeeded' });
+    onUpdated(result.data.order);
   }
 
   const number = formatOrderNumber(order.order_number);
@@ -420,6 +438,12 @@ export function SettleOrderSheet({
       ) : saved ? (
         <p role="status" className="mt-3 text-sm font-bold text-green-700">
           Saved
+        </p>
+      ) : saveState.phase === 'stale' ? (
+        // The draft went with the refetch (it had landed, or the lines changed):
+        // the message stays so the staffer knows why.
+        <p role="alert" className="mt-3 text-sm font-bold text-red-700">
+          {error}
         </p>
       ) : null}
 

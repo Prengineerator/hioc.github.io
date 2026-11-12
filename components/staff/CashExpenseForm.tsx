@@ -6,8 +6,16 @@
 // right (no phantom shortage) and the owner sees every rupee that left the
 // drawer. Manager-only bank deposits / float top-ups stay in CashMovementForm.
 // Validation uses the SAME validateExpense as POST /api/cash-expenses.
+//
+// Retry safety: each expense carries an `id` this form generates once per
+// attempt (lib/cash/clientRowId.ts) — the same id on a retry, a new one once it
+// is recorded or the form is changed — so a tap whose answer was lost, tapped
+// again, is answered with the expense already recorded instead of punching it
+// twice. One request at a time (components/staff/submitMachine.ts).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { newClientRowId } from '@/lib/cash/clientRowId';
+import { isSubmitting, useSubmitMachine } from '@/components/staff/submitMachine';
 import {
   EXPENSE_CATEGORIES,
   MAX_EXPENSE_NOTE_LEN,
@@ -50,10 +58,21 @@ function StatusPill({ status }: { status: ExpenseStatus }) {
 }
 
 export function CashExpenseForm() {
-  const [category, setCategory] = useState('');
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [category, setCategoryRaw] = useState('');
+  const [amount, setAmountRaw] = useState('');
+  const [note, setNoteRaw] = useState('');
+  const { state: submitState, send } = useSubmitMachine();
+  const busy = isSubmitting(submitState);
+  // The id of the expense being recorded: kept across retries of THIS entry,
+  // dropped once it is recorded or the form changes (it is then a new entry).
+  const entryId = useRef<string | null>(null);
+  const edited = (set: (v: string) => void) => (v: string) => {
+    entryId.current = null;
+    set(v);
+  };
+  const setCategory = edited(setCategoryRaw);
+  const setAmount = edited(setAmountRaw);
+  const setNote = edited(setNoteRaw);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [list, setList] = useState<ExpenseListResponse | null>(null);
@@ -96,12 +115,15 @@ export function CashExpenseForm() {
       setError(checked.error);
       return;
     }
-    setBusy(true);
+    // The one in-flight guard (a second tap in the same frame is refused).
+    if (!send({ type: 'submit' })) return;
+    if (!entryId.current) entryId.current = newClientRowId();
     try {
-      const body: ExpenseBody = {
+      const body: ExpenseBody & { id?: string } = {
         category: checked.expense.category,
         amountInr: checked.expense.amountInr,
         note: checked.expense.note,
+        ...(entryId.current ? { id: entryId.current } : {}),
       };
       const res = await fetch('/api/cash-expenses', {
         method: 'POST',
@@ -110,22 +132,26 @@ export function CashExpenseForm() {
       });
       const data = await res.json().catch(() => ({}) as Record<string, unknown>);
       if (!res.ok) {
+        send({ type: 'failed', message: '' });
         setError((data.error as string) ?? 'Could not record that.');
         return;
       }
+      send({ type: 'succeeded' });
+      send({ type: 'reset' });
+      entryId.current = null;
       const recorded = (data as { expense?: ExpenseEntry }).expense;
       setNotice(
         `Recorded ${inr(body.amountInr)} — ${expenseCategoryLabel(body.category)}.` +
           (recorded?.status === 'approved' ? '' : " You can undo it until it's approved."),
       );
-      setAmount('');
-      setNote('');
-      setCategory('');
+      setAmountRaw('');
+      setNoteRaw('');
+      setCategoryRaw('');
       await loadList();
     } catch {
+      // The same id goes with the retry: if this one landed, it is not recorded twice.
+      send({ type: 'failed', message: '' });
       setError('Network problem — please try again.');
-    } finally {
-      setBusy(false);
     }
   }
 

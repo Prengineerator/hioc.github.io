@@ -7,20 +7,27 @@
 // Settle & complete / Comp flow (POS-2) plus per-line Void (POS-4). The parent
 // owns the API calls (optimistic update + refetch); this is pure UI. Server
 // routes enforce authz (§5.2) — the UI only exposes the actions.
+//
+// Which step is on screen and which ONE request is in flight is a single state
+// (components/staff/orderDetailState.ts): every button that would race the
+// request in flight is disabled, and a quick settle prints the receipt and
+// opens the drawer only once the server has recorded it. What is offered —
+// Cancel for this role, settle / change payment / refund / comp — is derived
+// from the order and payment state machines, not lists kept here.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ElapsedTime } from '@/components/staff/ElapsedTime';
 import { useModalDismiss } from '@/lib/hooks/useModalDismiss';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
-import { PRIMARY_NEXT, STATUS_LABELS } from '@/lib/orders/stateMachine';
+import { PRIMARY_NEXT, STATUS_LABELS, isOpenOrder } from '@/lib/orders/stateMachine';
 import { canRemind } from '@/lib/orders/quickActions';
 import { PickupReminderButton } from '@/components/staff/PickupReminderButton';
 import { settlePrintPlan } from '@/lib/staff/autoPrint';
 import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, ritualBillRow } from '@/lib/pos/ritual';
 import { openDrawerIfCash } from '@/lib/desktop/drawer';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
-import { canChangePayment, describeOrderPayment, isSettleable } from '@/lib/orders/settleList';
+import { describeOrderPayment } from '@/lib/orders/settleList';
 import {
   COUNTER_PAYMENT_METHODS,
   isAppPaymentMethod,
@@ -40,6 +47,20 @@ import { lineSizeSuffix } from '@/lib/menu/weight';
 import { MANUAL_DISCOUNT_LABEL } from '@/lib/orders/manualDiscount';
 import { balanceOf, paidChangeBlockReason, settledInr } from '@/lib/orders/paidChange';
 import { SurfaceLink } from '@/components/SurfaceLink';
+import { useStaffShell } from '@/components/staff/StaffShell';
+import { useMachine } from '@/components/staff/submitMachine';
+import {
+  CANCEL_REASON,
+  cancelOffer,
+  counterActor,
+  detailReducer,
+  initialDetailState,
+  isDetailBusy,
+  outcomeEvent,
+  paymentOffers,
+  readyStep,
+  type DetailOutcome,
+} from '@/components/staff/orderDetailState';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -50,17 +71,12 @@ const VOID_REASONS = ['Wrong item', 'Customer changed mind', 'Kitchen error', 'O
 // District) included, since a table that booked through one settles here.
 const PAYMENT_METHODS = COUNTER_PAYMENT_METHODS;
 const DEFAULT_PREP_MIN = 15;
-// A paid order can still be refunded (in full or partially) even after it's
-// gone terminal — a manager might refund a completed order over a complaint.
-const REFUNDABLE_PAYMENT_STATUSES = ['paid', 'partially_refunded'];
-// The non-terminal, pre-settle states in which an open order can still be
-// corrected (voided) — mirrors OPEN_STATUSES in the /amend route.
-const OPEN_STATUSES: Order['status'][] = ['accepted', 'preparing', 'ready'];
 
 export function OrderDetailModal({
   order,
   defaultPrepMin = DEFAULT_PREP_MIN,
   initialMode,
+  busy = false,
   onClose,
   onRemind,
   onTransition,
@@ -76,6 +92,12 @@ export function OrderDetailModal({
   defaultPrepMin?: number;
   /** Open straight on the reject-reason step (a card's "Reject…" menu item). */
   initialMode?: 'reject';
+  /**
+   * The parent has a status change for this order in flight (its board's busy
+   * ids): every transition button waits for it, so the next tap carries the
+   * order's new version instead of meeting a 409.
+   */
+  busy?: boolean;
   onClose: () => void;
   /**
    * Resend the "order ready" WhatsApp (POST /api/orders/[id]/remind). The parent
@@ -83,12 +105,18 @@ export function OrderDetailModal({
    */
   onRemind?: (o: OrderWithItems) => Promise<void>;
   /**
-   * Hands a print to the page-level dock (components/staff/PrintDock). Not a
-   * queue owned here: this modal unmounts the moment the staffer closes the
-   * order, which used to kill the in-flight job and the failure chip with it.
+   * Hands a print to the staff shell's print dock (components/staff/PrintDock,
+   * mounted once by StaffShell). Not a queue owned here: this modal unmounts the
+   * moment the staffer closes the order, which used to kill the in-flight job and
+   * the failure chip with it.
    */
   onPrint: (orderId: string, type: PrintType) => void;
-  onTransition: (o: OrderWithItems, to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => void;
+  /** May return the request's promise: the modal's buttons wait for it. */
+  onTransition: (
+    o: OrderWithItems,
+    to: Order['status'],
+    extra?: { reason?: string; promised_ready_at?: string },
+  ) => void | Promise<unknown>;
   /** Resolves true once the server has recorded the payment. */
   /** `reference`: the booking / transaction ID, required for a dining-app method. */
   onPayment: (o: OrderWithItems, method: PaymentMethod, reference?: string) => Promise<boolean>;
@@ -103,13 +131,15 @@ export function OrderDetailModal({
     reason: string,
     method?: string,
     idempotencyKey?: string,
-  ) => Promise<void> | void;
+  ) => Promise<DetailOutcome | void> | void;
   // Void a wrongly-punched line (POS-4). The /amend route is manager-gated
   // (hasPermission('void_line'), D4) — the UI just exposes the action.
-  onVoid?: (o: OrderWithItems, itemId: string, reason: string) => Promise<void> | void;
+  // Resolves how it went: 'failed' keeps the panel open, 'stale' (the order
+  // moved on) returns to the view; nothing / 'done' = recorded.
+  onVoid?: (o: OrderWithItems, itemId: string, reason: string) => Promise<DetailOutcome | void> | void;
   // Manager comp (₹0 settle + complete) for an unpaid dine-in at `ready`
   // (POS-2). The /status route is manager-gated server-side.
-  onComp?: (o: OrderWithItems, reason: string) => Promise<void> | void;
+  onComp?: (o: OrderWithItems, reason: string) => Promise<DetailOutcome | void> | void;
   /**
    * The full payment step (cash + change, split) for this order: 'settle' an
    * unpaid bill, or 'change' how a paid one was paid (cash → UPI). Omit to
@@ -124,16 +154,25 @@ export function OrderDetailModal({
   onOpenBalance?: (o: OrderWithItems) => void;
 }) {
   useModalDismiss(onClose);
-  const [mode, setMode] = useState<'view' | 'accept' | 'reject' | 'refund' | 'void' | 'comp' | 'appRef'>(
-    initialMode === 'reject' && order.status === 'received' ? 'reject' : 'view',
-  );
+  // ONE state: the panel on screen + the one request in flight (orderDetailState).
+  // `send` returns false for a refused event — that is the double-tap guard.
+  const { state, send } = useMachine(detailReducer, () => initialDetailState(initialMode, order.status));
+  const mode = state.panel;
+  const inFlight = state.inFlight;
+  const working = isDetailBusy(state);
+  // Transition buttons also wait for the parent's own status change on this order.
+  const transitionBusy = busy || working;
+  const setMode = (panel: 'view' | 'accept' | 'reject' | 'refund' | 'comp') =>
+    panel === 'view' ? send({ type: 'back' }) : send({ type: 'open', panel });
+  // The signed-in operator, for what to OFFER (the routes re-check everything).
+  const actor = counterActor(useStaffShell().role);
   const [prepMin, setPrepMin] = useState(defaultPrepMin);
   const [reasonChoice, setReasonChoice] = useState(REJECT_REASONS[0]);
   const [reasonText, setReasonText] = useState('');
   const [codeInput, setCodeInput] = useState('');
   const [refundAmount, setRefundAmount] = useState(order.total_inr ?? order.subtotal_inr);
   const [refundReason, setRefundReason] = useState('');
-  const [refundSubmitting, setRefundSubmitting] = useState(false);
+  const refundSubmitting = inFlight === 'refund';
   // REF-1: which tender the money goes back on. Empty = let the server decide
   // (correct for the common single-tender order).
   const [refundMethod, setRefundMethod] = useState('');
@@ -144,14 +183,14 @@ export function OrderDetailModal({
   // between a laggy tablet and a double payout.
   const refundKeyRef = useRef<string>('');
   const [tenders, setTenders] = useState<{ method: string; amount_inr: number }[]>([]);
-  // Void panel state (POS-4): which line, and the picked/typed reason.
-  const [voidItemId, setVoidItemId] = useState<string | null>(null);
+  // Void panel state (POS-4): which line (the machine's), and the picked/typed reason.
+  const voidItemId = state.voidItemId;
   const [voidReasonChoice, setVoidReasonChoice] = useState(VOID_REASONS[0]);
   const [voidReasonText, setVoidReasonText] = useState('');
-  const [voidSubmitting, setVoidSubmitting] = useState(false);
+  const voidSubmitting = inFlight === 'void';
   // Comp panel state (POS-2): the manager's reason.
   const [compReason, setCompReason] = useState('');
-  const [compSubmitting, setCompSubmitting] = useState(false);
+  const compSubmitting = inFlight === 'comp';
 
   // Prep/handover checklist (R5): while preparing or ready, each line item is
   // tickable so staff verify it's made with the right variant/addons/notes.
@@ -194,18 +233,23 @@ export function OrderDetailModal({
   const ritualSale = isRitualSale(order);
   const next = ritualSale ? undefined : PRIMARY_NEXT[order.status];
   const isNew = !ritualSale && order.status === 'received';
-  const isActive = ['received', 'accepted', 'preparing', 'ready'].includes(order.status);
-  const canRefund = Boolean(onRefund) && REFUNDABLE_PAYMENT_STATUSES.includes(order.payment_status);
+  // Settle / change payment / refund / comp: the payment state machine's rules.
+  const offers = paymentOffers(order);
+  const canRefund = Boolean(onRefund) && offers.refund;
+  // Cancel: only when the order machine lets THIS role do it, with the board's confirmation.
+  const cancel = cancelOffer(order, actor);
 
   // Phase-3 dine-in / correction context. Money is never computed here — the
   // Total always comes from order.total_inr (server-recomputed on void/settle).
   const isDineIn = order.order_type === 'dine_in';
   const isPaid = order.payment_status === 'paid';
-  const isOpen = OPEN_STATUSES.includes(order.status);
+  const isOpen = isOpenOrder(order.status);
   // A dine-in bill paid at the counter can still be changed (lib/orders/
   // paidChange.ts): the difference becomes a balance settled later.
   const paidChangeable = isPaid && paidChangeBlockReason(order) === null;
   const balance = isPaid ? balanceOf(order) : 0;
+  // A Ready order's next step: the order machine's ready → completed guard.
+  const step = order.status === 'ready' ? readyStep(order, actor) : null;
   // A line is voidable when the order is open and unpaid (POS-4), or paid but
   // changeable as above. The /amend route re-checks this + the manager
   // permission; the button is a convenience.
@@ -223,8 +267,8 @@ export function OrderDetailModal({
   // vanishes) and raises a failure line if a job doesn't report back in 10s.
   // Token is only meaningful for a walk-in takeaway (it has a pickup_code);
   // receipt suits dine-in and settled orders.
-  // PRT-3: the queue, the iframe and the failure chip live at PAGE level now
-  // (components/staff/PrintDock). They used to be here, which meant closing this
+  // PRT-3: the queue, the iframe and the failure chip live in the staff shell's
+  // print dock (components/staff/PrintDock). They used to be here, which meant closing this
   // modal — Escape, a backdrop tap, or just getting back to the board — silently
   // cancelled an in-flight print and destroyed the shift's failure tally along
   // with the Retry buttons. `onPrint` hands the job to the dock and returns.
@@ -245,36 +289,42 @@ export function OrderDetailModal({
   // button. No KOT here: the kitchen got its ticket at placement, and a second
   // one at payment time reads as a second order on the rail.
   //
-  // PRT-1 removed the reason the print had to fire before the settle: an iframe
-  // isn't a pop-up, so nothing has to happen inside the click any more. It still
-  // does, because `onPayment` is fire-and-forget (the parent owns the request)
-  // and this component has no way to learn that the settle succeeded.
-  // PRN-6 / DRW-1 — the drawer opens on the Cash tap itself, alongside the
-  // settle rather than after it: the staffer is holding the customer's notes
-  // now. If the settle then fails, the order stays unpaid on the board and is
-  // settled again — the cash is already in the right place. No-op outside the
-  // desktop app or with no drawer printer configured; a drawer failure is a
-  // small note, never blocking.
+  // The receipt prints and the drawer opens only once `onPayment` has resolved
+  // TRUE — the server recorded the payment. They used to fire on the tap,
+  // alongside a fire-and-forget settle with its buttons still live: a double tap
+  // sent two settles and printed two receipts, and a settle the server refused
+  // (another till got there first, a booking ID already used) had printed one
+  // anyway. One settle at a time (the machine's 'settle' / 'app_settle'), every
+  // method button disabled while it is out. No-op drawer outside the desktop app
+  // or with no drawer printer configured; a drawer failure is a small note,
+  // never blocking.
   const [drawerNote, setDrawerNote] = useState<string | null>(null);
-  // A dining-app settle first asks for the platform's booking ID (mode
+  const afterSettle = useCallback(
+    (method: PaymentMethod) => {
+      for (const type of settlePrintPlan(autoPrint, { orderKind: order.order_kind })) onPrint(order.id, type);
+      setDrawerNote(null);
+      void openDrawerIfCash([{ method }], { orderId: order.id }).then((err) => {
+        if (err) setDrawerNote(err);
+      });
+    },
+    [autoPrint, onPrint, order.id, order.order_kind],
+  );
+  // A dining-app settle first asks for the platform's booking ID (panel
   // 'appRef'); the server refuses one without it, or one already on another bill.
-  const [appMethod, setAppMethod] = useState<PaymentMethod>('swiggy_dineout');
+  const appMethod: PaymentMethod = state.appMethod ?? 'swiggy_dineout';
   const [appRef, setAppRef] = useState('');
-  const [appBusy, setAppBusy] = useState(false);
-  const [appError, setAppError] = useState<string | null>(null);
+  const appBusy = inFlight === 'app_settle';
+  const appError = state.appError;
   const appRefParsed = parsePaymentReference(appRef);
   const confirmAppSettle = async () => {
-    if (!appRefParsed.ok || appBusy) return;
-    setAppBusy(true);
-    setAppError(null);
+    if (!appRefParsed.ok || !send({ type: 'start', action: 'app_settle' })) return;
     const ok = await onPayment(order, appMethod, appRefParsed.reference);
-    setAppBusy(false);
     if (!ok) {
-      setAppError('Not recorded — check the booking ID and try again.');
+      send({ type: 'failed', error: 'Not recorded — check the booking ID and try again.' });
       return;
     }
-    for (const type of settlePrintPlan(autoPrint, { orderKind: order.order_kind })) openPrint(type);
-    setMode('view');
+    send({ type: 'succeeded' });
+    afterSettle(appMethod);
   };
 
   // The booking IDs recorded on this order's dining-app tenders, so staff can
@@ -305,21 +355,19 @@ export function OrderDetailModal({
     };
   }, [hasAppTender, order.id, order.payment_status, order.payment_method]);
 
-  const settle = (method: PaymentMethod) => {
+  const settle = async (method: PaymentMethod) => {
     if (isAppPaymentMethod(method)) {
-      setAppMethod(method);
-      setAppRef('');
-      setAppError(null);
-      setMode('appRef');
+      if (send({ type: 'open', panel: 'appRef', method })) setAppRef('');
       return;
     }
-    for (const type of settlePrintPlan(autoPrint, { orderKind: order.order_kind })) openPrint(type);
-    setDrawerNote(null);
-    void openDrawerIfCash([{ method }], { orderId: order.id }).then((err) => {
-      if (err) setDrawerNote(err);
-    });
-    void onPayment(order, method);
+    // The one in-flight guard: a second tap (or another method) is refused.
+    if (!send({ type: 'start', action: 'settle' })) return;
+    const ok = await onPayment(order, method);
+    send(ok ? { type: 'succeeded' } : { type: 'failed' });
+    // The parent has said why it failed (a toast); nothing printed, drawer shut.
+    if (ok) afterSettle(method);
   };
+  const settleBusy = inFlight === 'settle';
 
   // Resend the bill (BILL-4) — wires up the RCT-1 route that shipped with no
   // caller. Only offered when the order actually has somewhere to send to;
@@ -352,14 +400,28 @@ export function OrderDetailModal({
     }
   };
 
+  // Every status move goes through here: one at a time, and not while the
+  // parent's own change on this order is still out (`busy`).
+  const transition = (to: Order['status'], extra?: { reason?: string; promised_ready_at?: string }) => {
+    if (busy || !send({ type: 'start', action: 'transition' })) return;
+    void Promise.resolve(onTransition(order, to, extra)).then(
+      () => send({ type: 'succeeded' }),
+      () => send({ type: 'failed' }),
+    );
+  };
   const doAccept = () => {
     const promised = new Date(Date.now() + prepMin * 60_000).toISOString();
-    onTransition(order, 'accepted', { promised_ready_at: promised });
+    transition('accepted', { promised_ready_at: promised });
   };
   const doReject = () => {
     const reason = reasonChoice === 'Other' ? reasonText.trim() : reasonChoice;
     if (!reason) return;
-    onTransition(order, 'rejected', { reason });
+    transition('rejected', { reason });
+  };
+  const doCancel = () => {
+    if (!cancel || transitionBusy) return;
+    if (!window.confirm(cancel.confirm)) return;
+    transition('cancelled', { reason: CANCEL_REASON });
   };
   // Load the tender breakdown only when the refund panel opens — a split order
   // needs a choice, a single-tender one doesn't, and the queue shouldn't pay for
@@ -386,44 +448,39 @@ export function OrderDetailModal({
     };
   }, [mode, order.id]);
 
-  const doRefund = async () => {
-    if (!onRefund || refundAmount <= 0 || !refundReason.trim()) return;
-    setRefundSubmitting(true);
+  // Refund / void / comp: the parent owns the request and says how it ended
+  // (outcomeEvent). A thrown request reads as failed: the panel stays open.
+  const runAction = async (
+    action: 'refund' | 'void' | 'comp',
+    request: () => Promise<DetailOutcome | void> | void,
+  ) => {
+    if (!send({ type: 'start', action })) return;
     try {
-      await onRefund(order, refundAmount, refundReason.trim(), refundMethod || undefined, refundKeyRef.current);
-      setMode('view');
-    } finally {
-      setRefundSubmitting(false);
+      send(outcomeEvent(await request()));
+    } catch {
+      send({ type: 'failed' });
     }
   };
+  const doRefund = async () => {
+    if (!onRefund || refundAmount <= 0 || !refundReason.trim()) return;
+    await runAction('refund', () =>
+      onRefund(order, refundAmount, refundReason.trim(), refundMethod || undefined, refundKeyRef.current),
+    );
+  };
   const startVoid = (itemId: string) => {
-    setVoidItemId(itemId);
+    if (!send({ type: 'open', panel: 'void', itemId })) return;
     setVoidReasonChoice(VOID_REASONS[0]);
     setVoidReasonText('');
-    setMode('void');
   };
   const doVoid = async () => {
     if (!onVoid || !voidItemId) return;
     const reason = voidReasonChoice === 'Other' ? voidReasonText.trim() : voidReasonChoice;
     if (!reason) return;
-    setVoidSubmitting(true);
-    try {
-      await onVoid(order, voidItemId, reason);
-      setMode('view');
-      setVoidItemId(null);
-    } finally {
-      setVoidSubmitting(false);
-    }
+    await runAction('void', () => onVoid(order, voidItemId, reason));
   };
   const doComp = async () => {
     if (!onComp || !compReason.trim()) return;
-    setCompSubmitting(true);
-    try {
-      await onComp(order, compReason.trim());
-      setMode('view');
-    } finally {
-      setCompSubmitting(false);
-    }
+    await runAction('comp', () => onComp(order, compReason.trim()));
   };
 
   return (
@@ -530,7 +587,8 @@ export function OrderDetailModal({
                   <button
                     type="button"
                     onClick={() => startVoid(item.id)}
-                    className="-my-1 min-h-[36px] shrink-0 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700 hover:bg-red-50"
+                    disabled={working}
+                    className="-my-1 min-h-[36px] shrink-0 rounded-md border border-red-200 px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50"
                   >
                     Void
                   </button>
@@ -666,7 +724,7 @@ export function OrderDetailModal({
               value={appRef}
               onChange={(e) => {
                 setAppRef(e.target.value);
-                setAppError(null);
+                send({ type: 'edit' });
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void confirmAppSettle();
@@ -696,7 +754,7 @@ export function OrderDetailModal({
               >
                 {appBusy ? 'Recording…' : 'Confirm settle'}
               </button>
-              <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
+              <button onClick={() => setMode('view')} disabled={appBusy} className="rounded-md border border-line px-4 py-2 text-muted disabled:opacity-50">Back</button>
             </div>
           </div>
         ) : mode === 'accept' ? (
@@ -709,8 +767,8 @@ export function OrderDetailModal({
             </div>
             <p className="mt-1 text-xs text-muted">~{formatIstTime(new Date(Date.now() + prepMin * 60_000))}</p>
             <div className="mt-3 flex gap-2">
-              <button onClick={doAccept} className="flex-1 rounded-md bg-tan-dark py-2 font-bold text-cream hover:bg-tan-darker">Confirm Accept</button>
-              <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
+              <button onClick={doAccept} disabled={transitionBusy} className="flex-1 rounded-md bg-tan-dark py-2 font-bold text-cream hover:bg-tan-darker disabled:opacity-50">Confirm Accept</button>
+              <button onClick={() => setMode('view')} disabled={working} className="rounded-md border border-line px-4 py-2 text-muted disabled:opacity-50">Back</button>
             </div>
           </div>
         ) : mode === 'refund' ? (
@@ -780,7 +838,7 @@ export function OrderDetailModal({
               >
                 {refundSubmitting ? 'Refunding…' : `Refund ₹${refundAmount}`}
               </button>
-              <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
+              <button onClick={() => setMode('view')} disabled={refundSubmitting} className="rounded-md border border-line px-4 py-2 text-muted disabled:opacity-50">Back</button>
             </div>
           </div>
         ) : mode === 'void' ? (
@@ -820,8 +878,9 @@ export function OrderDetailModal({
                 {voidSubmitting ? 'Voiding…' : 'Void line'}
               </button>
               <button
-                onClick={() => { setMode('view'); setVoidItemId(null); }}
-                className="rounded-md border border-line px-4 py-2 text-muted"
+                onClick={() => send({ type: 'back' })}
+                disabled={voidSubmitting}
+                className="rounded-md border border-line px-4 py-2 text-muted disabled:opacity-50"
               >
                 Back
               </button>
@@ -848,7 +907,7 @@ export function OrderDetailModal({
               >
                 {compSubmitting ? 'Comping…' : 'Comp & complete'}
               </button>
-              <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
+              <button onClick={() => setMode('view')} disabled={compSubmitting} className="rounded-md border border-line px-4 py-2 text-muted disabled:opacity-50">Back</button>
             </div>
           </div>
         ) : mode === 'reject' ? (
@@ -861,42 +920,46 @@ export function OrderDetailModal({
               <input value={reasonText} onChange={(e) => setReasonText(e.target.value)} placeholder="Reason…" className="mt-2 w-full rounded-md border border-line p-2 text-sm" />
             ) : null}
             <div className="mt-3 flex gap-2">
-              <button onClick={doReject} className="flex-1 rounded-md bg-red-600 py-2 font-bold text-white hover:bg-red-700">Confirm Reject</button>
-              <button onClick={() => setMode('view')} className="rounded-md border border-line px-4 py-2 text-muted">Back</button>
+              <button onClick={doReject} disabled={transitionBusy} className="flex-1 rounded-md bg-red-600 py-2 font-bold text-white hover:bg-red-700 disabled:opacity-50">Confirm Reject</button>
+              <button onClick={() => setMode('view')} disabled={working} className="rounded-md border border-line px-4 py-2 text-muted disabled:opacity-50">Back</button>
             </div>
           </div>
         ) : (
           <div className="mt-5 flex flex-col gap-2">
             {isNew ? (
               <div className="flex gap-2">
-                <button onClick={() => setMode('accept')} className="flex-1 rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker">Accept</button>
-                <button onClick={() => setMode('reject')} className="flex-1 rounded-md border border-red-300 py-2.5 font-bold text-red-700 hover:bg-red-50">Reject</button>
+                <button onClick={() => setMode('accept')} disabled={transitionBusy} className="flex-1 rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker disabled:opacity-50">Accept</button>
+                <button onClick={() => setMode('reject')} disabled={transitionBusy} className="flex-1 rounded-md border border-red-300 py-2.5 font-bold text-red-700 hover:bg-red-50 disabled:opacity-50">Reject</button>
               </div>
             ) : null}
             {order.status === 'ready' ? (
               isDineIn ? (
-                // Dine-in settle & complete (POS-2). Unpaid → collect via
-                // onPayment then complete (server blocks completion until paid,
-                // FND3-5); paid → complete in one tap. Comp is the ₹0 manager
-                // override. Money shown is server-authoritative (order.total_inr).
+                // Dine-in settle & complete (POS-2). What it asks for next is the
+                // order machine's ready → completed guard (readyStep): unpaid →
+                // collect via onPayment, then complete (the server blocks it until
+                // paid, FND3-5); settled → complete in one tap. Comp is the ₹0
+                // manager override. Money shown is server-authoritative.
                 <div className="rounded-md border border-line p-4">
                   <p className="text-sm font-bold text-charcoal">Settle &amp; complete</p>
                   <p className="text-xs text-muted">
                     {order.table_label ? `Table ${order.table_label} · ` : ''}
-                    {isPaid && balance > 0
+                    {step === 'collect_balance'
                       ? `₹${balance} balance due`
-                      : isPaid
-                        ? 'paid'
+                      : step === 'complete'
+                        ? isPaid
+                          ? 'paid'
+                          : order.payment_status.replace(/_/g, ' ')
                         : `₹${order.total_inr ?? order.subtotal_inr} due`}
                   </p>
-                  {isPaid && balance > 0 ? (
+                  {step === 'collect_balance' ? (
                     // Changed after it was paid and more is owed: collect it (or
                     // let it go) before completing — the server holds it too.
                     <>
                       {onOpenBalance ? (
                         <button
                           onClick={() => onOpenBalance(order)}
-                          className="mt-3 w-full rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker"
+                          disabled={working}
+                          className="mt-3 w-full rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker disabled:opacity-50"
                         >
                           Collect ₹{balance} balance
                         </button>
@@ -909,48 +972,60 @@ export function OrderDetailModal({
                         Complete (collect the balance first)
                       </button>
                     </>
-                  ) : isPaid ? (
+                  ) : step === 'complete' ? (
                     <>
                       {balance < 0 && onOpenBalance ? (
                         <button
                           onClick={() => onOpenBalance(order)}
-                          className="mt-3 w-full rounded-md border border-tan py-2 text-sm font-bold text-tan-dark hover:bg-surface"
+                          disabled={working}
+                          className="mt-3 w-full rounded-md border border-tan py-2 text-sm font-bold text-tan-dark hover:bg-surface disabled:opacity-50"
                         >
                           Give back ₹{-balance}
                         </button>
                       ) : null}
                       <button
-                        onClick={() => onTransition(order, 'completed')}
-                        className="mt-3 w-full rounded-md bg-green-600 py-2.5 font-bold text-cream hover:bg-green-700"
+                        onClick={() => transition('completed')}
+                        disabled={transitionBusy}
+                        className="mt-3 w-full rounded-md bg-green-600 py-2.5 font-bold text-cream hover:bg-green-700 disabled:opacity-50"
                       >
                         Complete
                       </button>
                     </>
                   ) : (
                     <>
-                      <p className="mt-2 text-xs text-muted">Collect payment to settle, then complete.</p>
-                      <div className="mt-2 grid grid-cols-3 gap-2">
-                        {PAYMENT_METHODS.map((m) => (
-                          <button
-                            key={m}
-                            onClick={() => settle(m)}
-                            className="rounded-md border border-line px-1 py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
-                          >
-                            {PAYMENT_METHOD_LABEL[m] ?? m}
-                          </button>
-                        ))}
-                      </div>
+                      {step === 'settle' ? (
+                        <>
+                          <p className="mt-2 text-xs text-muted">Collect payment to settle, then complete.</p>
+                          <div className="mt-2 grid grid-cols-3 gap-2">
+                            {PAYMENT_METHODS.map((m) => (
+                              <button
+                                key={m}
+                                onClick={() => void settle(m)}
+                                disabled={working}
+                                className="rounded-md border border-line px-1 py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
+                              >
+                                {PAYMENT_METHOD_LABEL[m] ?? m}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      ) : offers.settleRefusal ? (
+                        <p className="mt-2 text-xs text-muted">{offers.settleRefusal}</p>
+                      ) : null}
                       <button
                         disabled
                         title="Settle the bill first"
                         className="mt-3 w-full cursor-not-allowed rounded-md bg-tan/40 py-2.5 font-bold text-cream"
                       >
-                        Complete (settle first)
+                        {settleBusy ? 'Recording payment…' : 'Complete (settle first)'}
                       </button>
-                      {onComp ? (
+                      {onComp && offers.comp ? (
                         <button
-                          onClick={() => { setCompReason(''); setMode('comp'); }}
-                          className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                          onClick={() => {
+                            if (send({ type: 'open', panel: 'comp' })) setCompReason('');
+                          }}
+                          disabled={working}
+                          className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan disabled:opacity-50"
                         >
                           Comp (₹0, manager)
                         </button>
@@ -958,7 +1033,7 @@ export function OrderDetailModal({
                     </>
                   )}
                 </div>
-              ) : !isPaid ? (
+              ) : step !== 'complete' ? (
                 // Takeaway / delivery / web pay-at-counter: completing now
                 // requires payment too (the ready → completed guard), so the
                 // money is collected here BEFORE the pickup-code check.
@@ -967,28 +1042,36 @@ export function OrderDetailModal({
                   <p className="text-xs text-muted">
                     ₹{order.total_inr ?? order.subtotal_inr} due · the order can be handed over once it&apos;s paid.
                   </p>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {PAYMENT_METHODS.map((m) => (
-                      <button
-                        key={m}
-                        onClick={() => settle(m)}
-                        className="rounded-md border border-line bg-cream px-1 py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark"
-                      >
-                        {PAYMENT_METHOD_LABEL[m] ?? m}
-                      </button>
-                    ))}
-                  </div>
+                  {step === 'settle' ? (
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {PAYMENT_METHODS.map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => void settle(m)}
+                          disabled={working}
+                          className="rounded-md border border-line bg-cream px-1 py-2 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
+                        >
+                          {PAYMENT_METHOD_LABEL[m] ?? m}
+                        </button>
+                      ))}
+                    </div>
+                  ) : offers.settleRefusal ? (
+                    <p className="mt-2 text-xs text-muted">{offers.settleRefusal}</p>
+                  ) : null}
                   <button
                     disabled
                     title="Collect payment first"
                     className="mt-3 w-full cursor-not-allowed rounded-md bg-tan/40 py-2.5 font-bold text-cream"
                   >
-                    Complete (collect payment first)
+                    {settleBusy ? 'Recording payment…' : 'Complete (collect payment first)'}
                   </button>
-                  {onComp ? (
+                  {onComp && offers.comp ? (
                     <button
-                      onClick={() => { setCompReason(''); setMode('comp'); }}
-                      className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan"
+                      onClick={() => {
+                        if (send({ type: 'open', panel: 'comp' })) setCompReason('');
+                      }}
+                      disabled={working}
+                      className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan disabled:opacity-50"
                     >
                       Comp (₹0, manager)
                     </button>
@@ -1009,8 +1092,8 @@ export function OrderDetailModal({
                   {codeMismatch ? <p className="mt-1 text-xs font-bold text-red-600">Code doesn&apos;t match this order.</p> : null}
                   {codeMatches ? <p className="mt-1 text-xs font-bold text-green-600">Code matches ✓</p> : null}
                   <button
-                    onClick={() => onTransition(order, 'completed')}
-                    disabled={codeMismatch}
+                    onClick={() => transition('completed')}
+                    disabled={codeMismatch || transitionBusy}
                     className={
                       'mt-3 w-full rounded-md py-2.5 font-bold text-cream disabled:opacity-40 ' +
                       (codeMatches ? 'bg-green-600 hover:bg-green-700' : 'bg-tan-dark hover:bg-tan-darker')
@@ -1019,14 +1102,22 @@ export function OrderDetailModal({
                     {codeMatches ? 'Verify & complete pickup' : 'Complete pickup'}
                   </button>
                   {codeMismatch ? (
-                    <button onClick={() => onTransition(order, 'completed')} className="mt-1 w-full text-xs text-muted underline">
+                    <button
+                      onClick={() => transition('completed')}
+                      disabled={transitionBusy}
+                      className="mt-1 w-full text-xs text-muted underline disabled:opacity-50"
+                    >
                       Complete anyway (override)
                     </button>
                   ) : null}
                 </div>
               )
             ) : next && !isNew ? (
-              <button onClick={() => onTransition(order, next)} className="rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker">
+              <button
+                onClick={() => transition(next)}
+                disabled={transitionBusy}
+                className="rounded-md bg-tan-dark py-2.5 font-bold text-cream hover:bg-tan-darker disabled:opacity-50"
+              >
                 Mark {STATUS_LABELS[next]}
               </button>
             ) : null}
@@ -1036,24 +1127,20 @@ export function OrderDetailModal({
                 onRemind={() => onRemind(order)}
               />
             ) : null}
-            {ritualSale ? (
-              // The one status move the API allows on a pass sale: cancelling it
-              // while nothing has been paid. A paid one is refunded instead.
-              isSettleable(order) ? (
-                <button
-                  onClick={() => {
-                    if (window.confirm(`Cancel this ${RITUAL_SALE_LABEL}? The customer hasn’t paid for it yet.`)) {
-                      onTransition(order, 'cancelled', { reason: 'Cancelled by staff' });
-                    }
-                  }}
-                  className="min-h-[44px] rounded-md border border-line py-2 text-sm font-bold text-muted hover:text-red-700"
-                >
-                  Cancel sale
-                </button>
-              ) : null
-            ) : isActive && !isNew && order.status !== 'ready' ? (
-              <button onClick={() => onTransition(order, 'cancelled', { reason: 'Cancelled by staff' })} className="rounded-md border border-line py-2 text-sm font-bold text-muted hover:text-red-700">
-                Cancel order
+            {/* Cancel — offered only when the order machine lets THIS role do it
+                (a Preparing order needs a manager), and asked first, as the
+                board's "⋯ → Cancel" asks. A pass sale: only while nothing is
+                paid on it (a paid one is refunded instead). */}
+            {cancel ? (
+              <button
+                onClick={doCancel}
+                disabled={transitionBusy}
+                className={
+                  (ritualSale ? 'min-h-[44px] ' : '') +
+                  'rounded-md border border-line py-2 text-sm font-bold text-muted hover:text-red-700 disabled:opacity-50'
+                }
+              >
+                {cancel.label}
               </button>
             ) : null}
 
@@ -1075,19 +1162,34 @@ export function OrderDetailModal({
                   <span className="font-mono font-bold text-charcoal">{r.reference}</span>
                 </p>
               ))}
-              {order.payment_status !== 'paid' && order.status !== 'ready' ? (
+              {/* The payment machine's settle rule (canSettleAtCounter), not
+                  "anything but paid": no Cash / UPI / Card on a cancelled order,
+                  one waiting on an online payment, or a refunded one. */}
+              {offers.quickSettle && order.status !== 'ready' ? (
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {PAYMENT_METHODS.map((m) => (
-                    <button key={m} onClick={() => settle(m)} className="rounded-md border border-line px-1 py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark">
+                    <button
+                      key={m}
+                      onClick={() => void settle(m)}
+                      disabled={working}
+                      className="rounded-md border border-line px-1 py-1.5 text-xs font-bold uppercase text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
+                    >
                       {PAYMENT_METHOD_LABEL[m] ?? m}
                     </button>
                   ))}
                 </div>
               ) : null}
-              {onOpenPayment && isSettleable(order) ? (
+              {offers.settleRefusal && order.status !== 'ready' ? (
+                <p className="mt-2 text-xs text-muted">{offers.settleRefusal}</p>
+              ) : null}
+              {settleBusy && order.status !== 'ready' ? (
+                <p className="mt-2 text-xs text-muted">Recording payment…</p>
+              ) : null}
+              {onOpenPayment && offers.split ? (
                 <button
                   onClick={() => onOpenPayment(order, 'settle')}
-                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
+                  disabled={working}
+                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
                 >
                   Split or cash with change…
                 </button>
@@ -1097,15 +1199,17 @@ export function OrderDetailModal({
               {onOpenBalance && balance !== 0 && !(order.status === 'ready' && isDineIn) ? (
                 <button
                   onClick={() => onOpenBalance(order)}
-                  className="mt-2 w-full rounded-md border border-tan py-1.5 text-xs font-bold text-tan-dark hover:bg-surface"
+                  disabled={working}
+                  className="mt-2 w-full rounded-md border border-tan py-1.5 text-xs font-bold text-tan-dark hover:bg-surface disabled:opacity-50"
                 >
                   {balance > 0 ? `Collect ₹${balance} balance…` : `Give back ₹${-balance}…`}
                 </button>
               ) : null}
-              {onOpenPayment && canChangePayment(order) ? (
+              {onOpenPayment && offers.changePayment ? (
                 <button
                   onClick={() => onOpenPayment(order, 'change')}
-                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark"
+                  disabled={working}
+                  className="mt-2 w-full rounded-md border border-line py-1.5 text-xs font-bold text-charcoal hover:border-tan hover:text-tan-dark disabled:opacity-50"
                 >
                   Change payment
                 </button>
@@ -1116,7 +1220,8 @@ export function OrderDetailModal({
               {canRefund ? (
                 <button
                   onClick={() => setMode('refund')}
-                  className="mt-2 w-full rounded-md border border-red-200 py-1.5 text-xs font-bold text-red-700 hover:bg-red-50"
+                  disabled={working}
+                  className="mt-2 w-full rounded-md border border-red-200 py-1.5 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-50"
                 >
                   Refund (manager)
                 </button>

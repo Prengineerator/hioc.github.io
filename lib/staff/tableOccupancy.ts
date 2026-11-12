@@ -10,6 +10,7 @@
 // A single table may hold SEVERAL open orders (a second visit is a new order,
 // decision D2) — so we GROUP them rather than assume one order per table.
 
+import { isOpenOrder, OPEN_STATUSES } from '@/lib/orders/stateMachine';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
 
 export type OrderWithItems = Order & { items: OrderItem[] };
@@ -26,14 +27,12 @@ export interface StaffTable {
 
 // The open dine-in statuses that make a table "occupied" (POS-3 AC). Deliberately
 // NOT ACTIVE_LANES: 'received' is a web-order lane a dine-in order never enters.
-export const OPEN_DINE_IN_STATUSES: readonly OrderStatus[] = ['accepted', 'preparing', 'ready'];
+// The order state machine's OPEN_STATUSES (lib/orders/stateMachine.ts), so the
+// board, the amend flows and the order detail agree on what "open" means.
+export const OPEN_DINE_IN_STATUSES: readonly OrderStatus[] = OPEN_STATUSES;
 
 export function isOpenDineInOrder(order: Pick<Order, 'order_type' | 'status' | 'table_id'>): boolean {
-  return (
-    order.order_type === 'dine_in' &&
-    order.table_id !== null &&
-    OPEN_DINE_IN_STATUSES.includes(order.status)
-  );
+  return order.order_type === 'dine_in' && order.table_id !== null && isOpenOrder(order.status);
 }
 
 // Item count for a tile/summary — excludes voided lines so it matches the

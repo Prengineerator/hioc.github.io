@@ -19,15 +19,17 @@ import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { billOffers, parseSpendSnapshot, splitOrderDiscount, type BillOfferLine } from '@/lib/orders/offers';
 import { isPaidBill, paidChangeBlockReason, refundedChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
 import type { GatewayEvidence } from '@/lib/orders/paymentStateMachine';
+import { OPEN_STATUSES } from '@/lib/orders/stateMachine';
 import type { OrderStatus } from '@/lib/types';
 
 /**
- * The states in which an unpaid order can still be edited — the amend route's
- * OPEN_STATUSES. A 'received' order hasn't been accepted yet; a 'completed'
- * one has had its stock drawn (lib/inventory/server.ts), so changing what it
- * contains would leave the stock wrong.
+ * The states in which an unpaid order can still be edited — the order state
+ * machine's OPEN_STATUSES (the amend route's list). A 'received' order hasn't
+ * been accepted yet; a 'completed' one has had its stock drawn
+ * (lib/inventory/server.ts), so changing what it contains would leave the
+ * stock wrong.
  */
-export const SETTLE_EDIT_STATUSES: OrderStatus[] = ['accepted', 'preparing', 'ready'];
+export const SETTLE_EDIT_STATUSES: readonly OrderStatus[] = OPEN_STATUSES;
 
 /** Why the bill is being lowered — the void reasons (POS-4). 'Other' → free text. */
 export const EDIT_REASONS = ['Wrong item', 'Customer changed mind', 'Kitchen error', 'Other'] as const;

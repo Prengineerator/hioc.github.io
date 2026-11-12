@@ -11,6 +11,7 @@ import {
   validateExpense,
   type ExpenseListResponse,
 } from '@/lib/cash/expenses';
+import { ID_TAKEN_MESSAGE, isUniqueViolation, parseClientRowId, sameEntry } from '@/lib/cash/clientRowId';
 import {
   EXPENSE_BASE_COLUMNS,
   EXPENSE_COLUMNS,
@@ -48,7 +49,13 @@ const NO_DAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const LIST_LIMIT = 200;
 
 // POST /api/cash-expenses — any staffer with 'cash_expense'.
-// Body: { category, amountInr, note? }. Responds { expense }.
+// Body: { category, amountInr, note?, id? }. Responds { expense }.
+//
+// `id` (optional, a uuid the form generated for this entry — lib/cash/
+// clientRowId.ts) makes a retry safe: the row is inserted under it, so a retry
+// whose first attempt already landed hits the primary key and is answered with
+// the expense already recorded (200) — the same actor's same expense — instead
+// of punching it twice. A different entry under that id is refused (409).
 export async function POST(request: Request) {
   const actor = await getCounterActor();
   if (!actor) return unauthorized();
@@ -62,24 +69,39 @@ export async function POST(request: Request) {
   const parsed = validateExpense(body);
   if (!parsed.ok) return errorResponse(400, parsed.error);
   const { expense } = parsed;
+  const clientId = parseClientRowId(body.id);
+  if (!clientId.ok) return errorResponse(400, clientId.error);
   const role = actorRoleOf(actor.role);
 
   // An expense the owner punched needs no one else's sign-off.
   const approval = autoApproved(role) ? { approved_at: new Date().toISOString(), approved_by: user.id } : {};
 
   const admin = createAdminSupabaseClient();
+  const wanted = {
+    direction: 'out',
+    amount_inr: expense.amountInr,
+    reason: expense.reason,
+    category: expense.category,
+    recorded_by: user.id,
+  };
   const { data: inserted, error } = await admin
     .from('cash_movements')
-    .insert({
-      direction: 'out',
-      amount_inr: expense.amountInr,
-      reason: expense.reason,
-      category: expense.category,
-      recorded_by: user.id,
-      ...approval,
-    })
+    .insert({ ...(clientId.id ? { id: clientId.id } : {}), ...wanted, ...approval })
     .select(EXPENSE_COLUMNS)
     .single();
+  if (clientId.id && isUniqueViolation(error)) {
+    // Already recorded under this id: a retry of a request that went through.
+    // Answered as it stands now (it may have been approved or undone since).
+    const { data: existing } = await admin
+      .from('cash_movements')
+      .select(`direction, ${EXPENSE_COLUMNS}`)
+      .eq('id', clientId.id)
+      .maybeSingle();
+    const row = existing as (ExpenseRow & { direction: string }) | null;
+    if (!row || !sameEntry(row, wanted)) return errorResponse(409, ID_TAKEN_MESSAGE);
+    const [names, marks] = await Promise.all([getStaffDisplayNames(admin, userIdsOf([row])), loadCountMarks(admin)]);
+    return NextResponse.json({ expense: toExpenseEntry(row, names, { userId: user.id, role }, marks) });
+  }
   if (error || !inserted) {
     // The columns come from the migration; without them the insert fails
     // with a missing-column error, which is worth naming to whoever sees it.

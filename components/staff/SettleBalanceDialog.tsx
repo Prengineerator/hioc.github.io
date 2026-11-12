@@ -14,6 +14,15 @@
 //
 // Money is never decided here: the balance and what each tender took are the
 // server's, and every rule is re-checked by the route.
+//
+// Retry safety: every request carries `expected_version`, the version of the
+// order this dialog opened on (components/staff/orderWrite.ts). A collect or a
+// give-back whose answer was lost has already moved the version, so tapping
+// again is refused (409 stale_version) instead of collecting — or handing the
+// money back — twice; the screen then refetches and says "This order changed —
+// check it and try again" (`onStale`). One request at a time
+// (components/staff/submitMachine.ts), never retried by itself. The drawer
+// opens only once the server has recorded the money.
 
 import { useEffect, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
@@ -24,6 +33,8 @@ import { STAFF_SETTLE_SHORT_LIMIT_INR, type PaymentPart } from '@/lib/orders/pay
 import { PAYMENT_METHOD_LABEL } from '@/lib/print/labels';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import type { Order, OrderItem } from '@/lib/types';
+import { sendOrderWrite, withExpectedVersion } from '@/components/staff/orderWrite';
+import { isSubmitting, submitMessage, useSubmitMachine } from '@/components/staff/submitMachine';
 
 type OrderWithItems = Order & { items: OrderItem[] };
 
@@ -35,44 +46,58 @@ export function SettleBalanceDialog({
   order,
   onClose,
   onDone,
+  onStale,
 }: {
   order: OrderWithItems;
   onClose: () => void;
   /** Settled. `order` is the server's updated order; `message` says what happened, for a toast. */
   onDone: (order: OrderWithItems, message: string) => void;
+  /**
+   * The order moved on since this dialog opened (409 stale_version — possibly
+   * this very settlement, its answer lost): the screen closes the dialog,
+   * refetches and shows `message`. Without it the dialog shows the message
+   * itself and stays open.
+   */
+  onStale?: (message: string) => void;
 }) {
   const balance = balanceOf(order);
   const billInr = order.total_inr ?? order.subtotal_inr;
   const paidInr = settledInr(order);
   const number = formatOrderNumber(order.order_number);
 
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { state, send: sendEvent } = useSubmitMachine();
+  // Done = closing: nothing more is sent from here.
+  const submitting = isSubmitting(state) || state.phase === 'done';
+  const error = submitMessage(state);
+  const clearError = () => sendEvent({ type: 'edit' });
   const [drawerNote, setDrawerNote] = useState<string | null>(null);
 
   async function send(body: Record<string, unknown>): Promise<{ order: OrderWithItems; change_due_inr?: number } | null> {
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/orders/${order.id}/balance`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = (await res.json().catch(() => null)) as
-        | { order?: OrderWithItems; change_due_inr?: number; error?: string }
-        | null;
-      if (!res.ok || !data?.order) {
-        setError(data?.error ?? 'Could not settle the balance. Try again.');
-        return null;
-      }
-      return { order: data.order, change_due_inr: data.change_due_inr };
-    } catch {
-      setError('Could not settle the balance. Check the connection and try again.');
+    // The one in-flight guard (a second tap in the same frame is refused here).
+    if (!sendEvent({ type: 'submit' })) return null;
+    const result = await sendOrderWrite<{ order?: OrderWithItems; change_due_inr?: number }>(
+      `/api/orders/${order.id}/balance`,
+      withExpectedVersion(body, order.version),
+      'Could not settle the balance. Try again.',
+    );
+    if (result.kind === 'stale') {
+      sendEvent({ type: 'stale', message: result.message });
+      onStale?.(result.message);
       return null;
-    } finally {
-      setSubmitting(false);
     }
+    if (result.kind === 'network') {
+      sendEvent({ type: 'failed', message: 'Could not settle the balance. Check the connection and try again.' });
+      return null;
+    }
+    if (result.kind === 'error' || !result.data.order) {
+      sendEvent({
+        type: 'failed',
+        message: result.kind === 'error' ? result.message : 'Could not settle the balance. Try again.',
+      });
+      return null;
+    }
+    sendEvent({ type: 'succeeded' });
+    return { order: result.data.order, change_due_inr: result.data.change_due_inr };
   }
 
   // --- Collect -------------------------------------------------------------
@@ -82,17 +107,18 @@ export function SettleBalanceDialog({
   const letGoReason = letGoChoice === 'Other' ? letGoText.trim() : letGoChoice;
 
   async function collect(parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) {
-    if (!parts || submitting) return;
-    // The drawer opens on the Cash tap itself — the staffer is holding the notes.
-    void openDrawerIfCash(parts, { orderId: order.id }).then((err) => setDrawerNote(err));
+    if (!parts) return;
     const done = await send(adjustment ? { action: 'collect', parts, adjustment } : { action: 'collect', parts });
     if (!done) return;
+    // Recorded: the drawer opens for the notes and the change (the payment
+    // step's own Cash tap may already have opened it).
+    void openDrawerIfCash(parts, { orderId: order.id }).then((err) => setDrawerNote(err));
     const change = done.change_due_inr ?? 0;
     onDone(done.order, `#${number} balance collected${change > 0 ? ` · give ${rupees(change)} change` : ''}`);
   }
 
   async function writeOff() {
-    if (submitting || letGoReason.length < 3) return;
+    if (letGoReason.length < 3) return;
     const done = await send({ action: 'write_off', amount_inr: balance, reason: letGoReason });
     if (done) onDone(done.order, `#${number} · ${rupees(balance)} balance let go`);
   }
@@ -126,12 +152,14 @@ export function SettleBalanceDialog({
   }, [balance, order.id, owed]);
 
   async function giveBack() {
-    if (submitting || !method) return;
+    if (!method) return;
+    const done = await send({ action: 'give_back', amount_inr: owed, method, ...(note.trim() ? { reason: note.trim() } : {}) });
+    if (!done) return;
+    // Only once the server has recorded it does the drawer open to hand it
+    // back — never for a give-back that was refused or never arrived.
     if (method === 'cash') {
       void openDrawerIfCash([{ method: 'cash' }], { orderId: order.id }).then((err) => setDrawerNote(err));
     }
-    const done = await send({ action: 'give_back', amount_inr: owed, method, ...(note.trim() ? { reason: note.trim() } : {}) });
-    if (!done) return;
     const how = method === 'cash' ? 'from the drawer' : `on ${PAYMENT_METHOD_LABEL[method] ?? method}`;
     onDone(done.order, `#${number} · ${rupees(owed)} given back ${how}`);
   }
@@ -198,7 +226,7 @@ export function SettleBalanceDialog({
                 type="button"
                 onClick={() => {
                   setLetGo(false);
-                  setError(null);
+                  clearError();
                 }}
                 disabled={submitting}
                 className="min-h-[44px] rounded-md border border-line px-4 text-sm font-bold text-charcoal"
@@ -237,7 +265,7 @@ export function SettleBalanceDialog({
               type="button"
               onClick={() => {
                 setLetGo(true);
-                setError(null);
+                clearError();
               }}
               disabled={submitting}
               className="mt-3 w-full text-center text-xs font-bold text-muted underline disabled:opacity-50"

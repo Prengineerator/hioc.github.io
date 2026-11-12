@@ -3,20 +3,26 @@
 // Read-only live mirror of the staff queue for the owner (O1/OWN-002). Same
 // realtime hook the staff board uses; owner passes the staff API gate.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStaffOrdersRealtime } from '@/lib/realtime/hooks';
+import { createLatestRequest } from '@/components/staff/latestRequest';
 import { ACTIVE_LANES, STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { timeAgo } from '@/lib/utils/timeAgo';
 import type { Order } from '@/lib/types';
 
 export function LiveOps() {
   const [orders, setOrders] = useState<Order[]>([]);
+  // A realtime burst and the fallback poll can overlap: only the newest answer
+  // is drawn, so an older list never replaces a newer one.
+  const latest = useRef(createLatestRequest());
 
   const fetchOrders = useCallback(async () => {
+    const isLatest = latest.current.begin();
     try {
       const res = await fetch('/api/orders', { cache: 'no-store' });
       if (!res.ok) return;
       const data = await res.json();
+      if (!isLatest()) return;
       setOrders(data.orders ?? []);
     } catch {
       /* poll retries */
