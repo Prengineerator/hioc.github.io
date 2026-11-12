@@ -295,3 +295,18 @@ describe('ownerNav — the warehouse (docs/WAREHOUSE-SPEC.md)', () => {
     expect(activeOwnerGroup(nav, '/owner/warehouse')?.id).toBe('stock');
   });
 });
+
+describe('ownerNav — Instant Coffee shop', () => {
+  it('adds Shop orders to Sales, after Online orders, only with the shop on', () => {
+    expect(labels(itemsOf(ownerNav({ ...OFF, shop: true }), 'sales'))).toEqual(['Reports', 'Payments', 'Online orders', 'Shop orders']);
+    expect(allHrefs(ownerNav({ ...ON, shop: true }))).toContain('/owner/shop');
+    expect(allHrefs(ownerNav(ON))).not.toContain('/owner/shop');
+    expect(allHrefs(ownerNav({ ...OFF, shop: false }))).not.toContain('/owner/shop');
+  });
+
+  it('lights Shop orders on its page', () => {
+    const nav = ownerNav({ ...OFF, shop: true });
+    expect(activeOwnerLink(nav, '/owner/shop')?.label).toBe('Shop orders');
+    expect(activeOwnerGroup(nav, '/owner/shop')?.id).toBe('sales');
+  });
+});

@@ -1511,6 +1511,36 @@ async function checkWarehouse() {
 }
 
 // ---------------------------------------------------------------------------
+// Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md,
+// supabase/2026-11-instant-coffee-shop.sql): the flavours and the shipped
+// orders, both service-role only. Reads only.
+// ---------------------------------------------------------------------------
+async function checkInstantCoffeeShop() {
+  heading('SHOP-1 · instant coffee shop tables + lockdown', '2026-11-instant-coffee-shop.sql');
+  const hint = 'apply supabase/2026-11-instant-coffee-shop.sql';
+
+  for (const [table, col] of [
+    ['shop_products', 'id,price_inr,in_stock'],
+    ['shop_orders', 'id,order_number,status,razorpay_order_id,shiprocket_order_id,awb_code'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=3`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    if (table === 'shop_products' && (!Array.isArray(r.body) || r.body.length < 3)) {
+      fail('shop_products has the three flavours', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    const asAnon = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Coffee Pass — prepaid plans sold and redeemed as drinks
 // (docs/COFFEE-PASS-SPEC.md, supabase/2026-10-coffee-pass.sql). Customer-facing
 // it is "HIOC Ritual"; the database names stay coffee_pass_*. Four service-role
@@ -2260,6 +2290,7 @@ async function main() {
   await checkCoffeeAddonsPairings();
   await checkInventory();
   await checkWarehouse();
+  await checkInstantCoffeeShop();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();

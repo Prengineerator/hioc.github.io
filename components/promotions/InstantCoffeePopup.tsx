@@ -5,9 +5,11 @@
 // on it, instead of sitting on the page all the time. It shows once per visit
 // (sessionStorage, the same per-tab-session rule AnnouncementBanner uses for
 // dismissals): closing it, or moving around the site and coming back to the
-// home page, doesn't bring it back until the next visit. The jars are sold at
-// the counter, not on the online menu, so there's no "add to cart" here. Like
-// the poster, it sends people to the counter.
+// home page, doesn't bring it back until the next visit. The jars aren't on the
+// online menu, so there's no "add to cart" here. Like the poster, it sends
+// people to the counter; with the Instant Coffee shop switched on
+// (NEXT_PUBLIC_FLAG_SHOP) it also offers "Order online" (/shop, shipped at ₹399
+// a jar — the poster's offer is the counter's).
 //
 // To take it down when the offer ends, delete <InstantCoffeePopup /> from
 // app/page.tsx along with this file and public/images/promo-instant-coffee.jpg.
@@ -15,8 +17,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
+import { SurfaceLink } from '@/components/SurfaceLink';
 import { buttonVariants } from '@/components/ui/Button';
 import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
+import { flags } from '@/lib/flags';
 
 const SEEN_KEY = 'hioc:promo-popup:instant-coffee';
 const POSTER_SRC = '/images/promo-instant-coffee.jpg';
@@ -152,9 +156,22 @@ export function InstantCoffeePopup() {
         </button>
 
         <div className="border-t border-line p-3">
-          <button type="button" onClick={close} className={buttonVariants({ fullWidth: true })}>
-            Got it
-          </button>
+          {flags.shop ? (
+            // The jars can also be ordered online and shipped (/shop) once the
+            // shop is switched on; the poster's offer stays a counter offer.
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={close} className={buttonVariants({ variant: 'secondary', fullWidth: true })}>
+                Got it
+              </button>
+              <SurfaceLink href="/shop" onClick={close} className={buttonVariants({ fullWidth: true })}>
+                Order online
+              </SurfaceLink>
+            </div>
+          ) : (
+            <button type="button" onClick={close} className={buttonVariants({ fullWidth: true })}>
+              Got it
+            </button>
+          )}
         </div>
       </div>
     </div>,
