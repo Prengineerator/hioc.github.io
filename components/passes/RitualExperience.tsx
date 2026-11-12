@@ -53,16 +53,23 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 /**
  * The earlier sale's payment_status, after the server has checked with the
  * gateway; 'not_found' when there is no such order; null when it couldn't be asked.
+ * `gatewayChecked` is the route's `gateway_checked` (false = the server could not
+ * confirm a 'payment_pending' with Razorpay).
  */
-async function readSalePaymentStatus(orderId: string): Promise<string | null> {
+async function readSalePaymentStatus(
+  orderId: string,
+): Promise<{ paymentStatus: string | null; gatewayChecked?: boolean }> {
   try {
     const res = await fetch(`/api/payments/${orderId}/status`, { cache: 'no-store' });
-    if (res.status === 404) return 'not_found';
-    if (!res.ok) return null;
-    const data = (await res.json().catch(() => null)) as { payment_status?: unknown } | null;
-    return typeof data?.payment_status === 'string' ? data.payment_status : null;
+    if (res.status === 404) return { paymentStatus: 'not_found' };
+    if (!res.ok) return { paymentStatus: null };
+    const data = (await res.json().catch(() => null)) as { payment_status?: unknown; gateway_checked?: unknown } | null;
+    return {
+      paymentStatus: typeof data?.payment_status === 'string' ? data.payment_status : null,
+      gatewayChecked: typeof data?.gateway_checked === 'boolean' ? data.gateway_checked : undefined,
+    };
   } catch {
-    return null;
+    return { paymentStatus: null };
   }
 }
 
@@ -191,7 +198,8 @@ export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boole
       // An earlier sale may already be paid: settle that before selling again.
       const earlier = maybePaid.current;
       if (earlier) {
-        const decision = afterEarlierSaleCheck(await readSalePaymentStatus(earlier.orderId));
+        const earlierSale = await readSalePaymentStatus(earlier.orderId);
+        const decision = afterEarlierSaleCheck(earlierSale.paymentStatus, earlierSale.gatewayChecked);
         if (!mounted.current) return;
         if (decision === 'wait_for_pass') {
           void confirmPurchase(earlier.orderId, earlier.planName);

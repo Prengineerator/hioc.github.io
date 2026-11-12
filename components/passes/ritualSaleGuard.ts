@@ -38,8 +38,13 @@ export type EarlierSaleDecision = 'wait_for_pass' | 'sell' | 'blocked';
 /**
  * `paymentStatus`: the earlier sale's payment_status as the server answered it,
  * 'not_found' when there is no such order, or null if it couldn't be asked.
+ * `gatewayChecked`: the route's `gateway_checked`. A 'payment_pending' the
+ * server could NOT confirm with Razorpay (lookup failed, an authorized payment
+ * still capturing, a capture it couldn't record) is not "nothing is held", so it
+ * blocks instead of selling. Absent (an older server) keeps the old reading.
  */
-export function afterEarlierSaleCheck(paymentStatus: string | null): EarlierSaleDecision {
+export function afterEarlierSaleCheck(paymentStatus: string | null, gatewayChecked?: boolean): EarlierSaleDecision {
+  if (paymentStatus === 'payment_pending' && gatewayChecked === false) return 'blocked';
   switch (paymentStatus) {
     case 'paid':
     case 'partially_refunded':

@@ -35,8 +35,17 @@ export async function GET(_request: Request, { params }: RouteParams) {
   if (error) return errorResponse(500, 'Failed to load order');
   if (!order) return notFound();
 
+  // `gateway_checked`: is this answer final? true when the stored status is not
+  // 'payment_pending' (the database already knows), or when Razorpay was asked
+  // and holds no payment for this order (nothing captured, nothing authorized
+  // and on its way). false when 'payment_pending' could not be confirmed: the
+  // gateway lookup failed, a captured payment could not be recorded, or an
+  // authorized payment is still being captured. A caller about to start a NEW
+  // sale because the earlier one "is still pending" (components/passes/
+  // ritualSaleGuard.ts) must not act on a false — that is how a customer gets
+  // charged twice while the gateway is unreachable.
   if (order.payment_status !== 'payment_pending') {
-    return NextResponse.json({ payment_status: order.payment_status, order_status: order.status });
+    return NextResponse.json({ payment_status: order.payment_status, order_status: order.status, gateway_checked: true });
   }
 
   const { data: payment } = await admin
@@ -48,6 +57,8 @@ export async function GET(_request: Request, { params }: RouteParams) {
     .limit(1)
     .maybeSingle();
 
+  // No gateway order was ever created, so nothing can have been paid on one.
+  let gatewayChecked = true;
   if (payment?.gateway_order_id) {
     const attempts = await fetchOrderPaymentAttempts(payment.gateway_order_id);
     // Only a CAPTURED payment means money settled (M4). An 'authorized' one is
@@ -66,12 +77,18 @@ export async function GET(_request: Request, { params }: RouteParams) {
         return NextResponse.json({
           payment_status: result.order.payment_status,
           order_status: result.order.status,
+          gateway_checked: true,
         });
       }
     }
+    gatewayChecked = attempts !== null && !captured && !attempts.some((a) => a.status === 'authorized');
   }
 
-  return NextResponse.json({ payment_status: order.payment_status, order_status: order.status });
+  return NextResponse.json({
+    payment_status: order.payment_status,
+    order_status: order.status,
+    gateway_checked: gatewayChecked,
+  });
 }
 
 // POST /api/payments/[orderId]/status — customer payment actions (PAY-2).

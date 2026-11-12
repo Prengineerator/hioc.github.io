@@ -33,9 +33,22 @@ describe('what Buy does about the earlier sale', () => {
     expect(afterEarlierSaleCheck('something_new')).toBe('blocked');
   });
 
+  it("a 'payment_pending' the server could not confirm with Razorpay → do not sell", () => {
+    expect(afterEarlierSaleCheck('payment_pending', false)).toBe('blocked');
+    expect(afterEarlierSaleCheck('payment_pending', true)).toBe('sell');
+    // An older server that sends no gateway_checked keeps the old reading.
+    expect(afterEarlierSaleCheck('payment_pending', undefined)).toBe('sell');
+    // gateway_checked only qualifies 'payment_pending'; a stored outcome stands.
+    expect(afterEarlierSaleCheck('paid', false)).toBe('wait_for_pass');
+    expect(afterEarlierSaleCheck('unpaid', false)).toBe('sell');
+  });
+
   it('RitualExperience checks before starting a sale, and remembers a possibly-paid one', () => {
     const src = readFileSync('components/passes/RitualExperience.tsx', 'utf8');
-    const checkAt = src.indexOf('afterEarlierSaleCheck(await readSalePaymentStatus(earlier.orderId))');
+    const checkAt = src.indexOf(
+      'afterEarlierSaleCheck(earlierSale.paymentStatus, earlierSale.gatewayChecked)',
+    );
+    expect(src).toContain('const earlierSale = await readSalePaymentStatus(earlier.orderId);');
     const sellAt = src.indexOf("fetch('/api/passes/checkout'");
     expect(checkAt).toBeGreaterThan(-1);
     expect(sellAt).toBeGreaterThan(checkAt);
