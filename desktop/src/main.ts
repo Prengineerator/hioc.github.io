@@ -273,15 +273,16 @@ function createWindow(): BrowserWindow {
   keepWindowAlive(win);
 
   // Owner report (0.1.0): closing the window sometimes did nothing. Root
-  // cause: a page-level `beforeunload` handler (there is none in this repo's
-  // own app/ code — third-party script such as Razorpay's checkout.js is the
-  // known culprit) can set `event.returnValue`, and Electron silently cancels
-  // the window close for that, with no dialog shown (there's no
-  // `--disable-popup-blocking`-style override needed; this is deliberate
-  // Electron behavior, unlike a real browser which shows a confirmation
-  // dialog). This is a single-window kiosk app — nothing on this screen ever
-  // depends on a beforeunload prompt to save work — so that veto is never
-  // wanted here. See https://www.electronjs.org/docs/latest/api/web-contents
+  // cause: a page-level `beforeunload` handler can set `event.returnValue`,
+  // and Electron silently cancels the window close for that, with no dialog
+  // shown (there's no `--disable-popup-blocking`-style override needed; this
+  // is deliberate Electron behavior, unlike a real browser which shows a
+  // confirmation dialog). Third-party script such as Razorpay's checkout.js is
+  // the known culprit; the staff PrintDock (components/staff/PrintDock.tsx)
+  // also registers one, but only while a ticket is queued or printing, as a
+  // browser-tab safeguard. This is a single-window kiosk app, so that veto is
+  // never wanted here — the operator closing the window decides. See
+  // https://www.electronjs.org/docs/latest/api/web-contents
   // ("will-prevent-unload").
   win.webContents.on('will-prevent-unload', (event) => {
     event.preventDefault();
