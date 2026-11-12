@@ -6,12 +6,21 @@
 // drifting never produces a wrong answer — only a slower one if it's stale.
 
 import 'server-only';
+import { randomUUID } from 'crypto';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { expiryCutoff, pointsToExpire, type ExpiryRow } from '@/lib/loyalty/expiry';
 import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
+import {
+  canOrderLedgerOp,
+  ORDER_LEDGER_TYPES,
+  pointsToReverse,
+  standingRow,
+  type OrderLedgerRow,
+  type OrderLedgerType,
+} from '@/lib/loyalty/orderLedger';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
 import { spendOfferOnBill } from '@/lib/orders/offers';
 
@@ -267,18 +276,16 @@ export async function earnForOrder(orderId: string): Promise<void> {
   // no Beanies: that offer can't be combined with them (lib/orders/offers.ts).
   if (await hasSpendOfferOnBill(admin, orderId)) return;
 
-  // Idempotency: never double-earn for the same order.
-  const { data: existing, error: existingError } = await admin
-    .from('loyalty_transactions')
-    .select('id')
-    .eq('order_id', orderId)
-    .eq('type', 'earn')
-    .maybeSingle();
-  if (existingError) {
-    console.error('earnForOrder: idempotency check failed', existingError);
+  // Never twice, and never after the order's Beanies were reversed: a full
+  // refund (or a cancel) closed this order's ledger, and an earn written after
+  // it is one no reverse would ever take back (lib/loyalty/orderLedger.ts).
+  const rows = await loadOrderLedgerRows(admin, orderId);
+  if (!rows) return;
+  const step = canOrderLedgerOp('earn', rows);
+  if (!step.ok) {
+    if (step.code === 'reversed') console.error('earnForOrder: not earning on an order whose Beanies were reversed', orderId);
     return;
   }
-  if (existing) return;
 
   const config = await getLoyaltyConfig();
   if (!config) return;
@@ -287,19 +294,68 @@ export async function earnForOrder(orderId: string): Promise<void> {
   const points = computeEarnedPoints(amountInr, config);
   if (points <= 0) return;
 
-  const { error: insertError } = await admin.from('loyalty_transactions').insert({
+  const written = await insertOrderLedgerRow(admin, {
     user_id: order.loyaltyUserId,
     order_id: orderId,
     type: 'earn',
     points,
     note: `Earned on order #${formatOrderNumber(order.order_number)}`,
   });
-  if (insertError) {
-    console.error('earnForOrder: insert failed', insertError);
-    return;
-  }
+  if (written !== 'inserted') return;
 
   await syncAccountCache(admin, order.loyaltyUserId);
+}
+
+/**
+ * The order's own ledger rows (redeem / earn / reverse), for its lifecycle
+ * (lib/loyalty/orderLedger.ts). Null when they can't be read: the caller then
+ * writes nothing, since it can't tell a repeat from a first.
+ */
+async function loadOrderLedgerRows(admin: Admin, orderId: string): Promise<OrderLedgerRowWithUser[] | null> {
+  const { data, error } = await admin.from('loyalty_transactions').select('id, user_id, type, points').eq('order_id', orderId);
+  if (error) {
+    console.error('loyalty: could not read the order ledger', orderId, error);
+    return null;
+  }
+  return ((data ?? []) as OrderLedgerRowWithUser[]).filter((r) => (ORDER_LEDGER_TYPES as readonly string[]).includes(r.type));
+}
+
+type OrderLedgerRowWithUser = OrderLedgerRow & { id: string; user_id: string | null };
+
+/**
+ * Writes one redeem / earn / reverse row for an order, at most once.
+ *
+ * With supabase/2026-11-peripheral-money-state-machine.sql applied a unique
+ * index allows one row of each type per order, and a second writer's insert
+ * is refused (23505): that is "already written", not an error. Without it two
+ * requests that both found no row can both insert, so each reads the rows back
+ * and the later one removes its own (standingRow). That narrows the race; only
+ * the index closes it.
+ */
+async function insertOrderLedgerRow(
+  admin: Admin,
+  row: { user_id: string; order_id: string; type: OrderLedgerType; points: number; note: string },
+): Promise<'inserted' | 'duplicate' | 'failed'> {
+  const id = randomUUID();
+  const { error } = await admin.from('loyalty_transactions').insert({ id, ...row });
+  if (error) {
+    if (error.code === '23505') return 'duplicate';
+    console.error(`loyalty: ${row.type} insert failed`, row.order_id, error);
+    return 'failed';
+  }
+  const { data: same, error: readError } = await admin
+    .from('loyalty_transactions')
+    .select('id, created_at')
+    .eq('order_id', row.order_id)
+    .eq('type', row.type);
+  if (readError || !Array.isArray(same)) return 'inserted';
+  const standing = standingRow(same as { id: string; created_at: string | null }[]);
+  if (standing && standing.id !== id) {
+    const { error: deleteError } = await admin.from('loyalty_transactions').delete().eq('id', id);
+    if (deleteError) console.error(`loyalty: could not remove a duplicate ${row.type} row`, row.order_id, id, deleteError);
+    return 'duplicate';
+  }
+  return 'inserted';
 }
 
 /**
@@ -318,18 +374,10 @@ export async function redeemForOrder(
   if (!orderId || !Number.isInteger(points) || points <= 0) return;
   const admin = createAdminSupabaseClient();
 
-  // Idempotency: never double-redeem for the same order.
-  const { data: existing, error: existingError } = await admin
-    .from('loyalty_transactions')
-    .select('id')
-    .eq('order_id', orderId)
-    .eq('type', 'redeem')
-    .maybeSingle();
-  if (existingError) {
-    console.error('redeemForOrder: idempotency check failed', existingError);
-    return;
-  }
-  if (existing) return;
+  // Once, at checkout: never twice, and never on an order already earned or reversed.
+  const rows = await loadOrderLedgerRows(admin, orderId);
+  if (!rows) return;
+  if (!canOrderLedgerOp('redeem', rows).ok) return;
 
   const order = await loadOrderForLoyalty(admin, orderId);
   if (!order?.loyaltyUserId) {
@@ -338,17 +386,14 @@ export async function redeemForOrder(
   }
   const orderLabel = formatOrderNumber(order.order_number);
 
-  const { error: insertError } = await admin.from('loyalty_transactions').insert({
+  const written = await insertOrderLedgerRow(admin, {
     user_id: order.loyaltyUserId,
     order_id: orderId,
     type: 'redeem',
     points: -points,
     note: `Redeemed for ₹${discountInr} discount on order #${orderLabel}`,
   });
-  if (insertError) {
-    console.error('redeemForOrder: insert failed', insertError);
-    return;
-  }
+  if (written !== 'inserted') return;
 
   await syncAccountCache(admin, order.loyaltyUserId);
 }
@@ -358,53 +403,32 @@ export async function reverseForOrder(orderId: string): Promise<void> {
   if (!orderId) return;
   const admin = createAdminSupabaseClient();
 
-  const { data: rows, error: fetchError } = await admin
-    .from('loyalty_transactions')
-    .select('id, user_id, type, points')
-    .eq('order_id', orderId)
-    .in('type', ['earn', 'redeem']);
-
-  if (fetchError) {
-    console.error('reverseForOrder: lookup failed', fetchError);
-    return;
-  }
-  if (!rows || rows.length === 0) return;
-
-  // Idempotency: never double-reverse the same order.
-  const { data: existingReverse, error: existingError } = await admin
-    .from('loyalty_transactions')
-    .select('id')
-    .eq('order_id', orderId)
-    .eq('type', 'reverse')
-    .maybeSingle();
-  if (existingError) {
-    console.error('reverseForOrder: idempotency check failed', existingError);
-    return;
-  }
-  if (existingReverse) return;
+  // Once per order (a refund and a cancel can both land on it, even at the same
+  // moment), and only for an order that earned or spent something.
+  const rows = await loadOrderLedgerRows(admin, orderId);
+  if (!rows) return;
+  if (!canOrderLedgerOp('reverse', rows).ok) return;
 
   // Same resolution as earn and redeem, so a counter order reverses into the
   // account it earned in. The ledger row's own user is the fallback for an order
   // that can no longer answer (deleted, or its account removed) — the points
   // demonstrably went there, so that is where they come back from.
   const order = await loadOrderForLoyalty(admin, orderId);
-  const userId = order?.loyaltyUserId ?? (rows[0].user_id as string | null);
+  const moved = rows.filter((r) => r.type === 'earn' || r.type === 'redeem');
+  const userId = order?.loyaltyUserId ?? moved[0]?.user_id ?? null;
   if (!userId) return;
 
-  const netPoints = rows.reduce((sum, row) => sum + (row.points as number), 0);
+  const netPoints = pointsToReverse(rows);
   if (netPoints === 0) return;
 
-  const { error: insertError } = await admin.from('loyalty_transactions').insert({
+  const written = await insertOrderLedgerRow(admin, {
     user_id: userId,
     order_id: orderId,
     type: 'reverse',
     points: -netPoints,
     note: 'Reversed — order refunded/cancelled',
   });
-  if (insertError) {
-    console.error('reverseForOrder: insert failed', insertError);
-    return;
-  }
+  if (written !== 'inserted') return;
 
   await syncAccountCache(admin, userId);
 }

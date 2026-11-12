@@ -92,20 +92,28 @@ export async function getShopOrder(admin: SupabaseClient, id: string): Promise<O
  * Updates an order only if it is still in one of `fromStatuses` (so two
  * clicks, or the owner racing a webhook, can't both act). Returns the updated
  * row, or null when nothing matched (it moved on) or the write failed.
+ *
+ * `same` adds columns that must still hold exactly the value read (null means
+ * "still empty"): the in-flight markers beside the status (refund_id,
+ * shiprocket_sending_at, lib/shop/status.ts), so a write never lands over a
+ * claim another request took meanwhile.
  */
 export async function updateShopOrderIf(
   admin: SupabaseClient,
   id: string,
   fromStatuses: readonly string[],
   patch: Record<string, unknown>,
+  same: Partial<Record<'refund_id' | 'shiprocket_sending_at' | 'shiprocket_order_id', string | null>> = {},
 ): Promise<ShopOrderRow | null> {
-  const { data, error } = await admin
+  let query = admin
     .from('shop_orders')
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('id', id)
-    .in('status', [...fromStatuses])
-    .select('*')
-    .maybeSingle();
+    .in('status', [...fromStatuses]);
+  for (const [column, value] of Object.entries(same)) {
+    query = value === null || value === undefined ? query.is(column, null) : query.eq(column, value);
+  }
+  const { data, error } = await query.select('*').maybeSingle();
   if (error) {
     console.error('shop: order update failed', id, error);
     return null;

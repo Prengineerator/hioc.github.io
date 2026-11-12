@@ -13,6 +13,8 @@ import {
   type SpendOffer,
   type SpendOfferRow,
 } from '@/lib/orders/offers';
+import { standingRow } from '@/lib/loyalty/orderLedger';
+import { isLiveRedemption } from '@/lib/promotions/redemptionLiveness';
 
 /** Live offers by menu item id. */
 export type OffersByItem = ReadonlyMap<string, ActiveOffer>;
@@ -94,8 +96,9 @@ export async function loadSpendOfferRows(admin: SupabaseClient, menuItemIds?: re
 }
 
 /**
- * The spend offers (of `offerIds`) this phone number has had: a redemption on
- * an order that wasn't cancelled or rejected (supabase/2026-11-spend-offers.sql,
+ * The spend offers (of `offerIds`) this phone number has had: a LIVE
+ * redemption, i.e. on an order that wasn't cancelled or rejected
+ * (lib/promotions/redemptionLiveness.ts; supabase/2026-11-spend-offers.sql,
  * once per customer). `exceptOrderId` leaves out the order being corrected.
  *
  * A failed read answers "had them all": the offer is then withheld rather than
@@ -125,8 +128,7 @@ export async function loadUsedSpendOffers(
       orders: { status: string } | { status: string }[] | null;
     }[]) {
       if (row.order_id === exceptOrderId) continue;
-      const order = Array.isArray(row.orders) ? row.orders[0] : row.orders;
-      if (order && (order.status === 'cancelled' || order.status === 'rejected')) continue;
+      if (!isLiveRedemption(embeddedOrderStatus(row.orders))) continue;
       used.add(row.spend_offer_id);
     }
     return used;
@@ -148,21 +150,63 @@ export async function loadSpendOfferBlocks(
   return spendOfferBlocks(offers, phone, used);
 }
 
+/** The status of the order a redemption row embeds (`orders(status)`, one object or a one-row array). */
+function embeddedOrderStatus(orders: { status: string } | { status: string }[] | null | undefined): string | null {
+  const order = Array.isArray(orders) ? orders[0] : orders;
+  return order?.status ?? null;
+}
+
 /**
- * Records that `phone` had the spend offer on `orderId`. Never throws: the
- * order is already placed, so a failed write is logged, not refused.
+ * What recording a spend offer came to:
+ *   recorded  this order holds the number's one go at the offer
+ *   taken     another LIVE order for the same number got there first: two
+ *             orders placed at the same moment both passed the "had it?" read
+ *             (loadSpendOfferBlocks) before either wrote. The caller should
+ *             withdraw this order, as it does when a coupon's last use is lost
+ *             (its deletion removes this row too).
+ *   failed    the row could not be written (logged)
+ */
+export type SpendRedemptionResult = 'recorded' | 'taken' | 'failed';
+
+/**
+ * Records that `phone` had the spend offer on `orderId`, then checks — now
+ * that the row is in — that it is the number's only live one; of two, the
+ * earliest stands (standingRow), so both racers agree which order keeps it.
+ * There is no unique index to lean on: whether a row counts depends on its
+ * order's status, which an index can't see. Never throws: the order is
+ * already placed, so a failed write is logged, not refused.
  */
 export async function recordSpendRedemption(
   admin: SupabaseClient,
   input: { offerId: string; phone: string; orderId: string },
-): Promise<void> {
+): Promise<SpendRedemptionResult> {
   try {
     const { error } = await admin
       .from('spend_offer_redemptions')
       .insert({ spend_offer_id: input.offerId, phone: input.phone, order_id: input.orderId });
-    if (error) console.error('recordSpendRedemption failed', error);
+    if (error) {
+      console.error('recordSpendRedemption failed', error);
+      return 'failed';
+    }
+    const { data, error: readError } = await admin
+      .from('spend_offer_redemptions')
+      .select('id, order_id, created_at, orders(status)')
+      .eq('phone', input.phone)
+      .eq('spend_offer_id', input.offerId);
+    // Can't check: the row is written, which is all the old code did.
+    if (readError || !Array.isArray(data)) return 'recorded';
+    const live = (
+      data as { id: string; order_id: string; created_at: string | null; orders: { status: string } | { status: string }[] | null }[]
+    ).filter((r) => r.order_id === input.orderId || isLiveRedemption(embeddedOrderStatus(r.orders)));
+    const standing = standingRow(live);
+    if (standing && standing.order_id !== input.orderId) {
+      console.error('recordSpendRedemption: this number already has the offer on another order', input.offerId, standing.order_id, input.orderId);
+      return 'taken';
+    }
+    return 'recorded';
   } catch (err) {
     console.error('recordSpendRedemption threw', err);
+    return 'failed';
   }
 }
 

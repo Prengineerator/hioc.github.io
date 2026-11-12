@@ -16,6 +16,9 @@ export const maxDuration = 60;
 // after it lands. Safe to run any number of times: a file already read is
 // skipped by its hash (lib/online-settlements/ingest.ts).
 //
+// Never two at once (lib/online-settlements/sync.ts): with a check already in
+// flight this one stands down and answers 200 with a note.
+//
 // Protected by CRON_SECRET (Bearer), fails CLOSED like every other cron. With
 // the mailbox not configured it answers 200 with a note rather than an error,
 // so an unconfigured feature doesn't page anyone.
@@ -27,6 +30,9 @@ export async function GET(request: Request) {
 
   const result = await runOnlineReportSync(createAdminSupabaseClient(), 'cron');
   if (!result.configured) return NextResponse.json({ ok: true, note: result.error });
+  // The owner's "Check email now" is reading the mailbox right now: that run
+  // does today's work, so standing down is not a failure worth paging about.
+  if (result.busy) return NextResponse.json({ ok: true, note: result.error });
   return NextResponse.json(
     {
       ok: result.ok,

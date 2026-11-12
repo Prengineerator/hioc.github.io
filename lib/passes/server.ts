@@ -11,6 +11,7 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isMissingPassSchema, PASS_MIGRATION_HINT } from '@/lib/passes/api';
+import { PASS_STATES } from '@/lib/passes/stateMachine';
 import type {
   CoffeePassPlan,
   PassAdjustCode,
@@ -45,7 +46,7 @@ const num = (v: unknown): number => {
 };
 const numOrNull = (v: unknown): number | null => (v === null || v === undefined ? null : num(v));
 
-const PASS_STATES = new Set(['active', 'used_up', 'expired', 'refunded', 'void']);
+const PASS_STATE_SET = new Set<string>(PASS_STATES);
 
 function toPassSummary(row: Row): PassSummary {
   const status = row.status === 'refunded' || row.status === 'void' ? row.status : 'active';
@@ -64,7 +65,7 @@ function toPassSummary(row: Row): PassSummary {
     starts_at: String(row.starts_at),
     expires_at: String(row.expires_at),
     status,
-    state: PASS_STATES.has(String(row.state)) ? (row.state as PassSummary['state']) : 'expired',
+    state: PASS_STATE_SET.has(String(row.state)) ? (row.state as PassSummary['state']) : 'expired',
     order_id: String(row.order_id),
     drink_menu_item_id: typeof row.drink_menu_item_id === 'string' && row.drink_menu_item_id ? row.drink_menu_item_id : null,
     drink_label: typeof row.drink_label === 'string' ? row.drink_label : '',
@@ -329,12 +330,15 @@ export async function redeemPassDrinks(
   );
 }
 
-/** Voids the pass sold on `orderId` BEFORE its refund moves money (CP-D15): 'used' means a cup was spent, so refuse. */
+/**
+ * Voids the pass sold on `orderId` BEFORE its refund moves money (CP-D15): 'used' means a cup was spent, so refuse.
+ * The active → refunded move of lib/passes/stateMachine.ts; the function checks it under a row lock.
+ */
 export async function voidPassForRefund(admin: SupabaseClient, orderId: string): Promise<PassVoidCode | 'error'> {
   return callForCode(admin, 'coffee_pass_void_for_refund', { p_order_id: orderId }, VOID_CODES);
 }
 
-/** Undoes voidPassForRefund when the refund's money step failed. */
+/** Undoes voidPassForRefund when the refund's money step failed: refunded → active, only while the sale order is still paid. */
 export async function restorePassAfterFailedRefund(
   admin: SupabaseClient,
   orderId: string,

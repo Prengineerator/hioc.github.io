@@ -8,12 +8,9 @@ import { validatePackage } from '@/lib/shop/catalog';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
 import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
 import { createShiprocketOrder, isShiprocketConfigured, SHIPROCKET_NOT_CONFIGURED } from '@/lib/shop/shiprocket';
-import { canSendToShiprocket } from '@/lib/shop/status';
+import { checkShopAction, SHIPROCKET_SEND_CLAIM_MS, shopFromStatuses } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
-
-/** A send in flight holds its claim this long; after that a retry may go. */
-const CLAIM_MS = 2 * 60 * 1000;
 
 // POST /api/owner/shop/orders/[id]/shiprocket — owner only. The one click:
 // creates this paid order in Shiprocket with the parcel the owner confirmed.
@@ -21,7 +18,10 @@ const CLAIM_MS = 2 * 60 * 1000;
 //
 // Creating the Shiprocket order spends nothing; the courier, label and pickup
 // are chosen in the Shiprocket panel, and Refresh reads the AWB back. A short
-// claim (shiprocket_sending_at) stops a double click from creating it twice.
+// claim (shiprocket_sending_at) stops a double click from creating it twice,
+// and stops a Cancel & refund from starting meanwhile; the claim itself needs
+// refund_id empty, so an order whose refund has started is never shipped
+// (lib/shop/status.ts).
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   if (!(await getOwnerUser())) return unauthorized();
   if (!isUuid(params.id)) return notFound();
@@ -37,17 +37,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (!lookup.ok) return errorResponse(503, 'Could not load the order just now — please try again.');
   const order = lookup.order;
   if (!order) return notFound();
-  if (!canSendToShiprocket(order)) {
-    return errorResponse(409, order.shiprocket_order_id ? 'This order is already in Shiprocket.' : 'Only a paid order can be sent to Shiprocket.');
+  const check = checkShopAction('send', order);
+  if (!check.ok) {
+    return errorResponse(409, check.code === 'not_allowed' ? 'Only a paid order can be sent to Shiprocket.' : check.message);
   }
 
-  const cutoff = new Date(Date.now() - CLAIM_MS).toISOString();
+  const sendFrom = shopFromStatuses('send');
+  const sendingAt = new Date().toISOString();
+  const cutoff = new Date(Date.parse(sendingAt) - SHIPROCKET_SEND_CLAIM_MS).toISOString();
   const { data: claimed, error: claimError } = await admin
     .from('shop_orders')
-    .update({ shiprocket_sending_at: new Date().toISOString() })
+    .update({ shiprocket_sending_at: sendingAt })
     .eq('id', order.id)
-    .eq('status', 'paid')
+    .in('status', sendFrom)
     .is('shiprocket_order_id', null)
+    .is('refund_id', null)
     .or(`shiprocket_sending_at.is.null,shiprocket_sending_at.lt."${cutoff}"`)
     .select('id')
     .maybeSingle();
@@ -59,15 +63,18 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
   const result = await createShiprocketOrder(order, pkg.pkg);
   if (!result.ok) {
-    await admin.from('shop_orders').update({ shiprocket_sending_at: null }).eq('id', order.id);
+    // Only our own claim: a retry that took over a stale one keeps its own.
+    await admin.from('shop_orders').update({ shiprocket_sending_at: null }).eq('id', order.id).eq('shiprocket_sending_at', sendingAt);
     return errorResponse(502, result.error);
   }
 
   const { created } = result;
   const now = new Date().toISOString();
   const shipped = Boolean(created.awb);
-  const updated = await updateShopOrderIf(admin, order.id, ['paid'], {
-    status: shipped ? 'shipped' : 'sent_to_shiprocket',
+  const to = shipped ? 'shipped' : 'sent_to_shiprocket';
+  // The table's from-statuses for this move ('paid'): the order is still ours to move.
+  const updated = await updateShopOrderIf(admin, order.id, shopFromStatuses('send', to), {
+    status: to,
     shiprocket_order_id: created.shiprocketOrderId,
     shiprocket_shipment_id: created.shipmentId,
     shiprocket_status: created.status,

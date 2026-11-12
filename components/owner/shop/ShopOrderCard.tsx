@@ -19,9 +19,11 @@ import {
   canCancel,
   canMarkDelivered,
   canMarkShipped,
+  canRefreshFromShiprocket,
   canSendToShiprocket,
   OWNER_STATUS_LABEL,
   shopOrderRef,
+  shopRefundState,
   trackingUrl,
 } from '@/lib/shop/status';
 import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
@@ -112,6 +114,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   }
 
   const base = `/api/owner/shop/orders/${order.id}`;
+  const refund = shopRefundState(order);
 
   return (
     <li className="rounded-md border border-line bg-cream p-4 shadow-card">
@@ -209,13 +212,17 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
         <p className="mt-3 text-sm text-charcoal">
           Cancelled {when(order.cancelled_at)}
           {order.refunded_inr ? ` · refunded ${rupees(order.refunded_inr)}` : ''}
-          {order.refund_id && order.refund_id !== 'pending' ? <span className="text-muted"> ({order.refund_id})</span> : null}
+          {refund === 'done' ? <span className="text-muted"> ({order.refund_id})</span> : null}
           {order.cancel_reason ? <span className="block text-muted">“{order.cancel_reason}”</span> : null}
         </p>
       ) : null}
-      {order.refund_id === 'pending' && order.status !== 'cancelled' ? (
+      {refund === 'in_flight' && order.status !== 'cancelled' ? (
+        <p className="mt-3 text-sm font-semibold text-amber-800">A refund is under way — reload in a minute.</p>
+      ) : null}
+      {refund === 'unconfirmed' && order.status !== 'cancelled' ? (
         <p className="mt-3 text-sm font-semibold text-amber-800">
-          A refund was started but not confirmed. Check this payment in the Razorpay dashboard before trying again.
+          A refund was started but not confirmed. Press Cancel &amp; refund to finish it: Razorpay is asked first, so the
+          customer is never refunded twice.
         </p>
       ) : null}
 
@@ -226,7 +233,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             Send to Shiprocket
           </Button>
         ) : null}
-        {order.shiprocket_order_id && (order.status === 'sent_to_shiprocket' || order.status === 'shipped') ? (
+        {canRefreshFromShiprocket(order) ? (
           <Button size="sm" variant="secondary" loading={busy && panel === null} onClick={() => void act(`${base}/refresh`, 'POST', {}, 'Updated from Shiprocket.')} disabled={busy}>
             Refresh from Shiprocket
           </Button>

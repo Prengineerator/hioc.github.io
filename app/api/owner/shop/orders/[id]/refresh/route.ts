@@ -7,7 +7,7 @@ import { errorResponse, notFound, unauthorized } from '@/lib/api/http';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
 import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
 import { fetchShiprocketOrder } from '@/lib/shop/shiprocket';
-import { shopStatusFromShiprocket } from '@/lib/shop/status';
+import { canShopTransition, shopStatusFromShiprocket } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +39,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
     courier_name: state.courier ?? order.courier_name,
     shiprocket_shipment_id: state.shipmentId ?? order.shiprocket_shipment_id,
   };
+  if (next) {
+    // shopStatusFromShiprocket only moves forward; the table has the last word.
+    const move = canShopTransition('refresh', order.status, next, { actor: 'owner' });
+    if (!move.ok) return errorResponse(409, move.message);
+  }
   if (next === 'shipped') {
     patch.status = 'shipped';
     patch.shipped_at = order.shipped_at ?? now;

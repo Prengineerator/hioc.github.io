@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isReportAttachment, platformFromFileName, safeFileName } from './detect';
+import { INTERRUPTED, isReReadable, reportState, WRITING_REPORT } from './lifecycle';
 import { looksLikeXlsx, readCsv, readWorkbook, WorkbookRefused } from './sheets';
 import { isSwiggySettlement, parseSwiggySettlement } from './swiggy';
 import { hasZomatoOrderTable, isZomatoSettlement, parseZomatoSettlement } from './zomato';
@@ -28,11 +29,12 @@ import { PLATFORM_LABEL, type ParsedSettlement, type Platform, type SettlementDe
 //      pending. A report that lists the same order (or the same deduction)
 //      twice is collapsed to one row first, or Postgres would refuse the lot.
 //
-// While the rows are being written the report is 'failed' with INTERRUPTED as
-// its error, and only the last step makes it 'read'. A run killed part-way
-// (an upsert that throws, the 60 s limit) therefore leaves a report the next
-// ingest of the same bytes reads again, not a 'read' one with no rows that
-// every retry would call a duplicate.
+// While the rows are being written the report is 'writing' (stored as 'failed'
+// with INTERRUPTED as its error: lib/online-settlements/lifecycle.ts), and
+// only the last step makes it 'read'. A run killed part-way (an upsert that
+// throws, the 60 s limit) therefore leaves a report the next ingest of the
+// same bytes reads again, not a 'read' one with no rows that every retry
+// would call a duplicate.
 //
 // Storage and the database sit behind SettlementStore so this file is tested
 // against an in-memory store (tests/onlineSettlementsIngest.test.ts) and runs
@@ -60,8 +62,10 @@ export interface ReportRow {
   read_at: string | null;
 }
 
-/** A report's error while its rows are still being written: the mail check reads such a report again. */
-export const INTERRUPTED = 'Reading stopped before every order was saved: it will be read again';
+// INTERRUPTED (the error that, with status 'failed', stores a report's
+// 'writing' state) lives with the report lifecycle; re-exported for the
+// callers that import it from here.
+export { INTERRUPTED };
 
 export interface SettlementStore {
   findReportByHash(sha256: string): Promise<{ id: string; status: string } | null>;
@@ -231,7 +235,10 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
 
   const sha = sha256Hex(bytes);
   const seen = await store.findReportByHash(sha);
-  if (seen?.status === 'read') return { ...base, status: 'duplicate', reportId: seen.id, message: 'Already read' };
+  // 'read' is the end of a report's life; any other state is read again.
+  if (seen && !isReReadable(reportState({ status: seen.status, error: null }))) {
+    return { ...base, status: 'duplicate', reportId: seen.id, message: 'Already read' };
+  }
 
   // A .csv is its one sheet, 'Order Level'.
   const isCsv = /\.csv$/i.test(fileName);
@@ -300,7 +307,7 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
   }
 
   const nowIso = now().toISOString();
-  // A report to be read is saved as 'failed' (INTERRUPTED) until its rows are in.
+  // A report to be read is saved as 'writing' until its rows are in.
   const writing = status === 'read';
   const row: ReportRow = {
     platform,
@@ -316,8 +323,8 @@ export async function ingestSettlementFile(store: SettlementStore, input: Ingest
     restaurant_ref: parsed?.restaurantRef ?? null,
     period_start: parsed?.periodStart ?? null,
     period_end: parsed?.periodEnd ?? null,
-    status: writing ? 'failed' : status,
-    error: writing ? INTERRUPTED : error,
+    status: writing ? WRITING_REPORT.status : status,
+    error: writing ? WRITING_REPORT.error : error,
     orders_count: 0,
     deductions_count: 0,
     warnings: parsed?.warnings ?? [],

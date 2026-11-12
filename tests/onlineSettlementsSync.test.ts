@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ExcelJS from 'exceljs';
 import { INTERRUPTED, ingestSettlementFile } from '@/lib/online-settlements/ingest';
 import { scanMailbox, type MailboxConfig, type ScannedMessage } from '@/lib/online-settlements/mailbox';
-import { handleScannedMessage, runOnlineReportSync, SYNC_TIME_BUDGET_MS, type SyncResult } from '@/lib/online-settlements/sync';
+import { SYNC_RUN_STALE_MS } from '@/lib/online-settlements/lifecycle';
+import { ALREADY_RUNNING, handleScannedMessage, runOnlineReportSync, SYNC_TIME_BUDGET_MS, type SyncResult } from '@/lib/online-settlements/sync';
 import { memoryStore } from './helpers/memorySettlementStore';
 import { buildZomatoWorkbook } from './helpers/zomatoSettlementFixture';
 
@@ -32,6 +33,10 @@ const db = vi.hoisted(() => ({
   seen: [] as Record<string, unknown>[],
   finished: [] as Record<string, unknown>[],
   onSave: null as null | (() => void),
+  /** What each read of the runs in flight answers, in turn (then none). */
+  inFlight: [] as Record<string, unknown>[][],
+  dropped: [] as string[],
+  started: 0,
 }));
 
 vi.mock('imapflow', () => {
@@ -99,11 +104,21 @@ vi.mock('@/lib/online-settlements/store', () => ({
 // The calls sync.ts makes on the admin client, and nothing more.
 const admin = {
   from: (table: string) => ({
-    insert: () => ({ select: () => ({ single: async () => ({ data: { id: 'run-1' }, error: null }) }) }),
+    insert: () => ({
+      select: () => ({
+        single: async () => {
+          db.started++;
+          return { data: { id: 'run-1', started_at: new Date().toISOString() }, error: null };
+        },
+      }),
+    }),
     select: (column: string) => {
       const q = {
         not: () => q,
         order: () => q,
+        // The runs in flight: .is('finished_at', null).gte('started_at', …), awaited.
+        is: () => q,
+        gte: () => ({ then: (resolve: (v: unknown) => void) => resolve({ data: db.inFlight.shift() ?? [], error: null }) }),
         range: async () => ({
           data: (table === 'online_settlement_reports' ? db.reportIds : db.seenIds).map((id) => ({ [column]: id })),
           error: null,
@@ -111,6 +126,12 @@ const admin = {
       };
       return q;
     },
+    delete: () => ({
+      eq: async (_c: string, id: string) => {
+        db.dropped.push(id);
+        return { error: null };
+      },
+    }),
     upsert: async (row: Record<string, unknown>) => {
       db.seen.push(row);
       return { error: null };
@@ -193,6 +214,9 @@ beforeEach(() => {
   db.seen = [];
   db.finished = [];
   db.onSave = null;
+  db.inFlight = [];
+  db.dropped = [];
+  db.started = 0;
   process.env.ONLINE_REPORTS_IMAP_USER = 'r@test';
   process.env.ONLINE_REPORTS_IMAP_PASSWORD = 'x';
 });
@@ -446,5 +470,42 @@ describe('runOnlineReportSync', () => {
     expect(result.messagesLeft).toBe(4);
     expect(m.reports[0]).toMatchObject({ status: 'failed', error: INTERRUPTED });
     expect(db.finished[0]).toMatchObject({ files_found: 1, files_read: 1 });
+  });
+});
+
+describe('runOnlineReportSync — one check at a time', () => {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it('stands down, touching nothing, while another check is in flight', async () => {
+    db.inFlight = [[{ id: 'run-0', started_at: ago(20_000), finished_at: null, error: null }]];
+    imap.mails = [mail(1, { files: [await file('1')] })];
+
+    const result = await runOnlineReportSync(admin, 'cron');
+
+    expect(result).toMatchObject({ busy: true, ok: false, runId: null, error: ALREADY_RUNNING });
+    expect(db.started).toBe(0);
+    expect(imap.instances).toHaveLength(0);
+  });
+
+  it('goes ahead past a run that was killed and never finished (abandoned)', async () => {
+    db.inFlight = [[{ id: 'run-0', started_at: ago(SYNC_RUN_STALE_MS + 1000), finished_at: null, error: null }]];
+    imap.mails = [mail(1, { files: [await file('1')] })];
+
+    const result = await runOnlineReportSync(admin, 'owner');
+
+    expect(result).toMatchObject({ ok: true, filesRead: 1 });
+    expect(result.busy).toBeUndefined();
+  });
+
+  it('of two that start together, the later stands down and leaves no run behind', async () => {
+    // Nothing in flight at first; once our row is in, an earlier one shows up.
+    db.inFlight = [[], [{ id: 'run-0', started_at: ago(500), finished_at: null, error: null }, { id: 'run-1', started_at: new Date().toISOString(), finished_at: null, error: null }]];
+
+    const result = await runOnlineReportSync(admin, 'owner');
+
+    expect(result).toMatchObject({ busy: true, runId: null });
+    expect(db.dropped).toEqual(['run-1']);
+    expect(db.finished).toEqual([]);
+    expect(imap.instances).toHaveLength(0);
   });
 });

@@ -1,4 +1,6 @@
-// The life of a shop order (docs/INSTANT-COFFEE-SHOP.md). Pure.
+// The life of a shop order (docs/INSTANT-COFFEE-SHOP.md). Pure: safe to import
+// from the owner's card as well as the routes, so the buttons and the server
+// can never disagree about what may happen next.
 //
 //   payment_pending ──paid──▶ paid ──Send to Shiprocket──▶ sent_to_shiprocket
 //                                │                                │
@@ -10,17 +12,34 @@
 // 'payment_pending' orders are checkouts whose payment never completed. They
 // stay out of the owner's lists (an "Unpaid" tab shows them) and need nothing
 // done: no money moved.
+//
+// SHOP_TRANSITIONS below is that picture as data. Every writer asks it
+// (canShopTransition) before it writes, then writes compare-and-set on the
+// statuses the table allows (shopFromStatuses). Two in-flight markers sit on
+// the row beside the status, and each action that starts something slow
+// excludes the other's:
+//   shiprocket_sending_at  a "Send to Shiprocket" is creating the shipment
+//   refund_id = pending:…  a "Cancel & refund" is asking Razorpay for the money
+// so a refunded order is never handed to a courier, and an order being handed
+// to a courier is never refunded under it.
 
 import type { ShopOrderPublicView, ShopOrderRow, ShopOrderStatus } from './types';
 
-export const SHOP_ORDER_STATUSES: readonly ShopOrderStatus[] = [
+export const SHOP_ORDER_STATUSES = [
   'payment_pending',
   'paid',
   'sent_to_shiprocket',
   'shipped',
   'delivered',
   'cancelled',
-];
+] as const satisfies readonly ShopOrderStatus[];
+
+// Every ShopOrderStatus is in the list above: a status added to the type but not here fails to compile.
+const everyStatusListed: Exclude<ShopOrderStatus, (typeof SHOP_ORDER_STATUSES)[number]> extends never ? true : never = true;
+void everyStatusListed;
+
+/** Nothing leaves these. (A delivered order can still be cancelled and refunded, so it is not one.) */
+export const SHOP_TERMINAL_STATUSES: readonly ShopOrderStatus[] = ['cancelled'];
 
 export function isShopOrderStatus(v: unknown): v is ShopOrderStatus {
   return typeof v === 'string' && (SHOP_ORDER_STATUSES as readonly string[]).includes(v);
@@ -68,23 +87,235 @@ export function ownerTab(key: string | null | undefined): (typeof OWNER_TABS)[nu
   return OWNER_TABS.find((t) => t.key === key) ?? OWNER_TABS[0];
 }
 
-/** The owner may send to Shiprocket only a paid order not already sent. */
-export function canSendToShiprocket(order: Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'>): boolean {
-  return order.status === 'paid' && !order.shiprocket_order_id;
+// ---------------------------------------------------------------------------
+// The in-flight markers
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a "Send to Shiprocket" holds its claim (shiprocket_sending_at):
+ * after this a retry may go, and so may a cancel. Creating a Shiprocket order
+ * is one API call; two minutes is far past a slow one.
+ */
+export const SHIPROCKET_SEND_CLAIM_MS = 2 * 60 * 1000;
+
+/**
+ * How long a "Cancel & refund" holds its claim (refund_id = pending:…). Past it
+ * the request that took the claim is certainly gone (the longest maxDuration
+ * in this app is 60 s, the platform's default ceiling 300 s), so the claim
+ * reads 'unconfirmed' and pressing Cancel & refund again finishes the job:
+ * the route asks Razorpay first whether the money already went back, so it is
+ * never refunded twice.
+ */
+export const REFUND_CLAIM_MS = 5 * 60 * 1000;
+
+/** refund_id while the Razorpay refund call is in flight. Rows written before the marker carried its time hold the bare word. */
+const REFUND_PENDING = 'pending';
+
+/** The refund_id a cancel writes while it asks Razorpay for the money: "pending:<ISO time>". */
+export function refundPendingMarker(nowMs: number): string {
+  return `${REFUND_PENDING}:${new Date(nowMs).toISOString()}`;
+}
+
+/** True for a refund_id that is a cancel's claim rather than a Razorpay refund id. */
+export function isRefundPendingMarker(refundId: string | null | undefined): boolean {
+  return refundId === REFUND_PENDING || (typeof refundId === 'string' && refundId.startsWith(`${REFUND_PENDING}:`));
+}
+
+/**
+ * Where the order's refund stands:
+ *   none         no refund started (refund_id null)
+ *   in_flight    a cancel is asking Razorpay right now: leave it alone
+ *   unconfirmed  a cancel started one and never said how it ended (it was
+ *                killed, or could not save the result). Cancel & refund again
+ *                resolves it with Razorpay. A bare 'pending' is always this.
+ *   done         refund_id is Razorpay's refund id
+ */
+export type ShopRefundState = 'none' | 'in_flight' | 'unconfirmed' | 'done';
+
+export function shopRefundState(order: Pick<ShopOrderRow, 'refund_id'>, nowMs: number = Date.now()): ShopRefundState {
+  const id = order.refund_id;
+  if (!id) return 'none';
+  if (!isRefundPendingMarker(id)) return 'done';
+  const since = Date.parse(id.slice(REFUND_PENDING.length + 1));
+  if (Number.isNaN(since)) return 'unconfirmed';
+  return nowMs - since < REFUND_CLAIM_MS ? 'in_flight' : 'unconfirmed';
+}
+
+/** A "Send to Shiprocket" is creating the shipment right now (its claim is younger than SHIPROCKET_SEND_CLAIM_MS). */
+export function isShiprocketSendInFlight(
+  order: Pick<ShopOrderRow, 'shiprocket_sending_at'>,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!order.shiprocket_sending_at) return false;
+  const since = Date.parse(order.shiprocket_sending_at);
+  return !Number.isNaN(since) && nowMs - since < SHIPROCKET_SEND_CLAIM_MS;
+}
+
+// ---------------------------------------------------------------------------
+// The transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * What moves an order. Two actions can make the same move (a paid order reaches
+ * 'shipped' by a send that came back with an AWB, or by hand) and they are
+ * guarded differently, so the table is keyed by action too.
+ */
+export type ShopAction =
+  | 'capture' //        the payment was captured (verify, webhook or the order page's poll)
+  | 'send' //           Send to Shiprocket: creates the shipment
+  | 'mark_shipped' //   by hand, with an AWB from any courier
+  | 'refresh' //        Refresh from Shiprocket: reads the AWB / delivery back
+  | 'mark_delivered' // by hand
+  | 'cancel'; //        Cancel & refund
+
+/** 'gateway' is a Razorpay capture, whichever path saw it; everything else is the owner on /owner/shop. */
+export type ShopActor = 'owner' | 'gateway';
+
+/** The row facts a guard reads. */
+export type ShopGuardFacts = Pick<ShopOrderRow, 'shiprocket_order_id' | 'shiprocket_sending_at' | 'refund_id'>;
+
+export type ShopCheckCode = 'not_allowed' | 'forbidden_actor' | 'already_in_shiprocket' | 'refund_started' | 'sending';
+
+export type ShopCheck = { ok: true } | { ok: false; code: ShopCheckCode; message: string };
+
+export interface ShopTransitionRule {
+  action: ShopAction;
+  from: ShopOrderStatus;
+  to: ShopOrderStatus;
+  actor: ShopActor;
+  guard?: (order: ShopGuardFacts, nowMs: number) => ShopCheck;
+}
+
+const OK: ShopCheck = { ok: true };
+
+/**
+ * Starting a shipment: only once, and never for an order whose refund has
+ * started. That order is on its way to 'cancelled'; shipping it would send jars
+ * the customer has been paid back for.
+ */
+function sendGuard(order: ShopGuardFacts): ShopCheck {
+  if (order.shiprocket_order_id) return { ok: false, code: 'already_in_shiprocket', message: 'This order is already in Shiprocket.' };
+  if (order.refund_id) return { ok: false, code: 'refund_started', message: 'A refund has been started for this order, so it cannot be shipped.' };
+  return OK;
+}
+
+/**
+ * Starting a refund: never while a shipment is being created (it could land in
+ * Shiprocket after the cancel decided there was nothing there to call off),
+ * and never twice at once. An unconfirmed earlier refund may be finished.
+ */
+function cancelGuard(order: ShopGuardFacts, nowMs: number): ShopCheck {
+  if (isShiprocketSendInFlight(order, nowMs)) {
+    return { ok: false, code: 'sending', message: 'This order is being sent to Shiprocket right now — give it a minute, then reload.' };
+  }
+  const refund = shopRefundState(order, nowMs);
+  if (refund === 'in_flight') {
+    return { ok: false, code: 'refund_started', message: 'A refund for this order is already under way — reload the page.' };
+  }
+  if (refund === 'done') {
+    return { ok: false, code: 'refund_started', message: 'This order has already been refunded — reload the page.' };
+  }
+  return OK;
+}
+
+/** Every legal move. Anything not listed is refused. */
+export const SHOP_TRANSITIONS: readonly ShopTransitionRule[] = [
+  { action: 'capture', from: 'payment_pending', to: 'paid', actor: 'gateway' },
+
+  // A send that comes back with an AWB already assigned goes straight to shipped.
+  { action: 'send', from: 'paid', to: 'sent_to_shiprocket', actor: 'owner', guard: sendGuard },
+  { action: 'send', from: 'paid', to: 'shipped', actor: 'owner', guard: sendGuard },
+
+  { action: 'mark_shipped', from: 'paid', to: 'shipped', actor: 'owner' },
+  { action: 'mark_shipped', from: 'sent_to_shiprocket', to: 'shipped', actor: 'owner' },
+
+  // shopStatusFromShiprocket picks which, and only ever forward.
+  { action: 'refresh', from: 'sent_to_shiprocket', to: 'shipped', actor: 'owner' },
+  { action: 'refresh', from: 'sent_to_shiprocket', to: 'delivered', actor: 'owner' },
+  { action: 'refresh', from: 'shipped', to: 'delivered', actor: 'owner' },
+
+  { action: 'mark_delivered', from: 'shipped', to: 'delivered', actor: 'owner' },
+
+  // Any paid order, refunded in full as it is.
+  ...PAID_STATUSES.map((from): ShopTransitionRule => ({ action: 'cancel', from, to: 'cancelled', actor: 'owner', guard: cancelGuard })),
+];
+
+/**
+ * Whether `action` may move an order from `from` to `to`. `order` is the row
+ * the guards read (the routes pass the row they just loaded); without it only
+ * the table is consulted.
+ */
+export function canShopTransition(
+  action: ShopAction,
+  from: ShopOrderStatus,
+  to: ShopOrderStatus,
+  ctx: { actor?: ShopActor; order?: ShopGuardFacts; nowMs?: number } = {},
+): ShopCheck {
+  const rule = SHOP_TRANSITIONS.find((t) => t.action === action && t.from === from && t.to === to);
+  if (!rule) return { ok: false, code: 'not_allowed', message: `A shop order can't go from ${from} to ${to} by ${action}.` };
+  if (ctx.actor && ctx.actor !== rule.actor) {
+    return { ok: false, code: 'forbidden_actor', message: `Only the ${rule.actor} can ${action} a shop order.` };
+  }
+  if (rule.guard && ctx.order) return rule.guard(ctx.order, ctx.nowMs ?? Date.now());
+  return OK;
+}
+
+/** The statuses `action` moves an order out of (towards `to`, when given): the compare-and-set set for its write. */
+export function shopFromStatuses(action: ShopAction, to?: ShopOrderStatus): ShopOrderStatus[] {
+  const out: ShopOrderStatus[] = [];
+  for (const t of SHOP_TRANSITIONS) {
+    if (t.action === action && (to === undefined || t.to === to) && !out.includes(t.from)) out.push(t.from);
+  }
+  return out;
+}
+
+/** The first move `action` can make from this order's status, guards included, or the reason none can. */
+export function checkShopAction(
+  action: ShopAction,
+  order: Pick<ShopOrderRow, 'status'> & Partial<ShopGuardFacts>,
+  nowMs: number = Date.now(),
+): ShopCheck {
+  const facts: ShopGuardFacts = {
+    shiprocket_order_id: order.shiprocket_order_id ?? null,
+    shiprocket_sending_at: order.shiprocket_sending_at ?? null,
+    refund_id: order.refund_id ?? null,
+  };
+  let refusal: ShopCheck | null = null;
+  for (const t of SHOP_TRANSITIONS) {
+    if (t.action !== action || t.from !== order.status) continue;
+    const check = canShopTransition(action, t.from, t.to, { order: facts, nowMs });
+    if (check.ok) return check;
+    refusal ??= check;
+  }
+  return refusal ?? { ok: false, code: 'not_allowed', message: `A ${order.status} shop order can't be moved by ${action}.` };
+}
+
+/** The owner may send to Shiprocket only a paid order not already sent, and not one being refunded. */
+export function canSendToShiprocket(order: Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'> & Partial<ShopGuardFacts>): boolean {
+  return checkShopAction('send', order).ok;
 }
 
 /** Marking shipped by hand (an AWB from the Shiprocket panel or any courier). */
 export function canMarkShipped(order: Pick<ShopOrderRow, 'status'>): boolean {
-  return order.status === 'paid' || order.status === 'sent_to_shiprocket';
+  return checkShopAction('mark_shipped', order).ok;
 }
 
 export function canMarkDelivered(order: Pick<ShopOrderRow, 'status'>): boolean {
-  return order.status === 'shipped';
+  return checkShopAction('mark_delivered', order).ok;
 }
 
-/** Any paid order can be cancelled; a paid one is refunded in full as it is. */
-export function canCancel(order: Pick<ShopOrderRow, 'status'>): boolean {
-  return isPaidStatus(order.status);
+/** Reading the AWB / delivery back: an order Shiprocket has, still on its way. */
+export function canRefreshFromShiprocket(order: Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'>): boolean {
+  return Boolean(order.shiprocket_order_id) && checkShopAction('refresh', order).ok;
+}
+
+/**
+ * Any paid order can be cancelled; a paid one is refunded in full as it is.
+ * Not while it is being sent to Shiprocket, nor while a refund is in flight;
+ * an unconfirmed refund is finished this way.
+ */
+export function canCancel(order: Pick<ShopOrderRow, 'status'> & Partial<ShopGuardFacts>, nowMs: number = Date.now()): boolean {
+  return checkShopAction('cancel', order, nowMs).ok;
 }
 
 /** Shiprocket can still call off a shipment it hasn't handed to a courier. */

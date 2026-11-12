@@ -1,6 +1,7 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { ingestSettlementFile, INTERRUPTED, type IngestOutcome, type SettlementStore } from './ingest';
+import { ingestSettlementFile, type IngestOutcome, type SettlementStore } from './ingest';
+import { runThatGoesAhead, SYNC_RUN_STALE_MS, WRITING_REPORT, type SyncRunFacts } from './lifecycle';
 import {
   friendlyMailboxError,
   mailboxConfigFromEnv,
@@ -37,7 +38,11 @@ export interface SyncResult {
   error: string | null;
   files: Pick<IngestOutcome, 'fileName' | 'platform' | 'status' | 'periodStart' | 'periodEnd' | 'orders' | 'message'>[];
   skippedMessages: SkippedMessage[];
+  /** Another check was in flight, so this one did nothing (error says so). */
+  busy?: boolean;
 }
+
+export const ALREADY_RUNNING = 'Another mail check is running right now — try again in a minute.';
 
 const PAGE = 1000;
 
@@ -143,12 +148,12 @@ export async function handleScannedMessage(
 }
 
 /**
- * Reads again the reports a run left INTERRUPTED (rows being written when it
+ * Reads again the reports a run left 'writing' (rows being written when it
  * stopped). The mail scan can't: it skips an email that already has a report
  * row. Their saved files are read back from Storage, within the time budget.
  */
 async function rereadInterrupted(admin: SupabaseClient, store: SettlementStore, result: SyncResult, deadline: number) {
-  const { rows, left } = await loadRereadableReports(admin, { error: INTERRUPTED, limit: REREAD_MAX_FILES });
+  const { rows, left } = await loadRereadableReports(admin, { error: WRITING_REPORT.error, limit: REREAD_MAX_FILES });
   if (!rows.length) return;
   const reread = await reprocessSavedReports(store, rows, { deadline });
   for (const f of reread.files) {
@@ -166,6 +171,29 @@ async function rereadInterrupted(admin: SupabaseClient, store: SettlementStore, 
     });
   }
   result.messagesLeft += left + reread.notReached;
+}
+
+/**
+ * The runs that may still be in flight (unfinished, started since `sinceIso`),
+ * or null when they can't be read — the check then goes ahead, as it did
+ * before there was a guard: a missed mail check costs more than an overlap.
+ */
+async function runsInFlight(admin: SupabaseClient, sinceIso: string): Promise<(SyncRunFacts & { id: string })[] | null> {
+  try {
+    const { data, error } = await admin
+      .from('online_settlement_sync_runs')
+      .select('id, started_at, finished_at, error')
+      .is('finished_at', null)
+      .gte('started_at', sinceIso);
+    if (error) {
+      console.error('online-settlements: could not read the runs in flight', error.message);
+      return null;
+    }
+    return Array.isArray(data) ? (data as (SyncRunFacts & { id: string })[]) : null;
+  } catch (err) {
+    console.error('online-settlements: could not read the runs in flight', err);
+    return null;
+  }
 }
 
 export const NOT_CONFIGURED =
@@ -198,10 +226,23 @@ export async function runOnlineReportSync(
     return result;
   }
 
+  // One check at a time: the daily cron and the owner's "Check email now" read
+  // the same mailbox and write the same reports. A run in flight (unfinished,
+  // and younger than SYNC_RUN_STALE_MS: lib/online-settlements/lifecycle.ts)
+  // makes this one stand down; an abandoned one doesn't. Asked again once our
+  // own row is in, so two that start together agree which goes ahead.
+  const cutoffIso = new Date(Date.now() - SYNC_RUN_STALE_MS).toISOString();
+  const before = await runsInFlight(admin, cutoffIso);
+  if (before && runThatGoesAhead(before, Date.now())) {
+    result.busy = true;
+    result.error = ALREADY_RUNNING;
+    return result;
+  }
+
   const { data: run, error: runErr } = await admin
     .from('online_settlement_sync_runs')
     .insert({ trigger, lookback_days: lookbackDays })
-    .select('id')
+    .select('id, started_at')
     .single();
   if (runErr || !run) {
     result.error = /online_settlement_sync_runs/.test(runErr?.message ?? '')
@@ -209,7 +250,27 @@ export async function runOnlineReportSync(
       : `Could not start the mail check: ${runErr?.message ?? 'no row'}`;
     return result;
   }
-  result.runId = (run as { id: string }).id;
+  const ours = {
+    id: (run as { id: string }).id,
+    started_at: (run as { started_at?: string | null }).started_at ?? new Date().toISOString(),
+    finished_at: null,
+    error: null,
+  };
+  result.runId = ours.id;
+
+  const after = await runsInFlight(admin, cutoffIso);
+  if (after) {
+    const ahead = runThatGoesAhead(after.some((r) => r.id === ours.id) ? after : [...after, ours], Date.now());
+    if (ahead && ahead.id !== ours.id) {
+      // Stand down without a trace: the run that goes ahead is the one to show.
+      const { error: dropErr } = await admin.from('online_settlement_sync_runs').delete().eq('id', ours.id);
+      if (dropErr) console.error('online-settlements: could not drop a run that stood down', dropErr.message);
+      result.runId = null;
+      result.busy = true;
+      result.error = ALREADY_RUNNING;
+      return result;
+    }
+  }
 
   const deadline = Date.now() + SYNC_TIME_BUDGET_MS;
   const store = supabaseSettlementStore(admin);

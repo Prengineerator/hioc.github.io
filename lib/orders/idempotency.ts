@@ -12,11 +12,66 @@
 // the claim. A replay of the same key returns the original order. A concurrent
 // duplicate — key claimed but not yet completed — is rejected rather than
 // allowed to race.
+//
+// A key's life (idempotency_keys, one row per key):
+//
+//   free ──claim (insert)──▶ claimed ──complete (order_id set)──▶ completed
+//                              │                                    (the end:
+//                              ├──release (row deleted)──▶ free       replays get
+//                              │   creation failed; nothing exists    its order)
+//                              └──older than IDEMPOTENCY_CLAIM_TTL_MS──▶ stale
+//   stale ──reclaim (compare-and-set on the claim seen)──▶ claimed
+//
+// 'free' is no row: never claimed, or released. 'stale' is derived, never
+// written: a claim whose request died between claiming and completing (the
+// platform killed it, or it crashed before it could release). Without it such
+// a key answered "already being placed" for ever, and the POS keeps the key
+// on that answer (lib/pos/ritual.ts), so the staffer could never place the
+// order.
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 
 type Admin = ReturnType<typeof createAdminSupabaseClient>;
+
+export const IDEMPOTENCY_KEY_STATES = ['free', 'claimed', 'stale', 'completed'] as const;
+export type IdempotencyKeyState = (typeof IDEMPOTENCY_KEY_STATES)[number];
+
+/**
+ * How long a claim with no order holds before it may be taken over. Both
+ * callers (POST /api/orders, POST /api/passes/sell) claim right before they
+ * create the order and complete right after, so a live request holds a claim
+ * for seconds; neither route raises maxDuration, so the platform kills any
+ * request by its default ceiling of 300 s. Ten minutes is twice that: a
+ * reclaim can never race a request that is still alive and about to create
+ * the order (which would be the duplicate this table exists to stop), and a
+ * dead claim frees itself in minutes instead of never.
+ */
+export const IDEMPOTENCY_CLAIM_TTL_MS = 10 * 60 * 1000;
+
+export interface IdempotencyKeyRow {
+  order_id: string | null;
+  created_at?: string | null;
+}
+
+/**
+ * Where a key stands. A claim whose age can't be read counts as live: a
+ * duplicate order is worse than a retry that waits.
+ */
+export function idempotencyKeyState(row: IdempotencyKeyRow | null, nowMs: number): IdempotencyKeyState {
+  if (!row) return 'free';
+  if (row.order_id) return 'completed';
+  const claimedAt = Date.parse(row.created_at ?? '');
+  if (Number.isNaN(claimedAt)) return 'claimed';
+  return nowMs - claimedAt >= IDEMPOTENCY_CLAIM_TTL_MS ? 'stale' : 'claimed';
+}
+
+export const IDEMPOTENCY_KEY_TRANSITIONS: readonly { op: 'claim' | 'complete' | 'release' | 'reclaim'; from: IdempotencyKeyState; to: IdempotencyKeyState }[] = [
+  { op: 'claim', from: 'free', to: 'claimed' },
+  { op: 'complete', from: 'claimed', to: 'completed' },
+  { op: 'release', from: 'claimed', to: 'free' },
+  { op: 'reclaim', from: 'stale', to: 'claimed' },
+];
 
 // Bound the header so a hostile or broken client can't write unbounded rows.
 const MAX_KEY_LENGTH = 200;
@@ -58,11 +113,14 @@ export async function claimIdempotencyKey(
   if (error.code === '23505') {
     const { data } = await admin
       .from('idempotency_keys')
-      .select('order_id')
+      .select('order_id, created_at')
       .eq('key', key)
       .maybeSingle();
-    const orderId = (data as { order_id: string | null } | null)?.order_id ?? null;
-    return orderId ? { state: 'replay', orderId } : { state: 'in_flight' };
+    const row = (data as IdempotencyKeyRow | null) ?? null;
+    const state = idempotencyKeyState(row, Date.now());
+    if (state === 'completed') return { state: 'replay', orderId: row!.order_id as string };
+    if (state === 'stale') return reclaimStaleKey(admin, key, userId, row!.created_at as string);
+    return { state: 'in_flight' };
   }
 
   console.error(
@@ -71,6 +129,31 @@ export async function claimIdempotencyKey(
     error,
   );
   return { state: 'unavailable' };
+}
+
+/**
+ * Takes over a stale claim: compare-and-set on the claim time read, still with
+ * no order, so of two retries only one gets it, and a claim that was completed
+ * meanwhile is never taken. The claim time moves to now, so the new holder has
+ * the full TTL. Losing answers what the key is now.
+ */
+async function reclaimStaleKey(admin: Admin, key: string, userId: string | null, seenClaimedAt: string): Promise<ClaimResult> {
+  const { data: taken, error } = await admin
+    .from('idempotency_keys')
+    .update({ created_at: new Date().toISOString(), created_by: userId })
+    .eq('key', key)
+    .eq('created_at', seenClaimedAt)
+    .is('order_id', null)
+    .select('key')
+    .maybeSingle();
+  if (!error && taken) {
+    console.error('idempotency: took over a claim left by a request that never finished', key, seenClaimedAt);
+    return { state: 'claimed' };
+  }
+  if (error) console.error('idempotency reclaim failed', key, error);
+  const { data } = await admin.from('idempotency_keys').select('order_id').eq('key', key).maybeSingle();
+  const orderId = (data as { order_id: string | null } | null)?.order_id ?? null;
+  return orderId ? { state: 'replay', orderId } : { state: 'in_flight' };
 }
 
 /**
@@ -83,7 +166,8 @@ export async function completeIdempotencyKey(
   key: string,
   orderId: string,
 ): Promise<void> {
-  const { error } = await admin.from('idempotency_keys').update({ order_id: orderId }).eq('key', key);
+  // claimed → completed only: a completed key keeps the order it first pointed at.
+  const { error } = await admin.from('idempotency_keys').update({ order_id: orderId }).eq('key', key).is('order_id', null);
   if (error) console.error('idempotency completion failed', key, orderId, error);
 }
 

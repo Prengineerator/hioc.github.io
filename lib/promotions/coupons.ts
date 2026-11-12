@@ -12,6 +12,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
+import { RELEASING_ORDER_STATUSES_FILTER } from '@/lib/promotions/redemptionLiveness';
 import type { Coupon } from '@/lib/types';
 
 // Marketing coupons (docs/MARKETING-AGENT-SPEC.md §1.7) are issued to ONE phone.
@@ -138,13 +139,13 @@ export async function validateAndComputeCoupon(
 
   // Total usage limit (0 = unlimited).
   if (coupon.usage_limit > 0) {
-    // Count only redemptions on orders that weren't cancelled/rejected (H7) —
+    // Count only LIVE redemptions (H7, lib/promotions/redemptionLiveness.ts) —
     // an abandoned/rejected order must not permanently burn a limited coupon.
     const { count, error: usageError } = await admin
       .from('coupon_redemptions')
       .select('id, orders!inner(status)', { count: 'exact', head: true })
       .eq('coupon_id', coupon.id)
-      .not('orders.status', 'in', '("cancelled","rejected")');
+      .not('orders.status', 'in', RELEASING_ORDER_STATUSES_FILTER);
     if (usageError) {
       console.error('validateAndComputeCoupon: usage count failed', usageError);
       return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };
@@ -170,7 +171,7 @@ export async function validateAndComputeCoupon(
       .select('id, orders!inner(status)', { count: 'exact', head: true })
       .eq('coupon_id', coupon.id);
     if (ctx.userId) userUsage = userUsage.eq('user_id', ctx.userId);
-    const { count, error: userUsageError } = await userUsage.not('orders.status', 'in', '("cancelled","rejected")');
+    const { count, error: userUsageError } = await userUsage.not('orders.status', 'in', RELEASING_ORDER_STATUSES_FILTER);
     if (userUsageError) {
       console.error('validateAndComputeCoupon: per-user count failed', userUsageError);
       return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };

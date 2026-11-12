@@ -28,6 +28,8 @@ export async function POST(request: Request) {
 
   const result = await runOnlineReportSync(createAdminSupabaseClient(), 'owner', { lookbackDays });
   if (!result.configured) return errorResponse(400, result.error ?? 'Email is not set up');
+  // The daily check (or another click) is reading the mailbox right now.
+  if (result.busy) return errorResponse(409, result.error ?? 'A mail check is already running');
   if (!result.ok) return errorResponse(502, result.error ?? 'Mail check failed');
   return NextResponse.json({ result });
 }

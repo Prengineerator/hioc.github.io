@@ -20,6 +20,7 @@ import {
   type HolderPass,
 } from '@/lib/pos/ritual';
 import { passCoverLine, passTitle } from '@/lib/passes/ritualDrinks';
+import { canAdjustPass } from '@/lib/passes/stateMachine';
 import type { PassState } from '@/lib/passes/types';
 
 const STATE_VARIANT: Record<PassState, BadgeVariant> = {
@@ -47,7 +48,7 @@ export function PassCard({
   const { total, filled } = cupDots(pass);
   // A refunded or void pass cannot be changed (the API says "isn't active");
   // used-up and lapsed ones can, which is exactly when a manager needs to.
-  const changeable = canManage && pass.status === 'active';
+  const changeable = canManage && canAdjustPass(pass);
   const live = pass.state === 'active';
   const cover = passCoverLine(pass);
 

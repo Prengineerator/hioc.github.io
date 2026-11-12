@@ -7,7 +7,7 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { sendShopShippedEmail } from '@/lib/shop/emails';
 import { parseShippedInput } from '@/lib/shop/owner';
 import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
-import { canMarkDelivered, canMarkShipped } from '@/lib/shop/status';
+import { canMarkDelivered, canMarkShipped, shopFromStatuses } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,7 +37,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     if (!canMarkShipped(order)) return errorResponse(409, 'Only a paid order that has not shipped can be marked shipped.');
     const input = parseShippedInput(body);
     if (!input.ok) return errorResponse(400, input.error);
-    const updated = await updateShopOrderIf(admin, order.id, ['paid', 'sent_to_shiprocket'], {
+    const updated = await updateShopOrderIf(admin, order.id, shopFromStatuses('mark_shipped', 'shipped'), {
       status: 'shipped',
       awb_code: input.awb_code,
       courier_name: input.courier_name ?? order.courier_name,
@@ -50,7 +50,10 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
   if (body.action === 'mark_delivered') {
     if (!canMarkDelivered(order)) return errorResponse(409, 'Only a shipped order can be marked delivered.');
-    const updated = await updateShopOrderIf(admin, order.id, ['shipped'], { status: 'delivered', delivered_at: now });
+    const updated = await updateShopOrderIf(admin, order.id, shopFromStatuses('mark_delivered', 'delivered'), {
+      status: 'delivered',
+      delivered_at: now,
+    });
     if (!updated) return errorResponse(409, 'The order changed meanwhile — reload the page.');
     return NextResponse.json({ order: updated });
   }

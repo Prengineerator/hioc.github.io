@@ -17,6 +17,7 @@ import { runAfterResponse } from '@/lib/api/background';
 import { fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
 import { sendShopPaidEmails } from './emails';
 import { isMissingShopSchema, toShopOrderRow, updateShopOrderIf } from './server';
+import { canShopTransition, shopFromStatuses } from './status';
 import type { ShopOrderRow } from './types';
 
 export type ShopCaptureResult =
@@ -47,7 +48,7 @@ export async function captureShopPayment(params: {
   if (!data) return { handled: false };
 
   const order = toShopOrderRow(data as Record<string, unknown>);
-  if (order.status !== 'payment_pending') return { handled: true, order, newlyPaid: false };
+  if (!canShopTransition('capture', order.status, 'paid').ok) return { handled: true, order, newlyPaid: false };
 
   // Razorpay binds the amount to the order, so a mismatch is anomalous: the
   // money has moved, so it is recorded, and logged loudly to be looked at.
@@ -57,7 +58,7 @@ export async function captureShopPayment(params: {
     );
   }
 
-  const paid = await updateShopOrderIf(admin, order.id, ['payment_pending'], {
+  const paid = await updateShopOrderIf(admin, order.id, shopFromStatuses('capture', 'paid'), {
     status: 'paid',
     paid_at: new Date().toISOString(),
     razorpay_payment_id: params.gatewayPaymentId,
