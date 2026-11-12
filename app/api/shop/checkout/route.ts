@@ -6,8 +6,9 @@ import { clientIp, rateLimitOk } from '@/lib/api/rateLimit';
 import { flags } from '@/lib/flags';
 import { createGatewayOrder, isGatewayConfigured } from '@/lib/payments/gateway';
 import { validateShopAddress } from '@/lib/shop/address';
+import { locationColumns, parseShopLocation } from '@/lib/shop/location';
 import { parseCartItems, priceShopCart } from '@/lib/shop/pricing';
-import { isMissingShopSchema, loadShopProducts, SHOP_MIGRATION_HINT } from '@/lib/shop/server';
+import { isMissingShopSchema, loadShopOffer, loadShopProducts, SHOP_MIGRATION_HINT } from '@/lib/shop/server';
 import { shopOrderRef } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
@@ -15,13 +16,16 @@ export const dynamic = 'force-dynamic';
 const PAYMENT_UNAVAILABLE = "Online payment isn't available right now — please try again in a little while.";
 
 // POST /api/shop/checkout — buy Instant Coffee jars to be shipped.
-// Body: { items: [{ product_id, quantity }], address: {...}, expected_total_inr? }.
+// Body: { items: [{ product_id, quantity }], address: {...}, location?, expected_total_inr? }.
+// `location` is the optional delivery pin { lat, lng, accuracy_m?, source }
+// (lib/shop/location.ts); it goes to Shiprocket with the order.
 // Responds 201 { order_id, order_number, total_inr, payment } where `payment` is
 // the Razorpay intent openRazorpayCheckout() takes.
 //
 // Guest checkout (a signed-in customer's account is linked if there is one).
-// The price is the server's: products are read from shop_products and priced by
-// lib/shop/pricing.ts (₹49 shipping below 3 jars, free from 3). If the page
+// The price is the server's: products are read from shop_products, the offer
+// from shop_settings (the introductory "2 for ₹599 · 3 for ₹749" while it is
+// on), priced by lib/shop/pricing.ts (₹49 shipping below 3 jars, free from 3). If the page
 // showed a different total (a price or stock change since it loaded), the
 // customer is told before any payment, with 409 and the new figures.
 //
@@ -44,20 +48,31 @@ export async function POST(request: Request) {
   const address = validateShopAddress(body.address);
   if (!address.ok) return NextResponse.json({ error: address.error, field: address.field }, { status: 400 });
 
+  const pin = parseShopLocation(body.location);
+  if (!pin.ok) return NextResponse.json({ error: pin.error, field: 'location' }, { status: 400 });
+
   const admin = createAdminSupabaseClient();
-  const products = await loadShopProducts(admin);
+  const [products, offer] = await Promise.all([loadShopProducts(admin), loadShopOffer(admin)]);
   if (!products.ok) {
     return errorResponse(503, products.missingSchema ? `The shop isn't open yet — ${SHOP_MIGRATION_HINT}` : 'Could not load the shop just now — please try again.');
   }
 
-  const quote = priceShopCart(products.products, cart.items);
+  const quote = priceShopCart(products.products, cart.items, offer);
   if (!quote.ok) return errorResponse(400, quote.error);
 
   if (typeof body.expected_total_inr === 'number' && body.expected_total_inr !== quote.total_inr) {
     return NextResponse.json(
       {
         error: `The total is now ₹${quote.total_inr}, not ₹${body.expected_total_inr}. Please check your order and pay again.`,
-        quote: { lines: quote.lines, jar_count: quote.jar_count, subtotal_inr: quote.subtotal_inr, shipping_inr: quote.shipping_inr, total_inr: quote.total_inr },
+        quote: {
+          lines: quote.lines,
+          jar_count: quote.jar_count,
+          subtotal_inr: quote.subtotal_inr,
+          discount_inr: quote.discount_inr,
+          offer_name: quote.offer_name,
+          shipping_inr: quote.shipping_inr,
+          total_inr: quote.total_inr,
+        },
       },
       { status: 409 },
     );
@@ -79,8 +94,11 @@ export async function POST(request: Request) {
       lines: quote.lines,
       jar_count: quote.jar_count,
       subtotal_inr: quote.subtotal_inr,
+      discount_inr: quote.discount_inr,
+      offer_name: quote.offer_name,
       shipping_inr: quote.shipping_inr,
       total_inr: quote.total_inr,
+      ...locationColumns(pin.location),
       user_id: userId,
     })
     .select('id, order_number, total_inr')

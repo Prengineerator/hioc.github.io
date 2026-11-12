@@ -79,6 +79,14 @@ describe('buildShiprocketOrder', () => {
     ]);
   });
 
+  it('sends the offer as the order discount; the jars keep ₹399 each', () => {
+    const body = buildShiprocketOrder(shopOrder({ jar_count: 3, subtotal_inr: 1197, discount_inr: 448, offer_name: 'Introductory offer', shipping_inr: 0, total_inr: 749, lines: [
+      { product_id: 'classic', name: 'Signature Classic', sku: 'HIOC-IC-CLASSIC-50G', unit_price_inr: 399, quantity: 3, line_total_inr: 1197 },
+    ] }), PKG, 'Primary');
+    expect(body).toMatchObject({ total_discount: 448, sub_total: 749, shipping_charges: 0 });
+    expect((body.order_items as { selling_price: number }[])[0].selling_price).toBe(399);
+  });
+
   it('sends free shipping as 0 and a one-word name with an empty last name', () => {
     const body = buildShiprocketOrder(shopOrder({ customer_name: 'Riya', shipping_inr: 0 }), PKG, 'Agra Cafe');
     expect(body).toMatchObject({ billing_customer_name: 'Riya', billing_last_name: '', shipping_charges: 0, pickup_location: 'Agra Cafe' });

@@ -8,11 +8,14 @@ Only the owner sees these orders.
 
 | | |
 |---|---|
-| Price | ₹399 a jar, any mix of flavours (from `shop_products`, not the browser) |
+| Price | ₹399 a jar (MRP), any mix of flavours (from `shop_products`, not the browser) |
+| Introductory offer | **1 for ₹399 · 2 for ₹599 · 3 for ₹749**, any flavours (`shop_settings`). More jars = full groups of 3, then the rest (4 = ₹749 + ₹399), the café offers' rule. Jars stay ₹399 on the order; the offer is its own discount line. The owner switches it off or changes the prices on `/owner/shop` |
 | Shipping | ₹49 an order for 1–2 jars, **free from 3 jars** (`lib/shop/pricing.ts`) |
+| What customers pay | 1 jar ₹448 · 2 jars ₹648 · 3 jars ₹749 (offer on) |
 | Payment | Prepaid only, Razorpay (UPI, cards, netbanking). No cash on delivery |
 | Order size | Up to 12 jars online; more is a wholesale enquiry |
-| Launch offer | The poster's 1 for ₹299 / 2 for ₹499 / 3 for ₹599 stays a **counter** offer (the café's Promotions → Offers). The website says so |
+| Delivery pin | Optional. "Use my current location" (phone GPS) and, with a Google Maps key, a draggable map pin. Sent to Shiprocket in the order comment as a Google Maps link and shown to the owner, so the courier finds the door (fewer RTOs) |
+| Counter offer | The poster's 1 for ₹299 / 2 for ₹499 / 3 for ₹599 stays a **counter** offer (the café's Promotions → Offers). The website says online prices are its own |
 
 ## How it works
 
@@ -82,15 +85,22 @@ Owner: /owner/shop → "Send to Shiprocket" (checks weight & box size)
 7. **GST** — jars shipped are goods (not café service), and other states mean
    IGST. Confirm the rate and invoicing with your CA. The ₹399 is the
    all-inclusive price.
-8. **Emails** (optional but recommended) — with `RESEND_API_KEY` /
+8. **Google Maps pin** (optional but recommended) — "Use my current location"
+   works without anything. For the draggable map: Google Cloud console → enable
+   **Maps JavaScript API** → create an API key → restrict it to HTTP referrers
+   `https://hioc.in/*` (plus preview domains) and to that API → set
+   `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` in Vercel. Google bills map loads past
+   its free monthly allowance; a shop's checkout traffic normally stays inside it,
+   but check the pricing page and set a budget alert.
+9. **Emails** (optional but recommended) — with `RESEND_API_KEY` /
    `RESEND_FROM` set, the owner gets "New online order" and the customer gets
    confirmation / shipped / refund emails. `SHOP_ALERT_EMAILS` adds more
    recipients (e.g. whoever packs).
-9. **Switch on** — `NEXT_PUBLIC_FLAG_SHOP=true` in Vercel, redeploy. This shows
+10. **Switch on** — `NEXT_PUBLIC_FLAG_SHOP=true` in Vercel, redeploy. This shows
    `/shop`, the **Shop** link in the header, **Order online** on the home-page
    popup, **Shop orders** in the owner nav, and the shop wording on the policy
    pages (Shipping & Delivery, Refund & Cancellation, Terms, Privacy).
-10. **Test once with a real ₹ payment** (1 jar), send it to Shiprocket, refresh,
+11. **Test once with a real ₹ payment** (1 jar), send it to Shiprocket, refresh,
     then cancel & refund it — and check the emails arrive.
 
 `/owner/shop` works before step 9, with a setup checklist at the top.
@@ -101,7 +111,9 @@ Owner: /owner/shop → "Send to Shiprocket" (checks weight & box size)
   · Unpaid (abandoned checkouts — no money taken, nothing to do).
 - On each order: Copy address · Send to Shiprocket · Refresh from Shiprocket ·
   Mark shipped by hand (AWB + courier) · Mark delivered · Cancel & refund.
+- Online offer: switch it on/off, rename it, change the price for each number of jars.
 - Flavours in stock: switch a flavour off when it runs out.
+- Each order shows the customer's map pin (if any) as "Open delivery pin in Google Maps"; Copy address includes the link.
 - Download CSV: every paid order with address, items, amounts, refund,
   Razorpay payment id, Shiprocket id and AWB.
 
@@ -113,7 +125,17 @@ reads its answers loosely, but it hasn't been run against a live account (the
 docs host wasn't reachable from the build environment). Do step 10 before the
 first real customer; if Shiprocket answers differently, the error is shown on
 the order card and "Mark shipped by hand" still works. The tracking link uses
-`https://shiprocket.co/tracking/<AWB>`.
+`https://shiprocket.co/tracking/<AWB>`. The delivery pin is sent as a Google
+Maps link in the order's `comment`; if your Shiprocket account has dedicated
+latitude/longitude fields, they are a small addition in `buildShiprocketOrder()`.
+
+## Images
+
+`public/images/shop/` — `hero-jars.png` (all three) and `jar-<flavour>.png`
+are the jars cut out of the launch poster with a background-removal model
+(transparent PNGs with a soft shadow), not crops. For sharper pictures on big
+screens, swap in studio shots of the jars (transparent PNG, about 900 px tall
+for a single jar) under the same names.
 
 ## Files
 

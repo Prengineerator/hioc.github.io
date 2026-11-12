@@ -8,22 +8,26 @@ import type { ShopPackage } from './types';
 
 export const SHOP_PRODUCT_NAME = 'HIOC. Premium Instant Coffee';
 
-/** The flavour cards: colour (the poster's flavour pills) and jar photo, by product id. */
+/**
+ * The flavour cards: colour (the poster's flavour pills) and jar photo, by
+ * product id. The jars are cut out of the launch poster (transparent PNGs, each
+ * with a soft shadow); public/images/shop/hero-jars.png is all three together.
+ */
 export const FLAVOUR_STYLE: Record<string, { tagline: string; accent: string; image: string }> = {
   classic: {
     tagline: 'Bold, smooth and balanced — the everyday cup.',
     accent: '#1f3d7a',
-    image: '/images/shop/jar-classic.jpg',
+    image: '/images/shop/jar-classic.png',
   },
   hazelnut: {
     tagline: 'Toasty, nutty and rich.',
     accent: '#8c2b22',
-    image: '/images/shop/jar-hazelnut.jpg',
+    image: '/images/shop/jar-hazelnut.png',
   },
   vanilla: {
     tagline: 'Sweet, creamy vanilla notes.',
     accent: '#b7791f',
-    image: '/images/shop/jar-vanilla.jpg',
+    image: '/images/shop/jar-vanilla.png',
   },
 };
 

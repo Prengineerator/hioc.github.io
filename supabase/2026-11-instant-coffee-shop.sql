@@ -11,15 +11,24 @@
 --                   switch on /owner/shop; an out-of-stock flavour can't be
 --                   ordered. The price is read from here at checkout, never
 --                   from the browser.
+--   shop_settings   One row: the online offer. Starts as the introductory
+--                   offer "1 for ₹399 · 2 for ₹599 · 3 for ₹749" (any
+--                   flavours; more jars = full groups of 3, then the rest,
+--                   like the café's offers), switched on. The owner can switch
+--                   it off or change the prices on /owner/shop.
 --   shop_orders     One row per checkout. Created 'payment_pending' when the
 --                   Razorpay window opens; 'paid' once Razorpay confirms
 --                   (checkout verify, webhook or the status poll, whichever is
 --                   first); then 'sent_to_shiprocket' → 'shipped' →
 --                   'delivered', or 'cancelled' (refunded) by the owner.
---                   Shipping is ₹49 an order below 3 jars, free from 3.
+--                   Jars keep their ₹399 on the lines; the offer is its own
+--                   discount (discount_inr, offer_name). Shipping is ₹49 an
+--                   order below 3 jars, free from 3. An optional delivery pin
+--                   (location_*) goes to Shiprocket with the order.
 --
 -- Read and written only by the server (service role). Additive and safe to
--- re-run. Apply BEFORE switching on NEXT_PUBLIC_FLAG_SHOP.
+-- re-run (also over the first version of this file). Apply BEFORE switching on
+-- NEXT_PUBLIC_FLAG_SHOP.
 -- ===========================================================================
 
 create table if not exists shop_products (
@@ -66,8 +75,10 @@ create table if not exists shop_orders (
   lines                   jsonb not null check (jsonb_typeof(lines) = 'array'),
   jar_count               integer not null check (jar_count > 0),
   subtotal_inr            integer not null check (subtotal_inr > 0),
+  discount_inr            integer not null default 0 check (discount_inr >= 0),
+  offer_name              text,
   shipping_inr            integer not null check (shipping_inr >= 0),
-  total_inr               integer not null check (total_inr = subtotal_inr + shipping_inr),
+  total_inr               integer not null constraint shop_orders_total_positive check (total_inr > 0),
 
   -- Razorpay.
   razorpay_order_id       text unique,
@@ -101,15 +112,57 @@ create table if not exists shop_orders (
   updated_at              timestamptz not null default now()
 );
 
+-- Over the first version of this file: the offer columns, and the total now
+-- takes the offer off (subtotal − discount + shipping).
+alter table shop_orders
+  add column if not exists discount_inr integer not null default 0 check (discount_inr >= 0),
+  add column if not exists offer_name text;
+
+-- The delivery pin the customer may drop at checkout ("Use my current
+-- location" or the map): sent to Shiprocket and shown to the owner as a Google
+-- Maps link, so the courier finds the door. Optional; inside India.
+alter table shop_orders
+  add column if not exists location_lat numeric(9, 6) check (location_lat between 6 and 38),
+  add column if not exists location_lng numeric(9, 6) check (location_lng between 68 and 98),
+  add column if not exists location_accuracy_m integer check (location_accuracy_m >= 0),
+  add column if not exists location_source text check (location_source in ('gps', 'map'));
+alter table shop_orders drop constraint if exists shop_orders_total_inr_check;
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'shop_orders_total_adds_up') then
+    alter table shop_orders
+      add constraint shop_orders_total_adds_up check (total_inr = subtotal_inr - discount_inr + shipping_inr);
+  end if;
+end $$;
+
 create index if not exists shop_orders_status_created on shop_orders (status, created_at desc);
 create index if not exists shop_orders_created on shop_orders (created_at desc);
 
 alter table shop_orders enable row level security;
 revoke all on shop_orders from anon, authenticated;
 
+-- The online offer (one row). offer_tier_prices[n] is what n jars cost, any
+-- flavours; more jars than tiers = full groups of the biggest tier, then the
+-- tier for the rest (4 jars = ₹749 + ₹399).
+create table if not exists shop_settings (
+  is_singleton       boolean primary key default true check (is_singleton),
+  offer_active       boolean not null default true,
+  offer_name         text not null default 'Introductory offer' check (length(btrim(offer_name)) between 1 and 40),
+  offer_tier_prices  integer[] not null default '{399,599,749}'
+                       check (cardinality(offer_tier_prices) between 2 and 6 and 0 < all (offer_tier_prices)),
+  updated_at         timestamptz not null default now()
+);
+
+insert into shop_settings (is_singleton) values (true) on conflict (is_singleton) do nothing;
+
+alter table shop_settings enable row level security;
+revoke all on shop_settings from anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- Verify:
 --   select id, name, price_inr, in_stock from shop_products order by sort_order;
 --   -- expect Signature Classic / Nutty Hazelnut / French Vanilla at 399, in stock
+--   select offer_active, offer_name, offer_tier_prices from shop_settings;
+--   -- expect true / Introductory offer / {399,599,749}
 --   select count(*) from shop_orders;
 -- ---------------------------------------------------------------------------

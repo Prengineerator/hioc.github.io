@@ -22,7 +22,12 @@ export default function PrivacyPage() {
           <li><strong>Contact details</strong> you provide at checkout or sign-up: name, mobile number, and (if you create an account) email.</li>
           <li><strong>Order information</strong>: items ordered, pickup time, order notes, and order history.</li>
           {flags.shop ? (
-            <li><strong>Delivery details</strong> for Instant Coffee orders we ship: name, delivery address, pincode, mobile number and email.</li>
+            <li>
+              <strong>Delivery details</strong> for Instant Coffee orders we ship: name, delivery address, pincode, mobile
+              number and email, and — only if you choose to share it — a <strong>map pin</strong> of the delivery location
+              (your device&apos;s location when you tap &ldquo;Use my current location&rdquo;, or where you place the pin on
+              the map). It is used only to deliver that order.
+            </li>
           ) : null}
           <li><strong>Payment references</strong>: transaction identifiers from our payment gateway. We do <em>not</em> collect or store your card number, CVV, or UPI PIN.</li>
           <li><strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.</li>
@@ -56,7 +61,8 @@ export default function PrivacyPage() {
           {flags.shop ? (
             <li>
               Our <strong>shipping partner (Shiprocket) and its courier companies</strong> — the name,
-              delivery address and mobile number on an Instant Coffee order, to deliver it — and our{' '}
+              delivery address, mobile number and map pin (if given) on an Instant Coffee order, to deliver it
+              — <strong>Google Maps</strong>, which shows the map when you place a pin, and our{' '}
               <strong>email provider</strong>, to send your order and tracking emails.
             </li>
           ) : null}

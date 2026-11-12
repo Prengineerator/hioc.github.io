@@ -1512,8 +1512,9 @@ async function checkWarehouse() {
 
 // ---------------------------------------------------------------------------
 // Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md,
-// supabase/2026-11-instant-coffee-shop.sql): the flavours and the shipped
-// orders, both service-role only. Reads only.
+// supabase/2026-11-instant-coffee-shop.sql): the flavours, the online offer
+// and the shipped orders (with the offer and delivery-pin columns), all
+// service-role only. Reads only.
 // ---------------------------------------------------------------------------
 async function checkInstantCoffeeShop() {
   heading('SHOP-1 · instant coffee shop tables + lockdown', '2026-11-instant-coffee-shop.sql');
@@ -1521,7 +1522,8 @@ async function checkInstantCoffeeShop() {
 
   for (const [table, col] of [
     ['shop_products', 'id,price_inr,in_stock'],
-    ['shop_orders', 'id,order_number,status,razorpay_order_id,shiprocket_order_id,awb_code'],
+    ['shop_orders', 'id,order_number,status,discount_inr,offer_name,location_lat,location_lng,razorpay_order_id,shiprocket_order_id,awb_code'],
+    ['shop_settings', 'is_singleton,offer_active,offer_tier_prices'],
   ]) {
     const r = await rest(`/${table}?select=${col}&limit=3`);
     if (!r.ok) {
@@ -1533,7 +1535,10 @@ async function checkInstantCoffeeShop() {
     if (table === 'shop_products' && (!Array.isArray(r.body) || r.body.length < 3)) {
       fail('shop_products has the three flavours', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
     }
-    const asAnon = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    if (table === 'shop_settings' && (!Array.isArray(r.body) || r.body.length !== 1)) {
+      fail('shop_settings has its one row', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    const asAnon = await rest(`/${table}?select=${col.split(',')[0]}&limit=1`, { key: ANON });
     const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
     if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
     else pass(`${table} is not readable by the anon key`);

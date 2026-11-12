@@ -13,6 +13,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { defaultPackage } from '@/lib/shop/catalog';
+import { describePin, googleMapsLink, locationFromRow } from '@/lib/shop/location';
 import { jarsLabel, rupees } from '@/lib/shop/pricing';
 import {
   canCancel,
@@ -48,7 +49,8 @@ function when(iso: string | null): string {
 }
 
 function addressText(o: ShopOrderRow): string {
-  return [o.customer_name, o.address_line1, o.address_line2, `${o.city}, ${o.state} ${o.pincode}`, o.phone]
+  const pin = locationFromRow(o);
+  return [o.customer_name, o.address_line1, o.address_line2, `${o.city}, ${o.state} ${o.pincode}`, o.phone, pin ? `Map pin: ${googleMapsLink(pin)}` : null]
     .filter(Boolean)
     .join('\n');
 }
@@ -73,6 +75,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
 
   const ref = shopOrderRef(order.order_number);
   const tracking = trackingUrl(order.awb_code);
+  const pin = locationFromRow(order);
 
   async function act(path: string, method: 'POST' | 'PATCH', body: unknown, done: string) {
     setBusy(true);
@@ -137,7 +140,12 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           </ul>
           <p className="mt-2 text-sm text-charcoal">
             <span className="font-mono font-semibold tabular-nums">{rupees(order.total_inr)}</span>
-            <span className="text-muted"> ({order.shipping_inr ? `incl. ${rupees(order.shipping_inr)} shipping` : 'free shipping'})</span>
+            <span className="text-muted">
+              {' '}
+              ({[order.discount_inr > 0 ? `${order.offer_name ?? 'offer'} −${rupees(order.discount_inr)}` : null, order.shipping_inr ? `incl. ${rupees(order.shipping_inr)} shipping` : 'free shipping']
+                .filter(Boolean)
+                .join(' · ')})
+            </span>
           </p>
         </div>
         <div>
@@ -147,8 +155,22 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
               {copied ? 'Copied' : 'Copy address'}
             </button>
           </div>
-          <address className="mt-1 whitespace-pre-line text-sm not-italic text-charcoal">{addressText(order)}</address>
+          <address className="mt-1 whitespace-pre-line text-sm not-italic text-charcoal">
+            {[order.customer_name, order.address_line1, order.address_line2, `${order.city}, ${order.state} ${order.pincode}`, order.phone]
+              .filter(Boolean)
+              .join('\n')}
+          </address>
           <p className="mt-1 break-all text-xs text-muted">{order.email}</p>
+          {pin ? (
+            <p className="mt-2 text-sm">
+              <a href={googleMapsLink(pin)} target="_blank" rel="noopener noreferrer" className="font-semibold text-tan-dark underline">
+                Open delivery pin in Google Maps
+              </a>
+              <span className="block text-xs text-muted">Customer&apos;s pin, {describePin(pin)} · sent to Shiprocket with the order</span>
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-muted">No map pin — address only.</p>
+          )}
         </div>
       </div>
 

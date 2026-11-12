@@ -135,6 +135,46 @@ describe('POST /api/shop/checkout', () => {
     expect(state.rzpCalls[0]).toMatchObject({ amount: 119700 });
   });
 
+  it('with the introductory offer on: 2 jars charge ₹599 + ₹49 = ₹648, recorded as ₹199 off', async () => {
+    state.tables.shop_settings = [{ is_singleton: true, offer_active: true, offer_name: 'Introductory offer', offer_tier_prices: [399, 599, 749] }];
+    const res = await POST(req({ items: [{ product_id: 'classic', quantity: 2 }], address: ADDRESS, expected_total_inr: 648 }));
+    expect(res.status).toBe(201);
+    expect(state.tables.shop_orders[0]).toMatchObject({
+      subtotal_inr: 798,
+      discount_inr: 199,
+      offer_name: 'Introductory offer',
+      shipping_inr: 49,
+      total_inr: 648,
+    });
+    expect(state.rzpCalls[0]).toMatchObject({ amount: 64800 });
+  });
+
+  it('with the offer on: 3 jars are ₹749, shipped free', async () => {
+    state.tables.shop_settings = [{ is_singleton: true, offer_active: true, offer_name: 'Introductory offer', offer_tier_prices: [399, 599, 749] }];
+    const res = await POST(req({ items: [{ product_id: 'classic', quantity: 2 }, { product_id: 'vanilla', quantity: 1 }], address: ADDRESS }));
+    expect(res.status).toBe(201);
+    expect(state.tables.shop_orders[0]).toMatchObject({ discount_inr: 448, shipping_inr: 0, total_inr: 749 });
+    expect(state.rzpCalls[0]).toMatchObject({ amount: 74900 });
+  });
+
+  it('with the offer switched off: full price', async () => {
+    state.tables.shop_settings = [{ is_singleton: true, offer_active: false, offer_name: 'Introductory offer', offer_tier_prices: [399, 599, 749] }];
+    const res = await POST(req({ items: [{ product_id: 'classic', quantity: 3 }], address: ADDRESS }));
+    expect(res.status).toBe(201);
+    expect(state.tables.shop_orders[0]).toMatchObject({ discount_inr: 0, offer_name: null, total_inr: 1197 });
+  });
+
+  it('stores the delivery pin, and refuses one outside India', async () => {
+    const ok = await POST(req({ items: [{ product_id: 'classic', quantity: 1 }], address: ADDRESS, location: { lat: 26.9124, lng: 75.7873, accuracy_m: 15, source: 'gps' } }));
+    expect(ok.status).toBe(201);
+    expect(state.tables.shop_orders[0]).toMatchObject({ location_lat: 26.9124, location_lng: 75.7873, location_accuracy_m: 15, location_source: 'gps' });
+
+    const bad = await POST(req({ items: [{ product_id: 'classic', quantity: 1 }], address: ADDRESS, location: { lat: 40.7, lng: -74 } }));
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).field).toBe('location');
+    expect(state.tables.shop_orders).toHaveLength(1);
+  });
+
   it('points at the wrong address field with 400 and creates nothing', async () => {
     const res = await POST(req({ items: [{ product_id: 'classic', quantity: 1 }], address: { ...ADDRESS, pincode: '12' } }));
     expect(res.status).toBe(400);
@@ -155,7 +195,7 @@ describe('POST /api/shop/checkout', () => {
     const res = await POST(req({ items: [{ product_id: 'classic', quantity: 1 }], address: ADDRESS, expected_total_inr: 399 }));
     expect(res.status).toBe(409);
     const body = await res.json();
-    expect(body.quote).toMatchObject({ subtotal_inr: 399, shipping_inr: 49, total_inr: 448 });
+    expect(body.quote).toMatchObject({ subtotal_inr: 399, discount_inr: 0, shipping_inr: 49, total_inr: 448 });
     expect(state.tables.shop_orders).toHaveLength(0);
     expect(state.rzpCalls).toHaveLength(0);
   });

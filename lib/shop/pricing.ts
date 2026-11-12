@@ -5,10 +5,16 @@
 // never read.
 //
 //   each jar        its shop_products.price_inr (₹399 for all three flavours)
+//   online offer    shop_settings, while switched on: the introductory offer
+//                   "1 for ₹399 · 2 for ₹599 · 3 for ₹749", any flavours. More
+//                   jars = full groups of 3, then the rest (4 = ₹749 + ₹399),
+//                   the same rule as the café's offers (offerPriceFor). The
+//                   jars keep ₹399 on the lines; the offer is its own discount.
 //   shipping        ₹49 per order for 1 or 2 jars, free from 3 jars
 //   prepaid only    no cash on delivery
 
-import type { ShopLine, ShopProduct } from './types';
+import { offerPriceFor } from '@/lib/orders/offers';
+import type { ShopLine, ShopOffer, ShopProduct } from './types';
 
 export const SHIPPING_FEE_INR = 49;
 export const FREE_SHIPPING_MIN_JARS = 3;
@@ -65,19 +71,31 @@ export function parseCartItems(raw: unknown): ParsedCart {
 export interface ShopQuote {
   lines: ShopLine[];
   jar_count: number;
+  /** The jars at their own price (₹399 each). */
   subtotal_inr: number;
+  /** What the offer takes off (0 without one, or when it saves nothing). */
+  discount_inr: number;
+  /** The offer's name when it took something off. */
+  offer_name: string | null;
   shipping_inr: number;
+  /** subtotal − discount + shipping: what Razorpay charges. */
   total_inr: number;
 }
 
 export type QuoteResult = ({ ok: true } & ShopQuote) | { ok: false; error: string };
 
 /**
- * Prices cart items against the products. A product that doesn't exist or is
- * out of stock is refused by name, so the customer knows which flavour to take
- * out. Lines come back in the products' own order (sort_order), not the cart's.
+ * Prices cart items against the products, and the offer when there is one. A
+ * product that doesn't exist or is out of stock is refused by name, so the
+ * customer knows which flavour to take out. Lines come back in the products'
+ * own order (sort_order), not the cart's. The offer never adds: if its price
+ * for the jars isn't lower than the jars' own, nothing comes off.
  */
-export function priceShopCart(products: readonly ShopProduct[], items: readonly CartItem[]): QuoteResult {
+export function priceShopCart(
+  products: readonly ShopProduct[],
+  items: readonly CartItem[],
+  offer: ShopOffer | null = null,
+): QuoteResult {
   const byId = new Map(products.map((p) => [p.id, p]));
   for (const item of items) {
     const product = byId.get(item.product_id);
@@ -102,8 +120,77 @@ export function priceShopCart(products: readonly ShopProduct[], items: readonly 
   if (lines.length === 0) return { ok: false, error: 'Add at least one jar' };
   const jar_count = lines.reduce((n, l) => n + l.quantity, 0);
   const subtotal_inr = lines.reduce((n, l) => n + l.line_total_inr, 0);
+  const offerPrice = offer ? offerPriceFor(offer.tier_prices, jar_count) : subtotal_inr;
+  const discount_inr = offer && offerPrice > 0 ? Math.max(0, subtotal_inr - offerPrice) : 0;
   const shipping_inr = shippingForJars(jar_count);
-  return { ok: true, lines, jar_count, subtotal_inr, shipping_inr, total_inr: subtotal_inr + shipping_inr };
+  return {
+    ok: true,
+    lines,
+    jar_count,
+    subtotal_inr,
+    discount_inr,
+    offer_name: discount_inr > 0 && offer ? offer.name : null,
+    shipping_inr,
+    total_inr: subtotal_inr - discount_inr + shipping_inr,
+  };
+}
+
+/** Same-priced jars: what `jars` of them cost in all, offer and shipping included. */
+export function totalForJars(unitPrice: number, jars: number, offer: ShopOffer | null): number {
+  if (!(jars > 0)) return 0;
+  const own = unitPrice * jars;
+  const goods = offer ? Math.min(own, offerPriceFor(offer.tier_prices, jars)) : own;
+  return goods + shippingForJars(jars);
+}
+
+// ---------------------------------------------------------------------------
+// The offer (shop_settings)
+// ---------------------------------------------------------------------------
+
+export const MAX_OFFER_TIERS = 6;
+export const DEFAULT_OFFER_NAME = 'Introductory offer';
+
+/**
+ * Tier prices from the owner or the database → a clean list, or null. Each is
+ * a whole rupee amount; 2 to 6 tiers; each tier costs more in all than the one
+ * before (2 jars can't cost less than 1).
+ */
+export function normalizeOfferTiers(value: unknown): number[] | null {
+  if (!Array.isArray(value) || value.length < 2 || value.length > MAX_OFFER_TIERS) return null;
+  const tiers: number[] = [];
+  for (const v of value) {
+    const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 100000) return null;
+    if (tiers.length && n <= tiers[tiers.length - 1]) return null;
+    tiers.push(n);
+  }
+  return tiers;
+}
+
+/** The shop_settings row → the live offer, or null when it is off (or unreadable). */
+export function shopOfferFromSettings(
+  row: { offer_active?: unknown; offer_name?: unknown; offer_tier_prices?: unknown } | null | undefined,
+): ShopOffer | null {
+  if (!row || row.offer_active !== true) return null;
+  const tiers = normalizeOfferTiers(row.offer_tier_prices);
+  if (!tiers) return null;
+  const name = typeof row.offer_name === 'string' && row.offer_name.trim() ? row.offer_name.trim() : DEFAULT_OFFER_NAME;
+  return { name, tier_prices: tiers };
+}
+
+/** "1 for ₹399 · 2 for ₹599 · 3 for ₹749" */
+export function describeOfferTiers(tiers: readonly number[]): string {
+  return tiers.map((p, i) => `${i + 1} for ${rupees(p)}`).join(' · ');
+}
+
+/**
+ * The tiers that save something against `unitPrice` — what a headline should
+ * say: "2 for ₹599 · 3 for ₹749" (1 for ₹399 is just the price).
+ */
+export function offerDeals(tiers: readonly number[], unitPrice: number): { jars: number; price: number; was: number }[] {
+  return tiers
+    .map((price, i) => ({ jars: i + 1, price, was: unitPrice * (i + 1) }))
+    .filter((t) => t.price < t.was);
 }
 
 /** "₹1,197" */

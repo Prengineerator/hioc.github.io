@@ -12,20 +12,23 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
+import { LocationPin } from '@/components/shop/LocationPin';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import { INDIAN_STATES, validateShopAddress, type AddressField } from '@/lib/shop/address';
 import { FALLBACK_FLAVOUR_STYLE, FLAVOUR_STYLE } from '@/lib/shop/catalog';
+import type { ShopLocation } from '@/lib/shop/location';
 import {
   FREE_SHIPPING_MIN_JARS,
   jarsLabel,
-  jarsToFreeShipping,
   MAX_JARS_PER_ORDER,
+  offerDeals,
   priceShopCart,
   rupees,
-  SHIPPING_FEE_INR,
+  shippingForJars,
+  totalForJars,
 } from '@/lib/shop/pricing';
-import type { ShopProduct } from '@/lib/shop/types';
+import type { ShopOffer, ShopProduct } from '@/lib/shop/types';
 
 type Form = Record<AddressField, string>;
 
@@ -83,11 +86,36 @@ function Stepper({
   );
 }
 
-export function ShopExperience({ products, paymentReady }: { products: ShopProduct[]; paymentReady: boolean }) {
+/**
+ * The nudge under the total: what one more jar costs, and what it unlocks
+ * (the next offer tier, free shipping). Null when nothing more is unlocked.
+ */
+function nextJarNudge(jarCount: number, unitPrice: number, offer: ShopOffer | null): string | null {
+  if (jarCount <= 0 || jarCount >= MAX_JARS_PER_ORDER) return null;
+  const next = jarCount + 1;
+  const tier = offer ? offerDeals(offer.tier_prices, unitPrice).find((d) => d.jars === next) : undefined;
+  const freesShipping = shippingForJars(jarCount) > 0 && shippingForJars(next) === 0;
+  if (!tier && !freesShipping) return null;
+  const more = totalForJars(unitPrice, next, offer) - totalForJars(unitPrice, jarCount, offer);
+  const unlocks = [tier ? `${next} for ${rupees(tier.price)}` : null, freesShipping ? 'free shipping' : null].filter(Boolean).join(' + ');
+  return `Add ${next === 2 ? 'another' : `a ${next === 3 ? '3rd' : `${next}th`}`} jar for just ${rupees(more)} more: ${unlocks}.`;
+}
+
+export function ShopExperience({
+  products,
+  offer,
+  paymentReady,
+}: {
+  products: ShopProduct[];
+  offer: ShopOffer | null;
+  paymentReady: boolean;
+}) {
   const router = useRouter();
   const [qty, setQty] = useState<Record<string, number>>({});
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [fieldError, setFieldError] = useState<{ field: AddressField; error: string } | null>(null);
+  const [pin, setPin] = useState<ShopLocation | null>(null);
+  const [pinError, setPinError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [orderLink, setOrderLink] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,8 +127,10 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
     [qty],
   );
   const jarCount = items.reduce((n, i) => n + i.quantity, 0);
-  const quote = useMemo(() => (items.length ? priceShopCart(products, items) : null), [products, items]);
-  const toFree = jarsToFreeShipping(jarCount);
+  const quote = useMemo(() => (items.length ? priceShopCart(products, items, offer) : null), [products, items, offer]);
+  const unitPrice = Math.min(...products.map((p) => p.price_inr));
+  const nudge = nextJarNudge(jarCount, unitPrice, offer);
+  const deals = offer ? offerDeals(offer.tier_prices, unitPrice) : [];
   const canAddMore = jarCount < MAX_JARS_PER_ORDER;
 
   function setQuantity(id: string, n: number) {
@@ -135,7 +165,8 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
     }
 
     setBusy(true);
-    const key = JSON.stringify({ items, address: checked.address });
+    setPinError(null);
+    const key = JSON.stringify({ items, address: checked.address, pin });
     let current = pending.current;
     if (!current || current.key !== key) {
       let res: Response;
@@ -144,7 +175,7 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
         res = await fetch('/api/shop/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items, address: form, expected_total_inr: quote.total_inr }),
+          body: JSON.stringify({ items, address: form, location: pin, expected_total_inr: quote.total_inr }),
         });
         data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       } catch {
@@ -155,8 +186,10 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
       if (!res.ok) {
         setBusy(false);
         const message = typeof data.error === 'string' ? data.error : 'Could not start your order — please try again.';
-        const field = data.field as AddressField | undefined;
-        if (field && field in EMPTY_FORM) {
+        const field = data.field as AddressField | 'location' | undefined;
+        if (field === 'location') {
+          setPinError(message);
+        } else if (field && field in EMPTY_FORM) {
           setFieldError({ field, error: message });
           focusField(field);
         } else {
@@ -203,7 +236,9 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
           Choose your flavours
         </h2>
         <p className="mt-1 text-sm text-muted">
-          {rupees(products[0]?.price_inr ?? 399)} a jar · mix any flavours · free shipping on {FREE_SHIPPING_MIN_JARS} or more
+          {deals.length > 0 && offer
+            ? `${offer.name}: ${deals.map((d) => `${d.jars} for ${rupees(d.price)}`).join(' · ')} — any flavours · free shipping on ${FREE_SHIPPING_MIN_JARS} or more`
+            : `${rupees(unitPrice)} a jar · mix any flavours · free shipping on ${FREE_SHIPPING_MIN_JARS} or more`}
         </p>
         <ul className="mt-5 grid gap-4 md:grid-cols-3">
           {products.map((p) => {
@@ -216,13 +251,18 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
                 style={{ borderTop: `4px solid ${style.accent}` }}
               >
                 {style.image ? (
-                  <div className="relative w-28 shrink-0 bg-surface md:aspect-[4/3] md:w-full">
+                  // The jar (a cut-out with its own soft shadow) on a wash of its
+                  // flavour colour, so the three cards read like a product line.
+                  <div
+                    className="relative w-28 shrink-0 md:aspect-[5/4] md:w-full"
+                    style={{ background: `radial-gradient(ellipse at 50% 40%, #ffffff 0%, ${style.accent}1f 100%)` }}
+                  >
                     <Image
                       src={style.image}
                       alt={`${p.name} jar, ${p.net_qty}`}
                       fill
                       sizes="(min-width: 768px) 33vw, 112px"
-                      className="object-contain p-2"
+                      className={`object-contain p-2 md:p-3 ${p.in_stock ? '' : 'opacity-50 grayscale'}`}
                     />
                   </div>
                 ) : null}
@@ -278,6 +318,14 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
               <Select label="State" name="state" autoComplete="address-level1" placeholder="Choose a state" options={STATE_OPTIONS} value={form.state} onChange={(e) => setField('state', e.target.value)} error={err('state')} />
             </div>
           </div>
+          <LocationPin
+            value={pin}
+            onChange={(loc) => {
+              setPin(loc);
+              setPinError(null);
+            }}
+            error={pinError ?? undefined}
+          />
         </section>
 
         <aside aria-labelledby="summary-heading" className="md:sticky md:top-24 md:self-start">
@@ -295,6 +343,12 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
                     <dd className="font-mono tabular-nums text-charcoal">{rupees(l.line_total_inr)}</dd>
                   </div>
                 ))}
+                {quote.discount_inr > 0 ? (
+                  <div className="flex justify-between gap-3">
+                    <dt className="font-semibold text-green-800">{quote.offer_name}</dt>
+                    <dd className="font-mono tabular-nums text-green-800">−{rupees(quote.discount_inr)}</dd>
+                  </div>
+                ) : null}
                 <div className="flex justify-between gap-3 border-t border-line pt-2">
                   <dt className="text-muted">Shipping</dt>
                   <dd className="font-mono tabular-nums text-charcoal">
@@ -310,10 +364,9 @@ export function ShopExperience({ products, paymentReady }: { products: ShopProdu
               <p className="mt-3 text-sm text-muted">No jars yet — add a flavour above.</p>
             )}
 
-            {jarCount > 0 && toFree > 0 ? (
-              <p className="mt-4 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
-                Add {jarsLabel(toFree)} more for <strong>free shipping</strong> (saves {rupees(SHIPPING_FEE_INR)}).
-              </p>
+            {nudge ? <p className="mt-4 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">{nudge}</p> : null}
+            {quote && quote.ok && quote.discount_inr > 0 ? (
+              <p className="mt-3 text-center text-sm font-semibold text-green-800">You save {rupees(quote.discount_inr)}</p>
             ) : null}
 
             {error ? (

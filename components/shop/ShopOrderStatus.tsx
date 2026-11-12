@@ -190,6 +190,12 @@ export function ShopOrderStatus({ orderId }: { orderId: string }) {
               <dd className="font-mono tabular-nums">{rupees(l.line_total_inr)}</dd>
             </div>
           ))}
+          {order.discount_inr > 0 ? (
+            <div className="flex justify-between gap-3">
+              <dt className="text-green-800">{order.offer_name ?? 'Offer'}</dt>
+              <dd className="font-mono tabular-nums text-green-800">−{rupees(order.discount_inr)}</dd>
+            </div>
+          ) : null}
           <div className="flex justify-between gap-3 border-t border-line pt-2">
             <dt className="text-muted">Shipping</dt>
             <dd className="font-mono tabular-nums">{order.shipping_inr === 0 ? 'Free' : rupees(order.shipping_inr)}</dd>

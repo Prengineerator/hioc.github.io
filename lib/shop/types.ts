@@ -51,6 +51,10 @@ export interface ShopOrderRow extends ShopAddress {
   lines: ShopLine[];
   jar_count: number;
   subtotal_inr: number;
+  /** What the online offer took off (0 without one). */
+  discount_inr: number;
+  /** The offer's name when it was bought, e.g. "Introductory offer". */
+  offer_name: string | null;
   shipping_inr: number;
   total_inr: number;
   razorpay_order_id: string | null;
@@ -73,6 +77,11 @@ export interface ShopOrderRow extends ShopAddress {
   refund_id: string | null;
   refunded_inr: number | null;
   user_id: string | null;
+  /** The delivery pin, if the customer dropped one (lib/shop/location.ts). */
+  location_lat: number | string | null;
+  location_lng: number | string | null;
+  location_accuracy_m: number | null;
+  location_source: 'gps' | 'map' | null;
   created_at: string;
   updated_at: string;
 }
@@ -89,6 +98,8 @@ export interface ShopOrderPublicView {
   lines: ShopLine[];
   jar_count: number;
   subtotal_inr: number;
+  discount_inr: number;
+  offer_name: string | null;
   shipping_inr: number;
   total_inr: number;
   ship_to: { name: string; city: string; state: string; pincode: string };
@@ -101,6 +112,15 @@ export interface ShopOrderPublicView {
   shipped_at: string | null;
   delivered_at: string | null;
   cancelled_at: string | null;
+}
+
+/**
+ * The online offer (shop_settings): tier_prices[n - 1] is what n jars cost,
+ * any flavours. Null when the owner has it switched off.
+ */
+export interface ShopOffer {
+  name: string;
+  tier_prices: number[];
 }
 
 /** The parcel the owner hands to Shiprocket: kilograms and centimetres. */

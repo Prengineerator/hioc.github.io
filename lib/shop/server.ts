@@ -2,7 +2,8 @@
 
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { ShopLine, ShopOrderRow, ShopProduct } from './types';
+import { shopOfferFromSettings } from './pricing';
+import type { ShopLine, ShopOffer, ShopOrderRow, ShopProduct } from './types';
 
 export const SHOP_MIGRATION_HINT = 'apply supabase/2026-11-instant-coffee-shop.sql first';
 
@@ -30,6 +31,33 @@ export async function loadShopProducts(admin: SupabaseClient): Promise<ProductsR
   return { ok: true, products: (data ?? []) as ShopProduct[] };
 }
 
+export interface ShopSettingsRow {
+  offer_active: boolean;
+  offer_name: string;
+  offer_tier_prices: number[];
+}
+
+/** The offer settings row, or null (no row, or the shop tables aren't there yet). */
+export async function loadShopSettings(admin: SupabaseClient): Promise<ShopSettingsRow | null> {
+  const { data, error } = await admin
+    .from('shop_settings')
+    .select('offer_active, offer_name, offer_tier_prices')
+    .eq('is_singleton', true)
+    .maybeSingle();
+  if (error) {
+    if (!isMissingShopSchema(error) && !(error.message ?? '').includes('shop_settings')) {
+      console.error('shop: could not load settings', error);
+    }
+    return null;
+  }
+  return (data as ShopSettingsRow | null) ?? null;
+}
+
+/** The live online offer, or null (switched off, or no settings). */
+export async function loadShopOffer(admin: SupabaseClient): Promise<ShopOffer | null> {
+  return shopOfferFromSettings(await loadShopSettings(admin));
+}
+
 /** A row as stored → the typed shape (lines from jsonb, numbers as numbers). */
 export function toShopOrderRow(raw: Record<string, unknown>): ShopOrderRow {
   const lines = Array.isArray(raw.lines) ? (raw.lines as ShopLine[]) : [];
@@ -39,6 +67,8 @@ export function toShopOrderRow(raw: Record<string, unknown>): ShopOrderRow {
     lines,
     jar_count: Number(raw.jar_count),
     subtotal_inr: Number(raw.subtotal_inr),
+    discount_inr: Number(raw.discount_inr ?? 0),
+    offer_name: typeof raw.offer_name === 'string' && raw.offer_name ? raw.offer_name : null,
     shipping_inr: Number(raw.shipping_inr),
     total_inr: Number(raw.total_inr),
     cancel_reason: typeof raw.cancel_reason === 'string' ? raw.cancel_reason : '',

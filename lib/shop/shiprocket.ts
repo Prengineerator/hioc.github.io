@@ -17,6 +17,7 @@
 // what went wrong.
 
 import 'server-only';
+import { googleMapsLink, locationFromRow } from './location';
 import { shopOrderRef } from './status';
 import type { ShopOrderRow, ShopPackage } from './types';
 
@@ -150,7 +151,8 @@ function splitName(full: string): { first: string; last: string } {
 /**
  * The "Create custom order" body for a paid shop order. Pure (tested).
  * Prepaid only. Shipping is billed to the customer as shipping_charges;
- * sub_total is the jars. The billing address is the delivery address.
+ * sub_total is the jars after the offer (total_discount). The billing address
+ * is the delivery address.
  */
 export function buildShiprocketOrder(
   order: ShopOrderRow,
@@ -158,11 +160,18 @@ export function buildShiprocketOrder(
   pickupLocation: string,
 ): Record<string, unknown> {
   const { first, last } = splitName(order.customer_name);
+  // The customer's delivery pin, as a Google Maps link in the order comment
+  // (seen on the order in the Shiprocket panel), so the exact spot travels
+  // with the shipment.
+  const pin = locationFromRow(order);
+  const comment = ['HIOC. Premium Instant Coffee — online order (prepaid)', pin ? `Delivery pin: ${googleMapsLink(pin)}` : null]
+    .filter(Boolean)
+    .join(' · ');
   return {
     order_id: shopOrderRef(order.order_number),
     order_date: shiprocketDate(order.paid_at ?? order.created_at),
     pickup_location: pickupLocation,
-    comment: 'HIOC. Premium Instant Coffee — online order (prepaid)',
+    comment,
     billing_customer_name: first,
     billing_last_name: last,
     billing_address: order.address_line1,
@@ -186,8 +195,10 @@ export function buildShiprocketOrder(
     shipping_charges: order.shipping_inr,
     giftwrap_charges: 0,
     transaction_charges: 0,
-    total_discount: 0,
-    sub_total: order.subtotal_inr,
+    // The online offer: the jars stay at ₹399 each on the items, the offer is
+    // the order's discount, and sub_total is what the jars were sold for.
+    total_discount: order.discount_inr,
+    sub_total: order.subtotal_inr - order.discount_inr,
     length: pkg.length_cm,
     breadth: pkg.breadth_cm,
     height: pkg.height_cm,

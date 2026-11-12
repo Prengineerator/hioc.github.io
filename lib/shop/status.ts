@@ -138,6 +138,8 @@ export function toPublicView(o: ShopOrderRow): ShopOrderPublicView {
     lines: o.lines,
     jar_count: o.jar_count,
     subtotal_inr: o.subtotal_inr,
+    discount_inr: o.discount_inr,
+    offer_name: o.offer_name,
     shipping_inr: o.shipping_inr,
     total_inr: o.total_inr,
     ship_to: { name: o.customer_name, city: o.city, state: o.state, pincode: o.pincode },

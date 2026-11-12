@@ -11,13 +11,14 @@
 // check the setup before switching the shop on for customers.
 
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
+import { ShopOfferSettings } from '@/components/owner/shop/ShopOfferSettings';
 import { ShopOrderCard } from '@/components/owner/shop/ShopOrderCard';
 import { ShopStockToggles } from '@/components/owner/shop/ShopStockToggles';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { flags } from '@/lib/flags';
 import { isGatewayConfigured } from '@/lib/payments/gateway';
 import { rupees } from '@/lib/shop/pricing';
-import { isMissingShopSchema, loadShopProducts, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
+import { isMissingShopSchema, loadShopProducts, loadShopSettings, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
 import { isShiprocketConfigured } from '@/lib/shop/shiprocket';
 import { OWNER_TABS, ownerTab, PAID_STATUSES } from '@/lib/shop/status';
 import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
@@ -52,7 +53,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
   const admin = createAdminSupabaseClient();
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [productsResult, listResult, countsResult, recentResult] = await Promise.all([
+  const [productsResult, listResult, countsResult, recentResult, settings] = await Promise.all([
     loadShopProducts(admin),
     admin
       .from('shop_orders')
@@ -62,6 +63,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
       .limit(LIST_LIMIT),
     admin.from('shop_orders').select('status').in('status', ['paid', 'sent_to_shiprocket', 'shipped']),
     admin.from('shop_orders').select('status, jar_count, total_inr, refunded_inr').gte('paid_at', since),
+    loadShopSettings(admin),
   ]);
 
   const missingSchema = (!productsResult.ok && productsResult.missingSchema) || isMissingShopSchema(listResult.error);
@@ -174,6 +176,16 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
         </div>
 
         <aside className="space-y-6">
+          <section className="rounded-md border border-line bg-cream p-4 shadow-sm">
+            <h2 className="font-bold text-charcoal">Online offer</h2>
+            {settings ? (
+              <div className="mt-2">
+                <ShopOfferSettings settings={settings} />
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-muted">Apply the shop migration to set the offer.</p>
+            )}
+          </section>
           <section className="rounded-md border border-line bg-cream p-4 shadow-sm">
             <h2 className="font-bold text-charcoal">Flavours in stock</h2>
             <p className="mt-1 text-xs text-muted">Switch a flavour off when you run out; it shows “Out of stock” on the shop.</p>

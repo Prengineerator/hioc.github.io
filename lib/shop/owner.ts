@@ -1,6 +1,7 @@
 // Owner-side helpers for /owner/shop that don't touch the database. Pure.
 
 import type { CsvTable } from '@/lib/reports/csv';
+import { googleMapsLink, locationFromRow } from './location';
 import { OWNER_STATUS_LABEL, shopOrderRef } from './status';
 import type { ShopOrderRow } from './types';
 
@@ -47,9 +48,12 @@ export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
       'City',
       'State',
       'Pincode',
+      'Map pin',
       'Items',
       'Jars',
       'Jars (₹)',
+      'Offer',
+      'Offer discount (₹)',
       'Shipping (₹)',
       'Total paid (₹)',
       'Refunded (₹)',
@@ -70,9 +74,15 @@ export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
       o.city,
       o.state,
       o.pincode,
+      (() => {
+        const pin = locationFromRow(o);
+        return pin ? googleMapsLink(pin) : '';
+      })(),
       o.lines.map((l) => `${l.name} × ${l.quantity}`).join('; '),
       o.jar_count,
       o.subtotal_inr,
+      o.offer_name ?? '',
+      o.discount_inr,
       o.shipping_inr,
       o.total_inr,
       o.refunded_inr ?? '',
