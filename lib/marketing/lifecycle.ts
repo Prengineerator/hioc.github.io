@@ -268,13 +268,20 @@ export const RECIPIENT_TRANSITIONS: readonly RecipientTransition[] = [
   { from: 'sending', to: 'cancelled', action: 'drop' },
   { from: 'sending', to: 'queued', action: 'release' },
 
-  // Receipts, as the WhatsApp webhook applies them today: forward-only along sent < delivered < read,
-  // and a failure report while the row is still sending or sent.
-  { from: 'sent', to: 'delivered', action: 'receipt' },
-  { from: 'sent', to: 'read', action: 'receipt' },
-  { from: 'delivered', to: 'read', action: 'receipt' },
+  // Receipts, as the WhatsApp webhook applies them (its RECIPIENT_RUNGS, on the shared
+  // lib/notifications/status.ts ladder): forward-only along sending < sent < failed < delivered < read.
+  // A 'delivered'/'read' after a 'failed' is applied — proof the handset got it beats a report that it
+  // could not be sent — so 'failed' is not terminal here. (A 'sending' row has no provider_ref yet, so
+  // its receipt edges are what the guard permits rather than something a callback can match today.)
   { from: 'sending', to: 'failed', action: 'receipt' },
   { from: 'sent', to: 'failed', action: 'receipt' },
+  { from: 'sending', to: 'delivered', action: 'receipt' },
+  { from: 'sent', to: 'delivered', action: 'receipt' },
+  { from: 'failed', to: 'delivered', action: 'receipt' },
+  { from: 'sending', to: 'read', action: 'receipt' },
+  { from: 'sent', to: 'read', action: 'receipt' },
+  { from: 'failed', to: 'read', action: 'receipt' },
+  { from: 'delivered', to: 'read', action: 'receipt' },
 ];
 
 export function canTransitionRecipient(from: RecipientStatus | null, to: RecipientStatus): TransitionVerdict {

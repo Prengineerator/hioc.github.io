@@ -139,11 +139,11 @@ describe('recipient transitions', () => {
   const LEGAL: Record<RecipientStatus, RecipientStatus[]> = {
     pending: ['queued', 'cancelled'],
     queued: ['sending', 'cancelled'],
-    sending: ['sent', 'failed', 'skipped', 'cancelled', 'queued'],
+    sending: ['sent', 'failed', 'skipped', 'cancelled', 'queued', 'delivered', 'read'],
     sent: ['delivered', 'read', 'failed'],
     delivered: ['read'],
     read: [],
-    failed: [],
+    failed: ['delivered', 'read'],
     skipped: [],
     holdout: [],
     cancelled: [],
@@ -185,8 +185,8 @@ describe('recipient groupings', () => {
     expect(recipientFrom('claim')).toEqual(['queued']);
   });
 
-  it('terminal = read, failed, skipped, holdout, cancelled', () => {
-    expect([...TERMINAL_RECIPIENT_STATUSES].sort()).toEqual(['cancelled', 'failed', 'holdout', 'read', 'skipped']);
+  it('terminal = read, skipped, holdout, cancelled (a late delivered/read receipt can still move a failed row)', () => {
+    expect([...TERMINAL_RECIPIENT_STATUSES].sort()).toEqual(['cancelled', 'holdout', 'read', 'skipped']);
   });
 });
 
