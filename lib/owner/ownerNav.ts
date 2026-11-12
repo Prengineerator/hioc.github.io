@@ -43,6 +43,8 @@ export interface OwnerNavInput {
   attendance: boolean;
   /** Warehouse (inventory AND warehouse flags). Optional so older callers read off. */
   warehouse?: boolean;
+  /** Instant Coffee shop (NEXT_PUBLIC_FLAG_SHOP). Optional so older callers read off. */
+  shop?: boolean;
 }
 
 export interface OwnerNav {
@@ -74,6 +76,12 @@ export function ownerNav(input: OwnerNavInput): OwnerNav {
         // Zomato/Swiggy payouts (docs/ONLINE-SETTLEMENTS.md): the delivery
         // apps' side of the same money, so next to Payments.
         { href: '/owner/online', label: 'Online orders', description: 'Zomato and Swiggy payouts' },
+        // Instant Coffee jars sold on /shop and shipped with Shiprocket
+        // (docs/INSTANT-COFFEE-SHOP.md). Shown with the shop switched on; the
+        // page itself stays reachable to check the setup before that.
+        ...(input.shop
+          ? [{ href: '/owner/shop', label: 'Shop orders', description: 'Instant Coffee jars to ship with Shiprocket' }]
+          : []),
         // CC-4 (docs/PHASE-5-CASH-COUNTS.md). Behind the attendance flag as
         // before: the drawer count rides the clock-in/out punch.
         ...(input.attendance

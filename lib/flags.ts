@@ -134,6 +134,18 @@ export const flags = {
   // kill switch, default off). NEXT_PUBLIC_ because the nav, the owner page and the
   // order-confirmation card all decide client-side whether to render.
   marketing: boolEnv(process.env.NEXT_PUBLIC_FLAG_MARKETING, false),
+  // Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md): /shop sells the jars
+  // online (₹399 each; introductory offer 2 for ₹599 · 3 for ₹749; ₹49
+  // shipping below 3 jars, free from 3), paid by Razorpay and shipped with
+  // Shiprocket from /owner/shop. Default OFF: apply
+  // supabase/2026-11-instant-coffee-shop.sql, set the Razorpay and Shiprocket
+  // keys, and review the shop wording first (Shipping & Delivery, Refund &
+  // Cancellation, Terms and Privacy switch to it with this flag). Gates /shop,
+  // the /api/shop checkout, the "Shop" link in the header and the popup's
+  // "Order online" button, and the owner nav entry (the owner page itself
+  // stays reachable to check setup). NEXT_PUBLIC_ because the header and popup
+  // decide client-side.
+  shop: boolEnv(process.env.NEXT_PUBLIC_FLAG_SHOP, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

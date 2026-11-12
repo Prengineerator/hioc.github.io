@@ -1,12 +1,15 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS } from '@/lib/legal';
+import { BUSINESS, SHOP_POLICY_UPDATED } from '@/lib/legal';
+import { flags } from '@/lib/flags';
 
 export const metadata: Metadata = { title: 'Privacy Policy' };
 
 export default function PrivacyPage() {
   return (
-    <PolicyLayout title="Privacy Policy">
+    // The shop lines (delivery address, courier) appear only while the
+    // Instant Coffee shop is switched on (docs/INSTANT-COFFEE-SHOP.md).
+    <PolicyLayout title="Privacy Policy" updated={flags.shop ? SHOP_POLICY_UPDATED : undefined}>
       <p>
         This Privacy Policy explains how {BUSINESS.legalName} (&ldquo;{BUSINESS.name}&rdquo;,
         &ldquo;we&rdquo;) collects, uses, and protects your personal data when you use our website
@@ -18,6 +21,14 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-5">
           <li><strong>Contact details</strong> you provide at checkout or sign-up: name, mobile number, and (if you create an account) email.</li>
           <li><strong>Order information</strong>: items ordered, pickup time, order notes, and order history.</li>
+          {flags.shop ? (
+            <li>
+              <strong>Delivery details</strong> for Instant Coffee orders we ship: name, delivery address, pincode, mobile
+              number and email, and — only if you choose to share it — a <strong>map pin</strong> of the delivery location
+              (your device&apos;s location when you tap &ldquo;Use my current location&rdquo;, or where you place the pin on
+              the map). It is used only to deliver that order.
+            </li>
+          ) : null}
           <li><strong>Payment references</strong>: transaction identifiers from our payment gateway. We do <em>not</em> collect or store your card number, CVV, or UPI PIN.</li>
           <li><strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.</li>
         </ul>
@@ -47,6 +58,14 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-5">
           <li>Our <strong>payment gateway</strong> to process payments and refunds.</li>
           <li>Our <strong>SMS/WhatsApp provider</strong> to deliver order notifications.</li>
+          {flags.shop ? (
+            <li>
+              Our <strong>shipping partner (Shiprocket) and its courier companies</strong> — the name,
+              delivery address, mobile number and map pin (if given) on an Instant Coffee order, to deliver it
+              — <strong>Google Maps</strong>, which shows the map when you place a pin, and our{' '}
+              <strong>email provider</strong>, to send your order and tracking emails.
+            </li>
+          ) : null}
           <li>Where required by law or to protect our rights.</li>
         </ul>
         <p>We do not sell your personal data.</p>
