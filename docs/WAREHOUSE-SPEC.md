@@ -70,6 +70,7 @@ created already `picked`.
 | WH-D13 | **The owner settles each line that differs, once, all in one go.** Short: *lost on the way* (nothing moves; it is written off in transit) or *never left* (back into the origin's stock, with the expiry that was sent). Over: *the origin sent more than it recorded* (taken off the origin's stock; anything it can't cover becomes a shortfall there) or *accept it* (nothing moves). |
 | WH-D14 | **The warehouse sheet belongs to the owner.** Purchases (one batch per line; also used for the opening count), counts, write-offs and the warehouse low level are owner-only, on the owner portal. Items themselves are still added and edited on the Stock screen (INV-D15 unit lock and all). |
 | WH-D15 | **Transit is never typed in.** It is derived from the transfers: every sent line not yet counted in, plus every arrived-different line not yet settled. The In-transit tab and the stock sheet's "→ Store" and "→ Warehouse" columns read the same functions. |
+| WH-D16 | **Warehouse access per person** (added 2026-11-12). The owner can switch on **Warehouse runs** for a staffer (Staff → Edit), without making them a manager. They may then **record what was sent** from the warehouse (WH-D4), also for a transfer they carry themselves, and **send stock back** to the warehouse (WH-D8). Nothing else changes: they still can't count in at the POS what they sent or carried (WH-D6), so the store's count still checks theirs, and counting a return in at the warehouse and settling a difference stay the owner's. Column `staff_accounts.warehouse_access` (`supabase/2026-11-warehouse-access.sql`, default off). |
 
 ## Data: `supabase/2026-11-warehouse.sql`
 
@@ -118,8 +119,8 @@ re-run, and `2026-10-inventory.sql` can be re-run after it without undoing anyth
 | Route | Who | Does |
 |---|---|---|
 | `POST /api/inventory/requests` | any counter actor | with the warehouse on: a `from_warehouse` request (`warehouse_create_request`), then the owner is alerted |
-| `PATCH /api/inventory/requests/[id]` | per the rules | `assign` (`assigneeId`, or `deliverer: {name, phone?}` for a warehouse transfer) · `pick` (for `from_warehouse`, the dispatch: owner or manager → `warehouse_dispatch`, answers `short`) · `receive` (POS, not the deliverer; a difference alerts the owner) · `cancel` (not once it has left) |
-| `POST /api/inventory/returns` | manager / owner | "Send back to warehouse": `{lines, note?, assigneeId \| deliverer}` → `warehouse_create_return`, then the owner is alerted |
+| `PATCH /api/inventory/requests/[id]` | per the rules | `assign` (`assigneeId`, or `deliverer: {name, phone?}` for a warehouse transfer) · `pick` (for `from_warehouse`, the dispatch: owner, manager or a staffer with warehouse access (WH-D16) → `warehouse_dispatch`, answers `short`) · `receive` (POS, not the deliverer; a difference alerts the owner) · `cancel` (not once it has left) |
+| `POST /api/inventory/returns` | manager / owner / staffer with warehouse access (WH-D16) | "Send back to warehouse": `{lines, note?, assigneeId \| deliverer}` → `warehouse_create_return`, then the owner is alerted |
 | `GET /api/owner/warehouse` | owner | stock sheet, transfers (open, waiting to be settled, recent), people who can deliver, what is waiting |
 | `GET /api/owner/warehouse/waiting` | owner | the header badge's counts |
 | `PATCH /api/owner/warehouse/requests/[id]` | owner | `assign` · `pick` (record what was sent) · `cancel` · `receive_return` · `resolve` (`{lines: [{itemId, resolution}], note?}`) |

@@ -8,25 +8,30 @@ import { requireInventoryActor, inventoryWriteFailure } from '@/lib/inventory/ap
 import { loadAssignees } from '@/lib/inventory/server';
 import { sendStockAssignedEmail } from '@/lib/inventory/notify';
 import { sendOwnerAlert } from '@/lib/inventory/ownerAlerts';
-import { parseRequestLines } from '@/lib/inventory/rules';
+import { parseRequestLines, SEND_BACK_WAREHOUSE_SIDE_MESSAGE } from '@/lib/inventory/rules';
 import { parseDeliverer } from '@/lib/inventory/warehouse';
-import { WAREHOUSE_OFF_MESSAGE } from '@/lib/inventory/warehouseServer';
+import { hasWarehouseAccess, WAREHOUSE_OFF_MESSAGE } from '@/lib/inventory/warehouseServer';
 
 export const dynamic = 'force-dynamic';
 
 const MAX_NOTE = 300;
 
 // POST /api/inventory/returns — "Send back to warehouse" (docs/WAREHOUSE-SPEC.md,
-// WH-D6). Manager or owner, on any screen (like a write-off: it takes stock off
-// the store's shelf). Body:
+// WH-D8). Manager or owner, or a staffer the owner has given warehouse access
+// (WH-D16), on any screen (like a write-off: it takes stock off the store's
+// shelf). Body:
 //   { lines: [{ itemId, qty }], note?, assigneeId }              a team member carries it
 //   { lines: [{ itemId, qty }], note?, deliverer: { name, phone? } }  someone without a login
 // It leaves the store at once (warehouse_create_return) and is in transit until
 // the owner counts it in at the warehouse. The owner is alerted after the reply.
 export async function POST(request: Request) {
-  const gate = await requireInventoryActor({ managerOnly: true });
+  const gate = await requireInventoryActor();
   if ('response' in gate) return gate.response;
   if (!flags.warehouse) return errorResponse(404, WAREHOUSE_OFF_MESSAGE);
+  const admin = createAdminSupabaseClient();
+  if (!(await hasWarehouseAccess(admin, gate.actor.user.id, gate.actor.role))) {
+    return errorResponse(403, SEND_BACK_WAREHOUSE_SIDE_MESSAGE);
+  }
 
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
@@ -38,7 +43,6 @@ export async function POST(request: Request) {
   const note = typeof body.note === 'string' ? body.note.trim() : '';
   if (note.length > MAX_NOTE) return errorResponse(400, `Keep the note under ${MAX_NOTE} characters.`);
 
-  const admin = createAdminSupabaseClient();
   const team = who.deliverer.kind === 'member' ? await loadAssignees(admin) : [];
   if (who.deliverer.kind === 'member' && !team.some((p) => p.id === (who.deliverer as { userId: string }).userId)) {
     return errorResponse(400, 'That person is not on the active team.');

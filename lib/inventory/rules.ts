@@ -208,6 +208,9 @@ export interface RequestActor {
   userId: string;
   role: string;
   surface: StaffSurface;
+  /** A staffer the owner has given warehouse access (staff_accounts.warehouse_access,
+   * WH-D16). Absent = false. Managers and the owner have it by role. */
+  warehouseAccess?: boolean;
 }
 
 export interface RequestFacts {
@@ -227,6 +230,18 @@ export function isManagerRole(role: string): boolean {
   return role === 'manager' || role === 'owner';
 }
 
+/**
+ * Works the warehouse side of a transfer: records what left the warehouse and
+ * sends store stock back to it (docs/WAREHOUSE-SPEC.md, WH-D4, WH-D8, WH-D16).
+ * A manager or the owner always; a staffer when the owner has switched on
+ * their warehouse access. It never lets anyone count in what they sent or
+ * carried (canReceive), nor count a return in at the warehouse or settle a
+ * difference (the owner's).
+ */
+export function worksWarehouseSide(actor: Pick<RequestActor, 'role' | 'warehouseAccess'>): boolean {
+  return isManagerRole(actor.role) || (actor.role === 'staff' && actor.warehouseAccess === true);
+}
+
 export const RECEIVE_POS_ONLY_MESSAGE =
   'Stock is verified and received at the POS only — count it in at the counter.';
 
@@ -240,16 +255,20 @@ export function canAssign(req: RequestFacts, actor: RequestActor): Verdict {
 }
 
 export const DISPATCH_WAREHOUSE_SIDE_MESSAGE =
-  'The warehouse records what it sends — the owner or a manager does this.';
+  'The warehouse records what it sends — the owner, a manager, or someone the owner has given warehouse access.';
+
+export const SEND_BACK_WAREHOUSE_SIDE_MESSAGE =
+  'Only a manager, the owner, or someone the owner has given warehouse access can send stock back.';
 
 /**
  * Record the pick: the assignee, or a manager/owner standing in.
  *
  * A warehouse request's "pick" is its DISPATCH: what left the warehouse. That
- * is recorded by the warehouse side (the owner or a manager), never by the
- * delivery person alone — the point of matching is that whoever carries it is
- * checked by the counts at both ends. A return is dispatched when it is sent,
- * so it has no pick step.
+ * is recorded by the warehouse side (the owner, a manager, or a staffer with
+ * warehouse access — WH-D16), who may also be the one carrying it. The check
+ * on the carrier is at the other end: someone else counts it in at the POS
+ * (canReceive), and anything that doesn't match is flagged to the owner. A
+ * return is dispatched when it is sent, so it has no pick step.
  */
 export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
   if (req.route === 'to_warehouse') {
@@ -263,7 +282,7 @@ export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
         message: req.status === 'requested' ? 'Choose who delivers it before dispatching.' : `This request is already ${req.status}.`,
       };
     }
-    if (!isManagerRole(actor.role)) return { ok: false, status: 403, message: DISPATCH_WAREHOUSE_SIDE_MESSAGE };
+    if (!worksWarehouseSide(actor)) return { ok: false, status: 403, message: DISPATCH_WAREHOUSE_SIDE_MESSAGE };
     return OK;
   }
   if (req.status !== 'assigned') {

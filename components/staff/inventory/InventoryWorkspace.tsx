@@ -63,6 +63,7 @@ export function InventoryWorkspace() {
           userId: requests.actorId,
           role: requests.canManage ? 'manager' : 'staff',
           surface: requests.surface,
+          warehouseAccess: requests.warehouseAccess === true,
         };
         const f = {
           status: r.status,
@@ -74,7 +75,8 @@ export function InventoryWorkspace() {
         return (
           (r.status === 'requested' && canAssign(f, actor).ok) ||
           // The picker's own pick; a warehouse dispatch is the warehouse
-          // side's (any manager), so it counts for every manager.
+          // side's (any manager, or a staffer with warehouse access), so it
+          // counts for each of them.
           ((r.assignedTo?.id === requests.actorId || r.route === 'from_warehouse') && canPick(f, actor).ok) ||
           canReceive(f, actor).ok
         );
@@ -116,6 +118,7 @@ export function InventoryWorkspace() {
               onRequested={() => setTab('requests')}
               assignees={requests.assignees}
               actorId={requests.actorId}
+              canSendBack={requests.canManage || requests.warehouseAccess === true}
             />
           ) : (
             <Spinner />

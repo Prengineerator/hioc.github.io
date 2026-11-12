@@ -1494,6 +1494,11 @@ async function checkWarehouse() {
     else fail(`${table}: ${cols.split(',').join(', ')} exist`, errKind(r) === 'no_column' ? hint : errText(r));
   }
 
+  // WH-D16: a staffer the owner gives the warehouse run (dispatch + send back).
+  const access = await rest('/staff_accounts?select=warehouse_access&limit=1');
+  if (access.ok) pass('staff_accounts.warehouse_access exists');
+  else fail('staff_accounts.warehouse_access exists', errKind(access) === 'no_column' ? 'apply supabase/2026-11-warehouse-access.sql' : errText(access));
+
   // A request that does not exist: the service role reaches the function's own
   // refusal (it is installed); anon must not reach the function at all.
   for (const [fn, body] of [
