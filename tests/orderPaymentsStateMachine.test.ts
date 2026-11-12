@@ -16,11 +16,14 @@ import {
 } from '@/lib/orders/paymentStateMachine';
 import {
   REFUND_TRANSITIONS,
+  RESOLVE_PENDING_AFTER_MS,
   canTransitionRefund,
   hasPendingRefund,
+  isOldEnoughToResolve,
   processedInr,
   refundStatusForOutcome,
   refundedOrPendingInr,
+  resolvePendingRefunds,
 } from '@/lib/orders/refundStateMachine';
 import {
   CAPTURABLE_ROW_STATUSES,
@@ -313,5 +316,39 @@ describe('expected_version — the optional retry token', () => {
     expect(checkExpectedVersion(3, 4)).toMatchObject({ ok: false, status: 409, code: STALE_VERSION_CODE });
     expect(checkExpectedVersion('4', 4)).toMatchObject({ ok: false, status: 400 });
     expect(checkExpectedVersion(-1, 4)).toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+describe('resolving a pending refund from the gateway’s record', () => {
+  const resolve = (processed: number, pendingInr: number[], amountRefundedPaise: number | null | undefined) =>
+    resolvePendingRefunds({ processedInr: processed, pendingInr, amountRefundedPaise });
+
+  it('R ≥ P + pending → processed', () => {
+    expect(resolve(0, [200], 20000)).toBe('processed');
+    expect(resolve(100, [200], 30000)).toBe('processed');
+    expect(resolve(100, [200, 50], 35000)).toBe('processed');
+    expect(resolve(100, [200], 40000)).toBe('processed'); // more than we know of still covers ours
+  });
+
+  it('R = P → failed (none of the pending ones went through)', () => {
+    expect(resolve(0, [200], 0)).toBe('failed');
+    expect(resolve(100, [200], 10000)).toBe('failed');
+  });
+
+  it('anything else, a missing figure, or nothing pending → unknown (never guessed)', () => {
+    expect(resolve(100, [200], 20000)).toBe('unknown'); // between P and P + pending
+    expect(resolve(100, [200, 50], 30000)).toBe('unknown'); // covers one of two: can't say which
+    expect(resolve(100, [200], 5000)).toBe('unknown'); // less than we know went back
+    expect(resolve(0, [200], undefined)).toBe('unknown');
+    expect(resolve(0, [200], null)).toBe('unknown');
+    expect(resolve(0, [200], Number.NaN)).toBe('unknown');
+    expect(resolve(0, [], 0)).toBe('unknown');
+  });
+
+  it('a row is resolved only once the request that claimed it is surely over', () => {
+    const now = Date.parse('2026-11-12T12:00:00.000Z');
+    expect(isOldEnoughToResolve(new Date(now - RESOLVE_PENDING_AFTER_MS).toISOString(), now)).toBe(true);
+    expect(isOldEnoughToResolve(new Date(now - RESOLVE_PENDING_AFTER_MS + 1000).toISOString(), now)).toBe(false);
+    expect(isOldEnoughToResolve(undefined, now)).toBe(false);
   });
 });

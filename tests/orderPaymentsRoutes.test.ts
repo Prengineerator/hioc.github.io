@@ -17,6 +17,8 @@ const world: {
   refundGateway: ReturnType<typeof vi.fn>;
   attempts: Record<string, { id: string; status: string; amount: number; method?: string }[] | null>;
   createIntent: ReturnType<typeof vi.fn>;
+  /** Razorpay's Payment entity, as GET /payments/:id answers it (null = unreachable). */
+  fetchPayment: ReturnType<typeof vi.fn>;
 } = {
   tables: {},
   actor: null,
@@ -24,10 +26,13 @@ const world: {
   refundGateway: vi.fn(),
   attempts: {},
   createIntent: vi.fn(),
+  fetchPayment: vi.fn(),
 };
 
 function makeAdmin() {
-  const fake = makeFakeAdmin(world.tables, { startMs: Date.parse('2026-11-12T08:00:00.000Z') });
+  // The fake stamps created_at from now, like the database: a row a request
+  // inserts is a young row. Tests that need an old one say so.
+  const fake = makeFakeAdmin(world.tables, { startMs: Date.now() });
   return {
     from(table: string) {
       const chain = fake.from(table) as unknown as Record<string, (...args: unknown[]) => unknown>;
@@ -79,6 +84,7 @@ vi.mock('@/lib/payments/gateway', () => ({
   requestGatewayRefund: (...args: unknown[]) => world.refundGateway(...args),
   fetchOrderPaymentAttempts: (id: string) => Promise.resolve(id in world.attempts ? world.attempts[id] : []),
   createPaymentIntent: (...args: unknown[]) => world.createIntent(...args),
+  fetchGatewayPayment: (...args: unknown[]) => world.fetchPayment(...args),
   mapRazorpayMethod: (m?: string) => (m === 'upi' || m === 'card' ? m : 'online'),
 }));
 const passes = vi.hoisted(() => ({
@@ -167,6 +173,8 @@ beforeEach(() => {
   world.refundGateway.mockResolvedValue({ kind: 'processed', refundId: 'rfnd_1' });
   world.createIntent.mockReset();
   world.createIntent.mockResolvedValue({ gateway: 'razorpay', gatewayOrderId: 'order_rzp_new', amountInr: 500 });
+  world.fetchPayment.mockReset();
+  world.fetchPayment.mockResolvedValue(null);
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -552,5 +560,127 @@ describe('amend and balance — safe to retry, and not on a gateway or refunded 
     const res = await balance({ action: 'give_back', amount_inr: 120 });
     expect(res.status).toBe(409);
     expect(world.tables.refunds).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('POST /api/orders/[id]/refund — resolving a refund left pending', () => {
+  const refund = (body: Row = { reason: 'Customer asked' }, key?: string) =>
+    refundRoute(new Request('http://t/api/orders/x/refund', json(body, key ? { 'idempotency-key': key } : {})), params);
+  const OLD = '2026-01-01T00:00:00.000Z'; // well past RESOLVE_PENDING_AFTER_MS
+  const pendingRow = (over: Row = {}): Row => ({
+    id: 'r-pending',
+    payment_id: 'pay-row-1',
+    order_id: ORDER_ID,
+    amount_inr: 200,
+    reason: 'Cold coffee',
+    status: 'pending',
+    idempotency_key: 'key-1001',
+    created_at: OLD,
+    ...over,
+  });
+  /** Razorpay's Payment entity for pay_1, with `amount_refunded` in paise (or without it). */
+  const razorpay = (amountRefunded?: number) => ({
+    id: 'pay_1',
+    order_id: 'order_rzp_1',
+    status: 'captured',
+    amount: 50000,
+    ...(amountRefunded === undefined ? {} : { amount_refunded: amountRefunded }),
+  });
+
+  beforeEach(() => {
+    world.tables.orders.push(order({ status: 'completed', payment_status: 'paid', payment_method: 'upi', channel: 'table_qr' }));
+    world.tables.payments.push(gatewayRow());
+    world.tables.refunds.push(pendingRow());
+  });
+
+  it('(same key retried) Razorpay shows it refunded → pending → processed, answered as the replay, no second refund', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(20000));
+    const res = await refund({ reason: 'Cold coffee', amount_inr: 200 }, 'key-1001');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ replayed: true, refund: { id: 'r-pending', status: 'processed' } });
+    expect(world.refundGateway).not.toHaveBeenCalled();
+    expect(world.tables.refunds[0].status).toBe('processed');
+    expect(theOrder().payment_status).toBe('partially_refunded');
+    expect(world.tables.payments[0].status).toBe('partially_refunded');
+  });
+
+  it('(same key retried) Razorpay shows nothing refunded → pending → failed, key released, and this retry refunds afresh', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(0));
+    const res = await refund({ reason: 'Cold coffee', amount_inr: 200 }, 'key-1001');
+    expect(res.status).toBe(200);
+    expect(world.tables.refunds[0]).toMatchObject({ status: 'failed', idempotency_key: null });
+    expect(world.refundGateway).toHaveBeenCalledTimes(1);
+    expect(world.tables.refunds[1]).toMatchObject({ status: 'processed', idempotency_key: 'key-1001', amount_inr: 200 });
+    expect(theOrder().payment_status).toBe('partially_refunded');
+  });
+
+  it('(a new refund on the payment) resolves the pending one first, then refunds what is left', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(20000));
+    const res = await refund({ reason: 'The rest', amount_inr: 300 }, 'key-2002');
+    expect(res.status).toBe(200);
+    expect(world.tables.refunds.map((r) => r.status)).toEqual(['processed', 'processed']);
+    expect(theOrder().payment_status).toBe('refunded');
+    expect(ledger.reverseForOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('(a new refund) a resolution that frees the money still caps the new one at what is left', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(20000));
+    const res = await refund({ reason: 'Too much', amount_inr: 400 }, 'key-2003');
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/₹300/);
+  });
+
+  it('the figure MISSING from Razorpay’s answer: never guessed — stays pending, 409', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(undefined));
+    const res = await refund({ reason: 'x', amount_inr: 100 }, 'key-2004');
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('refund_pending');
+    expect(world.tables.refunds[0].status).toBe('pending');
+    expect(world.refundGateway).not.toHaveBeenCalled();
+  });
+
+  it('Razorpay unreachable: stays pending, 409 — for the same key too', async () => {
+    world.fetchPayment.mockResolvedValue(null);
+    const res = await refund({ reason: 'Cold coffee', amount_inr: 200 }, 'key-1001');
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('refund_pending');
+    expect(world.tables.refunds[0]).toMatchObject({ status: 'pending', idempotency_key: 'key-1001' });
+  });
+
+  it('a figure between the two (some refunded elsewhere, or part of it) proves nothing: stays pending', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(10000));
+    expect((await refund({ reason: 'x', amount_inr: 100 }, 'key-2005')).status).toBe(409);
+    expect(world.tables.refunds[0].status).toBe('pending');
+  });
+
+  it('a pending row too recent to be over is not resolved — the gateway is not even asked', async () => {
+    world.tables.refunds[0].created_at = new Date().toISOString();
+    world.fetchPayment.mockResolvedValue(razorpay(0));
+    expect((await refund({ reason: 'x', amount_inr: 100 }, 'key-2006')).status).toBe(409);
+    expect(world.fetchPayment).not.toHaveBeenCalled();
+    expect(world.tables.refunds[0].status).toBe('pending');
+  });
+
+  it('a failed resolution gives a Ritual pass back, as a definite refusal does', async () => {
+    world.tables.orders[0] = order({ status: 'completed', payment_status: 'paid', payment_method: 'upi', order_kind: 'coffee_pass' });
+    world.fetchPayment.mockResolvedValue(razorpay(0));
+    world.refundGateway.mockResolvedValue({ kind: 'unknown' }); // the fresh attempt then times out too
+    await refund({ reason: 'Cold coffee', amount_inr: 200 }, 'key-1001');
+    expect(world.tables.refunds[0].status).toBe('failed');
+    expect(passes.restorePassAfterFailedRefund).toHaveBeenCalledWith(expect.anything(), ORDER_ID);
+  });
+
+  it('every resolution write is compare-and-set on pending: a row resolved meanwhile is not overwritten', async () => {
+    world.fetchPayment.mockResolvedValue(razorpay(0));
+    world.beforeWrite = (table, op, payload) => {
+      if (table === 'refunds' && op === 'update' && payload.status === 'failed') {
+        world.beforeWrite = null;
+        world.tables.refunds[0] = { ...world.tables.refunds[0], status: 'processed' };
+      }
+    };
+    await refund({ reason: 'x', amount_inr: 100 }, 'key-2007');
+    expect(world.tables.refunds[0].status).toBe('processed');
+    expect(world.tables.refunds[0].idempotency_key).toBe('key-1001');
   });
 });

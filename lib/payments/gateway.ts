@@ -183,6 +183,13 @@ export interface RazorpayPaymentAttempt {
   status: string; // created | authorized | captured | refunded | failed
   method?: string;
   amount: number;
+  /**
+   * Paise refunded on this payment so far, per Razorpay's own record (the
+   * Payment entity). Optional: absent from an attempt listing, a test double or
+   * an older answer — and then no refund outcome is ever inferred from it
+   * (lib/orders/refundStateMachine.ts resolvePendingRefunds).
+   */
+  amount_refunded?: number;
 }
 
 /**

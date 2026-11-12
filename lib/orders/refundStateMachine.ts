@@ -14,10 +14,19 @@
 //                         The key is released with it, so a retry is a fresh try.
 //
 // An UNKNOWN gateway answer (a timeout, a 5xx, a dropped connection) is no
-// transition: the row stays 'pending', because the money may have moved. A
-// pending refund counts against what is left to refund, and no other gateway
-// refund starts on that payment until someone has checked the Razorpay
-// dashboard — the double refund this prevents is the expensive failure.
+// transition at the time: the row stays 'pending', because the money may have
+// moved. A pending refund counts against what is left to refund, and no other
+// gateway refund starts on that payment while it is unresolved — the double
+// refund this prevents is the expensive failure.
+//
+// It is resolved later from the gateway's OWN record (resolvePendingRefunds):
+// Razorpay's Payment entity says how much has been refunded on it in total
+// (amount_refunded, paise). Measured against what we know went back
+// (processed) plus what is pending, that either proves the pending refunds
+// went through, proves none did, or proves nothing — and then they stay
+// pending. It is never guessed. The refund route asks whenever it meets a
+// pending row (a new refund on the payment, or the same key retried), once
+// the row is old enough that the request that claimed it is surely over.
 
 import type { RefundStatus } from '@/lib/types';
 
@@ -85,6 +94,57 @@ export function refundStatusForOutcome(outcome: GatewayRefundOutcome): Extract<R
 }
 
 export const REFUND_PENDING_MESSAGE =
-  'A refund on this order is still waiting for the payment gateway’s answer. Check the Razorpay dashboard before refunding again.';
+  'A refund on this order is still waiting for the payment gateway’s answer. Try again in about 10 minutes — it is checked with Razorpay first and never made twice. Don’t refund it from the Razorpay dashboard meanwhile.';
 export const REFUND_UNCONFIRMED_MESSAGE =
-  'The payment gateway did not confirm the refund. It is recorded as pending — check the Razorpay dashboard before trying again.';
+  'The payment gateway did not confirm the refund, so it is recorded as pending. Try again in about 10 minutes — it is checked with Razorpay first and never made twice. Don’t refund it from the Razorpay dashboard meanwhile.';
+
+// --- Resolving a pending refund ----------------------------------------------
+
+/**
+ * How long a pending row is left alone before it is resolved from the
+ * gateway's record: longer than the refund request that claimed it can run
+ * (the platform stops a function well before this), so a row this old is
+ * never one whose gateway call is still on its way back. Resolving a younger
+ * one could mark it failed a moment before Razorpay processes it.
+ */
+export const RESOLVE_PENDING_AFTER_MS = 10 * 60_000;
+
+export function isOldEnoughToResolve(createdAt: string | null | undefined, nowMs: number): boolean {
+  const t = Date.parse(String(createdAt ?? ''));
+  return Number.isFinite(t) && nowMs - t >= RESOLVE_PENDING_AFTER_MS;
+}
+
+/**
+ * What the pending refunds on one gateway payment came to, from:
+ *   processedInr       rupees our processed refunds on it total (P)
+ *   pendingInr         the pending refunds' amounts
+ *   amountRefundedPaise  Razorpay's amount_refunded on the payment (R), or
+ *                      null/undefined when the field is missing or the
+ *                      gateway could not be asked
+ *
+ *   'processed'  R ≥ P + all pending: the gateway refunded at least that much,
+ *                so every pending refund went through
+ *   'failed'     R = P: nothing beyond the processed ones was refunded, so
+ *                none of the pending ones did
+ *   'unknown'    anything else — no answer, no field, or a figure between the
+ *                two (some but not all, or refunds made elsewhere): stay pending
+ *
+ * All pending rows move together: a figure that covers only some of them
+ * can't say which, so it says nothing.
+ */
+export type PendingResolution = 'processed' | 'failed' | 'unknown';
+
+export function resolvePendingRefunds(input: {
+  processedInr: number;
+  pendingInr: readonly number[];
+  amountRefundedPaise: number | null | undefined;
+}): PendingResolution {
+  const r = input.amountRefundedPaise;
+  if (input.pendingInr.length === 0) return 'unknown';
+  if (typeof r !== 'number' || !Number.isFinite(r) || r < 0) return 'unknown';
+  const processedPaise = Math.round(input.processedInr) * 100;
+  const pendingPaise = input.pendingInr.reduce((sum, a) => sum + Math.round(a) * 100, 0);
+  if (r >= processedPaise + pendingPaise) return 'processed';
+  if (r === processedPaise) return 'failed';
+  return 'unknown';
+}

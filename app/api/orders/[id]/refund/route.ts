@@ -4,7 +4,7 @@ import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
-import { requestGatewayRefund } from '@/lib/payments/gateway';
+import { fetchGatewayPayment, requestGatewayRefund } from '@/lib/payments/gateway';
 import {
   REFUNDABLE_ROW_STATUSES,
   canTransitionPaymentRow,
@@ -19,9 +19,12 @@ import {
   REFUND_UNCONFIRMED_MESSAGE,
   canTransitionRefund,
   hasPendingRefund,
+  isOldEnoughToResolve,
   processedInr,
   refundStatusForOutcome,
   refundedOrPendingInr,
+  resolvePendingRefunds,
+  type PendingResolution,
 } from '@/lib/orders/refundStateMachine';
 import { reverseForOrder } from '@/lib/loyalty/ledger';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
@@ -52,7 +55,11 @@ type RouteParams = { params: { id: string } };
 // definitely refuses (the key is released). A timeout or 5xx is neither: the
 // row stays 'pending', the pass stays void, the answer is a 504 with code
 // 'refund_unconfirmed', and no new gateway refund starts on that payment
-// (409 'refund_pending') until someone has checked the Razorpay dashboard.
+// (409 'refund_pending') while it is unresolved. It is resolved from
+// Razorpay's own record (the Payment's amount_refunded) the next time a refund
+// on that payment, or the same key, is tried once the row is 10 minutes old:
+// proven refunded → processed, proven not → failed (key released, pass given
+// back), anything else → still pending. Never guessed.
 // Both payment statuses are then written from a fresh read of the refunds,
 // compare-and-set. An ORPHAN capture (money taken after the order stopped
 // waiting for it — lib/payments/reconcile.ts) is refunded the same way and
@@ -92,42 +99,50 @@ export async function POST(request: Request, { params }: RouteParams) {
   // identical part-refunds are each under the cap. If this key already produced
   // a refund, return THAT one instead of issuing a second; if that one is still
   // waiting on the gateway's answer, say so rather than ask the gateway again.
+  //
+  // A key whose refund is still PENDING (its gateway call never answered) is
+  // not answered yet: the payment's pending refunds are resolved from
+  // Razorpay's record first (below), and the key is looked at again then.
   const idempotencyKey = readIdempotencyKey(request);
+  let keyWasPending = false;
   if (idempotencyKey) {
-    const existing = await findRefundByKey(admin, idempotencyKey);
-    if (existing) return replayOf(existing as RefundRow);
+    const existing = (await findRefundByKey(admin, idempotencyKey)) as RefundRow | null;
+    if (existing && existing.status !== 'pending') return replayOf(existing);
+    keyWasPending = Boolean(existing);
   }
 
   // `*` rather than a column list because order_kind (HIOC Ritual,
   // 2026-10-coffee-pass.sql) does not exist before that migration, and a select
   // naming an unknown column would fail every refund on such a database; here
   // it is simply absent, which reads as an ordinary menu order.
-  const { data: order, error: orderError } = await admin
-    .from('orders')
-    .select('*')
-    .eq('id', id)
-    .maybeSingle();
-  if (orderError) return errorResponse(500, 'Failed to load order');
-  if (!order) return notFound();
+  let loaded = await loadOrderAndPayment(admin, id);
+  if (!loaded.ok) return loaded.response;
 
-  // The latest gateway payment that still has money to give back: 'paid' or
-  // 'partially_refunded' (the payments row machine, lib/payments/
-  // paymentRowStateMachine.ts — a fully refunded row reads 'refunded').
-  const { data: payment, error: paymentError } = await admin
-    .from('payments')
-    .select('id, gateway_payment_id, amount_inr, status, error')
-    .eq('order_id', id)
-    .in('status', [...REFUNDABLE_ROW_STATUSES])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (paymentError) return errorResponse(500, 'Failed to load payment');
+  // A pending refund on this payment (a gateway call that never answered) is
+  // resolved from Razorpay's own record before anything else is decided — a new
+  // refund on the payment, or the same key retried, is what asks. When that
+  // settles it either way, the order and payment are read again; when it
+  // can't (no answer, no figure, too recent), the row stays pending.
+  if (loaded.payment?.gateway_payment_id) {
+    const resolution = await resolvePendingOnPayment(admin, id, loaded.order, loaded.payment);
+    if (resolution === 'processed' || resolution === 'failed') {
+      loaded = await loadOrderAndPayment(admin, id);
+      if (!loaded.ok) return loaded.response;
+    }
+  }
+  if (keyWasPending && idempotencyKey) {
+    // Processed now → the replay; still pending → "waiting on the gateway";
+    // failed → its key was released, and this request is a fresh attempt.
+    const again = (await findRefundByKey(admin, idempotencyKey)) as RefundRow | null;
+    if (again) return replayOf(again);
+  }
+  const { order, payment } = loaded;
 
   // An ORPHAN capture — money Razorpay took after the order stopped waiting for
   // it (cancelled, or paid at the counter after switching) — is refunded
   // whatever the order's own payment status says, and leaves that status alone:
   // the order never took that money.
-  const orphan = Boolean(payment?.gateway_payment_id && isOrphanCapture(payment as { error?: string | null }));
+  const orphan = Boolean(payment?.gateway_payment_id && isOrphanCapture(payment));
   if (!orphan && !isRefundable(order.payment_status as string)) {
     return errorResponse(409, 'This order has no captured payment to refund.');
   }
@@ -153,9 +168,9 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   // Every refund on this payment that may have moved money: processed, and
-  // pending (claimed, the gateway's answer not known). A pending one blocks a
-  // new refund outright — if it did go through, a second would pay the customer
-  // twice — until someone has checked the Razorpay dashboard.
+  // pending (claimed, the gateway's answer not known). A pending one still here
+  // could not be resolved above, and blocks a new refund outright — if it did
+  // go through, a second would pay the customer twice.
   const { data: priorRefunds, error: priorError } = await admin
     .from('refunds')
     .select('amount_inr, status')
@@ -239,7 +254,8 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (next === null) {
     // No answer we can trust (a timeout, a 5xx): the money MAY have moved. The
     // row stays pending, the pass stays void, nothing is given back, and no new
-    // gateway refund starts on this payment until someone has looked.
+    // gateway refund starts on this payment until Razorpay's record settles it
+    // (resolvePendingOnPayment, on the next try once the row is old enough).
     console.error(
       `refund ${claim.row.id} on order ${id}: the gateway's answer is UNKNOWN — left pending. ` +
         `Check Razorpay payment ${payment.gateway_payment_id} for a ₹${amountInr} refund.`,
@@ -263,34 +279,166 @@ export async function POST(request: Request, { params }: RouteParams) {
     console.error(`refund ${claim.row.id} on order ${id}: done at the gateway but could not be marked processed`);
   }
 
-  // Both statuses from a FRESH read of what has gone back on this payment —
-  // not the sum read before the gateway call (another refund may have landed).
-  const refundedNow = await sumProcessed(admin, { payment_id: payment.id });
-  if (refundedNow !== null) {
-    const rowNext = paymentRowAfterRefund(payment.amount_inr, refundedNow);
-    if (rowNext !== payment.status && canTransitionPaymentRow(payment.status as string, rowNext, 'refund')) {
-      await admin.from('payments').update({ status: rowNext }).eq('id', payment.id).eq('status', payment.status);
-    }
-  }
-
-  // The order's own payment status — not for an orphan, whose money the order never took.
-  const written = orphan
-    ? { order: order as Record<string, unknown>, status: order.payment_status as PaymentStatus }
-    : await writeRefundedStatus(admin, id, payment.amount_inr, () => sumProcessed(admin, { payment_id: payment.id }));
-
-  // Claw back Beanies ONLY on a FULL refund (H8). reverseForOrder reverses the
-  // order's ENTIRE earn+redeem, so running it on a partial refund would wrongly
-  // wipe all earned Beanies (e.g. a ₹10 refund on a ₹1000 order). A partial
-  // refund leaves loyalty untouched.
-  if (!orphan && written.status === 'refunded') {
-    await reverseForOrder(id);
-  }
-
+  const written = await afterGatewayRefundProcessed(admin, id, order, payment);
   return NextResponse.json({ refund: processedRow ?? claim.row, order: written.order });
 }
 
 type Admin = ReturnType<typeof createAdminSupabaseClient>;
 type RefundRow = { id: string; status?: string } & Record<string, unknown>;
+type GatewayPaymentRow = {
+  id: string;
+  gateway_payment_id: string;
+  amount_inr: number;
+  status: string;
+  error?: string | null;
+};
+/** The order as read with `*`: every column, of which these are relied on. */
+type RefundOrder = Record<string, unknown> & { id: string; payment_status: string; order_kind?: string | null };
+type LoadedRefundContext =
+  | { ok: true; order: RefundOrder; payment: GatewayPaymentRow | null }
+  | { ok: false; response: NextResponse };
+
+/**
+ * The order, and the latest gateway payment on it that still has money to give
+ * back: 'paid' or 'partially_refunded' (the payments row machine, lib/payments/
+ * paymentRowStateMachine.ts — a fully refunded row reads 'refunded').
+ *
+ * `*` for the order rather than a column list because order_kind (HIOC Ritual,
+ * 2026-10-coffee-pass.sql) does not exist before that migration, and a select
+ * naming an unknown column would fail every refund on such a database; here it
+ * is simply absent, which reads as an ordinary menu order.
+ */
+async function loadOrderAndPayment(admin: Admin, id: string): Promise<LoadedRefundContext> {
+  const { data: order, error: orderError } = await admin.from('orders').select('*').eq('id', id).maybeSingle();
+  if (orderError) return { ok: false, response: errorResponse(500, 'Failed to load order') };
+  if (!order) return { ok: false, response: notFound() };
+  const { data: payment, error: paymentError } = await admin
+    .from('payments')
+    .select('id, gateway_payment_id, amount_inr, status, error')
+    .eq('order_id', id)
+    .in('status', [...REFUNDABLE_ROW_STATUSES])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (paymentError) return { ok: false, response: errorResponse(500, 'Failed to load payment') };
+  return { ok: true, order: order as RefundOrder, payment: (payment as GatewayPaymentRow | null) ?? null };
+}
+
+/**
+ * Once money has gone back on a gateway payment: its row's status and the
+ * order's, both from a FRESH read of what has gone back (not a sum read before
+ * the gateway call — another refund may have landed), compare-and-set. An
+ * orphan's order is left alone: it never took that money. Beanies are clawed
+ * back ONLY on a FULL refund (H8): reverseForOrder reverses the order's ENTIRE
+ * earn+redeem, so running it on a partial refund (₹10 of ₹1000) would wipe it all.
+ */
+async function afterGatewayRefundProcessed(
+  admin: Admin,
+  id: string,
+  order: RefundOrder,
+  payment: GatewayPaymentRow,
+): Promise<{ order: Record<string, unknown> | null; status: PaymentStatus | null }> {
+  const orphan = isOrphanCapture(payment);
+  const refundedNow = await sumProcessed(admin, { payment_id: payment.id });
+  if (refundedNow !== null) {
+    const rowNext = paymentRowAfterRefund(payment.amount_inr, refundedNow);
+    if (rowNext !== payment.status && canTransitionPaymentRow(payment.status, rowNext, 'refund')) {
+      await admin.from('payments').update({ status: rowNext }).eq('id', payment.id).eq('status', payment.status);
+    }
+  }
+  const written = orphan
+    ? { order, status: order.payment_status as PaymentStatus }
+    : await writeRefundedStatus(admin, id, payment.amount_inr, () => sumProcessed(admin, { payment_id: payment.id }));
+  if (!orphan && written.status === 'refunded') {
+    await reverseForOrder(id);
+  }
+  return written;
+}
+
+/**
+ * Resolves the PENDING refunds on one gateway payment from Razorpay's own
+ * record (lib/orders/refundStateMachine.ts resolvePendingRefunds): its
+ * amount_refunded, against what we know went back plus what is pending.
+ *
+ *   'none'       nothing pending
+ *   'processed'  the gateway refunded them: pending → processed, then both
+ *                payment statuses as after any refund
+ *   'failed'     the gateway refunded none of them: pending → failed, their
+ *                keys released and a voided Ritual pass given back — exactly
+ *                what a definite refusal does
+ *   'unknown'    too recent to touch (its own request may still be waiting on
+ *                the gateway), the gateway could not be asked, the figure is
+ *                missing, or it doesn't settle it: they stay pending
+ *
+ * Every write is compare-and-set on status 'pending', so a row someone else
+ * resolved meanwhile is never overwritten.
+ */
+async function resolvePendingOnPayment(
+  admin: Admin,
+  id: string,
+  order: RefundOrder,
+  payment: GatewayPaymentRow,
+): Promise<'none' | PendingResolution> {
+  const { data: rows, error } = await admin
+    .from('refunds')
+    .select('*')
+    .eq('payment_id', payment.id)
+    .eq('status', 'pending');
+  if (error) {
+    console.error(`pending refunds on payment ${payment.id} could not be read — left as they are`, error);
+    return 'unknown';
+  }
+  const pending = (rows ?? []) as RefundRow[];
+  if (pending.length === 0) return 'none';
+  const nowMs = Date.now();
+  if (!pending.every((r) => isOldEnoughToResolve(r.created_at as string | null | undefined, nowMs))) return 'unknown';
+
+  const [gateway, processedSoFar] = await Promise.all([
+    fetchGatewayPayment(payment.gateway_payment_id),
+    sumProcessed(admin, { payment_id: payment.id }),
+  ]);
+  if (!gateway || gateway.id !== payment.gateway_payment_id || processedSoFar === null) return 'unknown';
+  const resolution = resolvePendingRefunds({
+    processedInr: processedSoFar,
+    pendingInr: pending.map((r) => r.amount_inr as number),
+    amountRefundedPaise: gateway.amount_refunded,
+  });
+  if (resolution === 'unknown') {
+    console.error(
+      `pending refunds ${pending.map((r) => r.id).join(',')} on order ${id}: Razorpay's record ` +
+        `(amount_refunded ${String(gateway.amount_refunded)}) doesn't settle them — left pending`,
+    );
+    return 'unknown';
+  }
+
+  const nowIso = new Date(nowMs).toISOString();
+  let allMoved = true;
+  for (const row of pending) {
+    const moved = await resolveClaim(
+      admin,
+      row.id,
+      resolution === 'processed'
+        ? { status: 'processed', processed_at: nowIso }
+        : { status: 'failed', ...(row.idempotency_key ? { idempotency_key: null } : {}) },
+    );
+    if (!moved) allMoved = false;
+  }
+  console.error(
+    `pending refunds ${pending.map((r) => r.id).join(',')} on order ${id} resolved ${resolution} ` +
+      `from Razorpay's record (amount_refunded ${gateway.amount_refunded}p, ₹${processedSoFar} processed before)`,
+  );
+
+  if (resolution === 'processed') {
+    await afterGatewayRefundProcessed(admin, id, order, payment);
+  } else if (order.order_kind === 'coffee_pass' && allMoved) {
+    // As after a definite refusal: the pass the claim voided is good again.
+    // The database gives it back only while the sale is still paid in full, so
+    // a pass an earlier, processed refund voided stays void — and not at all
+    // if another writer resolved one of these rows first (its CAS won).
+    await restorePassAfterFailedRefund(admin, id);
+  }
+  return resolution;
+}
 
 /** The answer for a key that already has a refund: that refund, or "still waiting on the gateway". */
 function replayOf(existing: RefundRow): NextResponse {
