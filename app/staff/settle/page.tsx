@@ -25,7 +25,7 @@ export const dynamic = 'force-dynamic';
 // caps a device-unlocked owner at 'manager', and hasPermission takes the role it
 // is given rather than re-deriving one a PIN operator does not have a session for.
 export default async function StaffSettlePage() {
-  const [actor, surface, settings] = await Promise.all([getCounterActor(), getStaffSurface(), getStoreSettings()]);
+  const [actor, surface, settings] = await Promise.all([getCounterActor({ slide: false }), getStaffSurface(), getStoreSettings()]);
   const [mayEdit, mayPunch] = actor
     ? await Promise.all([
         hasPermission(actor.user, 'settle_edit_order', actor.role),

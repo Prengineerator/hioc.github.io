@@ -28,7 +28,7 @@ export default async function StaffLeavePage() {
     );
   }
 
-  const account = await getCounterActor();
+  const account = await getCounterActor({ slide: false });
   const canApprove = account ? await hasPermission(account.user, 'leave_approve', account.role) : false;
 
   return <LeavePlanner canApprove={canApprove} />;

@@ -58,7 +58,7 @@ export default async function StaffPrintPage({
   // enrolled device + operator cookie pair), and an unauthenticated embed
   // renders the login redirect inside a 0×0 frame — printing nothing, leaking
   // nothing.
-  const account = await getCounterActor();
+  const account = await getCounterActor({ slide: false });
   if (!account) {
     redirect('/staff/login');
   }

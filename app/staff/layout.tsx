@@ -51,7 +51,7 @@ export default async function StaffLayout({
     return <>{children}</>;
   }
 
-  const actor = await getCounterActor();
+  const actor = await getCounterActor({ slide: false });
   // PIN-2/3: the flag AND the secret must both check out — with either one
   // off/missing/short, no lock screen and no overlay ever mount, matching
   // the same guard operatorFeatureConfigured() applies to the API routes

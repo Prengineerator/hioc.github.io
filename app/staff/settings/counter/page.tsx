@@ -28,7 +28,7 @@ export const dynamic = 'force-dynamic';
 // owner" escape hatch meant for a genuine classic owner session; only an
 // owner who actually signed in with their password sees it.
 export default async function StaffSettingsCounterPage() {
-  const account = await getCounterActor();
+  const account = await getCounterActor({ slide: false });
   const registry = await getDeviceRegistryState();
 
   return (

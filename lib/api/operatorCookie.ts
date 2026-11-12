@@ -12,10 +12,12 @@ import { createHmac, timingSafeEqual } from 'crypto';
  * cookies are ours. */
 export const OPERATOR_COOKIE = 'hioc_operator';
 
-/** D6-7/PIN-3: 12 hours, sliding — refreshed on every request that resolves
- * it successfully (lib/api/operator.ts), so a shift that never idles out
- * never has to re-punch a PIN, but a forgotten-unlocked counter cannot stay
- * unlocked past 12h of total inactivity either way. */
+/** D6-7/PIN-3: 12 hours, sliding. Refreshed on every Route Handler request
+ * that resolves it successfully (lib/api/operator.ts), so a shift that never
+ * idles out never has to re-punch a PIN, but a forgotten-unlocked counter
+ * cannot stay unlocked past 12h of total inactivity either way. Page and
+ * layout renders resolve it without refreshing, because cookies are
+ * read-only during a render. */
 export const OPERATOR_COOKIE_MAX_AGE_S = 12 * 60 * 60;
 
 /** Below this length the secret is treated as absent: PIN-3's fail-safe

@@ -36,7 +36,7 @@ export default async function StaffAttendancePage() {
     );
   }
 
-  const account = await getCounterActor();
+  const account = await getCounterActor({ slide: false });
   const canManageCash = account ? account.role === 'manager' || account.role === 'owner' : false;
 
   return (

@@ -43,7 +43,7 @@ export default async function StaffPassesPage({
     );
   }
 
-  const [actor, surface, settings] = await Promise.all([getCounterActor(), getStaffSurface(), getStoreSettings()]);
+  const [actor, surface, settings] = await Promise.all([getCounterActor({ slide: false }), getStaffSurface(), getStoreSettings()]);
   const mayTakeOrders = canTakeOrders(surface, settings.staff_web_ordering);
   const [maySell, mayManage] = actor
     ? await Promise.all([

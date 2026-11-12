@@ -64,12 +64,27 @@ export interface OperatorActor {
  * change mid-shift 401s the very next request, because this is read fresh
  * from `profiles` every time — never cached).
  *
- * On success, slides the cookie's expiry (best-effort — a failed re-set here
- * must never fail the request it's riding along on; `cookies().set()` is only
- * legal inside a Route Handler/Server Action, which is the only context this
- * is ever called from).
+ * On success, and only when `slide` is true (the default), slides the
+ * cookie's expiry: re-signs a fresh token for the SAME op/dev with a fresh
+ * `iat`. Only a token that has just passed every check above is ever slid,
+ * so a token that stops resolving (device revoked, operator demoted) dies at
+ * most 12h after its last successful resolve.
+ *
+ * `slide: false` is for Server Component renders (app/staff/layout.tsx and
+ * the staff pages). Next 14 makes cookies read-only during a render, and
+ * `cookies().set()` there throws "Cookies can only be modified in a Server
+ * Action or Route Handler". Those callers resolve exactly the same way, with
+ * the same device+operator checks, and just skip the write.
+ * tests/operatorSlide.test.ts checks that every render-time caller passes it.
+ * The slide happens in the Route Handlers the staff screens call (polls,
+ * reads, every write). Those are where `cookies().set()` is legal.
+ *
+ * middleware.ts deliberately does NOT slide. It runs on the Edge runtime,
+ * with no database, so the most it could check is the token's signature. A
+ * slide there would keep alive tokens whose device or operator no longer
+ * passes the checks above.
  */
-export async function resolveOperatorActor(): Promise<OperatorActor | null> {
+export async function resolveOperatorActor({ slide = true }: { slide?: boolean } = {}): Promise<OperatorActor | null> {
   const s = secret();
   if (!operatorSecretOk(s)) return null;
 
@@ -106,15 +121,19 @@ export async function resolveOperatorActor(): Promise<OperatorActor | null> {
   const { data: authUser, error: authError } = await admin.auth.admin.getUserById(payload.op);
   if (authError || !authUser?.user) return null;
 
-  try {
-    const fresh = issueOperatorCookieValue(payload.op, payload.dev);
-    if (fresh) {
-      cookies().set(OPERATOR_COOKIE, fresh.value, operatorCookieOptions(isProd()));
+  if (slide) {
+    try {
+      const fresh = issueOperatorCookieValue(payload.op, payload.dev);
+      if (fresh) {
+        cookies().set(OPERATOR_COOKIE, fresh.value, operatorCookieOptions(isProd()));
+      }
+    } catch (err) {
+      // Sliding is a convenience, not a correctness requirement, so a failed
+      // write must never fail the request it rides along on. Reaching this
+      // from a page or layout means a render-time caller forgot
+      // `slide: false`; tests/operatorSlide.test.ts is there to catch that.
+      console.error('resolveOperatorActor: could not slide the operator cookie', err);
     }
-  } catch (err) {
-    // Sliding is a convenience, not a correctness requirement — some call
-    // sites (e.g. during static generation) cannot set cookies at all.
-    console.error('resolveOperatorActor: could not slide the operator cookie', err);
   }
 
   return { user: authUser.user, role };

@@ -9,7 +9,7 @@ import { getCounterActor } from '@/lib/api/auth';
 export default async function StaffSettingsStorePage() {
   // Whether the staff website may take orders is a manager/owner switch (the
   // PATCH route enforces it; this only decides whether to offer the toggle).
-  const actor = await getCounterActor();
+  const actor = await getCounterActor({ slide: false });
   const canManageOrdering = actor?.role === 'manager' || actor?.role === 'owner';
   return (
     <div>

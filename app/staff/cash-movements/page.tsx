@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 // correct for that path. The menu only links here for managers/owners
 // (lib/staff/staffNav.ts); this guards a typed or bookmarked URL.
 export default async function CashMovementsPage() {
-  const account = flags.staffPos ? await getCounterActor() : null;
+  const account = flags.staffPos ? await getCounterActor({ slide: false }) : null;
   const canManageCash = account ? account.role === 'manager' || account.role === 'owner' : false;
 
   if (!flags.staffPos || !canManageCash) {

@@ -146,8 +146,17 @@ export async function getStaffOrOwner(): Promise<{ user: User; role: UserRole } 
  * ONLY. `/owner/**` and every `app/api/owner/**` route must keep calling
  * getOwnerUser() and must never be migrated to this — a 4-digit PIN on
  * shared hardware must never reach payroll or settings.
+ *
+ * `slide`: pass `{ slide: false }` from a Server Component (a page or a
+ * layout). Cookies are read-only during a render, so the device path must not
+ * try to re-issue the operator cookie there. Route Handlers keep the default,
+ * which slides the cookie's 12h expiry on every successful device resolve.
+ * The option changes only that write, never who resolves. See
+ * resolveOperatorActor() in lib/api/operator.ts.
  */
-export async function getCounterActor(): Promise<{ user: User; role: UserRole; via: 'session' | 'device' } | null> {
+export async function getCounterActor(
+  { slide = true }: { slide?: boolean } = {},
+): Promise<{ user: User; role: UserRole; via: 'session' | 'device' } | null> {
   const classic = await getStaffOrOwner();
   if (classic) return { ...classic, via: 'session' };
 
@@ -156,7 +165,7 @@ export async function getCounterActor(): Promise<{ user: User; role: UserRole; v
   // load for every caller of getAuthUser()/getStaffUser() etc. — those stay
   // exactly as cheap as they were before this function existed.
   const { resolveOperatorActor } = await import('@/lib/api/operator');
-  const operator = await resolveOperatorActor();
+  const operator = await resolveOperatorActor({ slide });
   if (!operator) return null;
   return { ...operator, via: 'device' };
 }
@@ -171,9 +180,14 @@ export async function getCounterActor(): Promise<{ user: User; role: UserRole; v
  * not the hasPermission() matrix — e.g. cash-counts' history view — this is
  * the direct drop-in that adds the device path without inventing a
  * permission-matrix key for something that was never one.
+ *
+ * `slide`: same meaning as getCounterActor()'s. Pass `{ slide: false }` from
+ * a page or layout.
  */
-export async function getCounterManager(): Promise<{ user: User; role: UserRole; via: 'session' | 'device' } | null> {
-  const actor = await getCounterActor();
+export async function getCounterManager(
+  opts: { slide?: boolean } = {},
+): Promise<{ user: User; role: UserRole; via: 'session' | 'device' } | null> {
+  const actor = await getCounterActor(opts);
   if (!actor) return null;
   return actor.role === 'manager' || actor.role === 'owner' ? actor : null;
 }
