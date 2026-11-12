@@ -28,8 +28,14 @@
 -- by the database until this is applied.
 -- ===========================================================================
 
+-- `set search_path` is restated on purpose: CREATE OR REPLACE resets every
+-- function setting it does not name, and 2026-09-security-advisor-fixes.sql
+-- pinned this function's search_path with an ALTER FUNCTION. Leaving it out
+-- would silently undo that hardening (function_search_path_mutable).
 create or replace function public.guard_refund_total()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = public, pg_temp
+as $$
 declare v_paid integer; v_refunded integer;
 begin
   if new.status not in ('processed', 'pending') then return new; end if;
@@ -66,7 +72,8 @@ create trigger trg_guard_refund_total before insert on refunds
 
 -- ---------------------------------------------------------------------------
 -- Verify:
---   select prosrc like '%for update%' as locks, prosrc like '%pending%' as counts_pending
+--   select prosrc like '%for update%' as locks, prosrc like '%pending%' as counts_pending,
+--          proconfig  -- expect {"search_path=public, pg_temp"}
 --     from pg_proc where proname = 'guard_refund_total';
 --   -- refunds still waiting on the gateway's answer (check each in Razorpay):
 --   select id, order_id, payment_id, amount_inr, created_at
