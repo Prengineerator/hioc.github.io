@@ -190,6 +190,8 @@ export interface CashDayRow {
   close_reason?: string | null;
   /** Set when nobody closed the day and it ended on its own at 3 am (lib/cash/autoEnd.ts). */
   auto_ended_at?: string | null;
+  /** The day's last reopen: a day reopened after its end did not end on its own (lib/cash/dayState.ts). */
+  reopened_at?: string | null;
   notes?: string | null;
 }
 

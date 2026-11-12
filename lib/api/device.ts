@@ -2,6 +2,12 @@
 //
 // The crypto and cookie-shape half is lib/api/deviceCookie.ts (pure, tested).
 // This half needs the database and next/headers, so it is server-only.
+//
+// A pos_devices row has two states, derived from revoked_at:
+//   active  — revoked_at IS NULL: its cookie resolves (getEnrolledDevice);
+//   revoked — revoked_at set. TERMINAL: there is no un-revoke; the machine is
+//             re-enrolled with a new secret (app/api/owner/devices PATCH, whose
+//             every write is guarded on revoked_at IS NULL).
 
 import { requestCache as cache } from '@/lib/api/requestCache';
 import 'server-only';

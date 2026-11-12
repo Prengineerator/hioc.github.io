@@ -7,6 +7,7 @@ import { nameFromEmail } from '@/lib/staff/displayName';
 import {
   MANAGEABLE_ROLES,
   TEAM_ROLES,
+  effectiveTeamRole,
   loginEmailFor,
   normalizeLoginId,
   normalizePersonalEmail,
@@ -151,7 +152,7 @@ export async function GET() {
     // blocks staff access) — report the role they'll be restored to
     // instead, so the team screen's edit form doesn't pre-fill 'customer'
     // and silently demote a manager on save. status already says deactivated.
-    const role = account?.status === 'deactivated' ? account.role_before_deactivation || 'staff' : p.role;
+    const role = effectiveTeamRole(p.role, account ?? null) ?? p.role;
     return {
       id: p.id,
       role: role as TeamMember['role'],

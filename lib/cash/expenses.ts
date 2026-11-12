@@ -181,6 +181,20 @@ export function approveProblem(input: { status: ExpenseStatus; isOwnEntry: boole
   return null;
 }
 
+/**
+ * What the owner re-tagging a cash-out (PATCH /api/owner/cash-movements/[id])
+ * does to its review: tagging a pending (or untagged) one approves it, as the
+ * owner; re-tagging an APPROVED expense keeps the approval it has — who signed
+ * it off and when are not the owner's to overwrite by changing a category;
+ * clearing the tag clears the approval (the schema only allows one on an
+ * expense). An undone expense cannot be re-tagged at all (null).
+ */
+export function retagReview(input: { status: ExpenseStatus; category: string | null }): 'approve' | 'keep' | 'clear' | null {
+  if (input.status === 'undone') return null;
+  if (input.category === null) return 'clear';
+  return input.status === 'approved' ? 'keep' : 'approve';
+}
+
 /** Expenses punched by the owner need no one else's sign-off: they are approved on entry. */
 export function autoApproved(actorRole: ActorRole): boolean {
   return actorRole === 'owner';

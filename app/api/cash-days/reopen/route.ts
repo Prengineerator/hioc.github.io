@@ -3,6 +3,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { requireCashManager } from '@/lib/cash/gate';
 import { cashReasonProblem } from '@/lib/cash/day';
+import { canCashDayTransition } from '@/lib/cash/dayState';
 import { CASH_DAY_COLUMNS, MIGRATION_HINT, getLatestDay, isMissingColumn, writeDayAppTotals, writeDayExpenses } from '@/lib/cash/dayServer';
 import type { CashDay, CashDayReopenEntry } from '@/lib/types';
 
@@ -17,6 +18,13 @@ export const dynamic = 'force-dynamic';
 // day would put two overlapping windows on the same drawer. The close it undoes
 // is kept in reopen_log (who, when, why, what it had counted), and the day's
 // closing fields are cleared so the re-close starts clean.
+//
+// A reopen starts a new open spell, so it also clears auto_ended_at
+// (lib/cash/dayState.ts): a day reopened the morning after is NOT a day left
+// open past its end — closing it again needs the close permission, the 3 am
+// job does not stamp it, and the owner's report does not call it "never
+// closed". Whether the close it undid came after the end stays readable from
+// reopen_log's prev_closed_at.
 //
 // The chain is untouched: the day_close checkpoint and the handover cash-out
 // written at the first close stay, so at the re-close expected cash correctly
@@ -42,12 +50,14 @@ export async function POST(request: Request) {
   const { day: latest, error: latestError } = await getLatestDay(admin);
   if (latestError) return errorResponse(500, isMissingColumn(latestError) ? MIGRATION_HINT : latestError.message);
   if (!latest) return errorResponse(404, 'There is no cash day to reopen');
-  if (latest.status !== 'closed') return errorResponse(409, 'The cash day is already open');
-  if (typeof body.id === 'string' && body.id !== latest.id) {
-    return errorResponse(409, 'Only the most recent cash day can be reopened');
-  }
-
   const nowIso = new Date().toISOString();
+  // Manager/owner, the most recent day, still closed (lib/cash/dayState.ts).
+  const check = canCashDayTransition('reopen', latest, {
+    nowMs: Date.parse(nowIso),
+    actor: { role: manager.role },
+    requestedId: typeof body.id === 'string' ? body.id : null,
+  });
+  if (!check.ok) return errorResponse(check.status, check.message);
   const entry: CashDayReopenEntry = {
     at: nowIso,
     by: manager.user.id,
@@ -57,39 +67,46 @@ export async function POST(request: Request) {
     prev_handover_inr: latest.handover_inr,
   };
 
-  const { data, error } = await admin
-    .from('cash_days')
-    .update({
-      status: 'open',
-      closed_by: null,
-      closed_at: null,
-      closing_denoms: {},
-      counted_total_inr: 0,
-      expected_cash_inr: 0,
-      over_short_inr: 0,
-      notes: '',
-      close_reason: '',
-      cash_sales_inr: null,
-      cash_sales_count: null,
-      cash_refunds_inr: null,
-      cash_in_inr: null,
-      cash_out_inr: null,
-      upi_inr: null,
-      card_inr: null,
-      handover_inr: null,
-      float_left_denoms: null,
-      float_left_total_inr: null,
-      unpaid_count_at_close: null,
-      unpaid_override_reason: null,
-      reopened_at: nowIso,
-      reopened_by: manager.user.id,
-      reopen_reason: reason,
-      reopen_log: [...(Array.isArray(latest.reopen_log) ? latest.reopen_log : []), entry],
-    })
-    .eq('id', latest.id)
-    .eq('status', 'closed') // a concurrent reopen/open loses here
-    .select(CASH_DAY_COLUMNS)
-    .maybeSingle();
+  const reopenPatch = {
+    status: 'open',
+    closed_by: null,
+    closed_at: null,
+    closing_denoms: {},
+    counted_total_inr: 0,
+    expected_cash_inr: 0,
+    over_short_inr: 0,
+    notes: '',
+    close_reason: '',
+    cash_sales_inr: null,
+    cash_sales_count: null,
+    cash_refunds_inr: null,
+    cash_in_inr: null,
+    cash_out_inr: null,
+    upi_inr: null,
+    card_inr: null,
+    handover_inr: null,
+    float_left_denoms: null,
+    float_left_total_inr: null,
+    unpaid_count_at_close: null,
+    unpaid_override_reason: null,
+    reopened_at: nowIso,
+    reopened_by: manager.user.id,
+    reopen_reason: reason,
+    reopen_log: [...(Array.isArray(latest.reopen_log) ? latest.reopen_log : []), entry],
+  };
+  const reopen = (patch: Record<string, unknown>) =>
+    admin
+      .from('cash_days')
+      .update(patch)
+      .eq('id', latest.id)
+      .eq('status', 'closed') // a concurrent reopen/open loses here
+      .select(CASH_DAY_COLUMNS)
+      .maybeSingle();
+  // auto_ended_at rides on the same guarded write, so the reopen and the clear
+  // land together; a database without 2026-10-cash-day-auto-end.sql has no
+  // record to clear, and reopens with the rest.
+  let { data, error } = await reopen({ ...reopenPatch, auto_ended_at: null });
+  if (error && isMissingColumn(error)) ({ data, error } = await reopen(reopenPatch));
 
   if (error) {
     // 23505: another day was opened in the meantime (idx_cash_days_one_open).

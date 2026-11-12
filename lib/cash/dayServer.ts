@@ -108,7 +108,9 @@ export async function dayExpensesFor(admin: Admin, dayIds: string[]): Promise<Ma
  * 2026-10-cash-day-auto-end.sql) — only where it is not recorded yet. Separate
  * and best-effort like writeDayAppTotals: the rule itself (lib/cash/autoEnd.ts)
  * never depends on the column, so a database without it still ends the day.
- * Returns false when the column is missing.
+ * Returns false when the column is missing. Callers ask
+ * canCashDayTransition('auto_end') first (lib/cash/dayState.ts): a day
+ * reopened after its end was not left open, and is never stamped.
  */
 export async function markDayAutoEnded(admin: Admin, dayId: string, endedAtIso: string): Promise<boolean> {
   const { error } = await admin

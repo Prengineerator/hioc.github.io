@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { retagReview } from '@/lib/cash/expenses';
 
 // PATCH /api/owner/cash-movements/[id]: the owner tags a PAST cash-out as a
 // store expense (or clears the tag). Only `category` is ever written, and a
@@ -14,6 +15,10 @@ const state: {
   movement: Row | null;
   updates: Row[];
   updateError: { code?: string; message: string } | null;
+  /** The guarded update matched no row (approved / undone in between). */
+  updateMatchesNothing: boolean;
+  /** The filters the last update ran with, e.g. ['is voided_at', 'is approved_at']. */
+  updateGuards: string[];
   closedDays: Row[];
   /** The categorised cash-outs the day-total query sees. */
   dayMoves: Row[];
@@ -24,6 +29,8 @@ const state: {
   movement: null,
   updates: [],
   updateError: null,
+  updateMatchesNothing: false,
+  updateGuards: [],
   closedDays: [],
   dayMoves: [],
   dayWrites: [],
@@ -45,7 +52,14 @@ vi.mock('@/lib/supabase-server', () => ({
           return chain;
         };
         chain.eq = self;
-        chain.not = self;
+        chain.not = (c: string) => {
+          if (updatePayload) state.updateGuards.push(`not ${c}`);
+          return chain;
+        };
+        chain.is = (c: string) => {
+          if (updatePayload) state.updateGuards.push(`is ${c}`);
+          return chain;
+        };
         chain.gt = (_c: string, v: string) => {
           state.dayWindow = { ...(state.dayWindow ?? {}), gt: v };
           return chain;
@@ -62,6 +76,7 @@ vi.mock('@/lib/supabase-server', () => ({
         chain.maybeSingle = () => {
           if (updatePayload) {
             if (state.updateError) return Promise.resolve({ data: null, error: state.updateError });
+            if (state.updateMatchesNothing) return Promise.resolve({ data: null, error: null });
             return Promise.resolve({ data: { id: MOVE_ID, category: updatePayload.category }, error: null });
           }
           return Promise.resolve({ data: state.movement, error: null });
@@ -124,6 +139,8 @@ beforeEach(() => {
   state.movement = { ...CASH_OUT };
   state.updates = [];
   state.updateError = null;
+  state.updateMatchesNothing = false;
+  state.updateGuards = [];
   state.closedDays = [];
   state.dayMoves = [];
   state.dayWrites = [];
@@ -227,5 +244,39 @@ describe('PATCH /api/owner/cash-movements/[id]', () => {
     const res = await call({ category: 'ice' });
     expect(res.status).toBe(200);
     expect(state.dayWrites).toEqual([]);
+  });
+
+  it('re-tagging an APPROVED expense changes only the category — the approval stays whoever gave it', async () => {
+    state.movement = { ...CASH_OUT, category: 'ice', approved_at: '2026-09-28T11:00:00.000Z' };
+    const res = await call({ category: 'water' });
+    expect(res.status).toBe(200);
+    // Before: approved_by was overwritten with the owner and approved_at with now.
+    expect(state.updates).toEqual([{ category: 'water' }]);
+    expect(state.updateGuards).toEqual(['is voided_at', 'not approved_at']);
+  });
+
+  it('tagging a pending one approves it only if it is still pending and not undone', async () => {
+    state.movement = { ...CASH_OUT, category: 'ice', approved_at: null };
+    expect((await call({ category: 'water' })).status).toBe(200);
+    expect(state.updateGuards).toEqual(['is voided_at', 'is approved_at']);
+  });
+
+  it('409s when the expense was approved or undone between the read and the write', async () => {
+    state.updateMatchesNothing = true;
+    const res = await call({ category: 'ice' });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/changed/);
+    expect(state.dayWrites).toEqual([]);
+  });
+});
+
+describe('retagReview (lib/cash/expenses.ts)', () => {
+  it('approves a pending tag, keeps an approval, clears with the tag, refuses an undone one', () => {
+    expect(retagReview({ status: 'pending', category: 'ice' })).toBe('approve');
+    expect(retagReview({ status: 'approved', category: 'water' })).toBe('keep');
+    expect(retagReview({ status: 'approved', category: null })).toBe('clear');
+    expect(retagReview({ status: 'pending', category: null })).toBe('clear');
+    expect(retagReview({ status: 'undone', category: 'ice' })).toBeNull();
+    expect(retagReview({ status: 'undone', category: null })).toBeNull();
   });
 });

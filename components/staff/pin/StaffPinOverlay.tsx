@@ -6,7 +6,9 @@
 //  - shows the current operator + a Switch/Lock action in StaffHeader;
 //  - auto-locks after an idle period, WITHOUT unmounting `children` (spec E5:
 //    an in-progress cart survives a lock/switch — it's client state sitting
-//    right there underneath the overlay);
+//    right there underneath the overlay). The idle lock and the Lock button
+//    are the SAME lock (./overlayState.ts): both end the operator session, so
+//    a reload after an idle lock shows the lock screen, not the last operator;
 //  - is a complete no-op — plain StaffHeader + children, nothing extra
 //    rendered or fetched — the moment this ISN'T the desktop app, so a
 //    personal phone or a plain browser tab on this same enrolled machine
@@ -29,6 +31,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getDesktopBridge } from '@/lib/desktop/bridge';
 import { StaffHeader } from '@/components/staff/StaffHeader';
 import { LockScreen } from './LockScreen';
+import {
+  endsOperatorSession,
+  pinOverlayStep,
+  type PinLockCause,
+  type PinOverlayEvent,
+  type PinOverlayModel,
+} from './overlayState';
 
 /** LCK-1: 15 minutes. D6-7's original 2 minutes locked the counter mid-shift
  * — a barista making a round of drinks, or staff watching the board without
@@ -57,8 +66,9 @@ export function StaffPinOverlay({
 }) {
   const [checked, setChecked] = useState(false);
   const [inApp, setInApp] = useState(false);
-  const [locked, setLocked] = useState(false);
-  const [operatorName, setOperatorName] = useState(initialOperatorName);
+  const [model, setModel] = useState<PinOverlayModel>({ state: 'unlocked', operatorName: initialOperatorName });
+  const locked = model.state === 'locked';
+  const operatorName = model.operatorName;
   const idleTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
@@ -66,10 +76,26 @@ export function StaffPinOverlay({
     setChecked(true);
   }, []);
 
+  // Every event goes through the machine (./overlayState.ts); THE lock — the
+  // Lock/Switch button and the idle timeout alike — also ends the operator
+  // session on the server.
+  const send = useCallback(async (event: PinOverlayEvent) => {
+    setModel((m) => pinOverlayStep(m, event).next);
+    if (!endsOperatorSession(event)) return;
+    try {
+      await fetch('/api/device/operator', { method: 'DELETE' });
+    } catch {
+      // Locking the SCREEN must not depend on the network — the overlay is
+      // already up either way, blocking taps.
+    }
+  }, []);
+
+  const lock = useCallback((cause: PinLockCause) => send({ type: 'lock', cause }), [send]);
+
   const resetIdle = useCallback(() => {
     if (idleTimer.current) clearTimeout(idleTimer.current);
-    idleTimer.current = setTimeout(() => setLocked(true), IDLE_MS);
-  }, []);
+    idleTimer.current = setTimeout(() => void lock('idle'), IDLE_MS);
+  }, [lock]);
 
   useEffect(() => {
     if (!inApp || locked) return;
@@ -83,19 +109,12 @@ export function StaffPinOverlay({
     };
   }, [inApp, locked, resetIdle]);
 
-  async function handleLock() {
-    setLocked(true);
-    try {
-      await fetch('/api/device/operator', { method: 'DELETE' });
-    } catch {
-      // Locking the SCREEN must not depend on the network — the overlay is
-      // already up either way, blocking taps.
-    }
+  function handleLock() {
+    void lock('button');
   }
 
   function handleUnlocked(name: string) {
-    setOperatorName(name);
-    setLocked(false);
+    void send({ type: 'unlock', operatorName: name });
   }
 
   if (!checked || !inApp) {

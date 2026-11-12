@@ -65,6 +65,11 @@ export async function POST(_request: Request, { params }: RouteParams) {
 
   // Race-safe: only a row that is STILL pending is voided. An approval or a
   // second undo landing between the read above and here matches 0 rows.
+  // "Counted since" is the one precondition this write cannot carry: it reads
+  // other tables (cash_counts, cash_days), which a single-row PostgREST update
+  // cannot filter on. A count recorded between loadCountMarks above and this
+  // write still lets the undo through — a window of milliseconds, and the same
+  // fix as any count that disagrees: a manager records a cash in.
   const voidedAt = new Date().toISOString();
   const { data: updated, error: updateError } = await admin
     .from('cash_movements')

@@ -4,7 +4,7 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody } from '@/lib/api/http';
 import { rateLimitOk } from '@/lib/api/rateLimit';
 import { isUuid } from '@/lib/api/constants';
-import { passwordProblem } from '@/lib/staff/accounts';
+import { isDeactivatedAccount, passwordProblem } from '@/lib/staff/accounts';
 import { sendPasswordLink, sendPasswordChangedNotice } from '@/lib/staff/emails';
 import { buildMember, isMissingTable } from '../../_lib';
 
@@ -46,7 +46,7 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (accountError && !isMissingTable(accountError)) return errorResponse(500, accountError.message);
   const account = accountRow as { login_id: string | null; personal_email: string | null; status: string } | null;
 
-  if (account?.status === 'deactivated') return errorResponse(409, 'This account is deactivated');
+  if (isDeactivatedAccount(account)) return errorResponse(409, 'This account is deactivated');
 
   if (mode === 'link') {
     if (!account?.personal_email) return errorResponse(400, 'Add a personal email first');

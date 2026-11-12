@@ -7,7 +7,9 @@
 // cash in/out, expected cash) stop at 3:00 am, whenever it is counted. Nobody
 // counted the drawer, so it is not closed: the next person to log in counts it
 // and closes it (any staffer — no manager needed for a day that is already
-// over), then opens the new day.
+// over), then opens the new day. Not a day a manager reopened after its end:
+// that one has ended too, but was not left open (lib/cash/dayState.ts, which
+// declares the whole lifecycle on top of this clock).
 //
 // The counter takes no orders until the day is open: every day, the first
 // thing on the POS is counting the float, and when yesterday was left open,

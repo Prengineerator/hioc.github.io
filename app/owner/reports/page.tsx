@@ -28,6 +28,7 @@ import {
 import { loadReport } from '@/lib/reports/reconcileServer';
 import { formatIstDate } from '@/lib/account/orderDisplay';
 import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
+import { cashDayEndedOnItsOwnAt } from '@/lib/cash/dayState';
 
 export const dynamic = 'force-dynamic';
 
@@ -401,6 +402,10 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
   const hasHandover = c.handover_inr !== null && c.handover_inr !== undefined;
   const outs = cashDayOuts(c);
   const rows = closed ? closingCountRows(c) : [];
+  // The counter's own rule (lib/cash/dayState.ts): an open day past its end has
+  // ended whether or not the 3 am job recorded it yet, and a day a manager
+  // reopened after its end did not end on its own — it is not "never closed".
+  const endedAt = cashDayEndedOnItsOwnAt(c, Date.now());
   return (
     <details open={open} className="group rounded-md border border-line bg-white">
       <summary className="flex min-h-[44px] cursor-pointer list-none flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2">
@@ -408,8 +413,8 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
           <span className="font-bold text-charcoal">{shortDate(c.business_date)}</span>
           <span className="ml-2 text-xs text-muted">
             {istTime(c.opened_at)} →{' '}
-            {c.auto_ended_at
-              ? `ended on its own ${istTime(c.auto_ended_at)}${closed ? ` · counted ${istTime(c.closed_at)}` : ''}`
+            {endedAt
+              ? `ended on its own ${istTime(endedAt)}${closed ? ` · counted ${istTime(c.closed_at)}` : ''}`
               : closed
                 ? istTime(c.closed_at)
                 : 'still open'}
@@ -426,7 +431,13 @@ function CashDayCard({ c, open }: { c: CashDayRow; open: boolean }) {
             </>
           ) : (
             <span className="font-bold text-amber-800">
-              {c.auto_ended_at ? 'Never closed — not counted yet' : 'Open — not counted yet'}
+              {endedAt
+                ? c.reopened_at
+                  ? 'Reopened, then left open — not counted yet'
+                  : 'Never closed — not counted yet'
+                : c.reopened_at
+                  ? 'Reopened — not counted yet'
+                  : 'Open — not counted yet'}
             </span>
           )}
         </span>

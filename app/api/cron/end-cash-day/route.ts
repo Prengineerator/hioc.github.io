@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
-import { cashDayEndsAt, isCashDayOverdue } from '@/lib/cash/autoEnd';
+import { cashDayEndsAt } from '@/lib/cash/autoEnd';
+import { canCashDayTransition } from '@/lib/cash/dayState';
 import { getOpenDay, isMissingColumn, markDayAutoEnded } from '@/lib/cash/dayServer';
 
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,8 @@ export const dynamic = 'force-dynamic';
 // person who logs in to count it and close it — so this job only RECORDS that
 // it ended on its own (cash_days.auto_ended_at, 2026-10-cash-day-auto-end.sql),
 // for the owner's 8 am report and the cash day log. Nothing is counted or
-// closed here: only a person can count the drawer.
+// closed here: only a person can count the drawer. A day a manager reopened
+// after its end was not left open (lib/cash/dayState.ts) and is not stamped.
 //
 // Five minutes past the hour so the run never lands a moment before the 3:00
 // end. Daily, like every cron here (see /api/cron/close-attendance on why).
@@ -33,9 +35,9 @@ export async function GET(request: Request) {
     console.error('end-cash-day cron: could not read the open day', error);
     return errorResponse(500, 'Could not read the open cash day');
   }
-  if (!day || !isCashDayOverdue(day, Date.now())) {
-    return NextResponse.json({ ok: true, ended: 0, note: day ? 'the open day has not ended yet' : 'no open day' });
-  }
+  if (!day) return NextResponse.json({ ok: true, ended: 0, note: 'no open day' });
+  const check = canCashDayTransition('auto_end', day, { nowMs: Date.now() });
+  if (!check.ok) return NextResponse.json({ ok: true, ended: 0, note: check.message });
 
   const endedAt = cashDayEndsAt(day.business_date);
   const recorded = await markDayAutoEnded(admin, day.id, endedAt);

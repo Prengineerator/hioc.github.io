@@ -3,7 +3,14 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOwnerUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody } from '@/lib/api/http';
 import { isUuid } from '@/lib/api/constants';
-import { MANAGEABLE_ROLES, loginEmailFor, normalizeLoginId, normalizePersonalEmail } from '@/lib/staff/accounts';
+import {
+  MANAGEABLE_ROLES,
+  effectiveTeamRole,
+  isDeactivatedAccount,
+  loginEmailFor,
+  normalizeLoginId,
+  normalizePersonalEmail,
+} from '@/lib/staff/accounts';
 import { buildMember, findUserIdByEmail, isMissingTable, performDelete } from '../_lib';
 
 export const dynamic = 'force-dynamic';
@@ -130,11 +137,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     accountPatch.warehouse_access = body.warehouseAccess;
   }
 
-  const isDeactivated = currentRole === 'customer' && account?.status === 'deactivated';
-  // profiles.role is 'customer' while deactivated — that's not the role the
-  // owner sees or means to compare against, so "effective" role for a
-  // deactivated account is what it'll be restored to.
-  const effectiveRole = isDeactivated ? account?.role_before_deactivation || 'staff' : currentRole;
+  // The one "is deactivated" predicate (lib/staff/accounts.ts): the row's
+  // status, even when a half-finished deactivate has not demoted
+  // profiles.role yet — the role then lives on the row, and reactivate
+  // restores it from there. profiles.role is 'customer' while deactivated —
+  // that's not the role the owner sees or means to compare against, so the
+  // "effective" role for a deactivated account is what it'll be restored to.
+  const isDeactivated = isDeactivatedAccount(account);
+  const effectiveRole = effectiveTeamRole(currentRole, account);
 
   if (patchHasRole) {
     const role = body.role as string;

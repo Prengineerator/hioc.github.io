@@ -26,10 +26,12 @@ const state: {
   profiles: Row[];
   accounts: Row[];
   accountsMissing: boolean;
-  authUsers: { id: string; email: string; last_sign_in_at: string | null }[];
+  authUsers: { id: string; email: string; last_sign_in_at: string | null; banned_until?: string | null }[];
   historyIds: Set<string>;
   bannedPatches: { id: string; attrs: Row }[];
   deletedUserIds: string[];
+  /** Makes the next staff_accounts update fail, to leave a step half-done. */
+  accountUpdateError: { message: string } | null;
 } = {
   owner: { id: OWNER_ID },
   profiles: [],
@@ -39,6 +41,7 @@ const state: {
   historyIds: new Set(),
   bannedPatches: [],
   deletedUserIds: [],
+  accountUpdateError: null,
 };
 
 function accountsError() {
@@ -98,6 +101,11 @@ vi.mock('@/lib/supabase-server', () => ({
             return { data: null, error: null };
           }
           if (ctx.op === 'update') {
+            if (state.accountUpdateError) {
+              const error = state.accountUpdateError;
+              state.accountUpdateError = null;
+              return { data: null, error };
+            }
             const id = ctx.eq.find(([c]) => c === 'user_id')?.[1] as string | undefined;
             const row = state.accounts.find((a) => a.user_id === id);
             if (row) Object.assign(row, ctx.payload);
@@ -160,7 +168,9 @@ vi.mock('@/lib/supabase-server', () => ({
         getUserById: (id: string) => {
           const u = state.authUsers.find((x) => x.id === id);
           return Promise.resolve({
-            data: { user: u ? { id: u.id, email: u.email, last_sign_in_at: u.last_sign_in_at } : null },
+            data: {
+              user: u ? { id: u.id, email: u.email, last_sign_in_at: u.last_sign_in_at, banned_until: u.banned_until ?? null } : null,
+            },
             error: null,
           });
         },
@@ -168,6 +178,9 @@ vi.mock('@/lib/supabase-server', () => ({
           state.bannedPatches.push({ id, attrs });
           const u = state.authUsers.find((x) => x.id === id);
           if (u && typeof attrs.email === 'string') u.email = attrs.email;
+          // The ban as GoTrue keeps it: 'none' lifts it, a duration sets banned_until.
+          if (u && attrs.ban_duration === 'none') u.banned_until = null;
+          else if (u && typeof attrs.ban_duration === 'string') u.banned_until = '2126-01-01T00:00:00.000Z';
           return Promise.resolve({ data: { user: u ?? null }, error: null });
         },
         deleteUser: (id: string) => {
@@ -230,6 +243,7 @@ beforeEach(() => {
   state.historyIds = new Set();
   state.bannedPatches = [];
   state.deletedUserIds = [];
+  state.accountUpdateError = null;
   sendPasswordLink.mockClear();
   sendPasswordChangedNotice.mockClear();
 });
@@ -379,9 +393,11 @@ describe('POST /api/owner/staff/[id]/deactivate', () => {
 
 describe('POST /api/owner/staff/[id]/reactivate', () => {
   beforeEach(() => {
+    // A fully deactivated account: banned, demoted, recorded.
     state.profiles.find((p) => p.id === VALID_ID)!.role = 'customer';
     state.accounts[0].status = 'deactivated';
     state.accounts[0].role_before_deactivation = 'manager';
+    state.authUsers.find((u) => u.id === VALID_ID)!.banned_until = '2126-01-01T00:00:00.000Z';
   });
 
   it('403s a non-owner', async () => {
@@ -434,5 +450,109 @@ describe('DELETE /api/owner/staff/[id] — true delete', () => {
     const res = await DELETE(req('DELETE', {}), params(VALID_ID));
     expect(res.status).toBe(200);
     expect(state.deletedUserIds).toContain(VALID_ID);
+  });
+});
+
+// Deactivate / reactivate change three stores one at a time — the auth ban,
+// profiles.role, staff_accounts.status (lib/staff/accounts.ts). A step that
+// fails part-way used to leave an account neither action could finish:
+// "already deactivated" while it could still sign in, or a reactivate that
+// "succeeded" without unbanning. Each is now re-runnable to completion.
+describe('deactivate / reactivate from a half-finished state', () => {
+  const profile = () => state.profiles.find((p) => p.id === VALID_ID)!;
+  const account = () => state.accounts.find((a) => a.user_id === VALID_ID)!;
+  const authUser = () => state.authUsers.find((u) => u.id === VALID_ID)!;
+  const BANNED = '2126-01-01T00:00:00.000Z';
+  const banCalls = () => state.bannedPatches.filter((p) => p.id === VALID_ID && 'ban_duration' in p.attrs);
+
+  it('deactivate parks the role before demoting: a failed record stops short, and running it again finishes', async () => {
+    profile().role = 'manager';
+    state.accountUpdateError = { message: 'connection reset' };
+    const first = await POST_DEACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(first.status).toBe(500);
+    expect((await first.json()).error).toMatch(/Run Deactivate again/);
+    // Login is blocked, but the role was NOT thrown away.
+    expect(authUser().banned_until).toBe(BANNED);
+    expect(profile().role).toBe('manager');
+    expect(account().status).toBe('active');
+
+    const again = await POST_DEACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(again.status).toBe(200);
+    expect(profile().role).toBe('customer');
+    expect(account()).toMatchObject({ status: 'deactivated', role_before_deactivation: 'manager' });
+    expect(banCalls()).toHaveLength(1); // already banned: not banned twice
+  });
+
+  it('deactivate finishes a reactivate that stopped half-way (unbanned, role back, row still deactivated)', async () => {
+    profile().role = 'manager';
+    account().status = 'deactivated';
+    account().role_before_deactivation = 'manager';
+    account().deactivated_at = '2026-11-01T00:00:00.000Z';
+    // Before: "already deactivated" — while the login worked.
+    const res = await POST_DEACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(res.status).toBe(200);
+    expect(authUser().banned_until).toBe(BANNED);
+    expect(profile().role).toBe('customer');
+    expect(account()).toMatchObject({ status: 'deactivated', role_before_deactivation: 'manager' });
+  });
+
+  it('deactivate finishes an old-style half-deactivation (banned + customer, row still active) instead of 404ing', async () => {
+    profile().role = 'customer';
+    authUser().banned_until = BANNED;
+    const res = await POST_DEACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(res.status).toBe(200);
+    expect(account()).toMatchObject({ status: 'deactivated', deactivated_by: OWNER_ID });
+    expect(account().role_before_deactivation ?? null).toBeNull(); // never 'customer'
+  });
+
+  it('reactivate unbans a half-deactivation (banned, row still active) instead of "succeeding" without it', async () => {
+    authUser().banned_until = BANNED; // the ban landed, nothing else did
+    const res = await POST_REACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(res.status).toBe(200);
+    expect(authUser().banned_until).toBeNull();
+    expect(profile().role).toBe('staff');
+    expect(account().status).toBe('active');
+  });
+
+  it('reactivate finishes after a failed record, without unbanning or restoring twice', async () => {
+    profile().role = 'customer';
+    account().status = 'deactivated';
+    account().role_before_deactivation = 'manager';
+    account().deactivated_at = '2026-11-01T00:00:00.000Z';
+    authUser().banned_until = BANNED;
+    state.accountUpdateError = { message: 'connection reset' };
+    const first = await POST_REACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(first.status).toBe(500);
+    expect((await first.json()).error).toMatch(/Run Reactivate again/);
+    expect(authUser().banned_until).toBeNull();
+    expect(profile().role).toBe('manager');
+    expect(account().status).toBe('deactivated'); // still on record as deactivated
+
+    state.bannedPatches = [];
+    const again = await POST_REACTIVATE(req('POST', {}), params(VALID_ID));
+    expect(again.status).toBe(200);
+    expect(account()).toMatchObject({ status: 'active', role_before_deactivation: null });
+    expect(profile().role).toBe('manager');
+    expect(banCalls()).toHaveLength(0);
+  });
+
+  it('neither action touches a plain customer', async () => {
+    profile().role = 'customer';
+    expect((await POST_DEACTIVATE(req('POST', {}), params(VALID_ID))).status).toBe(404);
+    expect((await POST_REACTIVATE(req('POST', {}), params(VALID_ID))).status).toBe(404);
+    expect(state.bannedPatches).toHaveLength(0);
+  });
+
+  it('PATCH role on an account recorded deactivated but not yet demoted edits the parked role', async () => {
+    account().status = 'deactivated';
+    account().role_before_deactivation = 'staff';
+    account().deactivated_at = '2026-11-01T00:00:00.000Z';
+    authUser().banned_until = BANNED;
+    const res = await PATCH(req('PATCH', { role: 'manager' }), params(VALID_ID));
+    expect(res.status).toBe(200);
+    expect(account().role_before_deactivation).toBe('manager');
+    expect(profile().role).toBe('staff'); // the deactivate that finishes demotes it; reactivate restores 'manager'
+    expect((await POST_REACTIVATE(req('POST', {}), params(VALID_ID))).status).toBe(200);
+    expect(profile().role).toBe('manager');
   });
 });

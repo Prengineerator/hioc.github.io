@@ -449,7 +449,7 @@ const SCHEMA: Record<string, string[]> = {
     'id', 'business_date', 'status', 'opened_by', 'opened_at', 'closed_by', 'closed_at', 'opening_total_inr',
     'cash_sales_inr', 'cash_sales_count', 'cash_refunds_inr', 'cash_in_inr', 'cash_out_inr', 'expected_cash_inr',
     'counted_total_inr', 'over_short_inr', 'handover_inr', 'float_left_total_inr', 'close_reason', 'notes',
-    'upi_inr', 'card_inr', 'expenses_inr', 'auto_ended_at', 'closing_denoms', 'float_left_denoms',
+    'upi_inr', 'card_inr', 'expenses_inr', 'auto_ended_at', 'closing_denoms', 'float_left_denoms', 'reopened_at',
   ],
   cash_movements: [
     'id', 'direction', 'amount_inr', 'reason', 'recorded_by', 'created_at', 'category', 'approved_by', 'approved_at',

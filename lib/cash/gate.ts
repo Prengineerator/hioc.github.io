@@ -12,6 +12,11 @@ import 'server-only';
 //
 // 401 means "no actor at all" (sign in / unlock the device); 403 means a
 // signed-in plain staffer, with a message the form can show as-is.
+//
+// "Manager" here is the ROLE (manager or owner) — the same predicate as
+// lib/cash/dayState.ts isCashManagerRole, which the cash-day routes use for the
+// reopen and the unpaid-order override. Closing a day is a different question
+// (the cash_day_close permission, which the owner can retune).
 
 import { NextResponse } from 'next/server';
 import { getCounterActor, getCounterManager } from '@/lib/api/auth';

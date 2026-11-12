@@ -443,6 +443,15 @@ export async function recordCount(admin: Admin, params: RecordCountParams): Prom
   };
 }
 
+// A cash_count_overrides row's state is DERIVED, never stored (no status
+// column; supabase/2026-09-cash-counts.sql):
+//   granted — used_at IS NULL and expires_at > now: usable for its user + punch type;
+//   used    — used_at set (used_count_id = the 'override' checkpoint it allowed). Terminal;
+//   expired — used_at IS NULL and expires_at <= now. Terminal.
+// granted → used is recordOverride below (guarded on used_at IS NULL);
+// granted → expired is just the clock. Readers ask "usable?" with the same
+// pair of filters (findUsableOverride, recordOverride).
+
 export interface RecordOverrideParams {
   userId: string;
   punchType: PunchType;

@@ -938,6 +938,7 @@ describe('a cash day left open past its 3 am end', () => {
       open_day_overdue: true,
       open_day_ends_at: ENDS_AT,
       can_override_unpaid: true, // a plain staffer, on an ended day
+      open_day_left_open: true,
     });
     expect(body.open_summary).toMatchObject({ cash_sales_inr: 3700, expected_cash_inr: 5200, as_of: ENDS_AT });
   });
@@ -1031,5 +1032,124 @@ describe('a cash day left open past its 3 am end', () => {
       expect(await (await CRON(cronReq('shh'))).json()).toMatchObject({ ended: 0 });
       expect(tables.cash_days[0].auto_ended_at).toBeUndefined();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4. A day REOPENED after its 3 am end (lib/cash/dayState.ts). It has ended —
+//    its figures stop at 3 am and the counter must close it before taking
+//    orders — but nobody left it open: a manager reopened it on purpose, so
+//    closing it again needs what any close needs. Before this, the reopen made
+//    it "overdue" at once and a plain staffer could close it without
+//    cash_day_close and override its unpaid orders.
+// ---------------------------------------------------------------------------
+describe('a cash day reopened after its 3 am end', () => {
+  const ENDS_AT = '2026-09-01T21:30:00.000Z'; // 3:00 am IST on the 2nd
+  const MORNING_AFTER = '2026-09-02T04:30:00.000Z'; // 10:00 am IST on the 2nd
+
+  const closedDay = (over: Row = {}) =>
+    dayRow({
+      status: 'closed',
+      closed_by: 'staff-1',
+      closed_at: '2026-09-01T19:00:00.000Z', // 12:30 am IST, before the end
+      counted_total_inr: 4500,
+      handover_inr: 3000,
+      float_left_total_inr: 1500,
+      float_left_denoms: { '500': 3 },
+      cash_sales_inr: 3000,
+      ...over,
+    });
+
+  const closeBody = (over: Row = {}) => ({
+    closing_denoms: { '500': 9 }, // 4500 = 1500 + 3000
+    float_left_denoms: { '500': 3 },
+    ...over,
+  });
+
+  async function reopenAsManager() {
+    auth.user = { id: 'mgr-1' };
+    auth.role = 'manager';
+    const res = await REOPEN(jsonReq('POST', { reason: 'counted the wrong drawer' }));
+    expect(res.status).toBe(200);
+    auth.user = { id: 'staff-1' };
+    auth.role = 'staff';
+  }
+
+  beforeEach(() => {
+    tables.orders.push(order({ id: 'o1', order_number: 1001, total_inr: 3000, paid_at: '2026-09-01T12:00:00.000Z' }));
+    vi.setSystemTime(new Date(MORNING_AFTER));
+  });
+
+  it('a staffer without the close permission cannot close it — the permission still applies', async () => {
+    tables.cash_days.push(closedDay());
+    await reopenAsManager();
+    auth.perms.cash_day_close = false;
+    const res = await PATCH(jsonReq('PATCH', closeBody()));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/reopened after it ended/);
+    expect(tables.cash_days[0].status).toBe('open');
+
+    auth.perms.cash_day_close = true; // whoever may close it normally still can
+    const ok = await PATCH(jsonReq('PATCH', closeBody()));
+    expect(ok.status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({ status: 'closed', cash_sales_inr: 3000 });
+  });
+
+  it('a plain staffer may not override its unpaid orders; a manager may', async () => {
+    tables.cash_days.push(closedDay());
+    tables.orders.push(
+      order({ id: 'u1', order_number: 3001, payment_status: 'unpaid', status: 'received', total_inr: 200, created_at: '2026-09-01T13:00:00.000Z' }),
+    );
+    await reopenAsManager();
+    expect(await (await GET()).json()).toMatchObject({
+      can_override_unpaid: false,
+      open_day_overdue: true, // it has ended: figures to 3 am, the counter must close it…
+      open_day_left_open: false, // …but nobody forgot it
+      gate_step: 'close_overdue',
+    });
+    const staff = await PATCH(jsonReq('PATCH', closeBody({ unpaid_override_reason: 'table 4 left without paying' })));
+    expect(staff.status).toBe(403);
+    expect((await staff.json()).code).toBe('UNPAID_OVERRIDE_FORBIDDEN');
+
+    auth.role = 'manager';
+    const mgr = await PATCH(jsonReq('PATCH', closeBody({ unpaid_override_reason: 'table 4 left without paying' })));
+    expect(mgr.status).toBe(200);
+  });
+
+  it('is not stamped as having ended on its own — by the re-close or by the 3 am job', async () => {
+    tables.cash_days.push(closedDay());
+    await reopenAsManager();
+    vi.stubEnv('CRON_SECRET', 'shh');
+    try {
+      const req = new Request('http://t/api/cron/end-cash-day', { headers: { authorization: 'Bearer shh' } });
+      expect(await (await CRON(req)).json()).toMatchObject({ ended: 0, note: expect.stringMatching(/reopened after it ended/) });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect((await PATCH(jsonReq('PATCH', closeBody()))).status).toBe(200);
+    expect(tables.cash_days[0].auto_ended_at).toBeNull();
+  });
+
+  it('the reopen clears a recorded auto-end, so the day no longer reads "never closed"', async () => {
+    // Left open past 3 am, the job recorded it, a staffer counted it at 9:30 am,
+    // then a manager reopened it to fix the count.
+    tables.cash_days.push(closedDay({ closed_at: '2026-09-02T04:00:00.000Z', auto_ended_at: ENDS_AT }));
+    await reopenAsManager();
+    expect(tables.cash_days[0]).toMatchObject({ status: 'open', auto_ended_at: null, reopened_at: MORNING_AFTER });
+    // The close it undid is still in the log — counted after the end.
+    const log = tables.cash_days[0].reopen_log as { prev_closed_at: string }[];
+    expect(log[0].prev_closed_at).toBe('2026-09-02T04:00:00.000Z');
+  });
+
+  it('a day reopened BEFORE its end and then left open is still the forgotten-day path: any staffer closes it', async () => {
+    vi.setSystemTime(new Date('2026-09-01T19:30:00.000Z')); // 1:00 am IST, before the end
+    tables.cash_days.push(closedDay());
+    await reopenAsManager();
+    vi.setSystemTime(new Date('2026-09-02T10:00:00.000Z')); // the next afternoon
+    auth.perms.cash_day_close = false;
+    expect((await (await GET()).json()).can_override_unpaid).toBe(true);
+    const res = await PATCH(jsonReq('PATCH', closeBody()));
+    expect(res.status).toBe(200);
+    expect(tables.cash_days[0]).toMatchObject({ status: 'closed', auto_ended_at: ENDS_AT });
   });
 });

@@ -74,6 +74,125 @@ export const HISTORY_CHECKS: { table: string; column: string }[] = [
   { table: 'cash_days', column: 'closed_by' },
 ];
 
+// ── Activation: one state across three stores ───────────────────────────────
+//
+// Whether someone may work is held in THREE places, which deactivate and
+// reactivate change one at a time (no transaction spans Supabase Auth and
+// Postgres):
+//   1. the auth ban (auth.users.banned_until) — blocks new sign-ins/refreshes;
+//   2. profiles.role — 'customer' while deactivated, so every server gate that
+//      reads the role refuses on the very next request;
+//   3. staff_accounts.status — the owner's record, and where the real role is
+//      parked while deactivated (role_before_deactivation).
+//
+// staff_accounts.status is the COMMIT POINT: an account IS deactivated exactly
+// when its row says so (isDeactivatedAccount) — the one predicate the team
+// list, the edit form, the password route and both actions share. A step that
+// failed half-way leaves the other two stores out of line with it; the
+// actions read all three, classify them (classifyActivation) and run only the
+// steps still missing (deactivationSteps / reactivationPlan), so either one
+// can be re-run to completion from any partial state instead of answering
+// "already deactivated" or 404.
+//
+// Deactivate runs ban → record → demote: login is blocked first, and the role
+// is parked on the row BEFORE profiles.role is overwritten, so a failure part
+// way can never lose it. Reactivate runs unban → restore role → record.
+
+export const ACTIVATION_STATES = [
+  'active',
+  'deactivated',
+  /** Recorded active, but banned: a deactivate that stopped before its record. */
+  'inconsistent_active',
+  /** Recorded deactivated, but unbanned and/or still holding a team role: either action stopped part-way. */
+  'inconsistent_deactivated',
+  /** A plain customer: no team role, not banned, no deactivation on record. Neither action applies. */
+  'not_staff',
+] as const;
+export type ActivationState = (typeof ACTIVATION_STATES)[number];
+
+export type DeactivateStep = 'ban' | 'record' | 'demote';
+export type ReactivateStep = 'unban' | 'restore_role' | 'record';
+
+/** What the three stores say right now. */
+export interface ActivationStores {
+  banned: boolean;
+  /** profiles.role, or null when there is no profile. */
+  profileRole: string | null;
+  /** The staff_accounts row, or null when there is none (or the table isn't there yet). */
+  account: { status?: string | null; role_before_deactivation?: string | null } | null;
+}
+
+/** THE "is deactivated" predicate (the commit point — see above). */
+export function isDeactivatedAccount(account: { status?: string | null } | null | undefined): boolean {
+  return account?.status === 'deactivated';
+}
+
+/** True for the roles an account works under (and keeps across a deactivation). */
+export function isTeamRole(role: string | null | undefined): role is TeamRole {
+  return (TEAM_ROLES as readonly string[]).includes(role ?? '');
+}
+
+/**
+ * The role the owner sees and edits: while deactivated, the parked one (what
+ * reactivate restores — profiles.role reads 'customer' then, and showing that
+ * would make the edit form demote a manager on save); otherwise profiles.role.
+ */
+export function effectiveTeamRole(
+  profileRole: string | null,
+  account: ActivationStores['account'],
+): string | null {
+  return isDeactivatedAccount(account) ? account?.role_before_deactivation || 'staff' : profileRole;
+}
+
+/** Whether an auth user's banned_until is still in force. */
+export function isBannedUntil(bannedUntil: string | null | undefined, nowMs: number): boolean {
+  if (!bannedUntil) return false;
+  const until = Date.parse(bannedUntil);
+  return Number.isFinite(until) && until > nowMs;
+}
+
+export function classifyActivation(s: ActivationStores): ActivationState {
+  const recorded = isDeactivatedAccount(s.account);
+  const demoted = s.profileRole === 'customer';
+  if (recorded) return s.banned && demoted ? 'deactivated' : 'inconsistent_deactivated';
+  if (s.banned) return 'inconsistent_active';
+  return demoted ? 'not_staff' : 'active';
+}
+
+/**
+ * The deactivation steps still to run, in order, and the role to park. A role
+ * already parked is never overwritten — in particular never with 'customer'
+ * from a profile a half-finished run already demoted.
+ */
+export function deactivationSteps(s: ActivationStores): { steps: DeactivateStep[]; parkRole: string | null } {
+  const steps: DeactivateStep[] = [];
+  if (!s.banned) steps.push('ban');
+  if (!isDeactivatedAccount(s.account)) steps.push('record');
+  if (s.profileRole !== 'customer') steps.push('demote');
+  const parkRole = isTeamRole(s.profileRole) ? s.profileRole : (s.account?.role_before_deactivation ?? null);
+  return { steps, parkRole };
+}
+
+/**
+ * The reactivation steps still to run, in order, and the role to restore:
+ * the parked role while the row says deactivated (it is authoritative then —
+ * the owner may have edited it), else the profile's own team role, else
+ * 'staff' (a deactivation that never got to park one).
+ */
+export function reactivationPlan(s: ActivationStores): { steps: ReactivateStep[]; restoreRole: string } {
+  const restoreRole = isDeactivatedAccount(s.account)
+    ? s.account?.role_before_deactivation || 'staff'
+    : isTeamRole(s.profileRole)
+      ? s.profileRole
+      : s.account?.role_before_deactivation || 'staff';
+  const steps: ReactivateStep[] = [];
+  if (s.banned) steps.push('unban');
+  // Never "restore" an owner: owners are not deactivated from the app.
+  if (s.profileRole !== restoreRole && s.profileRole !== 'owner') steps.push('restore_role');
+  if (isDeactivatedAccount(s.account)) steps.push('record');
+  return { steps, restoreRole };
+}
+
 // ── API contract: /api/owner/staff ──────────────────────────────────────────
 
 /** One row of GET /api/owner/staff → { members: TeamMember[] }. */
