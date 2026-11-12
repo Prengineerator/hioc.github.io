@@ -1042,7 +1042,24 @@ export async function POST(request: Request) {
   // The spend offer this customer just had (once per customer, by phone).
   const appliedSpend = offers.kind === 'spend' ? offers.offers[0]?.offer_id : undefined;
   if (appliedSpend && trimmedPhone) {
-    await recordSpendRedemption(admin, { offerId: appliedSpend, phone: trimmedPhone, orderId: orderRow.id as string });
+    const spend = await recordSpendRedemption(admin, {
+      offerId: appliedSpend,
+      phone: trimmedPhone,
+      orderId: orderRow.id as string,
+    });
+    if (spend === 'taken') {
+      // Another order for this number, placed at the same moment, got the
+      // number's one go at the offer first. Same as a lost coupon race: the
+      // order is withdrawn (its deletion takes this redemption row, and any
+      // Ritual cups spent above, with it) and the customer re-checks the bill,
+      // which is priced without the offer next time. 'failed' keeps the order:
+      // it is the old behaviour, and the failure is logged.
+      await admin.from('orders').delete().eq('id', orderRow.id);
+      return errorResponse(
+        409,
+        'This offer has just been used on another order for this number — please review your bill and try again.',
+      );
+    }
   }
 
   // Snapshot the coupon redemption ATOMICALLY (FND-3 / H1): try_redeem_coupon
