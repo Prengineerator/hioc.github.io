@@ -39,7 +39,7 @@ import type {
 import { renderEscPos } from '@/lib/print/escpos';
 import { resolveBrandHeader } from '@/lib/desktop/printExecutor';
 import { CUT_MODE_LABELS, cutTestTicketDoc, testTicketDoc } from '@/lib/print/testTicket';
-import { SaveQueue } from '@/lib/staff/saveQueue';
+import { SaveQueue, type SaveQueueResult } from '@/lib/staff/saveQueue';
 import { PrinterCard } from './printers/PrinterCard';
 import { PrinterForm } from './printers/PrinterForm';
 import { TicketRoutingTable } from './printers/TicketRoutingTable';
@@ -175,12 +175,16 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
   const printersRef = useRef(printers);
   printersRef.current = printers;
 
-  // Backs the Ticket routing / Paper & cutting / Cash drawer sections' auto-
-  // save (see lib/staff/saveQueue.ts for why: it fixes two toggled changes
-  // in a row deriving from the same stale `printers` snapshot and one
-  // silently clobbering the other). Built once per mount via the
-  // lazy-ref-init pattern — `bridge` is stable for the component's lifetime,
-  // so the queue's own `save` closure never needs to change.
+  // EVERY write to the printer list goes through this one queue: the Ticket
+  // routing / Paper & cutting / Cash drawer auto-saves AND the explicit "Save
+  // printer" and Delete (see lib/staff/saveQueue.ts for why: it fixes two
+  // changes in a row deriving from the same stale `printers` snapshot and one
+  // silently clobbering the other). Each save writes the WHOLE list, so a
+  // write that bypassed the queue could be overwritten by an older autosave
+  // still queued behind it — an added printer vanishing, a deleted one coming
+  // back. In the queue, the latest list always wins. Built once per mount via
+  // the lazy-ref-init pattern — `bridge` is stable for the component's
+  // lifetime, so the queue's own `save` closure never needs to change.
   const saveQueueRef = useRef<SaveQueue<PrinterConfig[]>>();
   if (!saveQueueRef.current) {
     saveQueueRef.current = new SaveQueue<PrinterConfig[]>([], (list) => bridge.printers.save(list));
@@ -191,12 +195,13 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
   // from under the newer, still-in-flight one.
   const autosaveSeqRef = useRef(0);
 
+  // Reloads go through the queue too (resync): read only after every queued
+  // save has landed, so the list shown is never one a write is about to replace.
   const loadPrinters = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await bridge.printers.list();
-      saveQueueRef.current?.reset(list);
-      setPrinters(list);
+      const list = await saveQueueRef.current?.resync(() => bridge.printers.list());
+      if (list) setPrinters(list);
     } catch {
       setSaveError('Could not load the printer list.');
     } finally {
@@ -267,6 +272,19 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     void runDetect();
   }
 
+  /**
+   * An explicit change (Save printer, Delete), through the same queue as the
+   * auto-saves, waiting for its own save to settle. The form still closes only
+   * once the bridge has the change, exactly as before.
+   */
+  function saveThroughQueue(updater: (prev: PrinterConfig[]) => PrinterConfig[]): Promise<SaveQueueResult<PrinterConfig[]>> {
+    const queue = saveQueueRef.current;
+    if (!queue) return Promise.resolve({ status: 'error', value: printersRef.current, error: null });
+    return new Promise((resolve) => {
+      queue.enqueue(updater, resolve);
+    });
+  }
+
   async function saveDraft() {
     if (!draft) return;
     const err = draftError(draft);
@@ -278,18 +296,22 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     setSaving(true);
     try {
       const config = draftToConfig(draft);
-      const withoutThis = printers.filter((p) => p.id !== config.id);
-      const deduped = config.drawer ? withoutThis.map((p) => ({ ...p, drawer: false })) : withoutThis;
-      const next = [...deduped, config];
-      await bridge.printers.save(next);
-      // Keep the autosave queue's own notion of "latest" in sync — it isn't
-      // used for THIS save (the form keeps its own explicit save button,
-      // unchanged), but the next toggle in Ticket routing/Paper & cutting/
-      // Cash drawer must build on this printer's addition/edit, not on
-      // whatever the queue last saw.
-      saveQueueRef.current?.reset(next);
-      setPrinters(next);
-      setDraft(null);
+      // Built on the queue's latest list, not on `printers`: a routing toggle
+      // still saving must not be undone by this save, nor undo it.
+      const result = await saveThroughQueue((prev) => {
+        const withoutThis = prev.filter((p) => p.id !== config.id);
+        const deduped = config.drawer ? withoutThis.map((p) => ({ ...p, drawer: false })) : withoutThis;
+        return [...deduped, config];
+      });
+      if (result.status === 'saved') {
+        // The queue's latest, not this save's own list: a change queued
+        // behind it already builds on it and must not be shown undone.
+        setPrinters(saveQueueRef.current?.current ?? result.value);
+        setDraft(null);
+      } else {
+        setSaveError(result.error instanceof Error ? result.error.message : 'Could not save the printer.');
+        void resyncAfterFailedSave();
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Could not save the printer.');
     } finally {
@@ -300,15 +322,13 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
   async function confirmDelete(id: string) {
     setSaving(true);
     try {
-      const next = printers.filter((p) => p.id !== id);
-      await bridge.printers.save(next);
-      // Same as saveDraft() above — keep the autosave queue's "latest" in
-      // sync so a subsequent routing/cutting/drawer toggle doesn't build on
-      // a list that still contains the printer just deleted.
-      saveQueueRef.current?.reset(next);
-      setPrinters(next);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Could not delete the printer.');
+      const result = await saveThroughQueue((prev) => prev.filter((p) => p.id !== id));
+      if (result.status === 'saved') {
+        setPrinters(saveQueueRef.current?.current ?? result.value);
+      } else {
+        setSaveError(result.error instanceof Error ? result.error.message : 'Could not delete the printer.');
+        void resyncAfterFailedSave();
+      }
     } finally {
       setSaving(false);
       setDeletingId(null);
@@ -378,17 +398,18 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
     }
   }
 
-  // On a failed autosave, the save that failed may be the only optimistic
+  // On a failed save, the save that failed may be the only optimistic
   // update in flight (no later enqueue is going to re-attempt it — see
   // saveQueue.ts's "self-healing" note for when one IS), so the UI can be
   // showing a change that was never actually persisted. Reloading from the
-  // bridge is the one way to know what's really saved; best-effort, since a
-  // second failure here isn't worth stacking a second error message.
-  const resyncAfterFailedAutosave = useCallback(async () => {
+  // bridge is the one way to know what's really saved — through the queue
+  // (resync), so the reload waits for saves still in flight instead of racing
+  // them, and is dropped if a newer change has been queued since. Best-effort,
+  // since a second failure here isn't worth stacking a second error message.
+  const resyncAfterFailedSave = useCallback(async () => {
     try {
-      const list = await bridge.printers.list();
-      saveQueueRef.current?.reset(list);
-      setPrinters(list);
+      const list = await saveQueueRef.current?.resync(() => bridge.printers.list());
+      if (list) setPrinters(list);
     } catch {
       // Leave whatever's on screen — the autosave error already shown covers it.
     }
@@ -426,7 +447,7 @@ function PrinterSettingsInner({ bridge }: { bridge: HiocDesktopBridge }) {
         error: result.error instanceof Error ? result.error.message : 'Could not save that change.',
         section,
       });
-      void resyncAfterFailedAutosave();
+      void resyncAfterFailedSave();
     });
     // Optimistic: render the change immediately rather than waiting on the
     // IPC round-trip — `next` is already the queue's up-to-date value, so

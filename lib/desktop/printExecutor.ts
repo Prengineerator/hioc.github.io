@@ -9,13 +9,26 @@
 // system+driver printers. Confirmed printers skip PrintQueue's hand-off window
 // entirely (see lib/pos/printQueue.ts) — the printer itself vouched for the
 // paper, which the iframe path could never do.
+//
+// A job is tracked per TARGET — one copy on one printer — on the job itself
+// (PrintJob.targets, lib/pos/printQueue.ts). The bar printer failing no longer
+// fails the kitchen's copy with it, and a retry sends only what didn't print:
+// a second KOT on the kitchen rail reads as a second order. When the queue
+// stops waiting (its timeout) the attempt's signal aborts and no further copy
+// is STARTED; a copy already with the bridge can't be recalled (bridge.ts has
+// no cancel), so the queue marks it unknown and Retry asks before resending it.
 
-import type { HiocDesktopBridge, PrinterConfig } from '@/lib/desktop/bridge';
+import type { HiocDesktopBridge, PrinterConfig, PrintResult } from '@/lib/desktop/bridge';
 import { routeJob } from '@/lib/desktop/routing';
 import { renderEscPos } from '@/lib/print/escpos';
 import { getBrandHeaderRaster } from '@/lib/print/brandHeaderRaster';
 import type { TicketBlock, TicketDoc } from '@/lib/print/ticketDoc';
-import { describePrintJob, type PrintJob } from '@/lib/pos/printQueue';
+import {
+  describePrintJob,
+  targetNeedsPrint,
+  type PrintAttemptContext,
+  type PrintJob,
+} from '@/lib/pos/printQueue';
 import { kotItemsQuery } from '@/lib/print/kotAddition';
 import { localPrintOrder, localTicketDoc } from '@/lib/print/localTicket';
 import { printUrl } from '@/lib/staff/autoPrint';
@@ -72,6 +85,17 @@ function isRawCapable(printer: PrinterConfig): boolean {
 }
 
 /**
+ * One copy of a job on one printer — the key PrintJob.targets is indexed by.
+ * Stable across attempts as long as the routing is unchanged; a routing edit
+ * between attempts simply produces keys the job hasn't seen, which print.
+ */
+export function printTargetKey(printerId: string, copy: number): string {
+  return `${printerId}#${copy}`;
+}
+
+const NO_REPORT: PrintAttemptContext['report'] = () => {};
+
+/**
  * Builds the executor PrintQueue calls for one job. `bridge` is captured once
  * (PrintDock creates the executor when the bridge first appears); the printer
  * LIST is re-fetched every call so a config change in Printers takes effect on
@@ -80,8 +104,10 @@ function isRawCapable(printer: PrinterConfig): boolean {
  */
 export function createDesktopExecutor(
   bridge: HiocDesktopBridge,
-): (job: PrintJob) => Promise<{ confirmed: boolean }> {
-  return async (job) => {
+): (job: PrintJob, ctx?: PrintAttemptContext) => Promise<{ confirmed: boolean }> {
+  return async (job, ctx) => {
+    const signal = ctx?.signal;
+    const report = ctx?.report ?? NO_REPORT;
     const printers = await bridge.printers.list();
     if (printers.length === 0) throw new NoPrintersConfiguredError();
 
@@ -90,6 +116,19 @@ export function createDesktopExecutor(
       throw new Error(
         `No printer is set for ${describePrintJob({ type: job.type })} — open Printers to assign one.`,
       );
+    }
+
+    // The whole plan, announced before anything is sent, so the job knows
+    // every copy it owes — a retry after the staffer says "Kitchen printed it"
+    // must still send the bar's copy that never started.
+    const plan = routed.map(({ printer, copies }) => ({
+      printer,
+      targets: Array.from({ length: copies }, (_, i) => printTargetKey(printer.id, i + 1)),
+    }));
+    for (const { printer, targets } of plan) {
+      for (const key of targets) {
+        if (!job.targets?.[key]) report(key, { printer: printer.name, state: 'pending' });
+      }
     }
 
     // Fetched at most once and shared across every printer/copy this job
@@ -109,9 +148,19 @@ export function createDesktopExecutor(
       return ticketDocPromise;
     };
 
-    const perPrinterConfirmed = await Promise.all(
-      routed.map(async ({ printer, copies }) => {
+    // What each copy sent THIS attempt answered: confirmed or not.
+    const sent = new Map<string, boolean>();
+
+    // allSettled, not all: the bar's printer throwing must not abandon the
+    // kitchen's copies mid-way (Promise.all would reject at once and leave
+    // them printing with nobody recording it). Every printer finishes, every
+    // copy's outcome is reported, and only then does the job fail.
+    const outcomes = await Promise.allSettled(
+      plan.map(async ({ printer, targets }) => {
+        const owed = targets.filter((key) => targetNeedsPrint(job.targets?.[key]?.state));
+        if (owed.length === 0) return;
         try {
+          let send: () => Promise<PrintResult>;
           if (isRawCapable(printer)) {
             const doc = await getTicketDoc();
             const resolved = await resolveBrandHeader(doc, printer.paperWidthMm);
@@ -120,26 +169,32 @@ export function createDesktopExecutor(
               cut: printer.cut,
               cutMode: printer.cutMode,
             });
-            let confirmed = true;
-            for (let i = 0; i < copies; i++) {
-              const result = await bridge.printRaw(printer.id, bytes);
-              confirmed = confirmed && result.confirmed;
-            }
-            return confirmed;
+            send = () => bridge.printRaw(printer.id, bytes);
+          } else {
+            // system + driver — the shell prints the existing staff-gated HTML
+            // ticket page off-screen, silently, with no Chrome print dialog. It
+            // still loads that page from the server: the shell can only print a
+            // URL, and taking HTML from the page needs a desktop app release.
+            const path = printUrl(job.orderId, job.type, job.itemIds);
+            const url = `${window.location.origin}${path}${path.includes('?') ? '&' : '?'}silent=1`;
+            send = () => bridge.printUrl(printer.id, url);
           }
 
-          // system + driver — the shell prints the existing staff-gated HTML
-          // ticket page off-screen, silently, with no Chrome print dialog. It
-          // still loads that page from the server: the shell can only print a
-          // URL, and taking HTML from the page needs a desktop app release.
-          const path = printUrl(job.orderId, job.type, job.itemIds);
-          const url = `${window.location.origin}${path}${path.includes('?') ? '&' : '?'}silent=1`;
-          let confirmed = true;
-          for (let i = 0; i < copies; i++) {
-            const result = await bridge.printUrl(printer.id, url);
-            confirmed = confirmed && result.confirmed;
+          for (const key of owed) {
+            // The queue has stopped waiting for this attempt: start nothing
+            // more. Copies not started stay owed, so a retry sends them.
+            if (signal?.aborted) throw new Error('stopped — the print timed out');
+            report(key, { printer: printer.name, state: 'printing' });
+            let result: PrintResult;
+            try {
+              result = await send();
+            } catch (err) {
+              report(key, { printer: printer.name, state: 'failed' });
+              throw err;
+            }
+            report(key, { printer: printer.name, state: 'printed', confirmed: result.confirmed });
+            sent.set(key, result.confirmed);
           }
-          return confirmed;
         } catch (err) {
           const detail = err instanceof Error ? err.message : String(err);
           // PRN-4: error messages must name the printer — "Kitchen: offline"
@@ -150,7 +205,23 @@ export function createDesktopExecutor(
     );
 
     // Several printers for one role all have to succeed — a KOT that reached
-    // the kitchen but not the bar is a silent half-failure, not a success.
-    return { confirmed: perPrinterConfirmed.every(Boolean) };
+    // the kitchen but not the bar is a half-failure, not a success. The
+    // kitchen's copy is recorded as printed, so the retry is the bar's alone.
+    const failures = outcomes.flatMap((o) =>
+      o.status === 'rejected' ? [o.reason instanceof Error ? o.reason.message : String(o.reason)] : [],
+    );
+    if (failures.length > 0) throw new Error(failures.join('; '));
+
+    // Confirmed only when every copy the job owes is vouched for: by the
+    // printer this attempt, by the printer on an earlier attempt, or by the
+    // staffer ("Kitchen printed it").
+    const confirmed = plan.every(({ targets }) =>
+      targets.every((key) => {
+        if (sent.has(key)) return sent.get(key) === true;
+        const earlier = job.targets?.[key];
+        return earlier?.state === 'skipped' || (earlier?.state === 'printed' && earlier.confirmed === true);
+      }),
+    );
+    return { confirmed };
   };
 }

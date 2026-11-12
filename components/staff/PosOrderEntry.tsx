@@ -414,25 +414,28 @@ export function PosOrderEntry({
   const [confirmation, setConfirmation] = useState<PlacementConfirmation | null>(null);
   const [resending, setResending] = useState(false);
 
-  // PRT-1/PRT-3 — the print pipeline, shared with the order board
-  // (components/staff/PrintDock). One hidden iframe at a time: two
+  // PRT-1/PRT-3 — the print pipeline, shared by every staff screen
+  // (components/staff/PrintDock, mounted once by the staff shell, so leaving
+  // this screen mid-print loses nothing). One hidden iframe at a time: two
   // window.print() calls in flight race inside the browser and one of them
   // silently does nothing, which on a KOT+receipt order means the kitchen gets
   // no ticket. The dock owns the queue, the ordering, the 10s watchdog, the
   // failure chip and the retry.
   const printDock = usePrintDock();
-  // TAB-2: set after items are added to a running order; the screen returns
-  // to where the staffer came from (`returnTo`: Tables, or Settle when they
-  // opened the bill there) once its KOT has printed (or straight away when none
-  // prints). A failed print keeps the staffer here, where the Retry button is.
-  const [leaveAfterAdd, setLeaveAfterAdd] = useState(false);
+  // TAB-2: set after items are added to a running order (to the ids of the KOT
+  // it queued, [] when none prints); the screen returns to where the staffer
+  // came from (`returnTo`: Tables, or Settle when they opened the bill there)
+  // once THAT KOT has printed, not whatever else the shared dock holds. A
+  // failed print keeps the staffer here, beside the Retry button.
+  const [leaveAfterAdd, setLeaveAfterAdd] = useState<string[] | null>(null);
+  const addPrints = leaveAfterAdd ? printDock.outcomeOf(leaveAfterAdd) : null;
 
   const router = useRouter();
   useEffect(() => {
-    if (!leaveAfterAdd || printDock.busy || printDock.hasFailed) return undefined;
+    if (addPrints !== 'done') return undefined;
     const t = setTimeout(() => router.push(returnTo), 600);
     return () => clearTimeout(t);
-  }, [leaveAfterAdd, printDock.busy, printDock.hasFailed, router, returnTo]);
+  }, [addPrints, router, returnTo]);
   const inFlight = useRef(false);
   // POS4-2 — identifies THIS order attempt across retries. Rotated only once an
   // order is actually placed, so a retry after a network failure replays rather
@@ -1613,15 +1616,14 @@ export function PosOrderEntry({
       // on the same auto-print rule as a new order's KOT.
       const addedIds = data.added_item_ids ?? [];
       const printsKot = autoPrint.kot && addedIds.length > 0;
-      if (printsKot) printDock.enqueue([{ orderId: addToOrder.id, type: 'kot', itemIds: addedIds }]);
+      const kotJobs = printsKot ? printDock.enqueue([{ orderId: addToOrder.id, type: 'kot', itemIds: addedIds }]) : [];
       showToast(
         `Added to order #${label}${owed > 0 ? ` · ₹${owed} balance to collect` : ''}${printsKot ? ' · KOT printing' : ''}.`,
       );
       // Back to where the staffer came from (Tables, or the bill on Settle) so
-      // the running total is visible in context — once the KOT has gone: the
-      // print dock lives on this page, and leaving mid-print would cancel the
-      // kitchen's ticket.
-      setLeaveAfterAdd(true);
+      // the running total is visible in context — once this KOT has gone, so a
+      // failure is raised here rather than after the screen has moved on.
+      setLeaveAfterAdd(kotJobs);
     } catch {
       setSubmitError('Network error — please check the connection and try again.');
     } finally {

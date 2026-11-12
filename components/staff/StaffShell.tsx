@@ -15,8 +15,13 @@
 //    the navigation, so the counter couldn't reach New order or Tables. It is
 //    now shell state: full screen + screen kept awake on every page, with the
 //    header trimmed to Orders / Settle / New order / Tables (StaffHeader).
+// 3. The print dock (components/staff/PrintDock.tsx): one queue, one print
+//    frame and one failure chip for every screen, so leaving New order, the
+//    board, Settle or HIOC Ritual while a ticket is queued or printing no
+//    longer drops it.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { PrintDockProvider } from '@/components/staff/PrintDock';
 import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
@@ -259,5 +264,9 @@ export function StaffShell({
     [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders, surface, staffWebOrdering, role],
   );
 
-  return <StaffShellContext.Provider value={value}>{children}</StaffShellContext.Provider>;
+  return (
+    <StaffShellContext.Provider value={value}>
+      <PrintDockProvider>{children}</PrintDockProvider>
+    </StaffShellContext.Provider>
+  );
 }

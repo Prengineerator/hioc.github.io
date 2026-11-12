@@ -97,3 +97,79 @@ describe('SaveQueue', () => {
     expect(next).toEqual(['y', 'z']);
   });
 });
+
+// §11 — PrinterSettings' explicit "Save printer" and Delete used to call
+// bridge.printers.save() directly with the whole list, beside this queue: an
+// older autosave still queued behind them then wrote ITS whole list last,
+// undoing the add or bringing the deleted printer back. Every write now goes
+// through the queue, and reloads use resync() so they can't race a write.
+describe('SaveQueue — explicit saves and reloads share the one queue', () => {
+  /** A fake bridge store: save() resolves only when the test says so. */
+  function store(initial: string[]) {
+    let saved = initial;
+    const pending: { value: string[]; done: ReturnType<typeof deferred<void>> }[] = [];
+    return {
+      get saved() {
+        return saved;
+      },
+      pending,
+      save: (value: string[]) => {
+        const done = deferred<void>();
+        pending.push({ value, done });
+        return done.promise.then(() => {
+          saved = value;
+        });
+      },
+      list: async () => saved,
+    };
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  it('an add queued behind an in-flight autosave lands last, carrying both changes', async () => {
+    const s = store(['kitchen']);
+    const queue = new SaveQueue<string[]>(['kitchen'], s.save);
+    queue.enqueue((prev) => prev.map((p) => `${p}+cut`), () => {}); // the autosave, in flight
+    const added = new Promise((resolve) => queue.enqueue((prev) => [...prev, 'bar'], resolve)); // Save printer
+
+    await tick();
+    expect(s.pending).toHaveLength(1); // the add waits its turn
+    s.pending[0].done.resolve();
+    await tick();
+    s.pending[1].done.resolve();
+    await added;
+    expect(s.saved).toEqual(['kitchen+cut', 'bar']);
+  });
+
+  it('resync() reads only after the saves already queued have landed', async () => {
+    const s = store(['kitchen']);
+    const queue = new SaveQueue<string[]>(['kitchen'], s.save);
+    queue.enqueue((prev) => prev.filter((p) => p !== 'kitchen'), () => {}); // Delete, in flight
+    const reloaded = queue.resync(s.list);
+
+    await tick();
+    s.pending[0].done.resolve();
+    expect(await reloaded).toEqual([]); // not the pre-delete ['kitchen']
+    expect(queue.current).toEqual([]);
+  });
+
+  it('resync() gives way to a change queued while it waited', async () => {
+    const s = store(['kitchen']);
+    const queue = new SaveQueue<string[]>(['kitchen'], s.save);
+    const reloaded = queue.resync(s.list);
+    queue.enqueue((prev) => [...prev, 'bar'], () => {});
+    expect(await reloaded).toBeNull();
+    expect(queue.current).toEqual(['kitchen', 'bar']);
+    // ...and that change's save still runs after the reload.
+    await tick();
+    expect(s.pending.map((p) => p.value)).toEqual([['kitchen', 'bar']]);
+  });
+
+  it('a failed load rejects resync() without stalling the queue', async () => {
+    const save = vi.fn(async () => {});
+    const queue = new SaveQueue<string[]>([], save);
+    await expect(queue.resync(() => Promise.reject(new Error('ipc down')))).rejects.toThrow('ipc down');
+    queue.enqueue((prev) => [...prev, 'a'], () => {});
+    await tick();
+    expect(save).toHaveBeenCalledWith(['a']);
+  });
+});

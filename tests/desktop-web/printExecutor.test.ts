@@ -345,3 +345,89 @@ describe('createDesktopExecutor — a placement that carries its order', () => {
   });
 });
 
+// The job tracks each copy on each printer (PrintJob.targets), so a retry
+// sends only what didn't print and a timed-out attempt starts nothing more.
+// End-to-end with the real queue: tests/printDockStateMachine.test.ts.
+describe('createDesktopExecutor — per-target progress (printer × copy)', () => {
+  function attempt(signal: AbortSignal = new AbortController().signal) {
+    const reports: string[] = [];
+    return {
+      reports,
+      ctx: {
+        signal,
+        report: (key: string, r: { state: string; confirmed?: boolean }) => {
+          reports.push(`${key}:${r.state}${r.confirmed === undefined ? '' : `:${r.confirmed}`}`);
+        },
+      },
+    };
+  }
+
+  it('announces every copy it owes before sending any, then reports each as it goes', async () => {
+    const bridge = fakeBridge([
+      printer({ id: 'kitchen', roles: ['kot'], copies: { kot: 2 } }),
+      printer({ id: 'bar', name: 'Bar', roles: ['kot'] }),
+    ]);
+    const { reports, ctx } = attempt();
+    await createDesktopExecutor(bridge)(job(), ctx);
+    expect(reports.slice(0, 3)).toEqual(['kitchen#1:pending', 'kitchen#2:pending', 'bar#1:pending']);
+    expect(reports).toContain('kitchen#2:printed:true');
+    expect(reports).toContain('bar#1:printed:true');
+  });
+
+  it('sends only the copies the job still owes', async () => {
+    const bridge = fakeBridge([printer({ id: 'kitchen', roles: ['kot'], copies: { kot: 2 } })]);
+    const result = await createDesktopExecutor(bridge)(
+      {
+        ...job({ attempts: 2 }),
+        targets: {
+          'kitchen#1': { printer: 'Kitchen', state: 'printed', attempt: 1, confirmed: true },
+          'kitchen#2': { printer: 'Kitchen', state: 'failed', attempt: 1 },
+        },
+      },
+      attempt().ctx,
+    );
+    expect(bridge.printRaw).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ confirmed: true }); // copy 1 was vouched for on attempt 1
+  });
+
+  it('an earlier copy the printer did not vouch for keeps the job unconfirmed', async () => {
+    const bridge = fakeBridge([printer({ id: 'kitchen', roles: ['kot'], copies: { kot: 2 } })]);
+    const result = await createDesktopExecutor(bridge)(
+      {
+        ...job({ attempts: 2 }),
+        targets: {
+          'kitchen#1': { printer: 'Kitchen', state: 'printed', attempt: 1, confirmed: false },
+          'kitchen#2': { printer: 'Kitchen', state: 'pending', attempt: 1 },
+        },
+      },
+      attempt().ctx,
+    );
+    expect(result).toEqual({ confirmed: false });
+  });
+
+  it('starts nothing once the queue has stopped waiting (aborted signal)', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const bridge = fakeBridge([printer({ roles: ['kot'] })]);
+    const { reports, ctx } = attempt(controller.signal);
+    await expect(createDesktopExecutor(bridge)(job(), ctx)).rejects.toThrow(/Kitchen/);
+    expect(bridge.printRaw).not.toHaveBeenCalled();
+    expect(reports).toEqual(['kitchen#1:pending']);
+  });
+
+  it('lets every printer finish before failing the job, so the copies that printed are on record', async () => {
+    const kitchen = printer({ id: 'kitchen', name: 'Kitchen', roles: ['kot'] });
+    const bar = printer({ id: 'bar', name: 'Bar', roles: ['kot'] });
+    const printRaw = vi.fn().mockImplementation(async (id: string) => {
+      if (id === 'bar') throw new Error('paper out');
+      await new Promise((r) => setTimeout(r, 5)); // the kitchen is still printing when the bar fails
+      return { confirmed: true };
+    });
+    const bridge = fakeBridge([kitchen, bar], { printRaw });
+    const { reports, ctx } = attempt();
+    await expect(createDesktopExecutor(bridge)(job(), ctx)).rejects.toThrow('Bar: paper out');
+    expect(reports).toContain('kitchen#1:printed:true');
+    expect(reports).toContain('bar#1:failed');
+  });
+});
+

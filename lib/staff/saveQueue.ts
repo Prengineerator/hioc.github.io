@@ -34,6 +34,8 @@ export interface SaveQueueResult<T> {
 export class SaveQueue<T> {
   private latest: T;
   private tail: Promise<void> = Promise.resolve();
+  /** Bumped by every enqueue(), so a resync() can tell it was overtaken. */
+  private version = 0;
 
   constructor(
     initial: T,
@@ -48,13 +50,38 @@ export class SaveQueue<T> {
     return this.latest;
   }
 
-  /** Replaces the queue's known-good value without going through save() —
-   * for the initial load, for keeping this queue in sync with a save made
-   * outside it (e.g. the Add/Edit printer form's own explicit save), and for
-   * resetting to a fresh list reloaded after a failed autosave. Does not
-   * affect saves already chained onto `tail`. */
+  /** Replaces the queue's known-good value without going through save().
+   * Does not wait for (or affect) saves already chained onto `tail` — a value
+   * read while one of those is in flight is stale the moment it lands, so a
+   * reload from storage should use resync() instead. */
   reset(value: T): void {
     this.latest = value;
+  }
+
+  /**
+   * Reloads the authoritative value — for the initial load and after a failed
+   * save — but only once every save already queued has settled, and before any
+   * save queued after it starts. A plain reset() in that window raced the
+   * in-flight write: the screen showed (and the next change built on) a list
+   * that write was about to replace, and the next save then overwrote it.
+   *
+   * Resolves with the loaded value, which is now `current`; or with null when
+   * an enqueue() arrived while it waited — that newer change is already built
+   * on `current` and its own save will write the whole value. Rejects when
+   * `load` does (the queue carries on regardless).
+   */
+  resync(load: () => Promise<T>): Promise<T | null> {
+    const asked = this.version;
+    const run = this.tail.then(load).then((value) => {
+      if (this.version !== asked) return null;
+      this.latest = value;
+      return value;
+    });
+    this.tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   /**
@@ -67,6 +94,7 @@ export class SaveQueue<T> {
   enqueue(updater: (prev: T) => T, onSettled: (result: SaveQueueResult<T>) => void): T {
     const next = updater(this.latest);
     this.latest = next;
+    this.version += 1;
     this.tail = this.tail.then(() =>
       this.save(next).then(
         () => onSettled({ status: 'saved', value: next }),
