@@ -69,9 +69,14 @@ Owner: /owner/shop → "Send to Shiprocket" (checks weight & box size)
    - Recharge the Shiprocket wallet.
    - In Vercel: `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`, and
      `SHIPROCKET_PICKUP_LOCATION` (if the nickname isn't `Primary`).
-4. **Parcel size** — weigh one packed box of 1, 2 and 3 jars and correct
-   `defaultPackage()` in `lib/shop/catalog.ts` (starting guess: 0.1 kg box +
-   0.3 kg a jar). The owner can change it per order in the send dialog anyway.
+4. **Parcel size** — **3 jars measured:** a real website order shipped at
+   **0.65 kg** in a **7 × 3.5 × 5 inch** box (17.8 × 8.9 × 12.7 cm), now the
+   3-jar default in `defaultPackage()` (`lib/shop/catalog.ts`) as 0.65 kg,
+   18 × 9 × 13 cm. The 1- and 2-jar defaults are estimated from that one box
+   (0.08 kg box + 0.19 kg a jar: 0.27 kg in 9 × 9 × 13 cm, 0.46 kg in
+   12 × 9 × 13 cm); weigh a packed 1- and 2-jar box when one ships and correct
+   them there. 4 jars and up are still rough guesses. The owner can change any
+   of it per order in the send dialog anyway.
 5. **Words on the website** — check and adjust, then they go live with the flag:
    - dispatch and delivery times: `DISPATCH_WITHIN` (2 working days) and
      `DELIVERY_TAKES` (3–7 working days) in `lib/shop/catalog.ts`;

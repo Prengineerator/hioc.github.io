@@ -22,7 +22,7 @@ const { POST: refresh } = await import('@/app/api/owner/shop/orders/[id]/refresh
 const { POST: send } = await import('@/app/api/owner/shop/orders/[id]/shiprocket/route');
 
 const ID = '7d0c3f0e-1b2a-4c5d-8e9f-0a1b2c3d4e5f';
-const PKG = { weight_kg: 1, length_cm: 28, breadth_cm: 12, height_cm: 10 };
+const PKG = { weight_kg: 0.65, length_cm: 18, breadth_cm: 9, height_cm: 13 };
 
 // An order like HIOC-S1004: 3 jars, ₹1197, offer −₹448, free shipping, paid
 // ₹749. Numbered 1005, since S1004 itself is an accepted exception.

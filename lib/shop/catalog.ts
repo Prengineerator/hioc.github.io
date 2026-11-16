@@ -53,21 +53,32 @@ export const DELIVERY_TAKES = '3–7 working days';
 // ---------------------------------------------------------------------------
 // The parcel. Shiprocket bills on the larger of the dead weight and the
 // volumetric weight (L × B × H ÷ 5000), so a sensible box matters. These are
-// starting points the owner can change in the "Send to Shiprocket" dialog;
-// weigh a packed box once and adjust them here.
+// starting points the owner can change in the "Send to Shiprocket" dialog,
+// which stays the override for every order.
+//
+// Only the 3-jar parcel is measured: a real website order shipped at 0.65 kg
+// in a 7 × 3.5 × 5 inch box (17.8 × 8.9 × 12.7 cm, rounded to 18 × 9 × 13).
+// Every other size is an estimate from that one box: the jars stand in a row
+// along its length (about 6 cm each), and 0.65 kg is split as below. Weigh a
+// packed 1- and 2-jar box when one ships and correct them here.
 // ---------------------------------------------------------------------------
 
-/** Box, bubble wrap and filler. */
-const BOX_WEIGHT_KG = 0.1;
-/** One packed 50 g glass jar. */
-const JAR_WEIGHT_KG = 0.3;
+/** Box, bubble wrap and filler (estimated from the 3-jar parcel). */
+const BOX_WEIGHT_KG = 0.08;
+/** One packed 50 g glass jar (estimated: 0.08 + 3 × 0.19 = the measured 0.65 kg). */
+const JAR_WEIGHT_KG = 0.19;
+
+/** The measured 3-jar parcel. */
+const THREE_JAR_PARCEL: ShopPackage = { weight_kg: 0.65, length_cm: 18, breadth_cm: 9, height_cm: 13 };
 
 export function defaultPackage(jars: number): ShopPackage {
   const n = Math.max(1, Math.floor(jars));
+  if (n === 3) return { ...THREE_JAR_PARCEL };
   const weight_kg = Math.round((BOX_WEIGHT_KG + JAR_WEIGHT_KG * n) * 100) / 100;
-  if (n === 1) return { weight_kg, length_cm: 12, breadth_cm: 10, height_cm: 10 };
-  if (n === 2) return { weight_kg, length_cm: 20, breadth_cm: 12, height_cm: 10 };
-  if (n === 3) return { weight_kg, length_cm: 28, breadth_cm: 12, height_cm: 10 };
+  // Same 9 × 13 cm cross-section as the measured box, shorter for fewer jars.
+  if (n === 1) return { weight_kg, length_cm: 9, breadth_cm: 9, height_cm: 13 };
+  if (n === 2) return { weight_kg, length_cm: 12, breadth_cm: 9, height_cm: 13 };
+  // Bigger orders: not measured or re-estimated; check the box when one comes in.
   if (n <= 6) return { weight_kg, length_cm: 24, breadth_cm: 20, height_cm: 12 };
   return { weight_kg, length_cm: 30, breadth_cm: 24, height_cm: 14 };
 }
