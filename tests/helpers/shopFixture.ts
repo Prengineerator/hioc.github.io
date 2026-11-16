@@ -32,6 +32,7 @@ export function shopOrder(patch: Partial<ShopOrderRow> = {}): ShopOrderRow {
     shiprocket_shipment_id: null,
     shiprocket_status: null,
     shiprocket_sending_at: null,
+    shiprocket_total_inr: null,
     awb_code: null,
     courier_name: null,
     package_weight_kg: null,

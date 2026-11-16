@@ -65,6 +65,12 @@ export interface ShopOrderRow extends ShopAddress {
   shiprocket_shipment_id: string | null;
   shiprocket_status: string | null;
   shiprocket_sending_at: string | null;
+  /**
+   * Shiprocket's own order total as last read back from Shiprocket (what its
+   * invoice and emails say). Null until read, or before
+   * supabase/2026-11-shop-shiprocket-total.sql is applied.
+   */
+  shiprocket_total_inr: number | null;
   awb_code: string | null;
   courier_name: string | null;
   package_weight_kg: number | string | null;

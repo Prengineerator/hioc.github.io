@@ -53,8 +53,9 @@ Owner: /owner/shop → "Send to Shiprocket" (checks weight & box size)
 ## Launch checklist (owner)
 
 1. **Database** — Supabase → SQL Editor → run
-   `supabase/2026-11-instant-coffee-shop.sql`. Then `npm run verify:db`
-   (look for `SHOP-1`).
+   `supabase/2026-11-instant-coffee-shop.sql`, then
+   `supabase/2026-11-shop-shiprocket-total.sql`. Then `npm run verify:db`
+   (look for `SHOP-1` and `SHOP-2`).
 2. **Razorpay** — keys already set for café payments are enough. Make sure the
    webhook (Dashboard → Webhooks → `https://hioc.in/api/payments/webhook`,
    events `payment.captured`, `order.paid`, `payment.failed`) is on: it catches
@@ -114,6 +115,20 @@ Owner: /owner/shop → "Send to Shiprocket" (checks weight & box size)
 - Online offer: switch it on/off, rename it, change the price for each number of jars.
 - Flavours in stock: switch a flavour off when it runs out.
 - Each order shows the customer's map pin (if any) as "Open delivery pin in Google Maps"; Copy address includes the link.
+- **Shiprocket's bill check**: Shiprocket works out its own order total from
+  what we send, and that is what its invoice, its emails to the customer and
+  the parcel's declared value say. Right after "Send to Shiprocket", and on
+  every Refresh, the order is read back and that total saved
+  (`shop_orders.shiprocket_total_inr`). The card shows "✓ Shiprocket's bill
+  ₹749 matches what the customer paid", or a red warning when it doesn't, and
+  a red banner at the top of the page names every order still on its way
+  whose bill is wrong. (HIOC-S1004 paid ₹749 and Shiprocket's bill said ₹301:
+  the offer was taken off twice, fixed in `buildShiprocketOrder()`.) Each read
+  also logs Shiprocket's money fields (`shiprocket order amounts`) in Vercel.
+  A mismatch the owner has accepted is listed in `SHIPROCKET_BILL_EXCEPTIONS`
+  (`lib/shop/status.ts`) by order, Shiprocket order id and the exact wrong
+  amount: it shows as a quiet note instead of a warning, and is flagged again
+  if Shiprocket's bill changes. HIOC-S1004 (₹301) is the only one.
 - Download CSV: every paid order with address, items, amounts, refund,
   Razorpay payment id, Shiprocket id and AWB.
 
@@ -140,6 +155,7 @@ for a single jar) under the same names.
 ## Files
 
 - `supabase/2026-11-instant-coffee-shop.sql` — tables, seed, lockdown
+- `supabase/2026-11-shop-shiprocket-total.sql` — Shiprocket's bill total, for the check
 - `lib/shop/` — pricing, address checks, status rules, Shiprocket client,
   Razorpay capture, emails, data access
 - `app/shop/`, `components/shop/` — the customer pages

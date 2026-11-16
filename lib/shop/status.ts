@@ -118,6 +118,67 @@ export function shopStatusFromShiprocket(
   return null;
 }
 
+/**
+ * Does Shiprocket's bill match what the customer paid? Shiprocket works out
+ * its own order total from what we send it, and that total is what its
+ * invoice, its emails to the customer and the parcel's declared value say.
+ * HIOC-S1004 paid ₹749 and Shiprocket's bill said ₹301, so /owner/shop
+ * checks every order it has read back. Null for an order not in Shiprocket.
+ * Under ₹1 apart counts as the same (Shiprocket keeps paise).
+ */
+export type ShiprocketBillCheck =
+  | { state: 'unchecked' }
+  | { state: 'matches'; shiprocket: number }
+  | { state: 'differs'; shiprocket: number; paid: number }
+  | { state: 'exception'; shiprocket: number; paid: number; note: string };
+
+/**
+ * Mismatches the owner has accepted, one by one: no warning, just a note.
+ * Each names the exact Shiprocket order and the exact wrong amount, so the
+ * exception ends by itself if Shiprocket's bill changes to anything else, and
+ * every other order is still flagged. Add to this only on the owner's say-so.
+ */
+export const SHIPROCKET_BILL_EXCEPTIONS: readonly {
+  order_number: number;
+  shiprocket_order_id: string;
+  shiprocket_total_inr: number;
+  note: string;
+}[] = [
+  {
+    // Owner, 16 Nov 2026: mark it as an exception; flag everything after it.
+    order_number: 1004,
+    shiprocket_order_id: '1733716182',
+    shiprocket_total_inr: 301,
+    note: 'Accepted: sent before the double-discount fix. The customer was charged the right amount.',
+  },
+];
+
+type BillFields = Pick<ShopOrderRow, 'order_number' | 'shiprocket_order_id' | 'shiprocket_total_inr' | 'total_inr'>;
+
+export function shiprocketBillCheck(order: BillFields): ShiprocketBillCheck | null {
+  if (!order.shiprocket_order_id) return null;
+  const shiprocket = order.shiprocket_total_inr;
+  if (shiprocket === null || shiprocket === undefined || !Number.isFinite(shiprocket)) return { state: 'unchecked' };
+  if (Math.abs(shiprocket - order.total_inr) < 1) return { state: 'matches', shiprocket };
+  const exception = SHIPROCKET_BILL_EXCEPTIONS.find(
+    (e) =>
+      e.order_number === order.order_number &&
+      e.shiprocket_order_id === order.shiprocket_order_id &&
+      Math.abs(e.shiprocket_total_inr - shiprocket) < 1,
+  );
+  if (exception) return { state: 'exception', shiprocket, paid: order.total_inr, note: exception.note };
+  return { state: 'differs', shiprocket, paid: order.total_inr };
+}
+
+const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+/** The owner's warning for a bill that doesn't match, or null when it does, isn't read yet, or is an accepted exception. */
+export function shiprocketBillWarning(order: BillFields): string | null {
+  const check = shiprocketBillCheck(order);
+  if (check?.state !== 'differs') return null;
+  return `Shiprocket's bill says ${inr(check.shiprocket)}, but the customer paid ${inr(check.paid)}. That wrong amount goes on Shiprocket's invoice, its emails to the customer and the parcel's declared value. Correct the order in the Shiprocket panel before a courier is booked.`;
+}
+
 /** The customer's tracking page for an AWB, on Shiprocket's tracking site. */
 export function trackingUrl(awb: string | null | undefined): string | null {
   const code = (awb ?? '').trim();

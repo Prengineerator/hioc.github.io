@@ -256,12 +256,28 @@ export interface ShiprocketOrderState {
   awb: string | null;
   courier: string | null;
   shipmentId: string | null;
+  /**
+   * Shiprocket's own order total: what its invoice and emails say, worked out
+   * by Shiprocket from what we sent. Null when the answer doesn't carry one.
+   */
+  total: number | null;
+}
+
+/** "₹1,197.00", "301.00" or 301 → a number; anything else → null. */
+export function shiprocketAmount(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v !== 'string') return null;
+  const s = v.replace(/[₹,\s]/g, '').replace(/^(rs\.?|inr)/i, '');
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
+  return Number(s);
 }
 
 /**
  * Reads the "order details" answer loosely. The order sits under `data`; the
  * AWB and courier are on its shipment (an object, or a list of one) or on
- * `awb_data`, depending on the account's API version.
+ * `awb_data`, depending on the account's API version. The order total is
+ * `total` (Shiprocket's total after its discount, with shipping), else
+ * `net_total`.
  */
 export function parseOrderDetails(body: unknown): ShiprocketOrderState | null {
   const b = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
@@ -275,6 +291,24 @@ export function parseOrderDetails(body: unknown): ShiprocketOrderState | null {
     awb: str(ship.awb) ?? str(ship.awb_code) ?? str(awbData.awb) ?? str(d.awb_code),
     courier: str(ship.courier) ?? str(ship.courier_name) ?? str(d.courier_name),
     shipmentId: str(ship.id) ?? str(d.shipment_id),
+    total: shiprocketAmount(d.total) ?? shiprocketAmount(d.net_total),
+  };
+}
+
+/**
+ * The money fields of an order-details answer, for the server log, so what
+ * Shiprocket holds can be compared with what was sent (sub_total,
+ * total_discount, shipping_charges) without opening the panel.
+ */
+function amountsForLog(body: unknown): Record<string, unknown> {
+  const b = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+  const d = (typeof b.data === 'object' && b.data !== null ? b.data : b) as Record<string, unknown>;
+  const others = (typeof d.others === 'object' && d.others !== null ? d.others : {}) as Record<string, unknown>;
+  const pick = (o: Record<string, unknown>, keys: string[]) =>
+    Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+  return {
+    ...pick(d, ['total', 'net_total', 'sub_total', 'discount', 'total_discount', 'shipping_charges', 'tax']),
+    others: pick(others, ['sub_total', 'total_discount', 'shipping_charges', 'giftwrap_charges', 'transaction_charges']),
   };
 }
 
@@ -285,6 +319,7 @@ export async function fetchShiprocketOrder(
   if (!result.ok) return { ok: false, error: result.error };
   const state = parseOrderDetails(result.data);
   if (!state) return { ok: false, error: 'Shiprocket sent back an order this page could not read.' };
+  console.info('shiprocket order amounts', shiprocketOrderId, JSON.stringify(amountsForLog(result.data)));
   return { ok: true, state };
 }
 

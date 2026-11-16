@@ -6,9 +6,9 @@ import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { validatePackage } from '@/lib/shop/catalog';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
-import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
-import { createShiprocketOrder, isShiprocketConfigured, SHIPROCKET_NOT_CONFIGURED } from '@/lib/shop/shiprocket';
-import { canSendToShiprocket } from '@/lib/shop/status';
+import { getShopOrder, saveShiprocketTotal, updateShopOrderIf } from '@/lib/shop/server';
+import { createShiprocketOrder, fetchShiprocketOrder, isShiprocketConfigured, SHIPROCKET_NOT_CONFIGURED } from '@/lib/shop/shiprocket';
+import { canSendToShiprocket, shiprocketBillWarning } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,11 +17,18 @@ const CLAIM_MS = 2 * 60 * 1000;
 
 // POST /api/owner/shop/orders/[id]/shiprocket — owner only. The one click:
 // creates this paid order in Shiprocket with the parcel the owner confirmed.
-// Body: { weight_kg, length_cm, breadth_cm, height_cm }. Responds { order }.
+// Body: { weight_kg, length_cm, breadth_cm, height_cm }. Responds
+// { order, warning? }.
 //
 // Creating the Shiprocket order spends nothing; the courier, label and pickup
 // are chosen in the Shiprocket panel, and Refresh reads the AWB back. A short
 // claim (shiprocket_sending_at) stops a double click from creating it twice.
+//
+// Right after creating it, the order is read back once for Shiprocket's own
+// total, so a bill that doesn't match what the customer paid is flagged (the
+// warning) while it can still be corrected, before a courier is booked. That
+// read is best effort: if it fails, the send still stands and Refresh checks
+// the bill later.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
   if (!(await getOwnerUser())) return unauthorized();
   if (!isUuid(params.id)) return notFound();
@@ -88,5 +95,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
   }
 
   if (shipped) runAfterResponse(sendShopShippedEmail(updated));
-  return NextResponse.json({ order: updated });
+
+  const details = await fetchShiprocketOrder(created.shiprocketOrderId);
+  const total = details.ok ? details.state.total : null;
+  if (total === null) return NextResponse.json({ order: updated });
+  const saved = await saveShiprocketTotal(admin, updated, total);
+  const bill = shiprocketBillWarning({ ...updated, shiprocket_total_inr: total }); // warn even if the save didn't go through
+  return NextResponse.json(bill ? { order: saved, warning: `Sent to Shiprocket — but check the amount. ${bill}` } : { order: saved });
 }
