@@ -106,9 +106,20 @@ describe('the customer view', () => {
 
 describe('the parcel', () => {
   it('starts from a box per jar count', () => {
-    expect(defaultPackage(1)).toEqual({ weight_kg: 0.4, length_cm: 12, breadth_cm: 10, height_cm: 10 });
-    expect(defaultPackage(3)).toEqual({ weight_kg: 1, length_cm: 28, breadth_cm: 12, height_cm: 10 });
-    expect(defaultPackage(0).weight_kg).toBe(0.4);
+    // Measured: a real 3-jar order, 0.65 kg in a 7 × 3.5 × 5 inch box.
+    expect(defaultPackage(3)).toEqual({ weight_kg: 0.65, length_cm: 18, breadth_cm: 9, height_cm: 13 });
+    // Estimated from that box.
+    expect(defaultPackage(1)).toEqual({ weight_kg: 0.27, length_cm: 9, breadth_cm: 9, height_cm: 13 });
+    expect(defaultPackage(2)).toEqual({ weight_kg: 0.46, length_cm: 12, breadth_cm: 9, height_cm: 13 });
+    expect(defaultPackage(0).weight_kg).toBe(0.27);
+    expect(defaultPackage(4).weight_kg).toBe(0.84);
+  });
+
+  it('keeps the small boxes billed on dead weight, not volume', () => {
+    for (const n of [1, 2, 3]) {
+      const p = defaultPackage(n);
+      expect((p.length_cm * p.breadth_cm * p.height_cm) / 5000).toBeLessThan(p.weight_kg);
+    }
   });
 
   it('accepts the owner’s numbers (as text too) and refuses silly ones', () => {
