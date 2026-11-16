@@ -52,6 +52,12 @@ back**, and on **Settle** next to the unpaid bills:
   expects that much less cash. Needs the **Refund** permission (manager by
   default). The bill stays **Paid**.
 
+When the balance is settled, the dialog stays open with **Print updated bill**
+— the customer's earlier paper bill is out of date. (A counter set to
+auto-print bills prints it straight away.) On Settle, the bill also goes under
+**Just settled** with **Print bill**. **Print receipt** on any order always
+prints the bill as it is now, with every item added or removed.
+
 An order with money still **owed** can't be completed until the balance is
 collected (or let go) — the same rule as an unpaid bill. Money owed **back**
 does not hold the order. The day-close screen lists bills with money owed among

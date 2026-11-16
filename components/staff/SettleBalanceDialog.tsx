@@ -14,6 +14,11 @@
 //
 // Money is never decided here: the balance and what each tender took are the
 // server's, and every rule is re-checked by the route.
+//
+// Once settled, the dialog stays open on a short confirmation with "Print
+// updated bill": the customer's paper bill is the old one, and the counter
+// doesn't print bills unasked unless it is set to (auto-print bill — then the
+// updated one prints straight away, by the same rule as any settle).
 
 import { useEffect, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
@@ -35,11 +40,21 @@ export function SettleBalanceDialog({
   order,
   onClose,
   onDone,
+  onPrintBill,
+  autoPrintBill = false,
 }: {
   order: OrderWithItems;
   onClose: () => void;
-  /** Settled. `order` is the server's updated order; `message` says what happened, for a toast. */
+  /**
+   * Settled, and the staffer is finished with the confirmation (Done, or the
+   * dialog closed). `order` is the server's updated order; `message` says what
+   * happened, for a toast.
+   */
   onDone: (order: OrderWithItems, message: string) => void;
+  /** Queue this order's bill on the counter's printer (the page's print dock). */
+  onPrintBill: (orderId: string) => void;
+  /** This counter prints a bill on every settle (settlePrintPlan): print the updated one unasked. */
+  autoPrintBill?: boolean;
 }) {
   const balance = balanceOf(order);
   const billInr = order.total_inr ?? order.subtotal_inr;
@@ -49,6 +64,27 @@ export function SettleBalanceDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [drawerNote, setDrawerNote] = useState<string | null>(null);
+  // Settled: the confirmation step, with the bill to print.
+  const [settled, setSettled] = useState<{ order: OrderWithItems; message: string } | null>(null);
+  const [billPrinted, setBillPrinted] = useState(false);
+
+  function complete(updated: OrderWithItems, message: string) {
+    setSettled({ order: updated, message });
+    if (autoPrintBill) {
+      onPrintBill(updated.id);
+      setBillPrinted(true);
+    }
+  }
+
+  function printBill() {
+    if (!settled) return;
+    onPrintBill(settled.order.id);
+    setBillPrinted(true);
+  }
+
+  function finish() {
+    if (settled) onDone(settled.order, settled.message);
+  }
 
   async function send(body: Record<string, unknown>): Promise<{ order: OrderWithItems; change_due_inr?: number } | null> {
     setSubmitting(true);
@@ -88,13 +124,13 @@ export function SettleBalanceDialog({
     const done = await send(adjustment ? { action: 'collect', parts, adjustment } : { action: 'collect', parts });
     if (!done) return;
     const change = done.change_due_inr ?? 0;
-    onDone(done.order, `#${number} balance collected${change > 0 ? ` · give ${rupees(change)} change` : ''}`);
+    complete(done.order, `#${number} balance collected${change > 0 ? ` · give ${rupees(change)} change` : ''}`);
   }
 
   async function writeOff() {
     if (submitting || letGoReason.length < 3) return;
     const done = await send({ action: 'write_off', amount_inr: balance, reason: letGoReason });
-    if (done) onDone(done.order, `#${number} · ${rupees(balance)} balance let go`);
+    if (done) complete(done.order, `#${number} · ${rupees(balance)} balance let go`);
   }
 
   // --- Give back -----------------------------------------------------------
@@ -133,7 +169,7 @@ export function SettleBalanceDialog({
     const done = await send({ action: 'give_back', amount_inr: owed, method, ...(note.trim() ? { reason: note.trim() } : {}) });
     if (!done) return;
     const how = method === 'cash' ? 'from the drawer' : `on ${PAYMENT_METHOD_LABEL[method] ?? method}`;
-    onDone(done.order, `#${number} · ${rupees(owed)} given back ${how}`);
+    complete(done.order, `#${number} · ${rupees(owed)} given back ${how}`);
   }
 
   const itemCount = order.items.filter((i) => !i.voided).reduce((n, i) => n + i.quantity, 0);
@@ -141,11 +177,48 @@ export function SettleBalanceDialog({
   return (
     <Modal
       open
-      onClose={submitting ? () => {} : onClose}
+      onClose={settled ? finish : submitting ? () => {} : onClose}
       title={balance > 0 ? `Collect balance · #${number}` : `Give back · #${number}`}
       subtitle={order.table_label ? `Table ${order.table_label}` : undefined}
     >
-      {balance > 0 ? (
+      {settled ? (
+        <div className="flex flex-col gap-3">
+          <p role="status" className="rounded-md bg-green-50 px-4 py-3 text-sm font-bold text-green-800">
+            ✓ {settled.message}
+          </p>
+          <div className="rounded-md border border-line px-4 py-3 text-sm text-charcoal">
+            <Row label="Bill now" value={rupees(settled.order.total_inr ?? settled.order.subtotal_inr)} />
+            <p className="mt-1 text-xs text-muted">Settled in full — the customer&rsquo;s earlier paper bill is out of date.</p>
+          </div>
+          {billPrinted ? (
+            <p className="text-xs font-bold text-charcoal">The updated bill has been sent to the printer.</p>
+          ) : null}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={printBill}
+              className={
+                'min-h-[44px] flex-1 rounded-md px-4 text-sm font-bold ' +
+                (billPrinted
+                  ? 'border border-line text-charcoal hover:border-tan'
+                  : 'bg-tan-dark text-cream hover:bg-tan-darker')
+              }
+            >
+              {billPrinted ? 'Print again' : 'Print updated bill'}
+            </button>
+            <button
+              type="button"
+              onClick={finish}
+              className={
+                'min-h-[44px] rounded-md px-5 text-sm font-bold ' +
+                (billPrinted ? 'bg-tan-dark text-cream hover:bg-tan-darker' : 'border border-line text-charcoal hover:border-tan')
+              }
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : balance > 0 ? (
         letGo ? (
           <div className="flex flex-col gap-3">
             <p className="text-sm text-charcoal">

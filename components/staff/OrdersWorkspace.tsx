@@ -614,6 +614,9 @@ export function OrdersWorkspace({ view }: { view: OrdersView }) {
             showToast(message);
             void fetchOrders();
           }}
+          onPrintBill={(orderId) => printDock.enqueue([{ orderId, type: 'receipt' }])}
+          // The same rule as settling any bill from here (auto-print bill on this counter).
+          autoPrintBill={settlePrintPlan(autoPrint, { orderKind: settlingBalance.order_kind }).includes('receipt')}
         />
       ) : null}
 
