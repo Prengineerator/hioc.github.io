@@ -5,7 +5,8 @@
 //
 //   assign          choose who picks it / delivers it          manager or owner
 //   pick            store room: record the pick                the assignee, or a manager
-//                   warehouse:  record the DISPATCH            the owner or a manager
+//                   warehouse:  record the DISPATCH            the owner, a manager, or a staffer
+//                                                              with warehouse access (WH-D16)
 //   receive         count it in at the POS                     not the picker / deliverer
 //   cancel          before it has moved stock                  requester before assignment,
 //                                                              or a manager/owner
@@ -67,6 +68,9 @@ export interface ActionActor {
   surface: StaffSurface;
   /** The enrolled POS device, for a count-in at the counter. */
   deviceId: string | null;
+  /** A staffer with warehouse access (WH-D16): may record a warehouse dispatch.
+   * Only read for a 'pick'; absent = false. */
+  warehouseAccess?: boolean;
 }
 
 const MAX_REASON = 200;
@@ -132,7 +136,12 @@ export async function patchStockRequest(
   };
   const lines = row.stock_request_lines ?? [];
   const lineItemIds = lines.map((l) => l.item_id);
-  const ruleActor: RequestActor = { userId: actor.userId, role: actor.role, surface: actor.surface };
+  const ruleActor: RequestActor = {
+    userId: actor.userId,
+    role: actor.role,
+    surface: actor.surface,
+    warehouseAccess: actor.warehouseAccess === true,
+  };
   const refuse = (v: Verdict) => (v.ok ? null : errorResponse(v.status, v.message));
 
   // ── assign ────────────────────────────────────────────────────────────────

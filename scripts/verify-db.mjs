@@ -1494,6 +1494,11 @@ async function checkWarehouse() {
     else fail(`${table}: ${cols.split(',').join(', ')} exist`, errKind(r) === 'no_column' ? hint : errText(r));
   }
 
+  // WH-D16: a staffer the owner gives the warehouse run (dispatch + send back).
+  const access = await rest('/staff_accounts?select=warehouse_access&limit=1');
+  if (access.ok) pass('staff_accounts.warehouse_access exists');
+  else fail('staff_accounts.warehouse_access exists', errKind(access) === 'no_column' ? 'apply supabase/2026-11-warehouse-access.sql' : errText(access));
+
   // A request that does not exist: the service role reaches the function's own
   // refusal (it is installed); anon must not reach the function at all.
   for (const [fn, body] of [
@@ -1507,6 +1512,41 @@ async function checkWarehouse() {
     const anon = await rest(`/rpc/${fn}`, { method: 'POST', body, key: ANON });
     if (anon.ok || errKind(anon) === 'raised') fail(`${fn} is not callable by the anon key`, 'EXECUTE was granted to anon — re-run the REVOKEs');
     else pass(`${fn} is not callable by the anon key`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md,
+// supabase/2026-11-instant-coffee-shop.sql): the flavours, the online offer
+// and the shipped orders (with the offer and delivery-pin columns), all
+// service-role only. Reads only.
+// ---------------------------------------------------------------------------
+async function checkInstantCoffeeShop() {
+  heading('SHOP-1 · instant coffee shop tables + lockdown', '2026-11-instant-coffee-shop.sql');
+  const hint = 'apply supabase/2026-11-instant-coffee-shop.sql';
+
+  for (const [table, col] of [
+    ['shop_products', 'id,price_inr,in_stock'],
+    ['shop_orders', 'id,order_number,status,discount_inr,offer_name,location_lat,location_lng,razorpay_order_id,shiprocket_order_id,awb_code'],
+    ['shop_settings', 'is_singleton,offer_active,offer_tier_prices'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=3`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    if (table === 'shop_products' && (!Array.isArray(r.body) || r.body.length < 3)) {
+      fail('shop_products has the three flavours', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    if (table === 'shop_settings' && (!Array.isArray(r.body) || r.body.length !== 1)) {
+      fail('shop_settings has its one row', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    const asAnon = await rest(`/${table}?select=${col.split(',')[0]}&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
   }
 }
 
@@ -2260,6 +2300,7 @@ async function main() {
   await checkCoffeeAddonsPairings();
   await checkInventory();
   await checkWarehouse();
+  await checkInstantCoffeeShop();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();

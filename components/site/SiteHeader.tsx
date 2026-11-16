@@ -6,10 +6,13 @@ import Link from 'next/link';
 import { useSurface } from '@/components/SurfaceLink';
 import { usePathname } from 'next/navigation';
 import { AccountNav } from '@/components/site/AccountNav';
+import { flags } from '@/lib/flags';
 
 const NAV_LINKS = [
   { href: '/', label: 'Home' },
   { href: '/menu', label: 'Menu' },
+  // Instant Coffee jars shipped across India (docs/INSTANT-COFFEE-SHOP.md).
+  ...(flags.shop ? [{ href: '/shop', label: 'Shop' }] : []),
   { href: '/about', label: 'About' },
   { href: '/contact', label: 'Contact' },
 ];

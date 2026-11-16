@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/payments/gateway';
 import { captureGatewayPayment, markGatewayPaymentFailed } from '@/lib/payments/reconcile';
+import { captureShopPayment } from '@/lib/shop/payments';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,6 +53,17 @@ export async function POST(request: Request) {
       const gatewayOrderId = paymentEntity?.order_id ?? orderEntity?.id;
       const gatewayPaymentId = paymentEntity?.id;
       if (gatewayOrderId && gatewayPaymentId) {
+        // The Instant Coffee shop shares this webhook URL. A Razorpay order that
+        // belongs to a shop order is recorded there (lib/shop/payments.ts) and
+        // never reaches the café's payments/orders; anything else is a café
+        // order, exactly as before.
+        const shop = await captureShopPayment({
+          gatewayOrderId,
+          gatewayPaymentId,
+          method: paymentEntity?.method,
+          capturedAmountPaise: paymentEntity?.amount,
+        });
+        if (shop.handled) return NextResponse.json({ received: true });
         await captureGatewayPayment({
           gatewayOrderId,
           gatewayPaymentId,

@@ -77,30 +77,14 @@ export async function createPaymentIntent(
   orderId: string,
   amountInr: number,
 ): Promise<CreatedPaymentIntent | null> {
-  if (!Number.isFinite(amountInr) || amountInr <= 0) return null;
-  const amountPaise = Math.round(amountInr) * 100;
-  if (amountPaise < MIN_ORDER_AMOUNT_PAISE) return null; // Razorpay rejects < ₹1
-  const creds = credentials();
-  if (!creds) return null; // gateway not configured — caller falls back to counter
-
-  type RzpOrder = { id: string; amount: number; currency: string };
-  const rzpOrder = await razorpayRequest<RzpOrder>('/orders', {
-    method: 'POST',
-    body: JSON.stringify({
-      amount: amountPaise,
-      currency: 'INR',
-      receipt: orderId,
-      payment_capture: 1, // auto-capture on success (M4) — never leave 'authorized'
-      notes: { hioc_order_id: orderId },
-    }),
-  });
-  if (!rzpOrder) return null;
+  const intent = await createGatewayOrder(amountInr, orderId, { hioc_order_id: orderId });
+  if (!intent) return null;
 
   const admin = createAdminSupabaseClient();
   const { error } = await admin.from('payments').insert({
     order_id: orderId,
     gateway: 'razorpay',
-    gateway_order_id: rzpOrder.id,
+    gateway_order_id: intent.gatewayOrderId,
     amount_inr: amountInr,
     status: 'payment_pending',
   });
@@ -113,6 +97,42 @@ export async function createPaymentIntent(
     console.error('createPaymentIntent: failed to record payments row', error);
     return null;
   }
+
+  return intent;
+}
+
+/**
+ * Creates a Razorpay order for `amountInr` (auto-capture) and returns the
+ * intent for the client SDK, recording NOTHING locally. createPaymentIntent()
+ * adds the café `payments` row on top; the Instant Coffee shop
+ * (lib/shop/payments.ts) keeps the gateway order id on its own shop_orders row
+ * instead, so a shipped jar never touches the café's orders or payments.
+ * `receipt` is at most 40 characters (a uuid fits). Null on any failure or
+ * when the gateway is not configured.
+ */
+export async function createGatewayOrder(
+  amountInr: number,
+  receipt: string,
+  notes: Record<string, string>,
+): Promise<CreatedPaymentIntent | null> {
+  if (!Number.isFinite(amountInr) || amountInr <= 0) return null;
+  const amountPaise = Math.round(amountInr) * 100;
+  if (amountPaise < MIN_ORDER_AMOUNT_PAISE) return null; // Razorpay rejects < ₹1
+  const creds = credentials();
+  if (!creds) return null; // gateway not configured
+
+  type RzpOrder = { id: string; amount: number; currency: string };
+  const rzpOrder = await razorpayRequest<RzpOrder>('/orders', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: receipt.slice(0, 40),
+      payment_capture: 1, // auto-capture on success (M4) — never leave 'authorized'
+      notes,
+    }),
+  });
+  if (!rzpOrder) return null;
 
   const publicKeyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || creds.keyId;
   return { gateway: 'razorpay', gatewayOrderId: rzpOrder.id, amountInr, keyId: publicKeyId };

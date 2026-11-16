@@ -1,17 +1,15 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS, RITUAL_POLICY_UPDATED } from '@/lib/legal';
+import { BUSINESS, policyUpdated } from '@/lib/legal';
 import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { rupees, SHIPPING_FEE_INR } from '@/lib/shop/pricing';
 
 export const metadata: Metadata = { title: 'Refund & Cancellation Policy' };
 
 export default function RefundPage() {
   return (
-    <PolicyLayout
-      title="Refund & Cancellation Policy"
-      updated={flags.coffeePass ? RITUAL_POLICY_UPDATED : undefined}
-    >
+    <PolicyLayout title="Refund & Cancellation Policy" updated={policyUpdated(flags)}>
       <p>
         This policy explains when and how orders placed with {BUSINESS.name} can be cancelled and
         how refunds are handled. Because we prepare fresh food to order, timing matters — please
@@ -140,6 +138,54 @@ export default function RefundPage() {
               <strong>Changes:</strong> we may change the price, the number of cups, the validity
               or the drinks covered, or stop selling a plan, for future purchases only. A{' '}
               {PASS_PROGRAM_NAME} you have already bought keeps the terms it was bought on.
+            </li>
+          </ul>
+        </PolicySection>
+      ) : null}
+
+      {/* Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md): jars shipped by
+          courier. Shown only while the shop is switched on. */}
+      {flags.shop ? (
+        <PolicySection
+          heading={`${flags.coffeePass ? 8 : 7}. ${BUSINESS.name} Premium Instant Coffee (shipped orders)`}
+          id="instant-coffee"
+        >
+          <p>
+            These rules apply to Instant Coffee jars bought on our website and shipped to you, in
+            place of sections 1, 4 and 5 above (which are about café orders).
+          </p>
+          <ul className="list-disc pl-5">
+            <li>
+              <strong>Cancelling:</strong> you can cancel an order until it has been handed to the
+              courier — contact us with your order number (e.g. HIOC-S1001). You receive a{' '}
+              <strong>full refund</strong>, shipping included. Once the parcel has shipped, the order
+              can no longer be cancelled.
+            </li>
+            <li>
+              <strong>Damaged, wrong or missing items:</strong> tell us within{' '}
+              <strong>48 hours of delivery</strong>, with a photo of the parcel and the jar, at{' '}
+              <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a> or{' '}
+              <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>.
+              We will send a replacement or refund the affected jars.
+            </li>
+            <li>
+              <strong>Returns:</strong> as a food product, opened jars cannot be returned, and we do
+              not accept returns for a change of mind.
+            </li>
+            <li>
+              <strong>Lost or undeliverable parcels:</strong> if the courier loses your parcel, or
+              we cannot ship to your pincode, we will reship it or refund you in full. If a parcel
+              comes back to us because the address was incomplete or no one was available to
+              receive it, we will contact you to reship it (shipping is charged again, {rupees(SHIPPING_FEE_INR)}{' '}
+              an order) or to refund the jars.
+            </li>
+            <li>
+              <strong>Cancellation by us:</strong> if we cannot fulfil your order (for example, a
+              flavour has run out), we will tell you and refund you in full.
+            </li>
+            <li>
+              Refunds go to the original payment method and typically show within{' '}
+              <strong>5–7 business days</strong>, depending on your bank or UPI provider.
             </li>
           </ul>
         </PolicySection>

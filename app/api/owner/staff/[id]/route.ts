@@ -20,15 +20,19 @@ type StaffAccountRow = {
 };
 
 /**
- * A friendlier message when a staff_accounts write fails only because
- * `handles_cash` doesn't exist yet (supabase/2026-09-cash-counts.sql not
- * applied) — the raw PostgREST "column not found" text isn't something an
- * owner can act on.
+ * A friendlier message when a staff_accounts write fails only because a
+ * per-person switch doesn't exist yet — `handles_cash`
+ * (supabase/2026-09-cash-counts.sql) or `warehouse_access`
+ * (supabase/2026-11-warehouse-access.sql) — the raw PostgREST "column not
+ * found" text isn't something an owner can act on.
  */
 function cashCountsColumnMessage(
   error: { code?: string; message?: string },
   patch: Record<string, unknown>,
 ): string | null {
+  if ('warehouse_access' in patch && isMissingTable(error) && /warehouse_access/.test(error.message ?? '')) {
+    return 'Warehouse-access migration not applied yet — run supabase/2026-11-warehouse-access.sql to set "Warehouse runs".';
+  }
   if ('handles_cash' in patch && isMissingTable(error)) {
     return 'Cash-counts migration not applied yet — run supabase/2026-09-cash-counts.sql to set "Handles cash".';
   }
@@ -121,6 +125,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     accountPatch.handles_cash = body.handlesCash;
   }
 
+  // Warehouse runs (WH-D16): record what left the warehouse, send stock back.
+  if (typeof body.warehouseAccess === 'boolean') {
+    accountPatch.warehouse_access = body.warehouseAccess;
+  }
+
   const isDeactivated = currentRole === 'customer' && account?.status === 'deactivated';
   // profiles.role is 'customer' while deactivated — that's not the role the
   // owner sees or means to compare against, so "effective" role for a
@@ -183,6 +192,9 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       }
       if ('handles_cash' in accountPatch) {
         insertPatch.handles_cash = accountPatch.handles_cash;
+      }
+      if ('warehouse_access' in accountPatch) {
+        insertPatch.warehouse_access = accountPatch.warehouse_access;
       }
       const { error } = await admin.from('staff_accounts').insert(insertPatch);
       if (error) return errorResponse(500, cashCountsColumnMessage(error, accountPatch) ?? error.message);

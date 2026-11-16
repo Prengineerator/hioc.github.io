@@ -35,3 +35,17 @@ export const BUSINESS = {
  * BUSINESS.lastUpdated, and a newer date over unchanged terms would be untrue.
  */
 export const RITUAL_POLICY_UPDATED = '30 September 2026';
+
+/**
+ * "Last updated" on the pages that carry the Instant Coffee shop wording
+ * (Shipping & Delivery, Refund & Cancellation, Terms), shown only while the shop
+ * is switched on (NEXT_PUBLIC_FLAG_SHOP), for the same reason as above.
+ */
+export const SHOP_POLICY_UPDATED = '12 November 2026';
+
+/** The "Last updated" date for a page that has Ritual and/or shop wording. */
+export function policyUpdated(flagsOn: { shop: boolean; coffeePass: boolean }): string | undefined {
+  if (flagsOn.shop) return SHOP_POLICY_UPDATED;
+  if (flagsOn.coffeePass) return RITUAL_POLICY_UPDATED;
+  return undefined;
+}

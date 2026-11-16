@@ -92,6 +92,7 @@ export function RequestsTab({
     userId: data.actorId,
     role: data.canManage ? 'manager' : 'staff',
     surface: data.surface,
+    warehouseAccess: data.warehouseAccess === true,
   };
   const open = data.requests.filter((r) => r.status !== 'received' && r.status !== 'cancelled');
   const closed = data.requests.filter((r) => r.status === 'received' || r.status === 'cancelled');

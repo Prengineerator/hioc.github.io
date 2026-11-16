@@ -1,8 +1,9 @@
 // A small in-memory fake of the Supabase admin query builder, for tests that
 // drive the REAL filter chains in lib/cash/** and the cash-day routes (rather
-// than a per-call stub). Supports select / insert / update with .eq .neq .is
-// .gt .gte .lt .lte .in .order .limit .maybeSingle .single and awaiting the
-// chain directly. Same shape as the fake in tests/cashCheckpoints.test.ts.
+// than a per-call stub). Supports select / insert / update / delete with .eq
+// .neq .is .gt .gte .lt .lte .in .order .limit .maybeSingle .single and awaiting
+// the chain directly (.or is accepted and ignored). Same shape as the fake in
+// tests/cashCheckpoints.test.ts.
 
 export type Row = Record<string, unknown>;
 type Filter = { op: string; col: string; val: unknown };
@@ -59,7 +60,7 @@ export function makeFakeAdmin(tables: Record<string, Row[]>, opts: FakeAdminOpti
       const filters: Filter[] = [];
       let order: { col: string; asc: boolean } | null = null;
       let limitN: number | null = null;
-      let op: 'select' | 'insert' | 'update' = 'select';
+      let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
       let insertPayload: Row | Row[] | null = null;
       let updatePayload: Row | null = null;
 
@@ -82,6 +83,11 @@ export function makeFakeAdmin(tables: Record<string, Row[]>, opts: FakeAdminOpti
         if (op === 'update') {
           const matched = applyFilters(store, filters);
           for (const row of matched) Object.assign(row, updatePayload);
+          return single ? { data: matched[0] ?? null, error: null } : { data: matched, error: null };
+        }
+        if (op === 'delete') {
+          const matched = applyFilters(store, filters);
+          for (const row of matched) store.splice(store.indexOf(row), 1);
           return single ? { data: matched[0] ?? null, error: null } : { data: matched, error: null };
         }
         let rows = applyFilters(store, filters);
@@ -111,6 +117,12 @@ export function makeFakeAdmin(tables: Record<string, Row[]>, opts: FakeAdminOpti
           updatePayload = p;
           return chain;
         },
+        delete: () => {
+          op = 'delete';
+          return chain;
+        },
+        // PostgREST `or` strings aren't parsed: treated as matching everything.
+        or: () => chain,
         eq: (c: string, v: unknown) => {
           filters.push({ op: 'eq', col: c, val: v });
           return chain;

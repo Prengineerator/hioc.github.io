@@ -1,8 +1,9 @@
 'use client';
 
-// "Send back to warehouse" (docs/WAREHOUSE-SPEC.md, WH-D6) — a manager sends
-// store stock to the warehouse: too much of something, a near-expiry batch
-// the warehouse can use elsewhere, an item being retired. It leaves the
+// "Send back to warehouse" (docs/WAREHOUSE-SPEC.md, WH-D8) — a manager, or a
+// staffer with warehouse access (WH-D16), sends store stock to the warehouse:
+// too much of something, a near-expiry batch the warehouse can use elsewhere,
+// an item being retired. It leaves the
 // store's stock the moment it is sent (earliest expiry first) and is in
 // transit until the owner counts it in at the warehouse; the owner is told.
 // POST /api/inventory/returns re-checks everything, and refuses more than the

@@ -2,7 +2,9 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { getEnrolledDevice } from '@/lib/api/device';
 import { getStaffSurface } from '@/lib/staff/surface';
+import { flags } from '@/lib/flags';
 import { requireInventoryActor } from '@/lib/inventory/api';
+import { hasWarehouseAccess } from '@/lib/inventory/warehouseServer';
 import { patchStockRequest, type RequestAction } from '@/lib/inventory/requestActions';
 
 export const dynamic = 'force-dynamic';
@@ -23,7 +25,9 @@ const STAFF_ACTIONS: readonly RequestAction[] = ['assign', 'pick', 'receive', 'c
 //                                                      without a login
 //   { action: 'pick',    lines: [{ itemId, qty }] }   the assignee (or a manager);
 //                                                      from the warehouse it is the
-//                                                      dispatch: the owner or a manager
+//                                                      dispatch: the owner, a manager,
+//                                                      or a staffer with warehouse
+//                                                      access (WH-D16)
 //   { action: 'receive', lines: [{ itemId, qty, expiryDate }] }
 //                                                      at the POS, not the picker
 //                                                      (nor the deliverer)
@@ -47,14 +51,22 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const surface = receiving ? await getStaffSurface() : 'web';
   const device = receiving ? await getEnrolledDevice() : null;
 
+  const admin = createAdminSupabaseClient();
+  // Only a dispatch cares whether a staffer has warehouse access (WH-D16).
+  const warehouseAccess =
+    body.action === 'pick' && flags.warehouse && !gate.actor.isManager
+      ? await hasWarehouseAccess(admin, gate.actor.user.id, gate.actor.role)
+      : false;
+
   return patchStockRequest(
-    createAdminSupabaseClient(),
+    admin,
     {
       userId: gate.actor.user.id,
       role: gate.actor.role,
       isManager: gate.actor.isManager,
       surface,
       deviceId: device?.id ?? null,
+      warehouseAccess,
     },
     params.id,
     body,

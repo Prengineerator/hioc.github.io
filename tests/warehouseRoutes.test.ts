@@ -319,6 +319,23 @@ describe('dispatch (what left the warehouse)', () => {
     expect(state.rpcCalls[0]).toMatchObject({ name: 'warehouse_dispatch', args: { p_actor: OWNER } });
   });
 
+  it('a staffer the owner gave warehouse access records it, even one they carry (WH-D16)', async () => {
+    state.tables.staff_accounts = [{ user_id: VIKRAM, warehouse_access: true, status: 'active' }];
+    state.actor = as(VIKRAM);
+    state.rpcResult = { data: { short: [] }, error: null };
+    expect((await staffPatch({ action: 'pick', lines })).status).toBe(200);
+    expect(state.rpcCalls[0]).toMatchObject({ name: 'warehouse_dispatch', args: { p_request_id: REQ, p_actor: VIKRAM } });
+  });
+
+  it('warehouse access switched off, or on a deactivated account, is refused', async () => {
+    state.actor = as(VIKRAM);
+    state.tables.staff_accounts = [{ user_id: VIKRAM, warehouse_access: false, status: 'active' }];
+    expect((await staffPatch({ action: 'pick', lines })).status).toBe(403);
+    state.tables.staff_accounts = [{ user_id: VIKRAM, warehouse_access: true, status: 'deactivated' }];
+    expect((await staffPatch({ action: 'pick', lines })).status).toBe(403);
+    expect(state.rpcCalls).toEqual([]);
+  });
+
   it('a store-room request still picks through inventory_pick', async () => {
     setRequest({ route: 'store_room', status: 'assigned', assigned_to: VIKRAM });
     state.actor = as(VIKRAM);
@@ -373,6 +390,30 @@ describe('cancel', () => {
     state.actor = as(MANAGER, 'manager');
     expect((await staffPatch({ action: 'cancel', reason: 'not needed' })).status).toBe(200);
     expect(state.updates[0].filters).toContainEqual(['in', 'status', ['requested', 'assigned']]);
+  });
+});
+
+describe('what the Stock screen is told about warehouse access (WH-D16)', () => {
+  it('a staffer with it is told so, and gets the team to name who carries a return', async () => {
+    state.tables.staff_accounts = [{ user_id: VIKRAM, warehouse_access: true, status: 'active' }];
+    state.actor = as(VIKRAM);
+    const body = await (await requestsRoute.GET()).json();
+    expect(body).toMatchObject({ canManage: false, warehouseAccess: true });
+    expect(body.assignees.map((p: { id: string }) => p.id)).toContain(VIKRAM);
+  });
+
+  it('plain staff are not, and get no team list', async () => {
+    state.actor = as(ASHA);
+    const body = await (await requestsRoute.GET()).json();
+    expect(body).toMatchObject({ canManage: false, warehouseAccess: false, assignees: [] });
+  });
+
+  it('with the warehouse off nobody is, whatever the switch says', async () => {
+    state.flags.warehouse = false;
+    state.tables.staff_accounts = [{ user_id: VIKRAM, warehouse_access: true, status: 'active' }];
+    state.actor = as(VIKRAM);
+    const body = await (await requestsRoute.GET()).json();
+    expect(body).toMatchObject({ warehouseAccess: false, assignees: [] });
   });
 });
 
@@ -503,6 +544,17 @@ describe('returns (Send back to warehouse)', () => {
     state.flags.warehouse = false;
     state.actor = as(MANAGER, 'manager');
     expect((await returnsRoute.POST(json('/api/inventory/returns', 'POST', body))).status).toBe(404);
+  });
+
+  it('a staffer with warehouse access can send it back, carrying it themselves (WH-D16)', async () => {
+    state.tables.staff_accounts = [{ user_id: VIKRAM, warehouse_access: true, status: 'active' }];
+    state.actor = as(VIKRAM);
+    state.rpcResult = { data: REQ, error: null };
+    const res = await returnsRoute.POST(json('/api/inventory/returns', 'POST', { lines: body.lines, assigneeId: VIKRAM }));
+    expect(res.status).toBe(201);
+    expect(state.rpcCalls[0]).toMatchObject({ name: 'warehouse_create_return', args: { p_actor: VIKRAM, p_assignee: VIKRAM } });
+    expect(sendStockAssignedEmail).not.toHaveBeenCalled();
+    expect(sendOwnerAlert).toHaveBeenCalledWith(expect.anything(), 'return_sent', REQ);
   });
 
   it('goes through warehouse_create_return, and the owner is alerted', async () => {

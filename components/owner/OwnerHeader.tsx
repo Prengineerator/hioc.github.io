@@ -292,11 +292,11 @@ export function OwnerHeader() {
   // See StaffHeader: compare the RESOLVED href, not the canonical one. On
   // owner.hioc.in '/owner/menu' is '/menu' and the root is '/'.
   const toHref = useSurfaceHref();
-  const { coffeePass, marketing, attendance } = flags;
+  const { coffeePass, marketing, attendance, shop } = flags;
   const warehouse = flags.inventory && flags.warehouse;
   const nav = useMemo(
-    () => ownerNav({ coffeePass, marketing, attendance, warehouse }),
-    [coffeePass, marketing, attendance, warehouse],
+    () => ownerNav({ coffeePass, marketing, attendance, warehouse, shop }),
+    [coffeePass, marketing, attendance, warehouse, shop],
   );
   const currentLink = activeOwnerLink(nav, pathname, toHref);
   const currentGroup = activeOwnerGroup(nav, pathname, toHref);
