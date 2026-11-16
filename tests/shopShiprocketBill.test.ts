@@ -24,9 +24,10 @@ const { POST: send } = await import('@/app/api/owner/shop/orders/[id]/shiprocket
 const ID = '7d0c3f0e-1b2a-4c5d-8e9f-0a1b2c3d4e5f';
 const PKG = { weight_kg: 1, length_cm: 28, breadth_cm: 12, height_cm: 10 };
 
-// HIOC-S1004: 3 jars, ₹1197, offer −₹448, free shipping, paid ₹749.
-const S1004 = {
-  order_number: 1004,
+// An order like HIOC-S1004: 3 jars, ₹1197, offer −₹448, free shipping, paid
+// ₹749. Numbered 1005, since S1004 itself is an accepted exception.
+const OFFER_ORDER = {
+  order_number: 1005,
   jar_count: 3,
   subtotal_inr: 1197,
   discount_inr: 448,
@@ -51,7 +52,7 @@ function req(body: unknown = {}) {
 }
 
 function seed(patch: Record<string, unknown>) {
-  state.tables = { shop_orders: [{ ...shopOrder({ ...S1004 }), ...patch } as Row] };
+  state.tables = { shop_orders: [{ ...shopOrder({ ...OFFER_ORDER }), ...patch } as Row] };
   state.admin = makeFakeAdmin(state.tables, { startMs: Date.parse('2026-11-16T12:00:00Z') });
 }
 
@@ -92,6 +93,14 @@ describe('Refresh from Shiprocket', () => {
     expect(body.order.shiprocket_total_inr).toBe(301);
     expect(body.warning).toContain("Shiprocket's bill says ₹301, but the customer paid ₹749");
     expect(row().shiprocket_total_inr).toBe(301);
+  });
+
+  it('does not warn for HIOC-S1004 itself at ₹301 (the accepted exception), but saves the amount', async () => {
+    seed({ order_number: 1004, status: 'sent_to_shiprocket', shiprocket_order_id: '1733716182', shiprocket_status: 'NEW' });
+    details = { total: '301.00' };
+    const body = (await (await refresh(req(), { params: { id: ID } })).json()) as { order: { shiprocket_total_inr: number }; warning?: string };
+    expect(body.warning).toBeUndefined();
+    expect(body.order.shiprocket_total_inr).toBe(301);
   });
 
   it('says nothing more when the bill matches', async () => {

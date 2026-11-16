@@ -125,6 +125,10 @@ Owner: /owner/shop → "Send to Shiprocket" (checks weight & box size)
   whose bill is wrong. (HIOC-S1004 paid ₹749 and Shiprocket's bill said ₹301:
   the offer was taken off twice, fixed in `buildShiprocketOrder()`.) Each read
   also logs Shiprocket's money fields (`shiprocket order amounts`) in Vercel.
+  A mismatch the owner has accepted is listed in `SHIPROCKET_BILL_EXCEPTIONS`
+  (`lib/shop/status.ts`) by order, Shiprocket order id and the exact wrong
+  amount: it shows as a quiet note instead of a warning, and is flagged again
+  if Shiprocket's bill changes. HIOC-S1004 (₹301) is the only one.
 - Download CSV: every paid order with address, items, amounts, refund,
   Razorpay payment id, Shiprocket id and AWB.
 

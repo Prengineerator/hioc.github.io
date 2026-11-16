@@ -174,12 +174,28 @@ describe("checking Shiprocket's bill against what the customer paid", () => {
     expect(shiprocketBillWarning(shopOrder({ ...sent, shiprocket_total_inr: 749 }))).toBeNull();
   });
 
-  it('flags HIOC-S1004: paid ₹749, Shiprocket’s bill ₹301', () => {
-    const order = shopOrder({ ...sent, shiprocket_total_inr: 301 });
+  it('flags a bill like HIOC-S1004’s on any other order: paid ₹749, Shiprocket’s bill ₹301', () => {
+    const order = shopOrder({ ...sent, order_number: 1005, shiprocket_order_id: '1733999999', shiprocket_total_inr: 301 });
     expect(shiprocketBillCheck(order)).toEqual({ state: 'differs', shiprocket: 301, paid: 749 });
     const warning = shiprocketBillWarning(order);
     expect(warning).toContain('₹301');
     expect(warning).toContain('₹749');
+  });
+
+  it('treats HIOC-S1004 at exactly ₹301 as the accepted exception: a note, no warning', () => {
+    const s1004 = shopOrder({ ...sent, order_number: 1004, shiprocket_total_inr: 301 });
+    const check = shiprocketBillCheck(s1004);
+    expect(check).toMatchObject({ state: 'exception', shiprocket: 301, paid: 749 });
+    expect(check?.state === 'exception' && check.note).toMatch(/Accepted/);
+    expect(shiprocketBillWarning(s1004)).toBeNull();
+  });
+
+  it('flags HIOC-S1004 again if its bill changes, and never extends the exception to another order', () => {
+    expect(shiprocketBillCheck(shopOrder({ ...sent, order_number: 1004, shiprocket_total_inr: 599 }))?.state).toBe('differs');
+    // Same number, a different Shiprocket order (e.g. sent again): flagged.
+    expect(shiprocketBillCheck(shopOrder({ ...sent, order_number: 1004, shiprocket_order_id: '1800000000', shiprocket_total_inr: 301 }))?.state).toBe('differs');
+    // Matching again is just a match.
+    expect(shiprocketBillCheck(shopOrder({ ...sent, order_number: 1004, shiprocket_total_inr: 749 }))?.state).toBe('matches');
   });
 
   it('flags a bill that left out the shipping (2 jars on the offer: ₹599 + ₹49)', () => {
