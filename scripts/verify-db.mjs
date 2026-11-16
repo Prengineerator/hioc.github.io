@@ -1550,6 +1550,18 @@ async function checkInstantCoffeeShop() {
   }
 }
 
+// Shop orders: Shiprocket's own order total, checked against what the
+// customer paid on /owner/shop (supabase/2026-11-shop-shiprocket-total.sql).
+// Without it the app skips that check. Reads only.
+async function checkShopShiprocketTotal() {
+  heading('SHOP-2 · Shiprocket bill check', '2026-11-shop-shiprocket-total.sql');
+  const r = await rest('/shop_orders?select=shiprocket_total_inr&limit=1');
+  if (r.ok) pass('shop_orders.shiprocket_total_inr exists');
+  else if (errKind(r) === 'no_column' || /shiprocket_total_inr/i.test(errText(r))) {
+    fail('shop_orders.shiprocket_total_inr exists', "/owner/shop can't check Shiprocket's bill — apply supabase/2026-11-shop-shiprocket-total.sql");
+  } else fail('shop_orders.shiprocket_total_inr exists', errText(r));
+}
+
 // ---------------------------------------------------------------------------
 // Coffee Pass — prepaid plans sold and redeemed as drinks
 // (docs/COFFEE-PASS-SPEC.md, supabase/2026-10-coffee-pass.sql). Customer-facing
@@ -2301,6 +2313,7 @@ async function main() {
   await checkInventory();
   await checkWarehouse();
   await checkInstantCoffeeShop();
+  await checkShopShiprocketTotal();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();

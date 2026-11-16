@@ -5,9 +5,9 @@ import { runAfterResponse } from '@/lib/api/background';
 import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, unauthorized } from '@/lib/api/http';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
-import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
+import { getShopOrder, saveShiprocketTotal, updateShopOrderIf } from '@/lib/shop/server';
 import { fetchShiprocketOrder } from '@/lib/shop/shiprocket';
-import { shopStatusFromShiprocket } from '@/lib/shop/status';
+import { shiprocketBillWarning, shopStatusFromShiprocket } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,7 +15,10 @@ export const dynamic = 'force-dynamic';
 // from Shiprocket: its status, AWB and courier. An AWB moves the order to
 // 'shipped' (the customer is emailed the tracking link), 'DELIVERED' to
 // 'delivered'. A cancelled or returning (RTO) shipment changes nothing here;
-// the owner sees Shiprocket's status and decides. Responds { order }.
+// the owner sees Shiprocket's status and decides. It also saves Shiprocket's
+// order total, which the owner page checks against what the customer paid.
+// Responds { order, warning? } — a warning when Shiprocket's bill doesn't
+// match, or when its total couldn't be read.
 export async function POST(_request: Request, { params }: { params: { id: string } }) {
   if (!(await getOwnerUser())) return unauthorized();
   if (!isUuid(params.id)) return notFound();
@@ -54,5 +57,11 @@ export async function POST(_request: Request, { params }: { params: { id: string
   if (next === 'shipped' || (next === 'delivered' && order.status === 'sent_to_shiprocket')) {
     runAfterResponse(sendShopShippedEmail(updated));
   }
-  return NextResponse.json({ order: updated });
+
+  const saved = state.total === null ? updated : await saveShiprocketTotal(admin, updated, state.total);
+  const warning =
+    state.total === null
+      ? "Updated from Shiprocket, but its bill total couldn't be read — check the amount on the order in the Shiprocket panel."
+      : shiprocketBillWarning({ ...updated, shiprocket_total_inr: state.total }); // warn even if the save didn't go through
+  return NextResponse.json(warning ? { order: saved, warning } : { order: saved });
 }

@@ -118,6 +118,40 @@ export function shopStatusFromShiprocket(
   return null;
 }
 
+/**
+ * Does Shiprocket's bill match what the customer paid? Shiprocket works out
+ * its own order total from what we send it, and that total is what its
+ * invoice, its emails to the customer and the parcel's declared value say.
+ * HIOC-S1004 paid ₹749 and Shiprocket's bill said ₹301, so /owner/shop
+ * checks every order it has read back. Null for an order not in Shiprocket.
+ * Under ₹1 apart counts as the same (Shiprocket keeps paise).
+ */
+export type ShiprocketBillCheck =
+  | { state: 'unchecked' }
+  | { state: 'matches'; shiprocket: number }
+  | { state: 'differs'; shiprocket: number; paid: number };
+
+export function shiprocketBillCheck(
+  order: Pick<ShopOrderRow, 'shiprocket_order_id' | 'shiprocket_total_inr' | 'total_inr'>,
+): ShiprocketBillCheck | null {
+  if (!order.shiprocket_order_id) return null;
+  const shiprocket = order.shiprocket_total_inr;
+  if (shiprocket === null || shiprocket === undefined || !Number.isFinite(shiprocket)) return { state: 'unchecked' };
+  if (Math.abs(shiprocket - order.total_inr) < 1) return { state: 'matches', shiprocket };
+  return { state: 'differs', shiprocket, paid: order.total_inr };
+}
+
+const inr = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
+/** The owner's warning for a bill that doesn't match, or null when it does (or isn't read yet). */
+export function shiprocketBillWarning(
+  order: Pick<ShopOrderRow, 'shiprocket_order_id' | 'shiprocket_total_inr' | 'total_inr'>,
+): string | null {
+  const check = shiprocketBillCheck(order);
+  if (check?.state !== 'differs') return null;
+  return `Shiprocket's bill says ${inr(check.shiprocket)}, but the customer paid ${inr(check.paid)}. That wrong amount goes on Shiprocket's invoice, its emails to the customer and the parcel's declared value. Correct the order in the Shiprocket panel before a courier is booked.`;
+}
+
 /** The customer's tracking page for an AWB, on Shiprocket's tracking site. */
 export function trackingUrl(awb: string | null | undefined): string | null {
   const code = (awb ?? '').trim();
