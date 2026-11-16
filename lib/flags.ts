@@ -146,6 +146,15 @@ export const flags = {
   // stays reachable to check setup). NEXT_PUBLIC_ because the header and popup
   // decide client-side.
   shop: boolEnv(process.env.NEXT_PUBLIC_FLAG_SHOP, false),
+  // First-party traffic tracking (docs/TRAFFIC-TRACKING.md): where visitors to
+  // the ordering and Shop pages come from (linking site and utm_* tags), and
+  // which of those visits end in an order, shown on Owner → Traffic. Default
+  // ON: every write is best-effort, so until
+  // supabase/2026-11-traffic-tracking.sql is applied nothing is recorded and
+  // nothing breaks. NEXT_PUBLIC_FLAG_TRAFFIC_TRACKING=false stops the browser
+  // sending page views and the checkout routes recording orders. NEXT_PUBLIC_
+  // because the tracker runs in the browser.
+  trafficTracking: boolEnv(process.env.NEXT_PUBLIC_FLAG_TRAFFIC_TRACKING, true),
 } as const;
 
 export type FeatureFlags = typeof flags;

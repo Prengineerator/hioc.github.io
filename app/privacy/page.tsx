@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS, SHOP_POLICY_UPDATED } from '@/lib/legal';
+import { BUSINESS, SHOP_POLICY_UPDATED, TRAFFIC_POLICY_UPDATED } from '@/lib/legal';
 import { flags } from '@/lib/flags';
 
 export const metadata: Metadata = { title: 'Privacy Policy' };
@@ -8,8 +8,12 @@ export const metadata: Metadata = { title: 'Privacy Policy' };
 export default function PrivacyPage() {
   return (
     // The shop lines (delivery address, courier) appear only while the
-    // Instant Coffee shop is switched on (docs/INSTANT-COFFEE-SHOP.md).
-    <PolicyLayout title="Privacy Policy" updated={flags.shop ? SHOP_POLICY_UPDATED : undefined}>
+    // Instant Coffee shop is switched on (docs/INSTANT-COFFEE-SHOP.md), and the
+    // visit-tracking lines only while traffic tracking is (docs/TRAFFIC-TRACKING.md).
+    <PolicyLayout
+      title="Privacy Policy"
+      updated={flags.trafficTracking ? TRAFFIC_POLICY_UPDATED : flags.shop ? SHOP_POLICY_UPDATED : undefined}
+    >
       <p>
         This Privacy Policy explains how {BUSINESS.legalName} (&ldquo;{BUSINESS.name}&rdquo;,
         &ldquo;we&rdquo;) collects, uses, and protects your personal data when you use our website
@@ -30,7 +34,18 @@ export default function PrivacyPage() {
             </li>
           ) : null}
           <li><strong>Payment references</strong>: transaction identifiers from our payment gateway. We do <em>not</em> collect or store your card number, CVV, or UPI PIN.</li>
-          <li><strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.</li>
+          {flags.trafficTracking ? (
+            <li>
+              <strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used. When you open
+              our ordering or shop pages we note which page it was, the website or campaign link that sent you there (for
+              example Instagram, Google or a link we tagged), whether you are on a phone, tablet or computer, your
+              approximate country and city, and whether that visit ended in an order. We use a random visit id kept only in
+              your browser tab, with no cookie, and we do not store your IP address or tie this to your name, number or
+              account. If your browser sends a Global Privacy Control or Do Not Track signal, we record nothing.
+            </li>
+          ) : (
+            <li><strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.</li>
+          )}
         </ul>
       </PolicySection>
 
@@ -75,6 +90,7 @@ export default function PrivacyPage() {
         <p>
           We keep order and account data for as long as needed to provide the service and to meet
           legal, accounting, and tax requirements, after which it is deleted or anonymised.
+          {flags.trafficTracking ? ' Usage data about visits to our ordering and shop pages is deleted after 13 months.' : null}
         </p>
       </PolicySection>
 

@@ -18,6 +18,7 @@ import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
 import { LOYALTY_UNIT, beaniesUnit } from '@/lib/loyalty/brand';
 import { flags } from '@/lib/flags';
+import { getTrafficAttribution } from '@/lib/traffic/client';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { useRitualOffer } from '@/components/passes/useRitualOffer';
 import { Skeleton } from '@/components/ui/Skeleton';
@@ -594,6 +595,9 @@ export function CheckoutForm({
           ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
           // Coffey checkout pairings: same rule, omitted when no line came from the card.
           ...(pairingLines ? { pairing_lines: pairingLines } : {}),
+          // Where this visit came from (docs/TRAFFIC-TRACKING.md). Undefined, so
+          // left out, when tracking is off or the browser declines it.
+          traffic: getTrafficAttribution(flags.trafficTracking),
         }),
       });
 

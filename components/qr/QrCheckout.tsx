@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { flags } from '@/lib/flags';
+import { getTrafficAttribution } from '@/lib/traffic/client';
 import { createClient } from '@/lib/supabase';
 import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
 import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel';
@@ -193,6 +194,8 @@ export function QrCheckout({
             special_instructions: i.specialInstructions,
             ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
           })),
+          // Where this visit came from (docs/TRAFFIC-TRACKING.md); left out when off or declined.
+          traffic: getTrafficAttribution(flags.trafficTracking),
         }),
       });
 

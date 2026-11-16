@@ -15,6 +15,8 @@ import { Select } from '@/components/ui/Select';
 import { LocationPin } from '@/components/shop/LocationPin';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
+import { flags } from '@/lib/flags';
+import { getTrafficAttribution } from '@/lib/traffic/client';
 import { INDIAN_STATES, validateShopAddress, type AddressField } from '@/lib/shop/address';
 import { FALLBACK_FLAVOUR_STYLE, FLAVOUR_STYLE } from '@/lib/shop/catalog';
 import type { ShopLocation } from '@/lib/shop/location';
@@ -175,7 +177,14 @@ export function ShopExperience({
         res = await fetch('/api/shop/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items, address: form, location: pin, expected_total_inr: quote.total_inr }),
+          body: JSON.stringify({
+            items,
+            address: form,
+            location: pin,
+            expected_total_inr: quote.total_inr,
+            // Where this visit came from (docs/TRAFFIC-TRACKING.md); left out when off or declined.
+            traffic: getTrafficAttribution(flags.trafficTracking),
+          }),
         });
         data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       } catch {

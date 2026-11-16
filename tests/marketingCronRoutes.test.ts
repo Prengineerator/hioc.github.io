@@ -5,7 +5,8 @@ import { newDb, rowsOf, seedSettings } from './helpers/marketingWorld';
 // The two crons, the public opt-in link and the click redirect (spec §6).
 //   crons          CRON_SECRET Bearer, fail CLOSED, GET and POST both, migration-missing is a no-op
 //   /api/marketing/optin   public, only the link, only when the flag is on AND a number is set
-//   /r/[token]     stamps the FIRST click only, then always 302 → /menu, never an error
+//   /r/[token]     stamps the FIRST click only, then always 302 → /menu (tagged as a
+//                  WhatsApp offer for Owner → Traffic), never an error
 
 const h = vi.hoisted(() => ({
   db: null as unknown as FakeDb,
@@ -178,9 +179,14 @@ describe('GET /r/[token] (public click redirect)', () => {
     expect(new URL(res.headers.get('location')!).pathname).toBe('/menu');
   });
 
-  it('carries nothing personal: the redirect is a bare /menu', async () => {
+  it('carries nothing personal: only the two fixed WhatsApp-offer tags, the same for everyone', async () => {
     const res = await call(TOKEN);
-    expect(new URL(res.headers.get('location')!).search).toBe('');
+    const location = new URL(res.headers.get('location')!);
+    expect([...location.searchParams.entries()]).toEqual([
+      ['utm_source', 'whatsapp'],
+      ['utm_medium', 'offer'],
+    ]);
+    expect(res.headers.get('location')).not.toContain(TOKEN);
     expect(res.headers.get('location')).not.toContain('9876543210');
   });
 });

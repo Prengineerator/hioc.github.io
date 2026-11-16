@@ -28,5 +28,13 @@ export async function GET(request: Request, { params }: { params: { token: strin
   }
   // 302, not Next's default 307: a browser follow-up to /menu is a plain GET either way,
   // and a click link is not something a client should cache as permanent.
-  return NextResponse.redirect(new URL('/menu', request.url), 302);
+  //
+  // The two fixed tags let Owner → Traffic count these clicks as WhatsApp
+  // offers (docs/TRAFFIC-TRACKING.md): WhatsApp passes no linking site, so
+  // without them every offer click would read as Direct. They are the same for
+  // every recipient, so the URL still says nothing about who clicked.
+  const target = new URL('/menu', request.url);
+  target.searchParams.set('utm_source', 'whatsapp');
+  target.searchParams.set('utm_medium', 'offer');
+  return NextResponse.redirect(target, 302);
 }

@@ -23,6 +23,10 @@
       "schedule": "0 2 * * 0"
     },
     {
+      "path": "/api/cron/purge-traffic",
+      "schedule": "20 2 * * 0"
+    },
+    {
       "path": "/api/cron/suggest-digest",
       "schedule": "30 22 * * 0"
     },

@@ -2273,6 +2273,28 @@ async function checkCoffeeAddonsPairings() {
   }
 }
 
+// First-party traffic tracking (docs/TRAFFIC-TRACKING.md). Read-only: the
+// table is service-role only, so this selects every column the API writes and
+// Owner → Traffic reads, and writes nothing.
+const TRAFFIC_COLUMNS = [
+  'id', 'created_at', 'event', 'session_id', 'page_group', 'route', 'landing', 'source', 'referrer_host',
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'device', 'country', 'city',
+  'order_id', 'shop_order_id', 'value_inr',
+];
+
+async function checkTrafficTracking() {
+  heading('TRAFFIC · first-party tracking table', '2026-11-traffic-tracking.sql');
+  const hint = 'apply supabase/2026-11-traffic-tracking.sql';
+  const res = await rest(`/traffic_events?select=${TRAFFIC_COLUMNS.join(',')}&limit=1`);
+  if (res.ok) {
+    pass('traffic_events exists', `${TRAFFIC_COLUMNS.length} column(s) selectable`);
+    return;
+  }
+  const kind = errKind(res);
+  if (kind === 'no_table' || kind === 'no_column') fail('traffic_events exists', `${hint} — ${errText(res)}`);
+  else fail('traffic_events exists', `${kind}: ${errText(res)}`);
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -2310,6 +2332,7 @@ async function main() {
   await checkSettleEditOrder();
   await checkMarketingAgent();
   await checkOnlineSettlements();
+  await checkTrafficTracking();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);
