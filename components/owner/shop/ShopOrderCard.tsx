@@ -216,6 +216,10 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
               <span aria-hidden="true">✓ </span>Shiprocket&apos;s bill{' '}
               <span className="font-mono font-semibold tabular-nums">{rupees(bill.shiprocket)}</span> matches what the customer paid
             </p>
+          ) : bill?.state === 'exception' ? (
+            <p className="text-xs text-muted">
+              Shiprocket&apos;s bill says {rupees(bill.shiprocket)}; the customer paid {rupees(bill.paid)}. {bill.note}
+            </p>
           ) : bill?.state === 'unchecked' && canRefresh ? (
             <p className="text-xs text-muted">Shiprocket&apos;s bill not checked yet — press Refresh from Shiprocket.</p>
           ) : bill?.state === 'differs' && !canRefresh ? (

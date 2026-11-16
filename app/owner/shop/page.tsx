@@ -92,6 +92,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
   const wrongBills = ((billsResult.error ? [] : billsResult.data ?? []) as Bill[]).filter(
     (b) =>
       shiprocketBillCheck({
+        order_number: Number(b.order_number),
         shiprocket_order_id: b.shiprocket_order_id,
         total_inr: Number(b.total_inr),
         shiprocket_total_inr: Number(b.shiprocket_total_inr),
