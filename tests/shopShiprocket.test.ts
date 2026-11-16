@@ -8,6 +8,7 @@ import {
   parseOrderDetails,
   resetShiprocketTokenCache,
   shiprocketDate,
+  shiprocketAmount,
   shiprocketErrorMessage,
   SHIPROCKET_NOT_CONFIGURED,
 } from '@/lib/shop/shiprocket';
@@ -134,6 +135,7 @@ describe('reading Shiprocket answers', () => {
       awb: 'A1',
       courier: 'Delhivery',
       shipmentId: '9',
+      total: null,
     });
     expect(parseOrderDetails({ data: { id: 1, status: 'IN TRANSIT', shipments: [{ id: 9, awb_code: 'A2', courier_name: 'Blue Dart' }] } })).toMatchObject({
       awb: 'A2',
@@ -142,6 +144,26 @@ describe('reading Shiprocket answers', () => {
     expect(parseOrderDetails({ data: { id: 1, status: 'NEW', awb_data: { awb: 'A3' } } })).toMatchObject({ awb: 'A3' });
     expect(parseOrderDetails({ data: { id: 1, status: 'NEW', shipments: { id: 9, awb: '' } } })).toMatchObject({ awb: null });
     expect(parseOrderDetails('nonsense')).toBeNull();
+  });
+
+  it("reads Shiprocket's order total from total, else net_total", () => {
+    // HIOC-S1004 as Shiprocket held it before the fix: the offer taken off twice.
+    expect(parseOrderDetails({ data: { id: 1, status: 'NEW', total: '301.00', net_total: '301.00' } })?.total).toBe(301);
+    expect(parseOrderDetails({ data: { id: 1, status: 'NEW', total: 749 } })?.total).toBe(749);
+    expect(parseOrderDetails({ data: { id: 1, status: 'NEW', net_total: '1,197.00' } })?.total).toBe(1197);
+    expect(parseOrderDetails({ data: { id: 1, status: 'NEW', total: '' , net_total: '648.00' } })?.total).toBe(648);
+    expect(parseOrderDetails({ data: { id: 1, status: 'NEW' } })?.total).toBeNull();
+  });
+
+  it('reads amounts as numbers or rupee strings, and nothing else', () => {
+    expect(shiprocketAmount(0)).toBe(0);
+    expect(shiprocketAmount('₹ 1,197.50')).toBe(1197.5);
+    expect(shiprocketAmount('Rs. 301')).toBe(301);
+    expect(shiprocketAmount('INR 749.00')).toBe(749);
+    expect(shiprocketAmount('abc')).toBeNull();
+    expect(shiprocketAmount('')).toBeNull();
+    expect(shiprocketAmount(null)).toBeNull();
+    expect(shiprocketAmount(Number.NaN)).toBeNull();
   });
 
   it('turns an error body into one readable line', () => {
@@ -227,7 +249,7 @@ describe('fetch and cancel', () => {
       return json({ status: 200 });
     };
     const got = await fetchShiprocketOrder('5001');
-    expect(got).toEqual({ ok: true, state: { status: 'PICKUP SCHEDULED', awb: 'AWB55', courier: 'Xpressbees', shipmentId: '6001' } });
+    expect(got).toEqual({ ok: true, state: { status: 'PICKUP SCHEDULED', awb: 'AWB55', courier: 'Xpressbees', shipmentId: '6001', total: null } });
     expect(calls[1].url).toBe('https://apiv2.shiprocket.in/v1/external/orders/show/5001');
 
     expect(await cancelShiprocketOrder('5001')).toEqual({ ok: true });

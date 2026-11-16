@@ -71,6 +71,12 @@ export function toShopOrderRow(raw: Record<string, unknown>): ShopOrderRow {
     offer_name: typeof raw.offer_name === 'string' && raw.offer_name ? raw.offer_name : null,
     shipping_inr: Number(raw.shipping_inr),
     total_inr: Number(raw.total_inr),
+    shiprocket_total_inr:
+      raw.shiprocket_total_inr === null || raw.shiprocket_total_inr === undefined || raw.shiprocket_total_inr === ''
+        ? null
+        : Number.isFinite(Number(raw.shiprocket_total_inr))
+          ? Number(raw.shiprocket_total_inr)
+          : null,
     cancel_reason: typeof raw.cancel_reason === 'string' ? raw.cancel_reason : '',
     address_line2: typeof raw.address_line2 === 'string' ? raw.address_line2 : '',
   };
@@ -111,4 +117,21 @@ export async function updateShopOrderIf(
     return null;
   }
   return data ? toShopOrderRow(data as Record<string, unknown>) : null;
+}
+
+/**
+ * Saves Shiprocket's order total on the order, on its own so a failure here
+ * never undoes a send or a refresh. Returns the order with the total on it,
+ * or the order as it was when the write didn't go through (logged, except
+ * before supabase/2026-11-shop-shiprocket-total.sql is applied).
+ */
+export async function saveShiprocketTotal(admin: SupabaseClient, order: ShopOrderRow, total: number): Promise<ShopOrderRow> {
+  const { error } = await admin.from('shop_orders').update({ shiprocket_total_inr: total }).eq('id', order.id);
+  if (error) {
+    const m = (error.message ?? '').toLowerCase();
+    const missingColumn = error.code === '42703' || error.code === 'PGRST204' || m.includes('shiprocket_total_inr');
+    if (!missingColumn) console.error('shop: could not save the Shiprocket total', order.id, error);
+    return order;
+  }
+  return { ...order, shiprocket_total_inr: total };
 }

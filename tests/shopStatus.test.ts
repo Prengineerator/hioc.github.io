@@ -7,6 +7,8 @@ import {
   canMarkShipped,
   canSendToShiprocket,
   ownerTab,
+  shiprocketBillCheck,
+  shiprocketBillWarning,
   shopOrderRef,
   shopStatusFromShiprocket,
   shouldCancelInShiprocket,
@@ -150,5 +152,38 @@ describe('owner inputs and the CSV', () => {
     expect(row).toContain('Signature Classic × 2');
     expect(row).toContain(847);
     expect(row).toContain('AWB9');
+  });
+});
+
+describe("checking Shiprocket's bill against what the customer paid", () => {
+  const sent = { shiprocket_order_id: '1733716182', total_inr: 749 };
+
+  it('has nothing to check for an order not in Shiprocket', () => {
+    expect(shiprocketBillCheck(shopOrder())).toBeNull();
+    expect(shiprocketBillWarning(shopOrder({ shiprocket_total_inr: 301 }))).toBeNull();
+  });
+
+  it('is unchecked until Shiprocket’s total has been read back', () => {
+    expect(shiprocketBillCheck(shopOrder({ ...sent, shiprocket_total_inr: null }))).toEqual({ state: 'unchecked' });
+    expect(shiprocketBillWarning(shopOrder({ ...sent, shiprocket_total_inr: null }))).toBeNull();
+  });
+
+  it('matches when Shiprocket’s total is what was paid (paise aside)', () => {
+    expect(shiprocketBillCheck(shopOrder({ ...sent, shiprocket_total_inr: 749 }))).toEqual({ state: 'matches', shiprocket: 749 });
+    expect(shiprocketBillCheck(shopOrder({ ...sent, shiprocket_total_inr: 749.4 }))?.state).toBe('matches');
+    expect(shiprocketBillWarning(shopOrder({ ...sent, shiprocket_total_inr: 749 }))).toBeNull();
+  });
+
+  it('flags HIOC-S1004: paid ₹749, Shiprocket’s bill ₹301', () => {
+    const order = shopOrder({ ...sent, shiprocket_total_inr: 301 });
+    expect(shiprocketBillCheck(order)).toEqual({ state: 'differs', shiprocket: 301, paid: 749 });
+    const warning = shiprocketBillWarning(order);
+    expect(warning).toContain('₹301');
+    expect(warning).toContain('₹749');
+  });
+
+  it('flags a bill that left out the shipping (2 jars on the offer: ₹599 + ₹49)', () => {
+    const order = shopOrder({ shiprocket_order_id: '9', subtotal_inr: 798, discount_inr: 199, shipping_inr: 49, total_inr: 648, shiprocket_total_inr: 599 });
+    expect(shiprocketBillCheck(order)).toEqual({ state: 'differs', shiprocket: 599, paid: 648 });
   });
 });

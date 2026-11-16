@@ -20,7 +20,7 @@ import { isGatewayConfigured } from '@/lib/payments/gateway';
 import { rupees } from '@/lib/shop/pricing';
 import { isMissingShopSchema, loadShopProducts, loadShopSettings, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
 import { isShiprocketConfigured } from '@/lib/shop/shiprocket';
-import { OWNER_TABS, ownerTab, PAID_STATUSES } from '@/lib/shop/status';
+import { OWNER_TABS, ownerTab, PAID_STATUSES, shiprocketBillCheck, shopOrderRef } from '@/lib/shop/status';
 import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
 
 export const dynamic = 'force-dynamic';
@@ -53,7 +53,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
   const admin = createAdminSupabaseClient();
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [productsResult, listResult, countsResult, recentResult, settings] = await Promise.all([
+  const [productsResult, listResult, countsResult, recentResult, settings, billsResult] = await Promise.all([
     loadShopProducts(admin),
     admin
       .from('shop_orders')
@@ -64,6 +64,13 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
     admin.from('shop_orders').select('status').in('status', ['paid', 'sent_to_shiprocket', 'shipped']),
     admin.from('shop_orders').select('status, jar_count, total_inr, refunded_inr').gte('paid_at', since),
     loadShopSettings(admin),
+    // Shiprocket's bill vs what the customer paid, for orders still on their
+    // way. Errors (e.g. before 2026-11-shop-shiprocket-total.sql) skip it.
+    admin
+      .from('shop_orders')
+      .select('order_number, total_inr, shiprocket_order_id, shiprocket_total_inr')
+      .in('status', ['sent_to_shiprocket', 'shipped'])
+      .not('shiprocket_total_inr', 'is', null),
   ]);
 
   const missingSchema = (!productsResult.ok && productsResult.missingSchema) || isMissingShopSchema(listResult.error);
@@ -80,6 +87,16 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
   const kept = recent.filter((r) => PAID_STATUSES.includes(r.status));
   const revenue = kept.reduce((n, r) => n + Number(r.total_inr), 0);
   const jars = kept.reduce((n, r) => n + Number(r.jar_count), 0);
+
+  type Bill = { order_number: number; total_inr: number | string; shiprocket_order_id: string | null; shiprocket_total_inr: number | string };
+  const wrongBills = ((billsResult.error ? [] : billsResult.data ?? []) as Bill[]).filter(
+    (b) =>
+      shiprocketBillCheck({
+        shiprocket_order_id: b.shiprocket_order_id,
+        total_inr: Number(b.total_inr),
+        shiprocket_total_inr: Number(b.shiprocket_total_inr),
+      })?.state === 'differs',
+  );
 
   const razorpay = isGatewayConfigured();
   const shiprocket = isShiprocketConfigured();
@@ -123,6 +140,23 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
             </SetupItem>
           </ul>
           <p className="mt-2 text-muted">Step by step: docs/INSTANT-COFFEE-SHOP.md.</p>
+        </section>
+      ) : null}
+
+      {wrongBills.length > 0 ? (
+        <section role="alert" className="mt-6 rounded-md border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          <p className="font-bold">
+            Shiprocket&apos;s bill doesn&apos;t match what the customer paid:{' '}
+            {wrongBills.map((b) => shopOrderRef(Number(b.order_number))).join(', ')}
+          </p>
+          <p className="mt-1">
+            The wrong amount goes on Shiprocket&apos;s invoice, its emails to the customer and the parcel&apos;s declared value.
+            See the order under{' '}
+            <Link href="/owner/shop?tab=with_courier" className="font-semibold underline">
+              With courier
+            </Link>
+            .
+          </p>
         </section>
       ) : null}
 

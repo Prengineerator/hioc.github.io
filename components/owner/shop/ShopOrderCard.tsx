@@ -7,6 +7,10 @@
 //   Shipped         Refresh · Mark delivered · Cancel & refund
 //   Delivered       Cancel & refund (e.g. arrived damaged)
 // Every action calls an /api/owner/shop route and refreshes the server page.
+//
+// Once an order is in Shiprocket, the card also checks Shiprocket's bill (its
+// own order total, read back on send and on Refresh) against what the customer
+// paid, and warns in red when they differ (lib/shop/status.ts).
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -21,6 +25,8 @@ import {
   canMarkShipped,
   canSendToShiprocket,
   OWNER_STATUS_LABEL,
+  shiprocketBillCheck,
+  shiprocketBillWarning,
   shopOrderRef,
   trackingUrl,
 } from '@/lib/shop/status';
@@ -76,6 +82,9 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   const ref = shopOrderRef(order.order_number);
   const tracking = trackingUrl(order.awb_code);
   const pin = locationFromRow(order);
+  const canRefresh = Boolean(order.shiprocket_order_id) && (order.status === 'sent_to_shiprocket' || order.status === 'shipped');
+  const bill = shiprocketBillCheck(order);
+  const billWarning = shiprocketBillWarning(order);
 
   async function act(path: string, method: 'POST' | 'PATCH', body: unknown, done: string) {
     setBusy(true);
@@ -202,7 +211,25 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
               ) : null}
             </p>
           ) : null}
+          {bill?.state === 'matches' ? (
+            <p className="text-green-800">
+              <span aria-hidden="true">✓ </span>Shiprocket&apos;s bill{' '}
+              <span className="font-mono font-semibold tabular-nums">{rupees(bill.shiprocket)}</span> matches what the customer paid
+            </p>
+          ) : bill?.state === 'unchecked' && canRefresh ? (
+            <p className="text-xs text-muted">Shiprocket&apos;s bill not checked yet — press Refresh from Shiprocket.</p>
+          ) : bill?.state === 'differs' && !canRefresh ? (
+            // Delivered or cancelled: nothing left to correct, so a note, not an alarm.
+            <p className="text-xs text-muted">
+              Shiprocket&apos;s bill said {rupees(bill.shiprocket)}; the customer paid {rupees(bill.paid)}.
+            </p>
+          ) : null}
         </div>
+      ) : null}
+      {billWarning && canRefresh ? (
+        <p role="alert" className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800">
+          {billWarning}
+        </p>
       ) : null}
 
       {order.status === 'cancelled' ? (
@@ -226,7 +253,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             Send to Shiprocket
           </Button>
         ) : null}
-        {order.shiprocket_order_id && (order.status === 'sent_to_shiprocket' || order.status === 'shipped') ? (
+        {canRefresh ? (
           <Button size="sm" variant="secondary" loading={busy && panel === null} onClick={() => void act(`${base}/refresh`, 'POST', {}, 'Updated from Shiprocket.')} disabled={busy}>
             Refresh from Shiprocket
           </Button>
