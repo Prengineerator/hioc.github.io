@@ -151,8 +151,9 @@ function splitName(full: string): { first: string; last: string } {
 /**
  * The "Create custom order" body for a paid shop order. Pure (tested).
  * Prepaid only. Shipping is billed to the customer as shipping_charges;
- * sub_total is the jars after the offer (total_discount). The billing address
- * is the delivery address.
+ * sub_total is the jars at ₹399 each and the offer is total_discount, so
+ * Shiprocket's total (sub_total − total_discount + shipping_charges) is what
+ * the customer paid. The billing address is the delivery address.
  */
 export function buildShiprocketOrder(
   order: ShopOrderRow,
@@ -195,10 +196,13 @@ export function buildShiprocketOrder(
     shipping_charges: order.shipping_inr,
     giftwrap_charges: 0,
     transaction_charges: 0,
-    // The online offer: the jars stay at ₹399 each on the items, the offer is
-    // the order's discount, and sub_total is what the jars were sold for.
+    // The online offer: the jars stay at ₹399 each on the items, and the offer
+    // is the order's discount. sub_total is the jars BEFORE the offer (the sum
+    // of the items): Shiprocket takes total_discount off sub_total itself, so
+    // sending the after-offer amount here took the offer off twice (#S1004:
+    // ₹1197 of jars, ₹448 offer, paid ₹749, but Shiprocket showed ₹301).
     total_discount: order.discount_inr,
-    sub_total: order.subtotal_inr - order.discount_inr,
+    sub_total: order.subtotal_inr,
     length: pkg.length_cm,
     breadth: pkg.breadth_cm,
     height: pkg.height_cm,
