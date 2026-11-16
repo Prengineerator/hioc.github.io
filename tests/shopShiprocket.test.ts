@@ -81,10 +81,28 @@ describe('buildShiprocketOrder', () => {
 
   it('sends the offer as the order discount; the jars keep ₹399 each', () => {
     const body = buildShiprocketOrder(shopOrder({ jar_count: 3, subtotal_inr: 1197, discount_inr: 448, offer_name: 'Introductory offer', shipping_inr: 0, total_inr: 749, lines: [
-      { product_id: 'classic', name: 'Signature Classic', sku: 'HIOC-IC-CLASSIC-50G', unit_price_inr: 399, quantity: 3, line_total_inr: 1197 },
+      { product_id: 'classic', name: 'Signature Classic', sku: 'HIOC-IC-CLASSIC-50G', unit_price_inr: 399, quantity: 2, line_total_inr: 798 },
+      { product_id: 'hazelnut', name: 'Nutty Hazelnut', sku: 'HIOC-IC-HAZELNUT-50G', unit_price_inr: 399, quantity: 1, line_total_inr: 399 },
     ] }), PKG, 'Primary');
-    expect(body).toMatchObject({ total_discount: 448, sub_total: 749, shipping_charges: 0 });
-    expect((body.order_items as { selling_price: number }[])[0].selling_price).toBe(399);
+    // sub_total is the jars before the offer: Shiprocket takes total_discount
+    // off it itself (sending ₹749 here showed the customer ₹749 − ₹448 = ₹301).
+    expect(body).toMatchObject({ total_discount: 448, sub_total: 1197, shipping_charges: 0 });
+    const items = body.order_items as { selling_price: number; units: number; discount: number }[];
+    expect(items.map((i) => i.selling_price)).toEqual([399, 399]);
+    expect(items.reduce((n, i) => n + i.selling_price * i.units - i.discount, 0)).toBe(body.sub_total);
+  });
+
+  it("makes Shiprocket's total equal what the customer paid, offer and shipping included", () => {
+    const shiprocketTotal = (b: Record<string, unknown>) =>
+      (b.sub_total as number) - (b.total_discount as number) + (b.shipping_charges as number);
+    // 3 jars on the offer, free shipping: paid ₹749.
+    const three = shopOrder({ jar_count: 3, subtotal_inr: 1197, discount_inr: 448, shipping_inr: 0, total_inr: 749 });
+    expect(shiprocketTotal(buildShiprocketOrder(three, PKG, 'Primary'))).toBe(749);
+    // 2 jars on the offer + ₹49 shipping: paid ₹648.
+    const two = shopOrder({ subtotal_inr: 798, discount_inr: 199, shipping_inr: 49, total_inr: 648 });
+    expect(shiprocketTotal(buildShiprocketOrder(two, PKG, 'Primary'))).toBe(648);
+    // No offer: ₹798 + ₹49.
+    expect(shiprocketTotal(buildShiprocketOrder(shopOrder(), PKG, 'Primary'))).toBe(847);
   });
 
   it('sends free shipping as 0 and a one-word name with an empty last name', () => {
