@@ -125,6 +125,10 @@ export function ownerNav(input: OwnerNavInput): OwnerNav {
         ...(input.marketing
           ? [{ href: '/owner/marketing', label: 'Marketing', description: 'Campaigns the agent prepares for you' }]
           : []),
+        // Where those customers come from online, and which visits order
+        // (docs/TRAFFIC-TRACKING.md). Always shown, like Suggestions: before the
+        // migration is applied the page itself says what to do.
+        { href: '/owner/traffic', label: 'Traffic', description: 'Where website visitors and orders come from' },
       ],
     },
     {

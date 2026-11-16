@@ -10,6 +10,9 @@ import { locationColumns, parseShopLocation } from '@/lib/shop/location';
 import { parseCartItems, priceShopCart } from '@/lib/shop/pricing';
 import { isMissingShopSchema, loadShopOffer, loadShopProducts, SHOP_MIGRATION_HINT } from '@/lib/shop/server';
 import { shopOrderRef } from '@/lib/shop/status';
+import { runAfterResponse } from '@/lib/api/background';
+import { recordTrafficConversion, trafficContext } from '@/lib/traffic/record';
+import { parseTrafficAttribution } from '@/lib/traffic/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -136,6 +139,20 @@ export async function POST(request: Request) {
     await withdraw();
     return errorResponse(503, PAYMENT_UNAVAILABLE);
   }
+
+  // Which visit this checkout came from, for Owner → Traffic
+  // (docs/TRAFFIC-TRACKING.md). Recorded now, counted there only once the
+  // order is paid. Best-effort; a missing or malformed `traffic` is skipped.
+  runAfterResponse(
+    recordTrafficConversion(admin, {
+      event: 'shop_order',
+      attribution: parseTrafficAttribution(body.traffic),
+      route: '/shop',
+      context: trafficContext(request),
+      shopOrderId: order.id,
+      valueInr: order.total_inr,
+    }),
+  );
 
   return NextResponse.json(
     { order_id: order.id, order_number: order.order_number, total_inr: order.total_inr, payment },

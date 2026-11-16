@@ -5,6 +5,8 @@ import { Analytics } from '@vercel/analytics/next';
 import { SiteHeader } from '@/components/site/SiteHeader';
 import { SiteFooter } from '@/components/site/SiteFooter';
 import { SurfaceProvider } from '@/components/SurfaceLink';
+import { TrafficTracker } from '@/components/traffic/TrafficTracker';
+import { flags } from '@/lib/flags';
 import { surfaceForHost, type Surface } from '@/lib/routing/surface';
 import { devanagariFont } from '@/lib/print/devanagariFont';
 import './globals.css';
@@ -82,6 +84,9 @@ export default function RootLayout({
           <main className="flex-1">{children}</main>
           <SiteFooter />
           <Analytics />
+          {/* Where customers come from (docs/TRAFFIC-TRACKING.md). Not on the
+              staff or owner subdomains: those are counter screens, not visits. */}
+          {surface === 'main' && flags.trafficTracking ? <TrafficTracker /> : null}
         </SurfaceProvider>
       </body>
     </html>

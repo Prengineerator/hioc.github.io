@@ -61,6 +61,8 @@ import { settleOrderPayment, type CounterActor, type CounterSettlement } from '@
 import { getStaffPrintOrder, type StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { canGiveManualDiscount, MANUAL_DISCOUNT_FORBIDDEN, parseManualDiscount } from '@/lib/orders/manualDiscount';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
+import { recordTrafficConversion, trafficContext } from '@/lib/traffic/record';
+import { parseTrafficAttribution } from '@/lib/traffic/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -112,6 +114,7 @@ export async function POST(request: Request) {
     manual_discount: rawManualDiscount,
     suggestion_session_ids,
     pairing_lines,
+    traffic: rawTraffic,
     settlement: rawSettlement,
     include_print_order: rawIncludePrintOrder,
     expected_total_inr: rawExpectedTotal,
@@ -136,6 +139,9 @@ export async function POST(request: Request) {
   // that were added from the "Pairs well with your order" card. Parsed
   // leniently for the same reason — anything malformed is dropped, never a 400.
   const pairingLines = parsePairingLines(pairing_lines, PAIRING_LIMITS.orderLinesMax);
+  // First-party traffic tracking (docs/TRAFFIC-TRACKING.md): the visit this
+  // order came from. Lenient like the two above: anything unusable is null.
+  const trafficAttribution = parseTrafficAttribution(rawTraffic);
 
   // Phase-3 (FND3-2/3): a request carrying an authenticated staff/manager/owner
   // session — or, PIN-3, an enrolled device's PIN operator — is the second
@@ -1155,6 +1161,21 @@ export async function POST(request: Request) {
         userId,
         lines: resolvedLines.map((l) => ({ menu_item_id: l.menu_item_id, line_total_inr: l.line_total_inr })),
         pairingLines,
+      }),
+    );
+  }
+  // Which visit (Instagram, Google, a tagged WhatsApp offer…) this customer
+  // order came from, for Owner → Traffic. Customer orders only: a counter
+  // order is not a website visit. Never throws; the table may not exist yet.
+  if (!isStaff && trafficAttribution) {
+    runAfterResponse(
+      recordTrafficConversion(admin, {
+        event: 'order',
+        attribution: trafficAttribution,
+        route: isTableQr ? '/t/[token]' : '/checkout',
+        context: trafficContext(request),
+        orderId: orderRow.id as string,
+        valueInr: bill.total_inr,
       }),
     );
   }

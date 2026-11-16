@@ -49,6 +49,8 @@ const EVERY_PAGE = [
   '/owner/payroll',
   '/owner/cash',
   '/owner/settings',
+  // Added after the flat header (docs/TRAFFIC-TRACKING.md).
+  '/owner/traffic',
   '/staff',
 ];
 
@@ -70,8 +72,8 @@ describe('ownerNav — all flags off', () => {
     expect(labels(itemsOf(nav, 'menu'))).toEqual(['Menu', 'Suggestions']);
   });
 
-  it('keeps Customers to Customers, Reviews, Feedback, Promotions', () => {
-    expect(labels(itemsOf(nav, 'customers'))).toEqual(['Customers', 'Reviews', 'Feedback', 'Promotions']);
+  it('keeps Customers to Customers, Reviews, Feedback, Promotions, Traffic', () => {
+    expect(labels(itemsOf(nav, 'customers'))).toEqual(['Customers', 'Reviews', 'Feedback', 'Promotions', 'Traffic']);
   });
 
   it('keeps Team to Team alone', () => {
@@ -90,7 +92,7 @@ describe('ownerNav — all flags on', () => {
     expect(labels(itemsOf(nav, 'sales'))).toEqual(['Reports', 'Payments', 'Online orders', 'Cash']);
   });
 
-  it('adds HIOC Ritual and Marketing after Promotions in Customers', () => {
+  it('adds HIOC Ritual and Marketing after Promotions in Customers, before Traffic', () => {
     expect(labels(itemsOf(nav, 'customers'))).toEqual([
       'Customers',
       'Reviews',
@@ -98,6 +100,7 @@ describe('ownerNav — all flags on', () => {
       'Promotions',
       PASS_PROGRAM_NAME,
       'Marketing',
+      'Traffic',
     ]);
   });
 
@@ -117,13 +120,13 @@ describe('ownerNav — one flag at a time', () => {
   it('coffeePass adds only the Ritual link', () => {
     const nav = ownerNav({ ...OFF, coffeePass: true });
     expect(sorted(allHrefs(nav))).toEqual(sorted([...base, '/owner/passes']));
-    expect(labels(itemsOf(nav, 'customers'))).toEqual(['Customers', 'Reviews', 'Feedback', 'Promotions', PASS_PROGRAM_NAME]);
+    expect(labels(itemsOf(nav, 'customers'))).toEqual(['Customers', 'Reviews', 'Feedback', 'Promotions', PASS_PROGRAM_NAME, 'Traffic']);
   });
 
   it('marketing adds only the Marketing link', () => {
     const nav = ownerNav({ ...OFF, marketing: true });
     expect(sorted(allHrefs(nav))).toEqual(sorted([...base, '/owner/marketing']));
-    expect(labels(itemsOf(nav, 'customers'))).toEqual(['Customers', 'Reviews', 'Feedback', 'Promotions', 'Marketing']);
+    expect(labels(itemsOf(nav, 'customers'))).toEqual(['Customers', 'Reviews', 'Feedback', 'Promotions', 'Marketing', 'Traffic']);
   });
 
   it('attendance adds only Cash, Attendance and Payroll', () => {

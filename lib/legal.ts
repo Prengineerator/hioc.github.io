@@ -43,6 +43,13 @@ export const RITUAL_POLICY_UPDATED = '30 September 2026';
  */
 export const SHOP_POLICY_UPDATED = '12 November 2026';
 
+/**
+ * "Last updated" on the Privacy Policy while first-party traffic tracking is on
+ * (NEXT_PUBLIC_FLAG_TRAFFIC_TRACKING, docs/TRAFFIC-TRACKING.md): the day its
+ * usage-data and retention wording was added. Same rule as above.
+ */
+export const TRAFFIC_POLICY_UPDATED = '16 November 2026';
+
 /** The "Last updated" date for a page that has Ritual and/or shop wording. */
 export function policyUpdated(flagsOn: { shop: boolean; coffeePass: boolean }): string | undefined {
   if (flagsOn.shop) return SHOP_POLICY_UPDATED;
