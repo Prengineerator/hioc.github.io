@@ -152,8 +152,13 @@ export function SettleWorkspace({
   }
 
   function handleBalanceDone(updated: OrderWithItems, message: string) {
+    const before = settlingBalance;
     setSettlingBalance(null);
     setOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)).filter(onSettle));
+    // Like any bill settled here: under "Just settled", with "Print bill" for
+    // the updated bill (the customer's earlier one is out of date).
+    const merged: OrderWithItems = { ...(before ?? updated), ...updated, items: updated.items ?? before?.items ?? [] };
+    setJustSettled((prev) => [merged, ...prev.filter((o) => o.id !== updated.id)].slice(0, JUST_SETTLED_LIMIT));
     setToast(message);
     void fetchUnpaid();
   }
@@ -300,6 +305,9 @@ export function SettleWorkspace({
           order={settlingBalance}
           onClose={() => setSettlingBalance(null)}
           onDone={handleBalanceDone}
+          onPrintBill={(orderId) => printDock.enqueue([{ orderId, type: 'receipt' }])}
+          // The same rule as settling any bill here (auto-print bill on this counter).
+          autoPrintBill={settlePrintPlan(autoPrint, { orderKind: settlingBalance.order_kind }).includes('receipt')}
         />
       ) : null}
 

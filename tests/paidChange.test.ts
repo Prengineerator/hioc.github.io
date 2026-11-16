@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COMPLETED_PAID_LATE,
   PAID_BILL_LOCKED,
   PAID_CHANGE_MIGRATION,
   appendSettleReason,
+  changeableState,
+  completedPaidChangeable,
+  lastLineMessage,
+  notChangeableMessage,
   balanceCompletionBlock,
   balanceOf,
   changedAfterPayment,
@@ -28,7 +33,10 @@ type Fixture = {
   order_kind?: string;
   balance_due_inr?: number;
   paid_amended_at: string | null;
+  created_at?: string;
 };
+
+const TWO_DAYS_AGO = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 const paidDineIn = (extra: Partial<Fixture> = {}): Fixture => ({
   status: 'preparing',
   order_type: 'dine_in',
@@ -74,9 +82,17 @@ describe('settleEditBlockReason on a paid bill', () => {
     expect(settleEditBlockReason(paidDineIn({ status: 'ready' }))).toBeNull();
   });
 
-  it('still refuses a paid dine-in bill that is no longer open', () => {
-    expect(settleEditBlockReason(paidDineIn({ status: 'completed' }))).toContain('stock');
+  it('lets a paid dine-in bill marked Completed today be edited, but not one from an earlier day', () => {
+    expect(settleEditBlockReason(paidDineIn({ status: 'completed', created_at: new Date().toISOString() }))).toBeNull();
+    expect(settleEditBlockReason(paidDineIn({ status: 'completed', created_at: TWO_DAYS_AGO }))).toBe(COMPLETED_PAID_LATE);
+    expect(settleEditBlockReason(paidDineIn({ status: 'completed' }))).toBe(COMPLETED_PAID_LATE);
     expect(settleEditBlockReason(paidDineIn({ status: 'received' }))).toContain('Accept this order');
+  });
+
+  it('still refuses an unpaid completed order (its stock is used)', () => {
+    expect(
+      settleEditBlockReason(paidDineIn({ status: 'completed', payment_status: 'unpaid', created_at: new Date().toISOString() })),
+    ).toContain('stock');
   });
 
   it('still refuses a paid takeaway bill', () => {
@@ -232,5 +248,65 @@ describe('the ready → completed guard with a balance', () => {
     expect(canTransition('ready', 'completed', 'staff', undefined, { paymentStatus: 'unpaid' }).message).toBe(
       'Collect payment before completing this order',
     );
+  });
+});
+
+describe('a paid dine-in bill marked Completed once served', () => {
+  const now = new Date('2026-11-07T15:00:00Z'); // 8:30 pm IST
+  const completed = (created_at: string, extra: Partial<Fixture> = {}) =>
+    paidDineIn({ status: 'completed', created_at, ...extra });
+
+  it('can still be changed on the IST day it was placed', () => {
+    expect(completedPaidChangeable(completed('2026-11-07T05:00:00Z'), now)).toBe(true); // 10:30 am IST
+    expect(changeableState(completed('2026-11-07T05:00:00Z'), now)).toBe(true);
+  });
+
+  it('counts the day in IST, not UTC', () => {
+    // 11:30 pm IST on the 6th is a different day from 8:30 pm IST on the 7th…
+    expect(completedPaidChangeable(completed('2026-11-06T18:00:00Z'), now)).toBe(false);
+    // …while 12:30 am IST on the 7th (still the 6th in UTC) is the same day.
+    expect(completedPaidChangeable(completed('2026-11-06T19:00:00Z'), now)).toBe(true);
+  });
+
+  it('is not changeable from an earlier day, and says why', () => {
+    const old = completed('2026-11-05T05:00:00Z');
+    expect(changeableState(old, now)).toBe(false);
+    expect(notChangeableMessage(old, 'not open')).toBe(COMPLETED_PAID_LATE);
+  });
+
+  it('only applies to bills that can be changed after payment at all', () => {
+    const today = '2026-11-07T05:00:00Z';
+    expect(completedPaidChangeable(completed(today, { order_type: 'takeaway' }), now)).toBe(false);
+    expect(completedPaidChangeable(completed(today, { payment_method: 'online' }), now)).toBe(false);
+    expect(completedPaidChangeable(completed(today, { payment_status: 'unpaid' }), now)).toBe(false);
+    expect(notChangeableMessage(completed(today, { order_type: 'takeaway' }), 'not open')).toBe('not open');
+  });
+
+  it('leaves the open states and the other terminal ones as they were', () => {
+    for (const status of ['accepted', 'preparing', 'ready'] as const) {
+      expect(changeableState(paidDineIn({ status }), now)).toBe(true);
+    }
+    for (const status of ['received', 'cancelled', 'rejected'] as const) {
+      expect(changeableState(paidDineIn({ status, created_at: '2026-11-07T05:00:00Z' }), now)).toBe(false);
+    }
+  });
+});
+
+describe('removing the only item', () => {
+  it('tells a paid bill to add the replacement first', () => {
+    expect(lastLineMessage({ payment_status: 'paid' })).toContain('add the new item first');
+  });
+
+  it('keeps the old wording on an unpaid bill', () => {
+    expect(lastLineMessage({ payment_status: 'unpaid' })).toBe('That would empty the order — cancel the order instead.');
+  });
+});
+
+describe('statusAfterAdd reopens a completed bill', () => {
+  it('sends a completed (paid, today) bill back to Preparing for the new items', async () => {
+    const { statusAfterAdd } = await import('@/lib/orders/amend');
+    expect(statusAfterAdd('completed')).toBe('preparing');
+    expect(statusAfterAdd('ready')).toBe('preparing');
+    expect(statusAfterAdd('accepted')).toBe('accepted');
   });
 });

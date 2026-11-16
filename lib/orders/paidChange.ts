@@ -42,7 +42,19 @@ export interface PaidChangeOrder {
   /** Absent on a database without the migration (rows are read with `*`). */
   balance_due_inr?: number | null;
   paid_amended_at?: string | null;
+  /** When the order was placed — a COMPLETED paid bill can be changed only that day. */
+  created_at?: string | null;
 }
+
+/** The states in which ANY order can still be corrected — the amend route's OPEN_STATUSES. */
+export const OPEN_ORDER_STATUSES: readonly string[] = ['accepted', 'preparing', 'ready'];
+
+/** Why a completed paid bill from an earlier day stays as it is. */
+export const COMPLETED_PAID_LATE =
+  'A completed bill can only be changed on the day it was placed — start a new order for anything else.';
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const istDay = (ms: number) => new Date(ms + IST_OFFSET_MS).toISOString().slice(0, 10);
 
 /** The bill has been paid, so a change to it goes down the post-payment path. */
 export function isPaidBill(order: Pick<PaidChangeOrder, 'payment_status'>): boolean {
@@ -80,6 +92,55 @@ export function paidChangeBlockReason(order: PaidChangeOrder): string | null {
     return `${PAID_BILL_LOCKED} Changing a paid bill needs the database update ${PAID_CHANGE_MIGRATION}.`;
   }
   return null;
+}
+
+/**
+ * A COMPLETED paid dine-in bill that can still be changed: the café marks a
+ * table's order Completed once it is served, and the table often asks for
+ * one more coffee (or says the brownie never came) after that. Allowed on the
+ * IST day the order was placed only — a closed day's sales, cash and GST are
+ * not rewritten after the fact.
+ *
+ * What completing did is left as it was: the stock its lines used stays taken
+ * (a later void doesn't put it back), the Beanies earned on it stay earned,
+ * and its bill and feedback request stay sent. Items ADDED reopen the order to
+ * Preparing (lib/orders/amend.ts statusAfterAdd) so the kitchen makes them;
+ * completing it again doesn't earn or send twice.
+ */
+export function completedPaidChangeable(order: PaidChangeOrder, now: Date = new Date()): boolean {
+  if (order.status !== 'completed') return false;
+  if (!isPaidBill(order) || paidChangeBlockReason(order) !== null) return false;
+  const placed = order.created_at ? Date.parse(order.created_at) : Number.NaN;
+  if (!Number.isFinite(placed)) return false;
+  return istDay(placed) === istDay(now.getTime());
+}
+
+/** Whether the order is in a state a change can be made in: open, or a completed paid bill from today. */
+export function changeableState(order: PaidChangeOrder, now: Date = new Date()): boolean {
+  return OPEN_ORDER_STATUSES.includes(order.status ?? '') || completedPaidChangeable(order, now);
+}
+
+/**
+ * The refusal for an order that isn't in a changeable state: `fallback` (the
+ * caller's own wording), or — for a completed paid dine-in bill from an
+ * earlier day — why that one stays.
+ */
+export function notChangeableMessage(order: PaidChangeOrder, fallback: string): string {
+  if (order.status === 'completed' && isPaidBill(order) && paidChangeBlockReason(order) === null) {
+    return COMPLETED_PAID_LATE;
+  }
+  return fallback;
+}
+
+/**
+ * Why removing a line would empty the order, in words that fit. On a paid
+ * bill the usual answer is a swap: add what they want instead, then take this
+ * off (the difference settles itself as a balance).
+ */
+export function lastLineMessage(order: Pick<PaidChangeOrder, 'payment_status'>): string {
+  return isPaidBill(order)
+    ? 'That is the only item on this bill. To swap it, add the new item first (Add items), then remove this one — or cancel the order and refund it.'
+    : 'That would empty the order — cancel the order instead.';
 }
 
 /** The difference still to settle on a bill (0 when none, or before the migration). */
