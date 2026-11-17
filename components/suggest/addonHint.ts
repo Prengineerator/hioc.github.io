@@ -10,10 +10,10 @@
 // customise modal and never preselected — `customizeModalProps` keeps it out of
 // `initialSelection` by construction.
 
-import { suggestedOptionIds } from '@/lib/menu/customization';
+import { suggestedOptionIds, vetPresets } from '@/lib/menu/customization';
 import { isSoldByWeight } from '@/lib/menu/weight';
 import { FLAVOUR_FAMILY_INFO } from '@/lib/suggest/traitVocabulary';
-import type { FlavourAddonSuggestion, SugarPreset, SuggestionPick } from '@/lib/suggest/types';
+import type { AddonPreset, FlavourAddonSuggestion, SugarPreset, SuggestionPick } from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
 
 /** The quiet line under a card's match tags. No price, by design. */
@@ -47,17 +47,76 @@ export function sugarPresetHint(preset: SugarPreset): string {
  */
 export function needsCustomizeModal(
   item: Pick<MenuItem, 'variants' | 'addon_groups' | 'sold_by_weight'>,
-  pick: Pick<SuggestionPick, 'flavourAddon'>,
+  pick: Pick<SuggestionPick, 'flavourAddon'> & Partial<Pick<SuggestionPick, 'addonPresets' | 'sugarPreset'>>,
 ): boolean {
   if (pick.flavourAddon) return true;
+  // Coffey preselected something (a ticked add-on or the sugar option): the
+  // customer must see the price before it goes in the cart, so never one tap.
+  if (pick.addonPresets?.length || pick.sugarPreset) return true;
   if (isSoldByWeight(item)) return true;
   return !(item.variants.length === 1 && item.addon_groups.length === 0);
 }
 
+/** True when this preset is a free option: no price is written for it. */
+const priceSuffix = (p: Pick<AddonPreset, 'priceInr'>) => (p.priceInr > 0 ? ` (+₹${p.priceInr})` : '');
+
+/**
+ * The sentence naming everything Coffey set, for the modal. `added` are the
+ * add-ons that survived vetting, `sugar` the vetted sugar option (or null).
+ */
+export function presetsHint(added: AddonPreset[], sugar: SugarPreset | null): string {
+  if (added.length === 0) return sugar ? sugarPresetHint(sugar) : '';
+  const names = added.map((p) => `${p.label}${priceSuffix(p)}`);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  if (sugar) {
+    const comma = names.length > 1 ? ',' : '';
+    return `Coffey added ${list}${comma} and set sugar to ${sugar.label}. Untick anything you don't want.`;
+  }
+  return names.length === 1
+    ? `Coffey added ${list}. Untick it if you'd rather not.`
+    : `Coffey added ${list}. Untick anything you don't want.`;
+}
+
+/** Why the ticked add-ons are on the card, in plain words (no talk of value). */
+export function presetReasonLine(presets: AddonPreset[]): string {
+  const sentences: string[] = [];
+  const seen = new Set<string>();
+  for (const p of presets) {
+    if (p.purpose !== 'flavour') continue;
+    const family = p.family ? FLAVOUR_FAMILY_INFO[p.family].label.toLowerCase() : null;
+    const sentence = family ? `Added for the ${family} flavour.` : 'Added for the flavour you asked for.';
+    if (!seen.has(sentence)) {
+      seen.add(sentence);
+      sentences.push(sentence);
+    }
+  }
+  if (presets.some((p) => p.purpose === 'strength')) sentences.push('An extra shot makes it strong.');
+  return sentences.join(' ');
+}
+
+/**
+ * The pick as it stands after the customer's un-ticking on the card:
+ * un-ticked add-ons and an un-ticked sugar option are removed, so everything
+ * downstream (needsCustomizeModal, the modal props) sees only what is ticked.
+ * When the pick has add-on presets the older `flavourAddon` is nulled (it is a
+ * fallback for picks without them); otherwise the pick is returned as it was.
+ */
+export function tickedPick(pick: SuggestionPick, unticked: ReadonlySet<string>): SuggestionPick {
+  const hasPresets = !!pick.addonPresets?.length;
+  return {
+    ...pick,
+    addonPresets: hasPresets ? pick.addonPresets!.filter((p) => !unticked.has(p.optionId)) : pick.addonPresets,
+    sugarPreset: pick.sugarPreset && !unticked.has(pick.sugarPreset.optionId) ? pick.sugarPreset : null,
+    flavourAddon: hasPresets ? null : pick.flavourAddon,
+  };
+}
+
 export interface CustomizeModalProps {
-  /** Preselected options. Sugar only: the flavour add-on is never in here (§4.7). */
+  /** Preselected options: Coffey's ticked add-on presets and sugar option, vetted
+   * against the item. The older `flavourAddon` highlight is never in here. */
   initialSelection?: Record<string, string[]>;
-  /** Options to highlight with a "Coffey's pick" pill. Nothing is chosen. */
+  /** Options to mark with a "Coffey's pick" pill: the preselected add-ons, or
+   * (older fallback) the highlighted flavour add-on, which is not chosen. */
   suggestedOptions?: Record<string, string[]>;
   /** Hint lines for the top of the modal, sugar first. */
   hint?: string[];
@@ -73,11 +132,41 @@ export interface CustomizeModalProps {
  */
 export function customizeModalProps(
   item: Pick<MenuItem, 'addon_groups'>,
-  extras: { sugarPreset?: SugarPreset | null; flavourAddon?: FlavourAddonSuggestion | null },
+  extras: {
+    sugarPreset?: SugarPreset | null;
+    flavourAddon?: FlavourAddonSuggestion | null;
+    /** The TICKED add-on presets (the caller drops un-ticked ones). */
+    addonPresets?: AddonPreset[];
+  },
 ): CustomizeModalProps {
-  const { sugarPreset, flavourAddon } = extras;
+  const { sugarPreset, flavourAddon, addonPresets } = extras;
   const props: CustomizeModalProps = {};
   const hint: string[] = [];
+
+  if (addonPresets && addonPresets.length > 0) {
+    // New path: preselect through the same vetted initialSelection as sugar.
+    // Sugar goes first so it wins a shared group's limited seats.
+    const requested: Record<string, string[]> = {};
+    const ask = (groupId: string, optionId: string) => {
+      requested[groupId] = [...(requested[groupId] ?? []), optionId];
+    };
+    if (sugarPreset) ask(sugarPreset.groupId, sugarPreset.optionId);
+    for (const p of addonPresets) ask(p.groupId, p.optionId);
+    const vetted = vetPresets(item, requested);
+    const has = (groupId: string, optionId: string) => vetted[groupId]?.includes(optionId) ?? false;
+    const added = addonPresets.filter((p) => has(p.groupId, p.optionId));
+    const sugar = sugarPreset && has(sugarPreset.groupId, sugarPreset.optionId) ? sugarPreset : null;
+    if (Object.keys(vetted).length > 0) props.initialSelection = vetted;
+    if (added.length > 0) {
+      props.suggestedOptions = {};
+      for (const p of added) {
+        props.suggestedOptions[p.groupId] = [...(props.suggestedOptions[p.groupId] ?? []), p.optionId];
+      }
+    }
+    const line = presetsHint(added, sugar);
+    if (line) props.hint = [line];
+    return props;
+  }
 
   if (sugarPreset) {
     props.initialSelection = { [sugarPreset.groupId]: [sugarPreset.optionId] };

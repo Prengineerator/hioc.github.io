@@ -3,7 +3,7 @@
 // One suggestion (a pick, or the "Your usual" card — same shape, §3.2 step 3).
 
 import { MenuItemImage } from '@/components/menu/MenuItemImage';
-import { coffeyTip } from '@/components/suggest/addonHint';
+import { coffeyTip, presetReasonLine } from '@/components/suggest/addonHint';
 import { buttonVariants } from '@/components/ui/Button';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { isSoldByWeight } from '@/lib/menu/weight';
@@ -19,12 +19,53 @@ function priceLabel(item: MenuItem): string {
   return min === max ? `₹${min}${unit}` : `₹${min}–₹${max}${unit}`;
 }
 
+const NO_ONE: ReadonlySet<string> = new Set();
+
+// One preselected option as a toggle chip. Ticked = filled surface with a tick
+// mark and a charcoal border; un-ticked = plain outline, no tick — the state is
+// never colour alone, and aria-pressed carries it for screen readers.
+function PresetChip({
+  label,
+  priceInr,
+  on,
+  onToggle,
+}: {
+  label: string;
+  priceInr?: number;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      onClick={onToggle}
+      className={
+        'inline-flex min-h-[44px] items-center gap-1.5 rounded-full border px-3 text-sm font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan ' +
+        (on
+          ? 'border-charcoal bg-surface text-charcoal'
+          : 'border-dashed border-line bg-cream text-muted hover:border-tan')
+      }
+    >
+      <span aria-hidden="true" className="w-3 text-center">
+        {on ? '✓' : ''}
+      </span>
+      {label}
+      {priceInr !== undefined && priceInr > 0 ? (
+        <span className="font-mono tabular-nums">+₹{priceInr}</span>
+      ) : null}
+    </button>
+  );
+}
+
 export function SuggestionCard({
   item,
   pick,
   isUsual = false,
   missLabel = null,
   feedback,
+  untickedOptionIds = NO_ONE,
+  onTogglePreset,
   onAddToCart,
   onFeedback,
 }: {
@@ -34,10 +75,19 @@ export function SuggestionCard({
   /** "Closest we have: not Chocolatey" — what this pick does not keep. */
   missLabel?: string | null;
   feedback?: 'up' | 'down';
+  /** Option ids of presets the customer un-ticked; everything else is ticked. */
+  untickedOptionIds?: ReadonlySet<string>;
+  onTogglePreset?: (optionId: string) => void;
   onAddToCart: () => void;
   onFeedback: (direction: 'up' | 'down') => void;
 }) {
   const available = isMenuItemAvailable(item);
+  const addonPresets = pick.addonPresets ?? [];
+  const tickedAddons = addonPresets.filter((p) => !untickedOptionIds.has(p.optionId));
+  const sugarPreset = pick.sugarPreset ?? null;
+  const showPresets = addonPresets.length > 0 || sugarPreset !== null;
+  const reasonLine = presetReasonLine(tickedAddons);
+  const toggle = (optionId: string) => onTogglePreset?.(optionId);
 
   return (
     <div className="flex flex-col rounded-md border border-line bg-cream p-4 shadow-card">
@@ -64,7 +114,12 @@ export function SuggestionCard({
           </span>
           {/* h2: the wizard's step heading above is the h1, so a pick's name is
               the next level down. */}
-          <h2 className="font-semibold text-charcoal">{item.name}</h2>
+          <h2 className="font-semibold text-charcoal">
+            {item.name}
+            {tickedAddons.length > 0 ? (
+              <span className="font-normal text-muted">{' + ' + tickedAddons.map((p) => p.label).join(' + ')}</span>
+            ) : null}
+          </h2>
         </div>
         <span className="shrink-0 font-mono font-bold tabular-nums text-tan-dark">{priceLabel(item)}</span>
       </div>
@@ -92,7 +147,33 @@ export function SuggestionCard({
           one quiet line, no price — Coffey never talks about spending. Tapping
           Add opens the customise modal, where the option is highlighted but not
           chosen. */}
-      {pick.flavourAddon ? <p className="mt-2 text-xs text-muted">{coffeyTip(pick.flavourAddon)}</p> : null}
+      {/* "Made your way": what Coffey preselected, as toggles. Ticked ones go
+          into the customise modal already chosen; un-ticked ones do not. */}
+      {showPresets ? (
+        <div className="mt-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">Made your way</p>
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {addonPresets.map((p) => (
+              <PresetChip
+                key={p.optionId}
+                label={p.label}
+                priceInr={p.priceInr}
+                on={!untickedOptionIds.has(p.optionId)}
+                onToggle={() => toggle(p.optionId)}
+              />
+            ))}
+            {sugarPreset ? (
+              <PresetChip
+                label={sugarPreset.label}
+                on={!untickedOptionIds.has(sugarPreset.optionId)}
+                onToggle={() => toggle(sugarPreset.optionId)}
+              />
+            ) : null}
+          </div>
+          {reasonLine ? <p className="mt-1.5 text-xs text-muted">{reasonLine}</p> : null}
+        </div>
+      ) : null}
+      {pick.flavourAddon && addonPresets.length === 0 ? <p className="mt-2 text-xs text-muted">{coffeyTip(pick.flavourAddon)}</p> : null}
       {!available ? (
         <p className="mt-2 text-sm font-medium text-muted">Currently unavailable</p>
       ) : null}
