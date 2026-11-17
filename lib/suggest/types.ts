@@ -341,6 +341,11 @@ export interface SuggestionPick {
    * customise modal, where one tap removes them. Empty or absent when the item
    * needs none. */
   addonPresets?: AddonPreset[];
+  /** The same pick WITHOUT its add-on presets, for the card to fall back to
+   * when the customer un-ticks one: the reason as the kitchen makes it, and the
+   * sugar option chosen for the item's own sweetness (the usual `sugarPreset`
+   * allows for the syrup). Present only when `addonPresets` is non-empty. */
+  plain?: { reason: string; sugarPreset: SugarPreset | null };
 }
 
 /** What making an item the customer's way adds (lib/suggest/promises.ts
@@ -369,6 +374,10 @@ export interface AddonPreset {
   purpose: 'flavour' | 'strength';
   /** The flavour family it supplies (purpose 'flavour' only). */
   family?: FlavourFamily;
+  /** The "why it matches" tag this add-on earns the pick (e.g. "Nutty",
+   * "Strong"), so the card can take it away again when the add-on is
+   * un-ticked. Absent when it earns none. */
+  tag?: string;
 }
 
 export interface SugarPreset {

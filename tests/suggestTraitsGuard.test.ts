@@ -59,6 +59,15 @@ describe('guardTraits', () => {
     expect(isMistaggedIced({ name: 'Latte Iced' }, row({ temperature: 'iced' }))).toBe(false);
     expect(isMistaggedIced({ name: 'Latte ICED' }, row({}))).toBe(true);
   });
+
+  it('corrects only a row that says hot: a drink served either way stays available hot', () => {
+    const row = (over: Partial<MenuItemTraits>) => ({ kind: 'drink', temperature: 'hot', ...over }) as MenuItemTraits;
+    expect(isMistaggedIced({ name: 'Latte Iced' }, row({ temperature: 'either' }))).toBe(false);
+    expect(isMistaggedIced({ name: 'Americano (Hot/Iced)' }, row({}))).toBe(false);
+    expect(isMistaggedIced({ name: 'Un-iced Tea' }, row({}))).toBe(false);
+    expect(isMistaggedIced({ name: 'Mocha (Iced)' }, row({}))).toBe(true);
+    expect(isMistaggedIced({ name: 'Iced Mocha' }, row({}))).toBe(true);
+  });
 });
 
 describe('a drink named "Iced" but tagged hot', () => {

@@ -10,20 +10,30 @@
 //
 // It is applied once, where items and traits are paired (runSuggest, menuFacets),
 // so the filter, the score, the tags and the decider brief all read the same,
-// corrected value. Only this one direction is corrected: "Iced" in a name is a
-// serving style here, while "Hot" also appears in names of things that are not
-// (a combo, a sauce).
+// corrected value. Only this one contradiction is corrected: a row that says
+// `hot` under a name that says "Iced". "Hot" in a name is not trusted the other
+// way round (it also appears in names of things that are not a serving style),
+// and a drink tagged `either` is left alone.
 //
 // Pure: no Supabase, no 'server-only'.
 
 import type { MenuItem } from '@/lib/types';
 import type { MenuItemTraits } from './types';
 
-const SAYS_ICED = /\biced\b/i;
+// "Iced" as a word of its own: at the start or after a space or bracket, and
+// followed by the end, a space or a bracket. Not "Spiced", not "Un-iced".
+const SAYS_ICED = /(?:^|[\s(])iced(?:$|[\s)])/i;
+const SAYS_HOT = /(?:^|[\s(/])hot(?:$|[\s)/])/i;
 
-/** True when the row's temperature contradicts a name that says "Iced". */
+/**
+ * True when the row says `hot` and the name says "Iced" (and does not also say
+ * "Hot"). Only that exact contradiction is corrected: a drink tagged `either`
+ * is served both ways and must stay available for a hot request, and a name
+ * like "Americano (Hot/Iced)" says both.
+ */
 export function isMistaggedIced(item: Pick<MenuItem, 'name'>, traits: Pick<MenuItemTraits, 'kind' | 'temperature'>): boolean {
-  return traits.kind === 'drink' && traits.temperature !== 'iced' && SAYS_ICED.test(item.name ?? '');
+  const name = item.name ?? '';
+  return traits.kind === 'drink' && traits.temperature === 'hot' && SAYS_ICED.test(name) && !SAYS_HOT.test(name);
 }
 
 /**
