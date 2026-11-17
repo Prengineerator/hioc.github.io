@@ -519,19 +519,19 @@ The 40 real first asks (the same requests in every column):
 
 | | Before §10 | After §10 | Now |
 |---|---|---|---|
-| Picks keeping the flavour asked | 49% | 71% | 90% |
+| Picks keeping the flavour asked | 49% | 71% | 86% |
 | Picks keeping the strength / sweetness / texture asked | 76% / 68% / 59% | 83% / 78% / 67% | 95% / 90% / 78% |
-| Requests where every pick keeps every choice | 5 of 35 | 17 of 35 | 26 of 35 |
-| Picks carrying a preselected add-on | 0 | 0 | 29 of 118 |
+| Requests where every pick keeps every choice | 5 of 35 | 17 of 35 | 25 of 35 |
+| Picks carrying a preselected add-on | 0 | 0 | 26 of 118 |
 
-The grid, on the requests the wizard now allows (4,656 of 6,336; §10 allowed 3,216, because a flavour or strength only an add-on can supply was greyed out):
+The grid, on the requests the wizard now allows (4,240 of 6,336; §10 allowed 3,216, because a flavour or strength only an add-on can supply was greyed out):
 
 | | Before §10 | Now |
 |---|---|---|
-| First pick keeps every choice | 55.5% | 99.5% |
-| Every pick keeps every choice | 23.4% | 73.7% |
-| Picks keeping every choice | 44.1% | 87.8% |
-| Picks carrying a preselected add-on | 0 | 27% |
+| First pick keeps every choice | 61.1% | 99.5% |
+| Every pick keeps every choice | 25.7% | 70.3% |
+| Picks keeping every choice | 48.5% | 86.6% |
+| Picks carrying a preselected add-on | 0 | 18% |
 | Requests returning fewer than three picks (all 6,336) | 7.6% | 7.6% |
 
 The most used presets in the grid: Espresso Shot (₹40), Caramel Sauce (₹30), Hazelnut syrup (₹35), Cinnamon syrup (₹35), Chocolate Sauce (₹30).
