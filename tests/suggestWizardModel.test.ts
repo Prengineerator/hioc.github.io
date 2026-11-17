@@ -230,6 +230,11 @@ describe('missLabel', () => {
     );
   });
 
+  it('never reads "not not sweet"', () => {
+    expect(missLabel(['sweetness'], toggleSweetness(state(), 'none'))).toBe('Closest we have: not unsweetened');
+    expect(missLabel(['sweetness'], toggleSweetness(state(), 'sweet'))).toBe('Closest we have: not sweet');
+  });
+
   it('is null with no misses or no set choice', () => {
     expect(missLabel(undefined, state())).toBeNull();
     expect(missLabel([], state())).toBeNull();

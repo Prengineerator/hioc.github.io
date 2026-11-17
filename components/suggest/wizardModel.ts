@@ -310,6 +310,8 @@ function choicePhrase(choice: HonouredChoice, state: WizardState, flavourCounts:
     case 'strength':
       return state.coffee === 'strong' || state.coffee === 'smooth' ? lowerFirst(COFFEE_LABEL[state.coffee]) : null;
     case 'sweetness':
+      // "not not sweet" would be unreadable after "Closest we have: not …".
+      if (state.sweetness === 'none') return 'unsweetened';
       return state.sweetness ? lowerFirst(SWEETNESS_LABEL[state.sweetness]) : null;
     case 'body':
       return state.body ? lowerFirst(BODY_LABEL[state.body]) : null;
