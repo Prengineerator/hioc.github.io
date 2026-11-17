@@ -27,7 +27,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const COMMENT =
-  "Snapshot of the LIVE menu (Supabase project 'Hioc Coffee'). Recipes in data/inventory/recipes/ must reference these ids and size labels exactly. Refresh with `npm run inventory:snapshot` (needs service-role env) or ask the chef agent. Do not hand-edit.";
+  "Snapshot of the LIVE menu (Supabase project 'Hioc India'). Recipes in data/inventory/recipes/ must reference these ids and size labels exactly. Refresh with `npm run inventory:snapshot` (needs service-role env) or ask the chef agent. Do not hand-edit.";
 
 // fileURLToPath, not url.pathname — see scripts/verify-db.mjs.
 const ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
