@@ -6,7 +6,7 @@ import type { FilteredCandidate } from '@/lib/suggest/filter';
 import { flavourCountsByKind } from '@/lib/suggest/flavor';
 import { withInputDefaults } from '@/lib/suggest/inputs';
 import { choiceApplies, honourChoices, isChoiceSet, satisfiesChoice, unmetChoices } from '@/lib/suggest/promises';
-import { deliveredSweetness } from '@/lib/suggest/sugar';
+import { deliveredSweetness, isSugarAdjustable } from '@/lib/suggest/sugar';
 import { matchTagsFor } from '@/lib/suggest/templates';
 import { FLAVOUR_FAMILY_INFO } from '@/lib/suggest/traitVocabulary';
 import { FLAVOUR_FAMILIES, HONOURED_CHOICES, KINDS, SWEETNESS_BANDS } from '@/lib/suggest/types';
@@ -596,5 +596,344 @@ describe('buildShortlist with pinned ids', () => {
   it('is identical to the two-argument call when nothing is pinned', () => {
     expect(buildShortlist(scored, inputs, new Set())).toEqual(buildShortlist(scored, inputs));
     expect(buildShortlist(scored, inputs, undefined)).toEqual(buildShortlist(scored, inputs));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Made your way (COFFEY-SPEC §11)
+// ---------------------------------------------------------------------------
+
+import { keepsChoice, madeToOrder } from '@/lib/suggest/promises';
+import { lintReason } from '@/lib/suggest/tone';
+import { buildAddonMenu, shotGroupFor, syrupGroupFor } from './fixtures/suggestAddonMenu';
+import type { AddonGroup } from '@/lib/types';
+
+describe('madeToOrder', () => {
+  const menu = buildAddonMenu();
+  const item = (id: string) => menu.items.find((i) => i.id === id)!;
+  const traitsOf = (id: string) => menu.traitsById.get(id)!;
+  const made = (id: string, over: Partial<SuggestInputs>) => madeToOrder(item(id), traitsOf(id), ask({ kinds: ['drink'], ...over }));
+
+  it('flavour: a syrup for a family the item lacks, adding its sweetness', () => {
+    const m = made('ax-cappuccino', { flavours: ['nutty'] });
+    expect(m.presets).toEqual([
+      { groupId: 'ax-cappuccino-syrup', optionId: 'ax-cappuccino-syrup-hazelnut', label: 'Hazelnut syrup', priceInr: 35, purpose: 'flavour', family: 'nutty' },
+    ]);
+    expect(m).toMatchObject({ families: ['nutty'], sweetnessLift: 2, intensityLift: 0, extraPriceInr: 35 });
+  });
+
+  it('flavour: nothing when the item carries one of the requested families itself, or has no syrup', () => {
+    expect(made('ax-hazelnut-latte', { flavours: ['nutty'] }).presets).toEqual([]);
+    expect(made('ax-hazelnut-latte', { flavours: ['nutty', 'caramel'] }).presets).toEqual([]); // OR: one is enough
+    expect(made('ax-americano', { flavours: ['nutty'] }).presets).toEqual([]);
+    expect(madeToOrder(item('ax-brownie'), traitsOf('ax-brownie'), ask({ kinds: ['dessert'], flavours: ['nutty'] })).presets).toEqual([]);
+  });
+
+  it('strength: the cheapest espresso shot for a "strong" coffee at intensity exactly 2', () => {
+    const m = made('ax-cappuccino', { strength: 'strong' });
+    expect(m.presets).toEqual([
+      { groupId: 'ax-cappuccino-shot', optionId: 'ax-cappuccino-shot-espresso', label: 'Espresso Shot', priceInr: 40, purpose: 'strength' },
+    ]);
+    expect(m).toMatchObject({ families: [], sweetnessLift: 0, intensityLift: 1, extraPriceInr: 40 });
+    expect(made('ax-americano', { strength: 'strong' }).presets).toEqual([]); // already 3
+    expect(made('ax-cappuccino', { strength: 'mild' }).presets).toEqual([]);
+    expect(made('ax-lemonade', { strength: 'strong' }).presets).toEqual([]); // not a coffee
+  });
+
+  it('both: a flavour preset and a strength preset, from different options', () => {
+    const m = made('ax-cappuccino', { flavours: ['nutty'], strength: 'strong' });
+    expect(m.presets.map((p) => p.purpose)).toEqual(['flavour', 'strength']);
+    expect(m).toMatchObject({ sweetnessLift: 2, intensityLift: 1, extraPriceInr: 75 });
+    expect(m.presets.length).toBeLessThanOrEqual(2);
+  });
+
+  it('neither: the empty result, and it never throws on an item with no addon_groups', () => {
+    expect(made('ax-cappuccino', {})).toMatchObject({ presets: [], families: [], sweetnessLift: 0, intensityLift: 0, extraPriceInr: 0 });
+    expect(made('ax-plain-flat-white', { flavours: ['nutty'], strength: 'strong' }).presets).toEqual([]);
+    expect(() => madeToOrder({ name: 'x', variants: [], addon_groups: undefined as never }, traitsOf('ax-latte'), ask({ flavours: ['nutty'] }))).not.toThrow();
+  });
+
+  it('one group with max_select 1 holding both options keeps the flavour one; with room for two it keeps both', () => {
+    const shared = (max: number): AddonGroup => {
+      const syrup = syrupGroupFor('s');
+      const shot = shotGroupFor('s');
+      return { ...syrup, id: 'mixed', max_select: max, options: [...syrup.options, ...shot.options].map((o) => ({ ...o, addon_group_id: 'mixed' })) };
+    };
+    const build = (max: number) => ({ ...item('ax-cappuccino'), addon_groups: [shared(max)] });
+    const inputs = ask({ kinds: ['drink'], flavours: ['nutty'], strength: 'strong' });
+    expect(madeToOrder(build(1), traitsOf('ax-cappuccino'), inputs).presets.map((p) => p.purpose)).toEqual(['flavour']);
+    expect(madeToOrder(build(2), traitsOf('ax-cappuccino'), inputs).presets.map((p) => p.purpose)).toEqual(['flavour', 'strength']);
+  });
+
+  it('budget: drops the strength preset first, then the flavour, and recomputes the lifts', () => {
+    const base = { flavours: ['nutty' as const], strength: 'strong' as const };
+    // Cappuccino ₹130: 130 + 35 + 40 = 205.
+    expect(made('ax-cappuccino', { ...base, budget: 'under_200' })).toMatchObject({ extraPriceInr: 35, sweetnessLift: 2, intensityLift: 0 });
+    expect(made('ax-cappuccino', { ...base, budget: 'under_200' }).presets.map((p) => p.purpose)).toEqual(['flavour']);
+    expect(made('ax-cappuccino', { ...base, budget: 'under_150' })).toMatchObject({ presets: [], extraPriceInr: 0, sweetnessLift: 0, families: [] });
+    expect(made('ax-cappuccino', { ...base, budget: 'any' }).presets).toHaveLength(2);
+  });
+
+  it('respects the price limit and a switched-off option', () => {
+    const dear = { ...item('ax-cappuccino'), addon_groups: [syrupGroupFor('d', 70)] };
+    expect(madeToOrder(dear, traitsOf('ax-cappuccino'), ask({ flavours: ['nutty'] })).presets).toEqual([]);
+    const off = { ...item('ax-cappuccino'), addon_groups: [{ ...shotGroupFor('o'), options: [{ ...shotGroupFor('o').options[0], is_available: false }] }] };
+    expect(madeToOrder(off, traitsOf('ax-cappuccino'), ask({ strength: 'strong' })).presets).toEqual([]);
+  });
+});
+
+describe('keepsChoice', () => {
+  const menu = buildAddonMenu();
+  const subjectOf = (id: string, inputs: SuggestInputs, withMade = true) => {
+    const item = menu.items.find((i) => i.id === id)!;
+    const traits = menu.traitsById.get(id)!;
+    return { name: item.name, traits, sugarAdjustable: isSugarAdjustable(item), made: withMade ? madeToOrder(item, traits, inputs) : undefined };
+  };
+
+  it('flavours: own, made, or false', () => {
+    const inputs = ask({ kinds: ['drink'], flavours: ['nutty'] });
+    expect(keepsChoice('flavours', subjectOf('ax-hazelnut-latte', inputs), inputs)).toBe('own');
+    expect(keepsChoice('flavours', subjectOf('ax-cappuccino', inputs), inputs)).toBe('made');
+    expect(keepsChoice('flavours', subjectOf('ax-cappuccino', inputs, false), inputs)).toBe(false); // without made: as the kitchen makes it
+    expect(keepsChoice('flavours', subjectOf('ax-americano', inputs), inputs)).toBe(false);
+    expect(keepsChoice('flavours', subjectOf('ax-garlic-bread', inputs), inputs)).toBeNull();
+  });
+
+  it('strength: strong is own at 3, made at 2 with a shot, false otherwise; mild and balanced never via an add-on', () => {
+    const strong = ask({ kinds: ['drink'], strength: 'strong' });
+    expect(keepsChoice('strength', subjectOf('ax-americano', strong), strong)).toBe('own');
+    expect(keepsChoice('strength', subjectOf('ax-cappuccino', strong), strong)).toBe('made');
+    expect(keepsChoice('strength', subjectOf('ax-plain-flat-white', strong), strong)).toBe(false);
+    const mild = ask({ kinds: ['drink'], strength: 'mild' });
+    expect(keepsChoice('strength', subjectOf('ax-cappuccino', mild), mild)).toBe('own');
+    expect(keepsChoice('strength', subjectOf('ax-americano', mild), mild)).toBe(false);
+    const balanced = ask({ kinds: ['drink'], strength: 'balanced' });
+    expect(keepsChoice('strength', subjectOf('ax-latte', balanced), balanced)).toBe('own');
+  });
+
+  it('sweetness is judged on the lifted level: a latte at 2 with a syrup reads 4, inside "light" (2–4), outside "none"', () => {
+    const light = ask({ kinds: ['drink'], flavours: ['nutty'], sweetness: 'light' });
+    const s = subjectOf('ax-latte', light);
+    expect(s.made?.sweetnessLift).toBe(2);
+    expect(keepsChoice('sweetness', s, light)).toBe('own');
+    const sweet = ask({ kinds: ['drink'], flavours: ['nutty'], sweetness: 'very' });
+    expect(keepsChoice('sweetness', subjectOf('ax-latte', sweet), sweet)).toBe(false);
+    const none = ask({ kinds: ['drink'], flavours: ['nutty'], sweetness: 'none' });
+    // "Not sweet" refuses a syrup that blows the ceiling: 2 + 2 > 0 + 3, so there is no preset to count on.
+    const refused = subjectOf('ax-latte', none);
+    expect(refused.made?.presets).toEqual([]);
+    expect(keepsChoice('flavours', refused, none)).toBe(false);
+  });
+
+  it('body: own or false', () => {
+    const rich = ask({ kinds: ['dessert'], body: 'rich' });
+    expect(keepsChoice('body', subjectOf('ax-brownie', rich), rich)).toBe('own');
+    const light = ask({ kinds: ['dessert'], body: 'light' });
+    expect(keepsChoice('body', subjectOf('ax-brownie', light), light)).toBe(false);
+  });
+
+  it('satisfiesChoice is keepsChoice mapped to true / false / null', () => {
+    const inputs = ask({ kinds: ['drink'], flavours: ['nutty'] });
+    expect(satisfiesChoice('flavours', subjectOf('ax-cappuccino', inputs), inputs)).toBe(true);
+    expect(satisfiesChoice('flavours', subjectOf('ax-americano', inputs), inputs)).toBe(false);
+    expect(satisfiesChoice('flavours', subjectOf('ax-garlic-bread', inputs), inputs)).toBeNull();
+  });
+});
+
+describe('honourChoices — own > made > not at all', () => {
+  const menu = buildAddonMenu();
+  const cands = (ids: string[]): FilteredCandidate[] =>
+    ids.map((id) => ({ item: menu.items.find((i) => i.id === id)!, traits: menu.traitsById.get(id)! }));
+  const inputs = ask({ kinds: ['drink'], flavours: ['nutty'] });
+
+  it('an item nutty on its own outranks one that needs a syrup, which outranks one that cannot be nutty', () => {
+    const pool = cands(['ax-americano', 'ax-cappuccino', 'ax-plain-flat-white', 'ax-hazelnut-latte', 'ax-latte']);
+    const out = honourChoices(pool, inputs);
+    // own (1) < need 3: pinned; made (cappuccino, latte) completes the pool; the two that cannot are out.
+    expect(out.pinnedIds).toEqual(['ax-hazelnut-latte']);
+    expect(ids(out.pool)).toEqual(['ax-cappuccino', 'ax-hazelnut-latte', 'ax-latte']);
+  });
+
+  it('an earlier choice outranks a later one even through add-ons', () => {
+    const both = ask({ kinds: ['drink'], flavours: ['nutty'], strength: 'strong' });
+    const pool = cands(['ax-americano', 'ax-hazelnut-latte', 'ax-cappuccino', 'ax-latte', 'ax-mocha']);
+    const out = honourChoices(pool, both);
+    // hazelnut latte: nutty own, strong made (22); americano: strong own but not nutty (02, no syrup); the rest 12.
+    expect(out.pinnedIds).toEqual(['ax-hazelnut-latte']);
+    expect(ids(out.pool)).not.toContain('ax-americano');
+  });
+
+  // Whether a choice is kept at all is compared before HOW it is kept: an item
+  // that keeps everything (even through add-ons) must outrank one that keeps the
+  // first choice on its own but breaks a later one.
+  it('keeping every choice beats keeping the first one on its own', () => {
+    const both = ask({ kinds: ['drink'], flavours: ['nutty'], strength: 'strong' });
+    const base = cands(['ax-hazelnut-latte', 'ax-cappuccino', 'ax-americano', 'ax-plain-flat-white', 'ax-latte', 'ax-mocha']);
+    // The hazelnut latte, made too gentle for a shot to lift it to strong: nutty
+    // on its own, never strong.
+    const gentle: FilteredCandidate = {
+      item: { ...base[0].item, id: 'ax-gentle-hazelnut' },
+      traits: { ...base[0].traits, menu_item_id: 'ax-gentle-hazelnut', intensity: 1 },
+    };
+    const pool = [gentle, ...base.slice(1)];
+    const subject = (c: FilteredCandidate) => ({
+      name: c.item.name,
+      traits: c.traits,
+      sugarAdjustable: isSugarAdjustable(c.item),
+      made: madeToOrder(c.item, c.traits, both),
+    });
+    expect(keepsChoice('flavours', subject(gentle), both)).toBe('own');
+    expect(keepsChoice('strength', subject(gentle), both)).toBe(false);
+
+    const keepsBoth = pool
+      .filter((c) => keepsChoice('flavours', subject(c), both) !== false && keepsChoice('strength', subject(c), both) !== false)
+      .map((c) => c.item.id);
+    expect(keepsBoth.length).toBeGreaterThan(0);
+    expect(keepsBoth).not.toContain('ax-gentle-hazelnut');
+
+    const out = honourChoices(pool, both);
+    for (const id of keepsBoth) expect(ids(out.pool), id).toContain(id);
+    if (keepsBoth.length >= 3) {
+      // Enough keep everything: the pool is exactly those, and the gentle one is out.
+      expect(ids(out.pool).sort()).toEqual([...keepsBoth].sort());
+    } else {
+      // Too few to fill the picks: they are pinned, and pinned FIRST, ahead of
+      // anything that breaks a choice.
+      expect(out.pinnedIds.slice(0, keepsBoth.length).sort()).toEqual([...keepsBoth].sort());
+    }
+  });
+});
+
+describe('runSuggest — made your way (decider: null, add-on menu)', () => {
+  const menu = buildAddonMenu();
+  const run = (inputs: SuggestInputs) =>
+    runSuggest({
+      request: { inputs },
+      menu: menu.items,
+      traitsById: menu.traitsById,
+      profile: null,
+      popularity: new Map(),
+      recentItemIds: [],
+      now: new Date('2026-06-01T10:00:00Z'),
+      decider: null as Decider | null,
+      fallbackReason: 'disabled',
+    });
+  const hotNutty = ask({ kinds: ['drink'], temperature: 'hot', base: 'coffee', flavours: ['nutty'] });
+
+  it('a hot nutty coffee: the own carrier first, the rest made with a Hazelnut syrup, nothing missed or unmet', async () => {
+    const result = await run(hotNutty);
+    expect(result.picks).toHaveLength(3);
+    expect(result.pickIds[0]).toBe('ax-hazelnut-latte');
+    const first = result.picks[0];
+    expect(first.addonPresets).toEqual([]);
+    for (const p of result.picks.slice(1)) {
+      expect(p.addonPresets).toHaveLength(1);
+      expect(p.addonPresets?.[0]).toMatchObject({ label: 'Hazelnut syrup', purpose: 'flavour', family: 'nutty', priceInr: 35 });
+      expect(p.flavourAddon?.label).toBe('Hazelnut syrup');
+      expect(p.matchTags).toContain('Nutty');
+      expect(p.matchTags!.join(' ')).not.toMatch(/add-on|₹/);
+      expect(p.reason).toContain('from Hazelnut syrup');
+      expect(lintReason(p.reason).ok).toBe(true);
+    }
+    for (const p of result.picks) expect(p.misses).toEqual([]);
+    expect(result.unmet).toEqual([]);
+  });
+
+  it('the sugar preset accounts for the syrup: a cappuccino (1) with a syrup (+2) is already "lightly sweet", so No Sugar', async () => {
+    const inputs = ask({ kinds: ['drink'], temperature: 'hot', base: 'coffee', flavours: ['nutty'], sweetness: 'light' });
+    const result = await run(inputs);
+    const cap = result.picks.find((p) => p.menuItemId === 'ax-cappuccino');
+    expect(cap?.addonPresets).toHaveLength(1);
+    expect(cap?.sugarPreset?.label).toBe('No Sugar'); // without the lift (1) it would have been Normal (1 → 4)
+    const noFlavour = await run({ ...inputs, flavours: [] });
+    expect(noFlavour.picks.find((p) => p.menuItemId === 'ax-cappuccino')?.sugarPreset?.label).toBe('Normal');
+  });
+
+  it('"strong" with too few intensity-3 coffees: an intensity-2 coffee with a strength preset, reading bold', async () => {
+    const strong = ask({ kinds: ['drink'], temperature: 'hot', base: 'coffee', strength: 'strong' });
+    const result = await run(strong);
+    expect(result.picks).toHaveLength(3);
+    expect(result.pickIds[0]).toBe('ax-americano'); // the only own intensity-3 hot coffee, pinned
+    const made = result.picks.filter((p) => (p.addonPresets ?? []).length > 0);
+    expect(made.length).toBeGreaterThan(0);
+    for (const p of made) {
+      expect(p.addonPresets?.[0]).toMatchObject({ label: 'Espresso Shot', purpose: 'strength', priceInr: 40 });
+      expect(p.matchTags).toContain('Strong');
+      expect(p.reason).toMatch(/\bbold\b/i);
+      expect(p.reason).not.toMatch(/mellow|gentle|full-flavoured/i);
+      expect(lintReason(p.reason).ok).toBe(true);
+    }
+    for (const p of result.picks) expect(p.misses).toEqual([]);
+    expect(result.unmet).toEqual([]);
+  });
+
+  it('every reason, with and without presets, stays short and passes the tone lint', async () => {
+    for (const inputs of [hotNutty, ask({ kinds: ['drink'], strength: 'strong', flavours: ['caramel'], sweetness: 'medium' }), ask({ kinds: ['drink', 'dessert'], flavours: ['nutty'], strength: 'strong', budget: 'under_200' })]) {
+      const result = await run(inputs);
+      for (const p of result.picks) {
+        expect(p.reason.length).toBeLessThanOrEqual(120);
+        expect(lintReason(p.reason).ok, p.reason).toBe(true);
+        expect((p.addonPresets ?? []).length).toBeLessThanOrEqual(2);
+      }
+    }
+  });
+});
+
+describe('flavourCountsByKind — made your way', () => {
+  const menu = buildAddonMenu();
+  const counts = flavourCountsByKind(menu.items, menu.traitsById);
+
+  it('counts an item for a family it carries itself or can be made to carry with a reachable add-on', () => {
+    // Own nutty: the hazelnut latte. Made nutty: the three PLAIN coffees with a
+    // syrup (cappuccino, latte, iced latte). The mocha has a flavour of its own
+    // (chocolate), so no syrup goes on it.
+    expect(counts.drink.nutty).toBe(4);
+    // No coffee carries caramel on its own; the same three plain ones can be made
+    // caramel. The mocha and the hazelnut latte cannot: they are not plain.
+    expect(counts.drink.caramel).toBe(3);
+    // Chocolatey: the mocha and the hazelnut latte's syrup cannot (no chocolate syrup): own only.
+    expect(counts.drink.chocolatey).toBe(1);
+    expect(counts.dessert.chocolatey).toBe(1);
+    expect(counts.dessert.nutty).toBeUndefined(); // no add-ons on desserts
+    expect(counts.food).toEqual({});
+  });
+
+  it('counts each item once per family, and the owner overrides are honoured', () => {
+    const overrides = new Map([['ax-cappuccino-syrup-vanilla', { role: 'flavour' as const, flavour_families: ['floral' as const], sweetness_delta: 1, intensity_delta: 0, indulgence_delta: 0, textures: [] }]]);
+    const withOverride = flavourCountsByKind(menu.items, menu.traitsById, overrides);
+    expect(withOverride.drink.floral).toBe(1);
+    expect(withOverride.drink.nutty).toBe(4);
+  });
+});
+
+// A syrup or sauce goes on a plain base only (madeToOrder): no "cranberry coffee
+// with chocolate sauce".
+describe('madeToOrder — a flavour add-on only on a plain base', () => {
+  const menu = buildAddonMenu();
+  const made = (id: string, inputs: SuggestInputs) =>
+    madeToOrder(menu.items.find((i) => i.id === id)!, menu.traitsById.get(id)!, inputs);
+  const nutty = ask({ kinds: ['drink'], flavours: ['nutty'] });
+
+  it('a plain cappuccino gets the syrup; a mocha, which is chocolatey on its own, does not', () => {
+    expect(made('ax-cappuccino', nutty).presets.map((p) => p.purpose)).toEqual(['flavour']);
+    expect(made('ax-mocha', nutty).presets).toEqual([]);
+    expect(made('ax-mocha', nutty).families).toEqual([]);
+  });
+
+  it('an item that already carries the asked flavour needs nothing', () => {
+    expect(made('ax-hazelnut-latte', nutty).presets).toEqual([]);
+  });
+
+  it('a strength shot is not a flavour: it still goes on a flavoured coffee', () => {
+    const strong = ask({ kinds: ['drink'], strength: 'strong' });
+    const item = menu.items.find((i) => i.id === 'ax-mocha')!;
+    const traits = menu.traitsById.get('ax-mocha')!;
+    const shotOnMenu = (item.addon_groups ?? []).some((g) => g.options.some((o) => /shot/i.test(o.name)));
+    // Only meaningful when the fixture's mocha offers a shot and sits one short of strong.
+    if (shotOnMenu && traits.intensity === 2) {
+      expect(made('ax-mocha', strong).presets.map((p) => p.purpose)).toEqual(['strength']);
+    } else {
+      expect(made('ax-mocha', strong).presets.every((p) => p.purpose === 'strength')).toBe(true);
+    }
   });
 });

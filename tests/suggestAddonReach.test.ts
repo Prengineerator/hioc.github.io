@@ -732,7 +732,8 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
       family: 'nutty',
     });
     expect(cap.flavourAddon!.label).toBe('Hazelnut syrup');
-    expect(cap.matchTags).toEqual(['Cosy']); // no "Nutty add-on" tag: the item is not nutty itself
+    expect(cap.matchTags).toEqual(['Nutty', 'Cosy']); // the preselected syrup makes it nutty: the family's normal tag, no "add-on" wording
+    expect(cap.addonPresets).toEqual([{ groupId: 'syrup-group', optionId: 'syrup-hazelnut', label: 'Hazelnut syrup', priceInr: 35, purpose: 'flavour', family: 'nutty' }]);
     expect(cap.reason).toContain('from Hazelnut syrup');
     // No sweetness word: the syrup sweetens the drink, so "unsweetened … from
     // Hazelnut syrup" would contradict itself. The next descriptor (texture) leads.
@@ -850,7 +851,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     expect(result.usual?.reasonCode).toBe('usual');
     expect(result.usual?.flavourAddon?.label).toBe('Hazelnut syrup');
     expect(result.usual?.reason).toBe('Your usual — toasty nutty notes from Hazelnut syrup, always a good choice.');
-    expect(result.usual?.matchTags).toEqual(['Cosy']);
+    expect(result.usual?.matchTags).toEqual(['Nutty', 'Cosy']);
     expect(result.picks.some((p) => p.menuItemId === 'cappucino')).toBe(false);
 
     const noFlavours = await run(ask([]), { profile });

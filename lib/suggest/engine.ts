@@ -29,7 +29,8 @@
 
 import { flavourAddonFor, reachableAddonFamilies } from './addonTraits';
 import { filterCandidates, relaxHintFor } from './filter';
-import { honourChoices, satisfiesChoice, unmetChoices } from './promises';
+import { guardTraits } from './traitsGuard';
+import { honourChoices, madeToOrder, satisfiesChoice, unmetChoices } from './promises';
 import { buildShortlist, scoreCandidates } from './score';
 import { isSugarAdjustable, sugarPresetFor } from './sugar';
 import { sweetnessLevel } from './sweetness';
@@ -39,7 +40,7 @@ import { pickUsual, summarizeProfile } from './profile';
 import { daypartFor } from './daypart';
 import { validateDeciderPicks } from './validate';
 import { DeciderError } from './deciderError';
-import { HONOURED_CHOICES, SUGGEST_LIMITS } from './types';
+import { HONOURED_CHOICES, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 import type {
   AddonTraits,
   Candidate,
@@ -199,14 +200,27 @@ function decorate(
   const sugarAdjustable = isSugarAdjustable(item);
   const flavourAddon = flavourAddonFor(item, traits, inputs, addonTraitsById);
   const addonFlavourFamilies = reachableAddonFamilies(item, traits, inputs, addonTraitsById);
+  // What making it the customer's way adds (COFFEY-SPEC §11): the add-ons to
+  // preselect, and the sweetness / intensity they bring.
+  const made = madeToOrder(item, traits, inputs, addonTraitsById);
+  const flavourPreset = made.presets.find((p) => p.purpose === 'flavour');
+  const nameFlavourAddon = flavourPreset && flavourAddon ? flavourAddon : null;
+  const liftedBase = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + made.sweetnessLift);
   return {
     ...pick,
-    reason: flavourAddon
-      ? templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable, flavourAddon)
-      : pick.reason,
-    matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies }, inputs),
-    sugarPreset: sugarPresetFor(item, inputs.sweetness, sweetnessLevel(traits)),
-    flavourAddon,
+    // The reason names the add-on exactly when a flavour add-on is preselected,
+    // and describes the made intensity when a shot is.
+    reason:
+      made.presets.length > 0
+        ? templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable, nameFlavourAddon, made)
+        : pick.reason,
+    matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies, made }, inputs),
+    sugarPreset: sugarPresetFor(item, inputs.sweetness, liftedBase),
+    // The older "tip" field: only ever the add-on Coffey itself preselects, so an
+    // older client never points at one the rules above would not use (a sauce on
+    // a drink that already has a flavour of its own, or one past the budget).
+    flavourAddon: nameFlavourAddon,
+    addonPresets: made.presets,
   };
 }
 
@@ -214,7 +228,7 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
   const {
     request,
     menu,
-    traitsById,
+    traitsById: taggedTraitsById,
     profile,
     popularity,
     recentItemIds,
@@ -223,6 +237,10 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     decider,
     fallbackReason: forcedFallbackReason,
   } = args;
+  // A drink whose own name says "Iced" is iced whatever its row says
+  // (lib/suggest/traitsGuard.ts): corrected once here, so the filter, the score,
+  // the tags and the brief all read the same value.
+  const traitsById = guardTraits(menu, taggedTraitsById);
   const inputs = request.inputs;
   const excludeIds = request.excludeItemIds ?? [];
   const startedAt = Date.now();
@@ -233,7 +251,7 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
   const filtered = filterCandidates(menu, traitsById, inputs, excludeIds);
   // 1b — keep the customer's flavour / strength / sweetness / texture choices
   // whenever the menu can (lib/suggest/promises.ts); only ever removes items.
-  const { pool: honoured, pinnedIds } = honourChoices(filtered, inputs);
+  const { pool: honoured, pinnedIds } = honourChoices(filtered, inputs, addonTraitsById);
 
   // 2 — score + shortlist, with diversity rules (§5.3).
   const scored = scoreCandidates({ candidates: honoured, inputs, profile, daypart, popularity, recentItemIds, addonTraitsById });
@@ -343,7 +361,12 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     const item = itemsById.get(p.menuItemId);
     const traits = traitsById.get(p.menuItemId);
     if (!item || !traits) return decorated;
-    const subject = { name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) };
+    const subject = {
+      name: item.name,
+      traits,
+      sugarAdjustable: isSugarAdjustable(item),
+      made: madeToOrder(item, traits, inputs, addonTraitsById),
+    };
     return { ...decorated, misses: HONOURED_CHOICES.filter((c) => satisfiesChoice(c, subject, inputs) === false) };
   });
   const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById, addonTraitsById) : null;
@@ -352,7 +375,9 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     picks.flatMap((p) => {
       const item = itemsById.get(p.menuItemId);
       const traits = traitsById.get(p.menuItemId);
-      return item && traits ? [{ name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) }] : [];
+      return item && traits
+        ? [{ name: item.name, traits, sugarAdjustable: isSugarAdjustable(item), made: madeToOrder(item, traits, inputs, addonTraitsById) }]
+        : [];
     }),
     inputs,
   );

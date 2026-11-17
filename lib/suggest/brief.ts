@@ -68,6 +68,7 @@
 // time, so the module is safe for the eval script and client bundles alike.
 
 import type { JsonValue } from '@typesafe-ai/sdk';
+import { intensityOf } from './promises';
 import { sweetnessLevel } from './sweetness';
 import { sanitizeNote } from './tone';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from './traitVocabulary';
@@ -79,6 +80,7 @@ import {
   type Budget,
   type Candidate,
   type Daypart,
+  type MadeTo,
   type MenuItemTraits,
   type Mood,
   type ProfileSummary,
@@ -359,7 +361,7 @@ const KIND_WORD: Record<string, string | null> = { dessert: 'dessert', food: 'sa
 
 /** The taste summary as separate parts, in reading order. Unknowns are left
  * out: a pre-v2 row simply has fewer parts (no intensity, refreshment, …). */
-function tasteParts(traits: MenuItemTraits): string[] {
+function tasteParts(traits: MenuItemTraits, made?: MadeTo): string[] {
   const parts: string[] = [];
 
   // Hot / iced. 'ambient' (food, dessert) says nothing about the drink.
@@ -381,8 +383,11 @@ function tasteParts(traits: MenuItemTraits): string[] {
 
   // v2 dimensions, only when tagged. The middle grades of refreshment,
   // indulgence and novelty are unremarkable, so they say nothing.
-  const intensity = grade03(traits.intensity);
-  if (intensity !== null) parts.push(INTENSITY_WORD[intensity]);
+  // With a shot preselected for "strong", the intensity is the made one.
+  const lift = made?.intensityLift ?? 0;
+  const own = grade03(traits.intensity);
+  const intensity = lift > 0 ? Math.min(3, intensityOf(traits) + lift) : own;
+  if (intensity !== null) parts.push(lift > 0 ? `${INTENSITY_WORD[intensity as 0 | 1 | 2 | 3]} with an extra shot` : INTENSITY_WORD[intensity as 0 | 1 | 2 | 3]);
 
   const refreshment = grade03(traits.refreshment);
   if (refreshment === 2) parts.push('refreshing');
@@ -408,8 +413,8 @@ function tasteParts(traits: MenuItemTraits): string[] {
  * then "dessert" / "savoury food" for a non-drink. A row tagged before v2 gives
  * the shorter line without the extras.
  */
-export function tasteLine(c: Pick<Candidate, 'traits'>): string {
-  return tasteParts(c.traits).join(TASTE_SEPARATOR);
+export function tasteLine(c: Pick<Candidate, 'traits' | 'made'>): string {
+  return tasteParts(c.traits, c.made).join(TASTE_SEPARATOR);
 }
 
 /**
@@ -420,8 +425,9 @@ export function tasteLine(c: Pick<Candidate, 'traits'>): string {
  */
 export function shortCriterion(c: Candidate): string {
   const price = Number.isFinite(c.minPriceInr) ? `, ₹${c.minPriceInr}` : '';
-  const head = `${plain(c.name)} — ${plain(c.category)}${price}`;
-  const parts = tasteParts(c.traits);
+  const extras = (c.made?.presets ?? []).map((p) => plain(p.label)).filter(Boolean);
+  const head = `${plain(c.name)}${extras.length > 0 ? ` + ${extras.join(' + ')}` : ''} — ${plain(c.category)}${price}`;
+  const parts = tasteParts(c.traits, c.made);
   const build = () => (parts.length > 0 ? `${head}: ${parts.join(TASTE_SEPARATOR)}` : head);
 
   let line = build();
@@ -508,6 +514,13 @@ export function describeCandidate(c: Candidate): Record<string, JsonValue> {
 
   out.taste = tasteLine(c);
   out.flavours = (Array.isArray(c.traits.flavor_notes) ? c.traits.flavor_notes : []).map(plain).filter(Boolean);
+  // As Coffey would make it for this request: a flavour add-on's family is part
+  // of the item's flavour ("Nutty with Hazelnut syrup").
+  for (const preset of c.made?.presets ?? []) {
+    if (preset.purpose === 'flavour' && preset.family) {
+      out.flavours.push(plain(`${FLAVOUR_FAMILY_INFO[preset.family].label} with ${preset.label}`));
+    }
+  }
 
   const textures = (Array.isArray(c.traits.textures) ? c.traits.textures : []).map(plain).filter(Boolean);
   if (textures.length > 0) out.textures = textures;

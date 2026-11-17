@@ -25,10 +25,10 @@ export default async function SuggestPage() {
   let flavourCounts: FlavourCounts | null = null;
   let facets: MenuFacet[] | null = null;
   try {
-    const { items, traitsById } = await loadMenuAndTraits(createAdminSupabaseClient());
+    const { items, traitsById, addonTraitsById } = await loadMenuAndTraits(createAdminSupabaseClient());
     if (items.length > 0) {
-      flavourCounts = flavourCountsByKind(items, traitsById);
-      const built = menuFacets(items, traitsById);
+      flavourCounts = flavourCountsByKind(items, traitsById, addonTraitsById);
+      const built = menuFacets(items, traitsById, addonTraitsById);
       facets = built.length > 0 ? built : null;
     }
   } catch {

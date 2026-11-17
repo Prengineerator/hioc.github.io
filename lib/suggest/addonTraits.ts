@@ -23,7 +23,7 @@
 // the MenuItem rows the engine is handed, plus the optional override map.
 
 import type { AddonGroup, AddonOption, MenuItem } from '@/lib/types';
-import { flavourFamiliesOf } from './flavor';
+import { flavourFamiliesOf } from './families';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 import {

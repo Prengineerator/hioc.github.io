@@ -1,21 +1,43 @@
-// Menu facets (Coffey wizard): for every orderable, tagged item, what each
-// option the wizard can send would do to it — computed with the engine's OWN
-// functions (filter.ts passesHardConstraints, promises.ts satisfiesChoice) so
-// the wizard and the engine can never disagree about what "fits".
+// Menu facets (Coffey wizard): for every orderable, tagged item, the compact
+// record of exactly what the choice rules read — so the wizard can grey out an
+// option no item can keep TOGETHER with everything else the customer selected
+// ("never offer a chip that leads nowhere"), with no server round trip.
 //
-// The wizard uses the facets to grey out an option no item can satisfy together
-// with the customer's other choices ("never offer a chip that leads nowhere").
-// The facets are tiny (one short string per item) and cross to the client as
-// plain data; unavailableOptions() is the pure client-side half.
+// With "made your way" (COFFEY-SPEC §11) the choices interact: a syrup adds
+// sweetness, a shot adds price. So there are no per-option verdicts to precompute
+// any more. unavailableOptions() rebuilds a minimal MenuItem + traits from each
+// facet and asks the REAL engine functions (filter.ts passesHardConstraints,
+// promises.ts madeToOrder and keepsChoice), so the wizard and the engine cannot
+// disagree about what "fits": there is one implementation of the rules.
+//
+// A facet is plain data and identifies nothing: no id, no name, no label.
 //
 // Pure: no Supabase, no 'server-only'.
 
 import { isMenuItemAvailable } from '@/lib/menu/availability';
-import type { MenuItem } from '@/lib/types';
-import { passesHardConstraints } from './filter';
-import { satisfiesChoice, type ChoiceSubject } from './promises';
+import type { AddonGroup, MenuItem } from '@/lib/types';
+import { flavourFamiliesOf } from './families';
+import { resolveAddonTraits } from './addonTraits';
+import { minPriceInr, passesHardConstraints } from './filter';
+import { isMistaggedIced } from './traitsGuard';
+import { HONOURED_CHOICES } from './types';
+import { choiceApplies, intensityOf, isChoiceSet, keepsChoice, madeToOrder, type ChoiceSubject } from './promises';
 import { isSugarAdjustable } from './sugar';
-import { FLAVOUR_FAMILIES, type FlavourFamily, type MenuItemTraits, type SuggestInputs, type TraitKind } from './types';
+import { sweetnessLevel } from './sweetness';
+import {
+  ADDON_SUGGEST_LIMITS,
+  FLAVOUR_FAMILIES,
+  FLAVOUR_REACH_ROLES,
+  type AddonRole,
+  type AddonTraits,
+  type FlavourFamily,
+  type MenuItemTraits,
+  type SuggestInputs,
+  type TraitBody,
+  type TraitCaffeine,
+  type TraitKind,
+  type TraitTemperature,
+} from './types';
 
 export const FACET_OPTIONS = [
   'temp:hot',
@@ -36,20 +58,209 @@ export const FACET_OPTIONS = [
 ] as const;
 export type FacetOption = (typeof FACET_OPTIONS)[number];
 
-/** One character per FACET_OPTIONS entry: 'k' keeps it, 'x' rules the item out,
- * 'n' the option does not apply to this kind of item. */
-export interface MenuFacet {
-  kind: TraitKind;
-  states: string;
+/** An add-on option that could ever become a preset: a flavour source (reach
+ * role with a family) or an espresso shot. */
+export interface FacetAddon {
+  role: AddonRole;
+  /** Flavour families it supplies (empty for a shot). */
+  families: FlavourFamily[];
+  /** Sweetness it adds. */
+  sweetness: number;
+  /** Intensity it adds. */
+  intensity: number;
+  priceInr: number;
+  /** Index of its group within the item (menu order by sort_order). */
+  group: number;
+  /** That group's max_select. */
+  max: number;
 }
 
-type FacetState = 'k' | 'x' | 'n';
+/** What the choice rules read about one item, and nothing that identifies it. */
+export interface MenuFacet {
+  kind: TraitKind;
+  temperature: TraitTemperature;
+  isCoffee: boolean;
+  caffeine: TraitCaffeine;
+  /** sweetnessLevel(traits): inherent, 0–10. */
+  sweetness: number;
+  /** The intensity (0–3), with the caffeine fallback applied. */
+  intensity: number;
+  body: TraitBody;
+  sugarAdjustable: boolean;
+  /** Cheapest size. */
+  minPriceInr: number;
+  /** The flavour families the item carries itself. */
+  families: FlavourFamily[];
+  addons: FacetAddon[];
+}
 
-function neutralInputs(kind: TraitKind): SuggestInputs {
-  return {
+/** A price no budget cap admits, for an item with no priced size (JSON cannot hold Infinity). */
+const NO_PRICE = 1_000_000;
+
+/** One facet per orderable, tagged item. */
+export function menuFacets(
+  items: MenuItem[],
+  traitsById: Map<string, MenuItemTraits>,
+  overrides?: Map<string, AddonTraits>,
+): MenuFacet[] {
+  const reachRoles: readonly AddonRole[] = FLAVOUR_REACH_ROLES;
+  const out: MenuFacet[] = [];
+  for (const item of items) {
+    const traits = traitsById.get(item.id);
+    if (!traits || !isMenuItemAvailable(item)) continue;
+
+    const groups = [...(item.addon_groups ?? [])]
+      .map((group, i) => ({ group, i }))
+      .sort((a, b) => a.group.sort_order - b.group.sort_order || a.i - b.i);
+    const addons: FacetAddon[] = [];
+    groups.forEach(({ group }, rank) => {
+      const options = [...(group.options ?? [])].sort((a, b) => a.sort_order - b.sort_order || (a.id < b.id ? -1 : 1));
+      for (const option of options) {
+        if (option.is_available === false) continue;
+        if (!(option.price_inr <= ADDON_SUGGEST_LIMITS.maxPriceInr)) continue;
+        const t = resolveAddonTraits(group, option, overrides);
+        const flavourSource = reachRoles.includes(t.role) && t.flavour_families.length > 0;
+        const shot = t.role === 'shot' && t.intensity_delta >= 1;
+        if (!flavourSource && !shot) continue;
+        addons.push({
+          role: t.role,
+          families: flavourSource ? [...t.flavour_families] : [],
+          sweetness: t.sweetness_delta,
+          intensity: t.intensity_delta,
+          priceInr: option.price_inr,
+          group: rank,
+          max: group.max_select,
+        });
+      }
+    });
+
+    const price = minPriceInr(item);
+    out.push({
+      kind: traits.kind,
+      // The same correction the engine applies (lib/suggest/traitsGuard.ts), so a
+      // chip is never greyed or offered on a temperature the engine does not use.
+      temperature: isMistaggedIced(item, traits) ? 'iced' : traits.temperature,
+      isCoffee: traits.is_coffee,
+      caffeine: traits.caffeine,
+      sweetness: sweetnessLevel(traits),
+      intensity: intensityOf(traits),
+      body: traits.body,
+      sugarAdjustable: isSugarAdjustable(item),
+      minPriceInr: Number.isFinite(price) ? price : NO_PRICE,
+      families: flavourFamiliesOf(item.name, traits.flavor_notes ?? []),
+      addons,
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Rebuilding real objects from a facet
+// ---------------------------------------------------------------------------
+
+/** A flavour note per family that flavourFamiliesOf reads back as exactly that
+ * family (tests/suggestFacets.test.ts checks all seven). */
+export const CANONICAL_NOTE: Record<FlavourFamily, string> = {
+  chocolatey: 'cocoa',
+  caramel: 'toffee',
+  nutty: 'walnut',
+  biscuit: 'wafer',
+  fruity: 'citrus',
+  spiced: 'clove',
+  floral: 'lavender',
+};
+
+interface Rebuilt {
+  facet: MenuFacet;
+  item: MenuItem;
+  traits: MenuItemTraits;
+  overrides: Map<string, AddonTraits>;
+  sugarAdjustable: boolean;
+}
+
+function rebuild(facet: MenuFacet, index: number): Rebuilt {
+  const overrides = new Map<string, AddonTraits>();
+  const groups = new Map<number, AddonGroup>();
+  facet.addons.forEach((addon, j) => {
+    let group = groups.get(addon.group);
+    if (!group) {
+      group = {
+        id: `g${addon.group}`,
+        name: 'g',
+        display_name: '',
+        selection_type: 'multi',
+        min_select: 0,
+        max_select: addon.max,
+        sort_order: addon.group,
+        options: [],
+      };
+      groups.set(addon.group, group);
+    }
+    const id = `${group.id}o${j}`;
+    group.options.push({ id, addon_group_id: group.id, name: 'o', price_inr: addon.priceInr, sort_order: j, is_available: true });
+    overrides.set(id, {
+      role: addon.role,
+      flavour_families: addon.families,
+      sweetness_delta: addon.sweetness,
+      intensity_delta: addon.intensity,
+      indulgence_delta: 0,
+      textures: [],
+    });
+  });
+
+  const id = `facet-${index}`;
+  const item = {
+    id,
+    name: '',
+    description: '',
+    category: '',
+    parent_category: '',
+    is_veg: true,
+    is_available: true,
+    unavailable_until: null,
+    variants: [{ id: `${id}-v`, menu_item_id: id, label: '', price_inr: facet.minPriceInr, sort_order: 0 }],
+    addon_groups: [...groups.values()].sort((a, b) => a.sort_order - b.sort_order),
+  } as unknown as MenuItem;
+  const traits = {
+    menu_item_id: id,
+    kind: facet.kind,
+    temperature: facet.temperature,
+    caffeine: facet.caffeine,
+    is_coffee: facet.isCoffee,
+    sweetness: 0,
+    sweetness_level: facet.sweetness,
+    intensity: facet.intensity,
+    body: facet.body,
+    flavor_notes: facet.families.map((f) => CANONICAL_NOTE[f]),
+  } as unknown as MenuItemTraits;
+  return { facet, item, traits, overrides, sugarAdjustable: facet.sugarAdjustable };
+}
+
+const REBUILT = new WeakMap<readonly MenuFacet[], Rebuilt[]>();
+
+function rebuiltFor(facets: readonly MenuFacet[]): Rebuilt[] {
+  let list = REBUILT.get(facets);
+  if (!list) {
+    list = facets.map(rebuild);
+    REBUILT.set(facets, list);
+  }
+  return list;
+}
+
+// ---------------------------------------------------------------------------
+// Selections → the inputs the wizard would send
+// ---------------------------------------------------------------------------
+
+function groupOf(option: FacetOption): string {
+  return option.split(':')[0];
+}
+
+/** The SuggestInputs the wizard sends for these options (kinds as given). */
+export function inputsForOptions(kinds: readonly TraitKind[], options: readonly FacetOption[]): SuggestInputs {
+  const inputs: SuggestInputs = {
     mood: 'cosy',
     secondaryMood: null,
-    kinds: [kind],
+    kinds: [...kinds],
     temperature: 'either',
     base: 'either',
     strength: 'any',
@@ -60,127 +271,104 @@ function neutralInputs(kind: TraitKind): SuggestInputs {
     budget: 'any',
     note: '',
   };
-}
-
-function inputsFor(option: FacetOption, kind: TraitKind): SuggestInputs {
-  const inputs = neutralInputs(kind);
-  const [group, value] = option.split(':');
-  switch (group) {
-    case 'temp':
-      inputs.temperature = value as 'hot' | 'iced';
-      break;
-    case 'coffee':
-      if (value === 'none') inputs.base = 'no_coffee';
-      else {
-        inputs.base = 'coffee';
-        inputs.strength = value as 'strong' | 'mild';
-      }
-      break;
-    case 'caffeineFree':
-      inputs.needs = ['no_caffeine'];
-      break;
-    case 'sweet':
-      inputs.sweetness = value as 'none' | 'light' | 'sweet';
-      break;
-    case 'flavour':
-      inputs.flavours = [value as FlavourFamily];
-      break;
-    case 'budget':
-      inputs.budget = value as 'under_100' | 'under_150' | 'under_200';
-      break;
-    case 'body':
-      inputs.body = value as 'light' | 'rich';
-      break;
+  for (const option of options) {
+    const [group, value] = option.split(':');
+    switch (group) {
+      case 'temp':
+        inputs.temperature = value as 'hot' | 'iced';
+        break;
+      case 'coffee':
+        if (value === 'none') {
+          inputs.base = 'no_coffee';
+          inputs.strength = 'any';
+        } else {
+          inputs.base = 'coffee';
+          inputs.strength = value as 'strong' | 'mild';
+        }
+        break;
+      case 'caffeineFree':
+        inputs.needs = ['no_caffeine'];
+        break;
+      case 'sweet':
+        inputs.sweetness = value as 'none' | 'light' | 'sweet';
+        break;
+      case 'flavour':
+        if (!inputs.flavours.includes(value as FlavourFamily)) inputs.flavours.push(value as FlavourFamily);
+        break;
+      case 'budget':
+        inputs.budget = value as 'under_100' | 'under_150' | 'under_200';
+        break;
+      case 'body':
+        inputs.body = value as 'light' | 'rich';
+        break;
+    }
   }
   return inputs;
 }
 
-function choiceState(result: boolean | null): FacetState {
-  return result === null ? 'n' : result ? 'k' : 'x';
-}
-
-function stateOf(option: FacetOption, item: MenuItem, traits: MenuItemTraits, subject: ChoiceSubject): FacetState {
-  const inputs = inputsFor(option, traits.kind);
-  const passes = () => passesHardConstraints(item, traits, inputs, []);
-  const group = option.split(':')[0];
-  switch (group) {
+/** Does this item, made the customer's way, deliver the option being tested? */
+function delivers(option: FacetOption, subject: ChoiceSubject, inputs: SuggestInputs): boolean {
+  const kept = (choice: (typeof HONOURED_CHOICES)[number]) => {
+    const k = keepsChoice(choice, subject, inputs);
+    return k === 'own' || k === 'made';
+  };
+  switch (groupOf(option)) {
     case 'temp':
-      if (traits.kind !== 'drink') return 'n';
-      return passes() ? 'k' : 'x';
+      return subject.traits.kind === 'drink';
     case 'coffee':
-      if (!passes()) return 'x';
-      if (option === 'coffee:none') return traits.kind === 'drink' ? 'k' : 'n';
-      return choiceState(satisfiesChoice('strength', subject, inputs));
-    case 'caffeineFree':
-    case 'budget':
-      return passes() ? 'k' : 'x';
+      return option === 'coffee:none' ? subject.traits.kind === 'drink' && !subject.traits.is_coffee : kept('strength');
     case 'sweet':
-      if (!passes()) return 'x';
-      return choiceState(satisfiesChoice('sweetness', subject, inputs));
+      return kept('sweetness');
     case 'flavour':
-      return choiceState(satisfiesChoice('flavours', subject, inputs));
+      return kept('flavours');
+    case 'body':
+      return kept('body');
     default:
-      return choiceState(satisfiesChoice('body', subject, inputs));
+      return true; // caffeineFree, budget: the hard filter and the choices are all there is
   }
 }
 
-/** One facet per orderable, tagged item. */
-export function menuFacets(items: MenuItem[], traitsById: Map<string, MenuItemTraits>): MenuFacet[] {
-  const out: MenuFacet[] = [];
-  for (const item of items) {
-    const traits = traitsById.get(item.id);
-    if (!traits || !isMenuItemAvailable(item)) continue;
-    const subject: ChoiceSubject = { name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) };
-    out.push({
-      kind: traits.kind,
-      states: FACET_OPTIONS.map((option) => stateOf(option, item, traits, subject)).join(''),
-    });
-  }
-  return out;
-}
-
-const INDEX = new Map<FacetOption, number>(FACET_OPTIONS.map((o, i) => [o, i]));
-
-function groupOf(option: FacetOption): string {
-  return option.split(':')[0];
+/** Is there a rebuilt item that passes the hard filter, keeps (or can be made to
+ * keep) every set choice, and delivers `option` (undefined: nothing to deliver)? */
+function someItemFits(pool: readonly Rebuilt[], inputs: SuggestInputs, option: FacetOption | null): boolean {
+  return pool.some((r) => {
+    if (!passesHardConstraints(r.item, r.traits, inputs, [])) return false;
+    const subject: ChoiceSubject = {
+      name: r.item.name,
+      traits: r.traits,
+      sugarAdjustable: r.sugarAdjustable,
+      made: madeToOrder(r.item, r.traits, inputs, r.overrides),
+    };
+    for (const choice of HONOURED_CHOICES) {
+      if (!isChoiceSet(choice, inputs) || !choiceApplies(choice, r.traits.kind)) continue;
+      if (keepsChoice(choice, subject, inputs) === false) return false;
+    }
+    return option === null || delivers(option, subject, inputs);
+  });
 }
 
 /**
  * The options that lead nowhere given what is already chosen: no item of the
- * ticked kinds keeps the option AND is compatible with every other selected
- * group (single-select: not ruled out by the selected option; flavours, which
- * are OR: not ruled out by at least one selected family). Selected options are
- * never returned, so a chip can always be tapped again to clear it.
+ * ticked kinds passes the hard filter, keeps every other set choice (on its own
+ * or with the add-ons Coffey would preselect) AND delivers the option. A flavour
+ * chip is tested alone (flavours are OR); a single-select group's value is
+ * replaced by the option. Selected options are never returned, so a chip can
+ * always be tapped again to clear it.
  */
 export function unavailableOptions(
   selection: { kinds: readonly TraitKind[]; options: readonly FacetOption[] },
   facets: readonly MenuFacet[],
 ): Set<FacetOption> {
   const selected = new Set<FacetOption>(selection.options);
-  const byGroup = new Map<string, FacetOption[]>();
-  for (const option of selection.options) {
-    const g = groupOf(option);
-    byGroup.set(g, [...(byGroup.get(g) ?? []), option]);
-  }
-  const pool = facets.filter((f) => selection.kinds.includes(f.kind));
-
-  const compatible = (facet: MenuFacet, group: string): boolean => {
-    const options = byGroup.get(group);
-    if (!options || options.length === 0) return true;
-    return options.some((o) => facet.states[INDEX.get(o) as number] !== 'x');
-  };
+  const pool = rebuiltFor(facets).filter((r) => selection.kinds.includes(r.facet.kind));
 
   const out = new Set<FacetOption>();
   for (const option of FACET_OPTIONS) {
     if (selected.has(option)) continue;
-    const idx = INDEX.get(option) as number;
-    const own = groupOf(option);
-    const available = pool.some(
-      (facet) =>
-        facet.states[idx] === 'k' &&
-        [...byGroup.keys()].every((g) => g === own || compatible(facet, g)),
-    );
-    if (!available) out.add(option);
+    const g = groupOf(option);
+    const others = selection.options.filter((o) => groupOf(o) !== g);
+    const inputs = inputsForOptions(selection.kinds, [...others, option]);
+    if (!someItemFits(pool, inputs, option)) out.add(option);
   }
   return out;
 }

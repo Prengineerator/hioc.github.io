@@ -1,172 +1,233 @@
 import { describe, expect, it } from 'vitest';
 
-// Menu facets (lib/suggest/facets.ts): each option's effect on each item, taken
-// from the engine's own functions, and the pure "which options lead nowhere"
-// check the wizard uses.
+// Menu facets (lib/suggest/facets.ts): a compact record per item, and the exact
+// JOINT "which options lead nowhere" check the wizard uses. The check rebuilds
+// items from the facets and calls the engine's own functions, so here it is
+// compared with a brute-force check done directly on the real items.
 
-import { FACET_OPTIONS, menuFacets, unavailableOptions, type FacetOption, type MenuFacet } from '@/lib/suggest/facets';
-import { passesHardConstraints } from '@/lib/suggest/filter';
-import { satisfiesChoice } from '@/lib/suggest/promises';
-import { isSugarAdjustable } from '@/lib/suggest/sugar';
-import type { SuggestInputs } from '@/lib/suggest/types';
 import {
-  BAKED_CHEESE_NACHOS,
-  BERRY_LEMONADE,
-  BLUEBERRY_CHEESECAKE,
-  CAPPUCCINO,
-  CAPPUCCINO_TRAITS,
-  BERRY_LEMONADE_TRAITS,
-  BLUEBERRY_CHEESECAKE_TRAITS,
-  BAKED_CHEESE_NACHOS_TRAITS,
-  buildFixtureMenu,
-  buildFixtureTraitsById,
-  UNAVAILABLE_ITEM,
-  NO_TRAITS_ITEM,
-} from './fixtures/suggestMenu';
+  CANONICAL_NOTE,
+  FACET_OPTIONS,
+  inputsForOptions,
+  menuFacets,
+  unavailableOptions,
+  type FacetOption,
+  type MenuFacet,
+} from '@/lib/suggest/facets';
+import { flavourFamiliesOf } from '@/lib/suggest/families';
+import { passesHardConstraints } from '@/lib/suggest/filter';
+import { HONOURED_CHOICES, FLAVOUR_FAMILIES, type MenuItemTraits, type TraitKind } from '@/lib/suggest/types';
+import { choiceApplies, isChoiceSet, keepsChoice, madeToOrder, type ChoiceSubject } from '@/lib/suggest/promises';
+import { isSugarAdjustable } from '@/lib/suggest/sugar';
 import type { MenuItem } from '@/lib/types';
-import type { MenuItemTraits } from '@/lib/suggest/types';
+import { NO_TRAITS_ITEM, UNAVAILABLE_ITEM, buildFixtureMenu, buildFixtureTraitsById, makeMenuItem, makeTraitsV2 } from './fixtures/suggestMenu';
+import { buildAddonMenu, shotGroupFor, syrupGroupFor } from './fixtures/suggestAddonMenu';
 
-const st = (facet: MenuFacet, option: FacetOption) => facet.states[FACET_OPTIONS.indexOf(option)];
+type Selection = { kinds: TraitKind[]; options: FacetOption[] };
 
-function facetOf(item: MenuItem, traits: MenuItemTraits): MenuFacet {
-  return menuFacets([item], new Map([[item.id, traits]]))[0];
+/** The brute-force check, on real items. */
+function bruteForce(selection: Selection, items: MenuItem[], traitsById: Map<string, MenuItemTraits>): Set<FacetOption> {
+  const out = new Set<FacetOption>();
+  const group = (o: FacetOption) => o.split(':')[0];
+  for (const option of FACET_OPTIONS) {
+    if (selection.options.includes(option)) continue;
+    const others = selection.options.filter((o) => group(o) !== group(option));
+    const inputs = inputsForOptions(selection.kinds, [...others, option]);
+    const fits = items.some((item) => {
+      const traits = traitsById.get(item.id);
+      if (!traits || !selection.kinds.includes(traits.kind)) return false;
+      if (!passesHardConstraints(item, traits, inputs, [])) return false;
+      const subject: ChoiceSubject = {
+        name: item.name,
+        traits,
+        sugarAdjustable: isSugarAdjustable(item),
+        made: madeToOrder(item, traits, inputs),
+      };
+      for (const choice of HONOURED_CHOICES) {
+        if (isChoiceSet(choice, inputs) && choiceApplies(choice, traits.kind) && keepsChoice(choice, subject, inputs) === false) return false;
+      }
+      const kept = (c: (typeof HONOURED_CHOICES)[number]) => ['own', 'made'].includes(String(keepsChoice(c, subject, inputs)));
+      const g = group(option);
+      if (g === 'temp') return traits.kind === 'drink';
+      if (g === 'coffee') return option === 'coffee:none' ? traits.kind === 'drink' && !traits.is_coffee : kept('strength');
+      if (g === 'sweet') return kept('sweetness');
+      if (g === 'flavour') return kept('flavours');
+      if (g === 'body') return kept('body');
+      return true;
+    });
+    if (!fits) out.add(option);
+  }
+  return out;
 }
 
-// Independent restatement of the spec, using the engine functions directly.
-function expected(item: MenuItem, traits: MenuItemTraits, option: FacetOption): string {
-  const inputs: SuggestInputs = {
-    mood: 'cosy', secondaryMood: null, kinds: [traits.kind], temperature: 'either', base: 'either',
-    strength: 'any', sweetness: 'any', body: 'any', flavours: [], needs: [], budget: 'any', note: '',
+/** A small deterministic PRNG (mulberry32). */
+function rng(seed: number) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-  const subject = { name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) };
-  const tri = (v: boolean | null) => (v === null ? 'n' : v ? 'k' : 'x');
-  const [g, v] = option.split(':');
-  if (g === 'temp') {
-    if (traits.kind !== 'drink') return 'n';
-    inputs.temperature = v as 'hot' | 'iced';
-    return passesHardConstraints(item, traits, inputs, []) ? 'k' : 'x';
-  }
-  if (g === 'flavour') return tri(satisfiesChoice('flavours', subject, { ...inputs, flavours: [v as 'fruity'] }));
-  if (g === 'body') return tri(satisfiesChoice('body', subject, { ...inputs, body: v as 'light' }));
-  if (g === 'budget') return passesHardConstraints(item, traits, { ...inputs, budget: v as 'under_100' }, []) ? 'k' : 'x';
-  if (g === 'caffeineFree') return passesHardConstraints(item, traits, { ...inputs, needs: ['no_caffeine'] }, []) ? 'k' : 'x';
-  if (g === 'sweet') {
-    const i = { ...inputs, sweetness: v as 'none' };
-    return passesHardConstraints(item, traits, i, []) ? tri(satisfiesChoice('sweetness', subject, i)) : 'x';
-  }
-  if (v === 'none') {
-    return passesHardConstraints(item, traits, { ...inputs, base: 'no_coffee' }, []) ? (traits.kind === 'drink' ? 'k' : 'n') : 'x';
-  }
-  const i = { ...inputs, base: 'coffee' as const, strength: v as 'strong' };
-  return passesHardConstraints(item, traits, i, []) ? tri(satisfiesChoice('strength', subject, i)) : 'x';
 }
+
+function randomSelection(rand: () => number): Selection {
+  const kindSets: TraitKind[][] = [['drink'], ['drink'], ['drink', 'dessert'], ['dessert'], ['drink', 'dessert', 'food'], ['drink', 'food']];
+  const kinds = kindSets[Math.floor(rand() * kindSets.length)];
+  const pickOne = (list: FacetOption[]) => (rand() < 0.45 ? [list[Math.floor(rand() * list.length)]] : []);
+  const options: FacetOption[] = [
+    ...pickOne(['temp:hot', 'temp:iced']),
+    ...pickOne(['coffee:strong', 'coffee:mild', 'coffee:none']),
+    ...(rand() < 0.15 ? (['caffeineFree'] as FacetOption[]) : []),
+    ...pickOne(['sweet:none', 'sweet:light', 'sweet:sweet']),
+    ...FLAVOUR_FAMILIES.filter(() => rand() < 0.12).map((f) => `flavour:${f}` as FacetOption),
+    ...pickOne(['budget:under_100', 'budget:under_150', 'budget:under_200']),
+    ...pickOne(['body:light', 'body:rich']),
+  ];
+  return { kinds, options: FACET_OPTIONS.filter((o) => options.includes(o)) };
+}
+
+const fixture = { items: buildFixtureMenu(), traitsById: buildFixtureTraitsById() };
+const addonMenu = buildAddonMenu();
 
 describe('menuFacets', () => {
-  it('has one character per option and one facet per orderable tagged item', () => {
-    const facets = menuFacets(buildFixtureMenu(), buildFixtureTraitsById());
+  it('one compact facet per orderable, tagged item, with exactly the fields the rules read and nothing identifying', () => {
+    const facets = menuFacets(fixture.items, fixture.traitsById);
     expect(facets.length).toBeGreaterThan(20);
-    for (const f of facets) expect(f.states).toHaveLength(FACET_OPTIONS.length);
-    expect(menuFacets([UNAVAILABLE_ITEM, NO_TRAITS_ITEM], buildFixtureTraitsById())).toEqual([]);
-  });
-
-  it('matches the engine for a hot coffee, an iced non-coffee, a dessert and a food item', () => {
-    for (const [item, traits] of [
-      [CAPPUCCINO, CAPPUCCINO_TRAITS],
-      [BERRY_LEMONADE, BERRY_LEMONADE_TRAITS],
-      [BLUEBERRY_CHEESECAKE, BLUEBERRY_CHEESECAKE_TRAITS],
-      [BAKED_CHEESE_NACHOS, BAKED_CHEESE_NACHOS_TRAITS],
-    ] as const) {
-      const facet = facetOf(item, traits);
-      expect(facet.kind).toBe(traits.kind);
-      for (const option of FACET_OPTIONS) expect(st(facet, option), `${item.name} ${option}`).toBe(expected(item, traits, option));
+    for (const f of facets) {
+      expect(Object.keys(f).sort()).toEqual(
+        ['addons', 'body', 'caffeine', 'families', 'intensity', 'isCoffee', 'kind', 'minPriceInr', 'sugarAdjustable', 'sweetness', 'temperature'],
+      );
     }
+    const json = JSON.stringify(facets);
+    for (const item of fixture.items) expect(json).not.toContain(item.id);
+    expect(menuFacets([UNAVAILABLE_ITEM, NO_TRAITS_ITEM], fixture.traitsById)).toEqual([]);
   });
 
-  it('reads sensibly: hot coffee keeps hot and coffee, not iced or no coffee; food is n for drink-only options', () => {
-    const hot = facetOf(CAPPUCCINO, CAPPUCCINO_TRAITS);
-    expect(st(hot, 'temp:hot')).toBe('k');
-    expect(st(hot, 'temp:iced')).toBe('x');
-    expect(st(hot, 'coffee:none')).toBe('x');
-    const lemonade = facetOf(BERRY_LEMONADE, BERRY_LEMONADE_TRAITS);
-    expect(st(lemonade, 'coffee:none')).toBe('k');
-    expect(st(lemonade, 'coffee:strong')).toBe('x');
-    const food = facetOf(BAKED_CHEESE_NACHOS, BAKED_CHEESE_NACHOS_TRAITS);
-    expect(st(food, 'temp:hot')).toBe('n');
-    expect(st(food, 'coffee:none')).toBe('n');
-    expect(st(food, 'flavour:fruity')).toBe('n');
-    expect(st(food, 'sweet:none')).not.toBe('n' + 'x');
+  it('keeps only the add-ons that can become a preset: flavour sources and espresso shots, switched on and within the price limit', () => {
+    const facets = menuFacets(addonMenu.items, addonMenu.traitsById);
+    const byKey = (name: string) => facets[addonMenu.items.findIndex((i) => i.name === name)];
+    const cappuccino = byKey('Cappuccino');
+    // Vanilla has no family, so it is not there; hazelnut (nutty) and caramel are, and the shot.
+    expect(cappuccino.addons.map((a) => [a.role, a.families, a.sweetness, a.intensity, a.priceInr])).toEqual([
+      ['flavour', ['nutty'], 2, 0, 35],
+      ['flavour', ['caramel'], 2, 0, 35],
+      ['shot', [], 0, 1, 40],
+    ]);
+    expect(new Set(cappuccino.addons.map((a) => a.group)).size).toBe(2);
+    expect(cappuccino.addons.every((a) => a.max === 1)).toBe(true);
+    expect(cappuccino.sugarAdjustable).toBe(true);
+    expect(byKey('Flat White').addons).toEqual([]);
+  });
+
+  it('a switched-off or dear option is left out', () => {
+    const item = makeMenuItem({
+      id: 'x',
+      name: 'Latte',
+      priceInr: 100,
+      addon_groups: [{ ...syrupGroupFor('x', 70) }, { ...shotGroupFor('y'), options: [{ ...shotGroupFor('y').options[0], is_available: false }] }],
+    });
+    const facets = menuFacets([item], new Map([['x', makeTraitsV2({ menu_item_id: 'x', sweetness_level: 1 })]]));
+    expect(facets[0].addons).toEqual([]);
+  });
+
+  it('has a canonical flavour note per family that flavourFamiliesOf reads back as exactly that family', () => {
+    for (const family of FLAVOUR_FAMILIES) expect(flavourFamiliesOf('', [CANONICAL_NOTE[family]]), family).toEqual([family]);
+  });
+
+  it('is small: the JSON of the fixture menu, for the record', () => {
+    const size = JSON.stringify(menuFacets(fixture.items, fixture.traitsById)).length;
+    expect(size).toBeLessThan(20_000);
   });
 });
 
-describe('unavailableOptions', () => {
-  const sel = (kinds: ('drink' | 'dessert' | 'food')[], ...options: FacetOption[]) => ({ kinds, options });
-  const make = (kind: 'drink' | 'dessert' | 'food', keep: FacetOption[], rule: FacetOption[] = []): MenuFacet => ({
-    kind,
-    states: FACET_OPTIONS.map((o) => (keep.includes(o) ? 'k' : rule.includes(o) ? 'x' : 'n')).join(''),
+describe('unavailableOptions agrees with a brute-force check on the real items', () => {
+  for (const [label, menu] of [
+    ['fixture menu', fixture],
+    ['add-on menu', addonMenu],
+  ] as const) {
+    it(`${label}: ${300} random selections, single-kind and multi-kind`, () => {
+      const facets = menuFacets(menu.items, menu.traitsById);
+      const rand = rng(label === 'fixture menu' ? 1 : 2);
+      let multi = 0;
+      let someOff = 0;
+      for (let n = 0; n < 300; n++) {
+        const selection = randomSelection(rand);
+        if (selection.kinds.length > 1) multi++;
+        const got = unavailableOptions(selection, facets);
+        const want = bruteForce(selection, menu.items, menu.traitsById);
+        expect([...got].sort(), JSON.stringify(selection)).toEqual([...want].sort());
+        for (const o of selection.options) expect(got.has(o)).toBe(false);
+        if (got.size > 0) someOff++;
+      }
+      expect(multi).toBeGreaterThan(50);
+      expect(someOff).toBeGreaterThan(50);
+    });
+  }
+});
+
+describe('unavailableOptions — made your way', () => {
+  const kinds: TraitKind[] = ['drink'];
+  const facets = menuFacets(addonMenu.items, addonMenu.traitsById);
+  const stripped = facets.map((f) => ({ ...f, addons: [] }));
+
+  it('a combination only reachable through a syrup is available (hot + coffee + caramel / nutty)', () => {
+    const selection = { kinds, options: ['temp:hot', 'coffee:strong'] as FacetOption[] };
+    // No hot coffee carries caramel itself; 16-style syrups make it so. Nutty also has an own carrier.
+    expect(unavailableOptions({ kinds, options: ['temp:hot'] }, stripped).has('flavour:caramel')).toBe(true);
+    expect(unavailableOptions({ kinds, options: ['temp:hot'] }, facets).has('flavour:caramel')).toBe(false);
+    expect(unavailableOptions({ kinds, options: ['temp:hot', 'flavour:caramel'] }, facets).has('coffee:strong')).toBe(false);
+    expect(unavailableOptions(selection, facets).has('flavour:caramel')).toBe(false);
   });
 
-  // Three drinks: hot strong coffee, iced strong coffee (chocolatey), iced non-coffee (fruity).
-  const hotStrong = make('drink', ['temp:hot', 'coffee:strong'], ['temp:iced', 'coffee:none', 'flavour:chocolatey', 'flavour:fruity']);
-  const icedStrongChoc = make('drink', ['temp:iced', 'coffee:strong', 'flavour:chocolatey'], ['temp:hot', 'coffee:none', 'flavour:fruity']);
-  const icedLemon = make('drink', ['temp:iced', 'coffee:none', 'flavour:fruity'], ['temp:hot', 'coffee:strong', 'flavour:chocolatey']);
-  const dessert = make('dessert', ['flavour:biscuit']);
-  const facets = [hotStrong, icedLemon, dessert];
-
-  it('with nothing selected only lists options no ticked item keeps', () => {
-    const off = unavailableOptions(sel(['drink']), facets);
-    expect(off.has('flavour:chocolatey')).toBe(true);
-    expect(off.has('flavour:biscuit')).toBe(true); // dessert not ticked
-    expect(off.has('temp:hot')).toBe(false);
-    expect(off.has('coffee:strong')).toBe(false);
-    expect(unavailableOptions(sel(['drink', 'dessert']), facets).has('flavour:biscuit')).toBe(false);
+  it('a strong coffee through a shot: only intensity-2 coffees with a shot, so no shot facets means only the intensity-3 ones', () => {
+    const noShots = facets.map((f) => ({ ...f, addons: f.addons.filter((a) => a.role !== 'shot') }));
+    // Hot + strong + caramel: intensity-3 hot coffee (americano) has no syrup; the intensity-2 ones need the shot.
+    const sel = { kinds, options: ['temp:hot', 'coffee:strong'] as FacetOption[] };
+    expect(unavailableOptions(sel, facets).has('flavour:caramel')).toBe(false);
+    expect(unavailableOptions(sel, noShots).has('flavour:caramel')).toBe(true);
   });
 
-  it('disables the conflicting option in each direction', () => {
-    const f = [...facets, icedStrongChoc].filter((x) => x !== hotStrong);
-    // Iced + strong + chocolatey exists only via icedStrongChoc; remove it.
-    const noChoc = [hotStrong, icedLemon];
-    expect(unavailableOptions(sel(['drink'], 'temp:iced', 'coffee:strong'), noChoc).has('flavour:chocolatey')).toBe(true);
-    expect(unavailableOptions(sel(['drink'], 'temp:iced', 'flavour:chocolatey'), noChoc).has('coffee:strong')).toBe(true);
-    expect(unavailableOptions(sel(['drink'], 'coffee:strong', 'flavour:chocolatey'), noChoc).has('temp:iced')).toBe(true);
-    // With the combination present, nothing is disabled.
-    const off = unavailableOptions(sel(['drink'], 'temp:iced', 'coffee:strong'), f);
-    expect(off.has('flavour:chocolatey')).toBe(false);
+  it('"Not sweet" + a flavour only a syrup can supply is not available on an item already at sweetness 2+ (the ceiling guard)', () => {
+    const coffee = (sweetness: number): MenuFacet => ({
+      kind: 'drink', temperature: 'hot', isCoffee: true, caffeine: 'medium', sweetness, intensity: 2, body: 'medium',
+      sugarAdjustable: false, minPriceInr: 100, families: [],
+      addons: [{ role: 'flavour', families: ['caramel'], sweetness: 2, intensity: 0, priceInr: 35, group: 0, max: 1 }],
+    });
+    const sel = { kinds, options: ['sweet:none'] as FacetOption[] };
+    for (const level of [2, 3, 5]) expect(unavailableOptions(sel, [coffee(level)]).has('flavour:caramel'), `level ${level}`).toBe(true);
+    // The guard itself, on the real function: level 2 + 2 > 0 + 3, so no preset at all.
+    const inputs = inputsForOptions(kinds, ['sweet:none', 'flavour:caramel']);
+    const item = makeMenuItem({ id: 'g', name: 'Latte', priceInr: 100, addon_groups: [syrupGroupFor('g')] });
+    const at = (level: number) => makeTraitsV2({ menu_item_id: 'g', sweetness_level: level, is_coffee: true });
+    expect(madeToOrder(item, at(2), inputs).presets).toEqual([]);
+    expect(madeToOrder(item, at(1), inputs).presets).toHaveLength(1); // 1 + 2 is within the ceiling,
+    expect(unavailableOptions(sel, [coffee(1)]).has('flavour:caramel')).toBe(false); // 3 is still inside the "not sweet" band
   });
 
-  it('never returns a selected option', () => {
-    const off = unavailableOptions(sel(['drink'], 'temp:iced', 'coffee:strong'), [hotStrong, icedLemon]);
-    expect(off.has('temp:iced')).toBe(false);
-    expect(off.has('coffee:strong')).toBe(false);
-    expect(unavailableOptions(sel(['drink'], 'flavour:chocolatey'), [hotStrong]).has('flavour:chocolatey')).toBe(false);
+  it('a budget cap the base price fits but base + add-on does not makes the flavour unavailable', () => {
+    const coffee = (price: number): MenuFacet => ({
+      kind: 'drink', temperature: 'hot', isCoffee: true, caffeine: 'medium', sweetness: 1, intensity: 2, body: 'medium',
+      sugarAdjustable: false, minPriceInr: price, families: [],
+      addons: [{ role: 'flavour', families: ['nutty'], sweetness: 2, intensity: 0, priceInr: 35, group: 0, max: 1 }],
+    });
+    const sel = { kinds, options: ['budget:under_150'] as FacetOption[] };
+    expect(unavailableOptions(sel, [coffee(140)]).has('flavour:nutty')).toBe(true); // 140 fits, 175 does not
+    expect(unavailableOptions(sel, [coffee(110)]).has('flavour:nutty')).toBe(false); // 145 fits
+    expect(unavailableOptions({ kinds, options: ['budget:under_200'] }, [coffee(140)]).has('flavour:nutty')).toBe(false);
   });
 
-  it('treats flavours as OR within the group', () => {
-    const f = [icedLemon, icedStrongChoc];
-    // Fruity or chocolatey selected: every iced drink is compatible, so both temps stay as the items allow.
-    const off = unavailableOptions(sel(['drink'], 'flavour:chocolatey', 'flavour:fruity'), f);
-    expect(off.has('coffee:strong')).toBe(false); // via the chocolatey item
-    expect(off.has('coffee:none')).toBe(false); // via the fruity item
-    // Only chocolatey selected: the lemonade is out, so coffee:none has no item.
-    expect(unavailableOptions(sel(['drink'], 'flavour:chocolatey'), f).has('coffee:none')).toBe(true);
+  it('a selected option is never returned, and nothing is available on empty facets', () => {
+    const options: FacetOption[] = ['temp:iced', 'flavour:floral', 'budget:under_100'];
+    const got = unavailableOptions({ kinds, options }, facets);
+    for (const o of options) expect(got.has(o)).toBe(false);
+    const none = unavailableOptions({ kinds, options }, []);
+    expect([...none].sort()).toEqual(FACET_OPTIONS.filter((o) => !options.includes(o)).sort());
+    expect(unavailableOptions({ kinds, options: [] }, []).size).toBe(FACET_OPTIONS.length);
   });
 
-  it('switching kinds changes the answer', () => {
-    expect(unavailableOptions(sel(['drink']), facets).has('flavour:biscuit')).toBe(true);
-    expect(unavailableOptions(sel(['dessert']), facets).has('flavour:biscuit')).toBe(false);
-    expect(unavailableOptions(sel(['dessert']), facets).has('temp:hot')).toBe(true);
-  });
-
-  it('with no facets every unselected option is unavailable', () => {
-    const off = unavailableOptions(sel(['drink'], 'temp:hot'), []);
-    expect(off.size).toBe(FACET_OPTIONS.length - 1);
-    expect(off.has('temp:hot')).toBe(false);
-  });
-
-  it('works on the fixture menu: a real facet list leaves the common options open', () => {
-    const real = menuFacets(buildFixtureMenu(), buildFixtureTraitsById());
-    const off = unavailableOptions(sel(['drink']), real);
-    expect(off.has('temp:hot')).toBe(false);
-    expect(off.has('temp:iced')).toBe(false);
-    expect(off.has('coffee:none')).toBe(false);
+  it('reuses the rebuilt items for the same facets array (cached) and gives the same answer twice', () => {
+    const sel = { kinds, options: ['temp:hot'] as FacetOption[] };
+    expect([...unavailableOptions(sel, facets)]).toEqual([...unavailableOptions(sel, facets)]);
   });
 });

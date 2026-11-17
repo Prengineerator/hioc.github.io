@@ -9,10 +9,14 @@ import {
   templateHeader,
   templateReason,
 } from '@/lib/suggest/templates';
+import { flavourAddonFor } from '@/lib/suggest/addonTraits';
+import { madeToOrder } from '@/lib/suggest/promises';
+import { isSugarAdjustable } from '@/lib/suggest/sugar';
 import { lintReason } from '@/lib/suggest/tone';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from '@/lib/suggest/traitVocabulary';
 import { BUDGETS, FLAVOUR_FAMILIES, KINDS, MOODS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import type { Candidate, MenuItemTraits, Mood, SuggestInputs, SuggestionPick } from '@/lib/suggest/types';
+import { buildAddonMenu } from './fixtures/suggestAddonMenu';
 import { MATCHA_LATTE_TRAITS, buildFixtureMenu, buildFixtureTraitsById, buildSugarGroup, makeTraits } from './fixtures/suggestMenu';
 
 function makeInputs(over: Partial<SuggestInputs> = {}): SuggestInputs {
@@ -1192,5 +1196,84 @@ describe('deterministicPicks — three different picks (MMR, COFFEY-SPEC §4.4)'
     // Adjustable + "lightly sweet" ⇒ described as they'll get it (level 3: lightly sweet), not "unsweetened".
     expect(pick.reason.startsWith('Lightly sweet')).toBe(true);
     expect(buildSugarGroup().name).toBe('Sugar'); // (fixture sanity: the live group's name)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Made your way: reasons and tags for subjects that carry add-on presets
+// ---------------------------------------------------------------------------
+
+describe('templateReason / matchTagsFor — subjects with add-on presets (COFFEY-SPEC §11)', () => {
+  const addonMenu = buildAddonMenu();
+  const flavourAddonOf = (item: (typeof addonMenu.items)[number], traits: MenuItemTraits, inputs: SuggestInputs) =>
+    flavourAddonFor(item, traits, inputs);
+
+  const variants: Partial<SuggestInputs>[] = [
+    { flavours: ['nutty'] },
+    { flavours: ['caramel'], sweetness: 'light' },
+    { flavours: ['nutty', 'caramel'], sweetness: 'medium', strength: 'strong' },
+    { strength: 'strong' },
+    { strength: 'strong', sweetness: 'none' },
+    { flavours: ['nutty'], strength: 'strong', budget: 'under_200' },
+    { flavours: ['chocolatey'], strength: 'strong', kinds: ['drink', 'dessert'] },
+  ];
+
+  it('every reason with presets stays within the cap and passes the tone lint, and names the add-on exactly when there is a flavour preset', () => {
+    let withPresets = 0;
+    for (const mood of MOODS) {
+      for (const prefs of variants) {
+        const inputs = makeInputs({ mood, ...prefs });
+        for (const item of addonMenu.items) {
+          const traits = addonMenu.traitsById.get(item.id)!;
+          const made = madeToOrder(item, traits, inputs);
+          const flavourPreset = made.presets.find((p) => p.purpose === 'flavour');
+          const addon = flavourPreset ? flavourAddonOf(item, traits, inputs) : null;
+          for (const code of [mood, 'trait', 'usual', 'popular'] as SuggestionPick['reasonCode'][]) {
+            const reason = templateReason(traits, inputs, code, item.name, isSugarAdjustable(item), addon, made);
+            const label = `${item.id} / ${code} / ${JSON.stringify(prefs)}: ${reason}`;
+            expect(reason.length, label).toBeLessThanOrEqual(SUGGEST_LIMITS.reasonMaxChars);
+            expect(lintReason(reason).ok, label).toBe(true);
+            if (!flavourPreset) expect(reason, label).not.toMatch(/ notes from | flavour from /);
+          }
+          if (made.presets.length > 0) withPresets++;
+        }
+      }
+    }
+    expect(withPresets).toBeGreaterThan(100);
+  });
+
+  it('a strength preset makes the intensity descriptor the made one: a cappuccino with a shot reads bold, not full-flavoured', () => {
+    const item = addonMenu.items.find((i) => i.id === 'ax-cappuccino')!;
+    const traits = addonMenu.traitsById.get(item.id)!;
+    const inputs = makeInputs({ mood: 'boost', strength: 'strong' });
+    const made = madeToOrder(item, traits, inputs);
+    expect(templateReason(traits, inputs, 'boost', item.name, false, null, null)).toMatch(/full-flavoured/i);
+    const reason = templateReason(traits, inputs, 'boost', item.name, false, null, made);
+    expect(reason).toMatch(/\bbold\b/i);
+    expect(reason).not.toMatch(/full-flavoured/i);
+  });
+
+  it('the sweetness word is judged on the lifted level: a syrup on a level-1 coffee makes "light" read lightly sweet; a lift past the band reads as delivered', () => {
+    const item = addonMenu.items.find((i) => i.id === 'ax-cappuccino')!;
+    const traits = addonMenu.traitsById.get(item.id)!;
+    const light = makeInputs({ mood: 'cosy', sweetness: 'light', strength: 'strong', flavours: [] });
+    const lifted = { presets: [], families: [], sweetnessLift: 2, intensityLift: 1, extraPriceInr: 0 };
+    expect(templateReason(traits, light, 'cosy', item.name, false, null, lifted)).toMatch(/^Bold and lightly sweet/);
+    const none = makeInputs({ mood: 'cosy', sweetness: 'none', strength: 'strong', flavours: [] });
+    // 1 + 6 = 7 is far past "not sweet": described as delivered, never as "unsweetened".
+    const big = { ...lifted, sweetnessLift: 6 };
+    expect(templateReason(traits, none, 'cosy', item.name, false, null, big)).toMatch(/sweet/i);
+    expect(templateReason(traits, none, 'cosy', item.name, false, null, big)).not.toMatch(/unsweetened|barely/i);
+  });
+
+  it('tags: the family tag and Strong appear for a made-kept choice, with no add-on wording', () => {
+    const item = addonMenu.items.find((i) => i.id === 'ax-cappuccino')!;
+    const traits = addonMenu.traitsById.get(item.id)!;
+    const inputs = makeInputs({ mood: 'cosy', flavours: ['nutty'], strength: 'strong' });
+    const made = madeToOrder(item, traits, inputs);
+    const tags = matchTagsFor({ name: item.name, traits, sugarAdjustable: true, made }, inputs);
+    expect(tags).toEqual(['Nutty', 'Strong', 'Cosy']);
+    expect(matchTagsFor({ name: item.name, traits, sugarAdjustable: true }, inputs)).not.toContain('Nutty');
+    for (const t of tags) expect(t).not.toMatch(/add-on|₹/);
   });
 });

@@ -10,7 +10,7 @@
 import { flavourFamiliesOf } from './flavor';
 import { moodsOf } from './inputs';
 import { selectDiversePicks } from './select';
-import { satisfiesChoice } from './promises';
+import { intensityOf, satisfiesChoice } from './promises';
 import { deliveredSweetness } from './sugar';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { lintReason, sanitizeNote } from './tone';
@@ -19,13 +19,14 @@ import type {
   Candidate,
   FlavourAddonSuggestion,
   FlavourFamily,
+  MadeTo,
   MenuItemTraits,
   Mood,
   SuggestInputs,
   SuggestionPick,
   SweetnessPref,
 } from './types';
-import { CURRENT_TRAITS_VERSION, SUGGEST_LIMITS } from './types';
+import { CURRENT_TRAITS_VERSION, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 
 function capReason(text: string): string {
   const clean = sanitizeNote(text);
@@ -187,15 +188,20 @@ function descriptorsFor(
   inputs: SuggestInputs,
   sugarAdjustable: boolean,
   withSweetness = true,
+  made: MadeTo | null = null,
 ): Descriptor[] {
   const all: Descriptor[] = [];
 
-  if (traits.kind === 'drink' && isFiniteNumber(traits.intensity)) {
-    const word = INTENSITY_WORD[Math.min(3, Math.max(0, Math.round(traits.intensity)))];
+  // The intensity the customer will get: with a shot preselected, the made one.
+  const lift = made?.intensityLift ?? 0;
+  if (traits.kind === 'drink' && (isFiniteNumber(traits.intensity) || lift > 0)) {
+    const intensity = lift > 0 ? intensityOf(traits) + lift : (traits.intensity as number);
+    const word = INTENSITY_WORD[Math.min(3, Math.max(0, Math.round(intensity)))];
     all.push({ alone: word, paired: word, asked: inputs.strength !== 'any' });
   }
 
-  const inherent = sweetnessLevel(traits);
+  // The delivered level counts what a preselected syrup adds.
+  const inherent = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + (made?.sweetnessLift ?? 0));
   const target = sweetnessTarget(inputs.sweetness);
   if (!withSweetness) {
     // The add-on decides how sweet it ends up; say nothing rather than guess.
@@ -208,7 +214,7 @@ function descriptorsFor(
     // 2–3 with no sugar in it), and "unsweetened" would be a claim about what is
     // in the cup that a level-2 or -3 item cannot make, so those read "barely
     // sweet" — still the customer's direction, and true.
-    const kept = satisfiesChoice('sweetness', { name: '', traits, sugarAdjustable }, inputs) === true;
+    const kept = satisfiesChoice('sweetness', { name: '', traits, sugarAdjustable, made: made ?? undefined }, inputs) === true;
     const delivered = deliveredSweetness(inherent, sugarAdjustable, target);
     const word = !kept
       ? sweetnessWord(delivered)
@@ -282,6 +288,7 @@ export function templateReason(
   name = '',
   sugarAdjustable = false,
   addon: FlavourAddonSuggestion | null = null,
+  made: MadeTo | null = null,
 ): string {
   const v2 = (traits.traits_version ?? 1) >= CURRENT_TRAITS_VERSION;
   const phrase = flavourPhraseFor(traits, inputs, name, v2, addon);
@@ -319,7 +326,7 @@ export function templateReason(
   }
 
   // v2: richest sentence first, then progressively plainer until one fits.
-  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable, !phrase?.fromAddon);
+  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable, !phrase?.fromAddon, made);
   const attempts: string[] = [];
   for (let d = descriptors.length; d >= 0; d--) {
     for (const p of phrases) attempts.push(richSentence(descriptors.slice(0, d), p, clause));
@@ -352,7 +359,7 @@ export const MAX_MATCH_TAGS = 3;
 /** What a match tag needs to know about an item — a Candidate satisfies it as
  * is, and the "usual" (which isn't a Candidate) is built from its menu row.
  * `addonFlavourFamilies` is optional: absent means none. */
-export type MatchTagSubject = Pick<Candidate, 'name' | 'traits' | 'sugarAdjustable' | 'addonFlavourFamilies'>;
+export type MatchTagSubject = Pick<Candidate, 'name' | 'traits' | 'sugarAdjustable' | 'addonFlavourFamilies' | 'made'>;
 
 /**
  * §4.6 — at most MAX_MATCH_TAGS labels saying why this item suits what the
@@ -375,7 +382,9 @@ export function matchTagsFor(subject: MatchTagSubject, inputs: SuggestInputs): s
   const tags: string[] = [];
 
   if (satisfiesChoice('flavours', subject, inputs) === true) {
-    const family = requestedFamilyOf(inputs, subject.name, traits);
+    // Its own family when it has one, else the one the preselected add-on supplies.
+    const family =
+      requestedFamilyOf(inputs, subject.name, traits) ?? inputs.flavours.find((f) => subject.made?.families.includes(f)) ?? null;
     if (family) tags.push(FLAVOUR_FAMILY_INFO[family].tag);
   }
 

@@ -343,6 +343,20 @@ export interface SuggestionPick {
   addonPresets?: AddonPreset[];
 }
 
+/** What making an item the customer's way adds (lib/suggest/promises.ts
+ * madeToOrder, COFFEY-SPEC §11): the add-ons to preselect and what they do. */
+export interface MadeTo {
+  presets: AddonPreset[];
+  /** The requested families the flavour preset supplies. */
+  families: FlavourFamily[];
+  /** Sweetness the flavour preset adds (0–10 scale). */
+  sweetnessLift: number;
+  /** Intensity the strength preset adds. */
+  intensityLift: number;
+  /** What the presets cost together. */
+  extraPriceInr: number;
+}
+
 /** One add-on Coffey preselects to make an item keep a choice (§11). */
 export interface AddonPreset {
   groupId: string;
@@ -391,6 +405,8 @@ export interface SuggestResponse {
 
 export interface Candidate {
   menuItemId: string;
+  /** What making it the customer's way adds (absent: nothing, or not computed). */
+  made?: MadeTo;
   name: string;
   score: number; // 0–1
   minPriceInr: number;

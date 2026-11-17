@@ -14,6 +14,7 @@ import { reachableAddonFamilies } from './addonTraits';
 import { flavourFamiliesOf } from './flavor';
 import type { FilteredCandidate } from './filter';
 import { moodsOf } from './inputs';
+import { madeToOrder } from './promises';
 import { achievableSweetness, isSugarAdjustable } from './sugar';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
@@ -504,6 +505,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       sugarAdjustable: isSugarAdjustable(c.item),
       addonFlavourFamilies: reachableAddonFamilies(c.item, c.traits, inputs, addonTraitsById),
     };
+    const made = madeToOrder(c.item, c.traits, inputs, addonTraitsById);
     const weighted =
       MOOD_WEIGHT * moodScore(inputs, c.traits, profile) +
       PREFERENCE_WEIGHT * preferenceScore(inputs, subject) +
@@ -525,6 +527,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       traits: c.traits,
       sugarAdjustable: subject.sugarAdjustable,
       addonFlavourFamilies: subject.addonFlavourFamilies,
+      ...(made.presets.length > 0 ? { made } : {}),
     };
   });
 
