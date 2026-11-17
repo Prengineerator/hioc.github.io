@@ -12,8 +12,12 @@
 // Every chip is a toggle: tap again to clear it, and cleared means "no
 // preference". There is no "Either" or "Any" chip anywhere.
 
-import { useId, useState, type ReactNode, type RefObject } from 'react';
+import { useId, useMemo, useState, type ReactNode, type RefObject } from 'react';
 import { CoffeyBubble } from '@/components/coffey/CoffeyBubble';
+import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
+import { LiveCup } from '@/components/coffey/LiveCup';
+import { ChoiceTile } from '@/components/suggest/ChoiceTile';
+import { SweetnessGlass } from '@/components/suggest/SweetnessGlass';
 import { Chip } from '@/components/suggest/Chip';
 import { MoodCard } from '@/components/suggest/MoodCard';
 import {
@@ -23,12 +27,18 @@ import {
   BUDGET_LABEL,
   CAFFEINE_FREE_LABEL,
   COFFEE_CHOICES,
-  COFFEE_LABEL,
+  COFFEE_TILE_LABEL,
+  DEFAULT_REACTION,
   KIND_INFO,
+  cupLook,
+  reactionLine,
+  setSweetness,
+  summaryLine,
   bodyOption,
   budgetOption,
   coffeeOption,
-  disabledOptions,
+  disabledOptionsForKey,
+  selectionKey,
   flavourOption,
   sweetOption,
   tempOption,
@@ -110,6 +120,20 @@ export function BackButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+// A small steam glyph for the Hot tile (three wisps, currentColor).
+function SteamGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" aria-hidden="true" focusable="false">
+      <path
+        d="M7 20 C4 17 10 15 7 11 M12 20 C9 17 15 15 12 11 M17 20 C14 17 20 15 17 11"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Step 1
 // ---------------------------------------------------------------------------
@@ -125,7 +149,7 @@ export function FeelingStep({
 }) {
   return (
     <section aria-labelledby="suggest-step1-heading">
-      <CoffeyBubble>
+      <CoffeyBubble size={96} centered lead={<LiveCup size={96} />}>
         Hi, I&apos;m Coffey! I know every item on the menu here at HIOC. Let&apos;s find your pick.
       </CoffeyBubble>
 
@@ -190,36 +214,55 @@ export function WantsStep({
   const flavours = offeredFlavours(state.kinds, flavourCounts);
   const moreSet = moreOptionsSet(state);
   const moreOpen = moreOpenChoice ?? moreSet;
-  const off = disabledOptions(state, facets, flavourCounts);
+  // Keyed on what the greying depends on (ticked kinds + selected options), not on
+  // the whole state: typing in the note must not re-run the engine's rules.
+  const { kinds: kindsKey, options: optionsKey } = selectionKey(state, flavourCounts);
+  const off = useMemo(
+    () => disabledOptionsForKey({ kinds: kindsKey, options: optionsKey }, facets),
+    [kindsKey, optionsKey, facets],
+  );
+  const look = useMemo(() => cupLook(state, flavourCounts), [state, flavourCounts]);
+  const summary = summaryLine(state, flavourCounts);
+  // Coffey's line follows the last thing the customer changed. Derived while
+  // rendering (the documented "adjust state on prop change" pattern), so it is
+  // never a frame behind.
+  const [seen, setSeen] = useState(state);
+  const [saying, setSaying] = useState(DEFAULT_REACTION);
+  if (seen !== state) {
+    setSeen(state);
+    const line = reactionLine(seen, state, flavourCounts);
+    if (line !== null) setSaying(line);
+  }
 
   return (
     <section aria-labelledby="suggest-step2-heading">
       <BackButton onClick={onBack} />
-      <CoffeyBubble>Lovely. What sounds good right now?</CoffeyBubble>
+      <CoffeyBubble size={104} centered lead={<LiveCup size={104} look={look} />}>
+        {saying}
+      </CoffeyBubble>
 
-      <h1
-        id="suggest-step2-heading"
-        ref={headingRef}
-        tabIndex={-1}
-        className="mt-6 text-2xl font-bold text-charcoal outline-none"
-      >
+      {/* The bubble beside the cup already asks the question in words, so the
+          heading is kept for assistive tech and focus (it names the section and
+          receives focus on arrival) without spending a line of a phone screen. */}
+      <h1 id="suggest-step2-heading" ref={headingRef} tabIndex={-1} className="sr-only">
         What sounds good?
       </h1>
       {/* The greyed-out rule is said once, here, and is always on screen while it
           can apply — not repeated under every group, and not popping in and out
           (which would shift the chips under the customer's thumb). */}
-      <p className="mt-1 text-sm text-muted">
+      <p className="mt-4 text-sm text-muted">
         Pick what matters to you — skip the rest.
         {facets !== null ? ' Greyed-out choices aren’t on the menu with what you’ve picked.' : ''}
       </p>
 
-      <FieldGroup label="What would you like?" hint="Pick one or more.">
+      <FieldGroup label="What would you like?" hint="Pick one or more." className="grid grid-cols-3 gap-2">
         {KINDS.map((kind) => (
-          <Chip
+          <ChoiceTile
             key={kind}
             label={KIND_INFO[kind].label}
             icon={KIND_INFO[kind].icon}
             pressed={state.kinds.includes(kind)}
+            minHeight={72}
             onClick={() => onChange((s) => toggleKind(s, kind))}
           />
         ))}
@@ -227,13 +270,15 @@ export function WantsStep({
 
       {drink ? (
         <>
-          <FieldGroup label="Hot or iced?">
+          <FieldGroup label="Hot or iced?" className="grid grid-cols-2 gap-2">
             {TEMPERATURES.map((value) => (
-              <Chip
+              <ChoiceTile
                 key={value}
                 label={TEMPERATURE_LABEL[value]}
+                icon={value === 'hot' ? <SteamGlyph /> : '🧊'}
                 disabled={off.has(tempOption(value))}
                 pressed={state.temperature === value}
+                minHeight={56}
                 onClick={() => onChange((s) => toggleTemperature(s, value))}
               />
             ))}
@@ -241,6 +286,7 @@ export function WantsStep({
 
           <FieldGroup
             label="Coffee?"
+            className="grid grid-cols-3 gap-2"
             hint={
               state.caffeineFree
                 ? 'Strong and smooth coffee are off while Caffeine-free is on.'
@@ -248,11 +294,13 @@ export function WantsStep({
             }
           >
             {COFFEE_CHOICES.map((value) => (
-              <Chip
+              <ChoiceTile
                 key={value}
-                label={COFFEE_LABEL[value]}
+                label={COFFEE_TILE_LABEL[value]}
+                icon={<CoffeyMascot size={40} animated={false} look={{ coffee: value }} />}
                 pressed={state.coffee === value}
                 disabled={(state.caffeineFree && value !== 'none') || off.has(coffeeOption(value))}
+                minHeight={88}
                 onClick={() => onChange((s) => toggleCoffee(s, value))}
               />
             ))}
@@ -262,17 +310,26 @@ export function WantsStep({
 
       <FieldGroup
         label="How sweet?"
+        className="flex items-center gap-4"
         hint={drink ? 'Coffee drinks can be made with or without sugar — Coffey sets it for you.' : undefined}
       >
-        {SWEETNESS_CHOICES.map((value) => (
-          <Chip
-            key={value}
-            label={SWEETNESS_LABEL[value]}
-            disabled={off.has(sweetOption(value))}
-            pressed={state.sweetness === value}
-            onClick={() => onChange((s) => toggleSweetness(s, value))}
-          />
-        ))}
+        <SweetnessGlass
+          value={state.sweetness}
+          off={off}
+          onChange={(level) => onChange((s) => setSweetness(s, level))}
+        />
+        {/* Sweet at the top, Not sweet at the bottom: each chip beside its fill level. */}
+        <div className="flex flex-col gap-2">
+          {[...SWEETNESS_CHOICES].reverse().map((value) => (
+            <Chip
+              key={value}
+              label={SWEETNESS_LABEL[value]}
+              disabled={off.has(sweetOption(value))}
+              pressed={state.sweetness === value}
+              onClick={() => onChange((s) => toggleSweetness(s, value))}
+            />
+          ))}
+        </div>
       </FieldGroup>
 
       {flavours.length > 0 ? (
@@ -387,6 +444,12 @@ export function WantsStep({
             : 'pb-[max(0.75rem,env(safe-area-inset-bottom))]')
         }
       >
+        <div className="mb-2 flex items-center gap-2">
+          <LiveCup size={44} look={look} />
+          <p data-part="summary" className="min-w-0 flex-1 truncate text-sm text-muted">
+            {summary}
+          </p>
+        </div>
         <button type="button" onClick={onSubmit} className={buttonVariants({ size: 'lg', fullWidth: true })}>
           Show my picks
         </button>

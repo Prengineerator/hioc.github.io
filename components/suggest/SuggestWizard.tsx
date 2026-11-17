@@ -21,7 +21,7 @@ import { useCart } from '@/lib/cart/CartContext';
 import { CoffeyBubble } from '@/components/coffey/CoffeyBubble';
 import { MenuItemCustomizeModal } from '@/components/menu/MenuItemCustomizeModal';
 import { SuggestionCard } from '@/components/suggest/SuggestionCard';
-import { customizeModalProps, needsCustomizeModal } from '@/components/suggest/addonHint';
+import { customizeModalProps, needsCustomizeModal, tickedPick } from '@/components/suggest/addonHint';
 import { ResultsSkeleton, ThinkingCopy } from '@/components/suggest/ResultsSkeleton';
 import { BackButton, FeelingStep, WantsStep } from '@/components/suggest/WizardSteps';
 import {
@@ -52,6 +52,7 @@ import type {
   SuggestResponse,
   SuggestionPick,
   SugarPreset,
+  AddonPreset,
 } from '@/lib/suggest/types';
 import type { MenuItem } from '@/lib/types';
 
@@ -75,6 +76,8 @@ interface CustomizeTarget {
    * (COFFEY-ADDONS-PAIRINGS-SPEC §1.1). Highlighted in the modal, never
    * preselected. */
   flavourAddon: FlavourAddonSuggestion | null;
+  /** The add-on presets still ticked on the card: preselected in the modal. */
+  addonPresets: AddonPreset[];
 }
 
 // The customise modal for a pick. Coffey's sugar preselection (§4.7) goes in as
@@ -114,6 +117,9 @@ export function SuggestWizard({ flavourCounts = null,
   const [showingRefined, setShowingRefined] = useState(false);
   const [shownIds, setShownIds] = useState<string[]>([]);
   const [feedbackGiven, setFeedbackGiven] = useState<Record<string, 'up' | 'down'>>({});
+  // Per pick (menu item id): option ids the customer un-ticked on the card's
+  // "Made your way" row. Absent = everything ticked. Reset on every new response.
+  const [untickedByPick, setUntickedByPick] = useState<Record<string, string[]>>({});
   const [customizeTarget, setCustomizeTarget] = useState<CustomizeTarget | null>(null);
   const [closedCustomizeTarget, setClosedCustomizeTarget] = useState<CustomizeTarget | null>(null);
 
@@ -219,6 +225,7 @@ export function SuggestWizard({ flavourCounts = null,
           result = await attempt();
         }
         setResponse(result);
+        setUntickedByPick({});
         setShowingRefined(opts.refineOf !== undefined);
         engagedRef.current = false;
         const shown = [
@@ -272,8 +279,20 @@ export function SuggestWizard({ flavourCounts = null,
     if (last) runSuggest(last.inputs, last.opts);
   }
 
-  function handleAddToCart(item: MenuItem, pick: SuggestionPick) {
+  function togglePreset(menuItemId: string, optionId: string) {
+    setUntickedByPick((prev) => {
+      const cur = prev[menuItemId] ?? [];
+      return {
+        ...prev,
+        [menuItemId]: cur.includes(optionId) ? cur.filter((id) => id !== optionId) : [...cur, optionId],
+      };
+    });
+  }
+
+  function handleAddToCart(item: MenuItem, rawPick: SuggestionPick) {
     if (!response) return;
+    // Only what is still ticked on the card counts from here on.
+    const pick = tickedPick(rawPick, new Set(untickedByPick[rawPick.menuItemId] ?? []), item);
     // A pick that carries a flavour add-on never takes the one-tap path, even on
     // an otherwise simple item: the customer has to see the suggestion (§1.1).
     const isSimple = !needsCustomizeModal(item, pick);
@@ -304,6 +323,7 @@ export function SuggestWizard({ flavourCounts = null,
         beforeCartTotal: totalItems,
         sugarPreset: pick.sugarPreset ?? null,
         flavourAddon: pick.flavourAddon ?? null,
+        addonPresets: pick.addonPresets ?? [],
       });
     }
   }
@@ -350,6 +370,8 @@ export function SuggestWizard({ flavourCounts = null,
         isUsual={isUsual}
         missLabel={isUsual ? null : missLabel(pick.misses, wiz, flavourCounts)}
         feedback={feedbackGiven[pick.menuItemId]}
+        untickedOptionIds={new Set(untickedByPick[pick.menuItemId] ?? [])}
+        onTogglePreset={(optionId) => togglePreset(pick.menuItemId, optionId)}
         onAddToCart={() => handleAddToCart(item, pick)}
         onFeedback={(dir) => handleFeedback(pick.menuItemId, dir)}
       />
@@ -360,7 +382,7 @@ export function SuggestWizard({ flavourCounts = null,
   const unmetText = response ? unmetLine(response.unmet, wiz, flavourCounts) : null;
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8 pb-28">
+    <div className="mx-auto max-w-2xl px-4 pb-28 pt-4">
       {step === 'feeling' ? <FeelingStep selected={wiz.mood} headingRef={headingRef} onPick={pickMood} /> : null}
 
       {step === 'wants' ? (

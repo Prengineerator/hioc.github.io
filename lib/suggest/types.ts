@@ -26,6 +26,8 @@ export type Daypart = (typeof DAYPARTS)[number];
 
 export type TraitTemperature = 'hot' | 'iced' | 'either' | 'ambient';
 export type TraitCaffeine = 'none' | 'low' | 'medium' | 'high';
+/** intensity (0 gentle → 3 bold) for a row with no v2 intensity: derived from caffeine. */
+export const INTENSITY_FROM_CAFFEINE: Record<TraitCaffeine, number> = { high: 3, medium: 2, low: 1, none: 0 };
 export type TraitBody = 'light' | 'medium' | 'rich';
 export type TraitKind = 'drink' | 'food' | 'dessert';
 /** Step 2 "What would you like?" order: a drink, something sweet, something savoury. */
@@ -239,6 +241,12 @@ export const SUGGESTION_EVENTS = [
   'browse_menu',
   'checkout_started',
   'ordered',
+  // COFFEY-SPEC §11.7 — how customers treat an add-on Coffey preselects. Needs
+  // supabase/2026-11-coffey-preset-events.sql (the event CHECK constraint);
+  // until it is applied these inserts fail and are swallowed, nothing else does.
+  'preset_shown', // server-written: a pick went out carrying add-on presets
+  'preset_removed', // the customer un-ticked it, or added the pick without it
+  'preset_kept', // the pick went into the cart with a preset still on
 ] as const;
 export type SuggestionEventType = (typeof SUGGESTION_EVENTS)[number];
 
@@ -252,6 +260,8 @@ export const CLIENT_SUGGESTION_EVENTS = [
   'dismissed',
   'browse_menu',
   'checkout_started',
+  'preset_removed',
+  'preset_kept',
 ] as const satisfies readonly SuggestionEventType[];
 export type ClientSuggestionEventType = (typeof CLIENT_SUGGESTION_EVENTS)[number];
 
@@ -333,6 +343,49 @@ export interface SuggestionPick {
    * on its card so a "closest we have" pick never passes for a match. Empty or
    * absent when it keeps them all. */
   misses?: HonouredChoice[];
+  /** The add-ons that make this pick keep a choice it would not keep as the
+   * kitchen makes it (COFFEY-SPEC §11): "Cappucino + Hazelnut syrup" for a hot
+   * nutty coffee. Shown on the card with their prices and PRESELECTED in the
+   * customise modal, where one tap removes them. Empty or absent when the item
+   * needs none. */
+  addonPresets?: AddonPreset[];
+  /** The same pick WITHOUT its add-on presets, for the card to fall back to
+   * when the customer un-ticks one: the reason as the kitchen makes it, and the
+   * sugar option chosen for the item's own sweetness (the usual `sugarPreset`
+   * allows for the syrup). Present only when `addonPresets` is non-empty. */
+  plain?: { reason: string; sugarPreset: SugarPreset | null };
+}
+
+/** What making an item the customer's way adds (lib/suggest/promises.ts
+ * madeToOrder, COFFEY-SPEC §11): the add-ons to preselect and what they do. */
+export interface MadeTo {
+  presets: AddonPreset[];
+  /** The requested families the flavour preset supplies. */
+  families: FlavourFamily[];
+  /** Sweetness the flavour preset adds (0–10 scale). */
+  sweetnessLift: number;
+  /** Intensity the strength preset adds. */
+  intensityLift: number;
+  /** What the presets cost together. */
+  extraPriceInr: number;
+}
+
+/** One add-on Coffey preselects to make an item keep a choice (§11). */
+export interface AddonPreset {
+  groupId: string;
+  optionId: string;
+  /** Customer-facing, e.g. "Hazelnut syrup", "Espresso Shot". */
+  label: string;
+  priceInr: number;
+  /** Which choice it is there for: a flavour the item lacks, or "Strong coffee"
+   * on a coffee one shot short of it. */
+  purpose: 'flavour' | 'strength';
+  /** The flavour family it supplies (purpose 'flavour' only). */
+  family?: FlavourFamily;
+  /** The "why it matches" tag this add-on earns the pick (e.g. "Nutty",
+   * "Strong"), so the card can take it away again when the add-on is
+   * un-ticked. Absent when it earns none. */
+  tag?: string;
 }
 
 export interface SugarPreset {
@@ -369,6 +422,8 @@ export interface SuggestResponse {
 
 export interface Candidate {
   menuItemId: string;
+  /** What making it the customer's way adds (absent: nothing, or not computed). */
+  made?: MadeTo;
   name: string;
   score: number; // 0–1
   minPriceInr: number;
@@ -461,6 +516,9 @@ export interface FlavourAddonSuggestion {
 export const ADDON_SUGGEST_LIMITS = {
   /** Options dearer than this are never pointed to. */
   maxPriceInr: 60,
+  /** At most this many add-ons are ever preselected on one pick (§11): one for
+   * a flavour and one for strength. */
+  maxPresets: 2,
   /** The flavour sub-fit for a family reached through an add-on (native = 1).
    * 0 on purpose: the add-on is a TIP on a pick, not a ranking boost. Measured
    * on the live menu (2026-10-10, 360 picks over mood × flavour × sweetness ×
@@ -594,6 +652,10 @@ export interface SuggestionStats {
   latencyP50Ms: number | null;
   latencyP90Ms: number | null;
   costUsd: number;
+  /** Coffey's preselected add-ons (COFFEY-SPEC §11.7): DISTINCT (session, menu
+   * item) pairs. Optional because stats stored in older suggestion_digests rows
+   * (jsonb) predate it; computeSuggestionStats always sets it. */
+  presets?: { shown: number; removed: number; kept: number };
 }
 
 // ---------------------------------------------------------------------------

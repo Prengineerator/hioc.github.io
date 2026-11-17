@@ -128,6 +128,35 @@ export function initialSelection(
 }
 
 /**
+ * Vets a set of outside preselections (group id -> option ids, in priority
+ * order) against the item, option by option: a group the item lacks, an option
+ * that isn't in its group or is switched off (`is_available === false`), and a
+ * repeat are dropped; what is left is cut to the group's max_select (one for a
+ * single-select group), earliest first. A group whose remainder still isn't an
+ * answer it would accept (short of min_select) is dropped whole. Whatever comes
+ * back is safe to hand to `initialSelection` as presets, and is what the caller
+ * should describe to the customer: anything missing here is NOT preselected.
+ */
+export function vetPresets(
+  item: Pick<MenuItem, 'addon_groups'>,
+  requested?: Record<string, string[]>,
+): Record<string, string[]> {
+  const vetted: Record<string, string[]> = {};
+  if (!requested) return vetted;
+  for (const group of item.addon_groups) {
+    const ids = requested[group.id];
+    if (!ids || ids.length === 0) continue;
+    const live = ids.filter(
+      (id, i) => ids.indexOf(id) === i && group.options.some((o) => o.id === id && o.is_available !== false),
+    );
+    const cap = group.selection_type === 'single' ? 1 : group.max_select;
+    const kept = live.slice(0, cap);
+    if (kept.length > 0 && isValidPreset(group, kept)) vetted[group.id] = kept;
+  }
+  return vetted;
+}
+
+/**
  * The option ids a caller wants HIGHLIGHTED in the modal (not preselected):
  * Coffey's flavour add-on on /suggest (COFFEY-ADDONS-PAIRINGS-SPEC §1.1). Unlike
  * `presets` above this never touches the selection, so it can't quietly add to

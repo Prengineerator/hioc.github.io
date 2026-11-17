@@ -12,9 +12,11 @@ import {
   suitsMood,
   tasteLine,
 } from '@/lib/suggest/brief';
+import { madeToOrder } from '@/lib/suggest/promises';
 import { sanitizeNote } from '@/lib/suggest/tone';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from '@/lib/suggest/traitVocabulary';
 import { BUDGETS, BUDGET_CAPS, FLAVOUR_FAMILIES, MOODS, SUGGEST_LIMITS } from '@/lib/suggest/types';
+import { buildAddonMenu } from './fixtures/suggestAddonMenu';
 import type { Candidate, Daypart, MenuItemTraits, ProfileSummary, SuggestInputs } from '@/lib/suggest/types';
 
 // Coffey v2 — lib/suggest/brief.ts (docs/COFFEY-SPEC.md §4.5): the plain-English
@@ -1262,5 +1264,49 @@ describe('describeCandidate', () => {
     expect(serialised).not.toContain('uuid-1234-secret');
     expect(serialised).not.toContain('iced-americano');
     expect(serialised).not.toMatch(/user|email|phone|order/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Made your way: what Jev is told about a candidate that carries add-on presets
+// ---------------------------------------------------------------------------
+
+describe('describeCandidate / tasteLine / shortCriterion — the item as Coffey would have it made', () => {
+  const menu = buildAddonMenu();
+  const candidateFor = (id: string, over: Partial<SuggestInputs>): Candidate => {
+    const item = menu.items.find((i) => i.id === id)!;
+    const traits = menu.traitsById.get(id)!;
+    const wanted = inputs({ kinds: ['drink'], ...over });
+    const made = madeToOrder(item, traits, wanted);
+    return {
+      menuItemId: id,
+      name: item.name,
+      score: 0.5,
+      minPriceInr: 130,
+      maxPriceInr: 130,
+      category: item.category,
+      description: '',
+      traits,
+      sugarAdjustable: false,
+      ...(made.presets.length > 0 ? { made } : {}),
+    };
+  };
+
+  it('the flavour a preset supplies is part of its flavours, and the shot makes the intensity the made one', () => {
+    const c = candidateFor('ax-cappuccino', { flavours: ['nutty'], strength: 'strong' });
+    const described = describeCandidate(c);
+    expect(described.flavours).toContain('Nutty with Hazelnut syrup');
+    expect(String(described.taste)).toContain('bold with an extra shot');
+    expect(shortCriterion(c)).toContain('Cappuccino + Hazelnut syrup + Espresso Shot');
+    expect(shortCriterion(c).length).toBeLessThanOrEqual(CRITERION_MAX_CHARS);
+    expect(JSON.parse(JSON.stringify(described))).toEqual(described);
+  });
+
+  it('a candidate with no presets reads exactly as before', () => {
+    const c = candidateFor('ax-cappuccino', {});
+    expect(c.made).toBeUndefined();
+    expect(tasteLine(c)).not.toContain('extra shot');
+    expect(describeCandidate(c).flavours).toEqual([]);
+    expect(shortCriterion(c)).toMatch(/^Cappuccino — /);
   });
 });
