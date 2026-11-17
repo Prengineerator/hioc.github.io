@@ -26,12 +26,18 @@ export type SimilarityInput = Pick<Candidate, 'name' | 'category' | 'traits'>;
  * run, so they are worked out once per candidate rather than once per pair. */
 type FamilyLookup = (c: SimilarityInput) => ReadonlySet<FlavourFamily>;
 
-function similarity(a: SimilarityInput, b: SimilarityInput, familiesOf: FamilyLookup): number {
+function similarity(
+  a: SimilarityInput,
+  b: SimilarityInput,
+  familiesOf: FamilyLookup,
+  requested: readonly FlavourFamily[] = [],
+): number {
   let sim = 0;
   if (a.category === b.category) sim += 0.5;
   const fa = familiesOf(a);
   const fb = familiesOf(b);
-  if ([...fa].some((f) => fb.has(f))) sim += 0.3;
+  // A family the customer asked for is not a reason to mark picks down.
+  if ([...fa].some((f) => fb.has(f) && !requested.includes(f))) sim += 0.3;
   if (a.traits.kind === b.traits.kind && a.traits.temperature === b.traits.temperature) sim += 0.2;
   return sim;
 }
@@ -69,7 +75,7 @@ export function pickSimilarity(a: SimilarityInput, b: SimilarityInput): number {
  */
 export function selectDiversePicks<T extends Candidate>(
   ranked: { candidate: T; score: number }[],
-  inputs: Pick<SuggestInputs, 'kinds'>,
+  inputs: Pick<SuggestInputs, 'kinds'> & Partial<Pick<SuggestInputs, 'flavours'>>,
   count: number = SUGGEST_LIMITS.picks,
 ): T[] {
   // Array.prototype.sort is stable, so equal scores keep their incoming order.
@@ -115,7 +121,7 @@ export function selectDiversePicks<T extends Candidate>(
     let chosenValue = Number.NEGATIVE_INFINITY;
     for (const entry of pool) {
       if (pickedIds.has(entry.candidate.menuItemId)) continue;
-      const maxSim = picked.reduce((m, p) => Math.max(m, similarity(entry.candidate, p.candidate, familiesOf)), 0);
+      const maxSim = picked.reduce((m, p) => Math.max(m, similarity(entry.candidate, p.candidate, familiesOf, inputs.flavours ?? [])), 0);
       const value = entry.score - MMR_LAMBDA * maxSim;
       // Strictly greater, so an exact tie goes to the earlier (higher-ranked) entry.
       if (value > chosenValue) {

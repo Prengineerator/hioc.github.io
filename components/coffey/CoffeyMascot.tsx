@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import type { FlavourFamily } from '@/lib/suggest/types';
 
 // Coffey, the HIOC. pick-helper (docs/COFFEY-SPEC.md §6.1): a friendly coffee
 // cup drawn as one inline SVG, in brand tokens only — a charcoal outline, a
@@ -22,12 +23,26 @@ import { useId } from 'react';
 
 export type CoffeyExpression = 'happy' | 'thinking' | 'wink';
 
+/** What the customer has chosen so far (the wizard's "live cup"). Optional on the
+ * mascot: with no `look` it renders exactly as it always has. `flavours` and
+ * `bite` are NOT drawn in the SVG (emoji in SVG text is unreliable); LiveCup
+ * shows them as badges around it. */
+export interface CoffeyLook {
+  temperature?: 'hot' | 'iced' | null;
+  coffee?: 'strong' | 'smooth' | 'none' | null;
+  sweetness?: 'none' | 'light' | 'sweet' | null;
+  flavours?: FlavourFamily[];
+  bite?: 'dessert' | 'food' | 'both' | null;
+}
+
 export interface CoffeyMascotProps {
   /** Rendered width and height in px. */
   size?: number;
   expression?: CoffeyExpression;
   /** Steam drift. Off, the wisps sit still. */
   animated?: boolean;
+  /** The live cup: liquid colour, ice and a straw, sugar cubes. */
+  look?: CoffeyLook;
   /** Gives the mascot an accessible name (role="img"). Without it the mascot is
    * decorative and hidden from assistive tech — right for most uses, where the
    * text next to it already says everything. */
@@ -55,9 +70,21 @@ export function CoffeyMascot({
   size = 48,
   expression = 'happy',
   animated = true,
+  look,
   title,
   className = '',
 }: CoffeyMascotProps) {
+  const iced = look?.temperature === 'iced';
+  const coffee = look?.coffee ?? null;
+  const sugarCubes = look?.sweetness === 'light' ? 1 : look?.sweetness === 'sweet' ? 2 : 0;
+  const liquidFill =
+    coffee === 'strong'
+      ? 'fill-charcoal'
+      : coffee === 'smooth'
+        ? 'fill-tan'
+        : coffee === 'none'
+          ? 'fill-surface stroke-tan-dark'
+          : 'fill-tan-dark';
   // useId() yields ids like ":r3:"; the colons are legal in an id but awkward
   // inside url(#…), so strip them.
   const uid = useId().replace(/:/g, '');
@@ -77,22 +104,46 @@ export function CoffeyMascot({
     >
       {title ? <title id={titleId}>{title}</title> : null}
 
-      {/* Steam — decoration, so plain tan is allowed here. */}
-      <g fill="none" strokeWidth="3.5" strokeLinecap="round" className="stroke-tan">
-        {WISPS.map((w) => (
-          <path
-            key={w.d}
-            d={w.d}
-            className={animated ? 'animate-steam opacity-80' : 'opacity-80'}
-            style={animated ? { animationDelay: w.delay } : undefined}
-          />
-        ))}
-      </g>
+      {/* Steam — decoration, so plain tan is allowed here. Iced drinks have none. */}
+      {iced ? null : (
+        <g fill="none" strokeWidth="3.5" strokeLinecap="round" className="stroke-tan">
+          {WISPS.map((w) => (
+            <path
+              key={w.d}
+              d={w.d}
+              className={animated ? 'animate-steam opacity-80' : 'opacity-80'}
+              style={animated ? { animationDelay: w.delay } : undefined}
+            />
+          ))}
+        </g>
+      )}
 
       {/* Handle first, so the cup body sits over where it joins: a charcoal tube
           with a tan-dark core, which leaves a charcoal edge on both sides. */}
       <path d={HANDLE} fill="none" strokeWidth="10" strokeLinecap="round" className="stroke-charcoal" />
       <path d={HANDLE} fill="none" strokeWidth="4" strokeLinecap="round" className="stroke-tan-dark" />
+
+      {/* Sugar cubes standing beside the base (live cup only). Drawn before the
+          body so the cup overlaps them and they read as tucked beside it. */}
+      {Array.from({ length: sugarCubes }, (_, i) => (
+        <g
+          key={i}
+          data-part="sugar-cube"
+          className="animate-scale-in"
+          style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+        >
+          <rect
+            x={i === 0 ? 7 : 10}
+            y={i === 0 ? 94 : 79}
+            width="15"
+            height="15"
+            rx="2.5"
+            strokeWidth="2.5"
+            transform={i === 0 ? undefined : 'rotate(-9 17.5 86.5)'}
+            className="fill-cream stroke-charcoal"
+          />
+        </g>
+      ))}
 
       {/* Cup body. The `surface` crescent down the right and along the bottom
           gives the white cup some volume: the body, clipped to itself, with a
@@ -111,7 +162,14 @@ export function CoffeyMascot({
       {/* Rim (its ellipse also hides the body path's closing edge), with the
           coffee sitting just below the lip and a small shine on it. */}
       <ellipse cx="50" cy="44" rx="33" ry="9.5" strokeWidth="3" className="fill-cream stroke-charcoal" />
-      <ellipse cx="50" cy="45" rx="27" ry="5.5" className="fill-tan-dark" />
+      <ellipse
+        cx="50"
+        cy="45"
+        rx="27"
+        ry="5.5"
+        strokeWidth={coffee === 'none' ? 2 : undefined}
+        className={look ? `${liquidFill} transition-colors duration-300` : 'fill-tan-dark'}
+      />
       <path
         d="M36 44 Q41 41.2 47 41.6"
         fill="none"
@@ -119,6 +177,64 @@ export function CoffeyMascot({
         strokeLinecap="round"
         className="stroke-tan opacity-90"
       />
+
+      {coffee === 'smooth' ? (
+        <path
+          data-part="swirl"
+          d="M40 45.5 Q45 42.5 50 45.5 T60 45.5"
+          fill="none"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          className="stroke-cream"
+        />
+      ) : null}
+
+      {/* Iced: a straw leaning out of the cup and two cubes sitting in the
+          liquid, breaking the rim. */}
+      {iced ? (
+        <>
+          <g
+            data-part="straw"
+            className="animate-scale-in"
+            style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+          >
+            <path d="M68 44 L85 8" fill="none" strokeWidth="7" strokeLinecap="round" className="stroke-charcoal" />
+            <path d="M68 44 L85 8" fill="none" strokeWidth="3.5" strokeLinecap="round" className="stroke-tan-dark" />
+          </g>
+          <g
+            data-part="ice-cube"
+            className="animate-scale-in"
+            style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+          >
+            <rect
+              x="34.5"
+              y="33.5"
+              width="13"
+              height="13"
+              rx="3"
+              strokeWidth="2.5"
+              transform="rotate(-14 41 40)"
+              className="fill-cream stroke-charcoal"
+            />
+          </g>
+          <g
+            data-part="ice-cube"
+            className="animate-scale-in"
+            style={{ transformBox: 'fill-box', transformOrigin: 'center' }}
+          >
+            <rect
+              x="52"
+              y="31.5"
+              width="13"
+              height="13"
+              rx="3"
+              strokeWidth="2.5"
+              transform="rotate(12 58.5 38)"
+              className="fill-cream stroke-charcoal"
+            />
+          </g>
+        </>
+      ) : null}
 
       {/* Cheeks. */}
       <circle cx="31" cy="81" r="5.2" className="fill-tan opacity-40" />
@@ -139,15 +255,7 @@ function Face({ expression }: { expression: CoffeyExpression }) {
       <g>
         <LookingEye cx={40} cy={69} />
         <LookingEye cx={61} cy={69} />
-        <ellipse
-          cx="52"
-          cy="83.5"
-          rx="3.4"
-          ry="4"
-          fill="none"
-          strokeWidth="3"
-          className="stroke-charcoal"
-        />
+        <ellipse cx="52" cy="83.5" rx="3.4" ry="4" fill="none" strokeWidth="3" className="stroke-charcoal" />
       </g>
     );
   }

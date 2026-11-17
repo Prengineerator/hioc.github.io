@@ -14,6 +14,7 @@ import { reachableAddonFamilies } from './addonTraits';
 import { flavourFamiliesOf } from './flavor';
 import type { FilteredCandidate } from './filter';
 import { moodsOf } from './inputs';
+import { madeToOrder } from './promises';
 import { achievableSweetness, isSugarAdjustable } from './sugar';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
@@ -30,7 +31,7 @@ import type {
   TraitCaffeine,
   TraitKind,
 } from './types';
-import { ADDON_SUGGEST_LIMITS, KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
+import { ADDON_SUGGEST_LIMITS, INTENSITY_FROM_CAFFEINE, KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 
 // ---------------------------------------------------------------------------
 // Weights (COFFEY-SPEC §4.2) — the exact numbers from the spec.
@@ -217,8 +218,8 @@ export interface PreferenceFits {
 
 const LIGHT_BODY_FIT: Record<TraitBody, number> = { light: 1, medium: 0.5, rich: 0 };
 const RICH_BODY_FIT: Record<TraitBody, number> = { rich: 1, medium: 0.5, light: 0 };
-/** intensity (0 gentle → 3 bold) for a row with no v2 intensity: derived from caffeine. */
-const INTENSITY_FROM_CAFFEINE: Record<TraitCaffeine, number> = { high: 3, medium: 2, low: 1, none: 0 };
+/** Kept exported from here for older importers; the table lives in types.ts. */
+export { INTENSITY_FROM_CAFFEINE };
 
 export function preferenceFits(inputs: SuggestInputs, subject: ScoredSubject): PreferenceFits {
   const { traits } = subject;
@@ -504,6 +505,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       sugarAdjustable: isSugarAdjustable(c.item),
       addonFlavourFamilies: reachableAddonFamilies(c.item, c.traits, inputs, addonTraitsById),
     };
+    const made = madeToOrder(c.item, c.traits, inputs, addonTraitsById);
     const weighted =
       MOOD_WEIGHT * moodScore(inputs, c.traits, profile) +
       PREFERENCE_WEIGHT * preferenceScore(inputs, subject) +
@@ -525,6 +527,7 @@ export function scoreCandidates(args: ScoreCandidatesArgs): Candidate[] {
       traits: c.traits,
       sugarAdjustable: subject.sugarAdjustable,
       addonFlavourFamilies: subject.addonFlavourFamilies,
+      ...(made.presets.length > 0 ? { made } : {}),
     };
   });
 
@@ -561,8 +564,12 @@ function weakestEvictable(list: Candidate[], requested: readonly TraitKind[]): n
  * in the list. That generalises v1's "one food/dessert when they chose to eat".
  * The guarantee is what lets the picks pair a drink with a dessert even when a
  * wide-open drink pool would otherwise fill all the slots.
+ *
+ * `pinnedIds` (lib/suggest/promises.ts): candidates that keep the customer's
+ * choices and are too few to fill the picks themselves. They go in first, count
+ * toward the category cap and the total, and the usual fill skips them.
  */
-export function buildShortlist(scored: Candidate[], inputs: SuggestInputs): Candidate[] {
+export function buildShortlist(scored: Candidate[], inputs: SuggestInputs, pinnedIds?: ReadonlySet<string>): Candidate[] {
   const perCategory = new Map<string, number>();
   const shortlist: Candidate[] = [];
   const add = (c: Candidate) => {
@@ -570,8 +577,19 @@ export function buildShortlist(scored: Candidate[], inputs: SuggestInputs): Cand
     perCategory.set(c.category, (perCategory.get(c.category) ?? 0) + 1);
   };
 
+  let pinnedAdded = false;
+  if (pinnedIds && pinnedIds.size > 0) {
+    for (const c of scored) {
+      if (shortlist.length >= SUGGEST_LIMITS.shortlist) break;
+      if (!pinnedIds.has(c.menuItemId)) continue;
+      add(c);
+      pinnedAdded = true;
+    }
+  }
+
   for (const c of scored) {
     if (shortlist.length >= SUGGEST_LIMITS.shortlist) break;
+    if (pinnedIds?.has(c.menuItemId)) continue;
     if ((perCategory.get(c.category) ?? 0) >= SUGGEST_LIMITS.maxPerCategoryInShortlist) continue;
     add(c);
   }
@@ -600,6 +618,8 @@ export function buildShortlist(scored: Candidate[], inputs: SuggestInputs): Cand
     // Forced entries went in at the end: restore the best-first order.
     if (changed) shortlist.sort(byScoreThenId);
   }
+  // Pinned entries went in first: restore the best-first order.
+  if (pinnedAdded) shortlist.sort(byScoreThenId);
 
   return shortlist;
 }

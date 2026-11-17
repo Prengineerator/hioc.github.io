@@ -9,10 +9,14 @@ import {
   templateHeader,
   templateReason,
 } from '@/lib/suggest/templates';
+import { flavourAddonFor } from '@/lib/suggest/addonTraits';
+import { madeToOrder } from '@/lib/suggest/promises';
+import { isSugarAdjustable } from '@/lib/suggest/sugar';
 import { lintReason } from '@/lib/suggest/tone';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from '@/lib/suggest/traitVocabulary';
 import { BUDGETS, FLAVOUR_FAMILIES, KINDS, MOODS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import type { Candidate, MenuItemTraits, Mood, SuggestInputs, SuggestionPick } from '@/lib/suggest/types';
+import { buildAddonMenu } from './fixtures/suggestAddonMenu';
 import { MATCHA_LATTE_TRAITS, buildFixtureMenu, buildFixtureTraitsById, buildSugarGroup, makeTraits } from './fixtures/suggestMenu';
 
 function makeInputs(over: Partial<SuggestInputs> = {}): SuggestInputs {
@@ -284,14 +288,24 @@ describe('templateReason — a Coffey (v2) row: descriptors, flavour, clause (CO
     });
 
     it("sweetness bands, on the customer's own scale: 0–1 unsweetened, 2–3 lightly sweet, 4–5 medium-sweet, 6–8 sweet, 9–10 dessert-sweet (when the customer set one)", () => {
-      const asked = makeInputs({ sweetness: 'medium' });
+      // A pick that keeps the choice reads as the customer's own word (see the
+      // "keeps the choice" test below); one that does not is described as
+      // delivered. 'none' is kept by levels 0–3 (a latte with no sugar is milk-sweet
+      // at 2–3; the band is the hard ceiling). 0–1 read "Unsweetened"; 2–3 read
+      // "Barely sweet", because "unsweetened" is a claim about what is in the cup…
+      const asked = makeInputs({ sweetness: 'none' });
       // Non-adjustable, so the word describes the item as made.
-      const word = (level: number) => lead(bare({ sweetness_level: level }), asked);
+      const word = (level: number, inputs = asked) => lead(bare({ sweetness_level: level }), inputs);
       for (const level of [0, 1]) expect(word(level), `${level}`).toBe('Unsweetened');
-      for (const level of [2, 3]) expect(word(level), `${level}`).toBe('Lightly sweet');
+      for (const level of [2, 3]) expect(word(level), `${level}`).toBe('Barely sweet');
       for (const level of [4, 5]) expect(word(level), `${level}`).toBe('Medium-sweet');
       for (const level of [6, 7, 8]) expect(word(level), `${level}`).toBe('Sweet');
       for (const level of [9, 10]) expect(word(level), `${level}`).toBe('Dessert-sweet');
+      // …and the low end of the delivered scale shows when the choice is one those
+      // levels do not keep ('very' is kept only by 8–10).
+      const very = makeInputs({ sweetness: 'very' });
+      for (const level of [0, 1]) expect(word(level, very), `${level}`).toBe('Unsweetened');
+      for (const level of [2, 3]) expect(word(level, very), `${level}`).toBe('Lightly sweet');
     });
 
     it('a target always reads as its own label: not sweet → unsweetened, lightly sweet → lightly sweet, medium → medium-sweet, sweet → sweet, very sweet → dessert-sweet', () => {
@@ -705,11 +719,11 @@ describe('matchTagsFor', () => {
     });
   });
 
-  describe('3 — their sweetness label, only when the item lands in the SAME band as what they chose', () => {
+  describe('2b — their sweetness label, only when the delivered level is inside the band of what they chose (SWEETNESS_BANDS)', () => {
     type Pref = 'none' | 'light' | 'medium' | 'sweet' | 'very';
     const label: Record<Pref, string> = { none: 'Not sweet', light: 'Lightly sweet', medium: 'Medium sweet', sweet: 'Sweet', very: 'Very sweet' };
-    // The bands the reasons' descriptors use, on the customer's scale (targets 0 / 3 / 5 / 7 / 10).
-    const bandLevels: Record<Pref, number[]> = { none: [0, 1], light: [2, 3], medium: [4, 5], sweet: [6, 7, 8], very: [9, 10] };
+    // SWEETNESS_BANDS, inclusive (they overlap at the edges on purpose).
+    const bandLevels: Record<Pref, number[]> = { none: [0, 1, 2, 3], light: [2, 3, 4], medium: [4, 5, 6], sweet: [5, 6, 7, 8, 9, 10], very: [8, 9, 10] };
     const tagAt = (level: number, sweetness: Pref, sugarAdjustable = false) =>
       matchTagsFor(subject(plain({ sweetness_level: level }), { sugarAdjustable }), makeInputs({ mood: 'surprise', sweetness }));
 
@@ -724,7 +738,7 @@ describe('matchTagsFor', () => {
       expect(matchTagsFor(subject(plain({ sweetness_level: 5 })), neutral())).toEqual([]);
     });
 
-    it('needs the item in the SAME band as the target: none 0–1, light 2–3, medium 4–5, sweet 6–8, very 9–10 — and nowhere else', () => {
+    it('needs the delivered level inside the band: none 0–3, light 2–4, medium 4–6, sweet 5–10, very 8–10 — and nowhere else', () => {
       for (const pref of Object.keys(bandLevels) as Pref[]) {
         for (let level = 0; level <= 10; level++) {
           expect(tagAt(level, pref), `${pref} @ level ${level}`).toEqual(bandLevels[pref].includes(level) ? [label[pref]] : []);
@@ -732,21 +746,21 @@ describe('matchTagsFor', () => {
       }
     });
 
-    it('being near is not enough: one band over gets no tag (it would read as the neighbouring word)', () => {
-      expect(tagAt(4, 'light')).toEqual([]); // 1 away, but "medium-sweet"
-      expect(tagAt(2, 'none')).toEqual([]); // 2 away: "lightly sweet"
-      expect(tagAt(6, 'medium')).toEqual([]); // "sweet"
-      expect(tagAt(8, 'very')).toEqual([]); // 2 away: still "sweet"
+    it('being near is not enough: just outside the band gets no tag', () => {
+      expect(tagAt(5, 'light')).toEqual([]);
+      expect(tagAt(4, 'none')).toEqual([]);
+      expect(tagAt(7, 'medium')).toEqual([]);
+      expect(tagAt(7, 'very')).toEqual([]);
     });
 
-    it('the fixture matcha at level 4 with "lightly sweet" asked gets no "Lightly sweet" tag', () => {
+    it('the fixture matcha at level 4 is inside the "lightly sweet" band: tagged, and its reason says the customer\'s own word', () => {
       const tags = matchTagsFor(
         { name: 'Matcha Latte', traits: MATCHA_LATTE_TRAITS, sugarAdjustable: false },
         makeInputs({ mood: 'focus', sweetness: 'light' }),
       );
-      expect(tags).toEqual(['Good for focus']);
-      // …and its reason says "medium-sweet", not "lightly sweet", so the two agree.
-      expect(templateReason(MATCHA_LATTE_TRAITS, makeInputs({ mood: 'focus', sweetness: 'light' }), 'focus', 'Matcha Latte').startsWith('Medium-sweet')).toBe(true);
+      expect(tags).toEqual(['Lightly sweet', 'Good for focus']);
+      // …and its reason says "lightly sweet" (not "medium-sweet"), so the two agree.
+      expect(templateReason(MATCHA_LATTE_TRAITS, makeInputs({ mood: 'focus', sweetness: 'light' }), 'focus', 'Matcha Latte').startsWith('Lightly sweet')).toBe(true);
     });
 
     it('counts a sugar choice: the band is judged on what they can get — up to (base + 3)', () => {
@@ -767,28 +781,28 @@ describe('matchTagsFor', () => {
       expect(matchTagsFor(subject(legacyTraits({ sweetness: 1, moods: [] })), makeInputs({ mood: 'surprise', sweetness: 'light' }))).toEqual([
         'Lightly sweet',
       ]);
-      // Legacy 2 → level 6: a "sweet" item is not "medium".
-      expect(matchTagsFor(subject(legacyTraits({ sweetness: 2, moods: [] })), makeInputs({ mood: 'surprise', sweetness: 'medium' }))).toEqual([]);
+      // Legacy 2 → level 6: outside the "lightly sweet" band.
+      expect(matchTagsFor(subject(legacyTraits({ sweetness: 2, moods: [] })), makeInputs({ mood: 'surprise', sweetness: 'light' }))).toEqual([]);
     });
   });
 
-  describe('4 — Strong / Smooth & milky, when asked for and the coffee is that', () => {
+  describe('3 — Strong / Smooth & milky, when asked for and the coffee is that', () => {
     const coffee = (intensity: number | null, over: Partial<MenuItemTraits> = {}) =>
       plain({ kind: 'drink', is_coffee: true, intensity, ...over });
 
-    it('Strong for a bold or full-flavoured coffee', () => {
+    it('Strong only for a bold (intensity 3) coffee', () => {
       const ask = makeInputs({ mood: 'surprise', strength: 'strong' });
       expect(matchTagsFor(subject(coffee(3)), ask)).toEqual(['Strong']);
-      expect(matchTagsFor(subject(coffee(2)), ask)).toEqual(['Strong']);
+      expect(matchTagsFor(subject(coffee(2)), ask)).toEqual([]);
       expect(matchTagsFor(subject(coffee(1)), ask)).toEqual([]);
       expect(matchTagsFor(subject(coffee(0)), ask)).toEqual([]);
     });
 
-    it('Smooth & milky for a mellow or gentle coffee', () => {
+    it('Smooth & milky for a coffee of intensity 2 or less', () => {
       const ask = makeInputs({ mood: 'surprise', strength: 'mild' });
       expect(matchTagsFor(subject(coffee(0)), ask)).toEqual(['Smooth & milky']);
       expect(matchTagsFor(subject(coffee(1)), ask)).toEqual(['Smooth & milky']);
-      expect(matchTagsFor(subject(coffee(2)), ask)).toEqual([]);
+      expect(matchTagsFor(subject(coffee(2)), ask)).toEqual(['Smooth & milky']);
       expect(matchTagsFor(subject(coffee(3)), ask)).toEqual([]);
     });
 
@@ -810,16 +824,16 @@ describe('matchTagsFor', () => {
     });
   });
 
-  describe('5 — Iced / Hot, when asked for', () => {
+  describe('4 — Iced / Hot, when asked for and the item is that', () => {
     it('Iced for an iced drink, Hot for a hot one', () => {
       expect(matchTagsFor(subject(plain({ temperature: 'iced' })), makeInputs({ mood: 'surprise', temperature: 'iced' }))).toEqual(['Iced']);
       expect(matchTagsFor(subject(plain({ temperature: 'hot' })), makeInputs({ mood: 'surprise', temperature: 'hot' }))).toEqual(['Hot']);
     });
 
-    it('a drink served either way qualifies for both', () => {
+    it("a drink whose own temperature is 'either' is not claimed as Iced or Hot", () => {
       const either = plain({ temperature: 'either' });
-      expect(matchTagsFor(subject(either), makeInputs({ mood: 'surprise', temperature: 'iced' }))).toEqual(['Iced']);
-      expect(matchTagsFor(subject(either), makeInputs({ mood: 'surprise', temperature: 'hot' }))).toEqual(['Hot']);
+      expect(matchTagsFor(subject(either), makeInputs({ mood: 'surprise', temperature: 'iced' }))).toEqual([]);
+      expect(matchTagsFor(subject(either), makeInputs({ mood: 'surprise', temperature: 'hot' }))).toEqual([]);
     });
 
     it('is absent for "either", and never for food or dessert (temperature never applies to them)', () => {
@@ -829,12 +843,12 @@ describe('matchTagsFor', () => {
     });
   });
 
-  describe('6 — Light & refreshing / Rich & filling, when asked for and the item is that', () => {
-    it('Light & refreshing for a light, refreshing item', () => {
+  describe('5 — Light & refreshing / Rich & filling, when asked for and the item has that body', () => {
+    it('Light & refreshing for a light-bodied item', () => {
       const ask = makeInputs({ mood: 'surprise', body: 'light' });
       expect(matchTagsFor(subject(plain({ body: 'light', refreshment: 3 })), ask)).toEqual(['Light & refreshing']);
-      // A light body that is not refreshing is only half of it.
-      expect(matchTagsFor(subject(plain({ body: 'light', refreshment: 0 })), ask)).toEqual([]);
+      // The tag follows the body (satisfiesChoice), not the refreshment half of the score.
+      expect(matchTagsFor(subject(plain({ body: 'light', refreshment: 0 })), ask)).toEqual(['Light & refreshing']);
       expect(matchTagsFor(subject(plain({ body: 'rich', refreshment: 3 })), ask)).toEqual([]);
       // A legacy row has no refreshment: the body alone decides.
       expect(matchTagsFor(subject(legacyTraits({ body: 'light', moods: [] })), ask)).toEqual(['Light & refreshing']);
@@ -853,23 +867,15 @@ describe('matchTagsFor', () => {
     });
   });
 
-  describe('7 — their budget ceiling', () => {
-    it('is the ceiling label: Up to ₹100 / Up to ₹150 / Up to ₹200', () => {
-      const tag = (budget: SuggestInputs['budget']) => matchTagsFor(subject(plain()), makeInputs({ mood: 'surprise', budget }));
-      expect(tag('under_100')).toEqual(['Up to ₹100']);
-      expect(tag('under_150')).toEqual(['Up to ₹150']);
-      expect(tag('under_200')).toEqual(['Up to ₹200']);
-      expect(tag('any')).toEqual([]);
-    });
-
-    it('has a label for every ceiling', () => {
-      for (const budget of BUDGETS.filter((b) => b !== 'any')) {
-        expect(matchTagsFor(subject(plain()), makeInputs({ mood: 'surprise', budget })), budget).toHaveLength(1);
+  describe('6 — no budget tag (the hard filter already guarantees it)', () => {
+    it('never labels a budget ceiling', () => {
+      for (const budget of BUDGETS) {
+        expect(matchTagsFor(subject(plain()), makeInputs({ mood: 'surprise', budget })), budget).toEqual([]);
       }
     });
   });
 
-  describe('8 — Caffeine-free, when asked for', () => {
+  describe('7 — Caffeine-free, when asked for', () => {
     it('is present for a caffeine-free item when "no caffeine" was asked for', () => {
       const ask = makeInputs({ mood: 'surprise', needs: ['no_caffeine'] });
       expect(matchTagsFor(subject(plain({ caffeine: 'none' })), ask)).toEqual(['Caffeine-free']);
@@ -909,11 +915,11 @@ describe('matchTagsFor', () => {
       expect(matchTagsFor(subject(everything, { sugarAdjustable: true }), allAsks)).toHaveLength(3);
     });
 
-    it('takes them in priority order: feeling, flavour, sweetness…', () => {
+    it('takes them in priority order: flavour, sweetness, strength… (the feeling is last)', () => {
       expect(matchTagsFor(subject(everything, { sugarAdjustable: true, name: 'Caramel Latte' }), allAsks)).toEqual([
-        'A proper lift',
         'Caramel',
         'Medium sweet',
+        'Strong',
       ]);
     });
 
@@ -921,27 +927,22 @@ describe('matchTagsFor', () => {
       const asks = (over: Partial<SuggestInputs>) => makeInputs({ ...allAsks, ...over });
       const tags = (traits: MenuItemTraits, inputs: SuggestInputs) => matchTagsFor(subject(traits, { sugarAdjustable: true }), inputs);
 
-      // No feeling that fits: flavour, sweetness, strength.
-      expect(tags({ ...everything, mood_fit: { boost: 0 } }, allAsks)).toEqual(['Caramel', 'Medium sweet', 'Strong']);
+      const t = (traits: MenuItemTraits, inputs: SuggestInputs) =>
+        matchTagsFor(subject(traits, { sugarAdjustable: true, name: 'Caramel Latte' }), inputs);
+      const noFeeling = { ...everything, mood_fit: { boost: 0 } };
+
+      // Flavour, sweetness, strength.
+      expect(t(noFeeling, allAsks)).toEqual(['Caramel', 'Medium sweet', 'Strong']);
       // …and no flavour asked: sweetness, strength, temperature.
-      expect(tags({ ...everything, mood_fit: { boost: 0 } }, asks({ flavours: [] }))).toEqual(['Medium sweet', 'Strong', 'Iced']);
+      expect(t(noFeeling, asks({ flavours: [] }))).toEqual(['Medium sweet', 'Strong', 'Iced']);
       // …and no sweetness: strength, temperature, body.
-      expect(tags({ ...everything, mood_fit: { boost: 0 } }, asks({ flavours: [], sweetness: 'any' }))).toEqual([
-        'Strong',
-        'Iced',
-        'Light & refreshing',
-      ]);
-      // …and no strength: temperature, body, budget.
-      expect(
-        tags({ ...everything, mood_fit: { boost: 0 } }, asks({ flavours: [], sweetness: 'any', strength: 'any' })),
-      ).toEqual(['Iced', 'Light & refreshing', 'Up to ₹150']);
-      // …and no temperature: body, budget, caffeine-free.
-      expect(
-        tags(
-          { ...everything, mood_fit: { boost: 0 } },
-          asks({ flavours: [], sweetness: 'any', strength: 'any', temperature: 'either' }),
-        ),
-      ).toEqual(['Light & refreshing', 'Up to ₹150', 'Caffeine-free']);
+      expect(t(noFeeling, asks({ flavours: [], sweetness: 'any' }))).toEqual(['Strong', 'Iced', 'Light & refreshing']);
+      // …and no strength: temperature, body, caffeine-free.
+      expect(t(noFeeling, asks({ flavours: [], sweetness: 'any', strength: 'any' }))).toEqual(['Iced', 'Light & refreshing', 'Caffeine-free']);
+      // …and no temperature: body, caffeine-free, then the feeling, last.
+      const rest = asks({ flavours: [], sweetness: 'any', strength: 'any', temperature: 'either' });
+      expect(t(noFeeling, rest)).toEqual(['Light & refreshing', 'Caffeine-free']);
+      expect(t(everything, rest)).toEqual(['Light & refreshing', 'Caffeine-free', 'A proper lift']);
     });
 
     it('a tag is never repeated', () => {
@@ -952,12 +953,12 @@ describe('matchTagsFor', () => {
 
   it('works for the "usual", which is a menu row and not a Candidate: a name, a traits row and a flag are all it needs', () => {
     const usual = { name: 'Rose Latte', traits: plain({ mood_fit: { cosy: 3 } }), sugarAdjustable: false };
-    expect(matchTagsFor(usual, makeInputs({ mood: 'cosy', flavours: ['floral'] }))).toEqual(['Cosy', 'Floral & tea']);
+    expect(matchTagsFor(usual, makeInputs({ mood: 'cosy', flavours: ['floral'] }))).toEqual(['Floral & tea', 'Cosy']);
   });
 
   it('accepts a Candidate as it is', () => {
     const c = candidate({ menuItemId: 'x', category: 'Coffee', score: 0.5, name: 'Mocha', traits: legacyTraits({ moods: ['comfort'] }) });
-    expect(matchTagsFor(c, makeInputs({ mood: 'comfort', flavours: ['chocolatey'] }))).toEqual(['Comforting', 'Chocolatey']);
+    expect(matchTagsFor(c, makeInputs({ mood: 'comfort', flavours: ['chocolatey'] }))).toEqual(['Chocolatey', 'Comforting']);
   });
 
   it('only ever uses the fixed vocabulary', () => {
@@ -975,9 +976,6 @@ describe('matchTagsFor', () => {
       'Hot',
       'Light & refreshing',
       'Rich & filling',
-      'Up to ₹100',
-      'Up to ₹150',
-      'Up to ₹200',
       'Caffeine-free',
     ]);
     const menu = buildFixtureMenu();
@@ -1024,7 +1022,10 @@ describe('the sweetness tag never contradicts the reason\'s sweetness descriptor
     sweet: 'sweet',
     very: 'dessert-sweet',
   };
-  const SWEETNESS_WORDS = new Set(WORD_OF_TAG.values());
+  // "barely sweet" is how a pick kept for "Not sweet" reads when it is milk-sweet
+  // (delivered 2–3): the same choice as the 'Not sweet' tag, in words that stay true.
+  const BARELY = 'barely sweet';
+  const SWEETNESS_WORDS = new Set([...WORD_OF_TAG.values(), BARELY]);
 
   /** The sweetness word a reason leads with, or null when it has none (a legacy row's reason has no descriptors). */
   function sweetnessDescriptorOf(reason: string): string | null {
@@ -1056,10 +1057,14 @@ describe('the sweetness tag never contradicts the reason\'s sweetness descriptor
           if (tag) tagged++;
           if (tag && descriptor) {
             checkedBoth++;
-            expect(descriptor, label).toBe(WORD_OF_TAG.get(tag));
+            if (tag === 'Not sweet') expect(['unsweetened', BARELY], label).toContain(descriptor);
+            else expect(descriptor, label).toBe(WORD_OF_TAG.get(tag));
           }
           // And the other way: a descriptor that IS the customer's own word comes with the tag.
-          if (descriptor === WORD_OF_PREF[sweetness]) expect(tag, label).toBeDefined();
+          // (Food has no sweetness choice to keep, so it never carries the tag.)
+          if (descriptor === WORD_OF_PREF[sweetness] && traits.kind !== 'food') expect(tag, label).toBeDefined();
+          // "Barely sweet" is only ever said of a pick kept for "Not sweet".
+          if (descriptor === BARELY) expect(tag, label).toBe('Not sweet');
           if (tag) expect(tag, label).toBe(
             { none: 'Not sweet', light: 'Lightly sweet', medium: 'Medium sweet', sweet: 'Sweet', very: 'Very sweet' }[sweetness],
           );
@@ -1072,25 +1077,27 @@ describe('the sweetness tag never contradicts the reason\'s sweetness descriptor
     expect(checkedBoth).toBeGreaterThan(5);
   });
 
-  it('for every level × sugar choice × sweetness choice (restating the formulas): the tag appears exactly when the reason says the customer\'s own word', () => {
+  it('for every level × sugar choice × sweetness choice (restating the formulas): the tag appears exactly when the delivered level is in the band, and then the reason says the customer\'s own word', () => {
     const bandOf = (level: number) => (level <= 1 ? 'unsweetened' : level <= 3 ? 'lightly sweet' : level <= 5 ? 'medium-sweet' : level <= 8 ? 'sweet' : 'dessert-sweet');
     const target: Record<Pref, number> = { none: 0, light: 3, medium: 5, sweet: 7, very: 10 };
+    const bands: Record<Pref, [number, number]> = { none: [0, 3], light: [2, 4], medium: [4, 6], sweet: [5, 10], very: [8, 10] };
     for (const sweetness of PREFS) {
       const inputs = makeInputs({ mood: 'surprise', sweetness });
       for (let level = 0; level <= 10; level++) {
         for (const sugarAdjustable of [false, true]) {
-          // What they can get: the item's level, or — with sugar — the point of [level, level+3] nearest the target.
-          const achievable = sugarAdjustable ? Math.min(Math.min(10, level + 3), Math.max(level, target[sweetness])) : level;
+          // What they get: the item's level, or — with sugar — whichever of level and level+3 is nearer the target (a tie keeps the level).
+          const lifted = Math.min(10, level + 3);
+          const delivered = sugarAdjustable && Math.abs(lifted - target[sweetness]) < Math.abs(level - target[sweetness]) ? lifted : level;
           const traits = v2Traits({ kind: 'drink', intensity: null, refreshment: 0, textures: [], flavor_notes: [], sweetness_level: level, mood_fit: {}, moods: [] });
-          const label = `${sweetness} / level ${level} / sugar=${sugarAdjustable} (achievable ${achievable})`;
+          const label = `${sweetness} / level ${level} / sugar=${sugarAdjustable} (delivered ${delivered})`;
+          const inBand = delivered >= bands[sweetness][0] && delivered <= bands[sweetness][1];
 
           const reason = templateReason(traits, inputs, 'trait', 'X', sugarAdjustable);
-          expect(sweetnessDescriptorOf(reason), label).toBe(bandOf(achievable));
+          const own = sweetness === 'none' && delivered >= 2 ? BARELY : WORD_OF_PREF[sweetness];
+          expect(sweetnessDescriptorOf(reason), label).toBe(inBand ? own : bandOf(delivered));
 
           const tags = matchTagsFor({ name: 'X', traits, sugarAdjustable }, inputs);
-          const sameBand = bandOf(achievable) === bandOf(target[sweetness]);
-          expect(tags.some((t) => WORD_OF_TAG.has(t)), label).toBe(sameBand);
-          if (sameBand) expect(sweetnessDescriptorOf(reason), label).toBe(WORD_OF_PREF[sweetness]);
+          expect(tags.some((t) => WORD_OF_TAG.has(t)), label).toBe(inBand);
         }
       }
     }
@@ -1189,5 +1196,84 @@ describe('deterministicPicks — three different picks (MMR, COFFEY-SPEC §4.4)'
     // Adjustable + "lightly sweet" ⇒ described as they'll get it (level 3: lightly sweet), not "unsweetened".
     expect(pick.reason.startsWith('Lightly sweet')).toBe(true);
     expect(buildSugarGroup().name).toBe('Sugar'); // (fixture sanity: the live group's name)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Made your way: reasons and tags for subjects that carry add-on presets
+// ---------------------------------------------------------------------------
+
+describe('templateReason / matchTagsFor — subjects with add-on presets (COFFEY-SPEC §11)', () => {
+  const addonMenu = buildAddonMenu();
+  const flavourAddonOf = (item: (typeof addonMenu.items)[number], traits: MenuItemTraits, inputs: SuggestInputs) =>
+    flavourAddonFor(item, traits, inputs);
+
+  const variants: Partial<SuggestInputs>[] = [
+    { flavours: ['nutty'] },
+    { flavours: ['caramel'], sweetness: 'light' },
+    { flavours: ['nutty', 'caramel'], sweetness: 'medium', strength: 'strong' },
+    { strength: 'strong' },
+    { strength: 'strong', sweetness: 'none' },
+    { flavours: ['nutty'], strength: 'strong', budget: 'under_200' },
+    { flavours: ['chocolatey'], strength: 'strong', kinds: ['drink', 'dessert'] },
+  ];
+
+  it('every reason with presets stays within the cap and passes the tone lint, and names the add-on exactly when there is a flavour preset', () => {
+    let withPresets = 0;
+    for (const mood of MOODS) {
+      for (const prefs of variants) {
+        const inputs = makeInputs({ mood, ...prefs });
+        for (const item of addonMenu.items) {
+          const traits = addonMenu.traitsById.get(item.id)!;
+          const made = madeToOrder(item, traits, inputs);
+          const flavourPreset = made.presets.find((p) => p.purpose === 'flavour');
+          const addon = flavourPreset ? flavourAddonOf(item, traits, inputs) : null;
+          for (const code of [mood, 'trait', 'usual', 'popular'] as SuggestionPick['reasonCode'][]) {
+            const reason = templateReason(traits, inputs, code, item.name, isSugarAdjustable(item), addon, made);
+            const label = `${item.id} / ${code} / ${JSON.stringify(prefs)}: ${reason}`;
+            expect(reason.length, label).toBeLessThanOrEqual(SUGGEST_LIMITS.reasonMaxChars);
+            expect(lintReason(reason).ok, label).toBe(true);
+            if (!flavourPreset) expect(reason, label).not.toMatch(/ notes from | flavour from /);
+          }
+          if (made.presets.length > 0) withPresets++;
+        }
+      }
+    }
+    expect(withPresets).toBeGreaterThan(100);
+  });
+
+  it('a strength preset makes the intensity descriptor the made one: a cappuccino with a shot reads bold, not full-flavoured', () => {
+    const item = addonMenu.items.find((i) => i.id === 'ax-cappuccino')!;
+    const traits = addonMenu.traitsById.get(item.id)!;
+    const inputs = makeInputs({ mood: 'boost', strength: 'strong' });
+    const made = madeToOrder(item, traits, inputs);
+    expect(templateReason(traits, inputs, 'boost', item.name, false, null, null)).toMatch(/full-flavoured/i);
+    const reason = templateReason(traits, inputs, 'boost', item.name, false, null, made);
+    expect(reason).toMatch(/\bbold\b/i);
+    expect(reason).not.toMatch(/full-flavoured/i);
+  });
+
+  it('the sweetness word is judged on the lifted level: a syrup on a level-1 coffee makes "light" read lightly sweet; a lift past the band reads as delivered', () => {
+    const item = addonMenu.items.find((i) => i.id === 'ax-cappuccino')!;
+    const traits = addonMenu.traitsById.get(item.id)!;
+    const light = makeInputs({ mood: 'cosy', sweetness: 'light', strength: 'strong', flavours: [] });
+    const lifted = { presets: [], families: [], sweetnessLift: 2, intensityLift: 1, extraPriceInr: 0 };
+    expect(templateReason(traits, light, 'cosy', item.name, false, null, lifted)).toMatch(/^Bold and lightly sweet/);
+    const none = makeInputs({ mood: 'cosy', sweetness: 'none', strength: 'strong', flavours: [] });
+    // 1 + 6 = 7 is far past "not sweet": described as delivered, never as "unsweetened".
+    const big = { ...lifted, sweetnessLift: 6 };
+    expect(templateReason(traits, none, 'cosy', item.name, false, null, big)).toMatch(/sweet/i);
+    expect(templateReason(traits, none, 'cosy', item.name, false, null, big)).not.toMatch(/unsweetened|barely/i);
+  });
+
+  it('tags: the family tag and Strong appear for a made-kept choice, with no add-on wording', () => {
+    const item = addonMenu.items.find((i) => i.id === 'ax-cappuccino')!;
+    const traits = addonMenu.traitsById.get(item.id)!;
+    const inputs = makeInputs({ mood: 'cosy', flavours: ['nutty'], strength: 'strong' });
+    const made = madeToOrder(item, traits, inputs);
+    const tags = matchTagsFor({ name: item.name, traits, sugarAdjustable: true, made }, inputs);
+    expect(tags).toEqual(['Nutty', 'Strong', 'Cosy']);
+    expect(matchTagsFor({ name: item.name, traits, sugarAdjustable: true }, inputs)).not.toContain('Nutty');
+    for (const t of tags) expect(t).not.toMatch(/add-on|₹/);
   });
 });

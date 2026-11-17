@@ -217,3 +217,78 @@ describe('computeSuggestionStats', () => {
     expect(empty.latencyP90Ms).toBeNull();
   });
 });
+
+describe('computeSuggestionStats — presets block (COFFEY-SPEC §11.7)', () => {
+  const run = (sess: SuggestionSessionRow[], events: SuggestionEventRow[]) =>
+    computeSuggestionStats({ sessions: sess, events, webOrders: [], itemNames: new Map(), windowStart: WINDOW_START });
+
+  it('is all zeros with no events', () => {
+    expect(run([session({ id: 'a' })], []).presets).toEqual({ shown: 0, removed: 0, kept: 0 });
+    expect(run([], []).presets).toEqual({ shown: 0, removed: 0, kept: 0 });
+  });
+
+  it('counts distinct (session, item) pairs — two removals for one pair count once', () => {
+    const out = run(
+      [session({ id: 'a' }), session({ id: 'b' })],
+      [
+        event({ session_id: 'a', event: 'preset_shown', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_shown', menu_item_id: 'latte', id: 'dup-shown' }),
+        event({ session_id: 'a', event: 'preset_shown', menu_item_id: 'mocha' }),
+        event({ session_id: 'b', event: 'preset_shown', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_removed', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_removed', menu_item_id: 'latte', id: 'dup-removed' }),
+        event({ session_id: 'b', event: 'preset_kept', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_kept', menu_item_id: 'mocha' }),
+      ],
+    );
+    expect(out.presets).toEqual({ shown: 3, removed: 1, kept: 2 });
+  });
+
+  it('ignores events of sessions outside the window/scope passed in', () => {
+    const out = run(
+      [session({ id: 'in' })],
+      [
+        event({ session_id: 'in', event: 'preset_shown', menu_item_id: 'latte' }),
+        event({ session_id: 'old', event: 'preset_shown', menu_item_id: 'latte' }),
+        event({ session_id: 'old', event: 'preset_kept', menu_item_id: 'latte' }),
+      ],
+    );
+    expect(out.presets).toEqual({ shown: 1, removed: 0, kept: 0 });
+  });
+
+  it('lets the final outcome win: removed excludes a pair that also has kept', () => {
+    const out = run(
+      [session({ id: 'a' })],
+      [
+        event({ session_id: 'a', event: 'preset_shown', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_removed', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_kept', menu_item_id: 'latte', id: 'k1' }),
+        event({ session_id: 'a', event: 'preset_removed', menu_item_id: 'mocha', id: 'r2' }),
+      ],
+    );
+    // latte: un-ticked then re-ticked and added -> kept only. mocha: removed only.
+    expect(out.presets).toEqual({ shown: 1, removed: 1, kept: 1 });
+  });
+
+  it('the removed and kept shares cannot add past 100% for one pick', () => {
+    const out = run(
+      [session({ id: 'a' })],
+      [
+        event({ session_id: 'a', event: 'preset_shown', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_removed', menu_item_id: 'latte' }),
+        event({ session_id: 'a', event: 'preset_kept', menu_item_id: 'latte', id: 'k1' }),
+      ],
+    );
+    expect(out.presets).toEqual({ shown: 1, removed: 0, kept: 1 });
+    expect(out.presets!.removed + out.presets!.kept).toBeLessThanOrEqual(out.presets!.shown);
+  });
+
+  it('does not let preset events inflate the existing funnel or top-picks numbers', () => {
+    const out = run(
+      [session({ id: 'a' })],
+      [event({ session_id: 'a', event: 'preset_shown', menu_item_id: 'latte' })],
+    );
+    expect(out.topItems).toEqual([]);
+    expect(out.sessionsWithAdd).toBe(0);
+  });
+});

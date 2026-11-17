@@ -6,8 +6,12 @@ import {
   flattenAddons,
   initialSelection,
   invalidGroups,
+  preselectedSuggestions,
+  stripCoversPresets,
   suggestedOptionIds,
   toggleOption,
+  vetPresets,
+  visibleHints,
 } from '@/lib/menu/customization';
 import { basePriceInr, DEFAULT_WEIGHT_GRAMS, isSoldByWeight } from '@/lib/menu/weight';
 import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
@@ -53,7 +57,19 @@ export function MenuItemCustomizeModal({
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
-  const hints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+  // What Coffey preselected: the suggested options that are in the VETTED presets
+  // it passed in. An option merely selected on open (a required group's default)
+  // or only highlighted (the older flavour tip) is not "set up". Read once.
+  const [coffey] = useState(() => {
+    const vetted = vetPresets(item, presets);
+    return { vetted, options: preselectedSuggestions(suggestedOptions, vetted) };
+  });
+  const coffeyOptions = coffey.options;
+  // The panel replaces the hint lines only when it has a chip for every
+  // preselected option; otherwise the hints stay (and the panel still shows).
+  const stripCovers = stripCoversPresets(item, coffey.vetted, coffeyOptions, selected);
+  const allHints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+  const hints = visibleHints(allHints, stripCovers);
 
   const suggestedIds = useMemo(() => suggestedOptionIds(item, suggestedOptions), [item, suggestedOptions]);
 
@@ -138,6 +154,7 @@ export function MenuItemCustomizeModal({
         instructions={instructions}
         onInstructionsChange={setInstructions}
         suggestedOptionIds={suggestedIds}
+        coffeyOptions={coffeyOptions}
         weightGrams={weightGrams}
         onWeightChange={byWeight ? setWeightGrams : undefined}
       />

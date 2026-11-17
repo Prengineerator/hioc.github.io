@@ -1,9 +1,7 @@
 import type { Metadata } from 'next';
 
-// app/suggest/page.tsx is a client component (the wizard's state lives there),
-// and a client component can't export metadata — so the page's title and
-// description live in this layout instead. The root layout's template adds
-// " | HIOC." to the title.
+// The page's title and description live in this layout. The root layout's
+// template adds " | HIOC." to the title.
 export const metadata: Metadata = {
   title: 'Ask Coffey',
   description:

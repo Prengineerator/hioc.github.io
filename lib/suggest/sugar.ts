@@ -74,6 +74,18 @@ export function achievableSweetness(baseLevel: number, adjustable: boolean, targ
 }
 
 /**
+ * The sweetness level the customer will actually get: the item's own level, or,
+ * when sugar is adjustable, whichever of `base` and `base + sugarAdds` (capped)
+ * is closer to `target` — a tie goes to `base`, matching the No Sugar preset
+ * (sugarPresetFor). No target means no preset, so the item as made.
+ */
+export function deliveredSweetness(base: number, adjustable: boolean, target: number | null): number {
+  if (!adjustable || target === null) return base;
+  const lifted = Math.min(SWEETNESS_SCALE.max, base + SWEETNESS_SCALE.sugarAdds);
+  return Math.abs(lifted - target) < Math.abs(base - target) ? lifted : base;
+}
+
+/**
  * §4.7 — the sugar option to preselect for a customer who chose `pref`.
  *
  * `null` for 'any' (they expressed no view) or when the item has no sugar

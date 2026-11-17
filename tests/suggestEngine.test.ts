@@ -92,7 +92,7 @@ describe('runSuggest — decider output validation (SUG-4 AC)', () => {
   });
 
   it('hands the decider the v2 inputs as they are, and candidates that know whether their sugar can be adjusted', async () => {
-    const inputs = makeInputs({ mood: 'focus', secondaryMood: 'cool', kinds: ['drink', 'dessert'], sweetness: 'light', flavours: ['nutty'] });
+    const inputs = makeInputs({ mood: 'focus', secondaryMood: 'cool', kinds: ['drink', 'dessert'], sweetness: 'light', flavours: ['nutty', 'caramel'] });
     const seen: { inputs?: SuggestInputs; shortlist?: Candidate[] } = {};
     const decider: Decider = async (args) => {
       seen.inputs = args.inputs;
@@ -103,8 +103,9 @@ describe('runSuggest — decider output validation (SUG-4 AC)', () => {
     expect(seen.inputs).toEqual(inputs);
     expect(seen.shortlist!.length).toBeGreaterThan(0);
     for (const c of seen.shortlist!) expect(typeof c.sugarAdjustable).toBe('boolean');
-    expect(seen.shortlist!.find((c) => c.menuItemId === 'signature-iced-brew')?.sugarAdjustable).toBe(true);
-    expect(seen.shortlist!.find((c) => c.menuItemId === 'espresso')?.sugarAdjustable).toBe(false);
+    // Both survive the flavour narrowing: the caramel iced latte (sugar group) and the nutty cortado (none).
+    expect(seen.shortlist!.find((c) => c.menuItemId === 'caramel-iced-latte')?.sugarAdjustable).toBe(true);
+    expect(seen.shortlist!.find((c) => c.menuItemId === 'cortado')?.sugarAdjustable).toBe(false);
   });
 
   it('never mutates the inputs it was handed', async () => {
@@ -112,6 +113,37 @@ describe('runSuggest — decider output validation (SUG-4 AC)', () => {
     const before = JSON.parse(JSON.stringify(inputs));
     await runSuggest(baseArgs({ request: request({ inputs }), decider: null, fallbackReason: 'disabled' }));
     expect(inputs).toEqual(before);
+  });
+});
+
+describe('runSuggest — a pinned pick is never dropped, even when its kind has no pick to replace', () => {
+  it('the only dessert that keeps the flavour survives the usual being removed from the only dessert slot', async () => {
+    // Nutty, a drink plus something sweet: after the hard filter exactly one dessert keeps nutty
+    // (almond-biscotti = P), so it is pinned. The other desserts are dropped except the customer's
+    // usual, blueberry-cheesecake (U), which is the decider's only dessert pick. Removing U as the
+    // usual refills the picks with a drink, leaving P with no dessert to replace.
+    const inputs = makeInputs({ mood: 'comfort', kinds: ['drink', 'dessert'], flavours: ['nutty'] });
+    const menu = buildFixtureMenu();
+    const traitsById = buildFixtureTraitsById();
+    const P = 'almond-biscotti';
+    const U = 'blueberry-cheesecake';
+    const dessertIds = filterCandidates(menu, traitsById, inputs, []).filter((c) => c.traits.kind === 'dessert').map((c) => c.item.id);
+    expect(dessertIds).toContain(P);
+    const excludeItemIds = dessertIds.filter((id) => id !== P && id !== U);
+    const decider: Decider = async () => goodResult([U, 'nutella-shake', 'cortado'].map(trait));
+    const result = await runSuggest(
+      baseArgs({ request: request({ inputs, excludeItemIds }), profile: profileWith([U]), decider }),
+    );
+    expect(result.usualItemId).toBe(U);
+    expect(result.pickIds).not.toContain(U);
+    expect(result.pickIds).toContain(P);
+    expect(result.picks).toHaveLength(SUGGEST_LIMITS.picks);
+    expect(new Set(result.pickIds).size).toBe(SUGGEST_LIMITS.picks);
+    const traitsOf = (id: string) => traitsById.get(id)!;
+    expect(result.pickIds.some((id) => traitsOf(id).kind === 'drink')).toBe(true);
+    expect(result.pickIds.some((id) => traitsOf(id).kind === 'dessert')).toBe(true);
+    // The drink the refill had added (hazelnut-creme) is what P displaced.
+    expect(result.pickIds).not.toContain('hazelnut-creme');
   });
 });
 
@@ -214,7 +246,7 @@ describe('runSuggest — "usual" (§3.2)', () => {
     expect(result.usual?.reason).toBe('Your usual — espresso notes, always a good choice.');
     // Sugar takes this cold brew (inherent 0) up to 3 — the lightly-sweet band, not the
     // medium band they asked for — so there is no sweetness tag, only the feeling and "Iced".
-    expect(result.usual?.matchTags).toEqual(['Refreshing', 'Iced']);
+    expect(result.usual?.matchTags).toEqual(['Iced', 'Refreshing']);
     expect(result.usual?.sugarPreset).toEqual({ groupId: 'iced-brew-group', optionId: 'iced-brew-normal', label: 'Normal' });
   });
 });
@@ -342,15 +374,20 @@ describe('runSuggest — match tags and sugar presets (COFFEY-SPEC §4.6, §4.7)
     const result = await runSuggest(
       baseArgs({ request: request({ inputs: cool }), decider: decideThese('signature-iced-brew', 'caramel-iced-latte', 'iced-americano') }),
     );
-    expect(result.picks.map((p) => p.menuItemId)).toEqual(['signature-iced-brew', 'caramel-iced-latte', 'iced-americano']);
+    // The three items that keep "medium sweet" are too few to fill the picks on their own,
+    // so they are pinned (promises.ts) and displace the decider's iced-americano; pinned picks come first.
+    expect(result.picks.map((p) => p.menuItemId)).toEqual(['signature-creme', 'caramel-iced-latte', 'signature-iced-brew']);
     const tags = Object.fromEntries(result.picks.map((p) => [p.menuItemId, p.matchTags]));
     // Refreshing (cool, graded 3); no sweetness tag — sugar only reaches 3 of the 5 asked for, the
     // lightly-sweet band rather than the medium one (COFFEY-SPEC §4.6: same band or no tag); Iced.
-    expect(tags['signature-iced-brew']).toEqual(['Refreshing', 'Iced']);
+    expect(tags['signature-iced-brew']).toEqual(['Iced', 'Refreshing']);
     // Graded 2.5 for cool; inherent 4 + sugar lifts it to exactly 5, the medium band; Iced.
-    expect(tags['caramel-iced-latte']).toEqual(['Refreshing', 'Medium sweet', 'Iced']);
-    // A legacy row (tagged cool); no sugar to lift a 0 toward 5, so no sweetness tag.
-    expect(tags['iced-americano']).toEqual(['Refreshing', 'Iced']);
+    expect(tags['caramel-iced-latte']).toEqual(['Medium sweet', 'Iced', 'Refreshing']);
+    // A legacy row (tagged cool), with no sweetness asked: no sweetness tag.
+    const anyResult = await runSuggest(
+      baseArgs({ request: request({ inputs: { ...cool, sweetness: 'any' } }), decider: decideThese('iced-americano') }),
+    );
+    expect(anyResult.picks.find((p) => p.menuItemId === 'iced-americano')?.matchTags).toEqual(['Iced', 'Refreshing']);
     for (const p of result.picks) expect(p.matchTags!.length).toBeLessThanOrEqual(3);
   });
 
@@ -359,6 +396,7 @@ describe('runSuggest — match tags and sugar presets (COFFEY-SPEC §4.6, §4.7)
       baseArgs({ request: request({ inputs: cool }), decider: decideThese('signature-iced-brew', 'caramel-iced-latte', 'iced-americano') }),
     );
     const preset = Object.fromEntries(result.picks.map((p) => [p.menuItemId, p.sugarPreset]));
+    expect(Object.keys(preset)).toEqual(expect.arrayContaining(['signature-iced-brew', 'caramel-iced-latte']));
     // Inherent 0 → Normal reaches 3 (2 from the target 5) beating No Sugar's 0 (5 away).
     expect(preset['signature-iced-brew']).toEqual({ groupId: 'iced-brew-group', optionId: 'iced-brew-normal', label: 'Normal' });
     // Inherent 4 → No Sugar stays 4 (1 away); Normal would reach 7 (2 away).
@@ -367,8 +405,12 @@ describe('runSuggest — match tags and sugar presets (COFFEY-SPEC §4.6, §4.7)
       optionId: 'caramel-latte-none',
       label: 'No Sugar',
     });
-    // No sugar group ⇒ null, not absent: a stable shape for the page.
-    expect(preset['iced-americano']).toBeNull();
+    // No sugar group ⇒ null, not absent: a stable shape for the page. "Not sweet" keeps the
+    // iced americano (level 0), so it is really among the picks.
+    const notSweet = await runSuggest(
+      baseArgs({ request: request({ inputs: { ...cool, sweetness: 'none' } }), decider: decideThese('iced-americano') }),
+    );
+    expect(notSweet.picks.find((p) => p.menuItemId === 'iced-americano')?.sugarPreset).toBeNull();
   });
 
   it('never presets sugar when the customer chose no sweetness', async () => {

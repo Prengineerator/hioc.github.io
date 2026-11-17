@@ -6,6 +6,7 @@ import {
   invalidGroups,
   isRequired,
   toggleOption,
+  vetPresets,
 } from '@/lib/menu/customization';
 import type { AddonGroup, AddonOption, MenuItem } from '@/lib/types';
 
@@ -362,5 +363,47 @@ describe('flattenAddons', () => {
   it('ignores unknown option ids', () => {
     const item = makeItem([sugarGroup]);
     expect(flattenAddons(item, { sugar: ['does-not-exist'] })).toEqual([]);
+  });
+});
+
+// Preselections handed in from outside (Coffey's add-on presets) are vetted
+// option by option: bad ones are dropped, never added blindly.
+describe('vetPresets', () => {
+  const item = makeItem([sugarGroup, condimentsGroup]);
+  const cond = condimentsGroup.options;
+
+  it('keeps real, available options in their own group', () => {
+    expect(vetPresets(item, { sugar: ['none'], condiments: [cond[0].id] })).toEqual({
+      sugar: ['none'],
+      condiments: [cond[0].id],
+    });
+  });
+
+  it('drops an option missing from the item, and a group the item lacks', () => {
+    expect(vetPresets(item, { condiments: ['ghost'], nothere: ['x'] })).toEqual({});
+    expect(vetPresets(item, { condiments: [cond[0].id, 'ghost'] })).toEqual({ condiments: [cond[0].id] });
+  });
+
+  it('drops an option that is switched off', () => {
+    const off = makeItem([
+      group({
+        ...condimentsGroup,
+        options: condimentsGroup.options.map((o, i) => (i === 0 ? { ...o, is_available: false } : o)),
+      }),
+    ]);
+    expect(vetPresets(off, { condiments: [cond[0].id] })).toEqual({});
+  });
+
+  it('cuts to max_select, earliest first, and to one for a single-select group', () => {
+    const ids = cond.map((o) => o.id);
+    const capped = vetPresets(item, { condiments: ids });
+    expect(capped.condiments).toEqual(ids.slice(0, condimentsGroup.max_select));
+    expect(vetPresets(item, { sugar: ['none', 'normal'] }).sugar).toEqual(['none']);
+  });
+
+  it('feeds initialSelection, and with nothing requested is empty', () => {
+    expect(vetPresets(item, undefined)).toEqual({});
+    const sel = initialSelection(item, vetPresets(item, { condiments: [cond[0].id] }));
+    expect(sel.condiments).toEqual([cond[0].id]);
   });
 });
