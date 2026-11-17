@@ -241,6 +241,12 @@ export const SUGGESTION_EVENTS = [
   'browse_menu',
   'checkout_started',
   'ordered',
+  // COFFEY-SPEC §11.7 — how customers treat an add-on Coffey preselects. Needs
+  // supabase/2026-11-coffey-preset-events.sql (the event CHECK constraint);
+  // until it is applied these inserts fail and are swallowed, nothing else does.
+  'preset_shown', // server-written: a pick went out carrying add-on presets
+  'preset_removed', // the customer un-ticked it, or added the pick without it
+  'preset_kept', // the pick went into the cart with a preset still on
 ] as const;
 export type SuggestionEventType = (typeof SUGGESTION_EVENTS)[number];
 
@@ -254,6 +260,8 @@ export const CLIENT_SUGGESTION_EVENTS = [
   'dismissed',
   'browse_menu',
   'checkout_started',
+  'preset_removed',
+  'preset_kept',
 ] as const satisfies readonly SuggestionEventType[];
 export type ClientSuggestionEventType = (typeof CLIENT_SUGGESTION_EVENTS)[number];
 
@@ -618,6 +626,10 @@ export interface SuggestionStats {
   latencyP50Ms: number | null;
   latencyP90Ms: number | null;
   costUsd: number;
+  /** Coffey's preselected add-ons (COFFEY-SPEC §11.7): DISTINCT (session, menu
+   * item) pairs. Optional because stats stored in older suggestion_digests rows
+   * (jsonb) predate it; computeSuggestionStats always sets it. */
+  presets?: { shown: number; removed: number; kept: number };
 }
 
 // ---------------------------------------------------------------------------
