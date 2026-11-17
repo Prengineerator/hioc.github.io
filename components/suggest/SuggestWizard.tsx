@@ -273,7 +273,7 @@ export function SuggestWizard({ flavourCounts = null,
   function handleAddToCart(item: MenuItem, rawPick: SuggestionPick) {
     if (!response) return;
     // Only what is still ticked on the card counts from here on.
-    const pick = tickedPick(rawPick, new Set(untickedByPick[rawPick.menuItemId] ?? []));
+    const pick = tickedPick(rawPick, new Set(untickedByPick[rawPick.menuItemId] ?? []), item);
     // A pick that carries a flavour add-on never takes the one-tap path, even on
     // an otherwise simple item: the customer has to see the suggestion (§1.1).
     const isSimple = !needsCustomizeModal(item, pick);

@@ -40,6 +40,7 @@ import { pickUsual, summarizeProfile } from './profile';
 import { daypartFor } from './daypart';
 import { validateDeciderPicks } from './validate';
 import { DeciderError } from './deciderError';
+import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 import { HONOURED_CHOICES, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 import type {
   AddonTraits,
@@ -192,20 +193,43 @@ function decorate(
   itemsById: Map<string, MenuItem>,
   traitsById: Map<string, MenuItemTraits>,
   addonTraitsById?: Map<string, AddonTraits>,
+  /** The "Your usual" card: it is the customer's habitual order, so it never gets
+   * an add-on preselected, named, tagged for or priced in (§11). */
+  isUsual = false,
 ): SuggestionPick {
   const item = itemsById.get(pick.menuItemId);
   const traits = traitsById.get(pick.menuItemId);
   if (!item || !traits) return { ...pick, matchTags: [], sugarPreset: null, flavourAddon: null };
 
   const sugarAdjustable = isSugarAdjustable(item);
+  const ownSugarPreset = sugarPresetFor(item, inputs.sweetness, sweetnessLevel(traits));
+  const addonFlavourFamilies = isUsual ? [] : reachableAddonFamilies(item, traits, inputs, addonTraitsById);
+  if (isUsual) {
+    return {
+      ...pick,
+      matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies }, inputs),
+      sugarPreset: ownSugarPreset,
+      flavourAddon: null,
+      addonPresets: [],
+    };
+  }
+
   const flavourAddon = flavourAddonFor(item, traits, inputs, addonTraitsById);
-  const addonFlavourFamilies = reachableAddonFamilies(item, traits, inputs, addonTraitsById);
   // What making it the customer's way adds (COFFEY-SPEC §11): the add-ons to
   // preselect, and the sweetness / intensity they bring.
   const made = madeToOrder(item, traits, inputs, addonTraitsById);
   const flavourPreset = made.presets.find((p) => p.purpose === 'flavour');
   const nameFlavourAddon = flavourPreset && flavourAddon ? flavourAddon : null;
   const liftedBase = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + made.sweetnessLift);
+  const matchTags = matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies, made }, inputs);
+
+  // The tag each preset earns, so the card can take it away when the customer
+  // un-ticks the add-on: exactly the tags that vanish without `made`.
+  const addonPresets = made.presets.map((p) => {
+    const tag = p.purpose === 'flavour' && p.family ? FLAVOUR_FAMILY_INFO[p.family].tag : p.purpose === 'strength' ? 'Strong' : undefined;
+    return tag && matchTags.includes(tag) ? { ...p, tag } : { ...p };
+  });
+
   return {
     ...pick,
     // The reason names the add-on exactly when a flavour add-on is preselected,
@@ -214,13 +238,14 @@ function decorate(
       made.presets.length > 0
         ? templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable, nameFlavourAddon, made)
         : pick.reason,
-    matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies, made }, inputs),
+    matchTags,
     sugarPreset: sugarPresetFor(item, inputs.sweetness, liftedBase),
-    // The older "tip" field: only ever the add-on Coffey itself preselects, so an
-    // older client never points at one the rules above would not use (a sauce on
-    // a drink that already has a flavour of its own, or one past the budget).
-    flavourAddon: nameFlavourAddon,
-    addonPresets: made.presets,
+    flavourAddon,
+    addonPresets,
+    // The same pick without its add-ons, for when the customer un-ticks them.
+    ...(made.presets.length > 0
+      ? { plain: { reason: templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable), sugarPreset: ownSugarPreset } }
+      : {}),
   };
 }
 
@@ -369,7 +394,7 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     };
     return { ...decorated, misses: HONOURED_CHOICES.filter((c) => satisfiesChoice(c, subject, inputs) === false) };
   });
-  const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById, addonTraitsById) : null;
+  const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById, addonTraitsById, true) : null;
 
   const unmet = unmetChoices(
     picks.flatMap((p) => {

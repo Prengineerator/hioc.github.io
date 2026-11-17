@@ -37,7 +37,8 @@ import {
   bodyOption,
   budgetOption,
   coffeeOption,
-  disabledOptions,
+  disabledOptionsForKey,
+  selectionKey,
   flavourOption,
   sweetOption,
   tempOption,
@@ -213,7 +214,13 @@ export function WantsStep({
   const flavours = offeredFlavours(state.kinds, flavourCounts);
   const moreSet = moreOptionsSet(state);
   const moreOpen = moreOpenChoice ?? moreSet;
-  const off = useMemo(() => disabledOptions(state, facets, flavourCounts), [state, facets, flavourCounts]);
+  // Keyed on what the greying depends on (ticked kinds + selected options), not on
+  // the whole state: typing in the note must not re-run the engine's rules.
+  const { kinds: kindsKey, options: optionsKey } = selectionKey(state, flavourCounts);
+  const off = useMemo(
+    () => disabledOptionsForKey({ kinds: kindsKey, options: optionsKey }, facets),
+    [kindsKey, optionsKey, facets],
+  );
   const look = useMemo(() => cupLook(state, flavourCounts), [state, flavourCounts]);
   const summary = summaryLine(state, flavourCounts);
   // Coffey's line follows the last thing the customer changed. Derived while

@@ -221,13 +221,21 @@ describe('reachableAddonFamilies', () => {
     const syrups = () => cappucino([syrupGroup()]); // a syrup lifts sweetness by 2
     const at = (level: number) => latteTraits('cappucino', { sweetness_level: level });
 
-    it('"Not sweet" (target 0, ceiling 3): Hazelnut syrup counts only when baseLevel + 2 ≤ 3', () => {
+    it('"Not sweet": a sweetening add-on (a syrup, +2) is never reachable, at any level', () => {
       const none = ask(['nutty'], { sweetness: 'none' });
-      expect(reachableAddonFamilies(syrups(), at(0), none)).toEqual(['nutty']);
-      expect(reachableAddonFamilies(syrups(), at(1), none)).toEqual(['nutty']); // 1 + 2 = 3
-      expect(reachableAddonFamilies(syrups(), at(2), none)).toEqual([]); // 2 + 2 = 4
-      expect(flavourAddonFor(syrups(), at(2), none)).toBeNull();
-      expect(flavourAddonFor(syrups(), at(1), none)?.label).toBe('Hazelnut syrup');
+      for (const level of [0, 1, 2, 3]) {
+        expect(reachableAddonFamilies(syrups(), at(level), none), `level ${level}`).toEqual([]);
+        expect(flavourAddonFor(syrups(), at(level), none), `level ${level}`).toBeNull();
+      }
+      // The same item under "Lightly sweet" (ceiling 6) does reach it.
+      expect(flavourAddonFor(syrups(), at(1), ask(['nutty'], { sweetness: 'light' }))?.label).toBe('Hazelnut syrup');
+    });
+
+    it('"Not sweet": an option with no sweetness lift stays reachable', () => {
+      const none = ask(['nutty'], { sweetness: 'none' });
+      const noLift = new Map([['syrup-hazelnut', traits({ flavour_families: ['nutty'], sweetness_delta: 0 })]]);
+      expect(reachableAddonFamilies(syrups(), at(1), none, noLift)).toEqual(['nutty']);
+      expect(flavourAddonFor(syrups(), at(1), none, noLift)?.optionId).toBe('syrup-hazelnut');
     });
 
     it('the ceiling moves with the choice: Lightly sweet 3 → 6, Medium 5 → 8, Sweet 7 → 10', () => {
@@ -250,18 +258,18 @@ describe('reachableAddonFamilies', () => {
 
     it('falls through to an option that fits: the topping (+1) when the syrup (+2) would blow the ceiling', () => {
       const item = cappucino([syrupGroup(), toppingGroup()]);
-      const none = ask(['nutty'], { sweetness: 'none' });
-      expect(flavourAddonFor(item, at(1), none)?.optionId).toBe('syrup-hazelnut'); // both fit; the syrup is the flavour role
-      const tight = flavourAddonFor(item, at(2), none); // 2 + 2 = 4 > 3 but 2 + 1 = 3
+      const light = ask(['nutty'], { sweetness: 'light' }); // ceiling 6
+      expect(flavourAddonFor(item, at(4), light)?.optionId).toBe('syrup-hazelnut'); // both fit; the syrup is the flavour role
+      const tight = flavourAddonFor(item, at(5), light); // 5 + 2 = 7 > 6 but 5 + 1 = 6
       // Hazelnut ₹25 and Almond ₹15 are both nutty toppings (+1); the cheaper one is named.
       expect(tight).toEqual({ groupId: 'topping-group', optionId: 'topping-almond', label: 'Almond', priceInr: 15, family: 'nutty' });
-      expect(flavourAddonFor(item, at(3), none)).toBeNull(); // 3 + 1 = 4
+      expect(flavourAddonFor(item, at(6), light)).toBeNull(); // 6 + 1 = 7
     });
 
     it('the guard applies to the other requested families independently', () => {
       const item = cappucino([syrupGroup(), toppingGroup()]);
-      // At level 2, "not sweet": nutty survives via the topping, caramel (syrup only) does not.
-      expect(reachableAddonFamilies(item, at(2), ask(['caramel', 'nutty'], { sweetness: 'none' }))).toEqual(['nutty']);
+      // At level 5, "lightly sweet" (ceiling 6): nutty survives via the topping, caramel (syrup only) does not.
+      expect(reachableAddonFamilies(item, at(5), ask(['caramel', 'nutty'], { sweetness: 'light' }))).toEqual(['nutty']);
     });
   });
 
@@ -733,7 +741,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     });
     expect(cap.flavourAddon!.label).toBe('Hazelnut syrup');
     expect(cap.matchTags).toEqual(['Nutty', 'Cosy']); // the preselected syrup makes it nutty: the family's normal tag, no "add-on" wording
-    expect(cap.addonPresets).toEqual([{ groupId: 'syrup-group', optionId: 'syrup-hazelnut', label: 'Hazelnut syrup', priceInr: 35, purpose: 'flavour', family: 'nutty' }]);
+    expect(cap.addonPresets).toEqual([{ groupId: 'syrup-group', optionId: 'syrup-hazelnut', label: 'Hazelnut syrup', priceInr: 35, purpose: 'flavour', family: 'nutty', tag: 'Nutty' }]);
     expect(cap.reason).toContain('from Hazelnut syrup');
     // No sweetness word: the syrup sweetens the drink, so "unsweetened … from
     // Hazelnut syrup" would contradict itself. The next descriptor (texture) leads.
@@ -798,13 +806,18 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     );
   });
 
-  it('"Not sweet": the syrup only counts while baseLevel + 2 ≤ 3', async () => {
+  it('"Not sweet" never preselects or names a syrup (it is sugar); "Lightly sweet" does while baseLevel + 2 ≤ 6', async () => {
     const none = ask(['nutty'], { sweetness: 'none' });
-    const ok = await run(none, { menu: menu({ cappucinoLevel: 1 }) });
+    const refused = await run(none, { menu: menu({ cappucinoLevel: 1 }) });
+    expect(pick(refused, 'cappucino').flavourAddon ?? null).toBeNull();
+    expect(pick(refused, 'cappucino').addonPresets ?? []).toEqual([]);
+
+    const light = ask(['nutty'], { sweetness: 'light' });
+    const ok = await run(light, { menu: menu({ cappucinoLevel: 1 }) });
     expect(pick(ok, 'cappucino').flavourAddon?.label).toBe('Hazelnut syrup');
     expect(pick(ok, 'cappucino').matchTags).not.toContain('Nutty add-on');
 
-    const tooSweet = await run(none, { menu: menu({ cappucinoLevel: 2 }) });
+    const tooSweet = await run(light, { menu: menu({ cappucinoLevel: 5 }) });
     expect(pick(tooSweet, 'cappucino').flavourAddon ?? null).toBeNull();
     expect(pick(tooSweet, 'cappucino').matchTags).not.toContain('Nutty add-on');
     expect(pick(tooSweet, 'cappucino').reason).not.toContain('Hazelnut');
@@ -835,7 +848,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     expect(cap.reason).toContain('from Vanilla syrup');
   });
 
-  it('the usual is decorated the same way, and keeps its "usual" voice', async () => {
+  it('the usual keeps its "usual" voice and is NEVER given an add-on: no preset, no syrup in the reason, no tag for it, no price', async () => {
     const profile: TasteProfile = {
       topItems: [{ menu_item_id: 'cappucino', count: 9, lastOrderedAt: '2026-05-01T00:00:00Z' }],
       categoryAffinity: { Coffee: 1 },
@@ -849,9 +862,12 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     const result = await run(ask(['nutty']), { profile });
     expect(result.usualItemId).toBe('cappucino');
     expect(result.usual?.reasonCode).toBe('usual');
-    expect(result.usual?.flavourAddon?.label).toBe('Hazelnut syrup');
-    expect(result.usual?.reason).toBe('Your usual — toasty nutty notes from Hazelnut syrup, always a good choice.');
-    expect(result.usual?.matchTags).toEqual(['Nutty', 'Cosy']);
+    expect(result.usual?.flavourAddon ?? null).toBeNull();
+    expect(result.usual?.addonPresets ?? []).toEqual([]);
+    expect(result.usual?.plain).toBeUndefined();
+    expect(result.usual?.reason).toMatch(/^Your usual — /);
+    expect(result.usual?.reason).not.toMatch(/Hazelnut|syrup| from /);
+    expect(result.usual?.matchTags).toEqual(['Cosy']); // as the kitchen makes it: not nutty
     expect(result.picks.some((p) => p.menuItemId === 'cappucino')).toBe(false);
 
     const noFlavours = await run(ask([]), { profile });

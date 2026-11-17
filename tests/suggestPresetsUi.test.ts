@@ -11,6 +11,7 @@ import {
   customizeModalProps,
   needsCustomizeModal,
   presetReasonLine,
+  presetView,
   tickedPick,
 } from '@/components/suggest/addonHint';
 import { initialSelection } from '@/lib/menu/customization';
@@ -267,5 +268,157 @@ describe('customizeModalProps with addon presets', () => {
     expect(customizeModalProps(item(), { sugarPreset: sugarNone, addonPresets: [] })).toEqual(
       customizeModalProps(item(), { sugarPreset: sugarNone }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Un-ticking must not leave a false card (presetView, shared by card + modal)
+// ---------------------------------------------------------------------------
+
+const sugarPlain: SugarPreset = { groupId: 'g-sugar', optionId: 'o-normal', label: 'Normal' };
+const tagged = (p: AddonPreset, tag: string): AddonPreset => ({ ...p, tag });
+const hz = tagged(hazelPreset, 'Nutty');
+const sh = tagged(shotPreset, 'Strong');
+const full = (over: Partial<SuggestionPick> = {}) =>
+  pick({
+    reason: 'nutty notes from Hazelnut syrup',
+    matchTags: ['Cosy', 'Nutty', 'Strong'],
+    addonPresets: [hz, sh],
+    sugarPreset: sugarNone,
+    plain: { reason: 'Mellow and silky', sugarPreset: sugarPlain },
+    ...over,
+  });
+
+describe('presetView', () => {
+  const view = (p: SuggestionPick, off: string[] = []) => presetView(item(), p, new Set(off));
+
+  it('everything ticked: pick as sent', () => {
+    const v = view(full());
+    expect(v.tags).toEqual(['Cosy', 'Nutty', 'Strong']);
+    expect(v.reason).toBe('nutty notes from Hazelnut syrup');
+    expect(v.withoutLine).toBeNull();
+    expect(v.sugar).toEqual(sugarNone);
+    expect(v.sugarTicked).toBe(true);
+  });
+
+  it('flavour un-ticked: tag gone, plain reason, Without line, plain sugar', () => {
+    const v = view(full(), ['o-hazelnut']);
+    expect(v.tags).toEqual(['Cosy', 'Strong']);
+    expect(v.reason).toBe('Mellow and silky');
+    expect(v.withoutLine).toBe('Without Hazelnut syrup: not nutty');
+    expect(v.sugar).toEqual(sugarPlain);
+    expect(v.ticked).toEqual([sh]);
+    expect(v.chips).toEqual([hz, sh]);
+  });
+
+  it('strength un-ticked: sugar unchanged, plain reason, "not strong"', () => {
+    const v = view(full(), ['o-vanilla']);
+    expect(v.tags).toEqual(['Cosy', 'Nutty']);
+    expect(v.reason).toBe('Mellow and silky');
+    expect(v.withoutLine).toBe('Without Espresso Shot: not strong');
+    expect(v.sugar).toEqual(sugarNone);
+  });
+
+  it('both un-ticked: one line joined with a middle dot', () => {
+    const v = view(full(), ['o-hazelnut', 'o-vanilla']);
+    expect(v.tags).toEqual(['Cosy']);
+    expect(v.withoutLine).toBe('Without Hazelnut syrup: not nutty · Without Espresso Shot: not strong');
+    expect(v.ticked).toEqual([]);
+  });
+
+  it('without plain: reason stays, sugar stays', () => {
+    const v = view(full({ plain: undefined }), ['o-hazelnut']);
+    expect(v.reason).toBe('nutty notes from Hazelnut syrup');
+    expect(v.sugar).toEqual(sugarNone);
+    expect(v.tags).toEqual(['Cosy', 'Strong']);
+  });
+
+  it('plain.sugarPreset null: no sugar chip after the flavour is un-ticked', () => {
+    const v = view(full({ plain: { reason: 'Plain', sugarPreset: null } }), ['o-hazelnut']);
+    expect(v.sugar).toBeNull();
+    expect(tickedPick(full({ plain: { reason: 'Plain', sugarPreset: null } }), new Set(['o-hazelnut']), item()).sugarPreset).toBeNull();
+    const html = render(full({ plain: { reason: 'Plain', sugarPreset: null } }), ['o-hazelnut']);
+    expect(html).not.toContain('No Sugar');
+  });
+
+  it('customer sugar un-tick wins, keyed by the option shown', () => {
+    expect(view(full(), ['o-nosugar']).sugarTicked).toBe(false);
+    const swapped = view(full(), ['o-hazelnut', 'o-normal']);
+    expect(swapped.sugar).toEqual(sugarPlain);
+    expect(swapped.sugarTicked).toBe(false);
+    // un-ticking the syrup's sugar does not un-tick the plain one
+    expect(view(full(), ['o-hazelnut', 'o-nosugar']).sugarTicked).toBe(true);
+  });
+
+  it('tickedPick agrees with the card in every case', () => {
+    const cases = [[], ['o-hazelnut'], ['o-vanilla'], ['o-hazelnut', 'o-vanilla'], ['o-nosugar'], ['o-hazelnut', 'o-normal']];
+    for (const off of cases) {
+      const v = view(full(), off);
+      const t = tickedPick(full(), new Set(off), item());
+      expect(t.addonPresets).toEqual(v.ticked);
+      expect(t.sugarPreset).toEqual(v.sugarTicked ? v.sugar : null);
+      expect(t.matchTags).toEqual(v.tags);
+      expect(t.reason).toBe(v.reason);
+      const html = text(render(full(), off));
+      expect(html).toContain(v.reason);
+      for (const tag of v.tags) expect(html).toContain(tag);
+      if (v.withoutLine) expect(html).toContain(v.withoutLine);
+      else expect(html).not.toContain('Without ');
+    }
+  });
+});
+
+describe('presets the customise screen would drop', () => {
+  it('missing option: no chip, tag and reason revert, Without line shown', () => {
+    const ghost = tagged({ ...hazelPreset, optionId: 'o-ghost' }, 'Nutty');
+    const p = full({ addonPresets: [ghost] });
+    const html = text(render(p));
+    expect(html).not.toContain('+₹35');
+    expect(html).not.toContain('Hazelnut syrup</button>');
+    expect(html).toContain('Without Hazelnut syrup: not nutty');
+    expect(html).toContain('Mellow and silky');
+    expect(html).not.toContain('Added for the nutty');
+  });
+
+  it('switched-off option behaves the same', () => {
+    const off = tagged({ ...hazelPreset, optionId: 'o-caramel', label: 'Caramel syrup' }, 'Nutty');
+    const v = presetView(item(), full({ addonPresets: [off] }), new Set());
+    expect(v.chips).toEqual([]);
+    expect(v.ticked).toEqual([]);
+    expect(v.withoutLine).toBe('Without Caramel syrup: not nutty');
+    expect(v.sugar).toEqual(sugarPlain);
+  });
+
+  it('over max_select: the extra preset is not shown ticked and not passed on', () => {
+    const wide = item({
+      addon_groups: [
+        sugarGroup,
+        { ...syrupGroup, max_select: 1 },
+      ],
+    });
+    const p = full();
+    const v = presetView(wide, p, new Set());
+    expect(v.ticked).toEqual([hz]);
+    expect(v.chips).toEqual([hz]);
+    expect(v.withoutLine).toBe('Without Espresso Shot: not strong');
+    expect(tickedPick(p, new Set(), wide).addonPresets).toEqual([hz]);
+    const html = renderToStaticMarkup(
+      createElement(SuggestionCard, { item: wide, pick: p, onAddToCart: () => {}, onFeedback: () => {} }),
+    );
+    expect(html).not.toContain('Espresso Shot +');
+    expect(html).toContain('Without Espresso Shot: not strong');
+  });
+
+  it('an invalid sugar preset is not drawn', () => {
+    const v = presetView(item(), pick({ sugarPreset: { ...sugarNone, optionId: 'o-ghost' } }), new Set());
+    expect(v.sugar).toBeNull();
+  });
+});
+
+describe('"Your usual" without presets', () => {
+  it('renders no Made your way row', () => {
+    const html = render(pick({ addonPresets: undefined, sugarPreset: null }), [], true);
+    expect(html).toContain('Your usual');
+    expect(html).not.toContain('Made your way');
   });
 });

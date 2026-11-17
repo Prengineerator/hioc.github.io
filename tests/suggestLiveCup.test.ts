@@ -31,6 +31,7 @@ import {
   type WizardState,
 } from '@/components/suggest/wizardModel';
 import { menuFacets, type FacetOption, type MenuFacet } from '@/lib/suggest/facets';
+import { buttonFor } from './fixtures/buttonFor';
 import { CAPPUCCINO, CAPPUCCINO_TRAITS } from './fixtures/suggestMenu';
 import type { FlavourCounts } from '@/lib/suggest/types';
 
@@ -91,7 +92,10 @@ describe('CoffeyMascot', () => {
   });
 
   it('uses palette utility classes only (no hex colours)', () => {
-    expect(mascot({ temperature: 'iced', coffee: 'smooth', sweetness: 'sweet' })).not.toMatch(/#[0-9a-fA-F]{3,6}/);
+    const html = mascot({ temperature: 'iced', coffee: 'smooth', sweetness: 'sweet' });
+    expect(html).toContain('<svg');
+    expect(count(html, 'ice-cube')).toBe(2); // the look really rendered
+    expect(html).not.toMatch(/#[0-9a-fA-F]{3,6}/);
   });
 });
 
@@ -107,6 +111,7 @@ describe('LiveCup badges', () => {
   });
   it('shows no badges below 72px, and is aria-hidden', () => {
     const html = cup(44, { flavours: ['chocolatey'], bite: 'dessert' });
+    expect(html).toContain('<svg'); // the cup rendered, just without badges
     expect(html).not.toContain('🍫');
     expect(html).not.toContain('🧇');
     expect(html).toContain('aria-hidden="true"');
@@ -277,17 +282,21 @@ describe('step 2 tiles', () => {
 
   it('lists the sweetness chips Sweet first, and the summary follows the choices', () => {
     const html = wants(toggleCoffee(toggleTemperature(state(), 'iced'), 'strong'));
-    expect(html.indexOf('>Sweet<')).toBeLessThan(html.indexOf('>Lightly sweet<'));
-    expect(html.indexOf('>Lightly sweet<')).toBeLessThan(html.indexOf('>Not sweet<'));
+    const at = (label: string) => {
+      const i = html.indexOf(`>${label}</button>`);
+      expect(i, `${label} chip`).toBeGreaterThan(-1);
+      return i;
+    };
+    expect(at('Sweet')).toBeLessThan(at('Lightly sweet'));
+    expect(at('Lightly sweet')).toBeLessThan(at('Not sweet'));
     expect(html).toContain('Iced · Strong coffee');
   });
 
   it('greys a facet-disabled tile', () => {
     const hotOnly = menuFacets([CAPPUCCINO], new Map([[CAPPUCCINO.id, CAPPUCCINO_TRAITS]]));
     const html = wants(state(), hotOnly);
-    const iced = html.match(/<button(?:(?!<button)[\s\S])*?>Iced<\/span><\/button>/);
-    expect(iced?.[0]).toContain('disabled=""');
-    const hot = html.match(/<button(?:(?!<button)[\s\S])*?>Hot<\/span><\/button>/);
-    expect(hot?.[0]).not.toContain('disabled=""');
+    expect(buttonFor(html, 'Iced')).toContain('disabled=""');
+    expect(buttonFor(html, 'Hot')).not.toContain('disabled=""');
+    expect(buttonFor(html, 'No coffee')).toContain('disabled=""'); // the only item is a coffee
   });
 });

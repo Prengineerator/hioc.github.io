@@ -196,13 +196,17 @@ describe('unavailableOptions — made your way', () => {
     });
     const sel = { kinds, options: ['sweet:none'] as FacetOption[] };
     for (const level of [2, 3, 5]) expect(unavailableOptions(sel, [coffee(level)]).has('flavour:caramel'), `level ${level}`).toBe(true);
-    // The guard itself, on the real function: level 2 + 2 > 0 + 3, so no preset at all.
+    // The guard itself, on the real function: level 2 + 2 > 0 + 3, so no preset at all…
     const inputs = inputsForOptions(kinds, ['sweet:none', 'flavour:caramel']);
     const item = makeMenuItem({ id: 'g', name: 'Latte', priceInr: 100, addon_groups: [syrupGroupFor('g')] });
     const at = (level: number) => makeTraitsV2({ menu_item_id: 'g', sweetness_level: level, is_coffee: true });
     expect(madeToOrder(item, at(2), inputs).presets).toEqual([]);
-    expect(madeToOrder(item, at(1), inputs).presets).toHaveLength(1); // 1 + 2 is within the ceiling,
-    expect(unavailableOptions(sel, [coffee(1)]).has('flavour:caramel')).toBe(false); // 3 is still inside the "not sweet" band
+    // …and under "Not sweet" a syrup is sugar: never preselected, even where the ceiling would allow it.
+    expect(madeToOrder(item, at(1), inputs).presets).toEqual([]);
+    expect(unavailableOptions(sel, [coffee(1)]).has('flavour:caramel')).toBe(true);
+    // With a lift-free flavour option it is still available.
+    const noLift: MenuFacet = { ...coffee(1), addons: [{ role: 'flavour', families: ['caramel'], sweetness: 0, intensity: 0, priceInr: 35, group: 0, max: 1 }] };
+    expect(unavailableOptions(sel, [noLift]).has('flavour:caramel')).toBe(false);
   });
 
   it('a budget cap the base price fits but base + add-on does not makes the flavour unavailable', () => {

@@ -12,6 +12,8 @@ import {
   buildInputs,
   initialState,
   disabledOptions,
+  disabledOptionsForKey,
+  selectionKey,
   missLabel,
   moreOptionsSummary,
   selectedOptions,
@@ -30,6 +32,7 @@ import {
   unmetLine,
   type WizardState,
 } from '@/components/suggest/wizardModel';
+import { buttonFor } from './fixtures/buttonFor';
 import { menuFacets } from '@/lib/suggest/facets';
 import { validateSuggestInputs } from '@/lib/suggest/validate';
 import { FLAVOUR_FAMILIES, FLAVOUR_OFFER_MIN, MOODS } from '@/lib/suggest/types';
@@ -161,7 +164,12 @@ describe('offeredFlavours', () => {
     expect(offeredFlavours(['dessert'], COUNTS)).toEqual(['chocolatey', 'biscuit']);
     // caramel 2 + 1, floral 2, nutty 1 + 0: caramel now qualifies.
     expect(offeredFlavours(['drink', 'dessert'], COUNTS)).toEqual(['chocolatey', 'caramel', 'biscuit', 'fruity']);
-    expect(offeredFlavours(['drink', 'dessert', 'food'], COUNTS)).toEqual(['chocolatey', 'caramel', 'biscuit', 'fruity']);
+    expect(offeredFlavours(['drink', 'dessert', 'food'], COUNTS)).toEqual([
+      'chocolatey',
+      'caramel',
+      'biscuit',
+      'fruity',
+    ]);
   });
 
   it('offers none for savoury only, and all seven with null counts (except savoury only)', () => {
@@ -180,7 +188,13 @@ describe('recapLabels', () => {
     s = toggleCoffee(s, 'strong');
     s = toggleSweetness(s, 'none');
     s = toggleFlavour(s, 'chocolatey');
-    expect(recapLabels(s, COUNTS)).toEqual(['Tired — need a boost', 'Iced', 'Strong coffee', 'Not sweet', 'Chocolatey']);
+    expect(recapLabels(s, COUNTS)).toEqual([
+      'Tired — need a boost',
+      'Iced',
+      'Strong coffee',
+      'Not sweet',
+      'Chocolatey',
+    ]);
   });
 
   it('names the kinds only when they are not just a drink, and drops hidden groups', () => {
@@ -277,6 +291,32 @@ describe('disabledOptions / selectedOptions', () => {
     expect(selectedOptions(s, null)).toEqual(['sweet:none', 'flavour:fruity']);
     expect(selectedOptions(toggleKind(s, 'dessert'), COUNTS)).toEqual(['sweet:none']);
   });
+  it('selectedOptions and the greying key ignore everything the greying does not depend on', () => {
+    let s = toggleTemperature(toggleCoffee(state(), 'strong'), 'iced');
+    s = toggleFlavour(s, 'chocolatey');
+    expect(selectedOptions(s, COUNTS).length).toBeGreaterThan(0);
+    const base = selectionKey(s, COUNTS);
+    const same: WizardState[] = [
+      { ...s, note: 'studying late' },
+      { ...s, mood: 'cool' },
+      { ...s, touched: { kinds: true, temperature: true } },
+      { ...s, appliedMoods: ['cool', 'boost'] },
+      { ...s, kinds: ['drink'] },
+    ];
+    for (const other of same) {
+      expect(selectedOptions(other, COUNTS)).toEqual(selectedOptions(s, COUNTS));
+      expect(selectionKey(other, COUNTS)).toEqual(base);
+    }
+    // And it does move for what the greying does depend on.
+    expect(selectionKey(toggleSweetness(s, 'none'), COUNTS)).not.toEqual(base);
+    expect(selectionKey(toggleKind(s, 'dessert'), COUNTS)).not.toEqual(base);
+    expect(selectionKey(toggleBudget(s, 'under_100'), COUNTS)).not.toEqual(base);
+  });
+  it('the key gives the same answer as disabledOptions', () => {
+    const s = toggleTemperature(state(), 'hot');
+    expect([...disabledOptionsForKey(selectionKey(s), facets)].sort()).toEqual([...disabledOptions(s, facets)].sort());
+    expect(disabledOptionsForKey(selectionKey(s), null).size).toBe(0);
+  });
   it('disables what the facets rule out and never a selected chip', () => {
     const off = disabledOptions(state(), facets);
     expect(off.has('temp:hot')).toBe(false);
@@ -352,12 +392,6 @@ describe('relaxState', () => {
   });
 });
 
-// The markup of the one button whose label span reads exactly `label`.
-function buttonFor(html: string, label: string): string {
-  const m = html.match(new RegExp(`<button(?:(?!<button)[\\s\\S])*?>${label}</span></button>`));
-  return m ? m[0] : '';
-}
-
 describe('step render smoke test', () => {
   const noop = () => {};
   const ref = { current: null };
@@ -397,6 +431,7 @@ describe('step render smoke test', () => {
 
   it('hides drink-only groups without a drink and the flavour group without any family', () => {
     const noDrink = wants(toggleKind(toggleKind(state(), 'food'), 'drink'), COUNTS);
+    expect(noDrink).toContain('What would you like?'); // it rendered
     expect(noDrink).not.toContain('Hot or iced?');
     expect(noDrink).not.toContain('Coffee?');
     expect(noDrink).not.toContain('Any flavour you fancy?');

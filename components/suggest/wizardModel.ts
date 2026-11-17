@@ -389,14 +389,38 @@ export function selectedOptions(state: WizardState, flavourCounts: FlavourCounts
   return FACET_OPTIONS.filter((o) => out.includes(o));
 }
 
+/** What the greying depends on, as two stable strings (the ticked kinds and the
+ * selected options): equal keys mean equal answers, so a memo keyed on them is not
+ * recomputed by typing in the note or anything else the greying ignores. */
+export function selectionKey(
+  state: WizardState,
+  flavourCounts: FlavourCounts | null = null,
+): { kinds: string; options: string } {
+  return { kinds: state.kinds.join(','), options: selectedOptions(state, flavourCounts).join(',') };
+}
+
+/** Options no pick can satisfy for a selection key (see selectionKey). Empty without facets. */
+export function disabledOptionsForKey(
+  key: { kinds: string; options: string },
+  facets: readonly MenuFacet[] | null,
+): Set<FacetOption> {
+  if (facets === null) return new Set();
+  return unavailableOptions(
+    {
+      kinds: key.kinds === '' ? [] : (key.kinds.split(',') as TraitKind[]),
+      options: key.options === '' ? [] : (key.options.split(',') as FacetOption[]),
+    },
+    facets,
+  );
+}
+
 /** Options no pick can satisfy together with the current choices. Empty without facets. */
 export function disabledOptions(
   state: WizardState,
   facets: readonly MenuFacet[] | null,
   flavourCounts: FlavourCounts | null = null,
 ): Set<FacetOption> {
-  if (facets === null) return new Set();
-  return unavailableOptions({ kinds: state.kinds, options: selectedOptions(state, flavourCounts) }, facets);
+  return disabledOptionsForKey(selectionKey(state, flavourCounts), facets);
 }
 
 /** Is anything inside "More options" set? */

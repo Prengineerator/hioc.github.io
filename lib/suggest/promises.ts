@@ -247,10 +247,19 @@ export function keepsChoice(choice: HonouredChoice, subject: ChoiceSubject, inpu
     }
     case 'sweetness': {
       if (inputs.sweetness === 'any') return null;
-      const base = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + (made?.sweetnessLift ?? 0));
-      const level = deliveredSweetness(base, subject.sugarAdjustable, sweetnessTarget(inputs.sweetness));
       const band = SWEETNESS_BANDS[inputs.sweetness];
-      return level >= band.min && level <= band.max ? 'own' : false;
+      const target = sweetnessTarget(inputs.sweetness);
+      const inBand = (lift: number) => {
+        const base = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + lift);
+        const level = deliveredSweetness(base, subject.sugarAdjustable, target);
+        return level >= band.min && level <= band.max;
+      };
+      const lift = made?.sweetnessLift ?? 0;
+      // What the customer gets is the item WITH its preselected add-ons: outside
+      // the band then is a miss. Inside it only because of the lift is kept
+      // through the add-on ('made'), not by the item itself.
+      if (!inBand(lift)) return false;
+      return lift > 0 && !inBand(0) ? 'made' : 'own';
     }
     case 'body':
       return traits.body === inputs.body ? 'own' : false;

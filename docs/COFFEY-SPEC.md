@@ -368,6 +368,8 @@ The result depends on the time of day, and "after" wins at every clock tried:
 
 Where this section and §1, §4.2–§4.6 disagree, this section wins. Nothing here changes the request contract (§2), the hard filter (§4.1), the score weights (§4.2), the traits (§3) or any table.
 
+**Changed again by §11, which wins where they differ:** the kind labels, the tiles and the sweetness glass (§10.1 → §11.4); "a flavour only an add-on supplies does not count" and what `FLAVOUR_OFFER_MIN` counts (§10.1, §10.2 → §11.1, §11.3); the add-on tip line and `flavourAddon` (§10.3 → §11.2); the response fields (§10.4 → §11.2); how the greyed chips are worked out (§10.1 → §11.3); and the numbers (§10.5 → §11.6).
+
 ### 10.0 Why: what the live data showed
 
 Read-only look at production (`suggestion_sessions`, `suggestion_events`, 26 Sep – 1 Nov) and Vercel page views (19 Oct – 17 Nov). The sample is small and part of it is the team testing, so read these as direction, not as rates.
@@ -487,7 +489,10 @@ The two never use the same option, never exceed a group's `max_select` between t
 - **The card.** The pick's name carries its ticked add-ons ("Cappucino + Hazelnut syrup"). A "Made your way" row shows one tickable chip per preselected option (add-ons with their price, the sugar preset by its name) and a line saying why ("Added for the nutty flavour.", "An extra shot makes it strong."). Un-ticking a chip takes it out.
 - **Adding.** A pick with a ticked add-on never takes the one-tap path: it opens the customise screen with the ticked options already chosen (`lib/menu/customization.ts` `vetPresets`: the option must exist, be switched on and fit the group's limit; anything else is dropped, never added blind), a "Coffey's pick" mark on each, a one-sentence note naming what Coffey set with prices, and the total including them from the first paint.
 - **This reverses two earlier rules on purpose.** COFFEY-ADDONS-PAIRINGS-SPEC §2.4 said an add-on is highlighted, never preselected, and §1.1 said the tip shows no price. An option that is preselected must show its price everywhere it appears, and it does: on the card chip, in the note and in the total. Reasons still never talk about spending (§6.2).
-- **Tags.** A flavour or "Strong" kept through an add-on gets its normal tag; there is no "add-on" wording in tags. `SuggestionPick.addonPresets` carries the options; the older `flavourAddon` is now set only when it is the preselected one.
+- **Tags.** A flavour or "Strong" kept through an add-on gets its normal tag; there is no "add-on" wording in tags. `SuggestionPick.addonPresets` carries the options; the older `flavourAddon` is now set only when it is the preselected one, and the "Coffey tip" line shows only for a pick that has that older field and no presets.
+- **Un-ticking stays truthful.** Each preset names the tag it earns (`AddonPreset.tag`), and a pick with presets carries its plain version (`SuggestionPick.plain`: the reason as the kitchen makes it, and the sugar option chosen for the item's own sweetness). When the customer un-ticks an add-on, the card drops that tag, switches to the plain reason, says "Without Hazelnut syrup: not nutty", and, for a flavour add-on, switches the sugar option to the plain one, because the first was chosen with the syrup's sweetness in it. The card and the customise screen use one derivation. A preset the customise screen would refuse (missing, switched off, over the group's limit) is never shown as ticked.
+- **Never on "Your usual".** The usual is the customer's own habit: it is shown as the kitchen makes it, with no add-on preset, whatever was asked.
+- **Never a sweetener for "Not sweet".** With "Not sweet" chosen, an add-on that adds any sweetness (a syrup, a sauce) is not reachable, even where the total would stay under the ceiling. An add-on with no lift (a sparkling-water serve) still is.
 
 ### 11.3 No dead ends, exactly (`lib/suggest/facets.ts`)
 
@@ -504,7 +509,7 @@ With add-ons the choices interact (a syrup adds sweetness, an add-on adds to the
 
 ### 11.5 A guard on one tagging mistake (`lib/suggest/traitsGuard.ts`)
 
-A drink whose own name says "Iced" is treated as iced whatever its traits row says, corrected once where items meet traits (`runSuggest`, `menuFacets`). On the live menu "Tiramisu Latte Iced" is tagged `hot` (and the hot "Tiramisu Latte" has no row at all), so it was offered for hot requests. The row still needs fixing by the owner; the guard only stops a customer seeing the contradiction.
+A drink whose row says `hot` under a name that says "Iced" (and not also "Hot") is treated as iced, corrected once where items meet traits (`runSuggest`, `menuFacets`). Only that exact contradiction: a drink tagged `either` is served both ways and stays available for a hot request. On the live menu "Tiramisu Latte Iced" is tagged `hot` (and the hot "Tiramisu Latte" has no row at all), so it was offered for hot requests. The row still needs fixing by the owner; the guard only stops a customer seeing the contradiction.
 
 ### 11.6 Measured (2026-11-17)
 

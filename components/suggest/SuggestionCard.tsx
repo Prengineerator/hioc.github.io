@@ -3,7 +3,7 @@
 // One suggestion (a pick, or the "Your usual" card — same shape, §3.2 step 3).
 
 import { MenuItemImage } from '@/components/menu/MenuItemImage';
-import { coffeyTip, presetReasonLine } from '@/components/suggest/addonHint';
+import { coffeyTip, presetReasonLine, presetView } from '@/components/suggest/addonHint';
 import { buttonVariants } from '@/components/ui/Button';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { isSoldByWeight } from '@/lib/menu/weight';
@@ -66,6 +66,7 @@ export function SuggestionCard({
   feedback,
   untickedOptionIds = NO_ONE,
   onTogglePreset,
+  vettingItem,
   onAddToCart,
   onFeedback,
 }: {
@@ -78,13 +79,17 @@ export function SuggestionCard({
   /** Option ids of presets the customer un-ticked; everything else is ticked. */
   untickedOptionIds?: ReadonlySet<string>;
   onTogglePreset?: (optionId: string) => void;
+  /** Override for the item presets are vetted against (defaults to `item`). */
+  vettingItem?: MenuItem;
   onAddToCart: () => void;
   onFeedback: (direction: 'up' | 'down') => void;
 }) {
   const available = isMenuItemAvailable(item);
-  const addonPresets = pick.addonPresets ?? [];
-  const tickedAddons = addonPresets.filter((p) => !untickedOptionIds.has(p.optionId));
-  const sugarPreset = pick.sugarPreset ?? null;
+  // One derivation shared with the customise screen (addonHint.presetView).
+  const view = presetView(vettingItem ?? item, pick, untickedOptionIds);
+  const addonPresets = view.chips;
+  const tickedAddons = view.ticked;
+  const sugarPreset = view.sugar;
   const showPresets = addonPresets.length > 0 || sugarPreset !== null;
   const reasonLine = presetReasonLine(tickedAddons);
   const toggle = (optionId: string) => onTogglePreset?.(optionId);
@@ -123,15 +128,15 @@ export function SuggestionCard({
         </div>
         <span className="shrink-0 font-mono font-bold tabular-nums text-tan-dark">{priceLabel(item)}</span>
       </div>
-      <p className="mt-1 text-sm text-muted">{pick.reason}</p>
+      <p className="mt-1 text-sm text-muted">{view.reason}</p>
       {/* "Why it matches" (COFFEY-SPEC §4.6): up to three short labels from the
           engine's fixed vocabulary. Charcoal on surface (well past AA), with a
           tan dot as decoration — never white on tan. role="list" because
           Tailwind's reset removes the bullets, and Safari then drops the list
           semantics along with them. */}
-      {pick.matchTags && pick.matchTags.length > 0 ? (
+      {view.tags.length > 0 ? (
         <ul role="list" aria-label="Why it matches" className="mt-2 flex flex-wrap gap-1.5">
-          {pick.matchTags.map((tag) => (
+          {view.tags.map((tag) => (
             <li
               key={tag}
               className="inline-flex items-center gap-1.5 rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-charcoal"
@@ -142,6 +147,7 @@ export function SuggestionCard({
           ))}
         </ul>
       ) : null}
+      {view.withoutLine ? <p className="mt-2 text-xs text-muted">{view.withoutLine}</p> : null}
       {missLabel && !isUsual ? <p className="mt-2 text-xs text-muted">{missLabel}</p> : null}
       {/* A flavour reached through an add-on (COFFEY-ADDONS-PAIRINGS-SPEC §1.1):
           one quiet line, no price — Coffey never talks about spending. Tapping
@@ -158,14 +164,14 @@ export function SuggestionCard({
                 key={p.optionId}
                 label={p.label}
                 priceInr={p.priceInr}
-                on={!untickedOptionIds.has(p.optionId)}
+                on={tickedAddons.includes(p)}
                 onToggle={() => toggle(p.optionId)}
               />
             ))}
             {sugarPreset ? (
               <PresetChip
                 label={sugarPreset.label}
-                on={!untickedOptionIds.has(sugarPreset.optionId)}
+                on={view.sugarTicked}
                 onToggle={() => toggle(sugarPreset.optionId)}
               />
             ) : null}
@@ -173,7 +179,7 @@ export function SuggestionCard({
           {reasonLine ? <p className="mt-1.5 text-xs text-muted">{reasonLine}</p> : null}
         </div>
       ) : null}
-      {pick.flavourAddon && addonPresets.length === 0 ? <p className="mt-2 text-xs text-muted">{coffeyTip(pick.flavourAddon)}</p> : null}
+      {pick.flavourAddon && !pick.addonPresets?.length ? <p className="mt-2 text-xs text-muted">{coffeyTip(pick.flavourAddon)}</p> : null}
       {!available ? (
         <p className="mt-2 text-sm font-medium text-muted">Currently unavailable</p>
       ) : null}

@@ -94,20 +94,101 @@ export function presetReasonLine(presets: AddonPreset[]): string {
   return sentences.join(' ');
 }
 
+/** What a pick looks like on the card, and what the customise screen gets. */
+export interface PresetView {
+  /** Add-on chips to draw (valid on the item), ticked or not. */
+  chips: AddonPreset[];
+  /** Add-ons that are ticked AND survive vetting: the ones that go in the cart. */
+  ticked: AddonPreset[];
+  /** The sugar chip to draw (null: none) and whether it is ticked. */
+  sugar: SugarPreset | null;
+  sugarTicked: boolean;
+  tags: string[];
+  reason: string;
+  /** "Without Hazelnut syrup: not nutty", or null. */
+  withoutLine: string | null;
+}
+
+const single = (p: { groupId: string; optionId: string }) => ({ [p.groupId]: [p.optionId] });
+
 /**
- * The pick as it stands after the customer's un-ticking on the card:
- * un-ticked add-ons and an un-ticked sugar option are removed, so everything
- * downstream (needsCustomizeModal, the modal props) sees only what is ticked.
- * When the pick has add-on presets the older `flavourAddon` is nulled (it is a
- * fallback for picks without them); otherwise the pick is returned as it was.
+ * The ONE derivation behind both the card and the customise screen
+ * (`tickedPick` wraps it), so they can never disagree.
+ *  - Presets the customise screen would drop (missing option, switched off, over
+ *    a group's limit: `vetPresets`) are never shown as ticked; they count as
+ *    un-ticked for tags, reason and the "Without…" line but get no chip.
+ *  - Un-ticked or dropped add-ons remove their tag, revert the reason to
+ *    `pick.plain.reason`, and add a "Without X: not Y" line.
+ *  - When a flavour add-on is not in, the sugar option becomes
+ *    `pick.plain.sugarPreset` (chosen for the item's own sweetness).
+ *  - The customer's own un-tick of the sugar chip wins, keyed by the option id
+ *    shown. `item` may be omitted (no vetting).
  */
-export function tickedPick(pick: SuggestionPick, unticked: ReadonlySet<string>): SuggestionPick {
+export function presetView(
+  item: Pick<MenuItem, 'addon_groups'> | undefined,
+  pick: SuggestionPick,
+  unticked: ReadonlySet<string>,
+): PresetView {
+  const all = pick.addonPresets ?? [];
+  const valid = item ? all.filter((p) => Object.keys(vetPresets(item, single(p))).length > 0) : all;
+  const wanted = valid.filter((p) => !unticked.has(p.optionId));
+  const flavourOff = all.some((p) => p.purpose === 'flavour' && !wanted.includes(p));
+  const candidate = flavourOff && pick.plain ? pick.plain.sugarPreset : (pick.sugarPreset ?? null);
+
+  let ticked = wanted;
+  let sugar = candidate;
+  if (item) {
+    const requested: Record<string, string[]> = {};
+    const ask = (p: { groupId: string; optionId: string }) => {
+      requested[p.groupId] = [...(requested[p.groupId] ?? []), p.optionId];
+    };
+    if (candidate) ask(candidate);
+    wanted.forEach(ask);
+    const vetted = vetPresets(item, requested);
+    const has = (p: { groupId: string; optionId: string }) => vetted[p.groupId]?.includes(p.optionId) ?? false;
+    ticked = wanted.filter(has);
+    sugar = candidate && has(candidate) ? candidate : null;
+  }
+  const chips = valid.filter((p) => !wanted.includes(p) || ticked.includes(p));
+  const off = all.filter((p) => !ticked.includes(p));
+  const offTags = new Set(off.map((p) => p.tag).filter((t): t is string => !!t));
+  const lines = off
+    .filter((p) => p.tag)
+    .map((p) => {
+      const what =
+        p.purpose === 'strength' ? 'strong' : p.family ? FLAVOUR_FAMILY_INFO[p.family].label.toLowerCase() : p.tag!.toLowerCase();
+      return `Without ${p.label}: not ${what}`;
+    });
+  return {
+    chips,
+    ticked,
+    sugar,
+    sugarTicked: sugar !== null && !unticked.has(sugar.optionId),
+    tags: (pick.matchTags ?? []).filter((t) => !offTags.has(t)),
+    reason: off.length > 0 && pick.plain ? pick.plain.reason : pick.reason,
+    withoutLine: lines.length > 0 ? lines.join(' · ') : null,
+  };
+}
+
+/**
+ * The pick as the customise screen should see it: exactly `presetView`'s
+ * ticked add-ons and sugar. When the pick has add-on presets the older
+ * `flavourAddon` is nulled (it is a fallback for picks without them).
+ */
+export function tickedPick(
+  pick: SuggestionPick,
+  unticked: ReadonlySet<string>,
+  item?: Pick<MenuItem, 'addon_groups'>,
+): SuggestionPick {
+  const view = presetView(item, pick, unticked);
   const hasPresets = !!pick.addonPresets?.length;
   return {
     ...pick,
-    addonPresets: hasPresets ? pick.addonPresets!.filter((p) => !unticked.has(p.optionId)) : pick.addonPresets,
-    sugarPreset: pick.sugarPreset && !unticked.has(pick.sugarPreset.optionId) ? pick.sugarPreset : null,
+    addonPresets: hasPresets ? view.ticked : pick.addonPresets,
+    sugarPreset: view.sugarTicked ? view.sugar : null,
     flavourAddon: hasPresets ? null : pick.flavourAddon,
+    matchTags: pick.matchTags ? view.tags : pick.matchTags,
+    reason: view.reason,
   };
 }
 
