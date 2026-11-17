@@ -34,7 +34,7 @@ Each finding has an Impact (H/M/L), an Effort (S/M/L) and a status: `fixed`, `pr
 
 ## What to decide
 
-1. **Apply `supabase/2026-11-coffey-preset-events.sql`** so the "Add-ons Coffey preselects" card starts counting (spec §11.7). Until then it shows zeros.
+1. **Nothing to apply:** `supabase/2026-11-coffey-preset-events.sql` was applied to the live database on 2026-11-17, so the "Add-ons Coffey preselects" card starts counting as soon as this code is deployed (spec §11.7).
 2. **CUS-UX-11:** whether to add step tracking (a small new table).
 3. **Data:** "Tiramisu Latte Iced" had its temperature corrected on 2026-11-17; regenerate the rest of its row, and generate traits for the eight items that have none (listed in `docs/COFFEY-SPEC.md` §10.6 and §11.9).
 4. **Preselecting a paid add-on** is a default the owner asked for. It is always priced and one tap to remove; the new card shows how often customers remove it, and `docs/COFFEY-SPEC.md` §11.9 says what to do if most do.
