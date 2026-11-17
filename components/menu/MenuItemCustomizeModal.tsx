@@ -3,11 +3,14 @@
 import { useMemo, useState } from 'react';
 import { useCart } from '@/lib/cart/CartContext';
 import {
+  coffeyStripEntries,
   flattenAddons,
   initialSelection,
   invalidGroups,
+  preselectedSuggestions,
   suggestedOptionIds,
   toggleOption,
+  visibleHints,
 } from '@/lib/menu/customization';
 import { basePriceInr, DEFAULT_WEIGHT_GRAMS, isSoldByWeight } from '@/lib/menu/weight';
 import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
@@ -53,7 +56,14 @@ export function MenuItemCustomizeModal({
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
-  const hints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+  // What Coffey chose for the customer on open (suggested AND selected; the older
+  // highlight-only flavour tip isn't "set up", so it keeps its hint and no strip).
+  // Read once, like `presets`.
+  const [coffeyOptions] = useState(() => preselectedSuggestions(suggestedOptions, initialSelection(item, presets)));
+  const stripShown = coffeyStripEntries(item, coffeyOptions, selected).length > 0;
+  const allHints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+  // The strip says it all, so it replaces the sentence.
+  const hints = visibleHints(allHints, stripShown);
 
   const suggestedIds = useMemo(() => suggestedOptionIds(item, suggestedOptions), [item, suggestedOptions]);
 
@@ -138,6 +148,7 @@ export function MenuItemCustomizeModal({
         instructions={instructions}
         onInstructionsChange={setInstructions}
         suggestedOptionIds={suggestedIds}
+        coffeyOptions={coffeyOptions}
         weightGrams={weightGrams}
         onWeightChange={byWeight ? setWeightGrams : undefined}
       />

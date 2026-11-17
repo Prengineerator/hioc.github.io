@@ -2,6 +2,7 @@
 
 import { useId, useState } from 'react';
 import {
+  coffeyStripEntries,
   compactHint,
   isRequired,
   MAX_INSTRUCTIONS_LEN,
@@ -38,6 +39,7 @@ export function ItemCustomizer({
   onInstructionsChange,
   size = 'default',
   suggestedOptionIds,
+  coffeyOptions,
   weightGrams = null,
   onWeightChange,
 }: {
@@ -58,6 +60,11 @@ export function ItemCustomizer({
    * lib/menu/customization suggestedOptionIds). Highlight only: nothing about
    * the selection changes. Omitted by the POS and the menu page. */
   suggestedOptionIds?: ReadonlySet<string>;
+  /** What Coffey preselected (group id → option ids; the modal passes its
+   * `suggestedOptions` narrowed to what was chosen on open). Draws the "Coffey
+   * set this up for you" strip above the options. Omitted by the POS, the menu
+   * page and the table menu: the screen is then exactly as it always was. */
+  coffeyOptions?: Record<string, string[]>;
 }) {
   const requiredGroups = item.addon_groups.filter(isRequired);
   const optionalGroups = item.addon_groups.filter((g) => !isRequired(g));
@@ -68,7 +75,9 @@ export function ItemCustomizer({
   const hasRequiredSection = showSize || byWeight || requiredGroups.length > 0;
   const hasOptionalSection = optionalGroups.length > 0;
 
-  return (
+  const stripEntries = coffeyStripEntries(item, coffeyOptions, selection);
+
+  const body = (
     <div className="divide-y divide-line">
       {hasRequiredSection ? (
         <section className="py-2 first:pt-0">
@@ -121,6 +130,103 @@ export function ItemCustomizer({
         <InstructionsField value={instructions} onChange={onInstructionsChange} />
       </div>
     </div>
+  );
+
+  if (stripEntries.length === 0) return body;
+  return (
+    <div>
+      <CoffeyStrip entries={stripEntries} selection={selection} onToggle={onToggle} />
+      {body}
+    </div>
+  );
+}
+
+/**
+ * "Coffey set this up for you": the options Coffey preselected, gathered above
+ * the (long) option groups so they can be seen and changed in one place. Each
+ * chip calls the SAME onToggle as the option's own chip in its group, so
+ * min/max/single-select rules live in one place (toggleOption) and the two
+ * always agree; `on` is read from the form's selection.
+ *  - An optional add-on: ticked (✓) when on, dashed outline when off.
+ *  - A required choice (sugar) can't be off: pressed while it is the chosen
+ *    option, unpressed when another is chosen below, and tapping selects it.
+ * State is never colour alone (tick / dashed outline) and every chip is a real
+ * button with aria-pressed.
+ */
+function CoffeyStrip({
+  entries,
+  selection,
+  onToggle,
+}: {
+  entries: ReturnType<typeof coffeyStripEntries>;
+  selection: Record<string, string[]>;
+  onToggle: (group: AddonGroup, optionId: string) => void;
+}) {
+  const headingId = useId();
+  const removable = entries.some((e) => !e.required);
+  return (
+    <div role="group" aria-labelledby={headingId} className="mb-3 rounded-lg border border-line bg-surface p-3">
+      <p id={headingId} className="mb-2 text-sm font-semibold text-charcoal">
+        Coffey set this up for you
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {entries.map((e) => (
+          <StripChip
+            key={e.option.id}
+            entry={e}
+            // Same rule as the option's own chip below: a full multi-select
+            // group can't take another.
+            atMax={e.group.selection_type === 'multi' && !e.on && (selection[e.group.id] ?? []).length >= e.group.max_select}
+            onToggle={onToggle}
+          />
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        {removable ? 'Tap to remove. Everything else is below, as usual.' : 'You can change it below.'}
+      </p>
+    </div>
+  );
+}
+
+/** A required group's name as a chip prefix: "Choice of Sugar" reads "Sugar". */
+function shortGroupName(displayName: string | null | undefined): string {
+  const short = (displayName ?? '').replace(/^\s*(?:choice of|choose(?: your)?|select(?: your)?)\s+/i, '').trim();
+  return short || 'Sugar';
+}
+
+function StripChip({
+  entry,
+  atMax,
+  onToggle,
+}: {
+  entry: ReturnType<typeof coffeyStripEntries>[number];
+  atMax: boolean;
+  onToggle: (group: AddonGroup, optionId: string) => void;
+}) {
+  const { group, option, label, priceInr, required, on } = entry;
+  return (
+    <button
+      type="button"
+      disabled={atMax}
+      aria-pressed={on}
+      onClick={() => onToggle(group, option.id)}
+      className={[
+        atMax ? 'cursor-not-allowed opacity-40' : '',
+        'inline-flex min-h-[44px] items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-medium transition-colors',
+        'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan',
+        on
+          ? 'border border-tan bg-tan-dark text-cream'
+          : 'border border-dashed border-muted text-charcoal hover:border-tan hover:text-tan-dark',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      {on ? <span aria-hidden="true">✓</span> : null}
+      <span>{required ? `${shortGroupName(group.display_name)}: ${label}` : label}</span>
+      {!required && priceInr > 0 ? (
+        <span className={'font-mono tabular-nums ' + (on ? 'text-cream/80' : 'text-muted')}>+₹{priceInr}</span>
+      ) : null}
+    </button>
   );
 }
 

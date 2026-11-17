@@ -5,7 +5,8 @@
 // the header comment on PosCustomizeModal.tsx for why that matters.
 
 import type { CartAddonSelection } from '@/lib/cart/CartContext';
-import type { AddonGroup, MenuItem } from '@/lib/types';
+import { addonLabel } from '@/lib/suggest/addonTraits';
+import type { AddonGroup, AddonOption, MenuItem } from '@/lib/types';
 
 // Mirrors app/api/orders/route.ts MAX_INSTRUCTION_LENGTH.
 export const MAX_INSTRUCTIONS_LEN = 200;
@@ -236,4 +237,72 @@ export function invalidGroups(item: MenuItem, selection: Record<string, string[]
     const count = (selection[group.id] ?? []).length;
     return count < group.min_select || count > group.max_select;
   });
+}
+
+/** One option Coffey set up, as the "Coffey set this up for you" strip shows it. */
+export interface CoffeyStripEntry {
+  group: AddonGroup;
+  option: AddonOption;
+  /** addonLabel(): "Hazelnut" in a syrup group reads "Hazelnut syrup". */
+  label: string;
+  priceInr: number;
+  /** The option's group must have a choice, so the chip can be switched
+   * between options but never off (the sugar level). */
+  required: boolean;
+  /** Currently selected in the form. */
+  on: boolean;
+}
+
+/**
+ * The suggested options that were actually CHOSEN when the screen opened: the
+ * ones Coffey preselected, as opposed to the older "highlight only" flavour tip
+ * (suggested but not chosen). `opened` is the selection the form started with.
+ */
+export function preselectedSuggestions(
+  suggested: Record<string, string[]> | undefined,
+  opened: Record<string, string[]>,
+): Record<string, string[]> | undefined {
+  if (!suggested) return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [groupId, ids] of Object.entries(suggested)) {
+    const kept = ids.filter((id) => opened[groupId]?.includes(id));
+    if (kept.length > 0) out[groupId] = kept;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * The strip's entries: every suggested option that exists on the item (and is
+ * switched on), optional add-ons first, then required choices (sugar), each in
+ * the item's own order. Pure; `on` follows `selection`. Nothing suggested, or
+ * nothing that exists on the item: [] (the screen draws no strip).
+ */
+export function coffeyStripEntries(
+  item: Pick<MenuItem, 'addon_groups'>,
+  suggested: Record<string, string[]> | undefined,
+  selection: Record<string, string[]>,
+): CoffeyStripEntry[] {
+  if (!suggested) return [];
+  const entries: CoffeyStripEntry[] = [];
+  for (const group of item.addon_groups) {
+    const wanted = suggested[group.id];
+    if (!wanted || wanted.length === 0) continue;
+    for (const option of group.options) {
+      if (option.is_available === false || !wanted.includes(option.id)) continue;
+      entries.push({
+        group,
+        option,
+        label: addonLabel(group, option),
+        priceInr: option.price_inr,
+        required: isRequired(group),
+        on: (selection[group.id] ?? []).includes(option.id),
+      });
+    }
+  }
+  return [...entries.filter((e) => !e.required), ...entries.filter((e) => e.required)];
+}
+
+/** Hint lines the modal shows: the strip replaces them when it is drawn. */
+export function visibleHints(hints: string[], stripShown: boolean): string[] {
+  return stripShown ? [] : hints;
 }
