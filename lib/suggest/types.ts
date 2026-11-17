@@ -335,6 +335,26 @@ export interface SuggestionPick {
    * on its card so a "closest we have" pick never passes for a match. Empty or
    * absent when it keeps them all. */
   misses?: HonouredChoice[];
+  /** The add-ons that make this pick keep a choice it would not keep as the
+   * kitchen makes it (COFFEY-SPEC §11): "Cappucino + Hazelnut syrup" for a hot
+   * nutty coffee. Shown on the card with their prices and PRESELECTED in the
+   * customise modal, where one tap removes them. Empty or absent when the item
+   * needs none. */
+  addonPresets?: AddonPreset[];
+}
+
+/** One add-on Coffey preselects to make an item keep a choice (§11). */
+export interface AddonPreset {
+  groupId: string;
+  optionId: string;
+  /** Customer-facing, e.g. "Hazelnut syrup", "Espresso Shot". */
+  label: string;
+  priceInr: number;
+  /** Which choice it is there for: a flavour the item lacks, or "Strong coffee"
+   * on a coffee one shot short of it. */
+  purpose: 'flavour' | 'strength';
+  /** The flavour family it supplies (purpose 'flavour' only). */
+  family?: FlavourFamily;
 }
 
 export interface SugarPreset {
@@ -463,6 +483,9 @@ export interface FlavourAddonSuggestion {
 export const ADDON_SUGGEST_LIMITS = {
   /** Options dearer than this are never pointed to. */
   maxPriceInr: 60,
+  /** At most this many add-ons are ever preselected on one pick (§11): one for
+   * a flavour and one for strength. */
+  maxPresets: 2,
   /** The flavour sub-fit for a family reached through an add-on (native = 1).
    * 0 on purpose: the add-on is a TIP on a pick, not a ranking boost. Measured
    * on the live menu (2026-10-10, 360 picks over mood × flavour × sweetness ×
