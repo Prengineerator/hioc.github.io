@@ -185,15 +185,13 @@ describe('createWizardStepReporter', () => {
     expect(sent.map((s) => s.body.anonId)).toEqual([stored, stored, stored]);
   });
 
-  it('keeps one guest id for the whole visit even when storage is blocked', async () => {
+  it('keeps one guest id for the whole visit even when storage is blocked — the one a request for picks carries', async () => {
     vi.stubGlobal('window', {
       get localStorage(): never {
         throw new Error('storage is blocked');
       },
     });
     const api = await freshApi();
-    // The ground this stands on: with storage blocked, every getAnonId() call is a new id.
-    expect(api.getAnonId()).not.toBe(api.getAnonId());
 
     const steps = api.createWizardStepReporter();
     steps.opened();
@@ -203,6 +201,27 @@ describe('createWizardStepReporter', () => {
     const ids = new Set(sent.map((s) => s.body.anonId));
     expect(sent).toHaveLength(4);
     expect(ids.size).toBe(1);
+    // getAnonId() is what SuggestWizard sends with the request for picks
+    // (tests/suggestAnonId.test.ts holds it steady for the page), so the steps
+    // and the session they lead to share a guest id.
+    expect(ids.has(api.getAnonId())).toBe(true);
+  });
+
+  it('with storage that reads but cannot write, the steps and the request for picks still share one id', async () => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error('quota exceeded');
+        },
+      },
+    });
+    const api = await freshApi();
+    const steps = api.createWizardStepReporter();
+    steps.opened();
+    const forPicks = api.getAnonId();
+    steps.picksRequested();
+    expect(sent.map((s) => s.body.anonId)).toEqual([forPicks, forPicks]);
   });
 
   it('sends a guest id the route accepts', async () => {

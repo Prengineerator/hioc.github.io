@@ -31,22 +31,39 @@ function randomId(): string {
   return `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// The id handed out on this page while storage could not keep one. Set in the
+// browser only: this module can also be evaluated on the server, where a
+// module-level id would be shared across requests and visitors.
+let pageAnonId: string | null = null;
+
 /**
  * The guest's anonymous id (§3, "anon id"), persisted in localStorage so a
- * refine or a later visit still ties back to the same funnel. Falls back to a
- * fresh, unpersisted id when storage is unavailable (private browsing, quota,
- * blocked) rather than ever throwing — this is a nice-to-have for analytics
- * continuity, never a requirement for the flow to work.
+ * refine or a later visit still ties back to the same funnel. Never throws.
+ *
+ * When storage is unavailable (blocked site data, some in-app webviews,
+ * private browsing, quota) the id cannot outlive the page, but it must stay the
+ * same for the life of the page: /api/suggest only accepts a guest's refine
+ * that carries the id its first request carried. So the id made on the first
+ * call is remembered and returned on every later one, whether reading storage
+ * throws or reading works and writing throws.
+ *
+ * While storage works, storage is the only source: the stored id is read on
+ * each call and nothing is remembered here.
  */
 export function getAnonId(): string {
+  let created: string | null = null;
   try {
     const existing = window.localStorage.getItem(ANON_ID_STORAGE_KEY);
     if (existing) return existing;
-    const created = randomId();
+    // Nothing stored. If an earlier call on this page could not store its id,
+    // offer that same id to storage again instead of making another.
+    created = pageAnonId ?? randomId();
     window.localStorage.setItem(ANON_ID_STORAGE_KEY, created);
     return created;
   } catch {
-    return randomId();
+    const id = pageAnonId ?? created ?? randomId();
+    if (typeof window !== 'undefined') pageAnonId = id;
+    return id;
   }
 }
 
@@ -150,18 +167,17 @@ export interface WizardStepReporter {
 
 /**
  * One reporter per wizard on screen (SuggestWizard keeps it for as long as it is
- * mounted): it holds the two "already sent" marks and one guest id for every
- * step it sends, so a browser with storage blocked — where getAnonId() makes a
- * fresh id on each call — still reads as one visitor from open to picks.
+ * mounted): it holds the two "already sent" marks. Every step carries
+ * getAnonId(), the id a request for picks carries too, so a visitor's steps
+ * line up with their sessions — including with storage blocked, where
+ * getAnonId() keeps one id for the page.
  */
 export function createWizardStepReporter(): WizardStepReporter {
-  let anonId: string | null = null;
   let openedSent = false;
   let feelingSent = false;
   const send = (step: WizardStep) => {
     try {
-      anonId ??= getAnonId();
-      postWizardStep(anonId, step);
+      postWizardStep(getAnonId(), step);
     } catch {
       // Never let step tracking touch the UI.
     }

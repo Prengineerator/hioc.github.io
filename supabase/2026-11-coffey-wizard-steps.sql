@@ -13,8 +13,8 @@
 -- Why: suggestion_sessions only gets a row when picks are requested, so a
 -- customer who leaves on the feeling step or the preferences step leaves no
 -- trace. Over 19 Oct – 17 Nov 2026 Vercel counted 14 visitors on /suggest and
--- suggestion_sessions held 2 first asks; nothing could say which step lost the
--- other 12. These rows can.
+-- 9 of them asked for picks (docs/COFFEY-SPEC.md §10.0); nothing could say
+-- which step the other 5 left on. These rows can.
 --
 -- What a row holds: the step, the time, the browser's guest id (anon_id, the
 -- same random id suggestion_sessions.anon_id carries, so a visitor's steps line
