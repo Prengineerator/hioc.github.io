@@ -456,3 +456,84 @@ Read with care: in 13 of the 18 live requests still flagged `unmet`, no item on 
 - "Celebrating" still ticks "Something sweet to eat" (§1). The research says retire it if customers untick it; there is still no log of that.
 - **Not built: step tracking.** Abandonment before the picks is only visible as page views minus sessions. A `wizard_step` event (step shown, picks requested) would show where people leave; it needs a table change, so it is left for the owner to decide.
 - **Owner follow-ups:** eight orderable items have no traits row and can never be suggested (Tiramisu Latte, Creamy Corn Toast, Mysterious Mocha Cupcake, Choconut Chip Creme, Coconut Creme, Lemon Americano, Lemon Americano Iced, Peach Lemonata): Owner → Suggestions → Traits → Generate. Re-label `tests/fixtures/suggest-eval.json` against today's menu before reading §9's hit rate again.
+
+---
+
+## 11. v2.2: made your way, and a wizard you build a drink in (2026-11-17)
+
+Where this section and §10, or COFFEY-ADDONS-PAIRINGS-SPEC §1.1 / §2.4 / §3, disagree, this section wins. The request contract, the hard filter, the score weights and the tables are unchanged.
+
+### 11.0 Why
+
+The menu's flavour is often an add-on. On the live menu one hot coffee is nutty on its own (Nutella Mocha), while fifteen hot coffees take Hazelnut syrup (₹35); no hot coffee is caramel on its own, and sixteen take a caramel sauce or syrup; an Espresso Shot (₹40) is offered on 36 of the 40 coffees. §10 counted only what an item is as the kitchen makes it, so a customer who asked for a hot nutty coffee was shown one match and two "closest we have", or found the chip greyed. The owner's ask: "Cappucino + Hazelnut" is the suggestion, with the add-on already chosen.
+
+### 11.1 Made your way (`lib/suggest/promises.ts`)
+
+`madeToOrder(item, traits, inputs, overrides)` returns the add-ons Coffey preselects so the item keeps a choice, at most `ADDON_SUGGEST_LIMITS.maxPresets` (2):
+
+| for | add-on | when |
+|---|---|---|
+| a flavour | the option `flavourAddonFor` already chose (reach roles, switched on, ≤ ₹60, the item's sweetness plus the option's lift within the hard ceiling) | the customer asked for flavours, the item carries **none** of them, and the item is a **plain base** (no flavour family of its own). A syrup goes on a cappuccino; a chocolate sauce does not go on a cranberry coffee. |
+| "Strong coffee" | the cheapest option with role `shot` (an espresso shot) | the item is a coffee drink at intensity exactly 2. |
+
+The two never use the same option, never exceed a group's `max_select` between them (the flavour one wins), and are dropped, strength first, when the cheapest size plus the add-ons would pass the customer's budget ceiling.
+
+`keepsChoice(choice, subject, inputs)` returns `'own'` (as the kitchen makes it), `'made'` (with those add-ons), `false` or `null`; `satisfiesChoice` is `own` or `made`. Sweetness is judged on the delivered level **including** the add-ons' sweetness lift, and the sugar option Coffey preselects is chosen on that lifted level, so a latte with a syrup under "Lightly sweet" gets No Sugar.
+
+**Tiers (§10.2) compare whether a choice is kept before how.** The key is the per-choice "kept at all" bits, lexicographic in priority order, then the per-choice "kept on its own" bits as a tie-break. A pick that keeps everything always outranks one that breaks a choice; among equals, the drink that needs no add-on comes first. So a hot nutty coffee gives Nutella Mocha (pinned), then Latte + Hazelnut syrup and Cappucino + Hazelnut syrup, and none of them is a "closest we have".
+
+### 11.2 What the customer sees
+
+- **The card.** The pick's name carries its ticked add-ons ("Cappucino + Hazelnut syrup"). A "Made your way" row shows one tickable chip per preselected option (add-ons with their price, the sugar preset by its name) and a line saying why ("Added for the nutty flavour.", "An extra shot makes it strong."). Un-ticking a chip takes it out.
+- **Adding.** A pick with a ticked add-on never takes the one-tap path: it opens the customise screen with the ticked options already chosen (`lib/menu/customization.ts` `vetPresets`: the option must exist, be switched on and fit the group's limit; anything else is dropped, never added blind), a "Coffey's pick" mark on each, a one-sentence note naming what Coffey set with prices, and the total including them from the first paint.
+- **This reverses two earlier rules on purpose.** COFFEY-ADDONS-PAIRINGS-SPEC §2.4 said an add-on is highlighted, never preselected, and §1.1 said the tip shows no price. An option that is preselected must show its price everywhere it appears, and it does: on the card chip, in the note and in the total. Reasons still never talk about spending (§6.2).
+- **Tags.** A flavour or "Strong" kept through an add-on gets its normal tag; there is no "add-on" wording in tags. `SuggestionPick.addonPresets` carries the options; the older `flavourAddon` is now set only when it is the preselected one.
+
+### 11.3 No dead ends, exactly (`lib/suggest/facets.ts`)
+
+With add-ons the choices interact (a syrup adds sweetness, an add-on adds to the price), so greying can no longer be worked out one option at a time. The page now gets one compact record per orderable item: kind, temperature, coffee or not, caffeine, sweetness, intensity, body, whether sugar can be chosen, cheapest price, its own flavour families, and the add-ons that could become a preset (role, families, lifts, price, group limit). No id, name or label. The wizard rebuilds a minimal item from each record and asks the engine's own `passesHardConstraints`, `madeToOrder` and `keepsChoice` whether any item of the ticked kinds can keep a chip together with everything else selected. One implementation of the rules; a property test checks the wizard's answer against the real items over random selections. `flavourCountsByKind` counts an item for a family it has or, if it is a plain base, can be made to have.
+
+### 11.4 The wizard as a drink builder
+
+- **A live cup.** `CoffeyMascot` takes an optional `look` (temperature, coffee, sweetness; flavours and a bite to eat are badges drawn by `LiveCup`). Iced drops ice cubes and a straw in; hot brings the steam back; strong darkens the coffee; smooth lightens it with a swirl; sweetness stacks sugar cubes beside the cup. It winks on each change and its bubble answers the last choice ("Iced it is."). With no `look` the mascot renders exactly as before.
+- **Tiles.** "What would you like?" (A drink · A sweet bite · A savoury bite), "Hot or iced?" and "Coffee?" are large tiles; each coffee tile shows the cup as that option makes it.
+- **A glass you fill.** "How sweet?" is a glass the customer drags (or taps) to Not sweet, Lightly sweet or Sweet; the three chips beside it are the keyboard and screen-reader control, and satisfy the rule that dragging needs an alternative. `touch-action: none` is set on the glass only.
+- **The sticky bar** carries a small copy of the cup and a one-line summary of what is chosen, above **Show my picks**.
+- The step heading is still there for assistive tech and focus but is visually hidden: the bubble asks the question.
+- Palette tokens only, no new dependency, and all motion is CSS, so the reduced-motion rule reaches it.
+
+### 11.5 A guard on one tagging mistake (`lib/suggest/traitsGuard.ts`)
+
+A drink whose own name says "Iced" is treated as iced whatever its traits row says, corrected once where items meet traits (`runSuggest`, `menuFacets`). On the live menu "Tiramisu Latte Iced" is tagged `hot` (and the hot "Tiramisu Latte" has no row at all), so it was offered for hot requests. The row still needs fixing by the owner; the guard only stops a customer seeing the contradiction.
+
+### 11.6 Measured (2026-11-17)
+
+Same method and request sets as §10.5. "After" picks are judged as made (their add-ons are preselected); "before" (the engine as it was before §10) as the kitchen makes them.
+
+The 40 real first asks (the same requests in every column):
+
+| | Before §10 | After §10 | Now |
+|---|---|---|---|
+| Picks keeping the flavour asked | 49% | 71% | 90% |
+| Picks keeping the strength / sweetness / texture asked | 76% / 68% / 59% | 83% / 78% / 67% | 95% / 90% / 78% |
+| Requests where every pick keeps every choice | 5 of 35 | 17 of 35 | 26 of 35 |
+| Picks carrying a preselected add-on | 0 | 0 | 29 of 118 |
+
+The grid, on the requests the wizard now allows (4,656 of 6,336; §10 allowed 3,216, because a flavour or strength only an add-on can supply was greyed out):
+
+| | Before §10 | Now |
+|---|---|---|
+| First pick keeps every choice | 55.5% | 99.5% |
+| Every pick keeps every choice | 23.4% | 73.7% |
+| Picks keeping every choice | 44.1% | 87.8% |
+| Picks carrying a preselected add-on | 0 | 27% |
+| Requests returning fewer than three picks (all 6,336) | 7.6% | 7.6% |
+
+The most used presets in the grid: Espresso Shot (₹40), Caramel Sauce (₹30), Hazelnut syrup (₹35), Cinnamon syrup (₹35), Chocolate Sauce (₹30).
+
+### 11.7 Judgement calls, and what to watch
+
+- Preselecting a paid add-on is a default, and defaults are powerful (§1). It is always shown with its price and is one tap to remove; watch how often customers un-tick it, and how many combo picks are added.
+- "A plain base only" and "one shot on intensity 2" are rules of thumb. The owner can override any option's role, families and lifts (`addon_option_traits`), which is the way to stop or allow a particular combination.
+- Some option names read awkwardly as a suggestion ("Sparkling Water(green Apple)"). `addonLabel` tidies only "(new)" and syrups; renaming the option on the menu fixes it everywhere.
+- **Owner follow-ups, added to §10.6's:** fix the temperature of "Tiramisu Latte Iced" and generate traits for "Tiramisu Latte" (Owner → Suggestions → Traits).
