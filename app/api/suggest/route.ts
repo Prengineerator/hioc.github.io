@@ -236,6 +236,30 @@ export async function POST(request: Request) {
         .insert(shownIds.map((menuItemId) => ({ session_id: sessionId, event: 'shown', menu_item_id: menuItemId })));
       if (eventsError) console.error('suggest route: shown events insert failed (best-effort)', eventsError);
     }
+
+    // One 'preset_shown' per final PICK (never the usual) that carries add-on
+    // presets: how many picks went out with a preselected add-on, and what it
+    // costs (COFFEY-SPEC §11.7). A SEPARATE insert, after 'shown', because the
+    // events CHECK refuses the new name until
+    // supabase/2026-11-coffey-preset-events.sql is applied, and a refused row
+    // must never take the 'shown' rows down with it. Best-effort: logged, and
+    // the response is unaffected.
+    const presetRows = result.picks
+      .filter((pick) => (pick.addonPresets?.length ?? 0) > 0)
+      .map((pick) => ({
+        session_id: sessionId,
+        event: 'preset_shown',
+        menu_item_id: pick.menuItemId,
+        value_inr: (pick.addonPresets ?? []).reduce((sum, p) => sum + p.priceInr, 0),
+      }));
+    if (presetRows.length > 0) {
+      try {
+        const { error: presetError } = await admin.from('suggestion_events').insert(presetRows);
+        if (presetError) console.error('suggest route: preset_shown events insert failed (best-effort)', presetError);
+      } catch (err) {
+        console.error('suggest route: preset_shown events insert threw (best-effort)', err);
+      }
+    }
   }
 
   const refinesLeft = Math.max(0, SUGGEST_LIMITS.refines - refineChainDepth);

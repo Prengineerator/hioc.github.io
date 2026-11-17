@@ -76,6 +76,13 @@ export async function POST(request: Request) {
   });
   if (insertError) {
     console.error('suggest events route: insert failed', insertError);
+    // The preset events are measurement only. Until
+    // supabase/2026-11-coffey-preset-events.sql is applied the database CHECK
+    // refuses them, so answer as if recorded rather than hand the page a 500
+    // for something it cannot act on. Every other event keeps its 500.
+    if (event === 'preset_removed' || event === 'preset_kept') {
+      return new NextResponse(null, { status: 204 });
+    }
     return errorResponse(500, 'Failed to record event');
   }
 

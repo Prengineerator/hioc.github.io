@@ -1922,6 +1922,21 @@ async function checkSuggestionEngine() {
     event: `bogus_${RUN_ID}`,
   });
   expectKind("suggestion_events.event CHECK rejects 'bogus'", bogusEvent, 'check', 'constraint is present, not merely dropped');
+
+  // The three preset events (2026-11-coffey-preset-events.sql). Until it is
+  // applied the CHECK refuses them, which the app tolerates (the server logs
+  // and carries on), so this reports a failure with the file to apply.
+  for (const name of ['preset_shown', 'preset_removed', 'preset_kept']) {
+    const attempt = await doomedInsert('suggestion_events', { session_id: BOGUS_SESSION_ID, event: name });
+    if (!attempt.ok && errKind(attempt) === 'check') {
+      fail(
+        `suggestion_events.event CHECK accepts '${name}'`,
+        'apply supabase/2026-11-coffey-preset-events.sql (the owner dashboard add-on card reads zero until then)',
+      );
+    } else {
+      expectKind(`suggestion_events.event CHECK accepts '${name}'`, attempt, 'fk', 'reached the FK, so the CHECK passed');
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

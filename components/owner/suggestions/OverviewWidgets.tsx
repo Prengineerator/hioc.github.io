@@ -71,6 +71,51 @@ export function FunnelCard({ stats }: { stats: SuggestionStats }) {
   );
 }
 
+/**
+ * "Add-ons Coffey preselects" (COFFEY-SPEC §11.7): how many picks went out with
+ * a preselected paid add-on, how often the customer took it off, and how often
+ * the pick went into the cart with it. Counts are distinct (session, item)
+ * pairs. The two shares are of "sent with an add-on".
+ */
+export function PresetsCard({ stats }: { stats: SuggestionStats }) {
+  const presets = stats.presets ?? { shown: 0, removed: 0, kept: 0 };
+  const tiles: { label: string; value: number; share: string | null }[] = [
+    { label: 'Picks sent with an add-on', value: presets.shown, share: null },
+    {
+      label: 'Customer removed it',
+      value: presets.removed,
+      share: presets.shown > 0 ? pct(presets.removed, presets.shown) : null,
+    },
+    {
+      label: 'Added to cart with it',
+      value: presets.kept,
+      share: presets.shown > 0 ? pct(presets.kept, presets.shown) : null,
+    },
+  ];
+  return (
+    <Card title="Add-ons Coffey preselects">
+      {presets.shown === 0 ? (
+        <p className="text-sm text-muted">
+          No picks with a preselected add-on in this period yet. If Coffey has been live a while, check that
+          supabase/2026-11-coffey-preset-events.sql has been applied.
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {tiles.map((t) => (
+            <div key={t.label} className="rounded-md bg-[#f2efe9] p-3 text-center">
+              <p className="font-mono text-xl font-bold tabular-nums text-charcoal">{t.value}</p>
+              <p className="text-xs uppercase text-muted">{t.label}</p>
+              {t.share ? (
+                <p className="font-mono text-xs tabular-nums text-muted">{t.share} of picks sent</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export function RevenueCard({ stats }: { stats: SuggestionStats }) {
   return (
     <Card title="Attributed revenue">

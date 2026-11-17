@@ -28,13 +28,13 @@ Each finding has an Impact (H/M/L), an Effort (S/M/L) and a status: `fixed`, `pr
 | CUS-UX-7 | customise screen via Coffey | A preselected option must never reach the cart unseen | H | S | A pick with a ticked add-on never takes the one-tap add. The customise screen opens with it chosen through the vetted path (exists, switched on, within the group's limit), marked "Coffey's pick", with a one-sentence note naming it and its price; the total includes it from the first paint | fixed |
 | CUS-UX-8 | step 2, greyed chips | With add-ons counting, greying one option at a time would enable combinations nothing can keep (a syrup adds sweetness, an add-on adds to the price) | H | M | The wizard evaluates the choices together with the engine's own functions on a compact per-item record (spec §11.3) | fixed |
 | CUS-UX-9 | picks for a hot request | "Tiramisu Latte Iced" was offered to customers who asked for a hot drink: its traits row says `hot` | H | S | A drink whose name says "Iced" is treated as iced (`traitsGuard.ts`). The row itself still needs correcting | fixed in code · data fix proposed |
-| CUS-UX-10 | customise screen via Coffey | Coffey's preselected options sit inside long option groups; the note names them, but the customer scrolls to find and change them | M | M | A "Coffey set this up" strip at the top of the screen with the same tickable chips as the card, bound to the form | proposed |
+| CUS-UX-10 | customise screen via Coffey | Coffey's preselected options sat inside long option groups; the note named them, but the customer scrolled to find and change them | M | M | A "Coffey set this up for you" panel at the top of the screen: one chip per preselected option, bound to the form's own toggle, so removing or restoring one is a single tap and the total moves with it (spec §11.8) | fixed |
 | CUS-UX-11 | `/suggest` | Abandonment before the picks is invisible (14 visitors, 2 reached picks in 30 days); no step is logged | M | M | A wizard step event and a funnel on the owner page; needs a table, so it is the owner's decision (queued as a suggested task) | proposed |
 | CUS-UX-12 | add-on names on cards | Some option names read badly as a suggestion ("Sparkling Water(green Apple)") | L | S | Rename the options on the menu; the card uses the menu's own names | proposed |
 
 ## What to decide
 
-1. **CUS-UX-10:** whether to add the "Coffey set this up" strip to the customise screen.
+1. **Apply `supabase/2026-11-coffey-preset-events.sql`** so the "Add-ons Coffey preselects" card starts counting (spec §11.7). Until then it shows zeros.
 2. **CUS-UX-11:** whether to add step tracking (a small new table).
-3. **Data:** fix the temperature of "Tiramisu Latte Iced", and generate traits for the eight items that have none (listed in `docs/COFFEY-SPEC.md` §10.6 and §11.7).
-4. **Preselecting a paid add-on** is a default the owner asked for. It is always priced and one tap to remove; `docs/COFFEY-SPEC.md` §11.7 says what to watch.
+3. **Data:** "Tiramisu Latte Iced" had its temperature corrected on 2026-11-17; regenerate the rest of its row, and generate traits for the eight items that have none (listed in `docs/COFFEY-SPEC.md` §10.6 and §11.9).
+4. **Preselecting a paid add-on** is a default the owner asked for. It is always priced and one tap to remove; the new card shows how often customers remove it, and `docs/COFFEY-SPEC.md` §11.9 says what to do if most do.

@@ -116,6 +116,19 @@ export function computeSuggestionStats(args: ComputeSuggestionStatsArgs): Sugges
   const latencyP50Ms = percentile(latencies, 50);
   const latencyP90Ms = percentile(latencies, 90);
 
+  // Preselected add-ons: distinct (session, menu item) pairs, so a customer who
+  // un-ticks twice, or a pick sent twice in one session, counts once.
+  const presetPairs = (type: SuggestionEventRow['event']): number => {
+    const pairs = new Set<string>();
+    for (const e of scopedEvents) if (e.event === type && e.menu_item_id) pairs.add(`${e.session_id}|${e.menu_item_id}`);
+    return pairs.size;
+  };
+  const presets = {
+    shown: presetPairs('preset_shown'),
+    removed: presetPairs('preset_removed'),
+    kept: presetPairs('preset_kept'),
+  };
+
   const costUsd = sessions.reduce((sum, s) => sum + s.cost_usd_micros, 0) / 1_000_000;
 
   return {
@@ -136,5 +149,6 @@ export function computeSuggestionStats(args: ComputeSuggestionStatsArgs): Sugges
     latencyP50Ms,
     latencyP90Ms,
     costUsd,
+    presets,
   };
 }

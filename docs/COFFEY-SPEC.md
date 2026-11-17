@@ -536,9 +536,25 @@ The grid, on the requests the wizard now allows (4,240 of 6,336; §10 allowed 3,
 
 The most used presets in the grid: Espresso Shot (₹40), Caramel Sauce (₹30), Hazelnut syrup (₹35), Cinnamon syrup (₹35), Chocolate Sauce (₹30).
 
-### 11.7 Judgement calls, and what to watch
+### 11.7 Watching the paid default (`suggestion_events`)
 
-- Preselecting a paid add-on is a default, and defaults are powerful (§1). It is always shown with its price and is one tap to remove; watch how often customers un-tick it, and how many combo picks are added.
+Preselecting a paid add-on is only right if customers mostly keep it. Three events record that, counted as distinct (session, item) pairs on the owner's Suggestions page under "Add-ons Coffey preselects":
+
+| event | written by | when |
+|---|---|---|
+| `preset_shown` | the server, with `value_inr` = the add-ons' total price | a pick (never the usual) went out carrying add-on presets |
+| `preset_removed` | the browser, at most once per pick | the customer un-ticked the add-on on the card, or added the pick to the cart without it (including removing it on the customise screen) |
+| `preset_kept` | the browser | the pick went into the cart with a preset still on, read from the cart line that was actually added |
+
+The sugar preset is free and is not counted. `suggestion_events.event` has a CHECK constraint, so these need `supabase/2026-11-coffey-preset-events.sql` (re-runnable; `npm run verify:db` checks it). Until it is applied the three inserts fail and are swallowed: nothing else changes, and the card shows zeros with a pointer to the SQL.
+
+### 11.8 Coffey's setup at the top of the customise screen
+
+A drink's customise screen is long (size, sugar, milk, syrup, toppings, sides), and what Coffey chose sat inside those groups. When Coffey opens the screen with anything preselected, a "Coffey set this up for you" panel now sits above the first group: one chip per preselected option ("Hazelnut syrup +₹35", "Sugar: No Sugar"), bound to the form's own state through the same toggle the option uses below, so the group limits are enforced in one place and the total moves as usual. An add-on chip removes or restores the add-on; the sugar chip belongs to a required group, so it shows whether Coffey's option is still the one chosen and restores it on a tap. The one-sentence note is replaced by the panel; the "Coffey's pick" mark on each option stays. Opened from the menu, the screen is unchanged.
+
+### 11.9 Judgement calls, and what to watch
+
+- Preselecting a paid add-on is a default, and defaults are powerful (§1). It is always shown with its price and is one tap to remove; §11.7 measures how often customers remove it. If most do, stop preselecting and go back to pointing at it.
 - "A plain base only" and "one shot on intensity 2" are rules of thumb. The owner can override any option's role, families and lifts (`addon_option_traits`), which is the way to stop or allow a particular combination.
 - Some option names read awkwardly as a suggestion ("Sparkling Water(green Apple)"). `addonLabel` tidies only "(new)" and syrups; renaming the option on the menu fixes it everywhere.
-- **Owner follow-ups, added to §10.6's:** fix the temperature of "Tiramisu Latte Iced" and generate traits for "Tiramisu Latte" (Owner → Suggestions → Traits).
+- **Owner follow-ups, added to §10.6's:** apply `supabase/2026-11-coffey-preset-events.sql`. "Tiramisu Latte Iced" had its temperature corrected to `iced` on 2026-11-17, but the rest of its row (moods, mood fit, refreshment) was written for a hot drink, and the hot "Tiramisu Latte" still has no row: regenerate the first and generate the second (Owner → Suggestions → Traits).

@@ -13,6 +13,10 @@ const state: {
   rateLimitOk: boolean;
   sessionUser: { id: string } | null;
   spentMicros: number;
+  /** Test hook: rewrites the engine's result (to give picks addonPresets). */
+  patchResult: ((r: any) => any) | null;
+  /** Test hook: make inserts of this event name fail, like the DB CHECK does. */
+  failEventName: string | null;
 } = {
   suggestFlag: true,
   menuRows: [],
@@ -24,6 +28,8 @@ const state: {
   rateLimitOk: true,
   sessionUser: null,
   spentMicros: 0,
+  patchResult: null,
+  failEventName: null,
 };
 
 vi.mock('@/lib/flags', () => ({
@@ -91,7 +97,11 @@ function chainFor(table: string) {
         };
       }
       if (table === 'suggestion_events') {
-        state.insertedEvents.push(...(Array.isArray(payload) ? payload : [payload]));
+        const rows = Array.isArray(payload) ? payload : [payload];
+        if (state.failEventName && rows.some((r) => r.event === state.failEventName)) {
+          return Promise.resolve({ error: { message: 'violates check constraint "suggestion_events_event_check"' } });
+        }
+        state.insertedEvents.push(...rows);
       }
       return Promise.resolve({ error: null });
     },
@@ -109,6 +119,17 @@ function chainFor(table: string) {
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({ from: (table: string) => chainFor(table) }),
 }));
+
+vi.mock('@/lib/suggest/engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/suggest/engine')>();
+  return {
+    ...actual,
+    runSuggest: async (args: Parameters<typeof actual.runSuggest>[0]) => {
+      const result = await actual.runSuggest(args);
+      return state.patchResult ? state.patchResult(result) : result;
+    },
+  };
+});
 
 const { POST } = await import('@/app/api/suggest/route');
 
@@ -254,6 +275,8 @@ beforeEach(() => {
   state.rateLimitOk = true;
   state.sessionUser = null;
   state.spentMicros = 0;
+  state.patchResult = null;
+  state.failEventName = null;
   delete process.env.SUGGEST_LLM;
   delete process.env.SUGGEST_DAILY_BUDGET_USD;
   process.env.TYPESAFE_API_KEY = 'test-key';
@@ -342,6 +365,73 @@ describe('POST /api/suggest', () => {
     expect(typeof data.sessionId).toBe('string');
     expect(data.sessionId).not.toBe(state.insertedSessionId);
     expect(state.insertedEvents).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 'preset_shown' (COFFEY-SPEC §11.7): picks that go out with a preselected add-on
+// ---------------------------------------------------------------------------
+
+describe('POST /api/suggest — preset_shown events', () => {
+  const preset = (optionId: string, priceInr: number) => ({
+    groupId: 'g',
+    optionId,
+    label: optionId,
+    priceInr,
+    purpose: 'flavour' as const,
+  });
+  const withPresets = (byItem: Record<string, ReturnType<typeof preset>[]>) => (r: any) => ({
+    ...r,
+    picks: r.picks.map((p: any) => (byItem[p.menuItemId] ? { ...p, addonPresets: byItem[p.menuItemId] } : p)),
+  });
+
+  it('writes one preset_shown per pick with presets, in a SEPARATE insert after "shown"', async () => {
+    state.patchResult = withPresets({ latte: [preset('hazelnut', 35), preset('shot', 40)] });
+    const res = await post(v2Body());
+    expect(res.status).toBe(200);
+    const events = state.insertedEvents;
+    const presetRows = events.filter((e) => e.event === 'preset_shown');
+    expect(presetRows).toEqual([
+      { session_id: state.insertedSessionId, event: 'preset_shown', menu_item_id: 'latte', value_inr: 75 },
+    ]);
+    // The 'shown' rows were inserted first, and none of them is a preset row.
+    const firstPreset = events.findIndex((e) => e.event === 'preset_shown');
+    expect(firstPreset).toBeGreaterThan(0);
+    expect(events.slice(0, firstPreset).every((e) => e.event === 'shown')).toBe(true);
+  });
+
+  it('writes no preset_shown when no pick carries presets', async () => {
+    const res = await post(v2Body());
+    expect(res.status).toBe(200);
+    expect(state.insertedEvents.some((e) => e.event === 'preset_shown')).toBe(false);
+  });
+
+  it('never writes preset_shown for the usual', async () => {
+    state.patchResult = (r: any) => ({
+      ...r,
+      usual: r.usual ?? { menuItemId: 'espresso', addonPresets: [preset('hazelnut', 35)] },
+      usualItemId: r.usualItemId ?? 'espresso',
+      picks: r.picks.map((p: any) => ({ ...p, addonPresets: undefined })),
+    });
+    const res = await post(v2Body());
+    expect(res.status).toBe(200);
+    expect(state.insertedEvents.some((e) => e.event === 'preset_shown')).toBe(false);
+    expect(state.insertedEvents.some((e) => e.event === 'shown')).toBe(true);
+  });
+
+  it('a rejected preset_shown insert leaves the shown rows in and the response a normal 200', async () => {
+    state.failEventName = 'preset_shown';
+    state.patchResult = withPresets({ latte: [preset('hazelnut', 35)] });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const res = await post(v2Body());
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.picks.length).toBeGreaterThan(0);
+    expect(data.sessionId).toBe(state.insertedSessionId);
+    expect(state.insertedEvents.length).toBeGreaterThan(0);
+    expect(state.insertedEvents.every((e) => e.event === 'shown')).toBe(true);
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    errSpy.mockRestore();
   });
 });
 
