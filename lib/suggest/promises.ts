@@ -8,10 +8,9 @@
 
 import { flavourFamiliesOf } from './flavor';
 import type { FilteredCandidate } from './filter';
-import { INTENSITY_FROM_CAFFEINE } from './score';
 import { deliveredSweetness, isSugarAdjustable } from './sugar';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
-import { HONOURED_CHOICES, PROMISE_MIN_POOL, SWEETNESS_BANDS } from './types';
+import { HONOURED_CHOICES, INTENSITY_FROM_CAFFEINE, PROMISE_MIN_POOL, SWEETNESS_BANDS } from './types';
 import type { HonouredChoice, MenuItemTraits, SuggestInputs, TraitKind } from './types';
 
 export interface ChoiceSubject {

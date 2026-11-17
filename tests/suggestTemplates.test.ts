@@ -286,12 +286,14 @@ describe('templateReason — a Coffey (v2) row: descriptors, flavour, clause (CO
     it("sweetness bands, on the customer's own scale: 0–1 unsweetened, 2–3 lightly sweet, 4–5 medium-sweet, 6–8 sweet, 9–10 dessert-sweet (when the customer set one)", () => {
       // A pick that keeps the choice reads as the customer's own word (see the
       // "keeps the choice" test below); one that does not is described as
-      // delivered. 'none' is kept by levels 0–3 (an unsweetened latte is milk-sweet
-      // at 2; the band is the hard ceiling), so those all read "Unsweetened"…
+      // delivered. 'none' is kept by levels 0–3 (a latte with no sugar is milk-sweet
+      // at 2–3; the band is the hard ceiling). 0–1 read "Unsweetened"; 2–3 read
+      // "Barely sweet", because "unsweetened" is a claim about what is in the cup…
       const asked = makeInputs({ sweetness: 'none' });
       // Non-adjustable, so the word describes the item as made.
       const word = (level: number, inputs = asked) => lead(bare({ sweetness_level: level }), inputs);
-      for (const level of [0, 1, 2, 3]) expect(word(level), `${level}`).toBe('Unsweetened');
+      for (const level of [0, 1]) expect(word(level), `${level}`).toBe('Unsweetened');
+      for (const level of [2, 3]) expect(word(level), `${level}`).toBe('Barely sweet');
       for (const level of [4, 5]) expect(word(level), `${level}`).toBe('Medium-sweet');
       for (const level of [6, 7, 8]) expect(word(level), `${level}`).toBe('Sweet');
       for (const level of [9, 10]) expect(word(level), `${level}`).toBe('Dessert-sweet');
@@ -1016,7 +1018,10 @@ describe('the sweetness tag never contradicts the reason\'s sweetness descriptor
     sweet: 'sweet',
     very: 'dessert-sweet',
   };
-  const SWEETNESS_WORDS = new Set(WORD_OF_TAG.values());
+  // "barely sweet" is how a pick kept for "Not sweet" reads when it is milk-sweet
+  // (delivered 2–3): the same choice as the 'Not sweet' tag, in words that stay true.
+  const BARELY = 'barely sweet';
+  const SWEETNESS_WORDS = new Set([...WORD_OF_TAG.values(), BARELY]);
 
   /** The sweetness word a reason leads with, or null when it has none (a legacy row's reason has no descriptors). */
   function sweetnessDescriptorOf(reason: string): string | null {
@@ -1048,11 +1053,14 @@ describe('the sweetness tag never contradicts the reason\'s sweetness descriptor
           if (tag) tagged++;
           if (tag && descriptor) {
             checkedBoth++;
-            expect(descriptor, label).toBe(WORD_OF_TAG.get(tag));
+            if (tag === 'Not sweet') expect(['unsweetened', BARELY], label).toContain(descriptor);
+            else expect(descriptor, label).toBe(WORD_OF_TAG.get(tag));
           }
           // And the other way: a descriptor that IS the customer's own word comes with the tag.
           // (Food has no sweetness choice to keep, so it never carries the tag.)
           if (descriptor === WORD_OF_PREF[sweetness] && traits.kind !== 'food') expect(tag, label).toBeDefined();
+          // "Barely sweet" is only ever said of a pick kept for "Not sweet".
+          if (descriptor === BARELY) expect(tag, label).toBe('Not sweet');
           if (tag) expect(tag, label).toBe(
             { none: 'Not sweet', light: 'Lightly sweet', medium: 'Medium sweet', sweet: 'Sweet', very: 'Very sweet' }[sweetness],
           );
@@ -1081,7 +1089,8 @@ describe('the sweetness tag never contradicts the reason\'s sweetness descriptor
           const inBand = delivered >= bands[sweetness][0] && delivered <= bands[sweetness][1];
 
           const reason = templateReason(traits, inputs, 'trait', 'X', sugarAdjustable);
-          expect(sweetnessDescriptorOf(reason), label).toBe(inBand ? WORD_OF_PREF[sweetness] : bandOf(delivered));
+          const own = sweetness === 'none' && delivered >= 2 ? BARELY : WORD_OF_PREF[sweetness];
+          expect(sweetnessDescriptorOf(reason), label).toBe(inBand ? own : bandOf(delivered));
 
           const tags = matchTagsFor({ name: 'X', traits, sugarAdjustable }, inputs);
           expect(tags.some((t) => WORD_OF_TAG.has(t)), label).toBe(inBand);

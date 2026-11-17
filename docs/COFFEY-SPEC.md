@@ -418,13 +418,13 @@ Four choices (`HONOURED_CHOICES`, in priority order: flavours, strength, sweetne
 - when only one or two do, they are pinned and the next-best tier fills the remaining slots;
 - it only ever removes candidates, never takes a request that could fill three picks below three, and never touches `relaxHintFor` or the usual (both still use the hard filter alone).
 
-Pinned items are always in the shortlist (`buildShortlist(scored, inputs, pinnedIds)`), and `enforcePins` in `engine.ts` guarantees them a slot on every path (Jev, fallback, after the usual is removed), replacing the last unpinned pick of the same kind and putting pinned picks first. Why flavours first: it is what the item *is* and the choice customers use most; strength is fixed by the recipe; sweetness can still be changed at the counter and has the hard ceiling behind it; texture is the least used. The order is one constant.
+Pinned items are always in the shortlist (`buildShortlist(scored, inputs, pinnedIds)`), and `enforcePins` in `engine.ts` gives them a slot on every path (Jev, fallback, after the usual is removed): it replaces the last unpinned pick of the same kind, or failing that the last unpinned pick of a kind that holds two or more picks, so no requested kind loses its only pick; pinned picks come first. Why flavours first: it is what the item *is* and the choice customers use most; strength is fixed by the recipe; sweetness can still be changed at the counter and has the hard ceiling behind it; texture is the least used. The order is one constant.
 
 The similarity term of §4.4 no longer counts a flavour family the customer asked for: sharing it is the point, not a reason to mark a pick down.
 
 ### 10.3 Tags and reasons (`templates.ts`)
 
-Order: flavour, sweetness, Strong / Smooth & milky, Iced / Hot, texture, Caffeine-free, then the feeling. Still at most three, so the customer's own choices are shown before the feeling. A tag about a choice appears only when `satisfiesChoice` is true; Iced / Hot only when the item's own temperature equals the choice. The "<Flavour> add-on" tag and the budget tag are gone (the add-on tip line and the add-on's place in the reason, COFFEY-ADDONS-PAIRINGS-SPEC §3.3, stay). The reason's sweetness word is the customer's own when the pick keeps their choice, and the delivered level otherwise.
+Order: flavour, sweetness, Strong / Smooth & milky, Iced / Hot, texture, Caffeine-free, then the feeling. Still at most three, so the customer's own choices are shown before the feeling. A tag about a choice appears only when `satisfiesChoice` is true; Iced / Hot only when the item's own temperature equals the choice. The "<Flavour> add-on" tag and the budget tag are gone (the add-on tip line and the add-on's place in the reason, COFFEY-ADDONS-PAIRINGS-SPEC §3.3, stay). The reason's sweetness word is the customer's own when the pick keeps their choice, and the delivered level otherwise. One exception: a pick kept for "Not sweet" at a delivered level of 2–3 (a latte with no sugar is milk-sweet) reads "barely sweet", because "unsweetened" would be a claim about what is in the cup.
 
 ### 10.4 Response additions
 

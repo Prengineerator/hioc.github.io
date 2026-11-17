@@ -141,6 +141,10 @@ const INTENSITY_WORD = ['gentle', 'mellow', 'full-flavoured', 'bold'] as const;
  *   0–1 unsweetened · 2–3 lightly sweet · 4–5 medium-sweet · 6–8 sweet ·
  *   9–10 dessert-sweet
  */
+/** From this delivered level up, a pick kept for "Not sweet" reads "barely
+ * sweet" rather than "unsweetened" (descriptorsFor). */
+const BARELY_SWEET_FROM = 2;
+
 function sweetnessWord(level: number): string {
   if (level <= 1) return 'unsweetened';
   if (level <= 3) return 'lightly sweet';
@@ -200,8 +204,17 @@ function descriptorsFor(
     // word for it, even where the delivered level sits at the edge of the band
     // (a 4 for "lightly sweet" would otherwise read "medium-sweet"); one that
     // does not keep it is described as they will actually get it.
+    // One exception: "Not sweet" is kept up to level 3 (a latte is milk-sweet at
+    // 2–3 with no sugar in it), and "unsweetened" would be a claim about what is
+    // in the cup that a level-2 or -3 item cannot make, so those read "barely
+    // sweet" — still the customer's direction, and true.
     const kept = satisfiesChoice('sweetness', { name: '', traits, sugarAdjustable }, inputs) === true;
-    const word = sweetnessWord(kept ? target : deliveredSweetness(inherent, sugarAdjustable, target));
+    const delivered = deliveredSweetness(inherent, sugarAdjustable, target);
+    const word = !kept
+      ? sweetnessWord(delivered)
+      : inputs.sweetness === 'none' && delivered >= BARELY_SWEET_FROM
+        ? 'barely sweet'
+        : sweetnessWord(target);
     all.push({ alone: word, paired: word, asked: true });
   } else if ((inherent <= 1 && traits.kind !== 'food') || inherent >= 8) {
     const word = sweetnessWord(inherent);

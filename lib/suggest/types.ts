@@ -26,6 +26,8 @@ export type Daypart = (typeof DAYPARTS)[number];
 
 export type TraitTemperature = 'hot' | 'iced' | 'either' | 'ambient';
 export type TraitCaffeine = 'none' | 'low' | 'medium' | 'high';
+/** intensity (0 gentle → 3 bold) for a row with no v2 intensity: derived from caffeine. */
+export const INTENSITY_FROM_CAFFEINE: Record<TraitCaffeine, number> = { high: 3, medium: 2, low: 1, none: 0 };
 export type TraitBody = 'light' | 'medium' | 'rich';
 export type TraitKind = 'drink' | 'food' | 'dessert';
 /** Step 2 "What would you like?" order: a drink, something sweet, something savoury. */

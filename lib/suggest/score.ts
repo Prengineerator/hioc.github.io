@@ -30,7 +30,7 @@ import type {
   TraitCaffeine,
   TraitKind,
 } from './types';
-import { ADDON_SUGGEST_LIMITS, KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
+import { ADDON_SUGGEST_LIMITS, INTENSITY_FROM_CAFFEINE, KINDS, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 
 // ---------------------------------------------------------------------------
 // Weights (COFFEY-SPEC §4.2) — the exact numbers from the spec.
@@ -217,8 +217,8 @@ export interface PreferenceFits {
 
 const LIGHT_BODY_FIT: Record<TraitBody, number> = { light: 1, medium: 0.5, rich: 0 };
 const RICH_BODY_FIT: Record<TraitBody, number> = { rich: 1, medium: 0.5, light: 0 };
-/** intensity (0 gentle → 3 bold) for a row with no v2 intensity: derived from caffeine. */
-export const INTENSITY_FROM_CAFFEINE: Record<TraitCaffeine, number> = { high: 3, medium: 2, low: 1, none: 0 };
+/** Kept exported from here for older importers; the table lives in types.ts. */
+export { INTENSITY_FROM_CAFFEINE };
 
 export function preferenceFits(inputs: SuggestInputs, subject: ScoredSubject): PreferenceFits {
   const { traits } = subject;

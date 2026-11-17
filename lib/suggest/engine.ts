@@ -132,8 +132,8 @@ function topUpPicks(picks: SuggestionPick[], shortlist: Candidate[], inputs: Sug
 /** Pinned candidates (lib/suggest/promises.ts) keep the customer's choices but
  * are too few to fill the picks on their own, so each must be among the final
  * picks whatever the decider said. A missing one is appended when there is room,
- * else replaces the last unpinned pick of its own kind (kind coverage stays);
- * with no such pick it is skipped. Pinned picks then come first, in pin order.
+ * else replaces the last unpinned pick of its own kind (kind coverage stays), else the
+ * last unpinned pick of a kind holding two or more picks; otherwise it is skipped. Pinned picks then come first, in pin order.
  * The count never exceeds SUGGEST_LIMITS.picks and never drops. */
 function enforcePins(
   picks: SuggestionPick[],
@@ -160,13 +160,16 @@ function enforcePins(
       out.push(pick);
       continue;
     }
-    for (let i = out.length - 1; i >= 0; i--) {
-      const other = out[i];
-      if (pinnedSet.has(other.menuItemId)) continue;
-      if (byId.get(other.menuItemId)?.traits.kind !== c.traits.kind) continue;
-      out[i] = pick;
-      break;
-    }
+    const kindOf = (p: SuggestionPick) => byId.get(p.menuItemId)?.traits.kind;
+    const lastWhere = (ok: (p: SuggestionPick) => boolean) => {
+      for (let i = out.length - 1; i >= 0; i--) if (!pinnedSet.has(out[i].menuItemId) && ok(out[i])) return i;
+      return -1;
+    };
+    // First choice: the last unpinned pick of the same kind. Otherwise the last
+    // unpinned pick whose kind holds two or more picks, so no kind loses its only pick.
+    let at = lastWhere((p) => kindOf(p) === c.traits.kind);
+    if (at === -1) at = lastWhere((p) => out.filter((q) => kindOf(q) === kindOf(p)).length >= 2);
+    if (at !== -1) out[at] = pick;
   }
   const pinnedPicks = pinnedIds.flatMap((id) => out.filter((p) => p.menuItemId === id));
   out = [...pinnedPicks, ...out.filter((p) => !pinnedSet.has(p.menuItemId))];
