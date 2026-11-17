@@ -10,10 +10,12 @@
 // over it: the request/response types (v2 SuggestInputs, matchTags, sugarPreset)
 // come straight from the contract, so nothing here changes when they do.
 
-import type { ClientSuggestionEventType, SuggestRequest, SuggestResponse } from '@/lib/suggest/types';
+import type { ClientSuggestionEventType, SuggestRequest, SuggestResponse, WizardStep } from '@/lib/suggest/types';
+import { trackingDeclined } from '@/lib/traffic/client';
 
 const ANON_ID_STORAGE_KEY = 'hioc.suggest.anon';
 const EVENTS_ENDPOINT = '/api/suggest/events';
+const STEPS_ENDPOINT = '/api/suggest/steps';
 const SUGGEST_ENDPOINT = '/api/suggest';
 
 function randomId(): string {
@@ -114,4 +116,85 @@ export function postSuggestEvent(
   } catch {
     // Never let an events failure touch the UI.
   }
+}
+
+// ---------------------------------------------------------------------------
+// Wizard step tracking (docs/COFFEY-SPEC.md §10.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/suggest/steps — one step of the wizard reached before any picks
+ * exist, so there is no session id to send: only the guest id and the step.
+ * Fire-and-forget like postSuggestEvent: never throws, never blocks, and the
+ * answer is not read. sendBeacon first, because a customer who opens the wizard
+ * and leaves at once is exactly who this is counting; a keepalive fetch when
+ * the beacon is unavailable or refused.
+ *
+ * Sends nothing for a browser that asks not to be tracked (Global Privacy
+ * Control or Do Not Track), the same rule as the traffic page views, as the
+ * privacy policy says.
+ */
+export function postWizardStep(anonId: string, step: WizardStep): void {
+  try {
+    if (trackingDeclined()) return;
+    const body = JSON.stringify({ anonId, step });
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      const blob = new Blob([body], { type: 'application/json' });
+      if (navigator.sendBeacon(STEPS_ENDPOINT, blob)) return;
+    }
+    fetch(STEPS_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    }).catch(() => {
+      // fire-and-forget
+    });
+  } catch {
+    // Never let step tracking touch the UI.
+  }
+}
+
+/** What the wizard calls as the customer moves through it. */
+export interface WizardStepReporter {
+  /** The wizard is on screen. Sent once, however often it is called. */
+  opened(): void;
+  /** A feeling was tapped. Sent the first time only: going Back and picking another is the same visit. */
+  feelingChosen(): void;
+  /** "Show my picks" was pressed. Sent on every press. */
+  picksRequested(): void;
+}
+
+/**
+ * One reporter per wizard on screen (SuggestWizard keeps it for as long as it is
+ * mounted): it holds the two "already sent" marks. Every step carries
+ * getAnonId(), the id a request for picks carries too, so a visitor's steps
+ * line up with their sessions — including with storage blocked, where
+ * getAnonId() keeps one id for the page.
+ */
+export function createWizardStepReporter(): WizardStepReporter {
+  let openedSent = false;
+  let feelingSent = false;
+  const send = (step: WizardStep) => {
+    try {
+      postWizardStep(getAnonId(), step);
+    } catch {
+      // Never let step tracking touch the UI.
+    }
+  };
+  return {
+    opened() {
+      if (openedSent) return;
+      openedSent = true;
+      send('opened');
+    },
+    feelingChosen() {
+      if (feelingSent) return;
+      feelingSent = true;
+      send('feeling_chosen');
+    },
+    picksRequested() {
+      send('picks_requested');
+    },
+  };
 }

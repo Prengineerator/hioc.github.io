@@ -597,6 +597,32 @@ export const PAIRING_LIMITS = {
 } as const;
 
 // ---------------------------------------------------------------------------
+// Wizard step tracking (docs/COFFEY-SPEC.md §10.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * The steps of the /suggest wizard a browser reports before any picks exist,
+ * in the order a customer reaches them: the wizard loaded, the first feeling
+ * was tapped, "Show my picks" was pressed. Mirrors the CHECK in
+ * supabase/2026-11-coffey-wizard-steps.sql (tests/suggestWizardStepsMigration.test.ts
+ * pins the two together).
+ */
+export const WIZARD_STEPS = ['opened', 'feeling_chosen', 'picks_requested'] as const;
+export type WizardStep = (typeof WIZARD_STEPS)[number];
+
+/** suggestion_wizard_steps — mirrors supabase/2026-11-coffey-wizard-steps.sql.
+ * A row never holds anything the customer chose or typed. */
+export interface WizardStepRow {
+  id: string;
+  /** The browser's guest id (components/suggest/api.ts getAnonId). */
+  anon_id: string;
+  /** From the session on the server, never from the request. */
+  user_id: string | null;
+  step: WizardStep;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
 // Owner analytics (SUG-10)
 // ---------------------------------------------------------------------------
 

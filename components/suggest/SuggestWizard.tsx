@@ -34,7 +34,12 @@ import {
   unmetLine,
   type WizardState,
 } from '@/components/suggest/wizardModel';
-import { fetchSuggestions, getAnonId, postSuggestEvent } from '@/components/suggest/api';
+import {
+  createWizardStepReporter,
+  fetchSuggestions,
+  getAnonId,
+  postSuggestEvent,
+} from '@/components/suggest/api';
 import {
   claimRemovedReport,
   eventForAdd,
@@ -144,6 +149,17 @@ export function SuggestWizard({ flavourCounts = null,
     null,
   );
 
+  // Where customers leave (COFFEY-SPEC §10.7): the steps reached before any
+  // picks exist — and so before there is a session for an event to attach to —
+  // go to /api/suggest/steps. One reporter for as long as this wizard is on
+  // screen, so 'opened' and 'feeling_chosen' are each sent once per visit.
+  // Separate from, and never read by, the session events and the dismissed /
+  // engaged logic below.
+  const [steps] = useState(createWizardStepReporter);
+  useEffect(() => {
+    steps.opened();
+  }, [steps]);
+
   useEffect(() => {
     sessionIdRef.current = response?.sessionId ?? null;
   }, [response]);
@@ -244,12 +260,15 @@ export function SuggestWizard({ flavourCounts = null,
 
   // Step 1: one tap picks the feeling, applies its context defaults, and moves on.
   function pickMood(mood: Mood) {
+    steps.feelingChosen();
     setWiz((prev) => selectMood(prev, mood));
     setStep('wants');
   }
 
+  // "Show my picks".
   function submitForSuggestions() {
     if (wiz.mood === null) return;
+    steps.picksRequested();
     runSuggest(buildInputs(wiz, flavourCounts));
   }
 

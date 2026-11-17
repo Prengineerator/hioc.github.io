@@ -1,18 +1,42 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS, SHOP_POLICY_UPDATED, TRAFFIC_POLICY_UPDATED } from '@/lib/legal';
+import { BUSINESS, COFFEY_STEPS_POLICY_UPDATED, SHOP_POLICY_UPDATED, TRAFFIC_POLICY_UPDATED } from '@/lib/legal';
 import { flags } from '@/lib/flags';
 
 export const metadata: Metadata = { title: 'Privacy Policy' };
 
 export default function PrivacyPage() {
+  // Ask Coffey's wizard steps (docs/COFFEY-SPEC.md §10.7): part of the usage
+  // data, said only while Ask Coffey is switched on. What it says must stay
+  // true of app/api/suggest/steps/route.ts and components/suggest/api.ts.
+  const coffeySteps = flags.suggest ? (
+    <>
+      {' '}
+      When you use Ask Coffey, our helper for choosing what to order, we note which of its steps you reach: that you
+      opened it, that you chose a feeling, and each time you asked for picks. This shows us where people stop. Each
+      of these step records holds only the step, the time and a random id that your browser keeps between visits
+      (plus your account, if you are signed in). It holds none of your answers, and we do not store your IP address
+      with it. We record no step if your browser sends a Global Privacy Control or Do Not Track signal.
+    </>
+  ) : null;
+
   return (
     // The shop lines (delivery address, courier) appear only while the
-    // Instant Coffee shop is switched on (docs/INSTANT-COFFEE-SHOP.md), and the
-    // visit-tracking lines only while traffic tracking is (docs/TRAFFIC-TRACKING.md).
+    // Instant Coffee shop is switched on (docs/INSTANT-COFFEE-SHOP.md), the
+    // visit-tracking lines only while traffic tracking is
+    // (docs/TRAFFIC-TRACKING.md), and the Ask Coffey step lines only while Ask
+    // Coffey is. The newest wording that is showing sets the date.
     <PolicyLayout
       title="Privacy Policy"
-      updated={flags.trafficTracking ? TRAFFIC_POLICY_UPDATED : flags.shop ? SHOP_POLICY_UPDATED : undefined}
+      updated={
+        flags.suggest
+          ? COFFEY_STEPS_POLICY_UPDATED
+          : flags.trafficTracking
+            ? TRAFFIC_POLICY_UPDATED
+            : flags.shop
+              ? SHOP_POLICY_UPDATED
+              : undefined
+      }
     >
       <p>
         This Privacy Policy explains how {BUSINESS.legalName} (&ldquo;{BUSINESS.name}&rdquo;,
@@ -42,9 +66,13 @@ export default function PrivacyPage() {
               approximate country and city, and whether that visit ended in an order. We use a random visit id kept only in
               your browser tab, with no cookie, and we do not store your IP address or tie this to your name, number or
               account. If your browser sends a Global Privacy Control or Do Not Track signal, we record nothing.
+              {coffeySteps}
             </li>
           ) : (
-            <li><strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.</li>
+            <li>
+              <strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.
+              {coffeySteps}
+            </li>
           )}
         </ul>
       </PolicySection>
@@ -91,6 +119,7 @@ export default function PrivacyPage() {
           We keep order and account data for as long as needed to provide the service and to meet
           legal, accounting, and tax requirements, after which it is deleted or anonymised.
           {flags.trafficTracking ? ' Usage data about visits to our ordering and shop pages is deleted after 13 months.' : null}
+          {flags.suggest ? ' The Ask Coffey step records described above are deleted after 13 months.' : null}
         </p>
       </PolicySection>
 

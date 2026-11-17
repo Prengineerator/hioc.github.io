@@ -2322,6 +2322,27 @@ async function checkTrafficTracking() {
   else fail('traffic_events exists', `${kind}: ${errText(res)}`);
 }
 
+// Coffey wizard step tracking (docs/COFFEY-SPEC.md §10.7,
+// supabase/2026-11-coffey-wizard-steps.sql). Read-only, like the traffic and
+// add-ons probes above: the table is service-role only, so this selects every
+// column the API writes and Owner → Suggestions reads, and writes nothing. The
+// CHECKs and RLS need a write to prove, so the migration's own Verify block
+// checks them from the SQL editor instead.
+const WIZARD_STEP_COLUMNS = ['id', 'anon_id', 'user_id', 'step', 'created_at'];
+
+async function checkCoffeyWizardSteps() {
+  heading('COFFEY · wizard step tracking table', '2026-11-coffey-wizard-steps.sql');
+  const hint = 'apply supabase/2026-11-coffey-wizard-steps.sql';
+  const res = await rest(`/suggestion_wizard_steps?select=${WIZARD_STEP_COLUMNS.join(',')}&limit=1`);
+  if (res.ok) {
+    pass('suggestion_wizard_steps exists', `${WIZARD_STEP_COLUMNS.length} column(s) selectable`);
+    return;
+  }
+  const kind = errKind(res);
+  if (kind === 'no_table' || kind === 'no_column') fail('suggestion_wizard_steps exists', `${hint} — ${errText(res)}`);
+  else fail('suggestion_wizard_steps exists', `${kind}: ${errText(res)}`);
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -2361,6 +2382,7 @@ async function main() {
   await checkMarketingAgent();
   await checkOnlineSettlements();
   await checkTrafficTracking();
+  await checkCoffeyWizardSteps();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);
