@@ -538,7 +538,7 @@ The most used presets in the grid: Espresso Shot (₹40), Caramel Sauce (₹30),
 
 ### 11.7 Watching the paid default (`suggestion_events`)
 
-Preselecting a paid add-on is only right if customers mostly keep it. Three events record that, counted as distinct (session, item) pairs on the owner's Suggestions page under "Add-ons Coffey preselects":
+Preselecting a paid add-on is only right if customers mostly keep it. Three events record that, counted as distinct (session, item) pairs on the owner's Suggestions page under "Add-ons Coffey preselects". The final outcome wins: a pick that was un-ticked, ticked again and then added with the add-on counts as kept, not as removed, so the two shares never add up to more than the picks sent. "Removed" includes picks the customer un-ticked and never added.
 
 | event | written by | when |
 |---|---|---|
@@ -546,11 +546,11 @@ Preselecting a paid add-on is only right if customers mostly keep it. Three even
 | `preset_removed` | the browser, at most once per pick | the customer un-ticked the add-on on the card, or added the pick to the cart without it (including removing it on the customise screen) |
 | `preset_kept` | the browser | the pick went into the cart with a preset still on, read from the cart line that was actually added |
 
-The sugar preset is free and is not counted. `suggestion_events.event` has a CHECK constraint, so these need `supabase/2026-11-coffey-preset-events.sql` (re-runnable; `npm run verify:db` checks it). Until it is applied the three inserts fail and are swallowed: nothing else changes, and the card shows zeros with a pointer to the SQL.
+The sugar preset is free and is not counted. `suggestion_events.event` has a CHECK constraint, so these need `supabase/2026-11-coffey-preset-events.sql` (one statement, re-runnable). It is safe to apply before or after the code is deployed: the deployed code only writes the nine old names, which stay allowed. Until it is applied the three inserts are refused (Postgres 23514) and swallowed, logged once per server instance; the `shown` events, the response and the page are unaffected, the card shows zeros with a pointer to the SQL, and `npm run verify:db` reports the check as skipped rather than failed.
 
 ### 11.8 Coffey's setup at the top of the customise screen
 
-A drink's customise screen is long (size, sugar, milk, syrup, toppings, sides), and what Coffey chose sat inside those groups. When Coffey opens the screen with anything preselected, a "Coffey set this up for you" panel now sits above the first group: one chip per preselected option ("Hazelnut syrup +₹35", "Sugar: No Sugar"), bound to the form's own state through the same toggle the option uses below, so the group limits are enforced in one place and the total moves as usual. An add-on chip removes or restores the add-on; the sugar chip belongs to a required group, so it shows whether Coffey's option is still the one chosen and restores it on a tap. The one-sentence note is replaced by the panel; the "Coffey's pick" mark on each option stays. Opened from the menu, the screen is unchanged.
+A drink's customise screen is long (size, sugar, milk, syrup, toppings, sides), and what Coffey chose sat inside those groups. When Coffey opens the screen with an add-on preselected, a "Coffey set this up for you" panel now sits above the first group: one chip per option Coffey itself preselected ("Hazelnut syrup +₹35", "Sugar: No Sugar"), with its price wherever it has one, bound to the form's own state through the same toggle the option uses below, so the group limits are enforced in one place and the total moves as usual. An option counts as Coffey's only if Coffey passed it in to be preselected, never because it happens to be a group's default. A pick whose only preselection is the sugar option keeps the one-line note instead: the sugar group is the second thing on the screen. An add-on chip removes or restores the add-on; the sugar chip belongs to a required group, so it shows whether Coffey's option is still the one chosen and restores it on a tap. The one-sentence note is replaced by the panel; the "Coffey's pick" mark on each option stays. Opened from the menu, the screen is unchanged.
 
 ### 11.9 Judgement calls, and what to watch
 

@@ -3,13 +3,14 @@
 import { useMemo, useState } from 'react';
 import { useCart } from '@/lib/cart/CartContext';
 import {
-  coffeyStripEntries,
   flattenAddons,
   initialSelection,
   invalidGroups,
   preselectedSuggestions,
+  stripCoversPresets,
   suggestedOptionIds,
   toggleOption,
+  vetPresets,
   visibleHints,
 } from '@/lib/menu/customization';
 import { basePriceInr, DEFAULT_WEIGHT_GRAMS, isSoldByWeight } from '@/lib/menu/weight';
@@ -56,14 +57,19 @@ export function MenuItemCustomizeModal({
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
-  // What Coffey chose for the customer on open (suggested AND selected; the older
-  // highlight-only flavour tip isn't "set up", so it keeps its hint and no strip).
-  // Read once, like `presets`.
-  const [coffeyOptions] = useState(() => preselectedSuggestions(suggestedOptions, initialSelection(item, presets)));
-  const stripShown = coffeyStripEntries(item, coffeyOptions, selected).length > 0;
+  // What Coffey preselected: the suggested options that are in the VETTED presets
+  // it passed in. An option merely selected on open (a required group's default)
+  // or only highlighted (the older flavour tip) is not "set up". Read once.
+  const [coffey] = useState(() => {
+    const vetted = vetPresets(item, presets);
+    return { vetted, options: preselectedSuggestions(suggestedOptions, vetted) };
+  });
+  const coffeyOptions = coffey.options;
+  // The panel replaces the hint lines only when it has a chip for every
+  // preselected option; otherwise the hints stay (and the panel still shows).
+  const stripCovers = stripCoversPresets(item, coffey.vetted, coffeyOptions, selected);
   const allHints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
-  // The strip says it all, so it replaces the sentence.
-  const hints = visibleHints(allHints, stripShown);
+  const hints = visibleHints(allHints, stripCovers);
 
   const suggestedIds = useMemo(() => suggestedOptionIds(item, suggestedOptions), [item, suggestedOptions]);
 

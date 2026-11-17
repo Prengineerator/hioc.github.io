@@ -10,7 +10,7 @@ const state: {
   inserted: Record<string, unknown>[];
   rateLimitOk: boolean;
   suggestFlag: boolean;
-  insertError: { message: string } | null;
+  insertError: { message: string; code?: string } | null;
 } = { session: null, inserted: [], rateLimitOk: true, suggestFlag: true, insertError: null };
 
 vi.mock('@/lib/flags', () => ({
@@ -151,14 +151,45 @@ describe('POST /api/suggest/events', () => {
     expect(state.inserted).toEqual([]);
   });
 
-  it('a database refusal of a preset event (CHECK not migrated yet) is a quiet 204, not a 500', async () => {
-    state.insertError = { message: 'violates check constraint "suggestion_events_event_check"' };
+  it("a '23514' on a preset event (CHECK not migrated yet) is a 204, logged once per instance", async () => {
+    vi.resetModules();
+    const fresh = await import('@/app/api/suggest/events/route');
+    const call = (event: string) =>
+      fresh.POST(
+        new Request('http://t/api/suggest/events', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sessionId: SESSION_ID, event, menuItemId: MENU_ITEM_ID }),
+        }),
+      );
+    state.insertError = { code: '23514', message: 'violates check constraint "suggestion_events_event_check"' };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const event of ['preset_removed', 'preset_kept']) {
+      expect((await call(event)).status).toBe(204);
+    }
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(String(errSpy.mock.calls[0][0])).toContain('2026-11-coffey-preset-events.sql');
+    errSpy.mockRestore();
+  });
+
+  it('any other insert error on a preset event behaves like an existing event (500)', async () => {
+    state.insertError = { code: '42501', message: 'permission denied' };
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     for (const event of ['preset_removed', 'preset_kept']) {
       const res = await post({ sessionId: SESSION_ID, event, menuItemId: MENU_ITEM_ID });
-      expect(res.status).toBe(204);
+      expect(res.status).toBe(500);
     }
-    expect(errSpy).toHaveBeenCalledTimes(2);
+    // an error with no code at all is "any other" too
+    state.insertError = { message: 'boom' };
+    expect((await post({ sessionId: SESSION_ID, event: 'preset_kept', menuItemId: MENU_ITEM_ID })).status).toBe(500);
+    errSpy.mockRestore();
+  });
+
+  it("an existing event with '23514' is NOT turned into a 204", async () => {
+    state.insertError = { code: '23514', message: 'check' };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const res = await post({ sessionId: SESSION_ID, event: 'added_to_cart', menuItemId: MENU_ITEM_ID });
+    expect(res.status).toBe(500);
     errSpy.mockRestore();
   });
 

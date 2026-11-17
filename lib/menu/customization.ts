@@ -254,18 +254,20 @@ export interface CoffeyStripEntry {
 }
 
 /**
- * The suggested options that were actually CHOSEN when the screen opened: the
- * ones Coffey preselected, as opposed to the older "highlight only" flavour tip
- * (suggested but not chosen). `opened` is the selection the form started with.
+ * The suggested options Coffey actually PRESELECTED, as opposed to the older
+ * "highlight only" flavour tip. `presets` must be the vetted presets Coffey
+ * passed in (vetPresets of the modal's initialSelection prop), never the
+ * selection the screen opens with: that includes a required group's ordinary
+ * defaults, which Coffey did not set.
  */
 export function preselectedSuggestions(
   suggested: Record<string, string[]> | undefined,
-  opened: Record<string, string[]>,
+  presets: Record<string, string[]>,
 ): Record<string, string[]> | undefined {
   if (!suggested) return undefined;
   const out: Record<string, string[]> = {};
   for (const [groupId, ids] of Object.entries(suggested)) {
-    const kept = ids.filter((id) => opened[groupId]?.includes(id));
+    const kept = ids.filter((id) => presets[groupId]?.includes(id));
     if (kept.length > 0) out[groupId] = kept;
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -302,7 +304,25 @@ export function coffeyStripEntries(
   return [...entries.filter((e) => !e.required), ...entries.filter((e) => e.required)];
 }
 
-/** Hint lines the modal shows: the strip replaces them when it is drawn. */
-export function visibleHints(hints: string[], stripShown: boolean): string[] {
-  return stripShown ? [] : hints;
+/**
+ * True when the strip has a chip for EVERY option Coffey preselected (`presets`:
+ * the vetted initialSelection). Only then does the strip say it all; otherwise
+ * some preselected option is mentioned only by a hint line, which must stay.
+ */
+export function stripCoversPresets(
+  item: Pick<MenuItem, 'addon_groups'>,
+  presets: Record<string, string[]>,
+  suggested: Record<string, string[]> | undefined,
+  selection: Record<string, string[]>,
+): boolean {
+  const entries = coffeyStripEntries(item, suggested, selection);
+  if (entries.length === 0) return false;
+  return Object.entries(presets).every(([groupId, ids]) =>
+    ids.every((id) => entries.some((e) => e.group.id === groupId && e.option.id === id)),
+  );
+}
+
+/** Hint lines the modal shows: the strip replaces them when it covers them all. */
+export function visibleHints(hints: string[], stripCoversAll: boolean): string[] {
+  return stripCoversAll ? [] : hints;
 }

@@ -12,6 +12,9 @@ export const dynamic = 'force-dynamic';
 // §5.6-style abuse guard for a public, unauthenticated, fire-and-forget
 // endpoint — generous, since a normal /suggest session fires a handful of
 // these, but bounded so it can't become a free insert-spam surface.
+// Logged once per server instance while the events CHECK still lacks the preset names.
+let presetCheckLogged = false;
+
 const EVENTS_RATE_LIMIT_MAX = 120;
 const EVENTS_RATE_LIMIT_WINDOW_SECS = 600;
 
@@ -75,14 +78,22 @@ export async function POST(request: Request) {
     menu_item_id: menuItemId ?? null,
   });
   if (insertError) {
-    console.error('suggest events route: insert failed', insertError);
     // The preset events are measurement only. Until
     // supabase/2026-11-coffey-preset-events.sql is applied the database CHECK
-    // refuses them, so answer as if recorded rather than hand the page a 500
-    // for something it cannot act on. Every other event keeps its 500.
-    if (event === 'preset_removed' || event === 'preset_kept') {
+    // refuses them (23514), so answer as if recorded rather than hand the page
+    // a 500 it cannot act on. Any other error, and every other event, keeps
+    // the 500.
+    if ((event === 'preset_removed' || event === 'preset_kept') && insertError.code === '23514') {
+      if (!presetCheckLogged) {
+        presetCheckLogged = true;
+        console.error(
+          `suggest events route: '${event}' refused by the suggestion_events CHECK; apply supabase/2026-11-coffey-preset-events.sql (logged once per instance)`,
+          insertError,
+        );
+      }
       return new NextResponse(null, { status: 204 });
     }
+    console.error('suggest events route: insert failed', insertError);
     return errorResponse(500, 'Failed to record event');
   }
 

@@ -164,6 +164,10 @@ function CoffeyStrip({
 }) {
   const headingId = useId();
   const removable = entries.some((e) => !e.required);
+  // Same rule as the chip's own `atMax`: a full multi-select group can't take another.
+  const isFull = (e: (typeof entries)[number]) =>
+    e.group.selection_type === 'multi' && !e.on && (selection[e.group.id] ?? []).length >= e.group.max_select;
+  const anyFull = entries.some(isFull);
   return (
     <div role="group" aria-labelledby={headingId} className="mb-3 rounded-lg border border-line bg-surface p-3">
       <p id={headingId} className="mb-2 text-sm font-semibold text-charcoal">
@@ -174,24 +178,25 @@ function CoffeyStrip({
           <StripChip
             key={e.option.id}
             entry={e}
-            // Same rule as the option's own chip below: a full multi-select
-            // group can't take another.
-            atMax={e.group.selection_type === 'multi' && !e.on && (selection[e.group.id] ?? []).length >= e.group.max_select}
+            atMax={isFull(e)}
             onToggle={onToggle}
           />
         ))}
       </div>
+      {anyFull ? (
+        <p className="mt-2 text-xs text-muted">That group is full. Remove one of its choices below to add this back.</p>
+      ) : null}
       <p className="mt-2 text-xs text-muted">
-        {removable ? 'Tap to remove. Everything else is below, as usual.' : 'You can change it below.'}
+        {removable ? 'Tap to remove or put back. Everything else is below, as usual.' : 'You can change it below.'}
       </p>
     </div>
   );
 }
 
-/** A required group's name as a chip prefix: "Choice of Sugar" reads "Sugar". */
+/** A required group's name as a chip prefix: "Choice of Sugar" reads "Sugar".
+ * Only a leading "Choice of " is stripped; an empty name gives no prefix. */
 function shortGroupName(displayName: string | null | undefined): string {
-  const short = (displayName ?? '').replace(/^\s*(?:choice of|choose(?: your)?|select(?: your)?)\s+/i, '').trim();
-  return short || 'Sugar';
+  return (displayName ?? '').replace(/^\s*choice of\s+/i, '').trim();
 }
 
 function StripChip({
@@ -222,8 +227,8 @@ function StripChip({
         .join(' ')}
     >
       {on ? <span aria-hidden="true">✓</span> : null}
-      <span>{required ? `${shortGroupName(group.display_name)}: ${label}` : label}</span>
-      {!required && priceInr > 0 ? (
+      <span>{required && shortGroupName(group.display_name) ? `${shortGroupName(group.display_name)}: ${label}` : label}</span>
+      {priceInr > 0 ? (
         <span className={'font-mono tabular-nums ' + (on ? 'text-cream/80' : 'text-muted')}>+₹{priceInr}</span>
       ) : null}
     </button>

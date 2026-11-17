@@ -178,7 +178,8 @@ describe('ItemCustomizer strip', () => {
     expect(s).not.toContain('Choice of Sugar: No Sugar'); // the chip drops "Choice of"
     expect(s.match(/aria-pressed="true"/g)).toHaveLength(2);
     expect(s).toContain('min-h-[44px]');
-    expect(s).toContain('Tap to remove. Everything else is below, as usual.');
+    expect(s).toContain('Tap to remove or put back. Everything else is below, as usual.');
+    expect(s).not.toContain('That group is full');
     // Pills below stay.
     expect(text(html).split("Coffey&#x27;s pick").length - 1).toBe(2);
     // Panel comes before the first option group.
@@ -213,6 +214,63 @@ describe('ItemCustomizer strip', () => {
     const selection = { ...initialSelection(item()), 'g-syrup': ['o-vanilla', 'o-caramel'] };
     const s = strip(render(selection, o));
     expect(s).toContain('disabled=""');
+    expect(s).toContain('That group is full. Remove one of its choices below to add this back.');
+  });
+
+  it('the full-group line appears only when a chip is disabled for that reason', () => {
+    const o = { 'g-syrup': ['o-hazelnut'] };
+    const full = 'That group is full.';
+    expect(strip(render({ ...initialSelection(item()), 'g-syrup': ['o-hazelnut'] }, o))).not.toContain(full);
+    expect(strip(render({ ...initialSelection(item()), 'g-syrup': [] }, o))).not.toContain(full);
+    // Sugar-only panel: nothing can be full.
+    expect(strip(render(initialSelection(item()), { 'g-sugar': ['o-nosugar'] }))).not.toContain(full);
+    // The chip is on although the group is at its limit: not disabled, no line.
+    const atLimit = { ...initialSelection(item()), 'g-syrup': ['o-hazelnut', 'o-vanilla'] };
+    const s = strip(render(atLimit, o));
+    expect(s).not.toContain('disabled=""');
+    expect(s).not.toContain(full);
+  });
+
+  it('footer: neutral line with a removable add-on (even when all are off), short line with only required', () => {
+    const neutral = 'Tap to remove or put back. Everything else is below, as usual.';
+    expect(strip(render({ ...sel(both), 'g-syrup': [] }, both.suggestedOptions))).toContain(neutral);
+    expect(strip(render(sel(both), both.suggestedOptions))).toContain(neutral);
+    const only = strip(render(initialSelection(item()), { 'g-sugar': ['o-nosugar'] }));
+    expect(only).toContain('You can change it below.');
+    expect(only).not.toContain('Tap to remove');
+  });
+
+  it('a paid preset in a required group shows its price; a free required option shows none', () => {
+    const flavour: AddonGroup = {
+      id: 'g-flav',
+      name: 'Flavour',
+      display_name: 'Choice of Flavour',
+      selection_type: 'single',
+      min_select: 1,
+      max_select: 1,
+      sort_order: 5,
+      options: [option('o-plain', 'g-flav', 'Plain', 0, 0), option('o-hz', 'g-flav', 'Hazelnut', 30, 10)],
+    };
+    const it2 = item({ addon_groups: [flavour, sugarGroup, syrupGroup] });
+    const o = { 'g-flav': ['o-hz'], 'g-sugar': ['o-nosugar'] };
+    const html = renderToStaticMarkup(
+      createElement(ItemCustomizer, {
+        item: it2,
+        variantId: 'v-reg',
+        onVariantChange: () => {},
+        selection: initialSelection(it2, o),
+        onToggle: () => {},
+        instructions: '',
+        onInstructionsChange: () => {},
+        coffeyOptions: o,
+      }),
+    );
+    const s = strip(html);
+    expect(s).toContain('Flavour: Hazelnut');
+    expect(s).toContain('+₹30</span>');
+    // Sugar "No Sugar" is free: exactly one price in the panel.
+    expect(s.match(/₹/g)).toHaveLength(1);
+    expect(s.slice(s.indexOf('Sugar: No Sugar'))).not.toContain('₹');
   });
 
   it('is exactly the same markup with no Coffey props (menu page, QR menu, staff)', () => {
@@ -225,6 +283,78 @@ describe('ItemCustomizer strip', () => {
     // With the props, the rest of the screen is the base plus the panel.
     const withProps = render(sel(both), both.suggestedOptions);
     expect(withProps).toContain('Coffey set this up for you');
+  });
+
+  it('the ordinary screen carries nothing of the panel and starts with its first group', () => {
+    const base = render(initialSelection(item()));
+    expect(base).not.toContain('Coffey set this up');
+    expect(base).not.toContain('Coffey&#x27;s pick');
+    // No panel: the only role="group" blocks are the option groups, and none comes before the first heading.
+    expect(base).not.toContain('class="mb-3 rounded-lg');
+    expect(base.indexOf('role="group"')).toBeGreaterThan(base.indexOf('>Required</h3>'));
+    expect(base).not.toContain('Tap to remove');
+    // The body opens straight on the first section's heading (no stray element).
+    expect(text(base).startsWith('<div class="divide-y divide-line"><section class="py-2 first:pt-0"><h3 ')).toBe(true);
+    expect(text(base)).toMatch(/^<div class="divide-y divide-line"><section class="py-2 first:pt-0"><h3 [^>]*>Required<\/h3>/);
+    // With several sizes, the size picker is what comes first.
+    const sized = renderToStaticMarkup(
+      createElement(ItemCustomizer, {
+        item: item({
+          variants: [
+            { id: 'v-reg', menu_item_id: 'm-capp', label: 'Regular', price_inr: 160, sort_order: 0 },
+            { id: 'v-lg', menu_item_id: 'm-capp', label: 'Large', price_inr: 200, sort_order: 1 },
+          ],
+        }),
+        variantId: 'v-reg',
+        onVariantChange: () => {},
+        selection: initialSelection(item()),
+        onToggle: () => {},
+        instructions: '',
+        onInstructionsChange: () => {},
+      }),
+    );
+    expect(text(sized)).toMatch(/^<div class="divide-y divide-line"><section class="py-2 first:pt-0"><h3 [^>]*>Required<\/h3>/);
+    expect(sized).not.toContain('class="mb-3 rounded-lg');
+  });
+
+  it('chip prefix: only a leading "Choice of " is stripped; an empty name has no prefix', () => {
+    const grp = (id: string, display: string, label: string): AddonGroup => ({
+      id,
+      name: 'x',
+      display_name: display,
+      selection_type: 'single',
+      min_select: 1,
+      max_select: 1,
+      sort_order: 1,
+      options: [option(id + '-o', id, label, 0, 0)],
+    });
+    const groups = [
+      grp('a', 'Choice of Sugar', 'No Sugar'),
+      grp('b', 'Choose any 2 toppings', 'Cream'),
+      grp('c', '', 'Plain'),
+      grp('d', 'choice of Milk', 'Oat'),
+    ];
+    const it2 = item({ addon_groups: groups });
+    const o = { a: ['a-o'], b: ['b-o'], c: ['c-o'], d: ['d-o'] };
+    const s = strip(
+      renderToStaticMarkup(
+        createElement(ItemCustomizer, {
+          item: it2,
+          variantId: 'v-reg',
+          onVariantChange: () => {},
+          selection: initialSelection(it2, o),
+          onToggle: () => {},
+          instructions: '',
+          onInstructionsChange: () => {},
+          coffeyOptions: o,
+        }),
+      ),
+    );
+    expect(s).toContain('<span>Sugar: No Sugar</span>');
+    expect(s).toContain('<span>Choose any 2 toppings: Cream</span>');
+    expect(s).toContain('<span>Plain</span>');
+    expect(s).not.toContain('Sugar: Plain');
+    expect(s).toContain('<span>Milk: Oat</span>');
   });
 });
 

@@ -94,23 +94,29 @@ export function PresetsCard({ stats }: { stats: SuggestionStats }) {
   ];
   return (
     <Card title="Add-ons Coffey preselects">
-      {presets.shown === 0 ? (
+      {presets.shown === 0 && presets.removed === 0 && presets.kept === 0 ? (
         <p className="text-sm text-muted">
-          No picks with a preselected add-on in this period yet. If Coffey has been live a while, check that
-          supabase/2026-11-coffey-preset-events.sql has been applied.
+          No picks with a preselected add-on in this period yet. If Coffey has been live for a while and this stays
+          empty, the tracking still needs switching on: ask whoever looks after the site to apply
+          supabase/2026-11-coffey-preset-events.sql.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {tiles.map((t) => (
-            <div key={t.label} className="rounded-md bg-[#f2efe9] p-3 text-center">
-              <p className="font-mono text-xl font-bold tabular-nums text-charcoal">{t.value}</p>
-              <p className="text-xs uppercase text-muted">{t.label}</p>
-              {t.share ? (
-                <p className="font-mono text-xs tabular-nums text-muted">{t.share} of picks sent</p>
-              ) : null}
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {tiles.map((t) => (
+              <div key={t.label} className="rounded-md bg-[#f2efe9] p-3 text-center">
+                <p className="font-mono text-xl font-bold tabular-nums text-charcoal">{t.value}</p>
+                <p className="text-xs uppercase text-muted">{t.label}</p>
+                {t.share ? (
+                  <p className="font-mono text-xs tabular-nums text-muted">{t.share} of picks sent</p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            Each pick counts once. “Removed” includes picks the customer un-ticked and never added.
+          </p>
+        </>
       )}
     </Card>
   );

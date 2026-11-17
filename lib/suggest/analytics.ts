@@ -117,16 +117,22 @@ export function computeSuggestionStats(args: ComputeSuggestionStatsArgs): Sugges
   const latencyP90Ms = percentile(latencies, 90);
 
   // Preselected add-ons: distinct (session, menu item) pairs, so a customer who
-  // un-ticks twice, or a pick sent twice in one session, counts once.
-  const presetPairs = (type: SuggestionEventRow['event']): number => {
+  // un-ticks twice, or a pick sent twice in one session, counts once. The final
+  // outcome wins: a pair with 'preset_kept' counts as kept only (a customer who
+  // un-ticked, re-ticked and added the pick sends both events), and 'removed'
+  // counts pairs removed and never kept, so removed + kept never exceeds the
+  // distinct pairs and the two shares of 'shown' cannot add past 100%.
+  const presetPairs = (type: SuggestionEventRow['event']): Set<string> => {
     const pairs = new Set<string>();
     for (const e of scopedEvents) if (e.event === type && e.menu_item_id) pairs.add(`${e.session_id}|${e.menu_item_id}`);
-    return pairs.size;
+    return pairs;
   };
+  const keptPairs = presetPairs('preset_kept');
+  const removedPairs = presetPairs('preset_removed');
   const presets = {
-    shown: presetPairs('preset_shown'),
-    removed: presetPairs('preset_removed'),
-    kept: presetPairs('preset_kept'),
+    shown: presetPairs('preset_shown').size,
+    removed: [...removedPairs].filter((k) => !keptPairs.has(k)).length,
+    kept: keptPairs.size,
   };
 
   const costUsd = sessions.reduce((sum, s) => sum + s.cost_usd_micros, 0) / 1_000_000;
