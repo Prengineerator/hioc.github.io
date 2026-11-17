@@ -372,13 +372,15 @@ Where this section and §1, §4.2–§4.6 disagree, this section wins. Nothing h
 
 ### 10.0 Why: what the live data showed
 
-Read-only look at production (`suggestion_sessions`, `suggestion_events`, 26 Sep – 1 Nov) and Vercel page views (19 Oct – 17 Nov). The sample is small and part of it is the team testing, so read these as direction, not as rates.
+Read-only look at the live database (`suggestion_sessions`, `suggestion_events`, 25 Sep – 14 Nov, read on 17 Nov) and Vercel page views (19 Oct – 17 Nov). The sample is small and part of it is the team testing, so read these as direction, not as rates.
+
+**Corrected 2026-11-17.** The first version of this table was read from the pre-migration database (the copy the site ran on until early November), which stops at 31 Oct. It said that 2 of 14 visitors reached the picks. Against the live database it is 9 of 14, so most people who open the wizard do finish it, and the larger loss is after the picks are shown. The other figures moved only slightly and are the live ones below. The engine measurements in §10.5 and §11.6 are unaffected: the menu and its traits are identical in both databases, and the replayed requests are the first 40 first asks (to 31 Oct), which both hold.
 
 | Finding | Evidence | Consequence |
 |---|---|---|
-| **People leave inside the wizard.** | 14 visitors opened `/suggest` in the last 30 days; 2 reached the picks. Nothing is logged before the "Ask Coffey" press, so the step they left on is unknown. | Step 2 was 28 tappable options over 3–4 phone screens, with the only way forward at the bottom. |
-| **Those who finish work hard, then walk away.** | 47 sessions, 40 first asks. Median 4–5 of the optional groups set. 6 sessions added a pick to the cart (13%; the gate in the v1 spec §6 is 25%), 1 ordered, 21 dismissed. | The picks did not repay the effort. |
-| **Three groups are barely used.** | Of 32 v2 first asks: sweetness set in 81%, flavours 78%, hot/iced 70%, a coffee choice 59%, a second feeling 47%; budget 17%, texture 16%, the note 7.5%, "No caffeine at all" 0. | Budget, texture, the note and caffeine-free move behind one "More options". |
+| **Some people leave inside the wizard.** | 14 visitors opened `/suggest` between 19 Oct and 17 Nov; 9 of them asked for picks (11 first asks). Nothing is logged before the "Ask Coffey" press, so the step the other 5 left on is unknown. | Step 2 was 28 tappable options over 3–4 phone screens, with the only way forward at the bottom. |
+| **Those who finish work hard, then walk away.** This is the larger loss. | 56 sessions, 49 first asks, 27 visitors. Median 4 of the optional groups set. 7 sessions added a pick to the cart (12.5%; the gate in the v1 spec §6 is 25%), 1 ordered, 26 dismissed. | The picks did not repay the effort. |
+| **Three groups are barely used.** | Of 41 v2 first asks: sweetness set in 78%, flavours 73%, hot/iced 63%, a coffee choice 61%, a second feeling 39%; budget 22%, texture 20%, the note 7%, "No caffeine at all" 0. | Budget, texture, the note and caffeine-free move behind one "More options". |
 | **The choices people make most are the ones the engine kept least.** | Flavours, strength, sweetness and texture were soft terms sharing one 0.25 weight (and about 7.5% of the final score on the Jev path). Replaying the 40 live first asks through the old engine: the pick carried the requested flavour 49% of the time, the strength 76%, the sweetness 68%. | A customer who taps "Chocolatey" and gets none stops believing the rest. |
 | **Tags could claim what the item doesn't have.** | 30 of 118 replayed picks carried a "<Flavour> add-on" tag (true only with a paid extra) or a budget tag that could contradict the price range on the card; an intensity-2 latte was tagged "Strong". | Tags now come from the same test that picks the items. |
 | **The menu can't serve some chips at all.** | Caramel is on 3 drinks and 2 desserts; no dessert is floral; no food item carries any flavour family. | Don't offer what can't be served. |
@@ -437,7 +439,7 @@ Both are optional, computed from the final picks, and not persisted.
 
 ### 10.5 Measured (2026-11-17)
 
-Deterministic fallback, live menu (126 orderable items, 118 tagged), clock pinned to 11:00 IST, no popularity or profile. Two request sets: the 40 real first asks since launch (notes dropped), and a grid of 6,336 requests covering every combination of the new step-2 chips for a drink, a drink with something sweet, and something sweet, for each feeling. Both engines are scored with the one predicate above.
+Deterministic fallback, live menu (126 orderable items, 118 tagged), clock pinned to 11:00 IST, no popularity or profile. Two request sets: the first 40 real first asks, 25 Sep – 31 Oct (notes dropped), and a grid of 6,336 requests covering every combination of the new step-2 chips for a drink, a drink with something sweet, and something sweet, for each feeling. Both engines are scored with the one predicate above.
 
 | | Before | After |
 |---|---|---|
@@ -557,5 +559,5 @@ A drink's customise screen is long (size, sugar, milk, syrup, toppings, sides), 
 - Preselecting a paid add-on is a default, and defaults are powerful (§1). It is always shown with its price and is one tap to remove; §11.7 measures how often customers remove it. If most do, stop preselecting and go back to pointing at it.
 - "A plain base only" and "one shot on intensity 2" are rules of thumb. The owner can override any option's role, families and lifts (`addon_option_traits`), which is the way to stop or allow a particular combination.
 - Some option names read awkwardly as a suggestion ("Sparkling Water(green Apple)"). `addonLabel` tidies only "(new)" and syrups; renaming the option on the menu fixes it everywhere.
-- **Done on the live database, 2026-11-17:** `supabase/2026-11-coffey-preset-events.sql` was applied (the event constraint now lists all twelve names; existing rows untouched).
+- **Done on the live database (the "Hioc India" Supabase project), 2026-11-17:** `supabase/2026-11-coffey-preset-events.sql` was applied (the event constraint now lists all twelve names; existing rows untouched), and "Tiramisu Latte Iced" was corrected from `hot` to `iced`. Both were first applied by mistake to the retired pre-migration project ("Hioc Coffee"), where they are harmless.
 - **Owner follow-ups, added to §10.6's:** "Tiramisu Latte Iced" had its temperature corrected to `iced` on 2026-11-17, but the rest of its row (moods, mood fit, refreshment) was written for a hot drink, and the hot "Tiramisu Latte" still has no row: regenerate the first and generate the second (Owner → Suggestions → Traits).
