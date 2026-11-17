@@ -508,7 +508,7 @@ describe('scoreCandidates and preferenceFits — flavours via an add-on', () => 
 // Tags, reasons and Jev's brief (§3.3)
 // ---------------------------------------------------------------------------
 
-describe('matchTagsFor — "<Family> add-on"', () => {
+describe('matchTagsFor — no "<Family> add-on" tag (a flavour only an add-on can give is not claimed)', () => {
   const subject = (over: Record<string, unknown> = {}) => ({
     name: 'Cappucino',
     traits: makeTraitsV2({ menu_item_id: 'cappucino', sweetness_level: 1, moods: [] }),
@@ -516,29 +516,29 @@ describe('matchTagsFor — "<Family> add-on"', () => {
     ...over,
   });
 
-  it('the family only reached through an add-on gets the add-on tag', () => {
-    expect(matchTagsFor(subject({ addonFlavourFamilies: ['nutty'] }), ask(['nutty'], { mood: 'surprise' }))).toEqual(['Nutty add-on']);
-    expect(matchTagsFor(subject({ addonFlavourFamilies: ['caramel'] }), ask(['caramel'], { mood: 'surprise' }))).toEqual(['Caramel add-on']);
-    expect(matchTagsFor(subject({ addonFlavourFamilies: ['biscuit'] }), ask(['biscuit'], { mood: 'surprise' }))).toEqual(['Cookies & biscuit add-on']);
+  it('the family only reached through an add-on gets no tag at all', () => {
+    expect(matchTagsFor(subject({ addonFlavourFamilies: ['nutty'] }), ask(['nutty'], { mood: 'surprise' }))).toEqual([]);
+    expect(matchTagsFor(subject({ addonFlavourFamilies: ['caramel'] }), ask(['caramel'], { mood: 'surprise' }))).toEqual([]);
+    expect(matchTagsFor(subject({ addonFlavourFamilies: ['biscuit'] }), ask(['biscuit'], { mood: 'surprise' }))).toEqual([]);
   });
 
-  it('takes slot 2: after the feeling, before sweetness, iced and the budget', () => {
+  it('an add-on family takes no slot: sweetness, Hot and the feeling (last) are what remain', () => {
     const traitsCosy = makeTraitsV2({ menu_item_id: 'cappucino', sweetness_level: 3, moods: ['cosy'], mood_fit: { cosy: 3 } });
     const tags = matchTagsFor(
       subject({ traits: traitsCosy, addonFlavourFamilies: ['nutty'] }),
       ask(['nutty'], { sweetness: 'light', temperature: 'hot', budget: 'under_150' }),
     );
-    expect(tags).toEqual(['Cosy', 'Nutty add-on', 'Lightly sweet']); // capped at three
+    expect(tags).toEqual(['Lightly sweet', 'Hot', 'Cosy']);
   });
 
   it('a native family takes the tag, with no "add-on"', () => {
     expect(matchTagsFor(subject({ name: 'Hazelnut Latte', addonFlavourFamilies: ['nutty'] }), ask(['nutty'], { mood: 'surprise' }))).toEqual(['Nutty']);
   });
 
-  it('with two asked, a native one beats an add-on one, and the first asked add-on family is used otherwise', () => {
+  it('with two asked, the native one is tagged and an add-on one never is', () => {
     const caramelNative = makeTraitsV2({ menu_item_id: 'cappucino', sweetness_level: 1, moods: [], flavor_notes: ['caramel'] });
     expect(matchTagsFor(subject({ traits: caramelNative, addonFlavourFamilies: ['nutty'] }), ask(['nutty', 'caramel'], { mood: 'surprise' }))).toEqual(['Caramel']);
-    expect(matchTagsFor(subject({ addonFlavourFamilies: ['caramel', 'nutty'] }), ask(['nutty', 'caramel'], { mood: 'surprise' }))).toEqual(['Nutty add-on']);
+    expect(matchTagsFor(subject({ addonFlavourFamilies: ['caramel', 'nutty'] }), ask(['nutty', 'caramel'], { mood: 'surprise' }))).toEqual([]);
   });
 
   it('nothing when the add-on family was not asked for, or when the field is absent or empty', () => {
@@ -732,7 +732,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
       family: 'nutty',
     });
     expect(cap.flavourAddon!.label).toBe('Hazelnut syrup');
-    expect(cap.matchTags).toEqual(['Cosy', 'Nutty add-on']);
+    expect(cap.matchTags).toEqual(['Cosy']); // no "Nutty add-on" tag: the item is not nutty itself
     expect(cap.reason).toContain('from Hazelnut syrup');
     // No sweetness word: the syrup sweetens the drink, so "unsweetened … from
     // Hazelnut syrup" would contradict itself. The next descriptor (texture) leads.
@@ -761,7 +761,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
 
     const native = pick(result, 'hazelnut-latte');
     expect(native.flavourAddon ?? null).toBeNull();
-    expect(native.matchTags).toEqual(['Cosy', 'Nutty']);
+    expect(native.matchTags).toEqual(['Nutty', 'Cosy']);
     expect(native.reason).not.toContain(' from ');
 
     const plain = pick(result, 'plain-latte');
@@ -801,7 +801,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     const none = ask(['nutty'], { sweetness: 'none' });
     const ok = await run(none, { menu: menu({ cappucinoLevel: 1 }) });
     expect(pick(ok, 'cappucino').flavourAddon?.label).toBe('Hazelnut syrup');
-    expect(pick(ok, 'cappucino').matchTags).toContain('Nutty add-on');
+    expect(pick(ok, 'cappucino').matchTags).not.toContain('Nutty add-on');
 
     const tooSweet = await run(none, { menu: menu({ cappucinoLevel: 2 }) });
     expect(pick(tooSweet, 'cappucino').flavourAddon ?? null).toBeNull();
@@ -850,7 +850,7 @@ describe('runSuggest — flavour add-ons, end to end (decider: null)', () => {
     expect(result.usual?.reasonCode).toBe('usual');
     expect(result.usual?.flavourAddon?.label).toBe('Hazelnut syrup');
     expect(result.usual?.reason).toBe('Your usual — toasty nutty notes from Hazelnut syrup, always a good choice.');
-    expect(result.usual?.matchTags).toEqual(['Cosy', 'Nutty add-on']);
+    expect(result.usual?.matchTags).toEqual(['Cosy']);
     expect(result.picks.some((p) => p.menuItemId === 'cappucino')).toBe(false);
 
     const noFlavours = await run(ask([]), { profile });

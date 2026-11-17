@@ -10,7 +10,9 @@
 //
 // Pure: no Supabase, no 'server-only'.
 
-import { FLAVOUR_FAMILIES, type FlavourFamily } from './types';
+import { isMenuItemAvailable } from '@/lib/menu/availability';
+import type { MenuItem } from '@/lib/types';
+import { FLAVOUR_FAMILIES, type FlavourCounts, type FlavourFamily, type MenuItemTraits } from './types';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 
 /**
@@ -29,4 +31,23 @@ export function flavourFamiliesOf(name: string, flavorNotes: readonly string[]):
     const { pattern } = FLAVOUR_FAMILY_INFO[family];
     return texts.some((text) => pattern.test(text));
   });
+}
+
+/**
+ * COFFEY-SPEC §10 — per kind, how many orderable, tagged items carry each
+ * flavour family THEMSELVES (an add-on that could supply it doesn't count). The
+ * wizard uses this to offer only the flavour chips the menu can serve for the
+ * kinds the customer ticked (FLAVOUR_OFFER_MIN): "Floral" is not offered to
+ * someone who only wants something sweet to eat when no dessert is floral.
+ */
+export function flavourCountsByKind(items: MenuItem[], traitsById: Map<string, MenuItemTraits>): FlavourCounts {
+  const counts: FlavourCounts = { drink: {}, dessert: {}, food: {} };
+  for (const item of items) {
+    const traits = traitsById.get(item.id);
+    if (!traits || !isMenuItemAvailable(item)) continue;
+    for (const family of flavourFamiliesOf(item.name, traits.flavor_notes ?? [])) {
+      counts[traits.kind][family] = (counts[traits.kind][family] ?? 0) + 1;
+    }
+  }
+  return counts;
 }

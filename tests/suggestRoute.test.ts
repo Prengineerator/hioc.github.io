@@ -454,7 +454,7 @@ describe('POST /api/suggest — sugar presets read the menu\'s own add-on groups
     const espresso = data.picks.find((p: { menuItemId: string }) => p.menuItemId === 'espresso');
     // Inherent 0; "Normal" reaches 3 — exactly the "lightly sweet" asked for — while "No Sugar" stays 0.
     expect(espresso.sugarPreset).toEqual({ groupId: 'esp-group', optionId: 'esp-normal', label: 'Normal' });
-    expect(espresso.matchTags).toEqual(['A proper lift', 'Lightly sweet']);
+    expect(espresso.matchTags).toEqual(['Lightly sweet', 'A proper lift']);
   });
 
   it('claims a sweetness only when the pick lands in the band they chose: a preset that falls short earns no tag', async () => {

@@ -86,6 +86,48 @@ export const SWEETNESS_SCALE = {
   legacyToLevel: [0, 3, 6, 9] as const,
 } as const;
 
+// ---------------------------------------------------------------------------
+// Honoured choices (COFFEY-SPEC §10). The four step-2 choices below used to be
+// soft score terms only, so a pick could ignore them. They are now kept
+// whenever the menu can keep them: lib/suggest/promises.ts narrows each
+// requested kind's pool to the items that satisfy the choice, and the response
+// says so (`unmet`) when it could not.
+// ---------------------------------------------------------------------------
+
+/** The choices Coffey keeps when the menu allows — in narrowing priority order
+ * (first = kept first when two choices can't both be met). Flavour is what the
+ * item IS and the choice customers use most; strength is fixed by the recipe;
+ * sweetness can still be adjusted at the counter and already has a hard
+ * ceiling (filter.ts); texture is the least used. */
+export const HONOURED_CHOICES = ['flavours', 'strength', 'sweetness', 'body'] as const;
+export type HonouredChoice = (typeof HONOURED_CHOICES)[number];
+
+/** A choice narrows a kind's pool only if at least this many items of that kind
+ * would remain: 3 when one kind was asked for (all three picks can keep it), 2
+ * when several were (each kind fills one or two slots). */
+export const PROMISE_MIN_POOL = { singleKind: 3, multiKind: 2 } as const;
+
+/** What each sweetness choice means as an inclusive band on the DELIVERED level
+ * — the item's own sweetness plus the sugar option Coffey preselects (sugar.ts).
+ * 'none' runs to 3, the same line as the hard ceiling (target + tolerance): an
+ * unsweetened latte or cappuccino is tagged 2–3 for its milk, and a customer
+ * who asks for "Not sweet" means exactly that drink with no sugar in it.
+ * 'sweet' has no upper bound on purpose: a third of the menu sits at 10. */
+export const SWEETNESS_BANDS: Record<Exclude<SweetnessPref, 'any'>, { min: number; max: number }> = {
+  none: { min: 0, max: 3 },
+  light: { min: 2, max: 4 },
+  medium: { min: 4, max: 6 },
+  sweet: { min: 5, max: 10 },
+  very: { min: 8, max: 10 },
+};
+
+/** The wizard offers a flavour chip only when at least this many items of the
+ * ticked kinds carry that family themselves — never offer what can't be served. */
+export const FLAVOUR_OFFER_MIN = 3;
+/** Per kind, how many orderable, tagged items carry each flavour family natively
+ * (lib/suggest/flavor.ts flavourCountsByKind). */
+export type FlavourCounts = Record<TraitKind, Partial<Record<FlavourFamily, number>>>;
+
 /** menu_item_traits.traits_version for rows tagged under COFFEY-SPEC §3. */
 export const CURRENT_TRAITS_VERSION = 2;
 
@@ -287,6 +329,10 @@ export interface SuggestionPick {
    * doesn't have on its own (COFFEY-ADDONS-PAIRINGS-SPEC §2.4). Highlighted in
    * the customise modal, never preselected. null/absent otherwise. */
   flavourAddon?: FlavourAddonSuggestion | null;
+  /** The customer's choices THIS pick does not keep (COFFEY-SPEC §10) — shown
+   * on its card so a "closest we have" pick never passes for a match. Empty or
+   * absent when it keeps them all. */
+  misses?: HonouredChoice[];
 }
 
 export interface SugarPreset {
@@ -307,6 +353,10 @@ export interface SuggestResponse {
   picks: SuggestionPick[]; // 0–3
   source: SuggestionSource;
   relaxHint: RelaxHint | null;
+  /** The explicit choices at least one pick could not keep because the menu
+   * doesn't hold enough items that do (COFFEY-SPEC §10). Empty or absent when
+   * every pick keeps every choice. Optional: old clients ignore it. */
+  unmet?: HonouredChoice[];
   refinesLeft: number; // 2 → 1 → 0
   // The menu rows for usual + picks, shaped like /api/menu items, so the page
   // can render cards and the customize modal without a second fetch.

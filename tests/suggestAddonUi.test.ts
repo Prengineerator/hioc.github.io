@@ -109,7 +109,7 @@ const pick = (over: Partial<SuggestionPick> = {}): SuggestionPick => ({
   menuItemId: 'm-capp',
   reason: 'Mellow and silky, with toasty nutty notes from Hazelnut syrup — easy to sip while you focus.',
   reasonCode: 'trait',
-  matchTags: ['Nutty add-on'],
+  matchTags: ['Cosy'],
   ...over,
 });
 
@@ -126,8 +126,8 @@ describe('SuggestionCard tip line', () => {
     expect(html).toContain('Coffey tip: try it with Hazelnut syrup');
     expect(coffeyTip(hazelnut)).toBe('Coffey tip: try it with Hazelnut syrup');
     // After the tags, so it reads as a quiet footnote to them.
-    expect(html.indexOf('Nutty add-on')).toBeGreaterThan(-1);
-    expect(html.indexOf('Coffey tip:')).toBeGreaterThan(html.indexOf('Nutty add-on'));
+    expect(html.indexOf('Cosy')).toBeGreaterThan(-1);
+    expect(html.indexOf('Coffey tip:')).toBeGreaterThan(html.indexOf('Cosy'));
   });
 
   it('shows it even when the pick has no match tags', () => {

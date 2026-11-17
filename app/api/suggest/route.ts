@@ -247,6 +247,7 @@ export async function POST(request: Request) {
     picks: result.picks,
     source: result.source,
     relaxHint: result.relaxHint,
+    unmet: result.unmet,
     refinesLeft,
     items: result.items,
   };

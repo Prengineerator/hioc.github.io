@@ -1,10 +1,9 @@
 'use client';
 
-// Step 1's big feeling cards (COFFEY-SPEC §1). The step is multi-select, capped
-// at two feelings, so each card is a toggle button (aria-pressed), not a radio.
-// The group itself (role="group" + aria-labelledby the step heading) is wired
-// up by the caller, which also owns the cap: once two are picked it passes
-// `disabled` to the rest, and the visible hint under the heading says why.
+// Step 1's big feeling cards (COFFEY-SPEC §1). One feeling, one tap: tapping a
+// card selects it and the caller moves on to step 2. Each card is a button with
+// aria-pressed (so Back shows the chosen one as selected). The group itself
+// (role="group" + aria-labelledby the step heading) is wired up by the caller.
 //
 // A picked card is never signalled by colour alone: it also gets a check badge
 // and a heavier border.

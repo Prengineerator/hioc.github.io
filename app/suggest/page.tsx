@@ -1,57 +1,40 @@
-'use client';
-
 // /suggest — "Ask Coffey", the suggestion wizard (SUG-7, COFFEY-SPEC §1).
-// Flag-gated: when flags.suggest is off this renders only the coming-soon state
-// below and makes no API calls at all. The page title lives in ./layout.tsx
-// (this is a client component, so it can't export metadata).
+// A server component so it can read the menu once and tell the wizard which
+// flavour chips the menu can actually serve. Flag-gated: when flags.suggest is
+// off this renders only the coming-soon state and makes NO database call. The
+// page title lives in ./layout.tsx.
 
-import { useState } from 'react';
-import { CartProvider } from '@/lib/cart/CartContext';
-import { useStoreSettings } from '@/lib/cart/useStoreSettings';
-import { StoreStatusBanner } from '@/components/menu/StoreStatusBanner';
-import { FloatingCartBar } from '@/components/cart/FloatingCartBar';
-import { CartDrawer } from '@/components/cart/CartDrawer';
-import { SuggestWizard } from '@/components/suggest/SuggestWizard';
 import { SuggestComingSoon } from '@/components/suggest/ComingSoon';
 import { flags } from '@/lib/flags';
+import { menuFacets, type MenuFacet } from '@/lib/suggest/facets';
+import { flavourCountsByKind } from '@/lib/suggest/flavor';
+import { loadMenuAndTraits } from '@/lib/suggest/serverData';
+import type { FlavourCounts } from '@/lib/suggest/types';
+import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { SuggestPageClient } from './SuggestPageClient';
 
-export default function SuggestPage() {
+// Counts follow the live menu (the loader keeps its own 60 s cache).
+export const dynamic = 'force-dynamic';
+
+export default async function SuggestPage() {
   if (!flags.suggest) {
     return <SuggestComingSoon />;
   }
-  return (
-    <CartProvider>
-      <SuggestPageContent />
-    </CartProvider>
-  );
-}
 
-function SuggestPageContent() {
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const { settings, openState } = useStoreSettings();
+  // null = "offer every family": a failed or empty read must never block the wizard.
+  let flavourCounts: FlavourCounts | null = null;
+  let facets: MenuFacet[] | null = null;
+  try {
+    const { items, traitsById } = await loadMenuAndTraits(createAdminSupabaseClient());
+    if (items.length > 0) {
+      flavourCounts = flavourCountsByKind(items, traitsById);
+      const built = menuFacets(items, traitsById);
+      facets = built.length > 0 ? built : null;
+    }
+  } catch {
+    flavourCounts = null;
+    facets = null;
+  }
 
-  const checkoutDisabledReason =
-    openState && !openState.acceptingOrders
-      ? 'Checkout is unavailable right now — see notice above.'
-      : null;
-
-  return (
-    <>
-      <div className="mx-auto max-w-2xl px-4 pt-6">
-        <StoreStatusBanner openState={openState} />
-      </div>
-
-      <SuggestWizard />
-      {/* Room for the floating cart bar so it never covers the last pick. */}
-      <div aria-hidden="true" className="h-20" />
-
-      <FloatingCartBar onOpen={() => setDrawerOpen(true)} settings={settings} />
-      <CartDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        settings={settings}
-        checkoutDisabledReason={checkoutDisabledReason}
-      />
-    </>
-  );
+  return <SuggestPageClient flavourCounts={flavourCounts} facets={facets} />;
 }

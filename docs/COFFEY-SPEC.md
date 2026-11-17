@@ -361,3 +361,98 @@ The result depends on the time of day, and "after" wins at every clock tried:
   - The harness has no popularity data, so ties fall to id order. In production, popularity breaks them.
   - Jev's graded `mood_fit` (§3.2) exists to separate exactly these items.
 - **Re-run after Regenerate, with the same `--now`**, for a like-for-like number. Add `--llm` once `TYPESAFE_API_KEY` is available to measure the Jev decision.
+
+---
+
+## 10. v2.1: fewer questions, choices kept (2026-11-17)
+
+Where this section and §1, §4.2–§4.6 disagree, this section wins. Nothing here changes the request contract (§2), the hard filter (§4.1), the score weights (§4.2), the traits (§3) or any table.
+
+### 10.0 Why: what the live data showed
+
+Read-only look at production (`suggestion_sessions`, `suggestion_events`, 26 Sep – 1 Nov) and Vercel page views (19 Oct – 17 Nov). The sample is small and part of it is the team testing, so read these as direction, not as rates.
+
+| Finding | Evidence | Consequence |
+|---|---|---|
+| **People leave inside the wizard.** | 14 visitors opened `/suggest` in the last 30 days; 2 reached the picks. Nothing is logged before the "Ask Coffey" press, so the step they left on is unknown. | Step 2 was 28 tappable options over 3–4 phone screens, with the only way forward at the bottom. |
+| **Those who finish work hard, then walk away.** | 47 sessions, 40 first asks. Median 4–5 of the optional groups set. 6 sessions added a pick to the cart (13%; the gate in the v1 spec §6 is 25%), 1 ordered, 21 dismissed. | The picks did not repay the effort. |
+| **Three groups are barely used.** | Of 32 v2 first asks: sweetness set in 81%, flavours 78%, hot/iced 70%, a coffee choice 59%, a second feeling 47%; budget 17%, texture 16%, the note 7.5%, "No caffeine at all" 0. | Budget, texture, the note and caffeine-free move behind one "More options". |
+| **The choices people make most are the ones the engine kept least.** | Flavours, strength, sweetness and texture were soft terms sharing one 0.25 weight (and about 7.5% of the final score on the Jev path). Replaying the 40 live first asks through the old engine: the pick carried the requested flavour 49% of the time, the strength 76%, the sweetness 68%. | A customer who taps "Chocolatey" and gets none stops believing the rest. |
+| **Tags could claim what the item doesn't have.** | 30 of 118 replayed picks carried a "<Flavour> add-on" tag (true only with a paid extra) or a budget tag that could contradict the price range on the card; an intensity-2 latte was tagged "Strong". | Tags now come from the same test that picks the items. |
+| **The menu can't serve some chips at all.** | Caramel is on 3 drinks and 2 desserts; no dessert is floral; no food item carries any flavour family. | Don't offer what can't be served. |
+
+### 10.1 The wizard
+
+**Step 1, one feeling, one tap.** Tapping a card selects it and goes straight to step 2: no "Next", no second feeling. The request still has `secondaryMood` (always `null` from this wizard; the API still accepts one). Why: a second feeling was averaged with the first, halving its pull, and it cost a decision plus a tap. The research (§3, §6 of the brief) supports two feelings but calls the cap untested; this is a friction trade, and `MAX_MOODS` stays in `types.ts` if it is ever wanted back. The two context defaults of §1 (Celebrating ticks "Something sweet to eat"; "cool me down" selects Iced) are unchanged.
+
+**Step 2, five visible groups.** Every chip is a toggle: tap to choose, tap again to clear, and cleared means no preference. There is no "Either" or "Any" chip.
+
+| group | options → engine value | notes |
+|---|---|---|
+| **What would you like?** | A drink → `drink` · Something sweet to eat → `dessert` · Something savoury → `food` | multi, at least one, as before |
+| **Hot or iced?** | Hot · Iced | drinks only; cleared = `either` |
+| **Coffee?** | Strong coffee → `base:coffee, strength:strong` · Smooth & milky coffee → `base:coffee, strength:mild` · No coffee → `base:no_coffee` | drinks only; cleared = `base:either, strength:any` |
+| **How sweet?** | Not sweet → `none` · Lightly sweet → `light` · Sweet → `sweet` | three levels, not five: the menu holds 16 of 118 items at levels 1–5 and 54 at 9–10, so the engine could not tell "Medium" from "Sweet" from "Very sweet". The research's five-point advice (§4 of the brief) is about measuring attitudes and is flagged there as weak for sweetness. `medium` and `very` are still valid on the wire. |
+| **Any flavour you fancy?** | the seven families | multi, OR. A family is offered only when the ticked kinds hold at least `FLAVOUR_OFFER_MIN` (3) items that carry it themselves; the group is hidden when none qualifies. |
+| **More options** (one collapsed section; its closed state lists what is set inside) | Caffeine-free only → `needs:[no_caffeine]` · Budget: Up to ₹100 / ₹150 / ₹200 · Texture: Light & refreshing / Rich & filling · the note | Caffeine-free switches Strong and Smooth off (there is no caffeine-free coffee). |
+
+That is at most 18 visible options instead of 28. The primary button, **Show my picks**, is sticky at the bottom of the screen (lifted above the floating cart bar when the cart has items), so a customer can stop choosing at any point. The shortest path to picks is two taps.
+
+**No dead ends.** The page loads one compact record per orderable item (`lib/suggest/facets.ts`, `menuFacets`: for every chip, whether the item keeps it, is ruled out by it, or is unaffected), computed on the server with the engine's own `passesHardConstraints` and `satisfiesChoice`. A chip is greyed out when no item of the ticked kinds keeps it together with the choices already made in the other groups ("Greyed out: not on the menu with your other choices."). A selected chip is never greyed, so it can always be cleared. If the record fails to load, every chip stays enabled and the engine's own honesty (§10.2, §10.4) is the backstop.
+
+**Results.** Under the heading: "You asked for: …" in the customer's own chip words, with **Change** (back to step 2, everything kept). After "Show me something different": "Here are some different picks." The error state has **Try again** (same request). The empty state mentions the relax option only when one is offered.
+
+### 10.2 Honoured choices (`lib/suggest/promises.ts`)
+
+Four choices (`HONOURED_CHOICES`, in priority order: flavours, strength, sweetness, texture) are kept whenever the menu can keep them. One predicate, `satisfiesChoice(choice, item, inputs)`, decides everywhere: narrowing, pins, tags, the reason's sweetness word, `misses`, `unmet` and the wizard's greyed chips.
+
+| choice | applies to | kept when |
+|---|---|---|
+| flavours | drinks, desserts | the item carries a requested family itself (name or notes). A flavour only an add-on supplies does not count. |
+| strength | coffee drinks | Strong: intensity 3. Smooth & milky: intensity ≤ 2. (`balanced`: 1–2.) A non-coffee drink never keeps it. |
+| sweetness | drinks, desserts | the **delivered** level (`deliveredSweetness`: the item's own level, or with the sugar option Coffey preselects) is inside `SWEETNESS_BANDS`: none 0–3, light 2–4, medium 4–6, sweet 5–10, very 8–10. "Not sweet" runs to 3 because an unsweetened latte or cappuccino is tagged 2–3 for its milk. The one-sided hard ceiling of §4.1 is unchanged and still applies first. |
+| texture | everything | `traits.body` equals the choice. |
+
+`honourChoices(filtered, inputs)` runs between the hard filter and scoring and returns `{ pool, pinnedIds }`. Per requested kind, candidates are ranked into tiers by which active choices they keep, lexicographically in priority order (keeping the flavour outranks everything after it). Tiers are taken best-first until at least `need` items are in: `need` is 3 when only one requested kind has candidates, otherwise 2 per kind (`PROMISE_MIN_POOL`). The tier that reaches `need` is taken whole; items in the tiers before it are **pinned**. So:
+- when enough items keep every choice, the pool for that kind is exactly those, and Jev and the ranking choose among them;
+- when only one or two do, they are pinned and the next-best tier fills the remaining slots;
+- it only ever removes candidates, never takes a request that could fill three picks below three, and never touches `relaxHintFor` or the usual (both still use the hard filter alone).
+
+Pinned items are always in the shortlist (`buildShortlist(scored, inputs, pinnedIds)`), and `enforcePins` in `engine.ts` guarantees them a slot on every path (Jev, fallback, after the usual is removed), replacing the last unpinned pick of the same kind and putting pinned picks first. Why flavours first: it is what the item *is* and the choice customers use most; strength is fixed by the recipe; sweetness can still be changed at the counter and has the hard ceiling behind it; texture is the least used. The order is one constant.
+
+The similarity term of §4.4 no longer counts a flavour family the customer asked for: sharing it is the point, not a reason to mark a pick down.
+
+### 10.3 Tags and reasons (`templates.ts`)
+
+Order: flavour, sweetness, Strong / Smooth & milky, Iced / Hot, texture, Caffeine-free, then the feeling. Still at most three, so the customer's own choices are shown before the feeling. A tag about a choice appears only when `satisfiesChoice` is true; Iced / Hot only when the item's own temperature equals the choice. The "<Flavour> add-on" tag and the budget tag are gone (the add-on tip line and the add-on's place in the reason, COFFEY-ADDONS-PAIRINGS-SPEC §3.3, stay). The reason's sweetness word is the customer's own when the pick keeps their choice, and the delivered level otherwise.
+
+### 10.4 Response additions
+
+- `SuggestionPick.misses?: HonouredChoice[]`: the choices this pick does not keep. The card shows "Closest we have: not …".
+- `SuggestResponse.unmet?: HonouredChoice[]`: the union over the picks. The page shows one line when it is non-empty.
+
+Both are optional, computed from the final picks, and not persisted.
+
+### 10.5 Measured (2026-11-17)
+
+Deterministic fallback, live menu (126 orderable items, 118 tagged), clock pinned to 11:00 IST, no popularity or profile. Two request sets: the 40 real first asks since launch (notes dropped), and a grid of 6,336 requests covering every combination of the new step-2 chips for a drink, a drink with something sweet, and something sweet, for each feeling. Both engines are scored with the one predicate above.
+
+| | Before | After |
+|---|---|---|
+| Live: picks carrying the requested flavour | 49% | 71% |
+| Live: picks keeping the strength / sweetness / texture asked | 76% / 68% / 59% | 83% / 78% / 67% |
+| Live: requests where every pick keeps every choice | 5 of 35 | 17 of 35 |
+| Picks with an add-on or price tag (live) | 30 of 118 | 0 |
+| Requests the greyed chips still allow, grid: first pick keeps every choice | 78.0% | 99.1% |
+| …every pick keeps every choice | 34.2% | 61.7% |
+| …picks keeping every choice | 61.4% | 80.5% |
+| Requests returning fewer than three picks (grid) | 7.6% | 7.6% |
+
+Read with care: in 13 of the 18 live requests still flagged `unmet`, no item on the menu keeps all of the customer's choices at once; those combinations are now greyed out before they can be asked for. What remains is thin coverage (one or two items fit, the rest are marked "closest we have"). The offline top-3 eval of §9 is not a usable gate until its labels are redone: 21 of 78 scenarios name an item that is off the menu or that the scenario's own rules exclude.
+
+### 10.6 Judgement calls, and what to watch
+
+- One feeling, three sweetness levels, budget behind "More options", and the priority order of §10.2 are judgement calls backed by the usage above, not by an experiment. Each is a small, local change to reverse.
+- "Celebrating" still ticks "Something sweet to eat" (§1). The research says retire it if customers untick it; there is still no log of that.
+- **Not built: step tracking.** Abandonment before the picks is only visible as page views minus sessions. A `wizard_step` event (step shown, picks requested) would show where people leave; it needs a table change, so it is left for the owner to decide.
+- **Owner follow-ups:** eight orderable items have no traits row and can never be suggested (Tiramisu Latte, Creamy Corn Toast, Mysterious Mocha Cupcake, Choconut Chip Creme, Coconut Creme, Lemon Americano, Lemon Americano Iced, Peach Lemonata): Owner → Suggestions → Traits → Generate. Re-label `tests/fixtures/suggest-eval.json` against today's menu before reading §9's hit rate again.

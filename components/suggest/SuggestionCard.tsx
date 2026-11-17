@@ -23,6 +23,7 @@ export function SuggestionCard({
   item,
   pick,
   isUsual = false,
+  missLabel = null,
   feedback,
   onAddToCart,
   onFeedback,
@@ -30,6 +31,8 @@ export function SuggestionCard({
   item: MenuItem;
   pick: SuggestionPick;
   isUsual?: boolean;
+  /** "Closest we have: not Chocolatey" — what this pick does not keep. */
+  missLabel?: string | null;
   feedback?: 'up' | 'down';
   onAddToCart: () => void;
   onFeedback: (direction: 'up' | 'down') => void;
@@ -84,6 +87,7 @@ export function SuggestionCard({
           ))}
         </ul>
       ) : null}
+      {missLabel && !isUsual ? <p className="mt-2 text-xs text-muted">{missLabel}</p> : null}
       {/* A flavour reached through an add-on (COFFEY-ADDONS-PAIRINGS-SPEC §1.1):
           one quiet line, no price — Coffey never talks about spending. Tapping
           Add opens the customise modal, where the option is highlighted but not

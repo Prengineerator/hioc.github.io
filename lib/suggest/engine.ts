@@ -29,6 +29,7 @@
 
 import { flavourAddonFor, reachableAddonFamilies } from './addonTraits';
 import { filterCandidates, relaxHintFor } from './filter';
+import { honourChoices, satisfiesChoice, unmetChoices } from './promises';
 import { buildShortlist, scoreCandidates } from './score';
 import { isSugarAdjustable, sugarPresetFor } from './sugar';
 import { sweetnessLevel } from './sweetness';
@@ -38,12 +39,13 @@ import { pickUsual, summarizeProfile } from './profile';
 import { daypartFor } from './daypart';
 import { validateDeciderPicks } from './validate';
 import { DeciderError } from './deciderError';
-import { SUGGEST_LIMITS } from './types';
+import { HONOURED_CHOICES, SUGGEST_LIMITS } from './types';
 import type {
   AddonTraits,
   Candidate,
   Decider,
   FallbackReason,
+  HonouredChoice,
   MenuItemTraits,
   RelaxHint,
   SuggestInputs,
@@ -89,6 +91,8 @@ export interface RunSuggestResult {
   usual: SuggestionPick | null;
   picks: SuggestionPick[];
   relaxHint: RelaxHint | null;
+  /** Set choices a final pick does not keep (usual excluded). */
+  unmet: HonouredChoice[];
   /** Shaped menu rows for usual + picks, usual first — ready for
    * SuggestResponse.items with no second fetch. */
   items: MenuItem[];
@@ -122,6 +126,50 @@ function topUpPicks(picks: SuggestionPick[], shortlist: Candidate[], inputs: Sug
       reasonCode,
     });
   }
+  return out;
+}
+
+/** Pinned candidates (lib/suggest/promises.ts) keep the customer's choices but
+ * are too few to fill the picks on their own, so each must be among the final
+ * picks whatever the decider said. A missing one is appended when there is room,
+ * else replaces the last unpinned pick of its own kind (kind coverage stays);
+ * with no such pick it is skipped. Pinned picks then come first, in pin order.
+ * The count never exceeds SUGGEST_LIMITS.picks and never drops. */
+function enforcePins(
+  picks: SuggestionPick[],
+  pinnedIds: string[],
+  usualItemId: string | null,
+  shortlist: Candidate[],
+  inputs: SuggestInputs,
+): SuggestionPick[] {
+  if (pinnedIds.length === 0) return picks;
+  const pinnedSet = new Set(pinnedIds);
+  const byId = new Map(shortlist.map((c) => [c.menuItemId, c]));
+  let out = [...picks];
+  for (const id of pinnedIds) {
+    if (id === usualItemId || out.some((p) => p.menuItemId === id)) continue;
+    const c = byId.get(id);
+    if (!c) continue;
+    const reasonCode = reasonCodeFor(c.traits, inputs);
+    const pick: SuggestionPick = {
+      menuItemId: c.menuItemId,
+      reason: templateReason(c.traits, inputs, reasonCode, c.name, c.sugarAdjustable),
+      reasonCode,
+    };
+    if (out.length < SUGGEST_LIMITS.picks) {
+      out.push(pick);
+      continue;
+    }
+    for (let i = out.length - 1; i >= 0; i--) {
+      const other = out[i];
+      if (pinnedSet.has(other.menuItemId)) continue;
+      if (byId.get(other.menuItemId)?.traits.kind !== c.traits.kind) continue;
+      out[i] = pick;
+      break;
+    }
+  }
+  const pinnedPicks = pinnedIds.flatMap((id) => out.filter((p) => p.menuItemId === id));
+  out = [...pinnedPicks, ...out.filter((p) => !pinnedSet.has(p.menuItemId))];
   return out;
 }
 
@@ -180,10 +228,13 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
 
   // 1 — hard filter (§5.2).
   const filtered = filterCandidates(menu, traitsById, inputs, excludeIds);
+  // 1b — keep the customer's flavour / strength / sweetness / texture choices
+  // whenever the menu can (lib/suggest/promises.ts); only ever removes items.
+  const { pool: honoured, pinnedIds } = honourChoices(filtered, inputs);
 
   // 2 — score + shortlist, with diversity rules (§5.3).
-  const scored = scoreCandidates({ candidates: filtered, inputs, profile, daypart, popularity, recentItemIds, addonTraitsById });
-  const shortlist = buildShortlist(scored, inputs);
+  const scored = scoreCandidates({ candidates: honoured, inputs, profile, daypart, popularity, recentItemIds, addonTraitsById });
+  const shortlist = buildShortlist(scored, inputs, new Set(pinnedIds));
   const candidateIds = shortlist.map((c) => c.menuItemId);
 
   // 6 — relaxHint is computed against the SAME hard filter, independent of
@@ -261,6 +312,8 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     );
   }
 
+  picks = enforcePins(picks, pinnedIds, usualItemId, shortlist, inputs);
+
   const itemsById = new Map(menu.map((m) => [m.id, m]));
   const usualItem = usualItemId ? itemsById.get(usualItemId) : undefined;
   const usualTraits = usualItemId ? traitsById.get(usualItemId) : undefined;
@@ -278,8 +331,28 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
   if (!lintReason(header).ok) header = templateHeader(inputs.mood);
 
   // 8 — decorate, now that the picks (LLM or fallback, usual removed) are final.
-  picks = picks.map((p) => decorate(p, inputs, itemsById, traitsById, addonTraitsById));
+  // `misses`: the customer's choices THIS pick does not keep, so its card can say
+  // "closest we have" instead of passing for a match. Same predicate as the
+  // narrowing, the tags and `unmet`. Picks only: the usual is shown as a habit,
+  // not as an answer to today's choices.
+  picks = picks.map((p) => {
+    const decorated = decorate(p, inputs, itemsById, traitsById, addonTraitsById);
+    const item = itemsById.get(p.menuItemId);
+    const traits = traitsById.get(p.menuItemId);
+    if (!item || !traits) return decorated;
+    const subject = { name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) };
+    return { ...decorated, misses: HONOURED_CHOICES.filter((c) => satisfiesChoice(c, subject, inputs) === false) };
+  });
   const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById, addonTraitsById) : null;
+
+  const unmet = unmetChoices(
+    picks.flatMap((p) => {
+      const item = itemsById.get(p.menuItemId);
+      const traits = traitsById.get(p.menuItemId);
+      return item && traits ? [{ name: item.name, traits, sugarAdjustable: isSugarAdjustable(item) }] : [];
+    }),
+    inputs,
+  );
 
   const pickIds = picks.map((p) => p.menuItemId);
   const items = [...(usualItemId ? [usualItemId] : []), ...pickIds]
@@ -291,6 +364,7 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     usual,
     picks,
     relaxHint,
+    unmet,
     items,
     source,
     fallbackReason,
