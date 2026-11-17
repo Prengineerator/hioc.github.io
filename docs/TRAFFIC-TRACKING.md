@@ -104,6 +104,6 @@ grouped by source, placement and campaign.
 | `lib/traffic/record.ts` | Builds and inserts rows; records orders from `POST /api/orders` and `POST /api/shop/checkout` |
 | `lib/traffic/load.ts`, `lib/traffic/summary.ts` | Reads a date range and adds it up for the owner page |
 | `app/owner/traffic/page.tsx`, `components/owner/traffic/CampaignLinkBuilder.tsx` | Owner → Traffic |
-| `app/api/cron/purge-traffic/route.ts` | Deletes rows older than 13 months (weekly, `vercel.json`) |
+| `app/api/cron/purge-traffic/route.ts` | Deletes rows older than 13 months (weekly, `vercel.json`); also purges the Coffey wizard steps (`docs/COFFEY-SPEC.md` §10.7) |
 
 Tests: `tests/traffic*.test.ts`.

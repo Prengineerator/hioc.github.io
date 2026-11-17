@@ -16,8 +16,9 @@ import type { MenuItemTraits, SuggestionDigestRow, SuggestionEventRow, Suggestio
 // True when `error` means "the relation/column doesn't exist" — the migration
 // isn't applied yet. Same check as lib/cash/checkpoints.ts's
 // `isMissingRelation`, duplicated locally per that file's own note (mirrored
-// across feature boundaries rather than imported).
-function isMissingSuggestRelation(error: { code?: string; message?: string } | null | undefined): boolean {
+// across feature boundaries rather than imported). Exported for the rest of
+// lib/suggest (wizardStepsStore.ts), which is the same feature.
+export function isMissingSuggestRelation(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error) return false;
   if (error.code === '42P01' || error.code === 'PGRST205' || error.code === '42703') return true;
   const msg = (error.message ?? '').toLowerCase();

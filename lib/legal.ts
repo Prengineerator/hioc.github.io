@@ -50,6 +50,14 @@ export const SHOP_POLICY_UPDATED = '12 November 2026';
  */
 export const TRAFFIC_POLICY_UPDATED = '16 November 2026';
 
+/**
+ * "Last updated" on the Privacy Policy while Ask Coffey is on
+ * (NEXT_PUBLIC_FLAG_SUGGEST): the day its wording about the wizard steps we note
+ * (docs/COFFEY-SPEC.md §10.7) was added. Same rule as above. Later than the
+ * traffic date, so it wins when both are on.
+ */
+export const COFFEY_STEPS_POLICY_UPDATED = '17 November 2026';
+
 /** The "Last updated" date for a page that has Ritual and/or shop wording. */
 export function policyUpdated(flagsOn: { shop: boolean; coffeePass: boolean }): string | undefined {
   if (flagsOn.shop) return SHOP_POLICY_UPDATED;

@@ -454,5 +454,41 @@ Read with care: in 13 of the 18 live requests still flagged `unmet`, no item on 
 
 - One feeling, three sweetness levels, budget behind "More options", and the priority order of §10.2 are judgement calls backed by the usage above, not by an experiment. Each is a small, local change to reverse.
 - "Celebrating" still ticks "Something sweet to eat" (§1). The research says retire it if customers untick it; there is still no log of that.
-- **Not built: step tracking.** Abandonment before the picks is only visible as page views minus sessions. A `wizard_step` event (step shown, picks requested) would show where people leave; it needs a table change, so it is left for the owner to decide.
+- **Step tracking** was not part of v2.1; it is built in §10.7. Before it, abandonment before the picks was only visible as page views minus sessions.
 - **Owner follow-ups:** eight orderable items have no traits row and can never be suggested (Tiramisu Latte, Creamy Corn Toast, Mysterious Mocha Cupcake, Choconut Chip Creme, Coconut Creme, Lemon Americano, Lemon Americano Iced, Peach Lemonata): Owner → Suggestions → Traits → Generate. Re-label `tests/fixtures/suggest-eval.json` against today's menu before reading §9's hit rate again.
+
+### 10.7 Where customers leave: wizard step tracking (2026-11-17)
+
+**Why.** A `suggestion_sessions` row is only written when picks are requested, so a customer who leaves on the feeling step or the preferences step leaves nothing behind. Over 19 Oct – 17 Nov, 14 visitors opened `/suggest` and 2 asked for picks; nothing said which step lost the other 12.
+
+**Setup (once, by the owner).** Run `supabase/2026-11-coffey-wizard-steps.sql` in the Supabase SQL editor (safe to re-run, and safe before or after the deploy), then `npm run verify:db`: the block `COFFEY · wizard step tracking table` should pass. Until the file is applied the wizard behaves exactly as before, the step inserts are skipped quietly, and the owner card asks for the file.
+
+**What is recorded.** One row in `suggestion_wizard_steps` per step reached, sent by the wizard to `POST /api/suggest/steps` as `{ anonId, step }`:
+
+| step | sent |
+|---|---|
+| `opened` | once each time the wizard comes on screen (a page load, or coming back to `/suggest` from another page) |
+| `feeling_chosen` | the first time a feeling is tapped in that visit; going Back and tapping another sends nothing |
+| `picks_requested` | on every press of **Show my picks** |
+
+A row holds the step, the time, the browser's guest id (the `anonId` kept in localStorage by `getAnonId`, the same one `suggestion_sessions.anon_id` carries) and, for a signed-in customer, the user id read from the session on the server. It never holds the feeling, a preference or the note: the request has no field for them, and the guest id is limited to letters, digits, `_` and `-` by the API and by a CHECK. No IP address or User-Agent is stored. "Show me something different", "Show me more options" and "Try again" send no step; the session events of the v1 spec §7 (`refined`, `dismissed`, …) are unchanged and separate.
+
+**Who is left out.** A browser that sends Global Privacy Control or Do Not Track sends no steps (the rule the traffic page views follow, `lib/traffic/client.ts`), and the route drops crawlers that run scripts, which would otherwise read as visitors who opened the wizard and left. So the counts are a little below Vercel's page views by design.
+
+**The route.** Public, behind `flags.suggest` (404 when off), rate-limited per IP at the events route's ceiling (120 per 10 minutes, its own bucket). A valid request always answers 204, whatever happens to the insert. The wizard sends with `navigator.sendBeacon` and falls back to a keepalive `fetch`; it never reads the answer.
+
+**Owner → Suggestions → "Where people leave the wizard"**, for the selected window: opened → chose a feeling → asked for picks → added a pick to the cart, each with its count and its share of the step above. The unit is a visitor (one guest id), counted once however often they came back, and each step counts only the visitors who also reached the step above it, so the numbers only go down. The last step is not new data: it is the `added_to_cart` events of `suggestion_events` in the window, matched to those visitors through `suggestion_sessions.anon_id`. A browser with storage blocked gets a new guest id on every request for picks, so its cart adds cannot be matched and it stops at "asked for picks".
+
+**Retention and privacy.** Rows older than 13 months are deleted every Sunday by `/api/cron/purge-traffic`, with the traffic rows. The Privacy Policy describes the steps and the retention while `NEXT_PUBLIC_FLAG_SUGGEST` is on.
+
+| File | What it does |
+|---|---|
+| `supabase/2026-11-coffey-wizard-steps.sql` | The table, its two CHECKs, RLS on with no policies |
+| `lib/suggest/types.ts` (`WIZARD_STEPS`) | The step vocabulary; the migration's CHECK mirrors it |
+| `lib/suggest/wizardSteps.ts` | What the route accepts, and the funnel arithmetic (pure) |
+| `lib/suggest/wizardStepsStore.ts` | The insert and the owner page's read |
+| `app/api/suggest/steps/route.ts` | Records a step (best-effort, always 204) |
+| `components/suggest/api.ts` (`createWizardStepReporter`) | The browser side: once-per-visit marks, one guest id per visit, beacon |
+| `components/owner/suggestions/WizardFunnelWidget.tsx` | The owner card |
+
+Tests: `tests/suggestWizardSteps*.test.ts`, `tests/purgeTraffic.test.ts`, `tests/privacyCoffeySteps.test.ts`.
