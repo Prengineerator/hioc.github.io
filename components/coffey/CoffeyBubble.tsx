@@ -17,6 +17,8 @@ export function CoffeyBubble({
   expression = 'happy',
   animated,
   live = false,
+  lead,
+  centered = false,
   className = '',
 }: {
   children: ReactNode;
@@ -30,11 +32,16 @@ export function CoffeyBubble({
    * when its text changes for a screen reader to speak it, so keep one bubble
    * mounted and swap its children rather than mounting a new one. */
   live?: boolean;
+  /** Something other than the default mascot beside the bubble (e.g. the
+   * wizard's live cup). `size` should then be that thing's size, for the tail. */
+  lead?: ReactNode;
+  /** Centre the bubble against a tall `lead` instead of top-aligning it. */
+  centered?: boolean;
   className?: string;
 }) {
   return (
-    <div className={['flex items-start gap-3', className].filter(Boolean).join(' ')}>
-      <CoffeyMascot size={size} expression={expression} animated={animated} />
+    <div className={['flex gap-3', centered ? 'items-center' : 'items-start', className].filter(Boolean).join(' ')}>
+      {lead ?? <CoffeyMascot size={size} expression={expression} animated={animated} />}
       <div
         aria-live={live ? 'polite' : undefined}
         className="relative min-w-0 flex-1 text-pretty rounded-2xl border border-line bg-surface px-4 py-3 text-charcoal"
@@ -45,7 +52,7 @@ export function CoffeyBubble({
         <span
           aria-hidden="true"
           className="absolute -left-[7px] h-3 w-3 rotate-45 border-b border-l border-line bg-surface"
-          style={{ top: Math.round(size * 0.55 - 6) }}
+          style={centered ? { top: 'calc(50% - 6px)' } : { top: Math.round(size * 0.55 - 6) }}
         />
         {children}
       </div>

@@ -6,15 +6,10 @@
 // "no preference". buildInputs() turns the state into a complete, valid v2
 // SuggestInputs, sending neutral values for everything cleared or hidden.
 
+import type { CoffeyLook } from '@/components/coffey/CoffeyMascot';
 import { FACET_OPTIONS, unavailableOptions, type FacetOption, type MenuFacet } from '@/lib/suggest/facets';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from '@/lib/suggest/traitVocabulary';
-import {
-  BUDGET_CAPS,
-  FLAVOUR_FAMILIES,
-  FLAVOUR_OFFER_MIN,
-  KINDS,
-  SUGGEST_LIMITS,
-} from '@/lib/suggest/types';
+import { BUDGET_CAPS, FLAVOUR_FAMILIES, FLAVOUR_OFFER_MIN, KINDS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import type {
   Budget,
   FlavourCounts,
@@ -32,13 +27,16 @@ import type {
 
 export const KIND_INFO: Record<TraitKind, { label: string; icon: string }> = {
   drink: { label: 'A drink', icon: '☕' },
-  dessert: { label: 'Something sweet to eat', icon: '🧇' },
-  food: { label: 'Something savoury', icon: '🥪' },
+  dessert: { label: 'A sweet bite', icon: '🧇' },
+  food: { label: 'A savoury bite', icon: '🥪' },
 };
 
 export const TEMPERATURES = ['hot', 'iced'] as const;
 export type TemperatureChoice = (typeof TEMPERATURES)[number];
-export const TEMPERATURE_LABEL: Record<TemperatureChoice, string> = { hot: 'Hot', iced: 'Iced' };
+export const TEMPERATURE_LABEL: Record<TemperatureChoice, string> = {
+  hot: 'Hot',
+  iced: 'Iced',
+};
 
 /** "Coffee?" is one question that maps onto base + strength. */
 export const COFFEE_CHOICES = ['strong', 'smooth', 'none'] as const;
@@ -46,6 +44,13 @@ export type CoffeeChoice = (typeof COFFEE_CHOICES)[number];
 export const COFFEE_LABEL: Record<CoffeeChoice, string> = {
   strong: 'Strong coffee',
   smooth: 'Smooth & milky coffee',
+  none: 'No coffee',
+};
+
+/** The short labels on the Coffee tiles (the recap and miss label keep COFFEE_LABEL). */
+export const COFFEE_TILE_LABEL: Record<CoffeeChoice, string> = {
+  strong: 'Strong',
+  smooth: 'Smooth & milky',
   none: 'No coffee',
 };
 
@@ -164,6 +169,11 @@ export function toggleTemperature(state: WizardState, value: TemperatureChoice):
 export function toggleCoffee(state: WizardState, value: CoffeeChoice): WizardState {
   if (state.caffeineFree && value !== 'none') return state;
   return { ...state, coffee: state.coffee === value ? null : value };
+}
+
+/** Set (never clear) a sweetness level: the glass's drag and tap. */
+export function setSweetness(state: WizardState, value: SweetnessChoice): WizardState {
+  return state.sweetness === value ? state : { ...state, sweetness: value };
 }
 
 export function toggleSweetness(state: WizardState, value: SweetnessChoice): WizardState {
@@ -405,4 +415,99 @@ export function moreOptionsSummary(state: WizardState): string {
   if (state.body) parts.push(BODY_LABEL[state.body]);
   if (state.note.trim() !== '') parts.push('Note added');
   return parts.length > 0 ? parts.join(' · ') : MORE_OPTIONS_LABEL;
+}
+
+// ---------------------------------------------------------------------------
+// The live cup, its summary and Coffey's reactions
+// ---------------------------------------------------------------------------
+
+/** The state as the live cup should look: hidden drink-only groups ignored,
+ * flavours limited to the ones still on offer. */
+export function cupLook(state: WizardState, flavourCounts: FlavourCounts | null): CoffeyLook {
+  const drink = wantsDrink(state);
+  const dessert = state.kinds.includes('dessert');
+  const food = state.kinds.includes('food');
+  return {
+    temperature: drink ? state.temperature : null,
+    coffee: drink ? state.coffee : null,
+    sweetness: state.sweetness,
+    flavours: activeFlavours(state, flavourCounts),
+    bite: dessert && food ? 'both' : dessert ? 'dessert' : food ? 'food' : null,
+  };
+}
+
+export const SUMMARY_EMPTY = 'Tap what matters, or go straight to your picks.';
+
+/** One line of what is chosen so far, in chip words ("Iced · Strong coffee ·
+ * Not sweet"); the feeling is left out, the kinds only when not just a drink. */
+export function summaryLine(state: WizardState, flavourCounts: FlavourCounts | null): string {
+  const labels = recapLabels(state, flavourCounts);
+  const parts = state.mood ? labels.slice(1) : labels;
+  return parts.length > 0 ? parts.join(' · ') : SUMMARY_EMPTY;
+}
+
+export const DEFAULT_REACTION = 'What sounds good right now?';
+
+const TEMPERATURE_REACTION: Record<TemperatureChoice, string> = {
+  hot: 'Hot and steamy.',
+  iced: 'Iced it is.',
+};
+const COFFEE_REACTION: Record<CoffeeChoice, string> = {
+  strong: 'Bold. I like it.',
+  smooth: 'Smooth and milky.',
+  none: 'No coffee, no problem.',
+};
+const SWEETNESS_REACTION: Record<SweetnessChoice, string> = {
+  none: 'Not sweet at all.',
+  light: 'Just a touch of sweet.',
+  sweet: 'Sweet tooth, noted.',
+};
+
+/**
+ * What Coffey says about the last change: a line when something was set, the
+ * default line when something was cleared, and null when nothing the cup
+ * shows changed (typing a note, say), so the caller keeps the line it has.
+ */
+export function reactionLine(
+  prev: WizardState,
+  next: WizardState,
+  flavourCounts: FlavourCounts | null = null,
+): string | null {
+  if (prev.caffeineFree !== next.caffeineFree) return next.caffeineFree ? 'Caffeine-free it is.' : DEFAULT_REACTION;
+  if (prev.temperature !== next.temperature) {
+    return next.temperature ? TEMPERATURE_REACTION[next.temperature] : DEFAULT_REACTION;
+  }
+  if (prev.coffee !== next.coffee) return next.coffee ? COFFEE_REACTION[next.coffee] : DEFAULT_REACTION;
+  if (prev.sweetness !== next.sweetness) return next.sweetness ? SWEETNESS_REACTION[next.sweetness] : DEFAULT_REACTION;
+  const before = activeFlavours(prev, flavourCounts);
+  const after = activeFlavours(next, flavourCounts);
+  const added = after.find((f) => !before.includes(f));
+  if (added) return `${FLAVOUR_FAMILY_INFO[added].label}. Good call.`;
+  if (before.some((f) => !after.includes(f))) return DEFAULT_REACTION;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The sweetness glass: pointer height <-> level
+// ---------------------------------------------------------------------------
+
+/** How far up the glass a pointer is, 0 (bottom) to 1 (top), clamped. */
+export function glassFraction(clientY: number, rectTop: number, rectHeight: number): number {
+  if (!(rectHeight > 0)) return 0;
+  const f = (rectTop + rectHeight - clientY) / rectHeight;
+  return Math.min(1, Math.max(0, f));
+}
+
+/**
+ * The level at a height on the glass: bottom third Not sweet, middle Lightly
+ * sweet, top Sweet. A level that is disabled cannot be chosen: the drag keeps
+ * `last` (the last level it allowed, or null).
+ */
+export function glassLevel(
+  fraction: number,
+  off: ReadonlySet<FacetOption> = new Set(),
+  last: SweetnessChoice | null = null,
+): SweetnessChoice | null {
+  const level: SweetnessChoice = fraction < 1 / 3 ? 'none' : fraction < 2 / 3 ? 'light' : 'sweet';
+  return off.has(sweetOption(level)) ? last : level;
 }

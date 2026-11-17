@@ -30,11 +30,11 @@ import {
   unmetLine,
   type WizardState,
 } from '@/components/suggest/wizardModel';
-import { FACET_OPTIONS } from '@/lib/suggest/facets';
+import { menuFacets } from '@/lib/suggest/facets';
 import { validateSuggestInputs } from '@/lib/suggest/validate';
 import { FLAVOUR_FAMILIES, FLAVOUR_OFFER_MIN, MOODS } from '@/lib/suggest/types';
 import type { FlavourCounts } from '@/lib/suggest/types';
-import { makeMenuItem } from './fixtures/suggestMenu';
+import { CAPPUCCINO, CAPPUCCINO_TRAITS, makeMenuItem } from './fixtures/suggestMenu';
 
 const COUNTS: FlavourCounts = {
   drink: { chocolatey: 5, caramel: 2, nutty: 1, fruity: 3 },
@@ -186,9 +186,9 @@ describe('recapLabels', () => {
   it('names the kinds only when they are not just a drink, and drops hidden groups', () => {
     let s = toggleTemperature(state(), 'hot');
     s = toggleKind(s, 'dessert');
-    expect(recapLabels(s, COUNTS)).toEqual(['Tired — need a boost', 'A drink', 'Something sweet to eat', 'Hot']);
+    expect(recapLabels(s, COUNTS)).toEqual(['Tired — need a boost', 'A drink', 'A sweet bite', 'Hot']);
     s = toggleKind(s, 'drink');
-    expect(recapLabels(s, COUNTS)).toEqual(['Tired — need a boost', 'Something sweet to eat']);
+    expect(recapLabels(s, COUNTS)).toEqual(['Tired — need a boost', 'A sweet bite']);
   });
 
   it('includes the More options choices and leaves the note out', () => {
@@ -265,7 +265,7 @@ describe('SuggestionCard missLabel', () => {
 });
 
 describe('disabledOptions / selectedOptions', () => {
-  const facets = [{ kind: 'drink' as const, states: FACET_OPTIONS.map((o) => (o === 'temp:hot' ? 'k' : 'x')).join('') }];
+  const facets = menuFacets([CAPPUCCINO], new Map([[CAPPUCCINO.id, CAPPUCCINO_TRAITS]]));
   it('is empty without facets', () => {
     expect(disabledOptions(state(), null).size).toBe(0);
   });
@@ -352,6 +352,12 @@ describe('relaxState', () => {
   });
 });
 
+// The markup of the one button whose label span reads exactly `label`.
+function buttonFor(html: string, label: string): string {
+  const m = html.match(new RegExp(`<button(?:(?!<button)[\\s\\S])*?>${label}</span></button>`));
+  return m ? m[0] : '';
+}
+
 describe('step render smoke test', () => {
   const noop = () => {};
   const ref = { current: null };
@@ -385,7 +391,7 @@ describe('step render smoke test', () => {
     expect(html).not.toContain('Skip whatever you like');
     expect(html).toContain('Show my picks');
     expect(html).toContain('Hot or iced?');
-    expect(html).toContain('Smooth &amp; milky coffee');
+    expect(html).toContain('Smooth &amp; milky');
     expect(html).toContain('More options');
   });
 
@@ -403,11 +409,12 @@ describe('step render smoke test', () => {
     const open = wants(toggleCaffeineFree(state()), null);
     expect(open).toContain('aria-expanded="true"');
     expect(open).toContain('Strong and smooth coffee are off while Caffeine-free is on.');
-    expect(open).toMatch(/disabled=""[^>]*>Strong coffee|aria-pressed="false" disabled=""[^>]*>Strong coffee/);
+    expect(buttonFor(open, 'Strong')).toContain('disabled=""');
+    expect(buttonFor(open, 'No coffee')).not.toContain('disabled=""');
   });
 
   it('greys out chips the facets rule out and says why once, under the heading', () => {
-    const onlyHot = [{ kind: 'drink' as const, states: FACET_OPTIONS.map((o) => (o === 'temp:hot' ? 'k' : 'x')).join('') }];
+    const onlyHot = menuFacets([CAPPUCCINO], new Map([[CAPPUCCINO.id, CAPPUCCINO_TRAITS]]));
     const html = renderToStaticMarkup(
       createElement(WantsStep, {
         state: state(),
@@ -420,12 +427,15 @@ describe('step render smoke test', () => {
         onSubmit: noop,
       }),
     );
-    expect(html).toMatch(/disabled=""[^>]*>Iced/);
+    expect(buttonFor(html, 'Iced')).toContain('disabled=""');
+    expect(buttonFor(html, 'Hot')).not.toContain('disabled=""');
     // Said once for the whole step, not repeated under each group…
     expect(html.split('Greyed-out choices aren’t on the menu with what you’ve picked.')).toHaveLength(2);
     // …and not at all when there is nothing to grey out with (no facets loaded).
     expect(wants(state(), null)).not.toContain('Greyed-out');
-    expect(html).not.toMatch(/disabled=""[^>]*>(<span[^>]*>[^<]*<\/span>)?(A drink|Something)/);
+    for (const label of ['A drink', 'A sweet bite', 'A savoury bite']) {
+      expect(buttonFor(html, label)).not.toContain('disabled=""');
+    }
   });
 
   it('lifts the sticky button above the cart bar only when the cart has items', () => {

@@ -29,7 +29,7 @@ export function MoodCard({
       disabled={disabled}
       onClick={onToggle}
       className={
-        'relative flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-md border p-4 text-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan disabled:cursor-not-allowed disabled:opacity-50 ' +
+        'relative flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-md border p-4 text-center transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.97] motion-reduce:active:scale-100 ' +
         // The heavier selected border is a 1px ring over the 1px border, so
         // toggling never nudges the card's contents by a pixel.
         (selected

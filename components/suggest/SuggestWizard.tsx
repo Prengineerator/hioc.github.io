@@ -363,7 +363,7 @@ export function SuggestWizard({ flavourCounts = null,
   const unmetText = response ? unmetLine(response.unmet, wiz, flavourCounts) : null;
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8 pb-28">
+    <div className="mx-auto max-w-2xl px-4 pb-28 pt-4">
       {step === 'feeling' ? <FeelingStep selected={wiz.mood} headingRef={headingRef} onPick={pickMood} /> : null}
 
       {step === 'wants' ? (
