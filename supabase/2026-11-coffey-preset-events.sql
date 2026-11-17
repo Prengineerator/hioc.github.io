@@ -15,8 +15,8 @@
 --   preset_kept     the pick went into the cart with at least one of its
 --                   preset add-ons still on the line.
 --
--- Nothing else changes. The constraint is dropped and added again by name, so
--- this file is safe to re-run.
+-- Nothing else changes. The constraint is replaced by name in a single
+-- statement, so this file is safe to re-run.
 --
 -- Safe to apply before OR after deploying the code: until it is applied every
 -- insert of a new event name is refused by the CHECK. The server logs that and
@@ -27,9 +27,12 @@
 -- Once applied: run `npm run verify:db`.
 -- ===========================================================================
 
-alter table suggestion_events drop constraint if exists suggestion_events_event_check;
-alter table suggestion_events add constraint suggestion_events_event_check
-  check (event in (
-    'shown', 'added_to_cart', 'feedback_up', 'feedback_down',
-    'refined', 'dismissed', 'browse_menu', 'checkout_started', 'ordered',
-    'preset_shown', 'preset_removed', 'preset_kept'));
+-- One statement on purpose: the old constraint goes and the new one arrives
+-- together, so a failure can never leave the table with no constraint at all.
+alter table suggestion_events
+  drop constraint if exists suggestion_events_event_check,
+  add constraint suggestion_events_event_check
+    check (event in (
+      'shown', 'added_to_cart', 'feedback_up', 'feedback_down',
+      'refined', 'dismissed', 'browse_menu', 'checkout_started', 'ordered',
+      'preset_shown', 'preset_removed', 'preset_kept'));
