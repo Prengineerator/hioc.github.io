@@ -196,7 +196,8 @@ export interface CustomizeModalProps {
   /** Preselected options: Coffey's ticked add-on presets and sugar option, vetted
    * against the item. The older `flavourAddon` highlight is never in here. */
   initialSelection?: Record<string, string[]>;
-  /** Options to mark with a "Coffey's pick" pill: the preselected add-ons, or
+  /** Options to mark with a "Coffey's pick" pill and list in the strip: every
+   * preselected option (add-ons and sugar), or
    * (older fallback) the highlighted flavour add-on, which is not chosen. */
   suggestedOptions?: Record<string, string[]>;
   /** Hint lines for the top of the modal, sugar first. */
@@ -238,11 +239,16 @@ export function customizeModalProps(
     const added = addonPresets.filter((p) => has(p.groupId, p.optionId));
     const sugar = sugarPreset && has(sugarPreset.groupId, sugarPreset.optionId) ? sugarPreset : null;
     if (Object.keys(vetted).length > 0) props.initialSelection = vetted;
-    if (added.length > 0) {
-      props.suggestedOptions = {};
+    // Every option Coffey preselected, the sugar option too: the customise
+    // screen's "Coffey set this up for you" strip and the "Coffey's pick" pills
+    // are both drawn from this one map.
+    if (added.length > 0 || sugar) {
+      const suggested: Record<string, string[]> = {};
+      if (sugar) suggested[sugar.groupId] = [sugar.optionId];
       for (const p of added) {
-        props.suggestedOptions[p.groupId] = [...(props.suggestedOptions[p.groupId] ?? []), p.optionId];
+        suggested[p.groupId] = [...(suggested[p.groupId] ?? []), p.optionId];
       }
+      props.suggestedOptions = suggested;
     }
     const line = presetsHint(added, sugar);
     if (line) props.hint = [line];

@@ -40,6 +40,12 @@ import {
   getAnonId,
   postSuggestEvent,
 } from '@/components/suggest/api';
+import {
+  claimRemovedReport,
+  eventForAdd,
+  findAddedLine,
+  snapshotLines,
+} from '@/components/suggest/presetEvents';
 import { buttonVariants } from '@/components/ui/Button';
 import { SUGGEST_LIMITS } from '@/lib/suggest/types';
 import type { MenuFacet } from '@/lib/suggest/facets';
@@ -78,6 +84,10 @@ interface CustomizeTarget {
   flavourAddon: FlavourAddonSuggestion | null;
   /** The add-on presets still ticked on the card: preselected in the modal. */
   addonPresets: AddonPreset[];
+  /** Every add-on option id the pick carried (ticked or not), for 'preset_kept'. */
+  presetOptionIds: string[];
+  /** The cart before the add (line key -> qty), to find the line it adds. */
+  cartBefore: Record<string, number>;
 }
 
 // The customise modal for a pick. Coffey's sugar preselection (§4.7) goes in as
@@ -105,7 +115,7 @@ export function SuggestWizard({ flavourCounts = null,
   facets?: MenuFacet[] | null;
 }) {
   const router = useRouter();
-  const { addItem, totalItems, setPendingSuggestionSessionId } = useCart();
+  const { items: cartItems, addItem, totalItems, setPendingSuggestionSessionId } = useCart();
 
   const [step, setStep] = useState<Step>('feeling');
   const [wiz, setWiz] = useState<WizardState>(initialState);
@@ -130,6 +140,9 @@ export function SuggestWizard({ flavourCounts = null,
   // do we consider it "dismissed" when the customer leaves (see the pagehide
   // effect below).
   const engagedRef = useRef(false);
+  // Pick ids already reported as 'preset_removed' in the current response
+  // (once per pick). Cleared when a new response arrives.
+  const removedReportedRef = useRef<Set<string>>(new Set());
   // The last request sent, so "Try again" can replay it exactly (same inputs,
   // same refine / exclude context).
   const lastRequestRef = useRef<{ inputs: SuggestInputs; opts: { refineOf?: string; exclude?: string[] } } | null>(
@@ -226,6 +239,7 @@ export function SuggestWizard({ flavourCounts = null,
         }
         setResponse(result);
         setUntickedByPick({});
+        removedReportedRef.current = new Set();
         setShowingRefined(opts.refineOf !== undefined);
         engagedRef.current = false;
         const shown = [
@@ -280,6 +294,18 @@ export function SuggestWizard({ flavourCounts = null,
   }
 
   function togglePreset(menuItemId: string, optionId: string) {
+    // Un-ticking an ADD-ON chip (not the sugar chip) is reported once per pick;
+    // re-ticking sends nothing.
+    const isUntick = !(untickedByPick[menuItemId] ?? []).includes(optionId);
+    const pick = response?.picks.find((p) => p.menuItemId === menuItemId);
+    if (
+      response &&
+      isUntick &&
+      pick?.addonPresets?.some((p) => p.optionId === optionId) &&
+      claimRemovedReport(removedReportedRef.current, menuItemId)
+    ) {
+      postSuggestEvent(response.sessionId, 'preset_removed', menuItemId);
+    }
     setUntickedByPick((prev) => {
       const cur = prev[menuItemId] ?? [];
       return {
@@ -311,6 +337,9 @@ export function SuggestWizard({ flavourCounts = null,
         suggestionSessionId: response.sessionId,
       });
       postSuggestEvent(response.sessionId, 'added_to_cart', item.id);
+      // The line added here has no add-ons by construction, so a pick that
+      // carried add-on presets went in without them.
+      reportPresetOutcome(response.sessionId, item.id, rawPick, []);
     } else {
       // Required addon choices (or multiple sizes) mean this has to go
       // through the existing customize modal, same as /menu (§3.2). The
@@ -324,8 +353,43 @@ export function SuggestWizard({ flavourCounts = null,
         sugarPreset: pick.sugarPreset ?? null,
         flavourAddon: pick.flavourAddon ?? null,
         addonPresets: pick.addonPresets ?? [],
+        presetOptionIds: (rawPick.addonPresets ?? []).map((p) => p.optionId),
+        cartBefore: snapshotLines(cartItems),
       });
     }
+  }
+
+  // 'preset_kept' / 'preset_removed' for a pick that carried add-on presets and
+  // really went into the cart. `lineAddonOptionIds` is what the added line
+  // holds, or null when that line could not be identified (send neither).
+  function reportPresetOutcome(
+    sessionId: string,
+    menuItemId: string,
+    pick: Pick<SuggestionPick, 'addonPresets'>,
+    lineAddonOptionIds: string[] | null,
+  ) {
+    reportPresetOptionOutcome(
+      sessionId,
+      menuItemId,
+      (pick.addonPresets ?? []).map((p) => p.optionId),
+      lineAddonOptionIds,
+    );
+  }
+
+  function reportPresetOptionOutcome(
+    sessionId: string,
+    menuItemId: string,
+    presetOptionIds: string[],
+    lineAddonOptionIds: string[] | null,
+  ) {
+    const event = eventForAdd(
+      presetOptionIds,
+      lineAddonOptionIds,
+      removedReportedRef.current.has(menuItemId),
+    );
+    if (!event) return;
+    if (event === 'preset_removed') claimRemovedReport(removedReportedRef.current, menuItemId);
+    postSuggestEvent(sessionId, event, menuItemId);
   }
 
   function handleCloseCustomize() {
@@ -340,6 +404,22 @@ export function SuggestWizard({ flavourCounts = null,
     if (!closedCustomizeTarget) return;
     if (totalItems > closedCustomizeTarget.beforeCartTotal) {
       postSuggestEvent(closedCustomizeTarget.sessionId, 'added_to_cart', closedCustomizeTarget.item.id);
+      // What the customer really added: the cart line this screen created, not
+      // what was ticked on the card (they may have removed the add-on here).
+      if (closedCustomizeTarget.presetOptionIds.length > 0) {
+        const line = findAddedLine(
+          closedCustomizeTarget.cartBefore,
+          cartItems,
+          closedCustomizeTarget.item.id,
+          closedCustomizeTarget.sessionId,
+        );
+        reportPresetOptionOutcome(
+          closedCustomizeTarget.sessionId,
+          closedCustomizeTarget.item.id,
+          closedCustomizeTarget.presetOptionIds,
+          line ? line.addons.map((a) => a.optionId) : null,
+        );
+      }
     }
     setClosedCustomizeTarget(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -572,9 +572,26 @@ The grid, on the requests the wizard now allows (4,240 of 6,336; §10 allowed 3,
 
 The most used presets in the grid: Espresso Shot (₹40), Caramel Sauce (₹30), Hazelnut syrup (₹35), Cinnamon syrup (₹35), Chocolate Sauce (₹30).
 
-### 11.7 Judgement calls, and what to watch
+### 11.7 Watching the paid default (`suggestion_events`)
 
-- Preselecting a paid add-on is a default, and defaults are powerful (§1). It is always shown with its price and is one tap to remove; watch how often customers un-tick it, and how many combo picks are added.
+Preselecting a paid add-on is only right if customers mostly keep it. Three events record that, counted as distinct (session, item) pairs on the owner's Suggestions page under "Add-ons Coffey preselects". The final outcome wins: a pick that was un-ticked, ticked again and then added with the add-on counts as kept, not as removed, so the two shares never add up to more than the picks sent. "Removed" includes picks the customer un-ticked and never added.
+
+| event | written by | when |
+|---|---|---|
+| `preset_shown` | the server, with `value_inr` = the add-ons' total price | a pick (never the usual) went out carrying add-on presets |
+| `preset_removed` | the browser, at most once per pick | the customer un-ticked the add-on on the card, or added the pick to the cart without it (including removing it on the customise screen) |
+| `preset_kept` | the browser | the pick went into the cart with a preset still on, read from the cart line that was actually added |
+
+The sugar preset is free and is not counted. `suggestion_events.event` has a CHECK constraint, so these need `supabase/2026-11-coffey-preset-events.sql` (one statement, re-runnable). It is safe to apply before or after the code is deployed: the deployed code only writes the nine old names, which stay allowed. Until it is applied the three inserts are refused (Postgres 23514) and swallowed, logged once per server instance; the `shown` events, the response and the page are unaffected, the card shows zeros with a pointer to the SQL, and `npm run verify:db` reports the check as skipped rather than failed.
+
+### 11.8 Coffey's setup at the top of the customise screen
+
+A drink's customise screen is long (size, sugar, milk, syrup, toppings, sides), and what Coffey chose sat inside those groups. When Coffey opens the screen with an add-on preselected, a "Coffey set this up for you" panel now sits above the first group: one chip per option Coffey itself preselected ("Hazelnut syrup +₹35", "Sugar: No Sugar"), with its price wherever it has one, bound to the form's own state through the same toggle the option uses below, so the group limits are enforced in one place and the total moves as usual. An option counts as Coffey's only if Coffey passed it in to be preselected, never because it happens to be a group's default. A pick whose only preselection is the sugar option keeps the one-line note instead: the sugar group is the second thing on the screen. An add-on chip removes or restores the add-on; the sugar chip belongs to a required group, so it shows whether Coffey's option is still the one chosen and restores it on a tap. The one-sentence note is replaced by the panel; the "Coffey's pick" mark on each option stays. Opened from the menu, the screen is unchanged.
+
+### 11.9 Judgement calls, and what to watch
+
+- Preselecting a paid add-on is a default, and defaults are powerful (§1). It is always shown with its price and is one tap to remove; §11.7 measures how often customers remove it. If most do, stop preselecting and go back to pointing at it.
 - "A plain base only" and "one shot on intensity 2" are rules of thumb. The owner can override any option's role, families and lifts (`addon_option_traits`), which is the way to stop or allow a particular combination.
 - Some option names read awkwardly as a suggestion ("Sparkling Water(green Apple)"). `addonLabel` tidies only "(new)" and syrups; renaming the option on the menu fixes it everywhere.
-- **Owner follow-ups, added to §10.6's:** fix the temperature of "Tiramisu Latte Iced" and generate traits for "Tiramisu Latte" (Owner → Suggestions → Traits).
+- **Done on the live database, 2026-11-17:** `supabase/2026-11-coffey-preset-events.sql` was applied (the event constraint now lists all twelve names; existing rows untouched).
+- **Owner follow-ups, added to §10.6's:** "Tiramisu Latte Iced" had its temperature corrected to `iced` on 2026-11-17, but the rest of its row (moods, mood fit, refreshment) was written for a hot drink, and the hot "Tiramisu Latte" still has no row: regenerate the first and generate the second (Owner → Suggestions → Traits).

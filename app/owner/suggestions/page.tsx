@@ -13,6 +13,7 @@ import {
   FunnelCard,
   MoodMixCard,
   PersonalisedCard,
+  PresetsCard,
   RevenueCard,
   TopPicksTable,
   WindowTabs,
@@ -120,6 +121,7 @@ export default async function OwnerSuggestionsPage({
       <WizardFunnelCard result={wizardFunnel} />
       <FunnelCard stats={stats} />
       <RevenueCard stats={stats} />
+      <PresetsCard stats={stats} />
       <PairingsCard stats={pairings.stats} missingTable={pairings.missingTable} enabled={flags.checkoutPairings} />
       <MoodMixCard stats={stats} />
       <TopPicksTable stats={stats} />
