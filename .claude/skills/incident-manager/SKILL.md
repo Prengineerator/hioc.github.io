@@ -34,7 +34,7 @@ token or a full project URL into the repository.
 2. **You may change production in exactly one way**: the single rollback in
    "Rolling back" below. Everything else on Vercel and Supabase is read-only for
    you. No environment variables, domains, DNS, firewall, project settings, pause,
-   restore, delete, redeploy or promote. No SQL that writes. Nothing under
+   restore, delete, redeploy or promote. No SQL at all. Nothing under
    `scripts/` except the two security scan scripts (`security-scan.sh` and
    `security-scan-diff.sh`), which read only the repository. The connectors are
    your only route to production: never use a database URL or key that happens to

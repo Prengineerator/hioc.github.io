@@ -40,7 +40,10 @@ describes it for the owner.
 - **Security reviewer.** `security-reviewer` reads every change before it is
   pushed and applies `docs/SECURITY-PLAYBOOK.md`. A FAIL blocks the push. Before
   pushing any change of your own, run `bash scripts/security-scan-diff.sh origin/main`;
-  it must end `RESULT: PASS`.
+  it must end `RESULT: PASS`. That script and `scripts/security-scan.sh` read only
+  the repository's own files and touch no database, so the database check above
+  does not apply to them. Run them with the three database variables set to CI's
+  placeholders, as `.claude/agents/web-engineer.md` shows.
 
 The owner set this up on 2026-11-18: the manager may roll back a bad deployment on
 its own during an outage, incident reports go to the owner by email, optimisation

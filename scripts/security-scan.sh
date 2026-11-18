@@ -33,7 +33,10 @@ SRC=(--include="*.ts" --include="*.tsx" --include="*.mts" --include="*.cts"
 #       byte or a byte that is not valid in the current locale as "binary file
 #       matches" on stderr and prints no line, so one stray byte in a file
 #       would hide every finding in it.
-#   -R  follow symbolic links, so code reached through a link is read too.
+#   -r  recurse WITHOUT following symbolic links. A link can point anywhere:
+#       at a file outside the repository, whose matching lines the scanner
+#       would then print, or at a device that never ends. Links are never read.
+#       Rule C-0 below reports every one of them instead.
 
 # A private scratch directory. Fixed names under /tmp could already exist (as a
 # directory, or owned by someone else), which made the redirect fail and the
@@ -66,13 +69,47 @@ warn() { yellow "  WARN [$1] $2";     WARN=$((WARN+1)); }
 hdr "HIOC security scan — $(date '+%Y-%m-%d %H:%M')"
 
 # ===========================================================================
+# C-0  No symbolic links in the source directories. The rules below do not read
+#      through a link, so code behind one would go unchecked, and a link can
+#      point at a file outside the repository. Checked first, before any file
+#      is read. If one of the directories the rules are pointed at is itself a
+#      link, nothing is read at all.
+# ===========================================================================
+hdr "C-0  no symbolic links in source directories"
+c0_hits=0
+linked_root=0
+for d in app components lib "$API_DIR"; do
+  if [ -L "$d" ]; then
+    crit C-0 "$d is a symbolic link — a source directory must be a real directory"
+    c0_hits=$((c0_hits+1))
+    linked_root=1
+  fi
+done
+if [ "$linked_root" -eq 0 ]; then
+  while IFS= read -r l; do
+    [ -z "$l" ] && continue
+    crit C-0 "$l is a symbolic link — replace it with the real file"
+    c0_hits=$((c0_hits+1))
+  done < <(find app components lib -type l 2>/dev/null | sort)
+fi
+[ "$c0_hits" -eq 0 ] && green "  ok — no symbolic links under app, components or lib"
+if [ "$linked_root" -ne 0 ]; then
+  hdr "Summary"
+  printf '  CRITICAL failures: %s\n' "$CRIT"
+  printf '  WARN / review:     %s\n' "$WARN"
+  printf '  Checks that could not run: %s\n' "$SCAN_ERRORS"
+  red   "  RESULT: FAIL — a source directory is a symbolic link, so no file was read. Fix that first."
+  exit 1
+fi
+
+# ===========================================================================
 # C-1  Service-role admin client must NEVER be imported by a client component.
 #      A 'use client' file bundling createAdminSupabaseClient would ship the
 #      service-role key to the browser. This is the single worst possible bug.
 # ===========================================================================
 hdr "C-1  service-role key never reaches the client"
 c1_hits=0
-run_grep "$TMP/c1" -aRl "createAdminSupabaseClient" app components lib "${SRC[@]}"
+run_grep "$TMP/c1" -arl "createAdminSupabaseClient" app components lib "${SRC[@]}"
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   # A file is a client component if its FIRST non-empty line is 'use client'.
@@ -98,7 +135,7 @@ while IFS= read -r f; do
     warn C-2 "$f has a POST handler but no rateLimitOk() throttle"
     c2_hits=$((c2_hits+1))
   fi
-done < <(find -L "$API_DIR/auth" -name 'route.*' 2>/dev/null)
+done < <(find "$API_DIR/auth" -type f -name 'route.*' 2>/dev/null)
 [ "$c2_hits" -eq 0 ] && green "  ok — every auth POST route is throttled"
 
 # ===========================================================================
@@ -119,7 +156,7 @@ while IFS= read -r f; do
   fi
   warn C-3 "$f uses the admin client with no recognised auth/opaque-id gate — confirm it is intentional"
   c3_hits=$((c3_hits+1))
-done < <(find -L "$API_DIR" -name 'route.*' 2>/dev/null)
+done < <(find "$API_DIR" -type f -name 'route.*' 2>/dev/null)
 [ "$c3_hits" -eq 0 ] && green "  ok — every admin-client route has a recognised gate"
 
 # ===========================================================================
@@ -128,7 +165,7 @@ done < <(find -L "$API_DIR" -name 'route.*' 2>/dev/null)
 #      `if (!secret || <mismatch>) return 401`.
 # ===========================================================================
 hdr "C-4  secret checks fail closed"
-if run_grep "$TMP/c4" -aRnE "if \(secret\) \{" "$API_DIR" "${SRC[@]}"; then
+if run_grep "$TMP/c4" -arnE "if \(secret\) \{" "$API_DIR" "${SRC[@]}"; then
   while IFS= read -r line; do crit C-4 "$line  (fail-open secret check — use: if (!secret || ...) return 401)"; done < "$TMP/c4"
 else
   green "  ok — no fail-open 'if (secret)' guards"
@@ -139,7 +176,7 @@ fi
 #      getSession() (trusts an unverified cookie) for authorization.
 # ===========================================================================
 hdr "C-5  no getSession() used for authorization"
-if run_grep "$TMP/c5" -aRn "auth.getSession()" app lib "${SRC[@]}"; then
+if run_grep "$TMP/c5" -arn "auth.getSession()" app lib "${SRC[@]}"; then
   while IFS= read -r line; do warn C-5 "$line  (prefer getUser() for auth decisions)"; done < "$TMP/c5"
 else
   green "  ok — authorization uses getUser()"
@@ -149,7 +186,7 @@ fi
 # C-6  No XSS sinks.
 # ===========================================================================
 hdr "C-6  no XSS / code-eval sinks"
-if run_grep "$TMP/c6" -aRnE "dangerouslySetInnerHTML|(^|[^a-zA-Z])eval\(|new Function\(" app components lib "${SRC[@]}"; then
+if run_grep "$TMP/c6" -arnE "dangerouslySetInnerHTML|(^|[^a-zA-Z])eval\(|new Function\(" app components lib "${SRC[@]}"; then
   while IFS= read -r line; do crit C-6 "$line"; done < "$TMP/c6"
 else
   green "  ok — no dangerouslySetInnerHTML / eval / new Function"
@@ -161,7 +198,7 @@ fi
 #      builders are parameterized and safe.
 # ===========================================================================
 hdr "C-7  no string-built SQL"
-if run_grep "$TMP/c7" -aRnE "\.(rpc|sql)\(\s*\`" lib app "${SRC[@]}"; then
+if run_grep "$TMP/c7" -arnE "\.(rpc|sql)\(\s*\`" lib app "${SRC[@]}"; then
   while IFS= read -r line; do warn C-7 "$line  (verify no untrusted interpolation into SQL)"; done < "$TMP/c7"
 else
   green "  ok — no template-literal SQL calls"
@@ -178,7 +215,7 @@ if git ls-files 2>/dev/null | grep -qE "\.env(\..*)?\.local$|\.env$"; then
   c8_hits=$((c8_hits+1))
 fi
 # service-role JWTs are long base64 'eyJ...' literals; flag any outside env examples.
-if run_grep "$TMP/c8" -aRnE "eyJ[A-Za-z0-9_-]{30,}" app lib components "${SRC[@]}"; then
+if run_grep "$TMP/c8" -arnE "eyJ[A-Za-z0-9_-]{30,}" app lib components "${SRC[@]}"; then
   while IFS= read -r line; do crit C-8 "$line  (possible hardcoded JWT/secret)"; done < "$TMP/c8"
   c8_hits=$((c8_hits+1))
 fi

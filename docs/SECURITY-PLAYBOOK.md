@@ -93,6 +93,13 @@ query builder (`.eq()`, `.in()`, `.rpc(name, params)`), which parameterizes.
 **Fix:** remove the literal, move it to an env var, and `git rm --cached` any tracked
 `.env*.local`. Rotate the exposed secret.
 
+### C-0 — symbolic link in a source directory (CRITICAL)
+**Meaning:** something under `app/`, `components/` or `lib/` is a symbolic link. The
+scanner never reads through a link (it could point outside the repository), so the
+code behind one is unchecked.
+**Fix:** replace the link with the real file or directory. There is no intentional
+case.
+
 ---
 
 ## Attendance & payroll invariants (Phase 5)
@@ -291,6 +298,8 @@ that is how the 95–98% band is held. A senior model / human resolves the resid
 ## Gate for one change (every pull request, every agent change)
 
 ```bash
+# CI's placeholder values. With these set, nothing below can reach a database.
+export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
 bash scripts/security-scan-diff.sh origin/main
 ```
 

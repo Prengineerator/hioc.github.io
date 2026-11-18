@@ -28,6 +28,8 @@
 #   * Every scan must reach the scanner's summary line. One that does not is
 #     an error (exit 2), not a clean result.
 #   * Line numbers are dropped before comparing, so moving code is not a finding.
+#   * A symbolic link the change adds under app/, components/ or lib/ fails
+#     before any scanner runs, and nothing is ever read through a link.
 #
 # What it cannot see:
 #   * Some rules report once per file (C-3). More of the same pattern in a file
@@ -83,12 +85,17 @@ if ! git worktree add --detach "$WORK/base" "$BASE" >/dev/null 2>&1; then
   exit 2
 fi
 
+# A scan of this codebase takes a few seconds. A limit turns one that never ends
+# into an error instead of a stuck check.
+LIMIT=""
+if command -v timeout >/dev/null 2>&1; then LIMIT="timeout 300"; fi
+
 # run_scan <scanner file> <tree> <output file>
 # The scanner finds its tree from its own path ($0), so it is sourced with $0
 # set to where it would live inside the tree being scanned. Nothing is written
 # into either tree.
 run_scan() {
-  bash -c 'source "$1"' "$2/$SCANNER" "$1" > "$3.raw" 2>&1
+  $LIMIT bash -c 'source "$1"' "$2/$SCANNER" "$1" > "$3.raw" 2>&1
   if ! grep -q 'CRITICAL failures:' "$3.raw"; then
     echo "security-scan-diff: a scan did not reach its summary ($(basename "$1") over $(basename "$2")). Treat as not run." >&2
     exit 2
@@ -118,6 +125,21 @@ fail_with() {
   echo "RESULT: FAIL — fix each new finding. A WARN that is intentional needs the owner's acceptance."
   exit 1
 }
+
+# --- 0. Symbolic links, before any scanner is run over the change. A link under
+#        a source directory can point outside the repository or at a device that
+#        never ends, and an older scanner on the base may read through one. A
+#        link the change adds fails here, and nothing is read through it.
+links_in() {
+  ( cd "$1" 2>/dev/null || exit 0
+    for d in app components lib app/api; do [ -L "$d" ] && echo "$d"; done
+    find app components lib -type l 2>/dev/null ) | sort -u
+}
+new_links="$(comm -13 <(links_in "$WORK/base") <(links_in "$ROOT"))"
+if [ -n "$new_links" ]; then
+  echo "security-scan-diff against ${BASE}"
+  fail_with "$(printf '%s\n' "$new_links" | sed -e 's/^/CRITICAL [C-0] /' -e 's/$/ is a symbolic link — replace it with the real file/')"
+fi
 
 # --- 1. The base's rules. Decided and kept in shell variables before any code
 #        from the change is run, so nothing the change contains can alter it.
