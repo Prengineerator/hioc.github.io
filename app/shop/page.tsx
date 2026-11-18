@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
-import Image from 'next/image';
 import { notFound } from 'next/navigation';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
+import { ProductLineCards } from '@/components/shop/ProductLineCards';
 import { ShopExperience } from '@/components/shop/ShopExperience';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getAuthUser } from '@/lib/api/auth';
@@ -15,12 +15,11 @@ import {
   DELIVERY_TAKES,
   DISPATCH_WITHIN,
   HOME_BLEND_NAME,
-  PRODUCT_HIGHLIGHTS,
   PRODUCT_NET_QTY,
   SHOP_PRODUCT_NAME,
   packLabel,
 } from '@/lib/shop/catalog';
-import { jarsLabel, offerDeals, rupees } from '@/lib/shop/pricing';
+import { offerDeals, rupees } from '@/lib/shop/pricing';
 import { isIntroOfferEligible, isRepeatCustomer, loadShopPricingSettings, loadShopProducts } from '@/lib/shop/server';
 import type { ShopCouponTerms } from '@/lib/shop/types';
 
@@ -110,87 +109,21 @@ export default async function ShopPage() {
   const homeBlendDescription = homeBlend.find((p) => p.description)?.description ?? '';
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10 md:py-14">
-      <header className="grid items-center gap-8 md:grid-cols-[1fr_minmax(0,28rem)]">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">Delivered to your door</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-charcoal md:text-4xl">
-            {homeBlend.length > 0 ? 'Instant Coffee & Home Blend' : 'Premium Instant Coffee'}
-          </h1>
-          <p className="mt-3 max-w-xl text-muted">
-            {homeBlend.length > 0
-              ? 'Café-quality instant coffee in three flavours, and our Signature Home Blend, ground the way you brew.'
-              : 'Café-quality coffee, instantly. 100% Arabica, freeze-dried to lock in the aroma, in three flavours.'}
-          </p>
-          <ul className="mt-5 grid gap-2 text-sm text-charcoal sm:grid-cols-2">
-            {PRODUCT_HIGHLIGHTS.map((h) => (
-              <li key={h} className="flex gap-2">
-                <span aria-hidden="true" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-tan" />
-                {h}
-              </li>
-            ))}
-          </ul>
-
-          {showIntro && offer ? (
-            <section aria-label={offer.name} className="mt-6 rounded-md border border-line bg-surface p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-tan-dark">{offer.name} · any instant flavours</p>
-              <ul className="mt-3 grid grid-cols-3 gap-2 text-center">
-                <li className="rounded-md bg-cream px-2 py-3 shadow-sm">
-                  <p className="text-xs text-muted">1 jar</p>
-                  <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-charcoal">{rupees(price)}</p>
-                </li>
-                {deals.slice(0, 2).map((d) => (
-                  <li key={d.jars} className="rounded-md bg-cream px-2 py-3 shadow-sm ring-1 ring-tan">
-                    <p className="text-xs font-semibold text-tan-dark">{jarsLabel(d.jars)}</p>
-                    <p className="mt-0.5 font-mono text-lg font-bold tabular-nums text-charcoal">{rupees(d.price)}</p>
-                    <p className="text-xs text-muted">
-                      <s>{rupees(d.was)}</s>
-                    </p>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-3 text-xs text-muted">{shippingCopy}</p>
-            </section>
-          ) : welcomeBack ? (
-            <section aria-label="Welcome back" className="mt-6 rounded-md border border-line bg-surface p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-tan-dark">Welcome back</p>
-              <p className="mt-2 text-base font-semibold text-charcoal">{welcomeBack}</p>
-              <p className="mt-3 text-xs text-muted">{shippingCopy}</p>
-            </section>
-          ) : (
-            <p className="mt-5 inline-flex flex-wrap items-baseline gap-x-2 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
-              <strong className="font-mono text-base tabular-nums">{rupees(price)}</strong> a {PRODUCT_NET_QTY} jar
-              <span aria-hidden="true">·</span>
-              <span>{shippingCopy}</span>
-            </p>
-          )}
-        </div>
-
-        {/* The three jars, cut out of the launch poster, on a soft warm light. */}
-        <div
-          className="relative overflow-hidden rounded-2xl px-2 pb-2 pt-8 md:pt-10"
-          style={{ background: 'radial-gradient(ellipse at 50% 35%, #ffffff 0%, #f6efe9 60%, #efe3d6 100%)' }}
-        >
-          {showIntro && offer ? (
-            <span className="absolute left-4 top-4 rounded-full bg-tan-dark px-3 py-1 text-xs font-semibold text-cream shadow-sm">
-              {offer.name}
-            </span>
-          ) : welcomeBack ? (
-            <span className="absolute left-4 top-4 rounded-full bg-tan-dark px-3 py-1 text-xs font-semibold text-cream shadow-sm">
-              Welcome back
-            </span>
-          ) : null}
-          <Image
-            src="/images/shop/hero-jars.png"
-            alt="Three 50 g jars of HIOC. Premium Instant Coffee — Nutty Hazelnut, French Vanilla and Classic — tied with black ribbons."
-            width={880}
-            height={476}
-            priority
-            sizes="(min-width: 768px) 448px, 100vw"
-            className="h-auto w-full"
-          />
-        </div>
+    <div className="mx-auto max-w-5xl px-4 py-6 md:py-14">
+      <header>
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">Delivered to your door</p>
+        <h1 className="mt-2 text-3xl font-bold tracking-tight text-charcoal md:text-4xl">Shop HIOC. coffee</h1>
+        <p className="mt-3 max-w-xl text-muted">Instant coffee or our Signature Home Blend, delivered across India.</p>
       </header>
+
+      <ProductLineCards
+        instantCount={instant.length}
+        homeBlendPacks={homeBlendPacks}
+        price={price}
+        intro={showIntro && offer ? { name: offer.name, deals: deals.slice(0, 2) } : null}
+        welcomeBack={welcomeBack}
+        shippingCopy={shippingCopy}
+      />
 
       {products.length > 0 ? (
         <ShopExperience products={products} settings={settings} introEligible={introEligible} signedIn={signedIn} paymentReady={isGatewayConfigured()} />
