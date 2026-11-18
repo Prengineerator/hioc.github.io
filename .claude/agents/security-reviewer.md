@@ -50,17 +50,21 @@ git fetch origin main -q
 # Use main's copy of the gate, so the change cannot pass by editing the gate.
 # This checkout's own copy is never run in its place.
 gate="$(mktemp)"
-git show origin/main:scripts/security-scan-diff.sh > "$gate" && [ -s "$gate" ] && bash "$gate" origin/main
-npx tsc --noEmit
-npm test
+if ! git show origin/main:scripts/security-scan-diff.sh > "$gate" || [ ! -s "$gate" ]; then
+  echo "GATE DID NOT RUN: main's copy of the gate could not be read. This is not a pass. Stop here."
+else
+  bash "$gate" origin/main
+  npx tsc --noEmit
+  npm test
+fi
 ```
 
 The order matters. The placeholders come first because the gate may run a scanner
 the change has edited, and the gate comes before the tests because the tests are
 the change's own code.
 
-If `git show` cannot read the gate from `main`, the gate did not run. That is not
-a pass: say so and stop. Do not run this checkout's copy instead.
+If the block prints `GATE DID NOT RUN`, nothing else in it runs. That is not a
+pass: say so in your verdict and stop. Do not run this checkout's copy instead.
 
 - The gate must end `RESULT: PASS`. **Any new finding is a FAIL, CRITICAL or
   WARN.** The gate and CI both fail on a new WARN, and so do you. If the author
