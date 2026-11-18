@@ -5,6 +5,7 @@ import {
   defaultPackageForLines,
   goodsWeightKg,
   GRINDS,
+  HOME_BLEND_HERO_IMAGE,
   HOME_BLEND_IMAGE,
   isGrindCode,
   lineItemLabel,
@@ -56,11 +57,12 @@ describe('grinds', () => {
 });
 
 describe('constants', () => {
-  it('has the line titles, placeholder price and no image yet', () => {
+  it('has the line titles, placeholder price and the Home Blend images', () => {
     expect(PRODUCT_LINES.instant.title).toBe('Instant Coffee');
     expect(PRODUCT_LINES.home_blend).toEqual({ title: 'Home Blend', anchor: 'home-blend' });
     expect(PLACEHOLDER_PRICE_INR).toBe(1);
-    expect(HOME_BLEND_IMAGE).toBeNull();
+    expect(HOME_BLEND_IMAGE).toBe('/images/shop/home-blend.png');
+    expect(HOME_BLEND_HERO_IMAGE).toBe('/images/shop/home-blend-hero.png');
     expect(MAX_PARCEL_KG).toBe(6);
   });
 });

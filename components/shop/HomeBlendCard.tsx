@@ -21,7 +21,7 @@ import Image from 'next/image';
 import { Button } from '@/components/ui/Button';
 import { Stepper } from '@/components/shop/InstantSection';
 import { HomeBlendPlaceholder } from '@/components/shop/HomeBlendPlaceholder';
-import { GRINDS, HOME_BLEND_HIGHLIGHTS, HOME_BLEND_IMAGE, HOME_BLEND_NAME, defaultHomeBlendPack, grindShort, packLabel } from '@/lib/shop/catalog';
+import { GRINDS, HOME_BLEND_HIGHLIGHTS, HOME_BLEND_IMAGE, HOME_BLEND_IMAGE_ALT, HOME_BLEND_NAME, defaultHomeBlendPack, grindShort, packLabel } from '@/lib/shop/catalog';
 import { SELECT_PACK_EVENT, acceptedPackId } from '@/lib/shop/productLines';
 import { MAX_UNITS_PER_ORDER, rupees, type CartItem } from '@/lib/shop/pricing';
 import type { GrindCode, ShopProduct } from '@/lib/shop/types';
@@ -96,8 +96,8 @@ export function HomeBlendCard({
 
       <div className="mt-5 overflow-hidden rounded-md border border-line bg-surface md:grid md:grid-cols-[minmax(0,18rem)_1fr]">
         {HOME_BLEND_IMAGE ? (
-          <div className="relative aspect-[4/3] md:aspect-auto">
-            <Image src={HOME_BLEND_IMAGE} alt={`${HOME_BLEND_NAME} pack`} fill sizes="(min-width: 768px) 288px, 100vw" className="object-contain p-4" />
+          <div className="relative aspect-[4/3] md:aspect-auto" style={{ background: 'radial-gradient(ellipse at 50% 35%, #ffffff 0%, #f6efe9 60%, #efe3d6 100%)' }}>
+            <Image src={HOME_BLEND_IMAGE} alt={HOME_BLEND_IMAGE_ALT} fill sizes="(min-width: 768px) 288px, 100vw" className="object-contain p-4" />
           </div>
         ) : (
           <HomeBlendPlaceholder className="aspect-[4/3] border-b border-line md:aspect-auto md:border-b-0 md:border-r" />
