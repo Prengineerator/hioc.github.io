@@ -118,8 +118,11 @@ npm run build     # compiled successfully
 ```
 
 Accessibility before and after: axe-core with the WCAG 2.2 AA and best-practice rules, at 390 and
-1280 px, against a local build reading the live menu (before: dev build of main; after: production
-build of this branch). No form was submitted and no order placed. Sideways overflow was 0 on every
+1280 px, against a local build (before: dev build of main; after: production build of this branch).
+Those builds read their menu from the retired Hioc Coffee project, read-only (every non-GET request
+was blocked). No form was submitted and no order placed. The data-dependent figures in this report
+were checked again against the live project, Hioc India, and match it: 126 customer items, 51 with
+a photo and 75 without, and no items in Waffle Crepes or Coffee Beans. Sideways overflow was 0 on every
 page both times; every page has one `<main>` and one h1.
 
 | Route | axe violations, before | after | Skip link | Title, before → after |
