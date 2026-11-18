@@ -18,11 +18,14 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { formatIstTime } from '@/lib/store/hours';
 import {
   ORDER_STATUS_BADGE_CLASS,
-  ORDER_STATUS_LABEL,
+  activeOrderSentence,
+  orderStatusLabel,
   formatIstDate,
   isActiveOrderStatus,
 } from '@/lib/account/orderDisplay';
 import { Spinner } from '@/components/ui/Spinner';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { buttonVariants } from '@/components/ui/Button';
 import { TasteProfileCard } from '@/components/account/TasteProfileCard';
 import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
@@ -36,7 +39,7 @@ const SECTIONS = [
   },
   {
     href: '/account/favorites',
-    title: 'Favorites',
+    title: 'Favourites',
     body: 'Your saved items, ready to add to cart.',
   },
   {
@@ -57,7 +60,7 @@ const SECTIONS = [
   {
     href: '/account/profile',
     title: 'Profile',
-    body: 'Name, phone, email, default order type, and notification preferences.',
+    body: 'Your name, phone, email and offer preferences.',
   },
 ];
 
@@ -89,24 +92,21 @@ export default function AccountHomePage() {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-2xl font-bold text-charcoal">My Account</h1>
-        <p className="mt-1 text-sm text-muted">Manage your orders, favorites, and profile.</p>
+        <h1 className="text-2xl font-bold text-charcoal">My account</h1>
+        <p className="mt-1 text-sm text-muted">Manage your orders, favourites and profile.</p>
       </div>
 
       {activeOrder ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-tan bg-surface px-4 py-3">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-tan-dark">
-              {ORDER_STATUS_LABEL[activeOrder.status]}
-            </p>
+            <p className="text-sm font-semibold text-tan-dark">{orderStatusLabel(activeOrder)}</p>
             <p className="truncate text-sm font-bold text-charcoal">
-              Order #<span className="font-mono tabular-nums">{formatOrderNumber(activeOrder.order_number)}</span> is
-              on its way
+              Order #<span className="font-mono tabular-nums">{formatOrderNumber(activeOrder.order_number)}</span> {activeOrderSentence(activeOrder)}
             </p>
           </div>
           <Link
             href={`/order/${activeOrder.id}`}
-            className="inline-flex min-h-[40px] shrink-0 items-center rounded-md bg-tan-dark px-4 text-sm font-semibold text-cream hover:bg-tan-darker"
+            className="inline-flex min-h-[44px] shrink-0 items-center rounded-md bg-tan-dark px-4 text-sm font-semibold text-cream hover:bg-tan-darker"
           >
             Track
           </Link>
@@ -115,7 +115,18 @@ export default function AccountHomePage() {
 
       {orders === null ? (
         <Spinner label="Loading your orders…" size="sm" />
-      ) : recentOrders.length > 0 ? (
+      ) : recentOrders.length === 0 ? (
+        <EmptyState
+          icon=""
+          heading="No orders yet"
+          body="Your orders will show up here once you place one."
+          action={
+            <Link href="/menu" className={buttonVariants()}>
+              Browse the menu
+            </Link>
+          }
+        />
+      ) : (
         <div>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="font-semibold text-charcoal">Recent orders</h2>
@@ -135,7 +146,7 @@ export default function AccountHomePage() {
                       #{formatOrderNumber(order.order_number)}
                     </p>
                     <p className="text-sm text-muted">
-                      {formatIstDate(order.created_at)} · {formatIstTime(new Date(order.created_at))}
+                      {formatIstDate(order.created_at)}, {formatIstTime(new Date(order.created_at))}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -144,7 +155,7 @@ export default function AccountHomePage() {
                         'rounded-full px-2 py-0.5 text-xs font-semibold ' + ORDER_STATUS_BADGE_CLASS[order.status]
                       }
                     >
-                      {ORDER_STATUS_LABEL[order.status]}
+                      {orderStatusLabel(order)}
                     </span>
                     <span className="font-mono text-sm font-bold tabular-nums text-charcoal">
                       ₹{order.total_inr ?? order.subtotal_inr}
@@ -155,7 +166,7 @@ export default function AccountHomePage() {
             ))}
           </ul>
         </div>
-      ) : null}
+      )}
 
       {flags.suggest ? <TasteProfileCard /> : null}
 

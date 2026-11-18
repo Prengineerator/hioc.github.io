@@ -1,6 +1,6 @@
 'use client';
 
-// Favorites (ACC-5): heart/unheart menu items, list them, add-to-cart from
+// Favourites (ACC-5): heart/unheart menu items, list them, add-to-cart from
 // there. The favorited-items grid reuses components/menu/MenuItemCard (same
 // add-to-cart/customize behavior as the main menu); a separate "browse to
 // add" picker lets a customer heart new items without leaving /account.
@@ -10,6 +10,8 @@ import { CartProvider } from '@/lib/cart/CartContext';
 import { FavoriteCard } from '@/components/account/FavoriteCard';
 import { FavoritePickerRow } from '@/components/account/FavoritePickerRow';
 import { Spinner } from '@/components/ui/Spinner';
+import { buttonVariants } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/EmptyState';
 import type { MenuItem } from '@/lib/types';
 
 interface FavoriteRow {
@@ -58,7 +60,7 @@ function FavoritesContent() {
   }
 
   if (loading) {
-    return <Spinner label="Loading your favorites…" />;
+    return <Spinner label="Loading your favourites…" />;
   }
 
   const favoriteIds = new Set(favorites.map((f) => f.menu_item_id));
@@ -69,10 +71,23 @@ function FavoritesContent() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold text-charcoal">Favorites</h1>
+      <h1 className="text-2xl font-bold text-charcoal">Favourites</h1>
 
       {validFavorites.length === 0 ? (
-        <p className="text-sm text-muted">No favorites yet — heart items below to save them here.</p>
+        <EmptyState
+          icon=""
+          heading="No favourites yet"
+          body="Save the items you love and they will wait for you here."
+          action={
+            <button
+              type="button"
+              onClick={() => setShowPicker(true)}
+              className={buttonVariants()}
+            >
+              Choose favourites
+            </button>
+          }
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           {validFavorites.map((f) => (
@@ -85,14 +100,15 @@ function FavoritesContent() {
         <button
           type="button"
           onClick={() => setShowPicker((v) => !v)}
-          className="text-sm font-semibold text-tan-dark hover:underline"
+          aria-expanded={showPicker}
+          className="min-h-[44px] text-sm font-semibold text-tan-dark hover:underline"
         >
-          {showPicker ? 'Hide menu' : 'Browse menu to add favorites'}
+          {showPicker ? 'Hide menu' : 'Browse menu to add favourites'}
         </button>
         {showPicker ? (
           <div className="mt-3">
             {pickable.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted">Everything&apos;s already a favorite.</p>
+              <p className="py-4 text-center text-sm text-muted">Everything is already a favourite.</p>
             ) : (
               pickable.map((item) => (
                 <FavoritePickerRow key={item.id} item={item} onAdded={handleAdded} />

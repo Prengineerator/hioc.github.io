@@ -26,7 +26,7 @@ import { RitualChip } from '@/components/passes/RitualChip';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/lib/passes/ui';
 import { OptInCard } from '@/components/marketing/OptInCard';
-import { CAFE_ADDRESS, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
+import { CAFE_ADDRESS, CAFE_DIRECTIONS_URL, CAFE_NAME, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
 import type { Order, OrderItem, OrderStatus } from '@/lib/types';
@@ -53,7 +53,7 @@ const STATUS_HEADLINE: Record<string, { title: string; body: string }> = {
   accepted: { title: 'Accepted', body: 'The café has your order and will start it shortly.' },
   preparing: { title: 'Being prepared', body: "We're making it now." },
   ready: { title: 'Ready for pickup!', body: 'Show your pickup code at the counter.' },
-  completed: { title: 'Collected — enjoy!', body: 'Thanks for ordering with us.' },
+  completed: { title: 'Collected, enjoy!', body: 'Thanks for ordering with us.' },
 };
 
 const PAYMENT_POLL_MS = 4000;
@@ -73,6 +73,9 @@ export default function OrderStatusPage() {
   const [order, setOrder] = useState<OrderWithItems | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // A failed load (network/5xx) is not a missing order: it gets its own retry state.
+  const [loadError, setLoadError] = useState(false);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
   const [paying, setPaying] = useState(false);
@@ -100,11 +103,18 @@ export default function OrderStatusPage() {
         setNotFound(true);
         return;
       }
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Server error: keep any last-known-good order; with none, show the retry state.
+        setLoadError(true);
+        return;
+      }
       const data = await res.json();
       setOrder(data.order as OrderWithItems);
+      setLoadError(false);
     } catch {
-      // Keep last-known-good; the poll/realtime will retry.
+      // Keep last-known-good; the poll/realtime will retry. With nothing
+      // loaded yet this is a network error, shown as a retry state.
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -115,6 +125,29 @@ export default function OrderStatusPage() {
   useEffect(() => {
     fetchOrder();
   }, [fetchOrder]);
+
+  // Ready alert (CHK-06): when the order BECOMES ready while this page is open
+  // (not when it is first loaded already ready), put it in the tab title and
+  // buzz once. The polite announcement is the aria-live headline below. No
+  // notification permission is requested.
+  const status = order?.status;
+  const orderNumber = order?.order_number;
+  const prevStatus = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const was = prevStatus.current;
+    prevStatus.current = status;
+    if (status !== 'ready' || !was || was === 'ready' || orderNumber == null) return;
+    const original = document.title;
+    document.title = `Ready: order ${formatOrderNumber(orderNumber)} | ${CAFE_NAME}`;
+    try {
+      navigator.vibrate?.([200, 100, 200]);
+    } catch {
+      // Vibration is a nicety; ignore browsers that refuse it.
+    }
+    return () => {
+      document.title = original;
+    };
+  }, [status, orderNumber]);
 
   // Bounded reconciliation poll (PAY-2/FND-1 "webhook delayed" edge case):
   // while payment is pending, ask the server to check with the gateway
@@ -152,13 +185,14 @@ export default function OrderStatusPage() {
       const res = await fetch(`/api/orders/${orderId}/cancel`, { method: 'POST' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setCancelError(data.error ?? 'Could not cancel — please call the cafe.');
+        setCancelError(data.error ?? 'Could not cancel. Please call the cafe.');
       }
       await fetchOrder();
     } catch {
-      setCancelError('Could not cancel — please call the cafe.');
+      setCancelError('Could not cancel. Please call the cafe.');
     } finally {
       setCancelling(false);
+      setConfirmingCancel(false);
     }
   }, [orderId, fetchOrder]);
 
@@ -183,7 +217,7 @@ export default function OrderStatusPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.payment) {
-        setPaymentActionError(data.error ?? 'Could not start payment — please try again.');
+        setPaymentActionError(data.error ?? 'Could not start payment. Please try again.');
         return;
       }
       await openRazorpayCheckout(data.payment, {
@@ -204,8 +238,8 @@ export default function OrderStatusPage() {
             lastFailure
               ? `Payment failed: ${lastFailure}`
               : allowCounter
-                ? 'Payment was cancelled — you can retry or pay at the counter.'
-                : 'Payment was cancelled — please retry the payment.',
+                ? 'Payment was cancelled. You can retry or pay at the counter.'
+                : 'Payment was cancelled. Please retry the payment.',
           );
           fetchOrder();
         },
@@ -216,7 +250,7 @@ export default function OrderStatusPage() {
         onPaymentFailed: (msg) => setPaymentActionError(`Payment failed: ${msg}`),
       });
     } catch {
-      setPaymentActionError('Network error — please try again.');
+      setPaymentActionError('Network error. Please try again.');
     } finally {
       setPaying(false);
     }
@@ -239,7 +273,7 @@ export default function OrderStatusPage() {
       }
       await fetchOrder();
     } catch {
-      setPaymentActionError('Network error — please try again.');
+      setPaymentActionError('Network error. Please try again.');
     } finally {
       setSwitching(false);
     }
@@ -248,7 +282,26 @@ export default function OrderStatusPage() {
   if (loading) {
     return (
       <div className="mx-auto max-w-xl px-4 py-16">
-        <Spinner label="Loading your order…" />
+        <Spinner label="Loading your order" />
+      </div>
+    );
+  }
+
+  if (loadError && !order && !notFound) {
+    return (
+      <div role="alert" className="mx-auto max-w-xl px-4 py-16 text-center">
+        <h1 className="text-2xl font-bold text-charcoal">We couldn&apos;t load your order.</h1>
+        <p className="mt-4 text-muted">Check your connection and try again.</p>
+        <button
+          type="button"
+          onClick={() => {
+            setLoading(true);
+            fetchOrder();
+          }}
+          className="mt-6 min-h-[44px] rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
+        >
+          Try again
+        </button>
       </div>
     );
   }
@@ -256,15 +309,15 @@ export default function OrderStatusPage() {
   if (notFound || !order) {
     return (
       <div className="mx-auto max-w-xl px-4 py-16 text-center">
-        <h1 className="text-2xl font-bold text-charcoal">Order Not Found</h1>
+        <h1 className="text-2xl font-bold text-charcoal">Order not found</h1>
         <p className="mt-4 text-muted">
           We couldn&apos;t find that order. The link may be incorrect.
         </p>
         <Link
           href="/menu"
-          className="mt-6 inline-block rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
+          className="mt-6 inline-flex min-h-[44px] items-center rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
         >
-          Back to Menu
+          Back to menu
         </Link>
       </div>
     );
@@ -291,7 +344,7 @@ export default function OrderStatusPage() {
         <ConnectionDot connection={connection} />
       </div>
       <p className="mt-1 text-sm text-muted">
-        Hi {order.customer_name.split(' ')[0]} — here&apos;s your live status.
+        Hi {order.customer_name.split(' ')[0]}, here&apos;s your live status.
       </p>
       <PaymentBadge order={order} />
 
@@ -304,14 +357,41 @@ export default function OrderStatusPage() {
         </p>
       ) : null}
 
+      {/* Pickup details up top (CHK-10): when, where, and how to get there. A
+          missing time is "As soon as possible", never an invented one. */}
+      {!awaitingPayment && !negative && !isPassSale ? (
+        <section aria-labelledby="pickup-heading" className="mt-6 rounded-md border border-line bg-cream p-4 shadow-sm">
+          <h2 id="pickup-heading" className="text-base font-bold text-charcoal">
+            Pickup
+          </h2>
+          <p className="mt-1 text-base text-charcoal">
+            <span className="font-semibold">{order.pickup_slot_label || order.pickup_time || 'As soon as possible'}</span>
+          </p>
+          <p className="mt-1 text-sm text-muted">Collect at the counter, {CAFE_ADDRESS}</p>
+          <div className="mt-2 flex flex-wrap gap-x-5">
+            <a
+              href={CAFE_DIRECTIONS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark underline"
+            >
+              Directions<span className="sr-only"> (opens in a new tab)</span>
+            </a>
+            <a href={CAFE_PHONE_HREF} className="inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark underline">
+              Call {CAFE_PHONE_DISPLAY}
+            </a>
+          </div>
+        </section>
+      ) : null}
+
       {awaitingPayment ? (
         <div className="mt-6 rounded-md border border-tan bg-surface p-6 text-center">
           <h2 className="text-lg font-bold text-charcoal">Waiting on payment</h2>
           <p className="mt-2 text-sm text-charcoal">
             {isPassSale
               ? `Your ${PASS_PROGRAM_NAME} will be ready as soon as payment is confirmed`
-              : 'Your order will join the kitchen queue as soon as payment is confirmed'}{' '}
-            — this updates automatically, usually within a few seconds.
+              : 'Your order will join the kitchen queue as soon as payment is confirmed'}
+            . This updates automatically, usually within a few seconds.
           </p>
           {displayedPaymentError ? (
             <p className="mt-3 text-sm font-semibold text-red-700">{displayedPaymentError}</p>
@@ -391,8 +471,8 @@ export default function OrderStatusPage() {
           {/* Pickup code, shown prominently for the counter (CUS-056). */}
           {order.pickup_code ? (
             <div className="mt-6 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
-              <p className="text-xs uppercase tracking-wide text-muted">Show this at the counter</p>
-              <p className="mt-1 font-mono text-4xl font-bold tracking-[0.3em] tabular-nums text-charcoal">
+              <p className="text-sm text-muted">Show this at the counter</p>
+              <p className="mt-1 font-mono text-4xl font-bold tracking-[0.2em] tabular-nums text-charcoal">
                 {order.pickup_code}
               </p>
             </div>
@@ -403,7 +483,7 @@ export default function OrderStatusPage() {
       {/* Items + bill breakup / receipt (C5, PAY-1). */}
       <div className="mt-8 rounded-md border border-line bg-cream p-6 shadow-sm">
         <h2 className="mb-4 text-lg font-bold text-charcoal">
-          {order.payment_status === 'paid' ? 'Receipt' : 'Order Summary'}
+          {order.payment_status === 'paid' ? 'Receipt' : 'Order summary'}
         </h2>
         <ul className="flex flex-col gap-3">
           {order.items.map((item) => (
@@ -411,7 +491,7 @@ export default function OrderStatusPage() {
               <div className="flex items-start justify-between">
                 <span>
                   {item.name_snapshot}
-                  {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)} ×{' '}
+                  {lineSizeSuffix(item.variant_label_snapshot, item.weight_grams)}, qty{' '}
                   {item.quantity}
                   {!item.voided && item.pass_drinks && item.pass_drinks > 0 ? (
                     <RitualChip className="ml-2 align-middle">{ritualTagLabel(item.pass_drinks)}</RitualChip>
@@ -437,39 +517,65 @@ export default function OrderStatusPage() {
               href={`/order/${order.id}/receipt`}
               className="inline-flex min-h-[44px] items-center rounded-md border border-tan px-5 text-sm font-semibold text-tan-dark hover:bg-surface"
             >
-              View / print bill
+              View or print bill
             </Link>
           </div>
         ) : null}
       </div>
 
-      {!awaitingPayment && !isPassSale ? (
-        <p className="mt-6 text-center text-sm text-charcoal">
-          Pickup: <span className="font-bold">{order.pickup_slot_label || order.pickup_time}</span>
-        </p>
-      ) : null}
       {/* Guest orders carry no phone — don't promise messages to nobody. A Ritual
           purchase has no progress to message about. */}
       {isPassSale ? null : (
-        <p className="mt-1 text-center text-sm italic text-muted">
+        <p className="mt-6 text-center text-sm italic text-muted">
           {order.customer_phone
             ? <>We&apos;ll message you on {order.customer_phone} as your order progresses.</>
-            : 'Keep this page open — it updates live as your order progresses.'}
+            : 'Keep this page open. It updates live as your order progresses.'}
         </p>
       )}
 
-      {/* Self-cancel — only before staff accept the order (F1). */}
+      {/* Self-cancel: only before staff accept the order (F1). Asks first, since
+          it can't be undone; the destructive action is not the primary one. */}
       {order.status === 'received' && !isPassSale ? (
         <div className="mt-6 text-center">
-          <button
-            type="button"
-            onClick={handleCancel}
-            disabled={cancelling}
-            className="min-h-[44px] rounded-md border border-line px-5 py-2 text-sm font-semibold text-muted transition-colors hover:border-red-300 hover:text-red-700 disabled:opacity-50"
-          >
-            {cancelling ? 'Cancelling…' : 'Cancel order'}
-          </button>
-          {cancelError ? <p className="mt-2 text-sm text-red-700">{cancelError}</p> : null}
+          {confirmingCancel ? (
+            <div role="group" aria-label="Confirm cancelling this order" className="rounded-md border border-line bg-cream p-4">
+              <p className="font-semibold text-charcoal">Cancel this order?</p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-center">
+                <button
+                  type="button"
+                  onClick={() => setConfirmingCancel(false)}
+                  disabled={cancelling}
+                  className="min-h-[44px] rounded-md bg-tan-dark px-5 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-50"
+                >
+                  Keep my order
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="min-h-[44px] rounded-md border border-red-700 px-5 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
+                >
+                  {cancelling ? 'Cancelling...' : 'Yes, cancel'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setCancelError('');
+                setConfirmingCancel(true);
+              }}
+              className="min-h-[44px] rounded-md border border-muted/80 px-5 py-2 text-sm font-semibold text-muted transition-colors hover:border-red-700 hover:text-red-700"
+            >
+              Cancel order
+            </button>
+          )}
+          {cancelError ? (
+            <p role="alert" className="mt-2 text-sm text-red-700">
+              {cancelError}
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -480,9 +586,9 @@ export default function OrderStatusPage() {
       <OptInCard />
 
       <div className="mt-10 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
-        <h3 className="font-semibold text-charcoal">Need help?</h3>
+        <h2 className="font-semibold text-charcoal">Need help?</h2>
         <p className="mt-2 text-sm text-muted">{CAFE_ADDRESS}</p>
-        <a href={CAFE_PHONE_HREF} className="mt-1 inline-block text-sm text-tan-dark hover:underline">
+        <a href={CAFE_PHONE_HREF} className="mt-1 inline-flex min-h-[44px] items-center text-sm text-tan-dark hover:underline">
           {CAFE_PHONE_DISPLAY}
         </a>
       </div>
@@ -508,9 +614,9 @@ function PaymentBadge({ order }: { order: OrderWithItems }) {
           ? 'bg-surface text-tan-dark'
           : 'bg-[#f2efe9] text-muted';
   return (
-    <span className={'mt-2 inline-block rounded-md px-2.5 py-1 text-xs font-semibold ' + tone}>
+    <span className={'mt-2 inline-block rounded-md px-2.5 py-1 text-sm font-semibold ' + tone}>
       Payment: {label[order.payment_status] ?? order.payment_status}
-      {order.payment_status === 'paid' && order.payment_method ? ` · ${order.payment_method}` : ''}
+      {order.payment_status === 'paid' && order.payment_method ? `, ${order.payment_method}` : ''}
     </span>
   );
 }
@@ -600,7 +706,7 @@ function ProgressTrack({ status }: { status: OrderStatus }) {
                 <div className="flex-1" />
               )}
             </div>
-            <span className={'mt-2 text-xs ' + (done ? 'font-bold text-charcoal' : 'text-muted')}>
+            <span className={'mt-2 text-xs sm:text-sm ' + (done ? 'font-bold text-charcoal' : 'text-muted')}>
               {STEP_LABEL[step]}
               {done && !isCurrent ? <span className="sr-only"> (done)</span> : null}
             </span>
@@ -614,8 +720,9 @@ function ProgressTrack({ status }: { status: OrderStatus }) {
 function ConnectionDot({ connection }: { connection: RealtimeConnection }) {
   const live = connection === 'live';
   return (
-    <span className="flex items-center gap-1.5 text-[11px] text-muted" title={connection}>
+    <span className="flex items-center gap-1.5 text-xs text-muted" title={connection}>
       <span
+        aria-hidden="true"
         className={
           'inline-block h-2 w-2 rounded-full ' +
           (live ? 'bg-green-500' : connection === 'connecting' ? 'bg-amber-400' : 'bg-muted')

@@ -1,17 +1,24 @@
 'use client';
 
-import { useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { cartBillBeforePackaging, useCart } from '@/lib/cart/CartContext';
+import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
+import { computeBill } from '@/lib/store/hours';
+import type { StoreOpenState } from '@/lib/store/hours';
+import { createClient } from '@/lib/supabase';
 import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
 import { lineSizeLabel } from '@/lib/menu/weight';
 import type { StoreSettings } from '@/lib/types';
+
+// Same switch the checkout uses: without a public Razorpay key a guest cannot pay.
+const ONLINE_PAYMENT_AVAILABLE = Boolean(process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID);
 
 export function CartDrawer({
   open,
   onClose,
   settings = null,
+  openState = null,
   checkoutDisabledReason = null,
 }: {
   open: boolean;
@@ -19,6 +26,10 @@ export function CartDrawer({
   // Both optional (C5/C3): the drawer still works standalone while settings
   // are loading, or if the caller doesn't wire the closed-store gate.
   settings?: StoreSettings | null;
+  // Optional: when a caller doesn't pass it, the drawer reads it from the same
+  // /api/store-settings the checkout uses, so a closed store can say when it opens.
+  openState?: StoreOpenState | null;
+  // Only whether it is set matters here; the drawer words the closed state itself.
   checkoutDisabledReason?: string | null;
 }) {
   const { items, totalPrice, totalItems, increment, decrement, removeItem } = useCart();
@@ -29,12 +40,58 @@ export function CartDrawer({
   // user could tab straight out of, with the menu still scrolling behind it.
   useDialogBehavior(open, onClose, panelRef);
 
+  // Store settings and the open state: from the caller when it has them,
+  // otherwise fetched once the drawer opens (the same client-side read the
+  // checkout does). Until they load the drawer shows the items' price alone.
+  const [fetched, setFetched] = useState<{ settings: StoreSettings | null; openState: StoreOpenState | null } | null>(null);
+  const needsFetch = !settings || (!!checkoutDisabledReason && !openState);
+  useEffect(() => {
+    if (!open || !needsFetch || fetched) return;
+    let cancelled = false;
+    fetch('/api/store-settings')
+      .then((res) => res.json())
+      .then((data: { settings?: StoreSettings | null; openState?: StoreOpenState | null }) => {
+        if (!cancelled) setFetched({ settings: data.settings ?? null, openState: data.openState ?? null });
+      })
+      .catch(() => {
+        // Keep the current figure; the checkout re-prices everything anyway.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, needsFetch, fetched]);
+
+  // Guests pay online; say so before checkout. null until the session answers.
+  const [isGuest, setIsGuest] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!open || isGuest !== null) return;
+    let cancelled = false;
+    createClient()
+      .auth.getUser()
+      .then(({ data }) => {
+        if (!cancelled) setIsGuest(!data.user);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isGuest]);
+
   if (!open || typeof document === 'undefined') return null;
 
   const isEmpty = items.length === 0;
-  const bill = settings ? cartBillBeforePackaging(items, totalPrice, settings) : null;
-  const packagingAtCheckout = (settings?.packaging_charge_inr ?? 0) > 0;
-  const checkoutDisabled = isEmpty || !!checkoutDisabledReason;
+  const storeSettings = settings ?? fetched?.settings ?? null;
+  const storeOpenState = openState ?? fetched?.openState ?? null;
+  // The total checkout shows by default (takeaway, packaging included), so the
+  // figure doesn't jump at the last step. Dine-in drops the packaging there.
+  const bill = storeSettings
+    ? computeBill(totalPrice, storeSettings, 0, cartTaxableSubtotal(items))
+    : null;
+  const closed = !!checkoutDisabledReason;
+  const checkoutDisabled = isEmpty || closed;
+  const includes = bill
+    ? [bill.tax_inr > 0 ? 'GST' : null, bill.packaging_inr > 0 ? 'packaging' : null].filter(Boolean)
+    : [];
 
   // Portalled for the same reason as Modal: a transformed ancestor would
   // otherwise become the fixed overlay's containing block.
@@ -57,7 +114,7 @@ export function CartDrawer({
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h2 id={titleId} className="text-lg font-semibold text-charcoal">
-            Your Cart
+            Your cart
             {totalItems > 0 ? (
               <span className="ml-2 text-sm font-normal text-muted">
                 {totalItems} item{totalItems === 1 ? '' : 's'}
@@ -78,14 +135,11 @@ export function CartDrawer({
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {isEmpty ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center">
-              <span aria-hidden="true" className="text-3xl">
-                ☕
-              </span>
-              <p className="text-sm text-muted">Your cart is empty. Add something delicious from the menu!</p>
+              <p className="text-sm text-muted">Your cart is empty. Add something from the menu.</p>
               <button
                 type="button"
                 onClick={onClose}
-                className="inline-flex min-h-[44px] items-center rounded-md border border-line px-4 text-sm font-semibold text-charcoal transition-colors hover:border-tan"
+                className="inline-flex min-h-[44px] items-center rounded-md border border-muted/80 px-4 text-sm font-semibold text-charcoal transition-colors hover:border-tan"
               >
                 Browse the menu
               </button>
@@ -126,30 +180,29 @@ export function CartDrawer({
                     </button>
                   </div>
                   <div className="flex items-center justify-between">
-                    {/* 36px steppers inside a 44px-tall pill — the old 20px dots
-                        were the smallest tap targets on the whole customer site. */}
-                    <div className="flex items-center gap-2 rounded-full border border-line p-1">
+                    {/* 44px steppers (WCAG 2.5.8), named for the item they change. */}
+                    <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        aria-label={item.qty === 1 ? `Remove ${item.name}` : `Decrease ${item.name} quantity`}
+                        aria-label={`Remove one ${item.name}`}
                         onClick={() => decrement(item.key)}
-                        className="flex h-9 w-9 items-center justify-center rounded-full bg-charcoal text-base text-cream transition-opacity hover:opacity-90"
+                        className="flex h-11 w-11 items-center justify-center rounded-full bg-charcoal text-lg text-cream transition-opacity hover:opacity-90"
                       >
-                        &minus;
+                        <span aria-hidden="true">&minus;</span>
                       </button>
                       <span
                         aria-live="polite"
-                        className="min-w-[1.5rem] text-center font-mono font-semibold tabular-nums text-charcoal"
+                        className="min-w-[2rem] text-center font-semibold tabular-nums text-charcoal"
                       >
                         {item.qty}
                       </span>
                       <button
                         type="button"
-                        aria-label={`Increase ${item.name} quantity`}
+                        aria-label={`Add one ${item.name}`}
                         onClick={() => increment(item.key)}
-                        className="flex h-9 w-9 items-center justify-center rounded-full bg-tan-dark text-base text-cream transition-colors hover:bg-tan-darker"
+                        className="flex h-11 w-11 items-center justify-center rounded-full bg-tan-dark text-lg text-cream transition-colors hover:bg-tan-darker"
                       >
-                        +
+                        <span aria-hidden="true">+</span>
                       </button>
                     </div>
                     <div className="text-right text-sm">
@@ -172,18 +225,45 @@ export function CartDrawer({
               <span className="font-mono tabular-nums">₹{bill ? bill.subtotal_inr : totalPrice}</span>
             </div>
             {bill && bill.tax_inr > 0 ? (
-              <div className="flex items-center justify-between font-bold text-charcoal">
-                <span>Total (incl. GST)</span>
+              <div className="flex items-center justify-between text-muted">
+                <span>GST</span>
+                <span className="font-mono tabular-nums">₹{bill.tax_inr}</span>
+              </div>
+            ) : null}
+            {bill && bill.packaging_inr > 0 ? (
+              <div className="flex items-center justify-between text-muted">
+                <span>Packaging</span>
+                <span className="font-mono tabular-nums">₹{bill.packaging_inr}</span>
+              </div>
+            ) : null}
+            {bill && includes.length > 0 ? (
+              <div className="mt-1 flex items-center justify-between border-t border-line pt-2 font-bold text-charcoal">
+                <span>Total, incl. {includes.join(' and ')}</span>
                 <span className="font-mono tabular-nums text-tan-dark">₹{bill.total_inr}</span>
               </div>
             ) : null}
-            {!isEmpty && packagingAtCheckout ? (
-              <p className="text-xs text-muted">Takeaway packaging is added at checkout.</p>
+            {!isEmpty && bill && bill.packaging_inr > 0 ? (
+              <p className="text-xs text-muted">Dine-in orders have no packaging charge.</p>
             ) : null}
           </div>
-          {checkoutDisabledReason ? (
-            <p className="mb-3 text-center text-sm font-semibold text-charcoal">
-              {checkoutDisabledReason}
+          {closed ? (
+            // In place, not a pointer to a notice the open drawer covers.
+            <p role="status" className="mb-3 text-center text-sm font-semibold text-charcoal">
+              We&apos;re not taking orders right now.
+              {storeOpenState?.nextOpenLabel ? ` We open ${storeOpenState.nextOpenLabel}.` : ''}
+            </p>
+          ) : null}
+          {!isEmpty && !closed && isGuest ? (
+            <p className="mb-3 text-center text-sm text-charcoal">
+              {ONLINE_PAYMENT_AVAILABLE ? (
+                'Guests pay online. '
+              ) : (
+                <>Online payment isn&apos;t available right now. </>
+              )}
+              <Link href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
+                Sign in
+              </Link>{' '}
+              {ONLINE_PAYMENT_AVAILABLE ? 'to pay at the counter.' : 'to order and pay at the counter.'}
             </p>
           ) : null}
           <Link
@@ -192,7 +272,9 @@ export function CartDrawer({
             title={
               isEmpty
                 ? 'Add items to your cart to checkout'
-                : checkoutDisabledReason ?? undefined
+                : closed
+                  ? 'The cafe is not taking orders right now'
+                  : undefined
             }
             onClick={(e) => {
               if (checkoutDisabled) e.preventDefault();
@@ -204,7 +286,7 @@ export function CartDrawer({
                 : 'bg-tan-dark text-cream hover:bg-tan-darker')
             }
           >
-            Proceed to Checkout
+            Proceed to checkout
           </Link>
         </div>
       </div>

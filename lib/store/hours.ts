@@ -56,6 +56,34 @@ function windowsFor(settings: StoreSettings, dow: number): OpeningHoursWindow[] 
   return settings.opening_hours[WEEKDAYS[dow]] ?? [];
 }
 
+const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/**
+ * When the schedule next opens, as customer-facing text ("Opens at 10:00 AM",
+ * "Opens tomorrow at 10:00 AM", "Opens Friday at 10:00 AM"), or null when the
+ * settings never reopen it within the coming week. Walks the weekly windows and
+ * skips holidays; only called for the schedule-driven closed states (before
+ * opening, after closing, after the order cut-off). A pause or a forced close
+ * has no known reopening time, so those never come here.
+ */
+function nextOpenText(settings: StoreSettings, now: Date): string | null {
+  const today = istParts(now);
+  for (let offset = 0; offset <= 7; offset++) {
+    const day = istParts(new Date(now.getTime() + offset * 24 * 60 * 60 * 1000));
+    if (settings.holidays.includes(day.isoDate)) continue;
+    const starts = windowsFor(settings, day.dow)
+      .map((w) => hhmmToMin(w.open))
+      .filter((openMin) => offset > 0 || openMin > today.minutes)
+      .sort((a, b) => a - b);
+    if (starts.length === 0) continue;
+    const time = formatIstTime(istMinutesToUtc(day.y, day.mo, day.d, starts[0]));
+    if (offset === 0) return `Opens at ${time}`;
+    if (offset === 1) return `Opens tomorrow at ${time}`;
+    return `Opens ${WEEKDAY_NAMES[day.dow]} at ${time}`;
+  }
+  return null;
+}
+
 /**
  * Authoritative "is the store open / accepting orders right now" (C3, S7).
  * Honors manual override (force_open/force_closed beats schedule), holidays,
@@ -87,7 +115,7 @@ export function computeStoreOpenState(
       isOpen: false,
       acceptingOrders: false,
       reason: onHoliday ? 'holiday' : 'closed_hours',
-      nextOpenLabel: null,
+      nextOpenLabel: nextOpenText(settings, now),
     };
   }
 
@@ -102,7 +130,12 @@ export function computeStoreOpenState(
   if (!forcedOpen && openWindow) {
     const closeMin = hhmmToMin(openWindow.close);
     if (minutes >= closeMin - settings.last_order_cutoff_min) {
-      return { isOpen: true, acceptingOrders: false, reason: 'after_cutoff', nextOpenLabel: null };
+      return {
+        isOpen: true,
+        acceptingOrders: false,
+        reason: 'after_cutoff',
+        nextOpenLabel: nextOpenText(settings, now),
+      };
     }
   }
 

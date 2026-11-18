@@ -24,9 +24,9 @@ import { flags } from '@/lib/flags';
 
 const SEEN_KEY = 'hioc:promo-popup:instant-coffee';
 const POSTER_SRC = '/images/promo-instant-coffee.jpg';
-// Matches the poster's on-screen width below, so the hidden preload and the
+// Matches the poster's on-screen width below (91vw is a download hint, not a layout size), so the hidden preload and the
 // dialog ask next/image for the same file and the dialog opens from cache.
-const POSTER_SIZES = '(min-width: 528px) 480px, calc(100vw - 2rem)';
+const POSTER_SIZES = '(min-width: 528px) 480px, 91vw';
 // Give the page a moment to appear before the popup covers it.
 const OPEN_DELAY_MS = 800;
 
@@ -53,12 +53,28 @@ export function InstantCoffeePopup() {
   const mountedAt = useRef(0);
   const openTimer = useRef<ReturnType<typeof setTimeout>>();
   const panelRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const descId = useId();
 
   const open = phase === 'open';
   const close = () => setPhase('closed');
   useDialogBehavior(open, close, panelRef);
+
+  // While the dialog is open, make everything else on the page inert, so
+  // neither Tab nor a screen reader's virtual cursor can reach the header,
+  // the page or the footer behind it. Only what this effect set is undone.
+  useEffect(() => {
+    if (!open) return;
+    const overlay = overlayRef.current;
+    const made: Element[] = [];
+    for (const el of Array.from(document.body.children)) {
+      if (el === overlay || el.hasAttribute('inert')) continue;
+      el.setAttribute('inert', '');
+      made.push(el);
+    }
+    return () => made.forEach((el) => el.removeAttribute('inert'));
+  }, [open]);
 
   // Decided after mount, never during SSR, so the server HTML and the first
   // client render agree (both render nothing).
@@ -100,10 +116,12 @@ export function InstantCoffeePopup() {
   // Portal to <body>, as Modal does, so the fixed overlay covers the whole
   // viewport whatever the home page's own layout is.
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-4 py-8">
+    <div ref={overlayRef} className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto px-4 py-8">
+      {/* Backdrop tap target only: keyboard users have Esc and the Close button. */}
       <button
         type="button"
-        aria-label="Close"
+        tabIndex={-1}
+        aria-hidden="true"
         onClick={close}
         className="fixed inset-0 animate-fade-in bg-charcoal/60"
       />
@@ -114,12 +132,12 @@ export function InstantCoffeePopup() {
         aria-labelledby={titleId}
         aria-describedby={descId}
         tabIndex={-1}
-        // The poster is as wide as fits: the screen less its gutter, or the
+        // The poster is as wide as fits: the overlay's width (the screen less its gutter), or the
         // height left once the gutter and the button bar are taken off
         // (scaled by the poster's 2:3 shape), or 480px, whichever is smallest.
         // So it always shows whole, without scrolling, on a small phone and on
         // a short laptop screen alike.
-        style={{ width: 'min(calc(100vw - 2rem), calc((100svh - 9rem) * 2 / 3), 30rem)' }}
+        style={{ width: 'min(100%, calc((100svh - 9rem) * 2 / 3), 30rem)' }}
         className="relative flex animate-scale-in flex-col overflow-hidden rounded-md bg-cream shadow-elevated outline-none"
       >
         <h2 id={titleId} className="sr-only">

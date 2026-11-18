@@ -154,3 +154,39 @@ describe('formatIstTime', () => {
     expect(formatIstTime(new Date('2026-07-15T13:00:00Z'))).toBe('6:30 PM');
   });
 });
+
+// "When do we open?" wording for the closed banner (MENU-03).
+describe('nextOpenLabel', () => {
+  const early = new Date('2026-07-14T21:30:00Z'); // 03:00 IST Wed
+  const late = new Date('2026-07-15T18:15:00Z'); // 23:45 IST Wed
+
+  it('says when it opens later today when closed before opening', () => {
+    expect(computeStoreOpenState(base, early).nextOpenLabel).toBe('Opens at 10:00 AM');
+  });
+
+  it('says tomorrow after the last-order cutoff', () => {
+    expect(computeStoreOpenState(base, late).nextOpenLabel).toBe('Opens tomorrow at 10:00 AM');
+  });
+
+  it('skips a holiday and names the day when it is further off', () => {
+    const s = withSettings({
+      holidays: ['2026-07-16'],
+      opening_hours: { ...base.opening_hours, fri: [{ open: '11:30', close: '24:00' }] },
+    });
+    expect(computeStoreOpenState(s, late).nextOpenLabel).toBe('Opens Friday at 11:30 AM');
+  });
+
+  it('on a holiday points at the next open day', () => {
+    const s = computeStoreOpenState(withSettings({ holidays: ['2026-07-15'] }), midday);
+    expect(s.nextOpenLabel).toBe('Opens tomorrow at 10:00 AM');
+  });
+
+  it('is null when it cannot be known, or when open', () => {
+    expect(computeStoreOpenState(withSettings({ accepting_orders: false }), midday).nextOpenLabel).toBeNull();
+    expect(
+      computeStoreOpenState(withSettings({ store_open_override: 'force_closed' }), midday).nextOpenLabel,
+    ).toBeNull();
+    expect(computeStoreOpenState(base, midday).nextOpenLabel).toBeNull();
+    expect(computeStoreOpenState(withSettings({ opening_hours: {} }), early).nextOpenLabel).toBeNull();
+  });
+});

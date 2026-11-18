@@ -30,6 +30,8 @@ const PICKS = count(SUGGEST_LIMITS.picks); // "three"
 
 export const metadata: Metadata = {
   title: 'Meet Coffey',
+  // The suggest feature is off by default: keep the explainer out of search until it ships.
+  robots: flags.suggest ? undefined : { index: false },
   description: `Meet Coffey, the HIOC. pick-helper: tell it how you feel and what sounds good, and it picks ${PICKS} things from our real menu, each with a reason.`,
 };
 

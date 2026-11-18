@@ -7,9 +7,9 @@ export const CAFE_NAME = 'HIOC.';
 export const CAFE_ADDRESS =
   'Shop No. 1-2, E-773, E Block, Ghatwasan, Kamla Nagar, Agra, Uttar Pradesh 282005';
 
-export const CAFE_HOURS = 'Open all days, 10:00 AM – 12:00 AM';
+export const CAFE_HOURS = 'Open all days, 10:00 AM to 12:00 AM';
 
-export const CAFE_HOURS_HOME = 'Open Daily, 10:00 AM – 12:00 AM';
+export const CAFE_HOURS_HOME = 'Open daily, 10:00 AM to 12:00 AM';
 
 export const CAFE_PHONE_DISPLAY = '+91 56279 63898';
 

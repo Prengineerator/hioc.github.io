@@ -28,15 +28,16 @@ export function PolicyLayout({
       <h1 className="text-3xl font-bold text-charcoal">{title}</h1>
       <p className="mt-1 text-sm text-muted">Last updated: {updated}</p>
 
-      <nav className="mt-4 flex flex-wrap gap-x-4 gap-y-1 border-b border-line pb-4 text-sm">
+      <nav className="mt-4 flex flex-wrap gap-x-4 border-b border-line pb-4 text-sm">
         {POLICIES.map((p) => (
-          <Link key={p.href} href={p.href} className="text-tan-dark hover:underline">
+          <Link key={p.href} href={p.href} className="inline-flex min-h-[44px] items-center text-tan-dark hover:underline">
             {p.label}
           </Link>
         ))}
       </nav>
 
-      <article className="policy-prose mt-6 flex flex-col gap-4 text-sm leading-relaxed text-charcoal">
+      {/* 16px text; max-w-[65ch] keeps lines to about 65 characters. */}
+      <article className="policy-prose mt-6 flex max-w-[65ch] flex-col gap-4 text-base leading-relaxed text-charcoal">
         {children}
       </article>
 
@@ -47,7 +48,7 @@ export function PolicyLayout({
         {BUSINESS.gstin ? <p className="text-muted">GSTIN: {BUSINESS.gstin}</p> : null}
         <p className="mt-1">
           <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>
-          {' · '}
+          {', '}
           <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a>
         </p>
       </div>

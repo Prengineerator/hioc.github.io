@@ -1,24 +1,25 @@
 'use client';
 
 import Link from 'next/link';
-import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
-import { computeBill } from '@/lib/store/hours';
+import { useCart } from '@/lib/cart/CartContext';
 import { lineSizeLabel } from '@/lib/menu/weight';
-import type { StoreSettings } from '@/lib/types';
 
-// `settings` is optional so this still renders (subtotal-only) while the
-// checkout page's store-settings fetch is in flight (C5). Dine-in has no
-// packaging charge (D5), the same rule the order route applies.
-export function CartSummary({ settings, dineIn = false }: { settings?: StoreSettings | null; dineIn?: boolean }) {
-  const { items, totalPrice } = useCart();
-  const billSettings = settings && dineIn ? { ...settings, packaging_charge_inr: 0 } : settings;
-  const bill = billSettings ? computeBill(totalPrice, billSettings, 0, cartTaxableSubtotal(items)) : null;
+// The order's lines only. The money (subtotal, GST, packaging, discounts and the
+// total) is printed once, in the checkout form's bill block, because only that
+// one is priced by the server quote with the coupon, Beanies and Ritual cups
+// applied. This card used to compute its own bill with no discount, so after an
+// offer it showed a different total from the bill below it.
+export function CartSummary() {
+  const { items } = useCart();
 
   return (
-    <div className="rounded-md border border-line bg-cream p-6 shadow-sm">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-charcoal">Your Order</h2>
-        <Link href="/menu" className="text-sm font-semibold text-tan-dark hover:underline">
+    <div className="rounded-md border border-line bg-cream p-4 md:p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-charcoal">Your order</h2>
+        <Link
+          href="/menu"
+          className="-my-2 inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline"
+        >
           Edit cart
         </Link>
       </div>
@@ -27,7 +28,7 @@ export function CartSummary({ settings, dineIn = false }: { settings?: StoreSett
           const lineTotal = item.unitPriceInr * item.qty;
           return (
             <li key={item.key} className="text-sm text-charcoal">
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-3">
                 <span>
                   {item.name} ({lineSizeLabel(item.variantLabel, item.weightGrams)}) × {item.qty}
                 </span>
@@ -47,38 +48,6 @@ export function CartSummary({ settings, dineIn = false }: { settings?: StoreSett
           );
         })}
       </ul>
-      <div className="mt-4 flex flex-col gap-1.5 border-t border-line pt-4 text-sm text-charcoal">
-        <div className="flex items-center justify-between">
-          <span>Subtotal</span>
-          <span className="font-mono tabular-nums">₹{bill ? bill.subtotal_inr : totalPrice}</span>
-        </div>
-        {bill ? (
-          <>
-            {bill.tax_inr > 0 ? (
-              <div className="flex items-center justify-between text-muted">
-                <span>GST</span>
-                <span className="font-mono tabular-nums">₹{bill.tax_inr}</span>
-              </div>
-            ) : null}
-            {bill.packaging_inr > 0 ? (
-              <div className="flex items-center justify-between text-muted">
-                <span>Packaging</span>
-                <span className="font-mono tabular-nums">₹{bill.packaging_inr}</span>
-              </div>
-            ) : null}
-            {bill.discount_inr > 0 ? (
-              <div className="flex items-center justify-between text-muted">
-                <span>Discount</span>
-                <span className="font-mono tabular-nums">&minus;₹{bill.discount_inr}</span>
-              </div>
-            ) : null}
-            <div className="flex items-center justify-between border-t border-line pt-1.5 font-bold text-charcoal">
-              <span>Total</span>
-              <span className="font-mono tabular-nums text-tan-dark">₹{bill.total_inr}</span>
-            </div>
-          </>
-        ) : null}
-      </div>
     </div>
   );
 }
