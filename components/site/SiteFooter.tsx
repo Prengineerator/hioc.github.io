@@ -57,7 +57,7 @@ export function SiteFooter() {
           />
           <p>
             HIOC<span className="text-tan">.</span>{' '}
-            <span className="text-cream/70">— High on Coffee</span>
+            <span className="text-cream/70">High on Coffee</span>
           </p>
           <a
             href={CAFE_INSTAGRAM_URL}
@@ -70,7 +70,7 @@ export function SiteFooter() {
         </div>
 
         <div className="flex flex-col items-center gap-2 text-center sm:items-start sm:text-left">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-tan">Explore</h3>
+          <h2 className="text-sm font-semibold text-tan">Explore</h2>
           {QUICK_LINKS.map((link) => (
             <Link
               key={link.href}
@@ -83,7 +83,7 @@ export function SiteFooter() {
         </div>
 
         <div className="flex flex-col items-center gap-1 text-center sm:items-start sm:text-left">
-          <h3 className="mb-1 text-xs font-semibold uppercase tracking-[0.2em] text-tan">Visit Us</h3>
+          <h2 className="mb-1 text-sm font-semibold text-tan">Visit us</h2>
           <p className="text-cream/70">{CAFE_ADDRESS}</p>
           <p className="text-cream/70">{CAFE_HOURS}</p>
           <a
@@ -95,12 +95,12 @@ export function SiteFooter() {
         </div>
       </div>
       <div className="border-t border-cream/10 px-4 py-5 text-center text-xs text-cream/50">
-        <div className="mb-3 flex flex-wrap justify-center gap-x-4 gap-y-1">
+        <div className="mb-3 flex flex-wrap justify-center gap-x-4">
           {POLICY_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
-              className="text-cream/60 transition-colors hover:text-tan"
+              className="inline-flex min-h-[44px] items-center text-cream/60 transition-colors hover:text-tan"
             >
               {link.label}
             </Link>
@@ -108,7 +108,7 @@ export function SiteFooter() {
         </div>
         <p>
           &copy; {new Date().getFullYear()} {BUSINESS.name}. Operated by {BUSINESS.legalName}
-          {BUSINESS.gstin ? ` · GSTIN ${BUSINESS.gstin}` : ''}.
+          {BUSINESS.gstin ? `, GSTIN ${BUSINESS.gstin}` : ''}.
         </p>
       </div>
     </footer>
