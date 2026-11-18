@@ -2,7 +2,16 @@ import type { Metadata } from 'next';
 import Image from 'next/image';
 import Link from 'next/link';
 import { CartProvider } from '@/lib/cart/CartContext';
-import { CAFE_ADDRESS, CAFE_HOURS_HOME, CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
+import {
+  CAFE_ADDRESS,
+  CAFE_DIRECTIONS_URL,
+  CAFE_HOURS_HOME,
+  CUSTOMER_MENU_CATEGORIES,
+} from '@/lib/constants';
+import { createServerSupabaseClient } from '@/lib/supabase-server';
+import { getStoreSettings } from '@/lib/store/settings';
+import { isCategoryHidden, switchesFromSettings } from '@/lib/menu/menuSwitches';
+import { isInStoreOnly } from '@/lib/menu/inStore';
 import { buttonVariants } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { flags } from '@/lib/flags';
@@ -16,12 +25,15 @@ import { AnnouncementBanner } from '@/components/promotions/AnnouncementBanner';
 import { InstantCoffeePopup } from '@/components/promotions/InstantCoffeePopup';
 
 export const metadata: Metadata = {
-  title: 'Home',
+  // Absolute: the root segment's title template doesn't wrap a page title, so a
+  // plain 'Home' would render as just "Home".
+  title: { absolute: 'HIOC. Coffee and Waffles in Kamla Nagar, Agra | Order Ahead for Pickup' },
   description:
-    'HIOC. — pure-vegetarian coffee and waffles in Kamla Nagar, Agra. High on Coffee.',
+    'HIOC. is a pure-vegetarian cafe in Kamla Nagar, Agra. Order coffee and waffles ahead and pick them up at the counter.',
 };
 
-export default function HomePage() {
+export default async function HomePage() {
+  const categories = await liveCategories();
   return (
     <CartProvider>
       <AnnouncementBanner />
@@ -31,17 +43,51 @@ export default function HomePage() {
       <MeetCoffey />
       {/* HIOC Ritual teaser: renders nothing until the feature is on and a plan is on sale. */}
       {flags.coffeePass ? <RitualTeaser /> : null}
-      <CategoryTeaser />
+      <CategoryTeaser categories={categories} />
       <VisitStrip />
       <AboutTeaser />
     </CartProvider>
   );
 }
 
+/**
+ * The customer categories that have at least one item on the menu, so a tile
+ * never opens an empty page (Waffle Crepes and Coffee Beans today). Read-only,
+ * on the server, with the same switches the menu API honours (a category the
+ * owner has switched off is left out). The root layout already renders every
+ * page per request (it reads headers()), so this adds one small read, not a
+ * loss of static rendering. If either read fails the whole fixed
+ * list is shown rather than an empty section.
+ */
+async function liveCategories() {
+  try {
+    const [{ data, error }, settings] = await Promise.all([
+      createServerSupabaseClient().from('menu_items').select('category, in_store_only'),
+      getStoreSettings().catch(() => null),
+    ]);
+    if (error || !data) return CUSTOMER_MENU_CATEGORIES;
+    // Unavailable items still count: the menu lists them greyed out with a
+    // reason (it asks /api/menu with includeUnavailable=true). In-store-only
+    // items don't: the public menu leaves them out.
+    const withItems = new Set(
+      (data as { category: string; in_store_only: boolean | null }[])
+        .filter((row) => !isInStoreOnly(row))
+        .map((row) => row.category),
+    );
+    const hidden = settings ? switchesFromSettings(settings).hiddenCategories : [];
+    const live = CUSTOMER_MENU_CATEGORIES.filter(
+      (c) => withItems.has(c.slug) && !isCategoryHidden(c.slug, hidden),
+    );
+    return live.length > 0 ? live : CUSTOMER_MENU_CATEGORIES;
+  } catch {
+    return CUSTOMER_MENU_CATEGORIES;
+  }
+}
+
 function HeroSection() {
   return (
-    <section className="mx-auto max-w-6xl px-4 py-12 md:py-20">
-      <div className="flex flex-col items-center gap-10 md:flex-row md:gap-14">
+    <section className="mx-auto max-w-6xl px-4 py-8 md:py-20">
+      <div className="flex flex-col items-center gap-6 md:flex-row md:gap-14">
         <div className="flex w-full max-w-sm shrink-0 justify-center md:max-w-md">
           <Image
             src="/images/img.jpeg"
@@ -49,22 +95,19 @@ function HeroSection() {
             width={500}
             height={500}
             priority
-            className="h-auto w-full max-w-sm rounded-md object-contain"
+            // Capped at 40% of the screen height on phones so "Order Now" stays above the fold.
+            className="h-auto max-h-[40svh] w-auto max-w-full rounded-md object-contain md:max-h-none md:w-full md:max-w-sm"
           />
         </div>
         <div className="flex flex-col items-center gap-4 text-center md:items-start md:text-left">
-          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">
-            Kamla Nagar, Agra
-          </span>
+          <span className="text-sm font-semibold text-tan-dark">Kamla Nagar, Agra</span>
           <h1 className="text-3xl font-bold tracking-tight text-charcoal md:text-5xl">
             HIOC<span className="text-tan-dark">.</span>
           </h1>
-          <p className="text-sm font-bold uppercase tracking-[0.3em] text-charcoal">
-            High on Coffee
-          </p>
+          <p className="text-base font-bold text-charcoal">High on Coffee</p>
           <p className="max-w-md text-muted">
-            Coffee and Waffles, brewed and baked fresh in the heart of Kamla
-            Nagar.
+            Order ahead on your phone and pick it up at the counter. Coffee and
+            waffles, brewed and baked fresh in Kamla Nagar.
           </p>
           {/* flex-wrap from sm up: at tablet width the hero's text column is
               narrower than these three side by side, and without wrapping the
@@ -91,8 +134,8 @@ function HeroSection() {
 // while the suggestion engine is on. One secondary button (the hero already has
 // the page's primary, "Order Now") and a plain link to the article.
 const COFFEY_PITCH = [
-  "Tell me how you feel — I'll match it to the menu.",
-  "Pick how sweet — I'll set the sugar for you.",
+  "Tell me how you feel and I'll match it to the menu.",
+  "Pick how sweet and I'll set the sugar for you.",
   'Three different picks, each with a reason.',
 ];
 
@@ -129,7 +172,7 @@ function MeetCoffey() {
               href="/coffey"
               className="inline-flex min-h-[44px] items-center font-semibold text-tan-dark hover:underline"
             >
-              How Coffey works →
+              How Coffey works
             </Link>
           </div>
         </div>
@@ -138,19 +181,19 @@ function MeetCoffey() {
   );
 }
 
-function CategoryTeaser() {
+function CategoryTeaser({ categories }: { categories: typeof CUSTOMER_MENU_CATEGORIES }) {
   return (
     <section className="mx-auto max-w-6xl px-4 py-12">
       <div className="mb-8 text-center">
         <h2 className="text-2xl font-bold text-charcoal md:text-3xl">
           Explore the Menu
         </h2>
-        <p className="mt-2 text-muted">Coffee, waffles, and more — something for every craving.</p>
+        <p className="mt-2 text-muted">Coffee, waffles, and more for every craving.</p>
       </div>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        {CUSTOMER_MENU_CATEGORIES.map((cat) => (
+        {categories.map((cat) => (
           <Link key={cat.slug} href={`/menu?category=${encodeURIComponent(cat.slug)}`}>
-            <Card interactive className="group h-full">
+            <Card className="group h-full transition-[transform,box-shadow,border-color] duration-150 hover:-translate-y-0.5 hover:border-tan hover:shadow-elevated">
               <h3 className="font-semibold text-charcoal group-hover:text-tan-dark">
                 {cat.label}
               </h3>
@@ -170,13 +213,20 @@ function VisitStrip() {
     <section className="mx-auto max-w-6xl px-4 pb-4">
       <Card className="flex flex-col items-center gap-4 text-center sm:flex-row sm:justify-between sm:text-left">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">Visit Us</p>
+          <p className="text-sm font-semibold text-tan-dark">Visit us</p>
           <p className="mt-1 font-semibold text-charcoal">{CAFE_ADDRESS}</p>
           <p className="mt-1 text-sm text-muted">{CAFE_HOURS_HOME}</p>
         </div>
-        <Link href="/contact" className={buttonVariants({ variant: 'secondary' })}>
+        {/* Straight to the maps pin; one line even at tablet width. */}
+        <a
+          href={CAFE_DIRECTIONS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={buttonVariants({ variant: 'secondary', className: 'shrink-0 whitespace-nowrap' })}
+        >
           Get Directions
-        </Link>
+          <span className="sr-only"> (opens in a new tab)</span>
+        </a>
       </Card>
     </section>
   );
@@ -191,7 +241,7 @@ function AboutTeaser() {
       <p className="mt-4 text-muted">
         HIOC. is a pure-vegetarian café serving coffee and waffles from our
         home in Kamla Nagar, Agra. Every cup and every waffle is made to
-        order — and if you&apos;re skipping dairy, we&apos;ve got vegan milk
+        order. If you&apos;re skipping dairy, we&apos;ve got vegan milk
         options available, including oat and soya. Come find your new
         favourite corner.
       </p>
@@ -199,7 +249,7 @@ function AboutTeaser() {
         href="/about"
         className="mt-4 inline-block font-semibold text-tan-dark hover:underline"
       >
-        Learn more →
+        Read our story
       </Link>
     </section>
   );

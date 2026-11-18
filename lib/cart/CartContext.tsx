@@ -108,10 +108,19 @@ function readFromStorage(): CartState {
   }
 }
 
+/**
+ * Fired on `window` after every save. The site header's cart badge lives in
+ * the root layout, outside every per-page <CartProvider>, and the `storage`
+ * event only reaches OTHER tabs, so this is how the badge hears about a change
+ * made in this tab without polling.
+ */
+export const CART_CHANGED_EVENT = 'hioc:cart-changed';
+
 function writeToStorage(state: CartState) {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.dispatchEvent(new Event(CART_CHANGED_EVENT));
   } catch {
     // localStorage may be unavailable (private browsing, quota) — cart
     // simply won't persist across reloads in that case, which is an
