@@ -73,15 +73,15 @@ you compute (`web-engineer`), or a trigger, constraint or policy rejecting a wri
 ```bash
 # CI's placeholder values. With these set, no command below can reach a database.
 export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
+bash scripts/security-scan-diff.sh origin/main
 npm run lint
 npx tsc --noEmit
 npm test
 npm run build
-bash scripts/security-scan-diff.sh origin/main
 ```
 
-All five green, with the last lines of each in your report. The last command is the
-security gate: it must end `RESULT: PASS`. The lead also has `security-reviewer`
+All five green, with the last lines of each in your report. The first command is the
+security gate, run before your own tests: it must end `RESULT: PASS`. The lead also has `security-reviewer`
 read your diff before it is pushed; a FAIL comes back to you.
 
 ## Your report

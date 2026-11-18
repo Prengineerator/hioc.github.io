@@ -62,14 +62,14 @@ until every one is green.
 ```bash
 # CI's placeholder values. With these set, no command below can reach a database.
 export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
+bash scripts/security-scan-diff.sh origin/main
 npm run lint
 npx tsc --noEmit
 npm test
 npm run build
-bash scripts/security-scan-diff.sh origin/main
 ```
 
-The build fetches nothing, so the placeholder values are enough. The last command is the security gate: it must end `RESULT: PASS`, meaning
+The build fetches nothing, so the placeholder values are enough. The first command is the security gate, run before your own tests: it must end `RESULT: PASS`, meaning
 your change adds no finding to `docs/SECURITY-PLAYBOOK.md`'s scan. The lead also has
 `security-reviewer` read your diff before it is pushed; a FAIL comes back to you. Add or update a test in `tests/` for the behaviour you changed; the existing
 route tests (for example `tests/menuInStoreRoute.test.ts`) show how Supabase is mocked.

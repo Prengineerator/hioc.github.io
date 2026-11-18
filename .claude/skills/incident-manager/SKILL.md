@@ -182,18 +182,19 @@ it lies between. Do not hand them your theory as fact.
 | Recipes or stock set-up | `chef` |
 
 The ICs cannot see production. When one asks for a fact, fetch it yourself and pass
-it on. If this run has the Supabase connector, read-only means read-only:
-aggregate counts and schema facts from Hioc India, never customer rows, never a
-statement that writes. Without the connector, say the fact is not available.
+it on. A fact you can read from Vercel or from the site, you may pass on. You do
+not run SQL against the database, with or without a Supabase connector: if the
+IC needs a fact only the database holds, put it in the report for the owner's
+developer to fetch.
 
 When the IC reports back:
 
 1. Read the whole diff yourself. It must be the smallest change that fixes the
    fault. Send it back if it does more.
-2. Run the checks yourself; do not take them on report: `npm run lint`,
-   `npx tsc --noEmit`, `npm test`, `bash scripts/security-scan-diff.sh origin/main`.
-   Set the three database variables to CI's placeholders first, as the "Prove it"
-   block in `.claude/agents/web-engineer.md` does, so nothing can reach a database.
+2. Run the checks yourself; do not take them on report. Use the "Prove it" block
+   in `.claude/agents/web-engineer.md` as written: CI's placeholder database
+   variables first, then the security gate, then lint, type check and tests. The
+   gate runs before the tests because the tests are the change's own code.
 3. Hand the branch to `security-reviewer`. **A FAIL blocks the push**, incident or
    not: the site is restored by rollback, never by shipping an unreviewed fix. The
    IC fixes the finding and the reviewer looks again.

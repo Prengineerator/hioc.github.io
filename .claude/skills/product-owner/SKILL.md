@@ -93,10 +93,9 @@ first, because the screens depend on it.
 
 - Go through each acceptance check against the actual diff and test output. A
   check you could not verify is reported as not verified.
-- Run the checks yourself: `npm run lint`, `npx tsc --noEmit`, `npm test`,
-  `bash scripts/security-scan-diff.sh origin/main`. Set the three database
-  variables to CI's placeholders first, as the "Prove it" block in
-  `.claude/agents/web-engineer.md` does.
+- Run the checks yourself, using the "Prove it" block in
+  `.claude/agents/web-engineer.md` as written: CI's placeholder database variables
+  first, then the security gate, then lint, type check and tests.
 - Hand the branch to `security-reviewer` before it is pushed. **A FAIL blocks the
   push.** The IC fixes the finding and the reviewer looks again. Tell the owner
   only when a finding changes what they asked for.

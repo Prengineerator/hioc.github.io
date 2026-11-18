@@ -44,17 +44,22 @@ This is the loop in `docs/SECURITY-PLAYBOOK.md`, less its live-database step
 (`npm run verify:db`), which is not yours to run. Run all of it, every time.
 
 ```bash
-git fetch origin main -q
-# Use main's copy of the gate, so the change cannot pass by editing the gate.
-gate="$(mktemp)"
-# The fallback to this checkout's copy is only for the change that first adds the gate.
-git show origin/main:scripts/security-scan-diff.sh > "$gate" 2>/dev/null || cp scripts/security-scan-diff.sh "$gate"
-bash "$gate" origin/main
 # CI's placeholder values. With these set, no command below can reach a database.
 export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
+git fetch origin main -q
+# Use main's copy of the gate, so the change cannot pass by editing the gate.
+# The fallback to this checkout's copy is only for the change that first adds
+# the gate. Remove the fallback once the gate is on main.
+gate="$(mktemp)"
+git show origin/main:scripts/security-scan-diff.sh > "$gate" 2>/dev/null || cp scripts/security-scan-diff.sh "$gate"
+bash "$gate" origin/main
 npx tsc --noEmit
 npm test
 ```
+
+The order matters. The placeholders come first because the gate may run a scanner
+the change has edited, and the gate comes before the tests because the tests are
+the change's own code.
 
 - The gate must end `RESULT: PASS`. **Any new finding is a FAIL, CRITICAL or
   WARN.** The gate and CI both fail on a new WARN, and so do you. If the author

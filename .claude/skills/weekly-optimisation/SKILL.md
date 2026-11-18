@@ -105,9 +105,10 @@ duplicate or unused indexes, policies that re-evaluate per row, and the rest).
   additive SQL file, safe to run twice, with a `-- Verify:` section.
 - An "unused index" notice is a proposal, never a drop: the advisor sees a short
   window and the café's month-end reports run rarely.
-- You do not run SQL. If a brief needs a number from production (a table's size,
-  how often a query runs), fetch an aggregate yourself, read-only, and pass it on.
-  Never customer rows.
+- You do not run SQL at all, and the connector this run is meant to have carries
+  no SQL tool. If a brief needs a number from production (a table's size, how
+  often a query runs), list it under "Needs your decision" for the owner's
+  developer to fetch.
 
 ## Step 4 — Standing production errors
 
@@ -129,10 +130,10 @@ Run these yourself on each branch. Do not take them on report.
 ```bash
 # CI's placeholder values. With these set, no command below can reach a database.
 export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
+bash scripts/security-scan-diff.sh origin/main
 npm run lint
 npx tsc --noEmit
 npm test
-bash scripts/security-scan-diff.sh origin/main
 npm run build
 ```
 

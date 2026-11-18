@@ -288,6 +288,28 @@ that is how the 95–98% band is held. A senior model / human resolves the resid
 
 ---
 
+## Gate for one change (every pull request, every agent change)
+
+```bash
+bash scripts/security-scan-diff.sh origin/main
+```
+
+`security-scan.sh` judges the whole codebase. `security-scan-diff.sh` judges one
+change: it scans the base branch and the working tree with the **base's** copy of
+the scanner and fails if the change adds a CRITICAL or WARN finding the base does
+not have. CI runs it first on every pull request that touches the app, before any
+of the pull request's code is installed (`.github/workflows/code-revamp.yml`).
+
+- `RESULT: PASS` — the change adds no finding.
+- `RESULT: FAIL` — fix each new finding. A new WARN that is intentional needs the
+  owner's acceptance; nobody else waves it through.
+- exit 2 — the comparison could not run. That is never a pass.
+
+Both scripts are tripwires for known-bad patterns, not proof that a change is
+safe. A change written to get round a grep will get round it. That is why every
+change is also read (`.claude/agents/security-reviewer.md`), and why a pull request
+from outside the team is merged only after the owner has looked at it.
+
 ## Deploy gate (must pass before production)
 
 1. `bash scripts/security-scan.sh` → PASS, 0 CRITICAL.

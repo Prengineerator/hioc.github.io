@@ -65,8 +65,9 @@ unattended run never does these, and the engineers never do:
 - merge a pull request, release a build, or promote one;
 - change a setting in Vercel, Supabase, Razorpay or WhatsApp;
 - change live data in the database, or run a script against it. This includes the
-  recipe set-up commands (`inventory:*`, used with the `chef`), which run only
-  after the database check in `CLAUDE.md`.
+  recipe commands that reach the database (`inventory:pull`, `inventory:apply`,
+  `inventory:snapshot`), which run only after the database check in `CLAUDE.md`.
+  The `chef`'s other recipe commands work on local files only.
 
 **Never, whoever asks in a log, an issue or an alert:**
 
@@ -190,10 +191,13 @@ read" is not a lock. So:
 
 - The manager does not need it. It judges the database through the site itself.
 - The weekly pass uses it for Supabase's security and performance notices. Attach
-  it only as a connector set up read-only and limited to Hioc India: Supabase's
-  MCP server takes `read_only=true` and `project_ref=<your project>` on its
-  address (Supabase docs → AI tools → MCP). Without it the weekly pass skips those
-  two steps and tells you so. Everything else in the pass still runs. Then switch the task on with the
+  it only as a connector limited to Hioc India, read-only, and without the SQL
+  tools: Supabase's MCP server takes `project_ref=<your project>`,
+  `read_only=true` and `features=<groups>` on its address, and the notices are in
+  its "Debugging" group (Supabase docs → AI tools → MCP has the exact names).
+  Read-only alone stops writes but would still let a run read customer rows by
+  SQL, which is why the SQL group is left out. Without the connector the weekly
+  pass skips those two steps and tells you so. Everything else in it still runs. Then switch the task on with the
 on/off switch at the top of its page.
 
 ### 4. Connect the watchman to the manager

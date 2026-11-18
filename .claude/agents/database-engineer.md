@@ -76,14 +76,15 @@ Read two recent files in `supabase/` before your first one, for example
 ```bash
 # CI's placeholder values. With these set, no command below can reach a database.
 export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
+bash scripts/security-scan-diff.sh origin/main
 npm run lint
 npx tsc --noEmit
 npm test
-bash scripts/security-scan-diff.sh origin/main
 ```
 
 These prove the code. They do not prove the SQL, and your report must say that. The
-last command is the security gate: it must end `RESULT: PASS`. The lead also has
+first command is the security gate, run before your own tests: it must end
+`RESULT: PASS`. The lead also has
 `security-reviewer` read your SQL and code before they are pushed; a FAIL comes
 back to you.
 

@@ -93,9 +93,17 @@ run_scan() {
     echo "security-scan-diff: a scan did not reach its summary ($(basename "$1") over $(basename "$2")). Treat as not run." >&2
     exit 2
   fi
-  # Findings only, colour codes and line numbers removed, sorted for comm(1).
-  sed -e 's/\x1b\[[0-9;]*m//g' "$3.raw" \
-    | grep -E '^[[:space:]]*(CRITICAL|WARN) \[' \
+  if grep -aqE 'Checks that could not run: [1-9]' "$3.raw"; then
+    echo "security-scan-diff: a rule could not run ($(basename "$1") over $(basename "$2")). Treat as not run." >&2
+    exit 2
+  fi
+  # Findings only, sorted for comm(1). Only the scanner's own colour codes are
+  # removed: the one that opens the line and the reset that closes it. Bytes
+  # inside the line belong to a file path or to code and are compared as they
+  # are, so a path cannot be dressed up to look like another one. Line numbers
+  # are dropped so that moving code is not a finding.
+  sed -E -e 's/^\x1b\[[0-9;]*m//' -e 's/\x1b\[0m$//' "$3.raw" \
+    | grep -aE '^[[:space:]]*(CRITICAL|WARN) \[' \
     | sed -E -e 's/^[[:space:]]+//' -e 's/(\.[a-zA-Z]+):[0-9]+:/\1:/' \
     | sort > "$3"
 }
