@@ -1,8 +1,12 @@
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { buttonVariants } from '@/components/ui/Button';
 import { CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 
 // Branded 404. Rendered inside the root layout, so the header and footer stay.
+// The title says so too: without it the tab would read just "HIOC.".
+export const metadata: Metadata = { title: 'Page not found' };
+
 export default function NotFound() {
   return (
     <div className="mx-auto max-w-xl px-4 py-20 text-center">
