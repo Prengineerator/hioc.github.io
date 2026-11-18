@@ -225,31 +225,36 @@ Work top to bottom. Each step says where to do it.
    first. **Hioc Coffee is retired.** It has taken no orders since early
    November 2026, and nothing should be run or changed there. Never paste a
    key or a full project URL into the repository or into a chat.
-2. **Apply the database changes to Hioc India, before the v2 deploy.** In Hioc
-   India → SQL Editor, run `supabase/2026-11-shop-v2.sql`. It is safe to run
-   again. If the v1 shop SQL has never been run on Hioc India, run
-   `supabase/2026-11-instant-coffee-shop.sql` and then
-   `supabase/2026-11-shop-shiprocket-total.sql` first.
-3. **Verify.** Run `npm run verify:db` with the variables pointing at Hioc
-   India. Check that **SHOP-1**, **SHOP-2** and **SHOP-3** pass. Do not deploy
-   until they do.
-4. **Deploy** the v2 code.
-5. **Shiprocket** (v1 steps, still valid):
+2. **Apply the database changes to Hioc India, before the v2 deploy.**
+   **Done on 2026-11-18.** Everything in `supabase/2026-11-shop-v2.sql` is on
+   Hioc India **except the three Home Blend rows**. They were held back on
+   purpose: the v1 code still live uses the cheapest product as its headline
+   "MRP per jar", so the ₹1 placeholder rows would have made the live shop say
+   "₹1 a jar".
+3. **Deploy** the v2 code.
+4. **Right after the deploy, add the Home Blend rows.** In Hioc India → SQL
+   Editor, run `supabase/2026-11-shop-v2.sql` again. Everything else is
+   already there and is skipped. Only the three hidden Home Blend packs are
+   added (unlisted, out of stock, ₹1 placeholder).
+5. **Verify.** Run `npm run verify:db` with the variables pointing at Hioc
+   India. Check that **SHOP-1**, **SHOP-2** and **SHOP-3** pass. SHOP-3 fails
+   on "the three Home Blend sizes exist" until step 4 is done.
+6. **Shiprocket** (v1 steps, still valid):
    - Shiprocket panel → Settings → API → Configure → **create an API user**. Use
      an email that is *different* from your main login.
    - Panel → Settings → Pickup addresses: note the pickup address **nickname**.
    - Recharge the Shiprocket wallet.
    - In Vercel, set `SHIPROCKET_EMAIL` and `SHIPROCKET_PASSWORD`, and set
      `SHIPROCKET_PICKUP_LOCATION` if the nickname isn't `Primary`.
-6. **Razorpay** (v1 step, still valid): the keys already used for café payments
+7. **Razorpay** (v1 step, still valid): the keys already used for café payments
    are enough. Check that the webhook `https://hioc.in/api/payments/webhook` is
    on, with the events `payment.captured`, `order.paid` and `payment.failed`.
    It catches payments when a customer closes the tab early. Tell Razorpay
    support that you now also sell packaged coffee shipped across India.
-7. **Price and list the Home Blend packs.** On `/owner/shop` → Products, set the
+8. **Price and list the Home Blend packs.** On `/owner/shop` → Products, set the
    price of the 250 g, 500 g and 1 kg packs, add a one-line description to each,
    mark them in stock and **list** them. They stay hidden until you do.
-8. **Weigh the parcels.** The weights set the 6 kg limit and the Shiprocket
+9. **Weigh the parcels.** The weights set the 6 kg limit and the Shiprocket
    parcel. The box is added once, by `BOX_WEIGHT_KG`, so weigh the goods and the
    box separately and never enter the weight of a whole boxed parcel.
    - a. For each product (each Home Blend pack, and each instant jar; each has
@@ -260,42 +265,42 @@ Work top to bottom. Each step says where to do it.
      is not about 0.1 kg, change `BOX_WEIGHT_KG` in `lib/shop/catalog.ts`.
    - c. Box sizes come from `defaultPackageForLines()` in `lib/shop/catalog.ts`.
      They can be changed for any order in the Send to Shiprocket dialog.
-9. **Add the Home Blend photo.** Put the image at
+10. **Add the Home Blend photo.** Put the image at
    `public/images/shop/home-blend.png`, then set `HOME_BLEND_IMAGE` to
    `'/images/shop/home-blend.png'` in `lib/shop/catalog.ts` and deploy. For
    sharper jar pictures, see "Images" below.
-10. **Review the money settings** on `/owner/shop`: the shipping fee (₹49), the
+11. **Review the money settings** on `/owner/shop`: the shipping fee (₹49), the
     free-shipping minimum (₹749), the Beanies cap (5%) and the introductory
     offer tiers.
-11. **Create the shop coupons.** Owner → Promotions → Coupons. For each one set
+12. **Create the shop coupons.** Owner → Promotions → Coupons. For each one set
     **Where it works** to **Shop** or **Both**. A coupon set to Café does not
     work online.
-12. **Emails** (optional but recommended). With `RESEND_API_KEY` and
+13. **Emails** (optional but recommended). With `RESEND_API_KEY` and
     `RESEND_FROM` set, the owner gets "New online order" and the customer gets
     confirmation, shipped and refund emails. `SHOP_ALERT_EMAILS` adds more
     recipients, for example whoever packs.
-13. **Switch on the shop.** Set `NEXT_PUBLIC_FLAG_SHOP=true` in Vercel and
+14. **Switch on the shop.** Set `NEXT_PUBLIC_FLAG_SHOP=true` in Vercel and
     redeploy. This shows `/shop`, the Shop link, the home-page "Order online"
     popup, the Shop orders item in the owner menu, and the shop wording on the
     policy pages.
-14. **Test once end to end, with a real ₹ payment.** Order one 250 g Home Blend
+15. **Test once end to end, with a real ₹ payment.** Order one 250 g Home Blend
     pack with a grind and one instant jar. Pay. In `/owner/shop`, Send to
     Shiprocket, then Mark delivered. Check that the customer's Beanies show the
     expected amount. Then Cancel & refund, and check the refund and that the
     emails arrived.
-15. **GST and HSN (ask the CA).** Roasted coffee (Home Blend) likely has a
+16. **GST and HSN (ask the CA).** Roasted coffee (Home Blend) likely has a
     different GST rate and HSN code from instant coffee. Ask the CA to confirm
     the rate, HSN and invoice format for each line. The prices shown are
     all-inclusive. Other states mean IGST.
-16. **FSSAI and the label.** For the Home Blend packs, confirm the printed label
+17. **FSSAI and the label.** For the Home Blend packs, confirm the printed label
     details: manufacturer or packer name and address, net quantity, MRP
     (inclusive of all taxes), country of origin and customer care. Confirm with
     your FSSAI consultant that the licence covers selling roasted coffee by post.
     Enter the details on the product pages and on the packs.
-17. **Dispatch promise.** Confirm the timing for the ground-to-order packs. The
+18. **Dispatch promise.** Confirm the timing for the ground-to-order packs. The
     default is "within 2 working days". It is set in `DISPATCH_WITHIN` in
     `lib/shop/catalog.ts`, and delivery in `DELIVERY_TAKES`.
-18. **Optional: the delivery map pin.** "Use my current location" works without
+19. **Optional: the delivery map pin.** "Use my current location" works without
     anything. For the draggable map, enable the Maps JavaScript API in Google
     Cloud, create a key restricted to HTTP referrers on `hioc.in` and to that
     API, and set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` in Vercel. Set a budget alert.
@@ -330,7 +335,7 @@ missing.
 The Shiprocket client (`lib/shop/shiprocket.ts`) follows Shiprocket's published
 API (login, create a custom order, read an order back, cancel). It reads the
 answers loosely and has not been run against a live account from the build
-environment. Do the test order (step 14) before the first real customer. If
+environment. Do the test order (step 15) before the first real customer. If
 Shiprocket answers differently, the error shows on the order card, and **Mark
 shipped by hand** still works. The tracking link is
 `https://shiprocket.co/tracking/<AWB>`. The delivery pin is sent as a Google
@@ -343,7 +348,7 @@ Maps link in the order comment.
 background-removal model (transparent PNGs with a soft shadow). For sharper
 pictures on big screens, swap in studio shots under the same names (transparent
 PNG, about 900 px tall for one jar). The Home Blend photo goes in
-`public/images/shop/home-blend.png` (step 9).
+`public/images/shop/home-blend.png` (step 10).
 
 ## Files
 
