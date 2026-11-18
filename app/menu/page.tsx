@@ -14,7 +14,7 @@ import { OrderAgainStrip } from '@/components/account/OrderAgainStrip';
 import { Spinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { CUSTOMER_MENU_CATEGORIES } from '@/lib/constants';
+import { CUSTOMER_MENU_CATEGORIES, MENU_CATEGORIES } from '@/lib/constants';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
 import { flags } from '@/lib/flags';
 import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
@@ -27,6 +27,25 @@ const VALID_CATEGORIES = CUSTOMER_MENU_CATEGORIES.map((c) => c.slug);
 
 function isMenuCategory(value: string | null): value is string {
   return !!value && VALID_CATEGORIES.includes(value);
+}
+
+// Forgiving search matching: case-, accent- and doubled-letter-insensitive, so
+// "capuccino" finds "Cappuccino" and "creme" finds "Crème". Both sides are
+// folded the same way (lowercase, accents stripped, runs of a repeated letter
+// collapsed to one), then compared as substrings.
+function foldForSearch(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/(.)\1+/g, '$1');
+}
+
+const CATEGORY_LABELS = new Map(MENU_CATEGORIES.map((c) => [c.slug, c.label]));
+
+// Smooth scrolling only when the visitor hasn't asked for reduced motion.
+function scrollBehavior(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 }
 
 // Mirrors the real MenuItemCard's box dimensions so swapping it in for the
@@ -80,32 +99,50 @@ function MenuPageContent() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const gridRef = useRef<HTMLDivElement>(null);
 
+  // One polite live region for the whole page: every card reports its adds here
+  // ("Added Latte to your cart"). A zero-width space on a repeat makes the same
+  // message count as a change, so it is read again.
+  const [announcement, setAnnouncement] = useState('');
+  const announceAdded = useCallback((name: string) => {
+    setAnnouncement((prev) => {
+      const msg = `Added ${name} to your cart`;
+      return prev === msg ? msg + '\u200b' : msg;
+    });
+  }, []);
+
   // Menu search (CUS-004). The category endpoint only returns one category,
-  // so the first keystroke lazily fetches the whole customer menu once (the
-  // same public GET /api/menu, just without ?category=) and filters it on the
-  // client — the full menu is a few dozen items, so this is cheaper than a
-  // request per keystroke and needs no API change.
+  // so the whole customer menu is fetched once (the same public GET /api/menu,
+  // just without ?category=) and filtered on the client — the full menu is a few
+  // dozen items, so this is cheaper than a request per keystroke and needs no
+  // API change. It loads when the page does (not on the first keystroke) because
+  // it also tells the category pills which categories are empty and need no pill.
   const [query, setQuery] = useState('');
   const [allItems, setAllItems] = useState<MenuItem[] | null>(null);
   const [allLoading, setAllLoading] = useState(false);
+  const triedAll = useRef(false);
   const searching = query.trim().length > 0;
   const fetchAllItems = useCallback(() => {
     setAllLoading(true);
     return fetch('/api/menu?includeUnavailable=true')
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((data: { items?: MenuItem[] }) => setAllItems(data.items ?? []))
-      .catch(() => setAllItems(null))
+      // Keep what we had: a failed background refresh must not wipe a working
+      // search index (or bring every empty category's pill back). A first load
+      // that fails leaves it null, which is what shows the retry.
+      .catch(() => {})
       .finally(() => setAllLoading(false));
   }, []);
   useEffect(() => {
-    if (searching && allItems === null && !allLoading) fetchAllItems();
-  }, [searching, allItems, allLoading, fetchAllItems]);
+    // Once only: a failed load is retried by the "Try again" button, not in a loop.
+    if (triedAll.current) return;
+    triedAll.current = true;
+    fetchAllItems();
+  }, [fetchAllItems]);
   const searchResults = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = foldForSearch(query.trim());
     if (!q || !allItems) return [];
-    return allItems.filter(
-      (item) =>
-        item.name.toLowerCase().includes(q) || (item.description ?? '').toLowerCase().includes(q),
+    return allItems.filter((item) =>
+      foldForSearch(`${item.name} ${item.description ?? ''} ${CATEGORY_LABELS.get(item.category) ?? ''}`).includes(q),
     );
   }, [query, allItems]);
   const { settings, openState } = useStoreSettings();
@@ -121,6 +158,13 @@ function MenuPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categoryParam]);
 
+  // The category on screen right now. A refresh started by the realtime hook or
+  // "Try again" isn't cancelled by the effect below, so it checks this before
+  // writing: an answer for the tab the customer just left must not land in the
+  // new one.
+  const shownCategory = useRef(category);
+  shownCategory.current = category;
+
   const fetchItems = useCallback(() => {
     let cancelled = false;
     // includeUnavailable=true (C3): 86'd items still render, greyed out and
@@ -128,17 +172,17 @@ function MenuPageContent() {
     fetch(`/api/menu?category=${encodeURIComponent(category)}&includeUnavailable=true`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((data: { items?: MenuItem[] }) => {
-        if (cancelled) return;
+        if (cancelled || shownCategory.current !== category) return;
         setItems(data.items ?? []);
         setLoadFailed(false);
       })
       .catch(() => {
         // A failed load is not an empty category — say so and offer a retry
         // instead of the misleading "Nothing here yet".
-        if (!cancelled) setLoadFailed(true);
+        if (!cancelled && shownCategory.current === category) setLoadFailed(true);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && shownCategory.current === category) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -162,6 +206,18 @@ function MenuPageContent() {
   // A category switched off for now (POS → Menu → On / off) has no tab; if the
   // URL points at one, move to the first category that is on.
   const hiddenCategories = useMemo(() => settings?.hidden_categories ?? [], [settings]);
+
+  // Categories with no items get no pill. Known once the whole menu has loaded;
+  // until then every category shows. The open category keeps its pill so the
+  // strip never loses the tab you are on.
+  const hiddenPills = useMemo(() => {
+    if (!allItems || allItems.length === 0) return hiddenCategories;
+    const filled = new Set(allItems.map((i) => i.category));
+    return [
+      ...hiddenCategories,
+      ...CUSTOMER_MENU_CATEGORIES.filter((c) => !filled.has(c.slug) && c.slug !== category).map((c) => c.slug),
+    ];
+  }, [allItems, hiddenCategories, category]);
   useEffect(() => {
     if (!hiddenCategories.includes(category)) return;
     const firstOn = CUSTOMER_MENU_CATEGORIES.find((c) => !hiddenCategories.includes(c.slug));
@@ -182,32 +238,64 @@ function MenuPageContent() {
       // leaving the customer mid-page in a list they didn't pick.
       const grid = gridRef.current;
       if (grid && grid.getBoundingClientRect().top < 0) {
-        grid.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        grid.scrollIntoView({ block: 'start', behavior: scrollBehavior() });
       }
     },
     [router, searchParams],
   );
 
+  // Whether menu prices include GST, straight from the store settings that the
+  // bill uses (computeBill: gst_inclusive extracts it, otherwise it is added at
+  // checkout). Nothing until the settings load, and nothing when GST is 0%.
+  const gstNote =
+    settings && settings.gst_percent > 0
+      ? settings.gst_inclusive
+        ? 'Prices include GST.'
+        : 'GST is added at checkout.'
+      : null;
+
   const checkoutDisabledReason =
     openState && !openState.acceptingOrders
-      ? 'Checkout is unavailable right now — see notice above.'
+      ? 'Checkout is unavailable right now. See the notice at the top of the menu.'
       : null;
 
   return (
     <>
-      <div className="mx-auto max-w-6xl px-4 py-10">
-        <div className="mb-8 text-center">
+      {/* The one live region for "Added … to your cart" (see announceAdded). */}
+      <div role="status" aria-live="polite" className="sr-only">
+        {announcement}
+      </div>
+      <div className="mx-auto max-w-6xl px-4 py-6 md:py-10">
+        <div className="mb-4 text-center md:mb-8">
           <h1 className="text-2xl font-bold text-charcoal md:text-3xl">
             Our Menu
           </h1>
-          <p className="mt-2 text-muted">
-            Pure vegetarian, always. Ask for oat or soya milk with any
-            coffee.
+          {/* One short line on a phone; the milk tip joins it from sm up. */}
+          <p className="mt-1 text-muted md:mt-2">
+            Pure vegetarian, always.
+            <span className="hidden sm:inline"> Ask for oat or soya milk with any coffee.</span>
           </p>
-          <p className="mt-1 text-sm italic text-muted">
-            {process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID
-              ? 'Pay online, or at the counter when you pick up.'
-              : 'Pay at the counter when you pick up — no online payment needed.'}
+          {/* Pay rule: guests pay online (it stops fake orders); signing in is
+              what unlocks paying at the counter. Without an online payment key
+              guests cannot order at all. */}
+          <p className="mt-1 text-sm text-muted">
+            {process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID ? (
+              <>
+                Guests pay online.{' '}
+                <Link href="/login?next=/menu" className="font-semibold text-tan-dark underline hover:text-tan-darker">
+                  Sign in
+                </Link>{' '}
+                to pay at the counter.
+              </>
+            ) : (
+              <>
+                <Link href="/login?next=/menu" className="font-semibold text-tan-dark underline hover:text-tan-darker">
+                  Sign in
+                </Link>{' '}
+                to order. You pay at the counter when you pick up.
+              </>
+            )}
+            {gstNote ? ` ${gstNote}` : ''}
           </p>
         </div>
 
@@ -221,7 +309,7 @@ function MenuPageContent() {
             className="mb-6 flex items-center justify-center gap-2 rounded-md border border-tan bg-surface px-4 py-3 text-center text-sm font-semibold text-charcoal transition-colors hover:bg-[#f0e6da]"
           >
             <CoffeyMascot size={24} />
-            Can&apos;t decide? Ask Coffey <span aria-hidden="true">→</span>
+            Can&apos;t decide? Ask Coffey
           </Link>
         ) : null}
 
@@ -247,7 +335,7 @@ function MenuPageContent() {
               aria-label="Search the menu"
               enterKeyHint="search"
               autoComplete="off"
-              className="h-11 w-full rounded-full border border-line bg-cream pl-10 pr-11 text-base text-charcoal outline-none transition-colors placeholder:text-muted focus:border-tan"
+              className="h-11 w-full rounded-full border border-muted/80 bg-cream pl-10 pr-11 text-base text-charcoal outline-none transition-colors placeholder:text-muted focus:border-tan [&::-webkit-search-cancel-button]:appearance-none"
             />
             {query ? (
               <button
@@ -260,7 +348,13 @@ function MenuPageContent() {
               </button>
             ) : null}
           </div>
-          <MenuCategoryTabs active={category} onChange={handleCategoryChange} hidden={hiddenCategories} />
+          {/* Neutral pills while a search shows results from every category. */}
+          <MenuCategoryTabs
+            wrapOnWide
+            active={searching ? null : category}
+            onChange={handleCategoryChange}
+            hidden={hiddenPills}
+          />
         </div>
 
         <div ref={gridRef} className="mt-6 scroll-mt-52 md:mt-8">
@@ -269,7 +363,7 @@ function MenuPageContent() {
               <MenuGridSkeleton />
             ) : allItems === null ? (
               <EmptyState
-                icon="⚠️"
+                icon=""
                 heading="Couldn't search the menu"
                 body="Check your connection and try again."
                 action={
@@ -284,18 +378,26 @@ function MenuPageContent() {
               />
             ) : searchResults.length === 0 ? (
               <EmptyState
-                icon="🔍"
+                icon=""
                 heading={`No matches for “${query.trim()}”`}
                 body="Try a shorter word, or browse the categories above."
               />
             ) : (
               <>
+                <h2 className="sr-only">Search results</h2>
                 <p className="mb-4 text-sm text-muted" aria-live="polite">
                   {searchResults.length} result{searchResults.length === 1 ? '' : 's'} for “{query.trim()}”
                 </p>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
-                  {searchResults.map((item) => (
-                    <MenuItemCard key={item.id} item={item} showRitual={showRitual} />
+                  {searchResults.map((item, i) => (
+                    <MenuItemCard
+                      key={item.id}
+                      item={item}
+                      showRitual={showRitual}
+                      eager={i < 2}
+                      onAdded={announceAdded}
+                      categoryLabel={CATEGORY_LABELS.get(item.category)}
+                    />
                   ))}
                 </div>
               </>
@@ -304,7 +406,7 @@ function MenuPageContent() {
             <MenuGridSkeleton />
           ) : loadFailed ? (
             <EmptyState
-              icon="⚠️"
+              icon=""
               heading="Couldn't load the menu"
               body="Check your connection and try again."
               action={
@@ -326,11 +428,24 @@ function MenuPageContent() {
               body="No items in this category yet"
             />
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
-              {items.map((item) => (
-                <MenuItemCard key={item.id} item={item} showRitual={showRitual} />
-              ))}
-            </div>
+            <>
+              {/* The h2 over the item titles (h3). Visible from md up; on a phone
+                  the active pill already says it, so it stays out of the way. */}
+              <h2 className="sr-only text-xl font-bold text-charcoal md:not-sr-only md:mb-4 md:block">
+                {CATEGORY_LABELS.get(category) ?? category}
+              </h2>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
+                {items.map((item, i) => (
+                  <MenuItemCard
+                    key={item.id}
+                    item={item}
+                    showRitual={showRitual}
+                    eager={i < 2}
+                    onAdded={announceAdded}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </div>
         {/* Room for the floating cart bar so it never covers the last item. */}
@@ -342,6 +457,7 @@ function MenuPageContent() {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         settings={settings}
+        openState={openState}
         checkoutDisabledReason={checkoutDisabledReason}
       />
     </>

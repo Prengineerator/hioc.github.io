@@ -81,7 +81,7 @@ export function ItemCustomizer({
     <div className="divide-y divide-line">
       {hasRequiredSection ? (
         <section className="py-2 first:pt-0">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Required</h3>
+          <h3 className="mb-2 text-sm font-semibold text-muted">Required</h3>
           <div className="space-y-3">
             {showSize ? (
               <SizePicker item={item} variantId={variantId} onVariantChange={onVariantChange} size={size} />
@@ -110,7 +110,7 @@ export function ItemCustomizer({
 
       {hasOptionalSection ? (
         <section className="py-2 first:pt-0">
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Add-ons (optional)</h3>
+          <h3 className="mb-2 text-sm font-semibold text-muted">Add-ons (optional)</h3>
           <div className="space-y-3">
             {optionalGroups.map((group) => (
               <AddonGroupBlock
@@ -267,8 +267,8 @@ function SizePicker({
               onClick={() => onVariantChange(v.id)}
               className={chipClasses(selected, size)}
             >
-              {v.label} ·{' '}
-              <span className="font-mono tabular-nums">{byWeight ? formatPerKg(v.price_inr) : `₹${v.price_inr}`}</span>
+              {v.label}{' '}
+              <span className="ml-1 font-mono tabular-nums">{byWeight ? formatPerKg(v.price_inr) : `₹${v.price_inr}`}</span>
             </button>
           );
         })}
@@ -309,7 +309,7 @@ function WeightPicker({
         <span id={labelId} className="truncate text-sm font-semibold text-charcoal">
           Weight
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] font-semibold tabular-nums text-muted">
+        <span className="shrink-0 whitespace-nowrap font-mono text-xs font-semibold tabular-nums text-muted">
           {formatPerKg(pricePerKg)}
         </span>
       </div>
@@ -327,21 +327,21 @@ function WeightPicker({
               }}
               className={chipClasses(selected, size)}
             >
-              {formatWeight(grams)} ·{' '}
-              <span className="font-mono tabular-nums">₹{weightPriceInr(pricePerKg, grams)}</span>
+              {formatWeight(grams)}{' '}
+              <span className="ml-1 font-mono tabular-nums">₹{weightPriceInr(pricePerKg, grams)}</span>
             </button>
           );
         })}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <label htmlFor={inputId} className="text-sm text-muted">
-          Other
+          Other weight
         </label>
         {/* The focus ring goes on the box, not the input, so it wraps the "g". */}
         <div
           className={
             'flex w-32 items-center rounded-md border focus-within:border-tan focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-tan ' +
-            (customInvalid ? 'border-tan-dark' : 'border-line')
+            (customInvalid ? 'border-tan-dark' : 'border-muted/80')
           }
         >
           <input
@@ -358,7 +358,7 @@ function WeightPicker({
             placeholder="grams"
             aria-describedby={hintId}
             aria-invalid={customInvalid || undefined}
-            className="w-full min-w-0 rounded-md bg-transparent px-3 py-2 font-mono text-sm tabular-nums text-charcoal outline-none focus-visible:outline-none"
+            className="min-h-[44px] w-full min-w-0 rounded-md bg-transparent px-3 py-2 font-mono text-base tabular-nums text-charcoal outline-none focus-visible:outline-none"
           />
           <span className="pr-3 text-sm text-muted">g</span>
         </div>
@@ -368,7 +368,7 @@ function WeightPicker({
           </span>
         ) : null}
         <span id={hintId} className={'text-xs ' + (customInvalid ? 'font-semibold text-tan-dark' : 'text-muted')}>
-          {WEIGHT_MIN_GRAMS}–{WEIGHT_MAX_GRAMS} g
+          {WEIGHT_MIN_GRAMS} to {WEIGHT_MAX_GRAMS} g
         </span>
       </div>
     </div>
@@ -392,14 +392,17 @@ function AddonGroupBlock({
   const required = isRequired(group);
   const count = selectedIds.length;
 
-  let badge: string;
+  // A required group is marked once, by the "Required" section heading it sits
+  // under, so it gets no pill of its own (just a count once a multi-select has
+  // some chosen).
+  let badge: string | null;
   let badgeClass: string;
   if (group.selection_type === 'multi' && count > 0) {
     badge = `${count}/${group.max_select}`;
     badgeClass = 'bg-surface text-tan-dark';
   } else if (required) {
-    badge = 'Required';
-    badgeClass = 'bg-surface text-tan-dark';
+    badge = null;
+    badgeClass = '';
   } else {
     badge = compactHint(group);
     badgeClass = 'text-muted';
@@ -411,12 +414,14 @@ function AddonGroupBlock({
         <span id={labelId} className="truncate text-sm font-semibold text-charcoal" title={group.display_name}>
           {group.display_name}
         </span>
-        <span
-          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${badgeClass}`}
-          aria-label={selectionLabel(group)}
-        >
-          {badge}
-        </span>
+        {badge ? (
+          <span
+            className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ${badgeClass}`}
+            aria-label={selectionLabel(group)}
+          >
+            {badge}
+          </span>
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {group.options.map((option) => {
@@ -463,7 +468,7 @@ function AddonGroupBlock({
 }
 
 function chipClasses(selected: boolean, size: 'default' | 'touch', disabled = false): string {
-  const sizeClasses = size === 'touch' ? 'min-h-[40px] px-3.5 py-2' : 'min-h-[36px] px-3 py-1.5';
+  const sizeClasses = size === 'touch' ? 'min-h-[44px] px-4 py-2' : 'min-h-[44px] px-3.5 py-2';
   return [
     'inline-flex items-center rounded-full text-sm font-medium transition-colors',
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan',
@@ -493,8 +498,8 @@ function InstructionsField({ value, onChange }: { value: string; onChange: (valu
 
   return (
     <div>
-      <label htmlFor={inputId} className="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted">
-        Note
+      <label htmlFor={inputId} className="mb-1 block text-sm font-semibold text-muted">
+        Note for this item
       </label>
       <input
         id={inputId}
@@ -504,8 +509,7 @@ function InstructionsField({ value, onChange }: { value: string; onChange: (valu
         onChange={(e) => onChange(e.target.value.slice(0, MAX_INSTRUCTIONS_LEN))}
         maxLength={MAX_INSTRUCTIONS_LEN}
         placeholder="e.g. less sugar, no ice"
-        aria-label="Special instructions for this item"
-        className="w-full rounded-md border border-line px-3 py-2 text-sm text-charcoal outline-none focus:border-tan"
+        className="min-h-[44px] w-full rounded-md border border-muted/80 px-3 py-2 text-base text-charcoal outline-none focus:border-tan"
       />
     </div>
   );
