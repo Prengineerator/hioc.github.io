@@ -13,6 +13,8 @@ import { cleanUtmValue } from '@/lib/traffic/classify';
 
 const PAGES = [
   { value: '/menu', label: 'Menu (order ahead)' },
+  { value: '/suggest', label: 'Ask Coffey (helps choose a drink)' },
+  { value: '/coffey', label: 'About Coffey (what Coffey can do)' },
   { value: '/shop', label: 'Shop (Instant Coffee)' },
   { value: '/', label: 'Home page' },
 ];

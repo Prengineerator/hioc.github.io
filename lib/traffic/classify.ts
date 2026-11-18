@@ -33,6 +33,8 @@ export function routeForPath(pathname: string): { route: TrackedRoute; group: Pa
   let route: TrackedRoute | null = null;
 
   if (parts.length === 1 && parts[0] === 'menu') route = '/menu';
+  else if (parts.length === 1 && parts[0] === 'suggest') route = '/suggest';
+  else if (parts.length === 1 && parts[0] === 'coffey') route = '/coffey';
   else if (parts.length === 1 && parts[0] === 'checkout') route = '/checkout';
   else if (parts.length === 1 && parts[0] === 'shop') route = '/shop';
   else if (parts.length === 2 && parts[0] === 't') route = '/t/[token]';

@@ -44,6 +44,18 @@ describe('buildCampaignLink (Owner → Traffic link maker)', () => {
     );
   });
 
+  it('tags the Ask Coffey wizard', () => {
+    expect(buildCampaignLink('https://hioc.in', '/suggest', { source: 'instagram', medium: 'story', campaign: 'Ask Coffey' })).toBe(
+      'https://hioc.in/suggest?utm_source=instagram&utm_medium=story&utm_campaign=ask-coffey',
+    );
+  });
+
+  it('tags the About Coffey page', () => {
+    expect(buildCampaignLink('https://hioc.in', '/coffey', { source: 'whatsapp', medium: 'status', campaign: '' })).toBe(
+      'https://hioc.in/coffey?utm_source=whatsapp&utm_medium=status',
+    );
+  });
+
   it('leaves out empty tags', () => {
     expect(buildCampaignLink('https://hioc.in', '/menu', { source: 'qr', medium: '', campaign: '  ' })).toBe(
       'https://hioc.in/menu?utm_source=qr',

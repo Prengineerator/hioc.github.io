@@ -80,6 +80,11 @@ export type Utm = Record<UtmKey, string | null>;
  */
 export const TRACKED_ROUTES = {
   '/menu': { group: 'orders', label: 'Menu' },
+  // Ask Coffey, the wizard that helps a customer choose (docs/COFFEY-SPEC.md).
+  // Part of ordering: it ends in the cart and checkout.
+  '/suggest': { group: 'orders', label: 'Ask Coffey' },
+  // "What can Coffey do?", the page that introduces the wizard and links to it.
+  '/coffey': { group: 'orders', label: 'About Coffey' },
   '/t/[token]': { group: 'orders', label: 'Table QR order' },
   '/checkout': { group: 'orders', label: 'Checkout' },
   '/order/[id]': { group: 'orders', label: 'Order tracking' },

@@ -20,6 +20,9 @@ describe('routeForPath', () => {
   it.each([
     ['/menu', '/menu', 'orders'],
     ['/menu/', '/menu', 'orders'],
+    ['/suggest', '/suggest', 'orders'],
+    ['/suggest/', '/suggest', 'orders'],
+    ['/coffey', '/coffey', 'orders'],
     ['/checkout', '/checkout', 'orders'],
     ['/t/abcDEF123', '/t/[token]', 'orders'],
     ['/order/7a1f0c3e-1111-4111-8111-111111111111', '/order/[id]', 'orders'],
@@ -33,7 +36,7 @@ describe('routeForPath', () => {
     expect(routeForPath(path)).toEqual({ route, group });
   });
 
-  it.each(['/', '/about', '/staff', '/staff/orders', '/orders', '/owner/traffic', '/order', '/shop/order', '/account', '/t'])(
+  it.each(['/', '/about', '/staff', '/staff/orders', '/orders', '/owner/traffic', '/owner/suggestions', '/coffey/more', '/order', '/shop/order', '/account', '/t'])(
     'does not track %s',
     (path) => {
       expect(routeForPath(path)).toBeNull();
