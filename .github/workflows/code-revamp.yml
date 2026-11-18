@@ -89,24 +89,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci --no-audit --no-fund
-      - run: npm run lint
-      - run: npx tsc --noEmit
-      - run: npm test
-
       # Security gate (docs/SECURITY-PLAYBOOK.md). Compares this PR with its
       # base, so it holds every new change to the playbook while findings that
       # were already on the base are worked through separately.
       #
+      # It runs first, straight after checkout and before any of the pull
+      # request's code is installed or executed (`npm ci`, the tests), so that
+      # code cannot touch the workspace the gate reads.
+      #
       # The gate script and the scanner both come from the BASE branch, so a
       # pull request cannot pass by editing either. The pull request's own copy
       # of the gate is used only when the base has none yet, which is true once:
-      # for the change that introduces it.
+      # for the change that introduces it. Remove that fallback after it merges.
       #
       # What this cannot stop is a pull request that edits this workflow file.
       # That is what the owner's own look at a pull request is for.
@@ -123,6 +117,15 @@ jobs:
           fi
           bash "$gate" FETCH_HEAD
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
       - run: npm run build
 
   revamp:

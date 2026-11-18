@@ -108,8 +108,11 @@ jobs:
             steps=$(gh run view "$id" --json jobs \
               --jq '.jobs[].steps[] | "\(.name)=\(.conclusion)"' 2>/dev/null || true)
             down=$(printf '%s\n' "$steps" | grep -c '^Fail the run when the site is down=failure$' || true)
+            looked=$(printf '%s\n' "$steps" | grep -c '^Has this outage been alerted already?=success$' || true)
             woke=$(printf '%s\n' "$steps" | grep -cE '^Wake the manager=(success|skipped)$' || true)
-            if [ "$down" = "1" ] && [ "$woke" = "1" ]; then alerted=true; fi
+            # "skipped" only means "alerted earlier" if that run got as far as
+            # deciding so. A run cut off before then also shows it as skipped.
+            if [ "$down" = "1" ] && [ "$looked" = "1" ] && [ "$woke" = "1" ]; then alerted=true; fi
           fi
           echo "already alerted: $alerted"
           echo "alerted=$alerted" >> "$GITHUB_OUTPUT"

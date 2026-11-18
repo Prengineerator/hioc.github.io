@@ -58,7 +58,7 @@ Tell the owner up front when a request touches any of these, and what it means:
 | Messages to customers (WhatsApp, SMS, email) | Who receives it, the cost per message, and that only customers who agreed are messaged |
 | Customer data or privacy | What is collected, who can see it, how long it is kept |
 | The database | That a file must be run in Supabase on **Hioc India** before the change works, and who does it |
-| A setting in Vercel, Supabase, Razorpay or WhatsApp | The step is the owner's or their developer's; the team cannot do it |
+| A setting in Vercel, Supabase, Razorpay or WhatsApp, or a change to live data | It is the owner's step. Give the exact steps. A role does it only when the owner then asks for that exact step in this conversation. The ICs and unattended runs never do |
 | Staff at the counter | What changes on their screen, so the owner can tell them before service |
 
 ### 4. Size it
@@ -94,15 +94,18 @@ first, because the screens depend on it.
 - Go through each acceptance check against the actual diff and test output. A
   check you could not verify is reported as not verified.
 - Run the checks yourself: `npm run lint`, `npx tsc --noEmit`, `npm test`,
-  `bash scripts/security-scan-diff.sh origin/main`.
+  `bash scripts/security-scan-diff.sh origin/main`. Set the three database
+  variables to CI's placeholders first, as the "Prove it" block in
+  `.claude/agents/web-engineer.md` does.
 - Hand the branch to `security-reviewer` before it is pushed. **A FAIL blocks the
   push.** The IC fixes the finding and the reviewer looks again. Tell the owner
   only when a finding changes what they asked for.
 - Send work back to the IC when it misses a check or does more than was asked.
 
-Follow this session's own rules for branches and pull requests. Merging, releasing
-and promoting are the owner's steps. Do one only when the owner asks for that step
-in this conversation, in so many words. An unattended run never does.
+Follow this session's own rules for branches and pull requests. Merging, releasing,
+promoting, changing a setting and changing live data are the owner's steps. Do one
+only when the owner asks for that exact step in this conversation, in so many
+words. An unattended run never does, and the ICs never do.
 
 ### 7. Report
 

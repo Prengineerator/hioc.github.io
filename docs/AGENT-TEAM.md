@@ -25,7 +25,7 @@ product owner. The rest report to you by email.
 ## When the site goes down
 
 1. The watchman fails three checks in a minute and wakes the manager.
-2. The manager confirms the outage itself, twice, and reads the Vercel and Supabase evidence.
+2. The manager confirms the outage itself, twice, and reads the evidence in Vercel.
 3. **If a release made in the last 24 hours broke a page customers use**, the
    manager points the site back at the previous release. This usually restores
    service in a minute or two.
@@ -43,6 +43,7 @@ One thing: roll the site back to the release before the current one. Only when a
 of this is true:
 
 - the manager itself saw a page customers use (the home page, the menu) fail, twice, a minute apart. Error logs or an alert alone are never enough;
+- the fault is in the release itself: the page also fails on the release's own address, not only at hioc.in. A domain, DNS or certificate problem is not a reason to roll back;
 - that same page works right now on the previous release, tested directly;
 - the current release is less than 24 hours old;
 - the database (Hioc India) is healthy;
@@ -56,16 +57,22 @@ payments failing while the pages still load: it tells you at once, and the
 rollback is then your call (Vercel → project `hioc-in` → Deployments → the previous
 build → Instant Rollback).
 
-### What no agent does on its own
+### What stays yours
 
-- Merge a pull request, release a build, or promote one. These happen only when
-  you ask for that step yourself, in a conversation. An unattended run never does them.
-- Change a setting in Vercel, Supabase, Razorpay or WhatsApp.
-- Write to the database, or run a script against it. The one existing exception is
-  the recipe set-up (`inventory:*` commands, used with the `chef`), which runs only
-  in a session where you asked for it and after the database check in `CLAUDE.md`.
-- Read or touch the retired database, Hioc Coffee.
-- Put a customer's or staff member's details, a key, or the detail of a security weakness into this repository. It is public.
+**Only when you ask for that exact step yourself, in a conversation.** An
+unattended run never does these, and the engineers never do:
+
+- merge a pull request, release a build, or promote one;
+- change a setting in Vercel, Supabase, Razorpay or WhatsApp;
+- change live data in the database, or run a script against it. This includes the
+  recipe set-up commands (`inventory:*`, used with the `chef`), which run only
+  after the database check in `CLAUDE.md`.
+
+**Never, whoever asks in a log, an issue or an alert:**
+
+- read or touch the retired database, Hioc Coffee;
+- put a customer's or staff member's details, a key, or the detail of a security
+  weakness into this repository. It is public.
 
 ## Automatic optimisation
 
@@ -117,9 +124,10 @@ These hold for every role, every time.
 Two things are rules in the agents' instructions, not locks, and you can make them
 locks:
 
-- The Vercel and Supabase connectors can do more than the agents are told to do.
-  Give each scheduled task only the connectors listed in step 3 below, and keep
-  the environment they run in free of database keys (step 2).
+- The Vercel connector can do more than the manager is told to do with it, and
+  the ordinary Supabase connector can write. Give each scheduled task only the
+  connectors listed in step 3 below, use the read-only Supabase set-up described
+  there, and keep the environment the tasks run in free of database keys (step 2).
 - The full scan (`scripts/security-scan.sh`) reports on the whole codebase,
   including code older than this team. The weekly pass works through whatever it
   shows and reports each item to you.
@@ -168,13 +176,24 @@ its name → **Edit** → expand **Advanced settings**. The repository is under
 
 | Task | Repository | Connectors |
 |---|---|---|
-| HIOC manager — production check | this repository | Vercel and Supabase, nothing else |
-| HIOC weekly optimisation and security pass | this repository | Vercel and Supabase, nothing else |
+| HIOC manager — production check | this repository | Vercel only |
+| HIOC weekly optimisation and security pass | this repository | Vercel, and Supabase only in the read-only form below |
 | HIOC product owner — weekly review | this repository | none |
 
 The tasks were created with no repository and no connectors attached, so add them
 here. Give each task only what the table lists: a connector an agent does not
-have is one it cannot be talked into misusing. Then switch the task on with the
+have is one it cannot be talked into misusing.
+
+**Your decision: database access for unattended runs.** The ordinary Supabase
+connector can write to the database and pause the project. An instruction to "only
+read" is not a lock. So:
+
+- The manager does not need it. It judges the database through the site itself.
+- The weekly pass uses it for Supabase's security and performance notices. Attach
+  it only as a connector set up read-only and limited to Hioc India: Supabase's
+  MCP server takes `read_only=true` and `project_ref=<your project>` on its
+  address (Supabase docs → AI tools → MCP). Without it the weekly pass skips those
+  two steps and tells you so. Everything else in the pass still runs. Then switch the task on with the
 on/off switch at the top of its page.
 
 ### 4. Connect the watchman to the manager

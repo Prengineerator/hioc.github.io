@@ -47,8 +47,11 @@ This is the loop in `docs/SECURITY-PLAYBOOK.md`, less its live-database step
 git fetch origin main -q
 # Use main's copy of the gate, so the change cannot pass by editing the gate.
 gate="$(mktemp)"
+# The fallback to this checkout's copy is only for the change that first adds the gate.
 git show origin/main:scripts/security-scan-diff.sh > "$gate" 2>/dev/null || cp scripts/security-scan-diff.sh "$gate"
 bash "$gate" origin/main
+# CI's placeholder values. With these set, no command below can reach a database.
+export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
 npx tsc --noEmit
 npm test
 ```

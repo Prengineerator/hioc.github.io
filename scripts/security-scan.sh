@@ -22,6 +22,11 @@ CRIT=0
 WARN=0
 API_DIR="app/api"
 
+# The content greps below use -a (read every file as text). Without it, grep
+# reports a file holding a NUL byte or a byte that is not valid in the current
+# locale as "binary file matches" on stderr and prints no line, so one stray
+# byte in a file would hide every finding in it.
+
 # --- tiny output helpers ---------------------------------------------------
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 yellow(){ printf '\033[33m%s\033[0m\n' "$*"; }
@@ -95,7 +100,7 @@ done < <(find "$API_DIR" -name route.ts 2>/dev/null)
 #      `if (!secret || <mismatch>) return 401`.
 # ===========================================================================
 hdr "C-4  secret checks fail closed"
-if grep -rnE "if \(secret\) \{" "$API_DIR" --include="*.ts" >/tmp/hioc_c4 2>/dev/null && [ -s /tmp/hioc_c4 ]; then
+if grep -arnE "if \(secret\) \{" "$API_DIR" --include="*.ts" >/tmp/hioc_c4 2>/dev/null && [ -s /tmp/hioc_c4 ]; then
   while IFS= read -r line; do crit C-4 "$line  (fail-open secret check — use: if (!secret || ...) return 401)"; done < /tmp/hioc_c4
 else
   green "  ok — no fail-open 'if (secret)' guards"
@@ -107,7 +112,7 @@ rm -f /tmp/hioc_c4
 #      getSession() (trusts an unverified cookie) for authorization.
 # ===========================================================================
 hdr "C-5  no getSession() used for authorization"
-if grep -rn "auth.getSession()" app lib --include="*.ts" --include="*.tsx" >/tmp/hioc_c5 2>/dev/null && [ -s /tmp/hioc_c5 ]; then
+if grep -arn "auth.getSession()" app lib --include="*.ts" --include="*.tsx" >/tmp/hioc_c5 2>/dev/null && [ -s /tmp/hioc_c5 ]; then
   while IFS= read -r line; do warn C-5 "$line  (prefer getUser() for auth decisions)"; done < /tmp/hioc_c5
 else
   green "  ok — authorization uses getUser()"
@@ -118,7 +123,7 @@ rm -f /tmp/hioc_c5
 # C-6  No XSS sinks.
 # ===========================================================================
 hdr "C-6  no XSS / code-eval sinks"
-if grep -rnE "dangerouslySetInnerHTML|[^a-zA-Z]eval\(|new Function\(" app components lib --include="*.ts" --include="*.tsx" >/tmp/hioc_c6 2>/dev/null && [ -s /tmp/hioc_c6 ]; then
+if grep -arnE "dangerouslySetInnerHTML|[^a-zA-Z]eval\(|new Function\(" app components lib --include="*.ts" --include="*.tsx" >/tmp/hioc_c6 2>/dev/null && [ -s /tmp/hioc_c6 ]; then
   while IFS= read -r line; do crit C-6 "$line"; done < /tmp/hioc_c6
 else
   green "  ok — no dangerouslySetInnerHTML / eval / new Function"
@@ -131,7 +136,7 @@ rm -f /tmp/hioc_c6
 #      builders are parameterized and safe.
 # ===========================================================================
 hdr "C-7  no string-built SQL"
-if grep -rnE "\.(rpc|sql)\(\s*\`" lib app --include="*.ts" >/tmp/hioc_c7 2>/dev/null && [ -s /tmp/hioc_c7 ]; then
+if grep -arnE "\.(rpc|sql)\(\s*\`" lib app --include="*.ts" >/tmp/hioc_c7 2>/dev/null && [ -s /tmp/hioc_c7 ]; then
   while IFS= read -r line; do warn C-7 "$line  (verify no untrusted interpolation into SQL)"; done < /tmp/hioc_c7
 else
   green "  ok — no template-literal SQL calls"
@@ -149,7 +154,7 @@ if git ls-files 2>/dev/null | grep -qE "\.env(\..*)?\.local$|\.env$"; then
   c8_hits=$((c8_hits+1))
 fi
 # service-role JWTs are long base64 'eyJ...' literals; flag any outside env examples.
-if grep -rnE "eyJ[A-Za-z0-9_-]{30,}" app lib components --include="*.ts" --include="*.tsx" >/tmp/hioc_c8 2>/dev/null && [ -s /tmp/hioc_c8 ]; then
+if grep -arnE "eyJ[A-Za-z0-9_-]{30,}" app lib components --include="*.ts" --include="*.tsx" >/tmp/hioc_c8 2>/dev/null && [ -s /tmp/hioc_c8 ]; then
   while IFS= read -r line; do crit C-8 "$line  (possible hardcoded JWT/secret)"; done < /tmp/hioc_c8
   c8_hits=$((c8_hits+1))
 fi

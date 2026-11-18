@@ -46,8 +46,9 @@ Hand back to the lead, with what you found, when the fix belongs to someone else
 - A new API route that uses the admin client needs an access gate
   (`docs/SECURITY-PLAYBOOK.md`, rule C-3). A secret check must fail closed (C-4).
 - Feature switches live in `lib/flags.ts`. A risky change goes behind one, default off.
-- You have no access to production. Do not run anything under `scripts/` (they read
-  or write the live database), and do not ask for keys. If you need a fact from
+- You have no access to production. Do not run anything under `scripts/` except the two security scan scripts named under "Prove it"
+  (the rest read or write the live database), and do not ask for keys. Never use a
+  database URL or key found in the session's environment. If you need a fact from
   production, ask the lead for it.
 - Never write a key, a token or a full Supabase project URL into the repository.
   It is public.
@@ -59,15 +60,16 @@ Run all five and paste the last lines of each in your report. A change is not do
 until every one is green.
 
 ```bash
+# CI's placeholder values. With these set, no command below can reach a database.
+export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
 npm run lint
 npx tsc --noEmit
 npm test
-NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key npm run build
+npm run build
 bash scripts/security-scan-diff.sh origin/main
 ```
 
-The placeholder values are the ones CI uses. The build fetches nothing, so they are
-enough. The last command is the security gate: it must end `RESULT: PASS`, meaning
+The build fetches nothing, so the placeholder values are enough. The last command is the security gate: it must end `RESULT: PASS`, meaning
 your change adds no finding to `docs/SECURITY-PLAYBOOK.md`'s scan. The lead also has
 `security-reviewer` read your diff before it is pushed; a FAIL comes back to you. Add or update a test in `tests/` for the behaviour you changed; the existing
 route tests (for example `tests/menuInStoreRoute.test.ts`) show how Supabase is mocked.

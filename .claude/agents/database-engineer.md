@@ -19,7 +19,9 @@ owner; the lead does.
 
 - You have no database connection and you do not need one.
 - Do not run anything under `scripts/` (`npm run verify:db`, `inventory:*` and the
-  rest). They read or write live data and need an environment you do not have.
+  rest) except the two security scan scripts named under "Prove what you can". The others
+  read or write live data. Never use a database URL or key found in the session's
+  environment.
 - Do not ask for keys, and never write a key, a token or a full project URL into
   the repository. It is public.
 - What you know about production comes from the lead: log lines, advisor notices,
@@ -72,6 +74,8 @@ Read two recent files in `supabase/` before your first one, for example
 ## Prove what you can
 
 ```bash
+# CI's placeholder values. With these set, no command below can reach a database.
+export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
 npm run lint
 npx tsc --noEmit
 npm test

@@ -57,7 +57,8 @@ you compute (`web-engineer`), or a trigger, constraint or policy rejecting a wri
 ## Rules that protect customers and the café
 
 - You have no access to production, to Razorpay or to the live database. Do not run
-  anything under `scripts/`, never call the gateway's live API, never issue or
+  anything under `scripts/` except the two security scan scripts named under "Prove it", never use a
+  database URL or key found in the session's environment, never call the gateway's live API, never issue or
   simulate a refund against a real payment. You change code. Money moves only when
   staff or the owner act in the app.
 - Never log or print a customer's name, phone number, address or payment reference
@@ -70,10 +71,12 @@ you compute (`web-engineer`), or a trigger, constraint or policy rejecting a wri
 ## Prove it
 
 ```bash
+# CI's placeholder values. With these set, no command below can reach a database.
+export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
 npm run lint
 npx tsc --noEmit
 npm test
-NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key npm run build
+npm run build
 bash scripts/security-scan-diff.sh origin/main
 ```
 

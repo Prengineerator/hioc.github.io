@@ -19,9 +19,12 @@
 #   * The scanner is taken from the BASE ref, not from the change, and run over
 #     both trees. A change cannot pass by deleting a rule, emptying the scanner
 #     or making it exit early: the base's rules still judge it.
-#   * If the change also edits the scanner, its version is run over both trees
-#     as well, so a new rule applies to the change that adds it without blaming
-#     that change for what the base already had. Either comparison can fail it.
+#   * The verdict on the base's rules is reached, and the script exits on a
+#     failure, before anything from the change is executed.
+#   * If the change also edits the scanner, its version is then run over both
+#     trees as well, so a new rule applies to the change that adds it without
+#     blaming that change for what the base already had. That second comparison
+#     can only add a failure. It cannot undo the first.
 #   * Every scan must reach the scanner's summary line. One that does not is
 #     an error (exit 2), not a clean result.
 #   * Line numbers are dropped before comparing, so moving code is not a finding.
@@ -37,6 +40,11 @@
 # ===========================================================================
 
 set -uo pipefail
+
+# Byte-wise matching and ordering everywhere below. In a UTF-8 locale grep treats
+# a file with one invalid byte as binary and prints no line for it, and sort and
+# comm must agree on order.
+export LC_ALL=C
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   echo "security-scan-diff: not inside a git checkout." >&2
@@ -92,37 +100,40 @@ run_scan() {
     | sort > "$3"
 }
 
-run_scan "$WORK/scanner-base.sh" "$WORK/base" "$WORK/base.by-base"
-run_scan "$WORK/scanner-base.sh" "$ROOT"      "$WORK/head.by-base"
-comm -13 "$WORK/base.by-base" "$WORK/head.by-base" > "$WORK/new.txt"
-comm -23 "$WORK/base.by-base" "$WORK/head.by-base" > "$WORK/fixed.txt"
+count_lines() { if [ -n "$1" ]; then printf '%s\n' "$1" | wc -l | tr -d ' '; else echo 0; fi; }
 
-scanner_note="the base's scanner"
-if ! cmp -s "$WORK/scanner-base.sh" "$SCANNER"; then
-  scanner_note="the base's scanner and this change's edited scanner"
-  cp "$SCANNER" "$WORK/scanner-head.sh"
-  run_scan "$WORK/scanner-head.sh" "$WORK/base" "$WORK/base.by-head"
-  run_scan "$WORK/scanner-head.sh" "$ROOT"      "$WORK/head.by-head"
-  comm -13 "$WORK/base.by-head" "$WORK/head.by-head" >> "$WORK/new.txt"
-  sort -u -o "$WORK/new.txt" "$WORK/new.txt"
-fi
-
-known=$(wc -l < "$WORK/base.by-base" | tr -d ' ')
-new=$(wc -l < "$WORK/new.txt" | tr -d ' ')
-fixed=$(wc -l < "$WORK/fixed.txt" | tr -d ' ')
-
-echo "security-scan-diff against ${BASE} (${scanner_note})"
-echo "  findings already on the base: ${known}"
-echo "  findings this change removes: ${fixed}"
-echo "  findings this change adds:    ${new}"
-
-if [ "$new" -gt 0 ]; then
+fail_with() {
   echo
   echo "New findings (rule ids and fixes are in docs/SECURITY-PLAYBOOK.md):"
-  sed 's/^/  /' "$WORK/new.txt"
+  printf '%s\n' "$1" | sed 's/^/  /'
   echo
   echo "RESULT: FAIL — fix each new finding. A WARN that is intentional needs the owner's acceptance."
   exit 1
+}
+
+# --- 1. The base's rules. Decided and kept in shell variables before any code
+#        from the change is run, so nothing the change contains can alter it.
+run_scan "$WORK/scanner-base.sh" "$WORK/base" "$WORK/base.by-base"
+run_scan "$WORK/scanner-base.sh" "$ROOT"      "$WORK/head.by-base"
+new_by_base="$(comm -13 "$WORK/base.by-base" "$WORK/head.by-base")"
+known="$(wc -l < "$WORK/base.by-base" | tr -d ' ')"
+fixed="$(comm -23 "$WORK/base.by-base" "$WORK/head.by-base" | wc -l | tr -d ' ')"
+
+echo "security-scan-diff against ${BASE}"
+echo "  findings already on the base:           ${known}"
+echo "  findings this change removes:           ${fixed}"
+echo "  findings this change adds (base rules): $(count_lines "$new_by_base")"
+[ -z "$new_by_base" ] || fail_with "$new_by_base"
+
+# --- 2. The change's own scanner, if it edits it. This can only add findings:
+#        the verdict on the base's rules above is already final.
+if ! cmp -s "$WORK/scanner-base.sh" "$SCANNER"; then
+  cp "$SCANNER" "$WORK/scanner-head.sh"
+  run_scan "$WORK/scanner-head.sh" "$WORK/base" "$WORK/base.by-head"
+  run_scan "$WORK/scanner-head.sh" "$ROOT"      "$WORK/head.by-head"
+  new_by_head="$(comm -13 "$WORK/base.by-head" "$WORK/head.by-head")"
+  echo "  findings this change adds (its edited scanner): $(count_lines "$new_by_head")"
+  [ -z "$new_by_head" ] || fail_with "$new_by_head"
 fi
 
 echo "RESULT: PASS — this change adds no finding."
