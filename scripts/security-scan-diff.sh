@@ -28,8 +28,9 @@
 #   * Every scan must reach the scanner's summary line. One that does not is
 #     an error (exit 2), not a clean result.
 #   * Line numbers are dropped before comparing, so moving code is not a finding.
-#   * A symbolic link the change adds under app/, components/ or lib/ fails
-#     before any scanner runs, and nothing is ever read through a link.
+#   * A symbolic link the change adds under app/, components/ or lib/, or a
+#     name there that holds a control character, fails before any scanner runs.
+#     Nothing is ever read through a link.
 #
 # What it cannot see:
 #   * Some rules report once per file (C-3). More of the same pattern in a file
@@ -126,19 +127,28 @@ fail_with() {
   exit 1
 }
 
-# --- 0. Symbolic links, before any scanner is run over the change. A link under
-#        a source directory can point outside the repository or at a device that
-#        never ends, and an older scanner on the base may read through one. A
-#        link the change adds fails here, and nothing is read through it.
-links_in() {
+# --- 0. Paths that are unsafe to scan, before any scanner is run over the
+#        change. A symbolic link under a source directory can point outside the
+#        repository or at a device that never ends. A name holding a line break
+#        can put any path on a line of its own in a scanner that reads names one
+#        per line, and the base's scanner may be an older one. Either, when the
+#        change adds it, fails here, and nothing is read.
+odd_paths_in() {
   ( cd "$1" 2>/dev/null || exit 0
-    for d in app components lib app/api; do [ -L "$d" ] && echo "$d"; done
-    find app components lib -type l 2>/dev/null ) | sort -u
+    for d in app components lib app/api; do
+      [ -L "$d" ] && echo "$d is a symbolic link — replace it with the real file"
+    done
+    find app components lib -name '*[[:cntrl:]]*' -print0 2>/dev/null \
+      | tr '\n' '?' | tr '\0' '\n' | tr -c '[:print:]\n' '?' \
+      | sed 's/$/ has a control character in its name (shown as ?) — rename it/'
+    find app components lib -type l ! -name '*[[:cntrl:]]*' 2>/dev/null \
+      | sed 's/$/ is a symbolic link — replace it with the real file/'
+  ) | sort -u
 }
-new_links="$(comm -13 <(links_in "$WORK/base") <(links_in "$ROOT"))"
-if [ -n "$new_links" ]; then
+new_odd="$(comm -13 <(odd_paths_in "$WORK/base") <(odd_paths_in "$ROOT"))"
+if [ -n "$new_odd" ]; then
   echo "security-scan-diff against ${BASE}"
-  fail_with "$(printf '%s\n' "$new_links" | sed -e 's/^/CRITICAL [C-0] /' -e 's/$/ is a symbolic link — replace it with the real file/')"
+  fail_with "$(printf '%s\n' "$new_odd" | sed 's/^/CRITICAL [C-0] /')"
 fi
 
 # --- 1. The base's rules. Decided and kept in shell variables before any code

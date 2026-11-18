@@ -93,12 +93,15 @@ query builder (`.eq()`, `.in()`, `.rpc(name, params)`), which parameterizes.
 **Fix:** remove the literal, move it to an env var, and `git rm --cached` any tracked
 `.env*.local`. Rotate the exposed secret.
 
-### C-0 — symbolic link in a source directory (CRITICAL)
-**Meaning:** something under `app/`, `components/` or `lib/` is a symbolic link. The
-scanner never reads through a link (it could point outside the repository), so the
-code behind one is unchecked.
-**Fix:** replace the link with the real file or directory. There is no intentional
-case.
+### C-0 — symbolic link or odd name in a source directory (CRITICAL)
+**Meaning:** something under `app/`, `components/` or `lib/` is a symbolic link, or
+has a control character (a line break, a tab) in its name. The scanner never reads
+through a link (it could point outside the repository), so the code behind one is
+unchecked. A name with a line break in it can make a tool that reads names one per
+line open a different path. When either is present the scanner stops before reading
+any file.
+**Fix:** replace the link with the real file or directory; rename the file. There is
+no intentional case.
 
 ---
 

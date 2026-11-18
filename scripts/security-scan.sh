@@ -69,15 +69,29 @@ warn() { yellow "  WARN [$1] $2";     WARN=$((WARN+1)); }
 hdr "HIOC security scan — $(date '+%Y-%m-%d %H:%M')"
 
 # ===========================================================================
-# C-0  No symbolic links in the source directories. The rules below do not read
-#      through a link, so code behind one would go unchecked, and a link can
-#      point at a file outside the repository. Checked first, before any file
-#      is read. If one of the directories the rules are pointed at is itself a
-#      link, nothing is read at all.
+# C-0  No symbolic links in the source directories, and no file or directory
+#      name there that holds a control character (a line break, a tab, ...).
+#      The rules below do not read through a link, so code behind one would go
+#      unchecked, and a link can point at a file outside the repository. Several
+#      rules read file names one per line, so a name with a line break in it
+#      could put any path on a line of its own. Checked first, before any file
+#      is read. If a directory the rules are pointed at is itself a link, or a
+#      name holds a control character, nothing is read at all.
 # ===========================================================================
-hdr "C-0  no symbolic links in source directories"
+hdr "C-0  no symbolic links or control characters in source paths"
 c0_hits=0
 linked_root=0
+# Names are taken NUL-separated and printed with every control character shown
+# as "?", so the report itself stays one finding per line.
+odd_names="$(find app components lib -name '*[[:cntrl:]]*' -print0 2>/dev/null | tr '\n' '?' | tr '\0' '\n' | LC_ALL=C tr -c '[:print:]\n' '?')"
+if [ -n "$odd_names" ]; then
+  while IFS= read -r n; do
+    [ -z "$n" ] && continue
+    crit C-0 "$n has a control character in its name (shown as ?) — rename it"
+    c0_hits=$((c0_hits+1))
+  done <<< "$odd_names"
+  linked_root=1
+fi
 for d in app components lib "$API_DIR"; do
   if [ -L "$d" ]; then
     crit C-0 "$d is a symbolic link — a source directory must be a real directory"
@@ -92,13 +106,13 @@ if [ "$linked_root" -eq 0 ]; then
     c0_hits=$((c0_hits+1))
   done < <(find app components lib -type l 2>/dev/null | sort)
 fi
-[ "$c0_hits" -eq 0 ] && green "  ok — no symbolic links under app, components or lib"
+[ "$c0_hits" -eq 0 ] && green "  ok — no symbolic links or odd names under app, components or lib"
 if [ "$linked_root" -ne 0 ]; then
   hdr "Summary"
   printf '  CRITICAL failures: %s\n' "$CRIT"
   printf '  WARN / review:     %s\n' "$WARN"
   printf '  Checks that could not run: %s\n' "$SCAN_ERRORS"
-  red   "  RESULT: FAIL — a source directory is a symbolic link, so no file was read. Fix that first."
+  red   "  RESULT: FAIL — a source directory is a symbolic link, or a name holds a control character, so no file was read. Fix that first."
   exit 1
 fi
 
