@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  defaultHomeBlendPack,
   defaultPackage,
   defaultPackageForLines,
   goodsWeightKg,
@@ -95,5 +96,26 @@ describe('parcel', () => {
   });
   it('uses the biggest box above 2 kg', () => {
     expect(defaultPackageForLines([blend(3, 1000, 'filter', 1.1)])).toMatchObject({ weight_kg: 3.4, length_cm: 30 });
+  });
+});
+
+describe('defaultHomeBlendPack', () => {
+  const pack = (pack_grams: number, in_stock = true) => ({ id: `hb-${pack_grams}`, pack_grams, in_stock });
+
+  it('opens on the 250 g pack, not the 100 g sample', () => {
+    expect(defaultHomeBlendPack([pack(100), pack(250), pack(500), pack(1000)])?.id).toBe('hb-250');
+  });
+
+  it('falls back to the first pack in stock when 250 g is out of stock', () => {
+    expect(defaultHomeBlendPack([pack(100), pack(250, false), pack(500)])?.id).toBe('hb-100');
+  });
+
+  it('falls back to the first pack in stock when there is no 250 g pack', () => {
+    expect(defaultHomeBlendPack([pack(100, false), pack(500), pack(1000)])?.id).toBe('hb-500');
+  });
+
+  it('is null when nothing is in stock', () => {
+    expect(defaultHomeBlendPack([pack(250, false)])).toBeNull();
+    expect(defaultHomeBlendPack([])).toBeNull();
   });
 });
