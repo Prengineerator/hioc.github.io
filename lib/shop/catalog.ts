@@ -159,6 +159,17 @@ export const HOME_BLEND_NAME = 'HIOC. Signature Home Blend';
 /** The Home Blend pack photo. The owner sets '/images/shop/home-blend.png' once the image is added. */
 export const HOME_BLEND_IMAGE: string | null = null;
 
+/**
+ * The pack the Home Blend card opens on: 250 g, the everyday size (the 100 g
+ * sample is a taster, not the lead). If 250 g isn't listed or is out of stock,
+ * the first pack in stock, in the order given (smallest first on the card).
+ */
+export const DEFAULT_HOME_BLEND_GRAMS = 250;
+
+export function defaultHomeBlendPack<T extends { pack_grams: number; in_stock: boolean }>(packs: readonly T[]): T | null {
+  return packs.find((p) => p.in_stock && p.pack_grams === DEFAULT_HOME_BLEND_GRAMS) ?? packs.find((p) => p.in_stock) ?? null;
+}
+
 /** Short copy placeholders. The owner confirms the wording before launch. */
 export const HOME_BLEND_HIGHLIGHTS = [
   'Our café house blend, roasted for your kitchen',

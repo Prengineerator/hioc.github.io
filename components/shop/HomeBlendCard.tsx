@@ -20,7 +20,7 @@ import { useId, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/Button';
 import { Stepper } from '@/components/shop/InstantSection';
-import { GRINDS, HOME_BLEND_HIGHLIGHTS, HOME_BLEND_IMAGE, HOME_BLEND_NAME, grindShort, packLabel } from '@/lib/shop/catalog';
+import { GRINDS, HOME_BLEND_HIGHLIGHTS, HOME_BLEND_IMAGE, HOME_BLEND_NAME, defaultHomeBlendPack, grindShort, packLabel } from '@/lib/shop/catalog';
 import { MAX_UNITS_PER_ORDER, rupees, type CartItem } from '@/lib/shop/pricing';
 import type { GrindCode, ShopProduct } from '@/lib/shop/types';
 
@@ -43,8 +43,7 @@ export function HomeBlendCard({
     () => products.filter((p) => p.line === 'home_blend' && p.listed).sort((a, b) => a.pack_grams - b.pack_grams || a.sort_order - b.sort_order),
     [products],
   );
-  const firstInStock = packs.find((p) => p.in_stock)?.id ?? null;
-  const [packId, setPackId] = useState<string | null>(firstInStock);
+  const [packId, setPackId] = useState<string | null>(defaultHomeBlendPack(packs)?.id ?? null);
   const [grind, setGrind] = useState<GrindCode | null>(null);
   const [grindPrompt, setGrindPrompt] = useState<string | null>(null);
   const [qty, setQty] = useState(1);
@@ -53,7 +52,7 @@ export function HomeBlendCard({
 
   if (packs.length === 0) return null;
 
-  const pack = packs.find((p) => p.id === packId && p.in_stock) ?? packs.find((p) => p.in_stock) ?? null;
+  const pack = packs.find((p) => p.id === packId && p.in_stock) ?? defaultHomeBlendPack(packs);
   const room = Math.max(0, MAX_UNITS_PER_ORDER - unitsInCart);
   const description = (pack && pack.description) || packs.find((p) => p.description)?.description || '';
   const name = (pack && pack.display_name) || HOME_BLEND_NAME;
