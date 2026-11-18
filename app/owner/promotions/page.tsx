@@ -11,6 +11,7 @@ import { CouponManager } from '@/components/promotions/CouponManager';
 import { AnnouncementManager } from '@/components/promotions/AnnouncementManager';
 import { OfferManager } from '@/components/promotions/OfferManager';
 import { SpendOfferManager } from '@/components/promotions/SpendOfferManager';
+import { loadShopProducts } from '@/lib/shop/server';
 import type { CouponPerformanceRow } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -28,8 +29,20 @@ async function getCouponPerformance(): Promise<CouponPerformanceRow[]> {
   return (data ?? []) as CouponPerformanceRow[];
 }
 
+// The shop products a coupon can be limited to; empty when the shop tables are not there yet.
+async function getShopProductOptions(): Promise<{ id: string; name: string }[]> {
+  try {
+    const result = await loadShopProducts(createAdminSupabaseClient());
+    if (!result.ok) return [];
+    return result.products.map((p) => ({ id: p.id, name: p.display_name || p.name }));
+  } catch (error) {
+    console.error('getShopProductOptions failed', error);
+    return [];
+  }
+}
+
 export default async function OwnerPromotionsPage() {
-  const performance = await getCouponPerformance();
+  const [performance, shopProducts] = await Promise.all([getCouponPerformance(), getShopProductOptions()]);
   const totalRedemptions = performance.reduce((sum, r) => sum + r.redemptions, 0);
   const totalDiscount = performance.reduce((sum, r) => sum + r.discount_given_inr, 0);
 
@@ -58,7 +71,7 @@ export default async function OwnerPromotionsPage() {
       </Card>
 
       <Card title="Coupons">
-        <CouponManager />
+        <CouponManager shopProducts={shopProducts} />
       </Card>
 
       <Card title="Announcements">

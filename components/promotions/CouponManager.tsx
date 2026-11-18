@@ -5,11 +5,63 @@
 // same PATCH the edit form uses.
 
 import { useEffect, useState } from 'react';
-import type { Coupon, CouponDiscountType } from '@/lib/types';
+import type { Coupon, CouponChannel, CouponDiscountType } from '@/lib/types';
+import { CHANNEL_LABEL, couponChannelOf, shopScopeOf } from '@/lib/promotions/couponRules';
 import { Spinner } from '@/components/ui/Spinner';
+import { Badge } from '@/components/ui/Badge';
 import { DataTable } from '@/components/ui/DataTable';
 
+export interface ShopProductOption {
+  id: string;
+  name: string;
+}
+
+// Icon + text, never colour alone. Decorative, so hidden from assistive tech (the text says it).
+function ChannelIcon({ channel }: { channel: CouponChannel }) {
+  const common = {
+    width: 12,
+    height: 12,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  };
+  if (channel === 'shop') {
+    return (
+      <svg {...common}>
+        <path d="M6 7h12l1 13H5L6 7Z" />
+        <path d="M9 7a3 3 0 0 1 6 0" />
+      </svg>
+    );
+  }
+  if (channel === 'both') {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 3v18M3 12h18" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <path d="M4 8h13v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V8Z" />
+      <path d="M17 10h2a2 2 0 0 1 0 4h-2" />
+    </svg>
+  );
+}
+
+const CHANNEL_HELP: Record<CouponChannel, string> = {
+  cafe: 'Works on café orders only.',
+  shop: 'Works on shop orders only.',
+  both: 'Works on café and shop orders.',
+};
+
 type FormState = {
+  channel: CouponChannel;
+  shop_product_ids: string[];
   code: string;
   description: string;
   discount_type: CouponDiscountType;
@@ -27,6 +79,8 @@ type FormState = {
 };
 
 const EMPTY_FORM: FormState = {
+  channel: 'cafe',
+  shop_product_ids: [],
   code: '',
   description: '',
   discount_type: 'percent',
@@ -52,6 +106,8 @@ function toDatetimeLocal(iso: string | null): string {
 
 function couponToForm(c: Coupon): FormState {
   return {
+    channel: couponChannelOf(c),
+    shop_product_ids: shopScopeOf(c),
     code: c.code,
     description: c.description,
     discount_type: c.discount_type,
@@ -76,7 +132,7 @@ function splitList(raw: string): string[] {
     .filter(Boolean);
 }
 
-export function CouponManager() {
+export function CouponManager({ shopProducts = [] }: { shopProducts?: ShopProductOption[] }) {
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -140,7 +196,13 @@ export function CouponManager() {
       discount_value: discountValue,
       min_order_inr: Number(form.min_order_inr) || 0,
       max_discount_inr: Number(form.max_discount_inr) || 0,
-      scope: { item_ids: splitList(form.item_ids), category: splitList(form.category) },
+      channel: form.channel,
+      scope: {
+        // Item and category limits are café-only; shop product limits are shop-only.
+        item_ids: form.channel === 'shop' ? [] : splitList(form.item_ids),
+        category: form.channel === 'shop' ? [] : splitList(form.category),
+        shop_product_ids: form.channel === 'cafe' ? [] : form.shop_product_ids,
+      },
       valid_from: form.valid_from ? new Date(form.valid_from).toISOString() : null,
       valid_to: form.valid_to ? new Date(form.valid_to).toISOString() : null,
       usage_limit: Number(form.usage_limit) || 0,
@@ -195,6 +257,7 @@ export function CouponManager() {
           onSubmit={handleSubmit}
           saving={saving}
           error={error}
+          shopProducts={shopProducts}
           isCreate={editingId === 'new'}
         />
       ) : null}
@@ -214,6 +277,21 @@ export function CouponManager() {
               filter: 'text',
               value: (c) => c.code,
               cellClassName: 'font-bold text-charcoal',
+            },
+            {
+              key: 'channel',
+              header: 'Where',
+              filter: 'select',
+              value: (c) => CHANNEL_LABEL[couponChannelOf(c)],
+              render: (c) => {
+                const channel = couponChannelOf(c);
+                return (
+                  <Badge variant="outline">
+                    <ChannelIcon channel={channel} />
+                    {CHANNEL_LABEL[channel]}
+                  </Badge>
+                );
+              },
             },
             {
               key: 'discount',
@@ -288,6 +366,7 @@ function CouponForm({
   saving,
   error,
   isCreate,
+  shopProducts,
 }: {
   form: FormState;
   setForm: (f: FormState) => void;
@@ -296,10 +375,39 @@ function CouponForm({
   saving: boolean;
   error: string;
   isCreate: boolean;
+  shopProducts: ShopProductOption[];
 }) {
   const set = (patch: Partial<FormState>) => setForm({ ...form, ...patch });
   return (
     <div className="mb-4 rounded-md border border-line bg-[#faf7f4] p-4">
+      <fieldset className="mb-4">
+        <legend className="text-sm font-semibold text-charcoal">Where it works</legend>
+        <div role="radiogroup" aria-label="Where it works" className="mt-1 flex flex-wrap gap-2">
+          {(['cafe', 'shop', 'both'] as const).map((ch) => (
+            <label
+              key={ch}
+              className={
+                'flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border px-4 text-sm font-semibold text-charcoal focus-within:outline focus-within:outline-2 focus-within:outline-tan ' +
+                (form.channel === ch ? 'border-tan-dark bg-surface' : 'border-line bg-white')
+              }
+            >
+              <input
+                type="radio"
+                name="coupon-channel"
+                value={ch}
+                checked={form.channel === ch}
+                onChange={() => set({ channel: ch })}
+                className="h-4 w-4"
+              />
+              <ChannelIcon channel={ch} />
+              {CHANNEL_LABEL[ch]}
+            </label>
+          ))}
+        </div>
+        <p className="mt-1 text-xs text-muted" aria-live="polite">
+          {CHANNEL_HELP[form.channel]}
+        </p>
+      </fieldset>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
           <span className="text-charcoal">Code</span>
@@ -344,6 +452,42 @@ function CouponForm({
           <span className="text-charcoal">Valid to</span>
           <input type="datetime-local" value={form.valid_to} onChange={(e) => set({ valid_to: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
+        {form.channel !== 'cafe' ? (
+          <fieldset className="sm:col-span-2">
+            <legend className="text-sm text-charcoal">Only for these shop products (none ticked = every shop product)</legend>
+            {shopProducts.length === 0 ? (
+              <p className="mt-1 text-sm text-muted">No shop products yet</p>
+            ) : (
+              <div className="mt-1 flex flex-wrap gap-2">
+                {shopProducts.map((p) => {
+                  const checked = form.shop_product_ids.includes(p.id);
+                  return (
+                    <label
+                      key={p.id}
+                      className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-md border border-line bg-white px-3 text-sm text-charcoal focus-within:outline focus-within:outline-2 focus-within:outline-tan"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          set({
+                            shop_product_ids: checked
+                              ? form.shop_product_ids.filter((id) => id !== p.id)
+                              : [...form.shop_product_ids, p.id],
+                          })
+                        }
+                        className="h-4 w-4"
+                      />
+                      {p.name}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+        ) : null}
+        {form.channel !== 'shop' ? (
+          <>
         <label className="text-sm sm:col-span-2">
           <span className="text-charcoal">Scope: item ids (comma-separated, blank = whole menu)</span>
           <input value={form.item_ids} onChange={(e) => set({ item_ids: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
@@ -352,6 +496,8 @@ function CouponForm({
           <span className="text-charcoal">Scope: categories (comma-separated, blank = whole menu)</span>
           <input value={form.category} onChange={(e) => set({ category: e.target.value })} className="mt-1 w-full rounded-md border border-line p-2" />
         </label>
+          </>
+        ) : null}
       </div>
       <div className="mt-3 flex flex-wrap gap-4">
         <label className="flex items-center gap-2 text-sm text-charcoal">

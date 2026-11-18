@@ -9,6 +9,9 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { buttonVariants } from '@/components/ui/Button';
 import { getAuthUser } from '@/lib/api/auth';
 import { getBalance, getLoyaltyConfig, getRecentTransactions } from '@/lib/loyalty/ledger';
+import { BagIcon } from '@/components/account/ShopOrderRow';
+import { Badge } from '@/components/ui/Badge';
+import { splitShopRefFromNote } from '@/lib/account/orderDisplay';
 import { LOYALTY_UNIT, beaniesLabel, beaniesTagline, beaniesUnit } from '@/lib/loyalty/brand';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
 
@@ -123,13 +126,36 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
     month: 'short',
     year: 'numeric',
   });
+  // A shop ledger row (docs/SHOP-V2-SPEC.md E5) carries shop_order_id: badge it
+  // (icon + text) and show the order number from the note, linked to the order.
+  const shopNote = tx.shop_order_id ? splitShopRefFromNote(tx.note) : null;
   return (
-    <li className="flex items-center justify-between rounded-md border border-line bg-cream px-4 py-3">
-      <div>
-        <p className="text-sm font-semibold capitalize text-charcoal">{tx.type}</p>
+    <li className="flex items-center justify-between gap-3 rounded-md border border-line bg-cream px-4 py-3">
+      <div className="min-w-0">
+        <p className="flex flex-wrap items-center gap-2 text-sm font-semibold capitalize text-charcoal">
+          {tx.type}
+          {tx.shop_order_id ? (
+            <Badge variant="neutral" className="normal-case">
+              <BagIcon />
+              Shop
+            </Badge>
+          ) : null}
+        </p>
         <p className="text-sm text-muted">
           {dateLabel}
-          {tx.note ? `, ${tx.note}` : ''}
+          {shopNote ? (
+            <>
+              , {shopNote.before}
+              <Link href={`/shop/order/${tx.shop_order_id}`} className="font-mono tabular-nums text-tan-dark underline">
+                {shopNote.ref}
+              </Link>
+              {shopNote.after}
+            </>
+          ) : tx.note ? (
+            `, ${tx.note}`
+          ) : (
+            ''
+          )}
         </p>
       </div>
       <span className={'shrink-0 font-mono font-bold tabular-nums ' + (positive ? 'text-green-700' : 'text-red-700')}>

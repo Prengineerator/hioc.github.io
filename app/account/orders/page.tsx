@@ -10,10 +10,15 @@
 // merged id query, so pagination (`total`/`hasMore`) is correct WITHIN a
 // tab rather than being computed over the whole unfiltered history and then
 // sliced client-side.
+//
+// Channel chips (docs/SHOP-V2-SPEC.md E4): All · Café · Shop, kept in the URL as
+// ?channel= and sent on as `&channel=`. `items[]` is the merged, newest-first
+// list; café rows render as before and shop rows as <ShopOrderRow>. The chips
+// are hidden (and the channel is always 'all') while flags.shop is off.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { CartProvider } from '@/lib/cart/CartContext';
 import { useReorder } from '@/lib/account/useReorder';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
@@ -29,6 +34,9 @@ import { hasBill } from '@/lib/orders/paymentStatusUI';
 import { Spinner } from '@/components/ui/Spinner';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { buttonVariants } from '@/components/ui/Button';
+import { ChannelFilter, parseChannel } from '@/components/account/ChannelFilter';
+import { CafeChannelBadge, ShopOrderRow } from '@/components/account/ShopOrderRow';
+import type { AccountHistoryItem, AccountHistoryResponse, HistoryChannelFilter } from '@/lib/account/historyTypes';
 import type { OrderResponse } from '@/lib/api/orders';
 import { lineSizeSuffix } from '@/lib/menu/weight';
 
@@ -58,20 +66,17 @@ function channelLabel(channel: string): string {
   return CHANNEL_LABELS[channel] || channel;
 }
 
-interface HistoryResponse {
-  orders: OrderResponse[];
-  page: number;
-  pageSize: number;
-  total: number;
-  hasMore: boolean;
-  phoneVerified: boolean;
+type HistoryResponse = Omit<AccountHistoryResponse, 'petpooja_orders' | 'items'> & {
+  items?: AccountHistoryItem[];
   petpooja_orders?: LegacyOrderResponse[];
-}
+};
 
 export default function AccountOrdersPage() {
   return (
     <CartProvider>
-      <AccountOrdersContent />
+      <Suspense fallback={<Spinner label="Loading your orders…" />}>
+        <AccountOrdersContent />
+      </Suspense>
     </CartProvider>
   );
 }
@@ -79,10 +84,11 @@ export default function AccountOrdersPage() {
 function AccountOrdersContent() {
   const router = useRouter();
   const { reorder, reorderingId } = useReorder();
+  const channel: HistoryChannelFilter = parseChannel(useSearchParams().get('channel'));
 
   // null tab = still deciding which one to default to (initial load).
   const [tab, setTab] = useState<Tab | null>(null);
-  const [orders, setOrders] = useState<OrderResponse[]>([]);
+  const [items, setItems] = useState<AccountHistoryItem[]>([]);
   const [petpoojaOrders, setPetpoojaOrders] = useState<LegacyOrderResponse[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -105,8 +111,14 @@ function AccountOrdersContent() {
   // response land afterwards and show Active orders under the Past tab.
   const latestRequest = useRef(0);
 
-  const fetchPage = useCallback(async (t: Tab, p: number): Promise<HistoryResponse | null> => {
-    const res = await fetch(`/api/account/history?page=${p}&status=${t}`, { cache: 'no-store' });
+  // The channel in play for any load; a ref so tab/page handlers always use the latest chip.
+  const channelRef = useRef(channel);
+  channelRef.current = channel;
+  const tabRef = useRef<Tab | null>(null);
+  tabRef.current = tab;
+
+  const fetchPage = useCallback(async (t: Tab, p: number, c: HistoryChannelFilter): Promise<HistoryResponse | null> => {
+    const res = await fetch(`/api/account/history?page=${p}&status=${t}&channel=${c}`, { cache: 'no-store' });
     if (!res.ok) return null;
     return res.json();
   }, []);
@@ -114,7 +126,11 @@ function AccountOrdersContent() {
   const applyPage = useCallback((t: Tab, p: number, data: HistoryResponse) => {
     setTab(t);
     setPage(p);
-    setOrders(data.orders ?? []);
+    // `items` is the merged list; fall back to café-only `orders` if a response lacks it.
+    setItems(
+      data.items ??
+        (data.orders ?? []).map((o): AccountHistoryItem => ({ channel: 'cafe', id: o.id, created_at: o.created_at, order: o })),
+    );
     setPetpoojaOrders(data.petpooja_orders ?? []);
     setPageSize(data.pageSize ?? 10);
     setTotal(data.total ?? 0);
@@ -128,7 +144,7 @@ function AccountOrdersContent() {
       setLoading(true);
       setError('');
       try {
-        const data = await fetchPage(t, p);
+        const data = await fetchPage(t, p, channelRef.current);
         if (req !== latestRequest.current) return;
         if (!data) {
           setError('Could not load your orders.');
@@ -147,7 +163,13 @@ function AccountOrdersContent() {
   // Initial load: default to the Active tab if it has anything in it, else
   // Past — so a customer with an order in flight lands straight on it, and
   // one with no active orders isn't shown an empty "Active" tab first.
+  // Changing the channel chip reloads page 1 of the tab already open.
   useEffect(() => {
+    const keepTab = tabRef.current;
+    if (keepTab) {
+      load(keepTab, 1);
+      return;
+    }
     const req = ++latestRequest.current;
     let cancelled = false;
     const stale = () => cancelled || req !== latestRequest.current;
@@ -155,7 +177,7 @@ function AccountOrdersContent() {
       setLoading(true);
       setError('');
       try {
-        const activeData = await fetchPage('active', 1);
+        const activeData = await fetchPage('active', 1, channel);
         if (stale()) return;
         if (!activeData) {
           setError('Could not load your orders.');
@@ -165,7 +187,7 @@ function AccountOrdersContent() {
           applyPage('active', 1, activeData);
           return;
         }
-        const pastData = await fetchPage('past', 1);
+        const pastData = await fetchPage('past', 1, channel);
         if (stale()) return;
         applyPage('past', 1, pastData ?? activeData);
       } catch {
@@ -178,7 +200,7 @@ function AccountOrdersContent() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [channel]);
 
   // Scroll to the top on every page/tab change — without this, switching
   // pages while scrolled down leaves the new page's top card off-screen.
@@ -239,6 +261,8 @@ function AccountOrdersContent() {
         </div>
       ) : null}
 
+      <ChannelFilter value={channel} />
+
       <div role="group" aria-label="Order list" className="flex gap-1 rounded-md border border-muted/80 p-1 text-sm">
         <button
           type="button"
@@ -268,20 +292,35 @@ function AccountOrdersContent() {
         <Spinner label="Loading your orders…" />
       ) : error ? (
         <p className="py-10 text-center text-sm text-muted">{error}</p>
-      ) : orders.length === 0 && !(tab === 'past' && petpoojaOrders.length > 0) ? (
-        <EmptyState
-          icon=""
-          heading={tab === 'active' ? 'No active orders' : 'No past orders yet'}
-          body={tab === 'active' ? 'Orders that are being made show up here.' : 'Orders you collect will show up here.'}
-          action={
-            <Link href="/menu" className={buttonVariants()}>
-              Browse the menu
-            </Link>
-          }
-        />
+      ) : items.length === 0 && !(tab === 'past' && channel !== 'shop' && petpoojaOrders.length > 0) ? (
+        channel === 'shop' ? (
+          <EmptyState
+            icon=""
+            heading="No shop orders yet"
+            body={tab === 'active' ? 'Coffee on its way to you shows up here.' : 'Orders delivered to you will show up here.'}
+            action={
+              <Link href="/shop" className={buttonVariants()}>
+                Browse the shop
+              </Link>
+            }
+          />
+        ) : (
+          <EmptyState
+            icon=""
+            heading={tab === 'active' ? 'No active orders' : 'No past orders yet'}
+            body={tab === 'active' ? 'Orders that are being made show up here.' : 'Orders you collect will show up here.'}
+            action={
+              <Link href="/menu" className={buttonVariants()}>
+                Browse the menu
+              </Link>
+            }
+          />
+        )
       ) : (
         <ul className="flex flex-col gap-3">
-          {orders.map((order) => {
+          {items.map((item) => {
+            if (item.channel === 'shop') return <ShopOrderRow key={item.id} order={item.order} />;
+            const order = item.order;
             const active = isActiveOrderStatus(order.status);
             const typeLabel = orderTypeLabel(order);
             return (
@@ -296,10 +335,10 @@ function AccountOrdersContent() {
                     </Link>
                     <p className="text-sm text-muted">
                       {formatIstDate(order.created_at)}, {formatIstTime(new Date(order.created_at))}
-                      {typeLabel ? `, ${typeLabel}` : ''}
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-1">
+                    <CafeChannelBadge detail={typeLabel} />
                     <span
                       className={
                         'rounded-full px-2.5 py-1 text-xs font-semibold ' + ORDER_STATUS_BADGE_CLASS[order.status]
@@ -350,7 +389,7 @@ function AccountOrdersContent() {
 
       {/* Bills from before the new app come with every history response, so
           show them on page 1 of Past only (not repeated on every page). */}
-      {petpoojaOrders.length > 0 && tab === 'past' && page === 1 && (
+      {petpoojaOrders.length > 0 && tab === 'past' && page === 1 && channel !== 'shop' && (
         <div className="mt-8 flex flex-col gap-3">
           <h2 className="text-lg font-semibold text-charcoal">Earlier orders, from before our new app</h2>
           <ul className="flex flex-col gap-3">
@@ -392,7 +431,7 @@ function AccountOrdersContent() {
         </div>
       )}
 
-      {!loading && !error && orders.length > 0 ? (
+      {!loading && !error && items.length > 0 ? (
         <div className="flex items-center justify-center gap-3">
           <button
             type="button"

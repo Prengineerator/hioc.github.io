@@ -6,6 +6,7 @@ import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { createGatewayRefund } from '@/lib/payments/gateway';
 import { sendShopCancelledEmail } from '@/lib/shop/emails';
+import { onShopOrderCancelled } from '@/lib/shop/lifecycle';
 import { parseCancelReason } from '@/lib/shop/owner';
 import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
 import { cancelShiprocketOrder } from '@/lib/shop/shiprocket';
@@ -21,7 +22,13 @@ const REFUND_PENDING = 'pending';
 // Razorpay. If the order is in Shiprocket and not yet with a courier, it is
 // cancelled there too (best-effort: a failure comes back as `warning`, to do
 // in the Shiprocket panel). A shipped parcel is the owner's to recall in
-// Shiprocket; the refund still goes. Responds { order, warning? }.
+// Shiprocket; the refund still goes. The refund is the money paid (total_inr); Beanies spent
+// are returned to the customer's balance, not refunded as money, and Beanies
+// earned from the order are taken back. Responds { order, warning?, beanies_returned }.
+// beanies_returned is the NET change to the customer's balance: it is negative
+// when the order earned more than it spent, i.e. Beanies were taken back. A UI
+// must word that as "Beanies taken back", never as "-3 returned". A failed
+// return or claim release is retried by the expire-orders cron (14 days).
 //
 // The refund comes first: if Razorpay refuses it, nothing is changed.
 export async function POST(request: Request, { params }: { params: { id: string } }) {
@@ -85,6 +92,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     return errorResponse(500, `Refunded ₹${refundedInr ?? 0} (Razorpay refund ${refundId ?? '—'}) but this page could not mark the order cancelled. Reload; don't refund it again.`);
   }
 
+  const { beanies_returned } = await onShopOrderCancelled(admin, updated);
   runAfterResponse(sendShopCancelledEmail(updated));
-  return NextResponse.json({ order: updated, ...(warning ? { warning } : {}) });
+  return NextResponse.json({ order: updated, ...(warning ? { warning } : {}), beanies_returned });
 }

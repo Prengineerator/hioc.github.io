@@ -4,44 +4,123 @@ import { notFound } from 'next/navigation';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { ShopExperience } from '@/components/shop/ShopExperience';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
+import { getAuthUser } from '@/lib/api/auth';
+import { verifiedEmailOf } from '@/lib/account/history';
 import { flags } from '@/lib/flags';
 import { BUSINESS } from '@/lib/legal';
+import { normalizeIndianMobile } from '@/lib/phone';
 import { isGatewayConfigured } from '@/lib/payments/gateway';
-import { DELIVERY_TAKES, DISPATCH_WITHIN, PRODUCT_HIGHLIGHTS, PRODUCT_NET_QTY, SHOP_PRODUCT_NAME } from '@/lib/shop/catalog';
-import { FREE_SHIPPING_MIN_JARS, jarsLabel, offerDeals, rupees, SHIPPING_FEE_INR } from '@/lib/shop/pricing';
-import { loadShopOffer, loadShopProducts } from '@/lib/shop/server';
+import { loadAutoShopCoupons } from '@/lib/promotions/shopCoupons';
+import {
+  DELIVERY_TAKES,
+  DISPATCH_WITHIN,
+  HOME_BLEND_NAME,
+  PRODUCT_HIGHLIGHTS,
+  PRODUCT_NET_QTY,
+  SHOP_PRODUCT_NAME,
+  packLabel,
+} from '@/lib/shop/catalog';
+import { jarsLabel, offerDeals, rupees } from '@/lib/shop/pricing';
+import { isIntroOfferEligible, isRepeatCustomer, loadShopPricingSettings, loadShopProducts } from '@/lib/shop/server';
+import type { ShopCouponTerms } from '@/lib/shop/types';
 
-// /shop — HIOC. Premium Instant Coffee, delivered (docs/INSTANT-COFFEE-SHOP.md).
-// A server shell: the flag, the products (live from shop_products, so a flavour
-// the owner marks out of stock shows so at once), the online offer (the
-// introductory "2 for ₹599 · 3 for ₹749" while the owner has it on), whether
-// Razorpay is set up, and the static copy. Picking, the address and paying are
-// the client part (components/shop/ShopExperience). Dynamic, for stock and offer.
+// /shop: HIOC. coffee, delivered (docs/SHOP-V2-SPEC.md E8). A server shell: the
+// flag, the products the owner has LISTED (an unlisted product never reaches
+// the browser), the pricing settings (introductory offer, shipping, Beanies
+// cap), whether Razorpay is set up, who is looking (for the offer's ribbon) and
+// the static copy. Choosing, the address and paying are the client part
+// (components/shop/ShopExperience). Dynamic, for stock, offer and viewer.
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Premium Instant Coffee — order online',
-  description:
-    'HIOC. Premium Instant Coffee: 100% Arabica, freeze-dried, in Signature Classic, Nutty Hazelnut and French Vanilla. 50 g jars shipped across India — introductory offer and free shipping on 3 jars.',
+  title: 'Shop HIOC. coffee: order online',
+  description: 'HIOC. coffee, delivered across India. Order online, pay securely and track your parcel.',
 };
+
+/** What a coupon is worth on a ₹1,000 basket: only used to pick the headline one, never to price an order. */
+function couponWorth(t: ShopCouponTerms): number {
+  const raw = t.discount_type === 'percent' ? Math.floor((1000 * t.discount_value) / 100) : Math.floor(t.discount_value);
+  return t.max_discount_inr > 0 ? Math.min(raw, t.max_discount_inr) : raw;
+}
+
+function couponHeadline(t: ShopCouponTerms): string {
+  const what = t.discount_type === 'percent' ? `${t.discount_value}% off` : `${rupees(t.discount_value)} off`;
+  const min = t.min_order_inr > 0 ? ` on orders of ${rupees(t.min_order_inr)}+` : '';
+  return `${what}${min}, applied automatically at checkout`;
+}
 
 export default async function ShopPage() {
   if (!flags.shop) notFound();
 
   const admin = createAdminSupabaseClient();
-  const [result, offer] = await Promise.all([loadShopProducts(admin), loadShopOffer(admin)]);
-  const products = result.ok ? result.products : [];
-  const price = products.length ? Math.min(...products.map((p) => p.price_inr)) : 399;
-  const deals = offer ? offerDeals(offer.tier_prices, price) : [];
+  const [result, settings] = await Promise.all([loadShopProducts(admin), loadShopPricingSettings(admin)]);
+  // Unlisted products (the owner hasn't priced or listed them) never leave the server.
+  const products = result.ok ? result.products.filter((p) => p.listed) : [];
+  const instant = products.filter((p) => (p.line ?? 'instant') === 'instant');
+  const homeBlend = products.filter((p) => p.line === 'home_blend');
+  const price = instant.length ? Math.min(...instant.map((p) => p.price_inr)) : 399;
+  const offer = settings.offer;
+
+  // Who is looking: a signed-in customer who has had the introductory offer sees
+  // "Welcome back" and their best live offer instead. They are never told "no".
+  let signedIn = false;
+  let introEligible = true;
+  let welcomeBack: string | null = null;
+  try {
+    const user = await getAuthUser();
+    if (user) {
+      signedIn = true;
+      let phone: string | null = null;
+      try {
+        const { data: profile } = await admin.from('profiles').select('phone, phone_verified').eq('id', user.id).maybeSingle();
+        const p = profile as { phone?: string | null; phone_verified?: boolean | null } | null;
+        const digits = p?.phone_verified && p.phone ? normalizeIndianMobile(p.phone) : null;
+        phone = digits ? `+91${digits}` : null;
+      } catch {
+        phone = null; // no verified phone to go by
+      }
+      const email = verifiedEmailOf(user);
+      if (offer) {
+        introEligible = await isIntroOfferEligible(admin, { userId: user.id, phone, email });
+        if (!introEligible) {
+          const [coupons, repeat] = await Promise.all([
+            loadAutoShopCoupons(admin, { userId: user.id, phone, email }),
+            isRepeatCustomer(admin, user.id),
+          ]);
+          const best = [...coupons].sort((a, b) => couponWorth(b) - couponWorth(a))[0];
+          welcomeBack = best
+            ? couponHeadline(best)
+            : repeat || settings.beanies_max_redeem_pct > 0
+              ? `Use your Beanies for up to ${settings.beanies_max_redeem_pct}% off`
+              : 'Free shipping on bigger orders';
+        }
+      }
+    }
+  } catch {
+    // Not signed in, or the session can't be read: the page is the guest's.
+    signedIn = false;
+    introEligible = true;
+    welcomeBack = null;
+  }
+
+  const deals = offer && introEligible ? offerDeals(offer.tier_prices, price) : [];
+  const showIntro = deals.length > 0 && offer !== null;
+  const shippingCopy = `${rupees(settings.shipping_fee_inr)} shipping, free on orders of ${rupees(settings.free_shipping_min_inr)}+`;
+  const homeBlendPacks = [...homeBlend].sort((a, b) => a.pack_grams - b.pack_grams);
+  const homeBlendDescription = homeBlend.find((p) => p.description)?.description ?? '';
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-10 md:py-14">
       <header className="grid items-center gap-8 md:grid-cols-[1fr_minmax(0,28rem)]">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">New launch · delivered to your door</p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-charcoal md:text-4xl">Premium Instant Coffee</h1>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">Delivered to your door</p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight text-charcoal md:text-4xl">
+            {homeBlend.length > 0 ? 'Instant Coffee & Home Blend' : 'Premium Instant Coffee'}
+          </h1>
           <p className="mt-3 max-w-xl text-muted">
-            Café-quality coffee, instantly. 100% Arabica, freeze-dried to lock in the aroma, in three flavours.
+            {homeBlend.length > 0
+              ? 'Café-quality instant coffee in three flavours, and our Signature Home Blend, ground the way you brew.'
+              : 'Café-quality coffee, instantly. 100% Arabica, freeze-dried to lock in the aroma, in three flavours.'}
           </p>
           <ul className="mt-5 grid gap-2 text-sm text-charcoal sm:grid-cols-2">
             {PRODUCT_HIGHLIGHTS.map((h) => (
@@ -52,9 +131,9 @@ export default async function ShopPage() {
             ))}
           </ul>
 
-          {deals.length > 0 && offer ? (
+          {showIntro && offer ? (
             <section aria-label={offer.name} className="mt-6 rounded-md border border-line bg-surface p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-tan-dark">{offer.name} · any flavours</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-tan-dark">{offer.name} · any instant flavours</p>
               <ul className="mt-3 grid grid-cols-3 gap-2 text-center">
                 <li className="rounded-md bg-cream px-2 py-3 shadow-sm">
                   <p className="text-xs text-muted">1 jar</p>
@@ -70,17 +149,19 @@ export default async function ShopPage() {
                   </li>
                 ))}
               </ul>
-              <p className="mt-3 text-xs text-muted">
-                {rupees(SHIPPING_FEE_INR)} shipping on 1–2 jars · <strong className="text-charcoal">free shipping on {FREE_SHIPPING_MIN_JARS}+ jars</strong>
-              </p>
+              <p className="mt-3 text-xs text-muted">{shippingCopy}</p>
+            </section>
+          ) : welcomeBack ? (
+            <section aria-label="Welcome back" className="mt-6 rounded-md border border-line bg-surface p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.15em] text-tan-dark">Welcome back</p>
+              <p className="mt-2 text-base font-semibold text-charcoal">{welcomeBack}</p>
+              <p className="mt-3 text-xs text-muted">{shippingCopy}</p>
             </section>
           ) : (
             <p className="mt-5 inline-flex flex-wrap items-baseline gap-x-2 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
               <strong className="font-mono text-base tabular-nums">{rupees(price)}</strong> a {PRODUCT_NET_QTY} jar
               <span aria-hidden="true">·</span>
-              <span>
-                {rupees(SHIPPING_FEE_INR)} shipping, <strong>free on {FREE_SHIPPING_MIN_JARS}+ jars</strong>
-              </span>
+              <span>{shippingCopy}</span>
             </p>
           )}
         </div>
@@ -90,9 +171,13 @@ export default async function ShopPage() {
           className="relative overflow-hidden rounded-2xl px-2 pb-2 pt-8 md:pt-10"
           style={{ background: 'radial-gradient(ellipse at 50% 35%, #ffffff 0%, #f6efe9 60%, #efe3d6 100%)' }}
         >
-          {deals.length > 0 && offer ? (
+          {showIntro && offer ? (
             <span className="absolute left-4 top-4 rounded-full bg-tan-dark px-3 py-1 text-xs font-semibold text-cream shadow-sm">
               {offer.name}
+            </span>
+          ) : welcomeBack ? (
+            <span className="absolute left-4 top-4 rounded-full bg-tan-dark px-3 py-1 text-xs font-semibold text-cream shadow-sm">
+              Welcome back
             </span>
           ) : null}
           <Image
@@ -108,10 +193,10 @@ export default async function ShopPage() {
       </header>
 
       {products.length > 0 ? (
-        <ShopExperience products={products} offer={offer} paymentReady={isGatewayConfigured()} />
+        <ShopExperience products={products} settings={settings} introEligible={introEligible} signedIn={signedIn} paymentReady={isGatewayConfigured()} />
       ) : (
         <p className="mt-10 rounded-md border border-line bg-surface p-6 text-center text-charcoal">
-          Online orders open soon. Meanwhile, you can buy jars at the café.
+          Online orders open soon. Meanwhile, you can buy at the café.
         </p>
       )}
 
@@ -122,9 +207,20 @@ export default async function ShopPage() {
           </h2>
           <dl className="mt-3 space-y-2 text-sm">
             {[
-              ['Product', `${SHOP_PRODUCT_NAME} (freeze-dried, 100% Arabica)`],
-              ['Net quantity', `${PRODUCT_NET_QTY} per jar`],
-              ['MRP', `${rupees(price)} per jar (inclusive of all taxes)`],
+              ...(instant.length > 0
+                ? [
+                    ['Instant Coffee', `${SHOP_PRODUCT_NAME} (freeze-dried, 100% Arabica)`],
+                    ['Net quantity', `${PRODUCT_NET_QTY} per jar`],
+                    ['MRP', `${rupees(price)} per jar (inclusive of all taxes)`],
+                  ]
+                : []),
+              ...(homeBlendPacks.length > 0
+                ? [
+                    ['Home Blend', `${HOME_BLEND_NAME}${homeBlendDescription ? `. ${homeBlendDescription}` : ''}`],
+                    ['Pack sizes', homeBlendPacks.map((p) => `${packLabel(p.pack_grams)} ${rupees(p.price_inr)}`).join(' · ') + ' (inclusive of all taxes)'],
+                    ['Grind', 'Whole bean, or ground to order for Espresso, Moka pot, Pour-over / Filter or French press'],
+                  ]
+                : []),
               ['Sold by', `${BUSINESS.legalName} (${BUSINESS.name}), ${BUSINESS.address}`],
               ['Customer care', `${BUSINESS.phoneDisplay} · ${BUSINESS.email}`],
             ].map(([k, v]) => (
@@ -138,17 +234,16 @@ export default async function ShopPage() {
         <div>
           <h2 className="text-lg font-bold text-charcoal">Shipping &amp; returns</h2>
           <ul className="mt-3 space-y-2 text-sm text-charcoal">
-            {deals.length > 0 && offer ? (
+            {showIntro && offer ? (
               <li>
-                {offer.name}: {deals.map((d) => `${d.jars} jars for ${rupees(d.price)}`).join(', ')}, any mix of flavours.
-                More jars are priced as groups of {offer.tier_prices.length} plus the rest.
+                {offer.name}: {deals.map((d) => `${d.jars} jars for ${rupees(d.price)}`).join(', ')}, any mix of instant flavours, for your first
+                online order. More jars are priced as groups of {offer.tier_prices.length} plus the rest.
               </li>
             ) : null}
-            <li>
-              Shipping is {rupees(SHIPPING_FEE_INR)} an order for 1 or 2 jars, and free on {FREE_SHIPPING_MIN_JARS} jars or more.
-            </li>
+            <li>Shipping is {shippingCopy.replace(' shipping,', ' an order,')}.</li>
             <li>
               We pack and hand your order to our courier within {DISPATCH_WITHIN}; delivery usually takes {DELIVERY_TAKES} after that, depending on your pincode.
+              {homeBlendPacks.length > 0 ? ' Home Blend is ground to order.' : ''}
             </li>
             <li>Prepaid only (UPI, cards, netbanking). No cash on delivery.</li>
             <li>
@@ -163,8 +258,7 @@ export default async function ShopPage() {
               policies.
             </li>
             <li className="text-muted">
-              The café counter runs its own launch offer (on our poster) for jars bought there; the prices on this page are for
-              online orders.
+              The café counter runs its own offers for items bought there; the prices on this page are for online orders.
             </li>
           </ul>
         </div>

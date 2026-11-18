@@ -4,7 +4,7 @@
 // The claims are the launch poster's own (public/images/promo-instant-coffee.jpg).
 // Prices are NOT here: they live in shop_products and lib/shop/pricing.ts.
 
-import type { ShopPackage } from './types';
+import type { GrindCode, ShopLine, ShopPackage, ShopProductLine } from './types';
 
 export const SHOP_PRODUCT_NAME = 'HIOC. Premium Instant Coffee';
 
@@ -58,7 +58,7 @@ export const DELIVERY_TAKES = '3–7 working days';
 // ---------------------------------------------------------------------------
 
 /** Box, bubble wrap and filler. */
-const BOX_WEIGHT_KG = 0.1;
+export const BOX_WEIGHT_KG = 0.1;
 /** One packed 50 g glass jar. */
 const JAR_WEIGHT_KG = 0.3;
 
@@ -97,4 +97,138 @@ export function validatePackage(raw: unknown): PackageResult {
       height_cm: Math.round(sides.height_cm * 10) / 10,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shop v2 (docs/SHOP-V2-SPEC.md E1, E6): grinds, product lines, line SKUs and
+// the parcel worked out from what is actually in the order.
+// ---------------------------------------------------------------------------
+
+/** How a Home Blend pack can be ground, in the order the customer sees them. */
+export const GRINDS: readonly { code: GrindCode; label: string; short: string; hint: string; sku_suffix: string }[] = [
+  { code: 'whole_bean', label: 'Whole bean', short: 'Whole bean', hint: "I'll grind it myself", sku_suffix: 'WB' },
+  { code: 'espresso', label: 'Espresso', short: 'Espresso', hint: 'Fine, for espresso machines', sku_suffix: 'ESP' },
+  { code: 'moka', label: 'Moka pot', short: 'Moka', hint: 'Fine-medium, for stovetop moka pots', sku_suffix: 'MOKA' },
+  {
+    code: 'filter',
+    label: 'Pour-over / Filter',
+    short: 'Filter',
+    hint: 'Medium, for V60, Chemex, drip and South Indian filter',
+    sku_suffix: 'FLT',
+  },
+  {
+    code: 'french_press',
+    label: 'French press',
+    short: 'French press',
+    hint: 'Coarse, for French press and cold brew',
+    sku_suffix: 'FP',
+  },
+];
+
+export function isGrindCode(v: unknown): v is GrindCode {
+  return typeof v === 'string' && GRINDS.some((g) => g.code === v);
+}
+
+export function grindLabel(code: GrindCode): string {
+  return GRINDS.find((g) => g.code === code)?.label ?? code;
+}
+
+export function grindShort(code: GrindCode): string {
+  return GRINDS.find((g) => g.code === code)?.short ?? code;
+}
+
+/** The SKU of one line: the product's base SKU plus the grind suffix (unchanged without a grind). */
+export function lineSku(baseSku: string, grind?: GrindCode | null): string {
+  const g = grind ? GRINDS.find((x) => x.code === grind) : undefined;
+  return g ? `${baseSku}-${g.sku_suffix}` : baseSku;
+}
+
+/** "250 g", "1 kg" */
+export function packLabel(grams: number): string {
+  if (grams >= 1000 && grams % 1000 === 0) return `${grams / 1000} kg`;
+  return `${grams} g`;
+}
+
+export const PRODUCT_LINES: Record<ShopProductLine, { title: string; anchor: 'instant' | 'home-blend' }> = {
+  instant: { title: 'Instant Coffee', anchor: 'instant' },
+  home_blend: { title: 'Home Blend', anchor: 'home-blend' },
+};
+
+export const HOME_BLEND_NAME = 'HIOC. Signature Home Blend';
+
+/** The Home Blend pack photo. The owner sets '/images/shop/home-blend.png' once the image is added. */
+export const HOME_BLEND_IMAGE: string | null = null;
+
+/** Short copy placeholders. The owner confirms the wording before launch. */
+export const HOME_BLEND_HIGHLIGHTS = [
+  'Our café house blend, roasted for your kitchen',
+  'Ground fresh to your brew method, or whole bean',
+  'Packed and sent within 2 working days of the roast',
+];
+
+/** The seed price of a product the owner hasn't priced yet: a product at this price can't be listed. */
+export const PLACEHOLDER_PRICE_INR = 1;
+
+/** A line's catalogue line; rows frozen by v1 checkouts have none and are instant coffee. */
+export function lineOf(l: ShopLine): ShopProductLine {
+  return l.line ?? 'instant';
+}
+
+/** "2× Signature Classic", "1× Home Blend 500 g · Filter" */
+export function lineItemLabel(l: ShopLine): string {
+  if (lineOf(l) === 'home_blend') {
+    const pack = l.pack_grams ? ` ${packLabel(l.pack_grams)}` : '';
+    const grind = l.grind ? ` · ${grindShort(l.grind)}` : '';
+    return `${l.quantity}× Home Blend${pack}${grind}`;
+  }
+  return `${l.quantity}× ${l.name}`;
+}
+
+/** The item name sent to Shiprocket. */
+export function shiprocketItemName(l: ShopLine): string {
+  if (lineOf(l) === 'home_blend') {
+    const pack = l.pack_grams ? packLabel(l.pack_grams) : '';
+    const grind = l.grind ? (l.grind_label ?? grindLabel(l.grind)) : '';
+    return `${HOME_BLEND_NAME}: ${[pack, grind].filter(Boolean).join(', ')}`;
+  }
+  return `${SHOP_PRODUCT_NAME}: ${l.name} (${packLabel(l.pack_grams ?? 50)})`;
+}
+
+/** What to do at the packing table: grind to order, or pack whole bean. Instant lines need nothing. */
+export function packingChecklist(lines: readonly ShopLine[]): string[] {
+  const out: string[] = [];
+  for (const l of lines) {
+    if (lineOf(l) !== 'home_blend') continue;
+    const pack = l.pack_grams ? packLabel(l.pack_grams) : 'pack';
+    if (!l.grind || l.grind === 'whole_bean') out.push(`Pack ${l.quantity} × ${pack} whole bean`);
+    else out.push(`Grind ${l.quantity} × ${pack} for ${l.grind_label ?? grindLabel(l.grind)}`);
+  }
+  return out;
+}
+
+/** The most one order can weigh packed, goods only. Past it: a wholesale enquiry. */
+export const MAX_PARCEL_KG = 6;
+
+/** What one unit weighs packed when the line doesn't say (a 50 g jar). */
+const DEFAULT_UNIT_WEIGHT_KG = JAR_WEIGHT_KG;
+
+export function lineShipWeightKg(l: ShopLine): number {
+  return l.ship_weight_kg ?? DEFAULT_UNIT_WEIGHT_KG;
+}
+
+/** The goods' weight, without the box. */
+export function goodsWeightKg(lines: readonly ShopLine[]): number {
+  const kg = lines.reduce((n, l) => n + lineShipWeightKg(l) * l.quantity, 0);
+  return Math.round(kg * 1000) / 1000;
+}
+
+/** The parcel to start from: the box plus the goods, in a box sized by total weight. */
+export function defaultPackageForLines(lines: readonly ShopLine[]): ShopPackage {
+  const raw = Math.round((BOX_WEIGHT_KG + lines.reduce((n, l) => n + lineShipWeightKg(l) * l.quantity, 0)) * 1000) / 1000;
+  const weight_kg = Math.round(raw * 100) / 100;
+  if (raw <= 0.45) return { weight_kg, length_cm: 12, breadth_cm: 10, height_cm: 10 };
+  if (raw <= 0.75) return { weight_kg, length_cm: 20, breadth_cm: 12, height_cm: 10 };
+  if (raw <= 1.05) return { weight_kg, length_cm: 28, breadth_cm: 12, height_cm: 10 };
+  if (raw <= 2.0) return { weight_kg, length_cm: 24, breadth_cm: 20, height_cm: 12 };
+  return { weight_kg, length_cm: 30, breadth_cm: 24, height_cm: 14 };
 }

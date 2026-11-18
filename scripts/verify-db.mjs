@@ -1562,6 +1562,69 @@ async function checkShopShiprocketTotal() {
   } else fail('shop_orders.shiprocket_total_inr exists', errText(r));
 }
 
+// Shop v2: Home Blend, saved addresses, shop coupons, Beanies on shop orders
+// (supabase/2026-11-shop-v2.sql). Reads only: the functions that write
+// (reserve_shop_beanies, claim_shop_intro_offer, record_shop_coupon_redemption,
+// make_customer_address_default) are deliberately never called here.
+async function checkShopV2() {
+  heading('SHOP-3 · shop v2: Home Blend, saved addresses, Beanies, shop coupons', '2026-11-shop-v2.sql');
+  const hint = 'apply supabase/2026-11-shop-v2.sql';
+
+  // Column probes: a select of the new columns fails if any is missing.
+  const probes = [
+    ['shop_products', 'line,display_name,pack_grams,ship_weight_kg,listed,requires_grind,description'],
+    ['shop_settings', 'shipping_fee_inr,free_shipping_min_inr,beanies_max_redeem_pct'],
+    ['shop_orders', 'landmark,offer_discount_inr,coupon_id,coupon_code,coupon_discount_inr,beanies_redeemed,beanies_discount_inr,intro_offer_applied,intro_offer_reused,goods_weight_kg,idempotency_key,save_address_label,customer_address_id,capture_effects_at'],
+    ['coupons', 'channel'],
+    ['coupon_redemptions', 'shop_order_id,phone'],
+    ['loyalty_transactions', 'shop_order_id'],
+  ];
+  for (const [table, cols] of probes) {
+    const r = await rest(`/${table}?select=${cols}&limit=1`);
+    if (r.ok) pass(`${table} new columns exist`, cols.split(',').length > 3 ? `${cols.split(',').length} columns` : cols);
+    else fail(`${table} new columns exist`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+  }
+
+  const blends = await rest('/shop_products?select=id&id=in.(home-blend-250,home-blend-500,home-blend-1kg)');
+  if (blends.ok && Array.isArray(blends.body)) {
+    if (blends.body.length === 3) pass('the three Home Blend sizes exist');
+    else fail('the three Home Blend sizes exist', `found ${blends.body.length} of 3 — ${hint}`);
+  } else fail('the three Home Blend sizes exist', errText(blends));
+
+  // shop_intro_claims: exists, and the anon key sees nothing.
+  const claims = await rest('/shop_intro_claims?select=shop_order_id&limit=1');
+  if (!claims.ok) {
+    fail('shop_intro_claims exists', errKind(claims) === 'no_table' ? hint : errText(claims));
+  } else {
+    pass('shop_intro_claims exists');
+    const asAnon = await rest('/shop_intro_claims?select=shop_order_id&limit=1', { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail('shop_intro_claims is not readable by the anon key', 'RLS is off or a policy was added');
+    else pass('shop_intro_claims is not readable by the anon key');
+  }
+
+  // customer_addresses: exists, and the anon key reads no rows.
+  const addrs = await rest('/customer_addresses?select=id&limit=1');
+  if (!addrs.ok) {
+    fail('customer_addresses exists', errKind(addrs) === 'no_table' ? hint : errText(addrs));
+  } else {
+    pass('customer_addresses exists');
+    const asAnon = await rest('/customer_addresses?select=id&limit=1', { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail('customer_addresses is not readable by the anon key', 'RLS is off or a policy was added');
+    else pass('customer_addresses is not readable by the anon key');
+  }
+
+  // coupon_usage_counts only reads; the nil coupon has no redemptions, so it
+  // returns one row of zeros.
+  const usage = await rest('/rpc/coupon_usage_counts', {
+    method: 'POST',
+    body: { p_coupon_id: '00000000-0000-0000-0000-000000000000', p_user_id: null, p_phone: null },
+  });
+  if (usage.ok) pass('coupon_usage_counts() answers', 'read-only');
+  else fail('coupon_usage_counts() answers', errKind(usage) === 'no_function' || /could not find the function/i.test(errText(usage)) ? hint : errText(usage));
+}
+
 // ---------------------------------------------------------------------------
 // Coffee Pass — prepaid plans sold and redeemed as drinks
 // (docs/COFFEE-PASS-SPEC.md, supabase/2026-10-coffee-pass.sql). Customer-facing
@@ -2372,6 +2435,7 @@ async function main() {
   await checkWarehouse();
   await checkInstantCoffeeShop();
   await checkShopShiprocketTotal();
+  await checkShopV2();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();

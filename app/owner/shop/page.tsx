@@ -1,10 +1,14 @@
-// Owner → Shop orders (docs/INSTANT-COFFEE-SHOP.md): Instant Coffee jars sold
-// on /shop, paid by Razorpay, to be shipped with Shiprocket. Only the owner
-// sees these orders; they never reach the counter's board or the café Reports.
+// Owner → Shop orders (docs/INSTANT-COFFEE-SHOP.md, docs/SHOP-V2-SPEC.md): the
+// two product lines sold on /shop (Instant Coffee jars and Signature Home Blend
+// packs, ground to order), paid by Razorpay, shipped with Shiprocket. Customers
+// can pay part with Beanies on repeat orders, and every shop order is synced to
+// the customer's one account, kept apart from café orders. Only the owner sees
+// these orders here; they never reach the counter's board or the café Reports.
 //
 // Server component, like app/owner/online/page.tsx: it reads the orders for the
-// chosen tab, the counts, the last 30 days and the flavours' stock, and shows a
-// setup checklist while something the shop needs is missing. The actions are
+// chosen tab, the counts, the last 30 days (units and revenue for each line) and
+// the Products card's rows, and shows a setup checklist while something the shop
+// needs is missing. The actions are
 // client parts (components/owner/shop/*) that call /api/owner/shop/*.
 //
 // Reachable while the shop flag is off (not in the nav then), so the owner can
@@ -13,15 +17,17 @@
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { ShopOfferSettings } from '@/components/owner/shop/ShopOfferSettings';
 import { ShopOrderCard } from '@/components/owner/shop/ShopOrderCard';
-import { ShopStockToggles } from '@/components/owner/shop/ShopStockToggles';
+import { ShopProductsCard } from '@/components/owner/shop/ShopProductsCard';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { flags } from '@/lib/flags';
 import { isGatewayConfigured } from '@/lib/payments/gateway';
+import { PLACEHOLDER_PRICE_INR } from '@/lib/shop/catalog';
+import { shopLineStats } from '@/lib/shop/ownerStats';
 import { rupees } from '@/lib/shop/pricing';
 import { isMissingShopSchema, loadShopProducts, loadShopSettings, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
 import { isShiprocketConfigured } from '@/lib/shop/shiprocket';
-import { OWNER_TABS, ownerTab, PAID_STATUSES, shiprocketBillCheck, shopOrderRef } from '@/lib/shop/status';
-import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
+import { OWNER_STATUS_LABEL, OWNER_TABS, ownerTab, shiprocketBillCheck, shopOrderRef } from '@/lib/shop/status';
+import type { ShopLine, ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +37,7 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   return (
     <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
       <p className="text-xs uppercase tracking-wide text-muted">{label}</p>
-      <p className="mt-1 text-2xl font-bold text-charcoal">{value}</p>
+      <p className="mt-1 font-mono text-2xl font-bold tabular-nums text-charcoal">{value}</p>
       {sub ? <p className="text-xs text-muted">{sub}</p> : null}
     </div>
   );
@@ -59,10 +65,14 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
       .from('shop_orders')
       .select('*')
       .in('status', [...tab.statuses])
-      .order(tab.key === 'to_ship' ? 'paid_at' : 'created_at', { ascending: tab.key === 'to_ship' })
+      .order(tab.key === 'to_ship' ? 'paid_at' : 'created_at', {
+        ascending: tab.key === 'to_ship',
+      })
       .limit(LIST_LIMIT),
     admin.from('shop_orders').select('status').in('status', ['paid', 'sent_to_shiprocket', 'shipped']),
-    admin.from('shop_orders').select('status, jar_count, total_inr, refunded_inr').gte('paid_at', since),
+    // lines + shipping_inr feed the per-line stats; before the v2 migration
+    // shipping_inr is still there (v1), and lines carry no `line` (read as instant).
+    admin.from('shop_orders').select('status, lines, total_inr, shipping_inr, refunded_inr').gte('paid_at', since),
     loadShopSettings(admin),
     // Shiprocket's bill vs what the customer paid, for orders still on their
     // way. Errors (e.g. before 2026-11-shop-shiprocket-total.sql) skip it.
@@ -82,14 +92,36 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
     if (key) open.set(key, (open.get(key) ?? 0) + 1);
   }
 
-  type Recent = { status: ShopOrderStatus; jar_count: number; total_inr: number; refunded_inr: number | null };
-  const recent = ((recentResult.data ?? []) as Recent[]).filter((r) => r.status !== 'payment_pending');
-  const kept = recent.filter((r) => PAID_STATUSES.includes(r.status));
-  const revenue = kept.reduce((n, r) => n + Number(r.total_inr), 0);
-  const jars = kept.reduce((n, r) => n + Number(r.jar_count), 0);
+  type Recent = {
+    status: ShopOrderStatus;
+    lines: ShopLine[] | null;
+    total_inr: number;
+    shipping_inr: number | null;
+    refunded_inr: number | null;
+  };
+  const stats = shopLineStats(
+    ((recentResult.data ?? []) as Recent[]).map((r) => ({
+      ...r,
+      lines: r.lines ?? [],
+    })),
+  );
 
-  type Bill = { order_number: number; total_inr: number | string; shiprocket_order_id: string | null; shiprocket_total_inr: number | string };
-  const wrongBills = ((billsResult.error ? [] : billsResult.data ?? []) as Bill[]).filter(
+  // The setup list notices a missing v2 migration the same tolerant way the
+  // loaders do (they fall back to v1 columns): the settings row lacks the
+  // shipping columns, or the catalogue has no Home Blend rows.
+  const products = productsResult.ok ? productsResult.products : [];
+  const homeBlend = products.filter((p) => p.line === 'home_blend');
+  const v2Missing =
+    !missingSchema && ((settings !== null && settings.shipping_fee_inr === undefined) || (productsResult.ok && homeBlend.length === 0));
+  const blendReady = homeBlend.length > 0 && homeBlend.every((p) => p.listed && p.price_inr > PLACEHOLDER_PRICE_INR);
+
+  type Bill = {
+    order_number: number;
+    total_inr: number | string;
+    shiprocket_order_id: string | null;
+    shiprocket_total_inr: number | string;
+  };
+  const wrongBills = ((billsResult.error ? [] : (billsResult.data ?? [])) as Bill[]).filter(
     (b) =>
       shiprocketBillCheck({
         order_number: Number(b.order_number),
@@ -101,7 +133,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
 
   const razorpay = isGatewayConfigured();
   const shiprocket = isShiprocketConfigured();
-  const setupDone = !missingSchema && razorpay && shiprocket && flags.shop;
+  const setupDone = !missingSchema && !v2Missing && razorpay && shiprocket && flags.shop && blendReady;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -109,8 +141,8 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
         <div>
           <h1 className="text-2xl font-bold text-charcoal">Shop orders</h1>
           <p className="text-sm text-muted">
-            Instant Coffee jars bought on the website. Pack them, send them to Shiprocket, and the customer gets the tracking
-            link by email.
+            Instant Coffee and Home Blend bought on the website. Pack them, send them to Shiprocket, and the customer gets the tracking link
+            by email.
           </p>
         </div>
         <div className="flex gap-3 text-sm">
@@ -130,14 +162,22 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
           <h2 className="font-bold text-charcoal">Setting up the shop</h2>
           <ul className="mt-2 space-y-1">
             <SetupItem ok={!missingSchema}>Database: {missingSchema ? SHOP_MIGRATION_HINT : 'shop tables are in place'}</SetupItem>
+            <SetupItem ok={!v2Missing}>
+              {v2Missing
+                ? 'Apply supabase/2026-11-shop-v2.sql (Home Blend, grinds, saved addresses, Beanies)'
+                : 'Shop v2 migration is applied'}
+            </SetupItem>
+            <SetupItem ok={blendReady}>
+              Price and list the Home Blend packs (250 g, 500 g, 1 kg) in the Products card; they stay hidden until you do
+            </SetupItem>
             <SetupItem ok={razorpay}>Razorpay keys (RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET) — customers pay online</SetupItem>
             <SetupItem ok={shiprocket}>
-              Shiprocket API user (SHIPROCKET_EMAIL / SHIPROCKET_PASSWORD, and SHIPROCKET_PICKUP_LOCATION if your pickup
-              address isn&apos;t named “Primary”) — for the one-click send
+              Shiprocket API user (SHIPROCKET_EMAIL / SHIPROCKET_PASSWORD, and SHIPROCKET_PICKUP_LOCATION if your pickup address isn&apos;t
+              named “Primary”) — for the one-click send
             </SetupItem>
             <SetupItem ok={flags.shop}>
-              Switch the shop on for customers: NEXT_PUBLIC_FLAG_SHOP=true in Vercel, then redeploy. This also adds the Shop
-              link to the website and the shop wording on the policy pages.
+              Switch the shop on for customers: NEXT_PUBLIC_FLAG_SHOP=true in Vercel, then redeploy. This also adds the Shop link to the
+              website and the shop wording on the policy pages.
             </SetupItem>
           </ul>
           <p className="mt-2 text-muted">Step by step: docs/INSTANT-COFFEE-SHOP.md.</p>
@@ -151,8 +191,8 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
             {wrongBills.map((b) => shopOrderRef(Number(b.order_number))).join(', ')}
           </p>
           <p className="mt-1">
-            The wrong amount goes on Shiprocket&apos;s invoice, its emails to the customer and the parcel&apos;s declared value.
-            See the order under{' '}
+            The wrong amount goes on Shiprocket&apos;s invoice, its emails to the customer and the parcel&apos;s declared value. See the
+            order under{' '}
             <Link href="/owner/shop?tab=with_courier" className="font-semibold underline">
               With courier
             </Link>
@@ -163,10 +203,23 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_18rem]">
         <div className="min-w-0">
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatCard label="To ship" value={String(open.get('to_ship') ?? 0)} sub="paid, not sent yet" />
-            <StatCard label="Last 30 days" value={rupees(revenue)} sub={`${kept.length} orders`} />
-            <StatCard label="Jars sold" value={String(jars)} sub="last 30 days" />
+            <StatCard
+              label="Instant Coffee"
+              value={`${stats.instant.units} sold`}
+              sub={`${rupees(stats.instant.revenue_inr)} · last 30 days`}
+            />
+            <StatCard
+              label="Home Blend"
+              value={`${stats.home_blend.units} sold`}
+              sub={`${rupees(stats.home_blend.revenue_inr)} · last 30 days`}
+            />
+            <StatCard
+              label="Last 30 days"
+              value={rupees(stats.total.revenue_inr)}
+              sub={`${stats.total.orders} orders · ${stats.total.units} units, shipping not counted`}
+            />
           </div>
 
           <nav aria-label="Order status" className="mt-6 flex flex-wrap gap-2">
@@ -196,13 +249,14 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
           ) : (
             <ul className="mt-4 space-y-4">
               {orders.map((o) => (
-                <ShopOrderCard key={`${o.id}:${o.updated_at}`} order={o} shiprocketReady={shiprocket} />
+                <ShopOrderCard key={o.id} order={o} shiprocketReady={shiprocket} />
               ))}
             </ul>
           )}
           {tab.key === 'unpaid' && orders.length > 0 ? (
             <p className="mt-3 text-xs text-muted">
-              Checkouts where the payment never completed. No money was taken and nothing needs doing.
+              Checkouts where the payment never completed ({OWNER_STATUS_LABEL.payment_pending} or {OWNER_STATUS_LABEL.expired}). No money
+              was taken and nothing needs doing.
             </p>
           ) : null}
           {orders.length === LIST_LIMIT ? (
@@ -222,25 +276,27 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
             )}
           </section>
           <section className="rounded-md border border-line bg-cream p-4 shadow-sm">
-            <h2 className="font-bold text-charcoal">Flavours in stock</h2>
-            <p className="mt-1 text-xs text-muted">Switch a flavour off when you run out; it shows “Out of stock” on the shop.</p>
+            <h2 className="font-bold text-charcoal">Products</h2>
+            <p className="mt-1 text-xs text-muted">
+              Set the price, list or unlist, and switch “In stock” off when you run out; it shows “Out of stock” on the shop.
+            </p>
             {productsResult.ok ? (
               <div className="mt-2">
-                <ShopStockToggles products={productsResult.products} />
+                <ShopProductsCard products={productsResult.products} />
               </div>
             ) : (
-              <p className="mt-2 text-sm text-muted">Apply the shop migration to manage flavours.</p>
+              <p className="mt-2 text-sm text-muted">Apply the shop migration to manage products.</p>
             )}
           </section>
           <section className="rounded-md border border-line bg-cream p-4 text-sm shadow-sm">
             <h2 className="font-bold text-charcoal">How shipping works</h2>
             <ol className="mt-2 list-decimal space-y-1 pl-5 text-charcoal">
-              <li>Pack the jars and check the weight.</li>
+              <li>Pack the order (grind the Home Blend as the card says) and check the weight.</li>
               <li>Press Send to Shiprocket on the order.</li>
               <li>In the Shiprocket panel: pick the courier, print the label, schedule the pickup.</li>
               <li>Press Refresh — the customer is emailed the tracking link.</li>
             </ol>
-            <p className="mt-2 text-xs text-muted">₹49 shipping is charged below 3 jars; 3 or more ship free. Prepaid only.</p>
+            <p className="mt-2 text-xs text-muted">Shipping fee and the free-shipping amount are set under Online offer. Prepaid only.</p>
           </section>
         </aside>
       </div>

@@ -7,7 +7,14 @@ export type ShopOrderStatus =
   | 'sent_to_shiprocket'
   | 'shipped'
   | 'delivered'
-  | 'cancelled';
+  | 'cancelled'
+  | 'expired';
+
+/** Which catalogue line a product belongs to. */
+export type ShopProductLine = 'instant' | 'home_blend';
+
+/** How a Home Blend pack is ground (whole bean needs no grinding). */
+export type GrindCode = 'whole_bean' | 'espresso' | 'moka' | 'filter' | 'french_press';
 
 /** A flavour as the shop sells it (a shop_products row). */
 export interface ShopProduct {
@@ -18,6 +25,13 @@ export interface ShopProduct {
   net_qty: string;
   in_stock: boolean;
   sort_order: number;
+  line: ShopProductLine;
+  display_name: string;
+  pack_grams: number;
+  ship_weight_kg: number;
+  listed: boolean;
+  requires_grind: boolean;
+  description: string;
 }
 
 /** One priced line of an order, frozen on shop_orders.lines at checkout. */
@@ -28,6 +42,15 @@ export interface ShopLine {
   unit_price_inr: number;
   quantity: number;
   line_total_inr: number;
+  // v2 fields. Rows frozen by v1 checkouts lack them; read a missing line as
+  // 'instant'. For v2 lines `sku` is the LINE SKU: base SKU + grind suffix
+  // (e.g. HIOC-HB-250G-FLT).
+  line?: ShopProductLine;
+  base_sku?: string;
+  pack_grams?: number;
+  grind?: GrindCode | null;
+  grind_label?: string | null;
+  ship_weight_kg?: number;
 }
 
 /** The delivery address and contact, validated (lib/shop/address.ts). */
@@ -38,6 +61,8 @@ export interface ShopAddress {
   email: string;
   address_line1: string;
   address_line2: string;
+  /** A nearby landmark for the courier (80 characters at most, '' when none). */
+  landmark: string;
   city: string;
   state: string;
   pincode: string;
@@ -49,12 +74,27 @@ export interface ShopOrderRow extends ShopAddress {
   order_number: number;
   status: ShopOrderStatus;
   lines: ShopLine[];
+  /** Units (the name is from v1, when every unit was a jar). */
   jar_count: number;
   subtotal_inr: number;
   /** What the online offer took off (0 without one). */
   discount_inr: number;
   /** The offer's name when it was bought, e.g. "Introductory offer". */
   offer_name: string | null;
+  offer_discount_inr: number;
+  coupon_id: string | null;
+  coupon_code: string | null;
+  coupon_discount_inr: number;
+  beanies_redeemed: number;
+  beanies_discount_inr: number;
+  intro_offer_applied: boolean;
+  intro_offer_reused: boolean;
+  goods_weight_kg: number | null;
+  idempotency_key: string | null;
+  checkout_fingerprint: string | null;
+  save_address_label: string | null;
+  customer_address_id: string | null;
+  capture_effects_at: string | null;
   shipping_inr: number;
   total_inr: number;
   razorpay_order_id: string | null;
@@ -118,6 +158,18 @@ export interface ShopOrderPublicView {
   shipped_at: string | null;
   delivered_at: string | null;
   cancelled_at: string | null;
+  unit_count: number;
+  offer_discount_inr: number;
+  coupon_code: string | null;
+  coupon_discount_inr: number;
+  beanies_redeemed: number;
+  beanies_discount_inr: number;
+  intro_offer_applied: boolean;
+  discounts: ShopDiscountLine[];
+  /** True for an order placed without an account. */
+  is_guest: boolean;
+  /** Beanies this order will earn once paid, when known. */
+  beanies_to_earn: number | null;
 }
 
 /**
@@ -135,4 +187,74 @@ export interface ShopPackage {
   length_cm: number;
   breadth_cm: number;
   height_cm: number;
+}
+
+/** Shop-wide settings (shop_settings): offer, shipping and Beanies rules. */
+export interface ShopSettings {
+  offer: ShopOffer | null;
+  shipping_fee_inr: number;
+  free_shipping_min_inr: number;
+  beanies_max_redeem_pct: number;
+}
+
+/** What checkout needs to know about a coupon (the discounts table, shop side). */
+export interface ShopCouponTerms {
+  id: string;
+  code: string;
+  discount_type: 'percent' | 'flat';
+  discount_value: number;
+  min_order_inr: number;
+  max_discount_inr: number;
+  shop_product_ids: string[];
+  is_auto: boolean;
+}
+
+/** An address saved on a customer's account (customer_addresses row). */
+export interface CustomerAddress {
+  id: string;
+  user_id: string;
+  label: string;
+  customer_name: string;
+  phone: string;
+  address_line1: string;
+  address_line2: string;
+  landmark: string;
+  city: string;
+  state: string;
+  pincode: string;
+  location_lat: number | null;
+  location_lng: number | null;
+  location_source: 'gps' | 'map' | null;
+  is_default: boolean;
+  last_used_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** What a saved address holds: the delivery address without the email. */
+export type SavedAddressFields = Omit<ShopAddress, 'email'>;
+
+/** One line of the discount breakdown on a receipt. */
+export interface ShopDiscountLine {
+  kind: 'offer' | 'coupon' | 'beanies';
+  label: string;
+  amount_inr: number;
+}
+
+/** One order in the customer's shop history (their own, so no address). */
+export interface ShopHistoryOrder {
+  id: string;
+  order_number: number;
+  status: ShopOrderStatus;
+  lines: ShopLine[];
+  unit_count: number;
+  total_inr: number;
+  city: string;
+  awb_code: string | null;
+  tracking_url: string | null;
+  created_at: string;
+  paid_at: string | null;
+  shipped_at: string | null;
+  delivered_at: string | null;
+  cancelled_at: string | null;
 }

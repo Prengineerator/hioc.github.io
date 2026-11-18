@@ -8,17 +8,26 @@
 //   Delivered       Cancel & refund (e.g. arrived damaged)
 // Every action calls an /api/owner/shop route and refreshes the server page.
 //
+// v2 (docs/SHOP-V2-SPEC.md E6): each Home Blend line shows its grind in bold,
+// with a packing checklist (grind this much for that brew method); the money
+// section lists every discount (offer, coupon with its code, Beanies) then
+// shipping and the total; "Intro offer reused" flags two checkouts that raced
+// for the once-per-customer offer; the send dialog starts from the parcel worked
+// out from the lines; Cancel says how many Beanies went back to the customer and
+// Mark delivered how many they earned.
+//
 // Once an order is in Shiprocket, the card also checks Shiprocket's bill (its
 // own order total, read back on send and on Refresh) against what the customer
 // paid, and warns in red when they differ (lib/shop/status.ts).
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { defaultPackage } from '@/lib/shop/catalog';
+import { defaultPackageForLines, lineOf, packingChecklist } from '@/lib/shop/catalog';
 import { describePin, googleMapsLink, locationFromRow } from '@/lib/shop/location';
-import { jarsLabel, rupees } from '@/lib/shop/pricing';
+import { jarsLabel, rupees, unitsLabel } from '@/lib/shop/pricing';
 import {
   canCancel,
   canMarkDelivered,
@@ -27,6 +36,7 @@ import {
   OWNER_STATUS_LABEL,
   shiprocketBillCheck,
   shiprocketBillWarning,
+  shopOrderDiscountBreakdown,
   shopOrderRef,
   trackingUrl,
 } from '@/lib/shop/status';
@@ -34,8 +44,17 @@ import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
 
 type Panel = 'send' | 'ship' | 'cancel' | null;
 
+interface ActResult {
+  error?: string;
+  warning?: string;
+  beanies_returned?: number;
+  earned?: number;
+  order?: { refunded_inr?: number | null; status?: ShopOrderStatus };
+}
+
 const STATUS_TONE: Record<ShopOrderStatus, string> = {
   payment_pending: 'border-line text-muted',
+  expired: 'border-line text-muted',
   paid: 'border-amber-600 text-amber-800',
   sent_to_shiprocket: 'border-tan text-tan-dark',
   shipped: 'border-tan text-tan-dark',
@@ -56,7 +75,14 @@ function when(iso: string | null): string {
 
 function addressText(o: ShopOrderRow): string {
   const pin = locationFromRow(o);
-  return [o.customer_name, o.address_line1, o.address_line2, `${o.city}, ${o.state} ${o.pincode}`, o.phone, pin ? `Map pin: ${googleMapsLink(pin)}` : null]
+  return [
+    o.customer_name,
+    o.address_line1,
+    o.address_line2,
+    `${o.city}, ${o.state} ${o.pincode}`,
+    o.phone,
+    pin ? `Map pin: ${googleMapsLink(pin)}` : null,
+  ]
     .filter(Boolean)
     .join('\n');
 }
@@ -65,10 +91,21 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   const router = useRouter();
   const [panel, setPanel] = useState<Panel>(null);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ tone: 'ok' | 'error' | 'warn'; text: string } | null>(null);
+  const [message, setMessage] = useState<{
+    tone: 'ok' | 'error' | 'warn';
+    text: string;
+  } | null>(null);
   const [copied, setCopied] = useState(false);
+  // Set after Cancel / Mark delivered: the order has left this tab, so the card
+  // stays mounted (actions hidden) until the owner dismisses the result.
+  const [settled, setSettled] = useState(false);
+  // The status the action left the order in (from the response), shown on the
+  // badge while the settled card waits to be dismissed.
+  const [settledStatus, setSettledStatus] = useState<ShopOrderStatus | null>(null);
 
-  const pkg0 = defaultPackage(order.jar_count);
+  const pkg0 = defaultPackageForLines(order.lines);
+  const checklist = packingChecklist(order.lines);
+  const discounts = shopOrderDiscountBreakdown(order);
   const [pkg, setPkg] = useState({
     weight_kg: String(pkg0.weight_kg),
     length_cm: String(pkg0.length_cm),
@@ -86,7 +123,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   const bill = shiprocketBillCheck(order);
   const billWarning = shiprocketBillWarning(order);
 
-  async function act(path: string, method: 'POST' | 'PATCH', body: unknown, done: string) {
+  async function act(path: string, method: 'POST' | 'PATCH', body: unknown, done: string | ((data: ActResult) => string), keepResult = false) {
     setBusy(true);
     setMessage(null);
     try {
@@ -95,14 +132,22 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),
       });
-      const data = (await res.json().catch(() => ({}))) as { error?: string; warning?: string };
+      const data = (await res.json().catch(() => ({}))) as ActResult;
       if (!res.ok) {
-        setMessage({ tone: 'error', text: data.error ?? `Something went wrong (HTTP ${res.status}).` });
+        setMessage({
+          tone: 'error',
+          text: data.error ?? `Something went wrong (HTTP ${res.status}).`,
+        });
         return;
       }
       setPanel(null);
-      setMessage(data.warning ? { tone: 'warn', text: data.warning } : { tone: 'ok', text: done });
-      router.refresh();
+      const text = typeof done === 'function' ? done(data) : done;
+      setMessage(data.warning ? { tone: 'warn', text: `${data.warning} ${text}` } : { tone: 'ok', text });
+      if (keepResult) {
+        setSettled(true);
+        if (data.order?.status) setSettledStatus(data.order.status);
+      }
+      else router.refresh();
     } catch {
       setMessage({ tone: 'error', text: 'Network error — please try again.' });
     } finally {
@@ -116,7 +161,10 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setMessage({ tone: 'error', text: 'Could not copy — select the address and copy it by hand.' });
+      setMessage({
+        tone: 'error',
+        text: 'Could not copy — select the address and copy it by hand.',
+      });
     }
   }
 
@@ -132,30 +180,84 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             {order.payment_method ? ` · ${order.payment_method.toUpperCase()}` : ''}
           </p>
         </div>
-        <span className={`inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-bold ${STATUS_TONE[order.status]}`}>
-          {OWNER_STATUS_LABEL[order.status]}
+        <span
+          className={`inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-bold ${STATUS_TONE[settledStatus ?? order.status]}`}
+        >
+          {OWNER_STATUS_LABEL[settledStatus ?? order.status]}
         </span>
       </div>
 
       <div className="mt-3 grid gap-4 sm:grid-cols-2">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted">{jarsLabel(order.jar_count)}</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted">{order.lines.every((l) => lineOf(l) === 'instant') ? jarsLabel(order.jar_count) : unitsLabel(order.jar_count)}</p>
           <ul className="mt-1 text-sm text-charcoal">
             {order.lines.map((l) => (
-              <li key={l.product_id}>
-                {l.name} × <strong>{l.quantity}</strong>
+              <li key={`${l.product_id}:${l.grind ?? ''}`}>
+                {lineOf(l) === 'home_blend' ? (
+                  <>
+                    {l.name} × <strong>{l.quantity}</strong>
+                    {l.grind ? (
+                      <>
+                        {' · '}
+                        <strong>{l.grind_label ?? l.grind}</strong>
+                      </>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {l.name} × <strong>{l.quantity}</strong>
+                  </>
+                )}
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-sm text-charcoal">
-            <span className="font-mono font-semibold tabular-nums">{rupees(order.total_inr)}</span>
-            <span className="text-muted">
-              {' '}
-              ({[order.discount_inr > 0 ? `${order.offer_name ?? 'offer'} −${rupees(order.discount_inr)}` : null, order.shipping_inr ? `incl. ${rupees(order.shipping_inr)} shipping` : 'free shipping']
-                .filter(Boolean)
-                .join(' · ')})
-            </span>
-          </p>
+          {checklist.length > 0 ? (
+            <div className="mt-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted">Packing checklist</p>
+              <ul className="mt-1 space-y-0.5 text-sm text-charcoal">
+                {checklist.map((c, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span aria-hidden="true" className="text-muted">
+                      ☐
+                    </span>
+                    {c}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <dl className="mt-3 space-y-0.5 text-sm text-charcoal">
+            {discounts.length > 0 ? (
+              <div className="flex justify-between gap-3">
+                <dt>Items</dt>
+                <dd className="font-mono tabular-nums">{rupees(order.subtotal_inr)}</dd>
+              </div>
+            ) : null}
+            {discounts.map((d) => (
+              <div key={d.kind} className="flex justify-between gap-3">
+                <dt>{d.label}</dt>
+                <dd className="font-mono tabular-nums">−{rupees(d.amount_inr)}</dd>
+              </div>
+            ))}
+            <div className="flex justify-between gap-3">
+              <dt>Shipping</dt>
+              <dd className="font-mono tabular-nums">{order.shipping_inr ? rupees(order.shipping_inr) : 'Free'}</dd>
+            </div>
+            <div className="flex justify-between gap-3 border-t border-line pt-1 font-semibold">
+              <dt>Total</dt>
+              <dd className="font-mono tabular-nums">{rupees(order.total_inr)}</dd>
+            </div>
+          </dl>
+          {order.intro_offer_reused ? (
+            <div className="mt-2">
+              <Badge variant="outline" className="border-amber-600 text-amber-800">
+                <span aria-hidden="true">⚠</span> Intro offer reused
+              </Badge>
+              <p className="mt-1 text-xs text-muted">
+                This customer had already used the introductory offer; two checkouts raced, so the price was honoured.
+              </p>
+            </div>
+          ) : null}
         </div>
         <div>
           <div className="flex items-center justify-between gap-2">
@@ -251,6 +353,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
       ) : null}
 
       {/* Actions */}
+      {settled ? null : (
       <div className="mt-4 flex flex-wrap gap-2">
         {canSendToShiprocket(order) ? (
           <Button size="sm" onClick={() => setPanel(panel === 'send' ? null : 'send')} disabled={busy}>
@@ -258,7 +361,13 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           </Button>
         ) : null}
         {canRefresh ? (
-          <Button size="sm" variant="secondary" loading={busy && panel === null} onClick={() => void act(`${base}/refresh`, 'POST', {}, 'Updated from Shiprocket.')} disabled={busy}>
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={busy && panel === null}
+            onClick={() => void act(`${base}/refresh`, 'POST', {}, 'Updated from Shiprocket.')}
+            disabled={busy}
+          >
             Refresh from Shiprocket
           </Button>
         ) : null}
@@ -268,23 +377,47 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           </Button>
         ) : null}
         {canMarkDelivered(order) ? (
-          <Button size="sm" variant="ghost" onClick={() => void act(base, 'PATCH', { action: 'mark_delivered' }, 'Marked delivered.')} disabled={busy}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              void act(base, 'PATCH', { action: 'mark_delivered' }, (d) =>
+                d.earned && d.earned > 0
+                  ? `Marked delivered. ${d.earned} ${d.earned === 1 ? 'Beanie' : 'Beanies'} earned.`
+                  : 'Marked delivered.',
+                true,
+              )
+            }
+            disabled={busy}
+          >
             Mark delivered
           </Button>
         ) : null}
         {canCancel(order) ? (
-          <Button size="sm" variant="ghost" className="text-red-700" onClick={() => setPanel(panel === 'cancel' ? null : 'cancel')} disabled={busy}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-red-700"
+            onClick={() => setPanel(panel === 'cancel' ? null : 'cancel')}
+            disabled={busy}
+          >
             Cancel &amp; refund
           </Button>
         ) : null}
       </div>
+      )}
 
       {panel === 'send' ? (
         <form
           className="mt-3 rounded-md border border-line p-3"
           onSubmit={(e) => {
             e.preventDefault();
-            void act(`${base}/shiprocket`, 'POST', pkg, 'Sent to Shiprocket. Pick the courier and print the label in the Shiprocket panel, then press Refresh.');
+            void act(
+              `${base}/shiprocket`,
+              'POST',
+              pkg,
+              'Sent to Shiprocket. Pick the courier and print the label in the Shiprocket panel, then press Refresh.',
+            );
           }}
         >
           <p className="text-sm text-charcoal">
@@ -296,10 +429,30 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             </p>
           ) : null}
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Input label="Weight (kg)" inputMode="decimal" value={pkg.weight_kg} onChange={(e) => setPkg({ ...pkg, weight_kg: e.target.value })} />
-            <Input label="Length (cm)" inputMode="decimal" value={pkg.length_cm} onChange={(e) => setPkg({ ...pkg, length_cm: e.target.value })} />
-            <Input label="Breadth (cm)" inputMode="decimal" value={pkg.breadth_cm} onChange={(e) => setPkg({ ...pkg, breadth_cm: e.target.value })} />
-            <Input label="Height (cm)" inputMode="decimal" value={pkg.height_cm} onChange={(e) => setPkg({ ...pkg, height_cm: e.target.value })} />
+            <Input
+              label="Weight (kg)"
+              inputMode="decimal"
+              value={pkg.weight_kg}
+              onChange={(e) => setPkg({ ...pkg, weight_kg: e.target.value })}
+            />
+            <Input
+              label="Length (cm)"
+              inputMode="decimal"
+              value={pkg.length_cm}
+              onChange={(e) => setPkg({ ...pkg, length_cm: e.target.value })}
+            />
+            <Input
+              label="Breadth (cm)"
+              inputMode="decimal"
+              value={pkg.breadth_cm}
+              onChange={(e) => setPkg({ ...pkg, breadth_cm: e.target.value })}
+            />
+            <Input
+              label="Height (cm)"
+              inputMode="decimal"
+              value={pkg.height_cm}
+              onChange={(e) => setPkg({ ...pkg, height_cm: e.target.value })}
+            />
           </div>
           <div className="mt-3 flex gap-2">
             <Button type="submit" size="sm" loading={busy} disabled={!shiprocketReady}>
@@ -317,10 +470,17 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           className="mt-3 rounded-md border border-line p-3"
           onSubmit={(e) => {
             e.preventDefault();
-            void act(base, 'PATCH', { action: 'mark_shipped', awb_code: awb, courier_name: courier }, 'Marked shipped. The customer has been emailed the tracking link.');
+            void act(
+              base,
+              'PATCH',
+              { action: 'mark_shipped', awb_code: awb, courier_name: courier },
+              'Marked shipped. The customer has been emailed the tracking link.',
+            );
           }}
         >
-          <p className="text-sm text-charcoal">For a parcel booked in the Shiprocket panel or with any courier. The customer is emailed the tracking link.</p>
+          <p className="text-sm text-charcoal">
+            For a parcel booked in the Shiprocket panel or with any courier. The customer is emailed the tracking link.
+          </p>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <Input label="Tracking number (AWB)" value={awb} onChange={(e) => setAwb(e.target.value)} required />
             <Input label="Courier (optional)" value={courier} onChange={(e) => setCourier(e.target.value)} placeholder="e.g. Delhivery" />
@@ -341,7 +501,18 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           className="mt-3 rounded-md border border-red-200 bg-red-50 p-3"
           onSubmit={(e) => {
             e.preventDefault();
-            void act(`${base}/cancel`, 'POST', { reason }, `Cancelled and refunded ${rupees(order.total_inr)}.`);
+            void act(`${base}/cancel`, 'POST', { reason }, (d) => {
+              const n = d.beanies_returned ?? 0;
+              const beanies =
+                n > 0
+                  ? ` ${n} ${n === 1 ? 'Beanie' : 'Beanies'} returned to the customer.`
+                  : n < 0
+                    ? ` ${-n} ${n === -1 ? 'Beanie' : 'Beanies'} taken back from the customer.`
+                    : '';
+              const refunded = d.order?.refunded_inr ?? 0;
+              const money = refunded > 0 ? `Refunded ${rupees(refunded)}.` : 'Cancelled (no online payment to refund).';
+              return `${money}${beanies}`;
+            }, true);
           }}
         >
           <p className="text-sm text-charcoal">
@@ -364,12 +535,19 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
       ) : null}
 
       {message ? (
-        <p
-          role={message.tone === 'error' ? 'alert' : 'status'}
-          className={`mt-3 text-sm font-semibold ${message.tone === 'error' ? 'text-red-700' : message.tone === 'warn' ? 'text-amber-800' : 'text-green-800'}`}
-        >
-          {message.text}
-        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p
+            role={message.tone === 'error' ? 'alert' : 'status'}
+            className={`text-sm font-semibold ${message.tone === 'error' ? 'text-red-700' : message.tone === 'warn' ? 'text-amber-800' : 'text-green-800'}`}
+          >
+            {message.text}
+          </p>
+          {settled ? (
+            <Button size="sm" variant="secondary" onClick={() => router.refresh()}>
+              Dismiss
+            </Button>
+          ) : null}
+        </div>
       ) : null}
     </li>
   );

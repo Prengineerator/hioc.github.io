@@ -3,7 +3,7 @@
 // "Order again" strip at the top of the menu (ACC-4) — a signed-in
 // customer's 3 most recent orders, each re-added to the cart in one tap.
 // Renders nothing for a guest (the history route 401s) or for a customer with
-// no orders yet, so the menu looks exactly as before for them.
+// no orders yet (café orders only: ?channel=cafe), so the menu looks exactly as before for them.
 
 import { useEffect, useState } from 'react';
 import { formatIstDate } from '@/lib/account/orderDisplay';
@@ -25,7 +25,7 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/account/history?page=1', { cache: 'no-store' })
+    fetch('/api/account/history?page=1&channel=cafe', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { orders?: OrderResponse[] } | null) => {
         if (cancelled || !data?.orders) return;

@@ -3,9 +3,14 @@ import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
 import { BUSINESS, SHOP_POLICY_UPDATED } from '@/lib/legal';
 import { flags } from '@/lib/flags';
 import { DELIVERY_TAKES, DISPATCH_WITHIN } from '@/lib/shop/catalog';
-import { FREE_SHIPPING_MIN_JARS, rupees, SHIPPING_FEE_INR } from '@/lib/shop/pricing';
+import { DEFAULT_SHOP_SETTINGS, rupees } from '@/lib/shop/pricing';
 
 export const metadata: Metadata = { title: 'Shipping & Delivery Policy' };
+
+// The shipping charge and the free-shipping threshold, in rupees of goods
+// (docs/SHOP-V2-SPEC.md E2). The checkout shows the live figure before paying;
+// these are the shop's standing defaults.
+const { shipping_fee_inr: SHIPPING_FEE, free_shipping_min_inr: FREE_SHIPPING_MIN } = DEFAULT_SHOP_SETTINGS;
 
 // Café orders are collected at the counter. With the Instant Coffee shop
 // switched on (NEXT_PUBLIC_FLAG_SHOP, docs/INSTANT-COFFEE-SHOP.md) packaged jars
@@ -20,7 +25,7 @@ export default function ShippingDeliveryPage() {
     <PolicyLayout title="Shipping & Delivery Policy" updated={shop ? SHOP_POLICY_UPDATED : undefined}>
       {shop ? (
         <p>
-          {BUSINESS.name} ships <strong>packaged Premium Instant Coffee</strong> across India, and
+          {BUSINESS.name} ships <strong>packaged Premium Instant Coffee and Signature Home Blend coffee</strong> across India, and
           runs an <strong>order-ahead, counter-pickup</strong> service for café food and drinks. This
           page explains how each is fulfilled.
         </p>
@@ -33,7 +38,7 @@ export default function ShippingDeliveryPage() {
       )}
 
       {shop ? (
-        <PolicySection heading="1. Instant Coffee jars — shipped to you" id="instant-coffee">
+        <PolicySection heading="1. Instant Coffee and Home Blend — shipped to you" id="instant-coffee">
           <ul className="list-disc pl-5">
             <li>
               <strong>Where we ship:</strong> to serviceable pincodes across India, through courier
@@ -41,8 +46,14 @@ export default function ShippingDeliveryPage() {
               refund you in full.
             </li>
             <li>
-              <strong>Shipping charges:</strong> {rupees(SHIPPING_FEE_INR)} per order for 1 or 2 jars;
-              free for {FREE_SHIPPING_MIN_JARS} jars or more. The charge is shown before you pay.
+              <strong>Shipping charges:</strong> {rupees(SHIPPING_FEE)} per order; free on orders of{' '}
+              {rupees(FREE_SHIPPING_MIN)} or more (counted on the goods, after any discount). The
+              charge is shown before you pay.
+            </li>
+            <li>
+              <strong>Home Blend:</strong> packs (250 g, 500 g and 1 kg) are whole bean or ground to
+              order for the brew method you choose, so we pack them after you pay. The grind you
+              pick is printed on your order.
             </li>
             <li>
               <strong>Dispatch:</strong> we pack your order and hand it to the courier within{' '}

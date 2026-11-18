@@ -1,187 +1,438 @@
 'use client';
 
-// The /shop page's interactive part: pick flavours, see the total (₹49
-// shipping below 3 jars, free from 3), enter the delivery address, pay with
-// Razorpay. Prices come from the server (shop_products); the same pure
-// functions the checkout route uses compute what is shown here, and the route
-// re-prices anyway (lib/shop/pricing.ts).
+// The /shop page's interactive part (docs/SHOP-V2-SPEC.md E8): the whole
+// purchase on one page, in three steps that never reload:
+//
+//   Choose      Instant Coffee and Home Blend, a sticky segmented control that
+//               deep-links to #instant and #home-blend, a cart drawer
+//   Deliver to  a saved address as a summary card, or the address form (E3)
+//   Pay         the bill, Beanies, "Have a code?", then Pay ₹X
+//
+// A sticky bar always shows the item count, the total and the page's ONE
+// primary action. This file is the orchestrator: it owns the cart (persisted on
+// every change under hioc_shop_cart_v2, so it survives a reload and the
+// /login?next=/shop round trip), the step, the quote and the checkout request.
+// The rules live in lib/shop/checkoutFlow.ts (pure, tested); the price comes
+// from lib/shop/useShopQuote.ts (local figure at once, the server's figure wins).
+//
+// Paying: one Idempotency-Key per attempt, kept in a ref and sessionStorage and
+// reused for retries (a double tap or a dropped connection finds the same
+// order); it is rotated only when the order changed or the server refused the
+// key. The server prices everything. A 409 swaps in the server's quote
+// ("Prices changed: here's the new total") without losing the cart, the address
+// or the code. Prices, offers and Beanies shown here are never trusted by the
+// route: expected_total_inr is only compared.
 
-import { useMemo, useRef, useState } from 'react';
-import Image from 'next/image';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/Button';
-import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { LocationPin } from '@/components/shop/LocationPin';
+import { CartDrawer } from '@/components/shop/CartDrawer';
+import { addressSummary, DeliverToStep, useDelivery } from '@/components/shop/DeliverToStep';
+import { HomeBlendCard } from '@/components/shop/HomeBlendCard';
+import { InstantSection } from '@/components/shop/InstantSection';
+import { PayStep } from '@/components/shop/PayStep';
+import { StickyCheckoutBar } from '@/components/shop/StickyCheckoutBar';
 import { openRazorpayCheckout, preloadRazorpay } from '@/lib/payments/razorpayCheckout';
 import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import { flags } from '@/lib/flags';
 import { getTrafficAttribution } from '@/lib/traffic/client';
-import { INDIAN_STATES, validateShopAddress, type AddressField } from '@/lib/shop/address';
-import { FALLBACK_FLAVOUR_STYLE, FLAVOUR_STYLE } from '@/lib/shop/catalog';
-import type { ShopLocation } from '@/lib/shop/location';
+import { normalizeAddressLabel } from '@/lib/shop/address';
+import { PRODUCT_LINES } from '@/lib/shop/catalog';
+import { cartUnits, clearShopCart, readShopCart, setCartItemQuantity, addCartItem, removeCartItem, writeShopCart } from '@/lib/shop/cart';
 import {
-  FREE_SHIPPING_MIN_JARS,
-  jarsLabel,
-  MAX_JARS_PER_ORDER,
-  offerDeals,
-  priceShopCart,
-  rupees,
-  shippingForJars,
-  totalForJars,
-} from '@/lib/shop/pricing';
-import type { ShopOffer, ShopProduct } from '@/lib/shop/types';
+  attemptFingerprint,
+  buildCartLines,
+  canAdvance,
+  checkDelivery,
+  initialStep,
+  isAddressField,
+  isCouponBlocked,
+  nextStep,
+  pickDisplayQuote,
+  prevStep,
+  SHOP_STEPS,
+  shouldRotateKey,
+  STEP_TITLES,
+  type ShopStep,
+} from '@/lib/shop/checkoutFlow';
+import { cartItemKey, MAX_UNITS_PER_ORDER, unitsLabel, type CartItem, type ShopQuoteV2 } from '@/lib/shop/pricing';
+import { useShopQuote } from '@/lib/shop/useShopQuote';
+import type { ShopProduct, ShopSettings } from '@/lib/shop/types';
 
-type Form = Record<AddressField, string>;
+const ATTEMPT_KEY = 'hioc_shop_checkout_attempt';
+/** A Razorpay intent is reused locally only this long; after it the server decides (same key). */
+const INTENT_REUSE_MS = 10 * 60 * 1000;
 
-const EMPTY_FORM: Form = {
-  customer_name: '',
-  phone: '',
-  email: '',
-  address_line1: '',
-  address_line2: '',
-  city: '',
-  state: '',
-  pincode: '',
-};
+interface Status {
+  tone: 'error' | 'info';
+  text: string;
+  orderLink?: string;
+}
 
-const STATE_OPTIONS = INDIAN_STATES.map((s) => ({ value: s, label: s }));
-
-interface PendingPayment {
+interface Attempt {
   key: string;
+  fingerprint: string;
+  /** The last answer's code, for shouldRotateKey. */
+  lastCode: string | null;
+}
+
+interface PendingIntent {
+  fingerprint: string;
   orderId: string;
   payment: CreatedPaymentIntent;
+  at: number;
 }
 
-function Stepper({
-  label,
-  value,
-  onChange,
-  canAdd,
-}: {
-  label: string;
-  value: number;
-  onChange: (n: number) => void;
-  canAdd: boolean;
-}) {
-  if (value === 0) {
-    return (
-      <Button variant="secondary" size="sm" onClick={() => onChange(1)} disabled={!canAdd} aria-label={`Add ${label}`}>
-        Add
-      </Button>
-    );
+/** A random v4 uuid (crypto.randomUUID where there is one). */
+function newIdempotencyKey(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  } catch {
+    // No crypto at all: a uuid-shaped random string still passes the route's check.
+    const r = () => Math.floor(Math.random() * 16).toString(16);
+    const part = (n: number) => Array.from({ length: n }, r).join('');
+    return `${part(8)}-${part(4)}-4${part(3)}-${(8 + Math.floor(Math.random() * 4)).toString(16)}${part(3)}-${part(12)}`;
   }
-  const btn =
-    'flex h-11 w-11 items-center justify-center rounded-md text-xl font-semibold text-tan-dark transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan';
-  return (
-    <div className="flex items-center rounded-md border border-line" role="group" aria-label={`${label} quantity`}>
-      <button type="button" className={btn} onClick={() => onChange(value - 1)} aria-label={`One fewer ${label}`}>
-        −
-      </button>
-      <span className="min-w-[2ch] text-center font-mono text-base tabular-nums text-charcoal" aria-live="polite">
-        {value}
-      </span>
-      <button type="button" className={btn} onClick={() => onChange(value + 1)} disabled={!canAdd} aria-label={`One more ${label}`}>
-        +
-      </button>
-    </div>
-  );
 }
 
-/**
- * The nudge under the total: what one more jar costs, and what it unlocks
- * (the next offer tier, free shipping). Null when nothing more is unlocked.
- */
-function nextJarNudge(jarCount: number, unitPrice: number, offer: ShopOffer | null): string | null {
-  if (jarCount <= 0 || jarCount >= MAX_JARS_PER_ORDER) return null;
-  const next = jarCount + 1;
-  const tier = offer ? offerDeals(offer.tier_prices, unitPrice).find((d) => d.jars === next) : undefined;
-  const freesShipping = shippingForJars(jarCount) > 0 && shippingForJars(next) === 0;
-  if (!tier && !freesShipping) return null;
-  const more = totalForJars(unitPrice, next, offer) - totalForJars(unitPrice, jarCount, offer);
-  const unlocks = [tier ? `${next} for ${rupees(tier.price)}` : null, freesShipping ? 'free shipping' : null].filter(Boolean).join(' + ');
-  return `Add ${next === 2 ? 'another' : `a ${next === 3 ? '3rd' : `${next}th`}`} jar for just ${rupees(more)} more: ${unlocks}.`;
+function readAttempt(): Attempt | null {
+  try {
+    const raw = window.sessionStorage.getItem(ATTEMPT_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<Attempt>;
+    return typeof v.key === 'string' && typeof v.fingerprint === 'string' ? { key: v.key, fingerprint: v.fingerprint, lastCode: null } : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAttempt(a: Attempt | null): void {
+  try {
+    if (a) window.sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify({ key: a.key, fingerprint: a.fingerprint }));
+    else window.sessionStorage.removeItem(ATTEMPT_KEY);
+  } catch {
+    // Private mode: the key lives in the ref for this page view.
+  }
 }
 
 export function ShopExperience({
   products,
-  offer,
+  settings,
+  introEligible,
+  signedIn,
   paymentReady,
 }: {
+  /** Listed products only (the server page filters; unlisted ones never reach the browser). */
   products: ShopProduct[];
-  offer: ShopOffer | null;
+  settings: ShopSettings;
+  introEligible: boolean;
+  signedIn: boolean;
   paymentReady: boolean;
 }) {
   const router = useRouter();
-  const [qty, setQty] = useState<Record<string, number>>({});
-  const [form, setForm] = useState<Form>(EMPTY_FORM);
-  const [fieldError, setFieldError] = useState<{ field: AddressField; error: string } | null>(null);
-  const [pin, setPin] = useState<ShopLocation | null>(null);
-  const [pinError, setPinError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [orderLink, setOrderLink] = useState<string | null>(null);
+  const instant = useMemo(() => products.filter((p) => p.listed && (p.line ?? 'instant') === 'instant'), [products]);
+  const homeBlend = useMemo(() => products.filter((p) => p.listed && p.line === 'home_blend'), [products]);
+
+  const [items, setItems] = useState<CartItem[]>([]);
+  const [step, setStep] = useState<ShopStep>('choose');
+  const [hydrated, setHydrated] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [appliedCode, setAppliedCode] = useState<string | null>(null);
+  const [useBeanies, setUseBeanies] = useState(true);
   const [busy, setBusy] = useState(false);
-  const pending = useRef<PendingPayment | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
+  const [status, setStatus] = useState<Status | null>(null);
+  const [priceNote, setPriceNote] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<'instant' | 'home-blend'>('instant');
 
-  const items = useMemo(
-    () => Object.entries(qty).filter(([, n]) => n > 0).map(([product_id, quantity]) => ({ product_id, quantity })),
-    [qty],
-  );
-  const jarCount = items.reduce((n, i) => n + i.quantity, 0);
-  const quote = useMemo(() => (items.length ? priceShopCart(products, items, offer) : null), [products, items, offer]);
-  const unitPrice = Math.min(...products.map((p) => p.price_inr));
-  const nudge = nextJarNudge(jarCount, unitPrice, offer);
-  const deals = offer ? offerDeals(offer.tier_prices, unitPrice) : [];
-  const canAddMore = jarCount < MAX_JARS_PER_ORDER;
+  const delivery = useDelivery({ signedIn });
+  const { seed } = delivery;
+  const storedRef = useRef<ReturnType<typeof readShopCart>>(null);
+  const queryRef = useRef<string | null>(null);
+  const attemptRef = useRef<Attempt | null>(null);
+  const pendingRef = useRef<PendingIntent | null>(null);
+  const doneRef = useRef(false);
+  const stepFocusRef = useRef<HTMLDivElement>(null);
+  const firstStep = useRef(true);
 
-  function setQuantity(id: string, n: number) {
-    setQty((q) => ({ ...q, [id]: Math.max(0, n) }));
-    setError(null);
+  // ---- read the stored cart once, after hydration ----
+  useEffect(() => {
+    const stored = readShopCart();
+    storedRef.current = stored;
+    try {
+      queryRef.current = new URLSearchParams(window.location.search).get('step');
+    } catch {
+      queryRef.current = null;
+    }
+    attemptRef.current = readAttempt();
+    if (stored) {
+      setItems(stored.items);
+      setNotice(stored.notice);
+      seed(stored.address, stored.address_id);
+    }
+    setHydrated(true);
+    // Runs once; `seed` is stable enough for a one-time hand-off.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- decide the opening step: a signed-in customer's address book has to be known first ----
+  useEffect(() => {
+    if (!hydrated || ready) return;
+    if (signedIn && delivery.loadStatus === 'loading') return;
+    setStep(
+      initialStep({
+        stored: storedRef.current,
+        query: queryRef.current,
+        // A saved address must be the one in play: a seeded one-off address (a reorder to an
+        // address not in the book, or one a guest typed) opens Deliver to in form mode instead,
+        // so the customer sees it, and the "Save to account" choice, before paying.
+        hasDefaultAddress: signedIn && delivery.loadStatus === 'ready' && delivery.addresses.length > 0 && delivery.mode === 'saved',
+      }),
+    );
+    setReady(true);
+  }, [hydrated, ready, signedIn, delivery.loadStatus, delivery.addresses.length, delivery.mode]);
+
+  // ---- who is buying, for the quote (offer eligibility and phone-locked codes) ----
+  const sel = delivery.selection;
+  const buyerPhone = sel.mode === 'saved' ? (delivery.selected?.phone ?? '') : String(sel.form.phone ?? '');
+  const buyerEmail = sel.mode === 'saved' ? sel.email : String(sel.form.email ?? '');
+
+  const q = useShopQuote({
+    products,
+    settings,
+    introEligible,
+    items,
+    couponCode: appliedCode,
+    useBeanies,
+    phone: buyerPhone,
+    email: buyerEmail,
+  });
+  const { adopt } = q;
+  const units = cartUnits(items);
+  // Pay keeps the last server figure on screen while a refresh is pending (pickDisplayQuote).
+  const shownQuote = pickDisplayQuote({ step, quote: q.quote, fromServer: q.fromServer, lastServerQuote: q.lastServerQuote, loading: q.loading });
+  const couponBlocked = isCouponBlocked({ appliedCode, couponError: q.couponError, fromServer: q.fromServer });
+  const totalInr = shownQuote ? shownQuote.total_inr : null;
+  const lines = useMemo(() => buildCartLines(products, items), [products, items]);
+
+  // ---- persist the cart on every change (not before the stored one has been read) ----
+  const storedAddress = useMemo(() => {
+    const c = checkDelivery(sel);
+    return c.ok && c.mode === 'form' ? c.address : null;
+  }, [sel]);
+  const storedAddressKey = JSON.stringify(storedAddress);
+  useEffect(() => {
+    if (!hydrated || doneRef.current) return;
+    if (items.length === 0) {
+      if (ready) clearShopCart();
+      return;
+    }
+    if (!ready) return;
+    writeShopCart({
+      items,
+      address_id: sel.mode === 'saved' ? sel.addressId : null,
+      address: storedAddress,
+      notice,
+      step,
+    });
+    // storedAddressKey stands for storedAddress.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, ready, items, step, notice, sel.mode, sel.addressId, storedAddressKey]);
+
+  useEffect(() => {
+    if (paymentReady && units > 0) preloadRazorpay();
+  }, [paymentReady, units]);
+
+  // ---- Pay needs a usable address: back to Deliver to when it isn't ----
+  useEffect(() => {
+    if (!ready || step !== 'pay' || delivery.loadStatus === 'loading') return;
+    if (!canAdvance({ step: 'deliver', itemCount: units, delivery: sel }).ok) setStep('deliver');
+  }, [ready, step, delivery.loadStatus, units, sel]);
+
+  // ---- a new step gets focus and the top of the page ----
+  useEffect(() => {
+    if (firstStep.current) {
+      firstStep.current = false;
+      return;
+    }
+    stepFocusRef.current?.focus({ preventScroll: true });
+    stepFocusRef.current?.scrollIntoView({ block: 'start' });
+  }, [step]);
+
+  // ---- which section the segmented control marks ----
+  const showTabs = instant.length > 0 && homeBlend.length > 0;
+  useEffect(() => {
+    if (!showTabs || step !== 'choose' || typeof IntersectionObserver === 'undefined') return;
+    const targets = ['instant', 'home-blend'].map((id) => document.getElementById(id)).filter((el): el is HTMLElement => el !== null);
+    if (targets.length < 2) return;
+    const seen = new Map<string, number>();
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) seen.set(e.target.id, e.isIntersecting ? e.intersectionRatio : 0);
+        const best = [...seen.entries()].sort((a, b) => b[1] - a[1])[0];
+        if (best && best[1] > 0) setActiveSection(best[0] === 'home-blend' ? 'home-blend' : 'instant');
+      },
+      { rootMargin: '-30% 0px -50% 0px', threshold: [0, 0.25, 0.5, 1] },
+    );
+    targets.forEach((t) => io.observe(t));
+    return () => io.disconnect();
+  }, [showTabs, step]);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#home-blend') setActiveSection('home-blend');
+  }, []);
+
+  // ---- cart edits ----
+  const touchCart = useCallback(() => {
+    setStatus(null);
+    setPriceNote(null);
     if (paymentReady) preloadRazorpay();
+  }, [paymentReady]);
+
+  const instantQty = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const i of items) if (!i.grind) out[i.product_id] = (out[i.product_id] ?? 0) + i.quantity;
+    return out;
+  }, [items]);
+
+  const setInstantQuantity = useCallback(
+    (productId: string, quantity: number) => {
+      touchCart();
+      setItems((cur) => {
+        const key = cartItemKey({ product_id: productId, quantity: 0 });
+        return cur.some((i) => cartItemKey(i) === key) ? setCartItemQuantity(cur, key, quantity) : addCartItem(cur, { product_id: productId, quantity });
+      });
+    },
+    [touchCart],
+  );
+  const addItem = useCallback(
+    (item: CartItem) => {
+      touchCart();
+      setItems((cur) => addCartItem(cur, item));
+    },
+    [touchCart],
+  );
+  const setLineQuantity = useCallback(
+    (key: string, quantity: number) => {
+      touchCart();
+      setItems((cur) => setCartItemQuantity(cur, key, quantity));
+    },
+    [touchCart],
+  );
+  const removeLine = useCallback(
+    (key: string) => {
+      touchCart();
+      setItems((cur) => removeCartItem(cur, key));
+    },
+    [touchCart],
+  );
+  const canAddMore = units < MAX_UNITS_PER_ORDER;
+
+  // ---- moving between steps ----
+  function showFieldProblem(focus: string | undefined, reason: string) {
+    if (focus && (isAddressField(focus) || focus === 'label')) delivery.setFieldError({ field: focus, error: reason });
+    else setStatus({ tone: 'error', text: reason });
   }
 
-  function setField(field: AddressField, value: string) {
-    setForm((f) => ({ ...f, [field]: value }));
-    if (fieldError?.field === field) setFieldError(null);
+  function goBack() {
+    setStatus(null);
+    setPriceNote(null);
+    setStep(prevStep({ step, delivery: sel }));
   }
 
-  function focusField(field: AddressField) {
-    const el = formRef.current?.querySelector<HTMLElement>(`[name="${field}"]`);
-    el?.focus();
-  }
-
-  async function pay(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setOrderLink(null);
-    if (!quote || !quote.ok) {
-      setError(quote && !quote.ok ? quote.error : 'Add at least one jar to your order.');
+  function onPrimary() {
+    if (step === 'pay') {
+      void pay();
       return;
     }
-    const checked = validateShopAddress(form);
-    if (!checked.ok) {
-      setFieldError({ field: checked.field, error: checked.error });
-      focusField(checked.field);
+    setStatus(null);
+    const flow = { step, itemCount: units, delivery: sel };
+    const can = canAdvance(flow);
+    if (!can.ok) {
+      showFieldProblem(can.focus, can.reason);
       return;
     }
+    if (step === 'choose' && q.cartProblem) {
+      setStatus({ tone: 'error', text: q.cartProblem });
+      setCartOpen(true);
+      return;
+    }
+    setStep(nextStep(flow));
+  }
+
+  // ---- paying ----
+  async function pay() {
+    if (busy) return;
+    setStatus(null);
+    setPriceNote(null);
+
+    const can = canAdvance({ step: 'pay', itemCount: units, delivery: sel });
+    if (!can.ok) {
+      if (can.focus === 'products') setStatus({ tone: 'error', text: can.reason });
+      else {
+        if (sel.mode === 'form') setStep('deliver');
+        showFieldProblem(can.focus, can.reason);
+      }
+      return;
+    }
+    const dc = checkDelivery(sel);
+    if (!dc.ok) return;
+    if (!q.quote) {
+      setStatus({ tone: 'error', text: q.cartProblem ?? 'Add something to your order to continue.' });
+      return;
+    }
+
+    const saveLabel =
+      signedIn && dc.mode === 'form' && delivery.saveToAccount && delivery.addresses.length < delivery.max ? normalizeAddressLabel(delivery.label) : null;
+    const fingerprint = attemptFingerprint(
+      {
+        items,
+        address: dc.mode === 'form' ? dc.address : { email: dc.email },
+        address_id: dc.mode === 'saved' ? dc.addressId : null,
+        coupon_code: appliedCode,
+        use_beanies: useBeanies,
+        save_address_label: saveLabel,
+      },
+      dc.mode === 'form' ? delivery.pin : null,
+    );
+
+    // One key per attempt; a retry of the same order reuses it.
+    const prev = attemptRef.current;
+    if (shouldRotateKey(prev?.fingerprint, fingerprint, prev?.lastCode)) {
+      attemptRef.current = { key: newIdempotencyKey(), fingerprint, lastCode: null };
+      pendingRef.current = null;
+      writeAttempt(attemptRef.current);
+    }
+    const attempt = attemptRef.current as Attempt;
+
+    const contact =
+      dc.mode === 'form'
+        ? { name: dc.address.customer_name, phone: dc.address.phone, email: dc.address.email }
+        : { name: delivery.selected?.customer_name ?? '', phone: delivery.selected?.phone ?? '', email: dc.email };
 
     setBusy(true);
-    setPinError(null);
-    const key = JSON.stringify({ items, address: checked.address, pin });
-    let current = pending.current;
-    if (!current || current.key !== key) {
+    let pending = pendingRef.current;
+    if (!pending || pending.fingerprint !== fingerprint || Date.now() - pending.at > INTENT_REUSE_MS) {
+      pending = null;
       let res: Response;
       let data: Record<string, unknown> = {};
       try {
         res = await fetch('/api/shop/checkout', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Idempotency-Key': attempt.key },
           body: JSON.stringify({
-            items,
-            address: form,
-            location: pin,
-            expected_total_inr: quote.total_inr,
+            items: items.map((i) => (i.grind ? { product_id: i.product_id, quantity: i.quantity, grind: i.grind } : { product_id: i.product_id, quantity: i.quantity })),
+            ...(dc.mode === 'saved' ? { address_id: dc.addressId, address: { email: dc.email } } : { address: delivery.form }),
+            save_address: saveLabel ? { label: saveLabel } : null,
+            location: dc.mode === 'form' ? delivery.pin : null,
+            coupon_code: appliedCode ?? undefined,
+            use_beanies: useBeanies,
+            expected_total_inr: q.quote.total_inr,
             // Where this visit came from (docs/TRAFFIC-TRACKING.md); left out when off or declined.
             traffic: getTrafficAttribution(flags.trafficTracking),
           }),
@@ -189,219 +440,271 @@ export function ShopExperience({
         data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
       } catch {
         setBusy(false);
-        setError('Network error — check your connection and try again.');
+        attempt.lastCode = 'network';
+        setStatus({ tone: 'error', text: 'Network error. Check your connection and tap Pay to try again.' });
         return;
       }
+      const code = typeof data.code === 'string' ? data.code : null;
+      const message = typeof data.error === 'string' ? data.error : 'Could not start your order. Please try again.';
+
       if (!res.ok) {
         setBusy(false);
-        const message = typeof data.error === 'string' ? data.error : 'Could not start your order — please try again.';
-        const field = data.field as AddressField | 'location' | undefined;
-        if (field === 'location') {
-          setPinError(message);
-        } else if (field && field in EMPTY_FORM) {
-          setFieldError({ field, error: message });
-          focusField(field);
-        } else {
-          setError(message);
+        attempt.lastCode = code ?? `http_${res.status}`;
+        if (res.status === 409 && (code === 'price_changed' || code === 'coupon' || code === 'beanies_changed')) {
+          // The server's number replaces ours; the cart, the address and the code stay.
+          if (data.quote && typeof data.quote === 'object') adopt(data.quote as ShopQuoteV2, code === 'coupon' ? message : null);
+          setPriceNote(code === 'price_changed' ? "Prices changed: here's the new total" : message);
+          return;
         }
-        // Prices or stock changed since the page loaded: load them again.
-        if (res.status === 409 || (res.status === 400 && !field)) router.refresh();
+        if (res.status === 409 && (code === 'idempotency_mismatch' || code === 'idempotency_expired')) {
+          // Take a new key next time (shouldRotateKey reads lastCode).
+          setStatus({ tone: 'error', text: message });
+          return;
+        }
+        const field = data.field;
+        if (field === 'location') {
+          if (sel.mode === 'form') setStep('deliver');
+          delivery.setPinError(message);
+        } else if (field === 'address_id') {
+          delivery.setChoosing(true);
+          setStatus({ tone: 'error', text: message });
+        } else if (field === 'save_address') {
+          if (sel.mode === 'form') setStep('deliver');
+          delivery.setFieldError({ field: 'label', error: message });
+        } else if (isAddressField(field)) {
+          if (sel.mode === 'form') setStep('deliver');
+          delivery.setFieldError({ field, error: message });
+        } else {
+          setStatus({ tone: 'error', text: message });
+        }
         return;
       }
-      current = { key, orderId: String(data.order_id), payment: data.payment as CreatedPaymentIntent };
-      pending.current = current;
+
+      if (data.already_paid) {
+        doneRef.current = true;
+        clearShopCart();
+        writeAttempt(null);
+        router.push(`/shop/order/${String(data.order_id)}`);
+        return;
+      }
+      attempt.lastCode = null;
+      pending = { fingerprint, orderId: String(data.order_id), payment: data.payment as CreatedPaymentIntent, at: Date.now() };
+      pendingRef.current = pending;
     }
 
-    const orderPath = `/shop/order/${current.orderId}`;
-    await openRazorpayCheckout(current.payment, {
-      name: checked.address.customer_name,
-      phone: checked.address.phone.replace(/^\+91/, ''),
-      email: checked.address.email,
-      description: `Instant Coffee — ${jarsLabel(quote.jar_count)}`,
+    const orderPath = `/shop/order/${pending.orderId}`;
+    await openRazorpayCheckout(pending.payment, {
+      name: contact.name,
+      phone: contact.phone.replace(/^\+91/, ''),
+      email: contact.email,
+      description: `HIOC. order: ${unitsLabel(units)}`,
       verifyPath: '/api/shop/verify',
-      onSuccess: () => router.push(orderPath),
+      onSuccess: () => {
+        doneRef.current = true;
+        clearShopCart();
+        writeAttempt(null);
+        router.push(orderPath);
+      },
       onDismiss: (lastFailure) => {
         setBusy(false);
-        setError(
-          lastFailure
-            ? `The payment didn't go through (${lastFailure}). You can try again.`
-            : 'Payment not completed, so nothing was charged. You can try again.',
-        );
+        setStatus({
+          tone: 'info',
+          text: lastFailure
+            ? `Payment not completed (${lastFailure}). You can try again.`
+            : 'Payment not completed — you can try again',
+        });
       },
       onFailure: (description) => {
         setBusy(false);
-        setError(`${description} If money has left your account, your order page will update within a few minutes.`);
-        setOrderLink(orderPath);
+        setStatus({
+          tone: 'error',
+          text: `${description} If money has left your account, your order page will update within a few minutes.`,
+          orderLink: orderPath,
+        });
       },
     });
   }
 
-  const err = (f: AddressField) => (fieldError?.field === f ? fieldError.error : undefined);
+  // ---- render ----
+  const stepNo = SHOP_STEPS.indexOf(step) + 1;
+  const loadingAddresses = signedIn && delivery.loadStatus === 'loading';
+  const primaryDisabled =
+    !ready ||
+    (step === 'choose' && units === 0) ||
+    (step !== 'choose' && loadingAddresses) ||
+    (step === 'pay' && (!paymentReady || !q.quote || q.loading || couponBlocked));
 
   return (
-    <>
-      <section aria-labelledby="flavours-heading" className="mt-10">
-        <h2 id="flavours-heading" className="text-xl font-bold text-charcoal">
-          Choose your flavours
-        </h2>
-        <p className="mt-1 text-sm text-muted">
-          {deals.length > 0 && offer
-            ? `${offer.name}: ${deals.map((d) => `${d.jars} for ${rupees(d.price)}`).join(' · ')} — any flavours · free shipping on ${FREE_SHIPPING_MIN_JARS} or more`
-            : `${rupees(unitPrice)} a jar · mix any flavours · free shipping on ${FREE_SHIPPING_MIN_JARS} or more`}
-        </p>
-        <ul className="mt-5 grid gap-4 md:grid-cols-3">
-          {products.map((p) => {
-            const style = FLAVOUR_STYLE[p.id] ?? FALLBACK_FLAVOUR_STYLE;
-            const n = qty[p.id] ?? 0;
-            return (
-              <li
-                key={p.id}
-                className="flex gap-4 overflow-hidden rounded-md border border-line bg-cream shadow-card md:flex-col md:gap-0"
-                style={{ borderTop: `4px solid ${style.accent}` }}
-              >
-                {style.image ? (
-                  // The jar (a cut-out with its own soft shadow) on a wash of its
-                  // flavour colour, so the three cards read like a product line.
-                  <div
-                    className="relative w-28 shrink-0 md:aspect-[5/4] md:w-full"
-                    style={{ background: `radial-gradient(ellipse at 50% 40%, #ffffff 0%, ${style.accent}1f 100%)` }}
-                  >
-                    <Image
-                      src={style.image}
-                      alt={`${p.name} jar, ${p.net_qty}`}
-                      fill
-                      sizes="(min-width: 768px) 33vw, 112px"
-                      className={`object-contain p-2 md:p-3 ${p.in_stock ? '' : 'opacity-50 grayscale'}`}
-                    />
-                  </div>
-                ) : null}
-                <div className="flex flex-1 flex-col py-3 pr-3 md:p-4">
-                  <h3 className="text-lg font-bold text-charcoal">{p.name}</h3>
-                  {style.tagline ? <p className="mt-0.5 text-sm text-muted">{style.tagline}</p> : null}
-                  <p className="mt-2 text-sm text-charcoal">
-                    <span className="font-mono font-semibold tabular-nums">{rupees(p.price_inr)}</span>
-                    <span className="text-muted"> · {p.net_qty} jar</span>
-                  </p>
-                  <div className="mt-auto pt-3">
-                    {p.in_stock ? (
-                      <Stepper label={p.name} value={n} onChange={(v) => setQuantity(p.id, v)} canAdd={canAddMore} />
-                    ) : (
-                      <span className="inline-flex rounded-full bg-surface px-3 py-1 text-xs font-semibold text-muted">
-                        Out of stock
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-        {!canAddMore ? (
-          <p className="mt-3 text-sm text-muted">
-            That&apos;s the most we take online ({MAX_JARS_PER_ORDER} jars). For more, call or email us.
+    <div className="pb-32">
+      <nav aria-label="Checkout steps" className="mt-8">
+        <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          {SHOP_STEPS.map((s, i) => (
+            <li key={s} aria-current={s === step ? 'step' : undefined} className="flex items-center gap-2">
+              {i > 0 ? <span aria-hidden="true" className="text-muted">/</span> : null}
+              <span className={s === step ? 'font-bold text-charcoal underline decoration-tan decoration-2 underline-offset-4' : 'text-muted'}>
+                <span className="font-mono tabular-nums">{i + 1}</span> {STEP_TITLES[s]}
+              </span>
+            </li>
+          ))}
+        </ol>
+      </nav>
+
+      <div aria-live="polite" className="mt-4 space-y-3">
+        {notice ? (
+          <div className="flex items-start justify-between gap-2 rounded-md border border-line bg-surface p-3 text-sm text-charcoal">
+            <p>{notice}</p>
+            <button
+              type="button"
+              aria-label="Dismiss message"
+              onClick={() => setNotice(null)}
+              className="-mr-1 -mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xl hover:bg-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+            >
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+        ) : null}
+        {status ? (
+          <p role={status.tone === 'error' ? 'alert' : 'status'} className={`text-sm font-semibold ${status.tone === 'error' ? 'text-red-700' : 'text-charcoal'}`}>
+            {status.text}{' '}
+            {status.orderLink ? (
+              <a href={status.orderLink} className="underline">
+                View your order
+              </a>
+            ) : null}
           </p>
         ) : null}
-      </section>
+      </div>
 
-      <form ref={formRef} onSubmit={pay} noValidate className="mt-10 grid gap-8 md:grid-cols-[1fr_minmax(0,22rem)]">
-        <section aria-labelledby="address-heading">
-          <h2 id="address-heading" className="text-xl font-bold text-charcoal">
-            Delivery address
-          </h2>
-          <p className="mt-1 text-sm text-muted">We ship anywhere in India. The courier may call this number.</p>
-          <div className="mt-5 grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <Input label="Full name" name="customer_name" autoComplete="name" value={form.customer_name} onChange={(e) => setField('customer_name', e.target.value)} error={err('customer_name')} maxLength={60} />
-            </div>
-            <Input label="Mobile number" name="phone" type="tel" inputMode="numeric" autoComplete="tel-national" placeholder="10-digit mobile" value={form.phone} onChange={(e) => setField('phone', e.target.value)} error={err('phone')} maxLength={14} />
-            <Input label="Email" name="email" type="email" autoComplete="email" hint="For your receipt and tracking link" value={form.email} onChange={(e) => setField('email', e.target.value)} error={err('email')} maxLength={254} />
-            <div className="sm:col-span-2">
-              <Input label="House / flat, street" name="address_line1" autoComplete="address-line1" value={form.address_line1} onChange={(e) => setField('address_line1', e.target.value)} error={err('address_line1')} maxLength={120} />
-            </div>
-            <div className="sm:col-span-2">
-              <Input label="Area, landmark (optional)" name="address_line2" autoComplete="address-line2" value={form.address_line2} onChange={(e) => setField('address_line2', e.target.value)} error={err('address_line2')} maxLength={120} />
-            </div>
-            <Input label="Town / city" name="city" autoComplete="address-level2" value={form.city} onChange={(e) => setField('city', e.target.value)} error={err('city')} maxLength={50} />
-            <Input label="Pincode" name="pincode" inputMode="numeric" autoComplete="postal-code" value={form.pincode} onChange={(e) => setField('pincode', e.target.value.replace(/\D/g, '').slice(0, 6))} error={err('pincode')} maxLength={6} />
-            <div className="sm:col-span-2">
-              <Select label="State" name="state" autoComplete="address-level1" placeholder="Choose a state" options={STATE_OPTIONS} value={form.state} onChange={(e) => setField('state', e.target.value)} error={err('state')} />
-            </div>
+      <div
+        ref={stepFocusRef}
+        tabIndex={-1}
+        role="group"
+        aria-label={`Step ${stepNo} of ${SHOP_STEPS.length}: ${STEP_TITLES[step]}`}
+        className="mt-4 scroll-mt-24 outline-none"
+      >
+        {ready && step !== 'choose' ? (
+          <button
+            type="button"
+            onClick={goBack}
+            disabled={busy}
+            className="mb-4 inline-flex min-h-[44px] items-center gap-1 rounded-md pr-3 text-sm font-semibold text-tan-dark hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan disabled:opacity-50"
+          >
+            <span aria-hidden="true">←</span> Back
+          </button>
+        ) : null}
+
+        {/* Choose stays mounted (hidden) on later steps, so a half-picked Home Blend isn't lost on Back. */}
+        <div hidden={step !== 'choose'} data-step="choose">
+          {showTabs ? (
+            <nav aria-label="Product lines" className="sticky top-[68px] z-30 -mx-4 border-b border-line bg-cream/95 px-4 py-2 backdrop-blur">
+              <ul className="flex gap-2">
+                {(['instant', 'home_blend'] as const).map((line) => {
+                  const anchor = PRODUCT_LINES[line].anchor;
+                  const active = activeSection === anchor;
+                  return (
+                    <li key={line} className="flex-1 md:flex-none">
+                      <a
+                        href={`#${anchor}`}
+                        aria-current={active ? 'true' : undefined}
+                        onClick={() => setActiveSection(anchor)}
+                        className={[
+                          'flex min-h-[44px] items-center justify-center rounded-full border-2 px-5 text-sm font-semibold transition-colors',
+                          'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan',
+                          active ? 'border-tan-dark bg-tan-dark text-cream' : 'border-muted/80 bg-cream text-charcoal hover:bg-surface',
+                        ].join(' ')}
+                      >
+                        {PRODUCT_LINES[line].title}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+          ) : null}
+
+          <div id="products" tabIndex={-1} className="mt-6 space-y-12 outline-none">
+            <InstantSection
+              products={instant}
+              quantities={instantQty}
+              onSetQuantity={setInstantQuantity}
+              canAddMore={canAddMore}
+              settings={settings}
+              introEligible={introEligible}
+            />
+            <HomeBlendCard products={homeBlend} unitsInCart={units} onAdd={addItem} />
           </div>
-          <LocationPin
-            value={pin}
-            onChange={(loc) => {
-              setPin(loc);
-              setPinError(null);
+          {!canAddMore ? (
+            <p className="mt-4 text-sm text-muted">That&apos;s the most we take online ({MAX_UNITS_PER_ORDER} items). For more, call or email us.</p>
+          ) : null}
+          {q.cartProblem ? (
+            <p role="alert" className="mt-4 text-sm font-semibold text-red-700">
+              {q.cartProblem}
+            </p>
+          ) : null}
+        </div>
+
+        {step === 'deliver' ? <DeliverToStep delivery={delivery} signedIn={signedIn} /> : null}
+
+        {step === 'pay' ? (
+          <PayStep
+            quote={shownQuote}
+            loading={q.loading}
+            quoteError={q.error}
+            cartProblem={q.cartProblem}
+            couponError={q.couponError}
+            couponBlocked={couponBlocked}
+            appliedCode={appliedCode}
+            onApplyCode={(code) => {
+              setPriceNote(null);
+              setAppliedCode(code);
             }}
-            error={pinError ?? undefined}
+            onRemoveCode={() => {
+              setPriceNote(null);
+              setAppliedCode(null);
+            }}
+            useBeanies={useBeanies}
+            onToggleBeanies={(v) => {
+              setPriceNote(null);
+              setUseBeanies(v);
+            }}
+            signedIn={signedIn}
+            priceNote={priceNote}
+            paymentReady={paymentReady}
+            deliverySlot={<DeliverToStepSlot delivery={delivery} signedIn={signedIn} />}
+            deliveryRecap={sel.mode === 'form' ? { text: addressSummary(delivery), onChange: () => setStep('deliver') } : null}
           />
-        </section>
+        ) : null}
+      </div>
 
-        <aside aria-labelledby="summary-heading" className="md:sticky md:top-24 md:self-start">
-          <div className="rounded-md border border-line bg-cream p-5 shadow-card">
-            <h2 id="summary-heading" className="text-lg font-bold text-charcoal">
-              Your order
-            </h2>
-            {quote && quote.ok ? (
-              <dl className="mt-4 space-y-2 text-sm">
-                {quote.lines.map((l) => (
-                  <div key={l.product_id} className="flex justify-between gap-3">
-                    <dt className="text-charcoal">
-                      {l.name} × {l.quantity}
-                    </dt>
-                    <dd className="font-mono tabular-nums text-charcoal">{rupees(l.line_total_inr)}</dd>
-                  </div>
-                ))}
-                {quote.discount_inr > 0 ? (
-                  <div className="flex justify-between gap-3">
-                    <dt className="font-semibold text-green-800">{quote.offer_name}</dt>
-                    <dd className="font-mono tabular-nums text-green-800">−{rupees(quote.discount_inr)}</dd>
-                  </div>
-                ) : null}
-                <div className="flex justify-between gap-3 border-t border-line pt-2">
-                  <dt className="text-muted">Shipping</dt>
-                  <dd className="font-mono tabular-nums text-charcoal">
-                    {quote.shipping_inr === 0 ? <span className="font-sans font-semibold text-green-700">Free</span> : rupees(quote.shipping_inr)}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-3 border-t border-line pt-2 text-base font-bold">
-                  <dt className="text-charcoal">Total</dt>
-                  <dd className="font-mono tabular-nums text-charcoal">{rupees(quote.total_inr)}</dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="mt-3 text-sm text-muted">No jars yet — add a flavour above.</p>
-            )}
+      <CartDrawer
+        open={cartOpen}
+        onClose={() => setCartOpen(false)}
+        lines={lines}
+        canAddMore={canAddMore}
+        onSetQuantity={setLineQuantity}
+        onRemove={removeLine}
+        problem={q.cartProblem}
+      />
 
-            {nudge ? <p className="mt-4 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">{nudge}</p> : null}
-            {quote && quote.ok && quote.discount_inr > 0 ? (
-              <p className="mt-3 text-center text-sm font-semibold text-green-800">You save {rupees(quote.discount_inr)}</p>
-            ) : null}
+      <StickyCheckoutBar
+        step={step}
+        itemCount={units}
+        totalInr={totalInr}
+        refreshing={q.loading}
+        busy={busy}
+        disabled={primaryDisabled}
+        onOpenCart={() => setCartOpen(true)}
+        onPrimary={onPrimary}
+      />
+    </div>
+  );
+}
 
-            {error ? (
-              <p role="alert" className="mt-4 text-sm font-semibold text-red-700">
-                {error}{' '}
-                {orderLink ? (
-                  <a href={orderLink} className="underline">
-                    View your order
-                  </a>
-                ) : null}
-              </p>
-            ) : null}
-
-            {paymentReady ? (
-              <Button type="submit" size="lg" fullWidth className="mt-5" loading={busy} disabled={!quote || !quote.ok}>
-                {quote && quote.ok ? `Pay ${rupees(quote.total_inr)}` : 'Pay'}
-              </Button>
-            ) : (
-              <p className="mt-5 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
-                Online payment isn&apos;t available right now. Please check back soon, or buy jars at the café.
-              </p>
-            )}
-            <p className="mt-3 text-center text-xs text-muted">Secure payment by Razorpay · UPI, cards, netbanking · prepaid only</p>
-          </div>
-        </aside>
-      </form>
-    </>
+/** The saved-address summary shown at the top of Pay (nothing when the address is typed). */
+function DeliverToStepSlot({ delivery, signedIn }: { delivery: ReturnType<typeof useDelivery>; signedIn: boolean }) {
+  return (
+    <div className="mt-4">
+      <DeliverToStep delivery={delivery} signedIn={signedIn} compact />
+    </div>
   );
 }
