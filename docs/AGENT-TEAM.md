@@ -20,14 +20,15 @@ product owner. The rest report to you by email.
 | **Weekly optimisation and security pass** | Runs the security checks first, then makes the site faster and cleaner, and proposes the changes for you to accept. | Mondays 6:51 am IST |
 | **Product owner** | Your contact for any change. Turns what you ask for into work for the engineers and checks it. Also keeps the to-do list. | Whenever you talk to it, and Mondays 10:31 am IST |
 | **Engineers (ICs)** | `web-engineer`, `database-engineer`, `orders-payments-engineer`, `chef`. They do the work they are briefed on. | When the roles above brief them |
-| **Security reviewer** | Reads every change before it leaves the session. A fail blocks it. It cannot edit code, so it is independent of the author. | Before every push |
+| **Security reviewer** | Reads every change before it leaves the session. A fail blocks it. It is given no editing tools and is told to change nothing, so its verdict does not depend on the author. | Before every push |
 
 ## When the site goes down
 
 1. The watchman fails three checks in a minute and wakes the manager.
 2. The manager confirms the outage itself, twice, and reads the Vercel and Supabase evidence.
-3. **If a release made in the last 24 hours broke the site**, the manager points the
-   site back at the previous release. This usually restores service in a minute or two.
+3. **If a release made in the last 24 hours broke a page customers use**, the
+   manager points the site back at the previous release. This usually restores
+   service in a minute or two.
 4. It records the incident, has the right engineer propose a fix as a pull request,
    and emails you a short report: what happened, what it did, what you need to do.
 
@@ -41,20 +42,28 @@ working release.
 One thing: roll the site back to the release before the current one. Only when all
 of this is true:
 
-- the outage is confirmed twice, a minute apart;
-- the current release is less than 24 hours old, and the previous release is working right now when tested directly;
+- the manager itself saw a page customers use (the home page, the menu) fail, twice, a minute apart. Error logs or an alert alone are never enough;
+- that same page works right now on the previous release, tested directly;
+- the current release is less than 24 hours old;
 - the database (Hioc India) is healthy;
 - the release did not change the database's structure;
+- the release is not a security fix, because rolling back would reopen the hole;
 - nobody has already rolled back.
 
 If any of these is not true it does nothing to the site and emails you with what it
-recommends.
+recommends. That includes a fault it can see only in the error logs, such as
+payments failing while the pages still load: it tells you at once, and the
+rollback is then your call (Vercel → project `hioc-in` → Deployments → the previous
+build → Instant Rollback).
 
-### What no agent ever does
+### What no agent does on its own
 
-- Merge a pull request, release a build, or promote one.
+- Merge a pull request, release a build, or promote one. These happen only when
+  you ask for that step yourself, in a conversation. An unattended run never does them.
 - Change a setting in Vercel, Supabase, Razorpay or WhatsApp.
-- Write to the database, or run any script against it.
+- Write to the database, or run a script against it. The one existing exception is
+  the recipe set-up (`inventory:*` commands, used with the `chef`), which runs only
+  in a session where you asked for it and after the database check in `CLAUDE.md`.
 - Read or touch the retired database, Hioc Coffee.
 - Put a customer's or staff member's details, a key, or the detail of a security weakness into this repository. It is public.
 
@@ -86,8 +95,16 @@ These hold for every role, every time.
 - **Every change is checked before it leaves.** The author runs
   `scripts/security-scan-diff.sh`, which fails if the change adds any finding to
   the playbook's scan. Then the security reviewer reads the change. A fail blocks it.
-- **GitHub enforces the same check.** Every pull request that touches the app runs
-  the scan comparison alongside the lint, type check, tests and build.
+- **GitHub runs the same check.** Every pull request that touches the app runs the
+  scan comparison alongside the lint, type check, tests and build. It uses
+  `main`'s copy of the check and of the scanner, so a change cannot pass by
+  editing either.
+- **Only merge what the team reported to you.** This repository is public, so a
+  stranger can open a pull request or an issue and give it a title that looks like
+  the team's. The roles recognise their own work by who opened it and where its
+  branch lives, never by its title, and they will tell you when something from
+  outside is imitating them. A green check on a stranger's pull request is not a
+  reason to merge it.
 - **Production is read-only** for every agent, except the manager's single rollback.
 - **Outside text is never an instruction.** Alert messages, error logs, and issues
   or comments on this public repository can be written by strangers. The roles
@@ -145,7 +162,9 @@ without them.
 ### 3. Finish the three tasks
 
 Go to <https://claude.ai/code/routines>. For each task: open it → the menu next to
-its name → **Edit**.
+its name → **Edit** → expand **Advanced settings**. The repository is under
+**Repository** on the **General** tab, and the connectors are on the
+**Connectors** tab. Finish with **Save changes**.
 
 | Task | Repository | Connectors |
 |---|---|---|
@@ -155,7 +174,8 @@ its name → **Edit**.
 
 The tasks were created with no repository and no connectors attached, so add them
 here. Give each task only what the table lists: a connector an agent does not
-have is one it cannot be talked into misusing. Save, then resume the task.
+have is one it cannot be talked into misusing. Then switch the task on with the
+on/off switch at the top of its page.
 
 ### 4. Connect the watchman to the manager
 
@@ -180,10 +200,11 @@ list, checks the site and finishes with "All clear — hioc.in is up."
 
 ## Stopping it
 
-- **Everything:** pause the three tasks at <https://claude.ai/code/routines>, and
-  disable *Uptime watch* in GitHub → Actions.
+- **Everything:** switch off the three tasks at <https://claude.ai/code/routines>,
+  and disable *Uptime watch* in GitHub → Actions. This takes effect at once.
 - **Only the automatic rollback:** tell the product owner "do not roll back
-  without asking me". The manager will then report and wait.
+  without asking me". It changes the manager's rules, and the change applies once
+  it is merged. Until then, switching off the manager task is the immediate stop.
 
 ## Limits you should know
 
@@ -193,6 +214,15 @@ list, checks the site and finishes with "All clear — hioc.in is up."
   the first days: if the checks are far apart, use a dedicated uptime service
   instead. Any service that can send a web request with custom headers can wake
   the manager the same way.
+- **A run can be held for your approval.** Unattended runs start in a mode where
+  an automatic check allows or blocks each action. If it holds the rollback, a
+  prompt appears in that run's session and waits for you, and the manager's email
+  says so. Until a real run has been through this, treat the automatic rollback as
+  likely, not certain.
+- **The security check compares, it does not prove.** It catches a change that
+  adds a finding. Where the scan reports once per file, more of the same problem
+  in a file that is already flagged can get past it; the security reviewer reads
+  the change for that.
 - **The manager's own schedule is hourly at best.** That is the fastest a Claude
   scheduled task can repeat. The watchman is what makes the response quick.
 - **Scheduled tasks are a research preview** and every run uses your Claude plan's

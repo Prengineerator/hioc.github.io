@@ -102,13 +102,26 @@ jobs:
       # Security gate (docs/SECURITY-PLAYBOOK.md). Compares this PR with its
       # base, so it holds every new change to the playbook while findings that
       # were already on the base are worked through separately.
+      #
+      # The gate script and the scanner both come from the BASE branch, so a
+      # pull request cannot pass by editing either. The pull request's own copy
+      # of the gate is used only when the base has none yet, which is true once:
+      # for the change that introduces it.
+      #
+      # What this cannot stop is a pull request that edits this workflow file.
+      # That is what the owner's own look at a pull request is for.
       - name: Security scan (no new findings)
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_REF"
-          bash scripts/security-scan-diff.sh FETCH_HEAD
+          gate="$RUNNER_TEMP/security-scan-diff.sh"
+          if ! git show FETCH_HEAD:scripts/security-scan-diff.sh > "$gate" 2>/dev/null; then
+            echo "The base branch has no gate script yet; using this pull request's copy."
+            cp scripts/security-scan-diff.sh "$gate"
+          fi
+          bash "$gate" FETCH_HEAD
 
       - run: npm run build
 

@@ -27,7 +27,9 @@ describes it for the owner.
   developer and should not have to manage the engineers.
 - **Manager.** Production checks and incidents follow
   `.claude/skills/incident-manager/SKILL.md`. Its rollback rules are the only way
-  an agent may change production without the owner's word in the conversation.
+  an agent may change production on its own. Anything else that changes production
+  (merging, releasing, promoting, a setting, the database) is done only when the
+  owner asks for that step in the conversation, and never by an unattended run.
 - **Weekly optimisation and security pass.** Runs by itself every week and
   follows `.claude/skills/weekly-optimisation/SKILL.md`. It proposes pull requests
   and changes nothing in production.

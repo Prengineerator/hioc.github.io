@@ -18,13 +18,14 @@ name: Uptime watch
 # Waking the manager means calling the manager scheduled task's API trigger,
 # which starts a Claude session that follows
 # .claude/skills/incident-manager/SKILL.md. The alert is sent once per outage,
-# on the healthy → down edge, so a long outage does not start a new session
-# every 5 minutes. The manager's own hourly run covers an outage that lasts.
+# so a long outage does not start a new session every 5 minutes. A wake call
+# that fails is tried again on the next check. The manager's own hourly run
+# covers an outage that lasts.
 #
 # Setup (once), in Settings → Secrets and variables → Actions:
 #   CLAUDE_MANAGER_FIRE_URL    the "Fire URL" of the manager task's API trigger
 #   CLAUDE_MANAGER_FIRE_TOKEN  the token generated for that trigger
-# docs/AGENT-TEAM.md, step 3, says where to find both. Until they are set the
+# docs/AGENT-TEAM.md, step 4, says where to find both. Until they are set the
 # check still runs and still goes red on an outage; it just cannot wake anyone.
 #
 # This repository is public, so its Actions logs are too. The steps below print
@@ -86,43 +87,56 @@ jobs:
             echo "health=$health"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Was the previous check healthy?
+      - name: Has this outage been alerted already?
         id: previous
         if: steps.probe.outputs.verdict == 'down'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # The newest completed run of this workflow. The current run is still
-          # in progress, so it is not in this list. If the lookup fails, alert
-          # anyway: a second alert costs less than a missed outage.
-          conclusion=$(gh run list --workflow uptime-watch.yml --status completed --limit 1 \
-            --json conclusion --jq '.[0].conclusion // "none"' 2>/dev/null || echo unknown)
-          echo "previous check: $conclusion"
-          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+          # Look at the newest completed run of this workflow (the current run
+          # is still in progress, so it is not in the list). This outage counts
+          # as already alerted only if that run also found the site down AND
+          # its wake step did not fail: it either woke the manager, or was
+          # skipped because an earlier run in the same outage had. A wake that
+          # failed is tried again now. If a lookup fails, alert: a second alert
+          # costs less than a missed outage.
+          alerted=false
+          id=$(gh run list --workflow uptime-watch.yml --status completed --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
+          if [ -n "$id" ]; then
+            steps=$(gh run view "$id" --json jobs \
+              --jq '.jobs[].steps[] | "\(.name)=\(.conclusion)"' 2>/dev/null || true)
+            down=$(printf '%s\n' "$steps" | grep -c '^Fail the run when the site is down=failure$' || true)
+            woke=$(printf '%s\n' "$steps" | grep -cE '^Wake the manager=(success|skipped)$' || true)
+            if [ "$down" = "1" ] && [ "$woke" = "1" ]; then alerted=true; fi
+          fi
+          echo "already alerted: $alerted"
+          echo "alerted=$alerted" >> "$GITHUB_OUTPUT"
 
       - name: Wake the manager
         if: >-
           inputs.test_alert == true ||
-          (steps.probe.outputs.verdict == 'down' && steps.previous.outputs.conclusion != 'failure')
+          (steps.probe.outputs.verdict == 'down' && steps.previous.outputs.alerted != 'true')
         env:
           FIRE_URL: ${{ secrets.CLAUDE_MANAGER_FIRE_URL }}
           FIRE_TOKEN: ${{ secrets.CLAUDE_MANAGER_FIRE_TOKEN }}
           VERDICT: ${{ steps.probe.outputs.verdict }}
           HOME_CODE: ${{ steps.probe.outputs.home }}
           HEALTH_CODE: ${{ steps.probe.outputs.health }}
-          TEST_ALERT: ${{ inputs.test_alert }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$FIRE_URL" ] || [ -z "$FIRE_TOKEN" ]; then
-            echo "::warning::CLAUDE_MANAGER_FIRE_URL / CLAUDE_MANAGER_FIRE_TOKEN are not set, so nobody was woken. See docs/AGENT-TEAM.md, step 3."
+            echo "::warning::CLAUDE_MANAGER_FIRE_URL / CLAUDE_MANAGER_FIRE_TOKEN are not set, so nobody was woken. See docs/AGENT-TEAM.md, step 4."
             exit 0
           fi
           now=$(date -u +%Y-%m-%dT%H:%MZ)
-          if [ "$TEST_ALERT" = "true" ]; then
-            text="TEST alert from the uptime watch at $now, sent by hand to prove the alert path works. The watch measured: home page HTTP $HOME_CODE, /api/health HTTP $HEALTH_CODE (verdict: $VERDICT). Run: $RUN_URL"
-          else
+          # A real outage is always reported as one, even when the run was
+          # started by hand with the test box ticked.
+          if [ "$VERDICT" = "down" ]; then
             text="Uptime watch at $now: hioc.in failed three checks over one minute. Home page HTTP $HOME_CODE, /api/health HTTP $HEALTH_CODE (000 means no answer). Run: $RUN_URL"
+          else
+            text="TEST alert from the uptime watch at $now, sent by hand to prove the alert path works. The watch measured: home page HTTP $HOME_CODE, /api/health HTTP $HEALTH_CODE (verdict: $VERDICT). Run: $RUN_URL"
           fi
           body=$(jq -n --arg text "$text" '{text: $text}')
           for attempt in 1 2 3; do
@@ -136,10 +150,12 @@ jobs:
             case "$code" in 2*) exit 0 ;; esac
             [ "$attempt" = "3" ] || sleep 10
           done
-          echo "::error::The manager could not be woken. Its hourly run will still pick the outage up."
+          # Failing this step is what makes the next run try again.
+          echo "::error::The manager could not be woken. The next check will try again, and its hourly run will still pick the outage up."
+          exit 1
 
       - name: Fail the run when the site is down
-        if: steps.probe.outputs.verdict == 'down'
+        if: always() && steps.probe.outputs.verdict == 'down'
         env:
           HOME_CODE: ${{ steps.probe.outputs.home }}
           HEALTH_CODE: ${{ steps.probe.outputs.health }}
