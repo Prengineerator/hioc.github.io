@@ -9,6 +9,7 @@
 // on both would make the shared piece worse than the duplication it removes.
 
 import type { PhoneOtp } from '@/lib/hooks/usePhoneOtp';
+import { Input } from '@/components/ui/Input';
 
 export function GetOtpButton({
   otp,
@@ -41,8 +42,8 @@ export function GetOtpButton({
       disabled={otp.busy || !otp.phoneIsValid || extraDisabled}
       className={
         variant === 'primary'
-          ? 'w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60'
-          : 'shrink-0 rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50'
+          ? 'min-h-[48px] w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60'
+          : 'min-h-[44px] shrink-0 rounded-md border border-muted/80 px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50'
       }
     >
       {otp.busy ? 'Sending…' : 'Get OTP'}
@@ -68,31 +69,32 @@ export function PhoneOtpPanel({
           opens if the send itself failed — leaving a button that appears to do
           nothing. */}
       {otp.step === 'idle' && !otp.verified && otp.error ? (
-        <p className="mt-1 text-sm text-red-700">{otp.error}</p>
+        <p role="alert" className="mt-1 text-sm text-red-700">{otp.error}</p>
       ) : null}
 
       {otp.step === 'sent' && !otp.verified ? (
-        <div className="mt-3 flex flex-col gap-3 rounded-md border border-tan bg-surface px-4 py-3">
+        <div className="mt-3 flex flex-col gap-3 rounded-md border border-tan px-4 py-3">
           <p className="text-sm text-charcoal">
             Enter the 6-digit code sent to your WhatsApp on{' '}
             <span className="font-bold">{otp.phone}</span> to confirm your number.
           </p>
-          <input
+          <Input
+            label="Verification code"
             type="text"
             inputMode="numeric"
+            autoComplete="one-time-code"
             pattern="[0-9]*"
             maxLength={6}
             value={otp.code}
             onChange={(e) => otp.setCode(e.target.value)}
             placeholder="6-digit code"
-            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+            error={otp.error ?? undefined}
           />
-          {otp.error ? <p className="text-sm text-red-700">{otp.error}</p> : null}
           <button
             type="button"
             onClick={() => void otp.verifyOtp()}
             disabled={otp.busy}
-            className="w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-[48px] w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
           >
             {otp.busy ? verifyingLabel : verifyLabel}
           </button>
@@ -101,11 +103,11 @@ export function PhoneOtpPanel({
               type="button"
               onClick={() => void otp.sendOtp()}
               disabled={otp.busy}
-              className="font-semibold text-tan-dark underline disabled:opacity-50"
+              className="inline-flex min-h-[44px] items-center font-semibold text-tan-dark underline disabled:opacity-50"
             >
               Resend code
             </button>
-            <button type="button" onClick={otp.cancel} className="text-muted underline">
+            <button type="button" onClick={otp.cancel} className="inline-flex min-h-[44px] items-center text-muted underline">
               Change number
             </button>
           </div>
@@ -115,12 +117,23 @@ export function PhoneOtpPanel({
       {otp.verified ? (
         <div
           role="status"
-          className="mt-2 flex items-center gap-2 rounded-md border border-tan bg-surface px-3 py-2 text-sm text-charcoal"
+          className="mt-2 flex items-center gap-2 text-sm text-charcoal"
         >
-          <span aria-hidden className="text-base font-bold text-tan-dark">
-            ✓
-          </span>
-          <span>Number verified — you can place your order.</span>
+          <svg
+            aria-hidden="true"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="shrink-0 text-green-700"
+          >
+            <path d="M5 12.5l4.5 4.5L19 7.5" />
+          </svg>
+          <span>Number verified. You can place your order.</span>
         </div>
       ) : null}
     </>
