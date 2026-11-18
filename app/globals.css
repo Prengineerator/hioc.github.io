@@ -25,6 +25,10 @@
  */
 html {
   color-scheme: light;
+  /* clip, never hidden: `hidden` turns the element into a scroll container and
+     breaks position: sticky (the site header, the menu's pinned bar). Both
+     elements, so one stray wide child can't scroll the page sideways. */
+  overflow-x: clip;
 }
 
 body {
@@ -37,6 +41,15 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow-x: clip;
+}
+
+/* The fixed cart bar (components/cart/FloatingCartBar.tsx, marked with
+   data-floating-cart-bar) is about 5rem tall. While it is on screen, leave
+   that much room under the page so it never covers the footer's last lines
+   (GSTIN, policy links). */
+body:has([data-floating-cart-bar]) {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
 }
 
 /*

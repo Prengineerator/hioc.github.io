@@ -79,9 +79,9 @@ export function AnnouncementBanner() {
             type="button"
             onClick={() => dismiss(a.id)}
             aria-label="Dismiss announcement"
-            className="shrink-0 text-lg leading-none text-muted hover:text-charcoal"
+            className="-mr-2 -my-1.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-xl leading-none text-muted transition-colors hover:text-charcoal"
           >
-            ×
+            <span aria-hidden="true">&times;</span>
           </button>
         </div>
       ))}

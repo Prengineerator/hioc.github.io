@@ -60,7 +60,7 @@ export function TasteProfileCard() {
           : prev,
       );
     } catch {
-      setActionError("That didn't go through — please try again.");
+      setActionError("That didn't go through. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -81,7 +81,7 @@ export function TasteProfileCard() {
       if (!res.ok) throw new Error(String(res.status));
     } catch {
       setData(previous);
-      setActionError("That didn't go through — please try again.");
+      setActionError("That didn't go through. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -93,7 +93,7 @@ export function TasteProfileCard() {
     <div className="rounded-md border border-line bg-cream p-5 shadow-card">
       <h2 className="font-semibold text-charcoal">Your taste profile</h2>
       <p className="mt-1 text-sm text-muted">
-        {data.summary || "We don't have enough orders yet to notice a pattern — that's alright."}
+        {data.summary || "We don't have enough orders yet to notice a pattern yet, and that's alright."}
       </p>
 
       {actionError ? <p className="mt-2 text-sm text-red-700">{actionError}</p> : null}

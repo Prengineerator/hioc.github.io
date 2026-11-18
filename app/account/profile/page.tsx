@@ -23,6 +23,9 @@ import { createClient } from '@/lib/supabase';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import { Spinner } from '@/components/ui/Spinner';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
 import type { OrderType } from '@/lib/types';
 
 interface MeResponse {
@@ -134,7 +137,7 @@ export default function ProfilePage() {
       mergeMe(data);
       setSaveMsg('Saved.');
     } catch {
-      setSaveErr('Network error — please try again.');
+      setSaveErr('No connection. Check your internet and try again.');
     } finally {
       setSaving(false);
     }
@@ -272,94 +275,79 @@ export default function ProfilePage() {
         onSubmit={handleSave}
         className="flex flex-col gap-4 rounded-md border border-line bg-cream p-5 shadow-sm"
       >
-        <div>
-          <label htmlFor="name" className="mb-1 block text-sm font-semibold text-charcoal">
-            Name
-          </label>
-          <input
-            id="name"
-            type="text"
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-        </div>
+        <Input
+          id="name"
+          label="Name"
+          type="text"
+          autoComplete="name"
+          required
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="!border-muted/80 text-base"
+        />
 
-        <div>
-          <label htmlFor="dateOfBirth" className="mb-1 block text-sm font-semibold text-charcoal">
-            Date of birth <span className="text-muted">(optional)</span>
-          </label>
-          <input
-            id="dateOfBirth"
-            type="date"
-            value={dateOfBirth}
-            onChange={(e) => setDateOfBirth(e.target.value)}
-            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-        </div>
+        <Input
+          id="dateOfBirth"
+          label="Date of birth (optional)"
+          type="date"
+          autoComplete="bday"
+          value={dateOfBirth}
+          onChange={(e) => setDateOfBirth(e.target.value)}
+          className="!border-muted/80 text-base"
+        />
 
-        <div>
-          <label htmlFor="dateOfAnniversary" className="mb-1 block text-sm font-semibold text-charcoal">
-            Anniversary date <span className="text-muted">(optional)</span>
-          </label>
-          <input
-            id="dateOfAnniversary"
-            type="date"
-            value={dateOfAnniversary}
-            onChange={(e) => setDateOfAnniversary(e.target.value)}
-            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
-          />
-        </div>
+        <Input
+          id="dateOfAnniversary"
+          label="Anniversary date (optional)"
+          type="date"
+          value={dateOfAnniversary}
+          onChange={(e) => setDateOfAnniversary(e.target.value)}
+          className="!border-muted/80 text-base"
+        />
 
-        <div>
-          <label htmlFor="orderType" className="mb-1 block text-sm font-semibold text-charcoal">
-            Default order type
-          </label>
-          <select
-            id="orderType"
-            value={defaultOrderType}
-            onChange={(e) => setDefaultOrderType(e.target.value as OrderType)}
-            className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
-          >
-            {(Object.keys(ORDER_TYPE_LABEL) as OrderType[]).map((t) => (
-              <option key={t} value={t}>
-                {ORDER_TYPE_LABEL[t]}
-              </option>
-            ))}
-          </select>
-        </div>
+        <Select
+          id="orderType"
+          label="Default order type"
+          value={defaultOrderType}
+          onChange={(e) => setDefaultOrderType(e.target.value as OrderType)}
+          options={(Object.keys(ORDER_TYPE_LABEL) as OrderType[]).map((t) => ({ value: t, label: ORDER_TYPE_LABEL[t] }))}
+          className="!border-muted/80 text-base"
+        />
 
-        <label className="flex items-center gap-2 text-sm text-charcoal">
+        <label className="flex min-h-[44px] items-center gap-3 text-base text-charcoal">
           <input
             type="checkbox"
             checked={vegOnly}
             onChange={(e) => setVegOnly(e.target.checked)}
-            className="h-4 w-4 accent-tan"
+            className="h-5 w-5 accent-tan-dark"
           />
           Show vegetarian items only
         </label>
 
-        <label className="flex items-center gap-2 text-sm text-charcoal">
+        <label className="flex min-h-[44px] items-center gap-3 text-base text-charcoal">
           <input
             type="checkbox"
             checked={marketingConsent}
             onChange={(e) => setMarketingConsent(e.target.checked)}
-            className="h-4 w-4 accent-tan"
+            className="h-5 w-5 accent-tan-dark"
           />
-          Send me offers & updates (you can opt out anytime)
+          Send me offers and updates (you can opt out anytime)
         </label>
 
-        {saveErr ? <p className="text-sm text-red-700">{saveErr}</p> : null}
-        {saveMsg ? <p className="text-sm text-green-700">{saveMsg}</p> : null}
+        {saveErr ? (
+          <p role="alert" className="text-sm font-semibold text-red-700">
+            {saveErr}
+          </p>
+        ) : null}
+        {saveMsg ? (
+          <p role="status" className="text-sm font-semibold text-green-700">
+            {saveMsg}
+          </p>
+        ) : null}
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="mt-2 w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {saving ? 'Saving…' : 'Save changes'}
-        </button>
+        <Button type="submit" size="lg" fullWidth loading={saving} className="mt-2">
+          {saving ? 'Saving' : 'Save changes'}
+        </Button>
       </form>
 
       <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
@@ -367,7 +355,12 @@ export default function ProfilePage() {
         <p className="mt-1 text-sm text-muted">
           {me?.phone ? (
             <>
-              {me.phone} {me.phone_verified ? <span className="text-green-700">· Verified</span> : <span className="text-tan-dark">· Unverified</span>}
+              {me.phone}{' '}
+              {me.phone_verified ? (
+                <span className="font-semibold text-green-700">Verified</span>
+              ) : (
+                <span className="font-semibold text-tan-dark">Not verified</span>
+              )}
             </>
           ) : (
             'No phone on file yet.'
@@ -378,7 +371,7 @@ export default function ProfilePage() {
           <button
             type="button"
             onClick={() => setPhoneStep('entering')}
-            className="mt-3 text-sm font-semibold text-tan-dark hover:underline"
+            className="mt-3 inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline"
           >
             {me?.phone ? 'Change phone number' : 'Add a phone number'}
           </button>
@@ -386,21 +379,27 @@ export default function ProfilePage() {
 
         {phoneStep === 'entering' ? (
           <form onSubmit={handlePhoneRequest} className="mt-3 flex flex-col gap-3">
-            <input
+            <Input
+              label="New mobile number (10 digits)"
               type="tel"
               inputMode="numeric"
+              autoComplete="tel-national"
               required
               value={newPhone}
               onChange={(e) => setNewPhone(e.target.value)}
-              placeholder="10-digit mobile number"
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              placeholder="98765 43210"
+              className="!border-muted/80 text-base"
             />
-            {phoneErr ? <p className="text-sm text-red-700">{phoneErr}</p> : null}
+            {phoneErr ? (
+              <p role="alert" className="text-sm font-semibold text-red-700">
+                {phoneErr}
+              </p>
+            ) : null}
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={phoneBusy}
-                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
+                className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
               >
                 {phoneBusy ? 'Sending…' : 'Send code'}
               </button>
@@ -410,7 +409,7 @@ export default function ProfilePage() {
                   setPhoneStep('idle');
                   setPhoneErr('');
                 }}
-                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
+                className="min-h-[44px] rounded-md border border-muted/80 px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -420,23 +419,29 @@ export default function ProfilePage() {
 
         {phoneStep === 'code' ? (
           <form onSubmit={handlePhoneVerify} className="mt-3 flex flex-col gap-3">
-            <input
+            <Input
+              label="6-digit code"
               type="text"
               inputMode="numeric"
+              autoComplete="one-time-code"
               pattern="[0-9]*"
               maxLength={6}
               required
               value={phoneCode}
               onChange={(e) => setPhoneCode(e.target.value)}
-              placeholder="6-digit code"
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              placeholder="123456"
+              className="!border-muted/80 text-base"
             />
-            {phoneErr ? <p className="text-sm text-red-700">{phoneErr}</p> : null}
+            {phoneErr ? (
+              <p role="alert" className="text-sm font-semibold text-red-700">
+                {phoneErr}
+              </p>
+            ) : null}
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={phoneBusy}
-                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
+                className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
               >
                 {phoneBusy ? 'Verifying…' : 'Verify'}
               </button>
@@ -446,7 +451,7 @@ export default function ProfilePage() {
                   setPhoneStep('idle');
                   setPhoneErr('');
                 }}
-                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
+                className="min-h-[44px] rounded-md border border-muted/80 px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -462,16 +467,18 @@ export default function ProfilePage() {
             <>
               {me.email}{' '}
               {me.email_verified ? (
-                <span className="text-green-700">· Verified</span>
+                <span className="font-semibold text-green-700">Verified</span>
               ) : (
-                <span className="text-tan-dark">· Unverified</span>
+                <span className="font-semibold text-tan-dark">Not verified</span>
               )}
             </>
           ) : (
             'No email linked yet. Link one to see orders you placed with it and get bills by email.'
           )}
         </p>
-        {emailMsg ? <p className="mt-2 text-sm text-green-700">{emailMsg}</p> : null}
+        <p role="status" className="mt-2 text-sm font-semibold text-green-700">
+          {emailMsg}
+        </p>
 
         {emailStep === 'idle' ? (
           <button
@@ -480,7 +487,7 @@ export default function ProfilePage() {
               setEmailStep('entering');
               setEmailMsg('');
             }}
-            className="mt-3 text-sm font-semibold text-tan-dark hover:underline"
+            className="mt-3 inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline"
           >
             {me?.email ? 'Change email' : 'Link an email'}
           </button>
@@ -488,20 +495,26 @@ export default function ProfilePage() {
 
         {emailStep === 'entering' ? (
           <form onSubmit={handleEmailRequest} className="mt-3 flex flex-col gap-3">
-            <input
+            <Input
+              label="Email address"
               type="email"
+              autoComplete="email"
               required
               value={newEmail}
               onChange={(e) => setNewEmail(e.target.value)}
               placeholder="you@example.com"
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              className="!border-muted/80 text-base"
             />
-            {emailErr ? <p className="text-sm text-red-700">{emailErr}</p> : null}
+            {emailErr ? (
+              <p role="alert" className="text-sm font-semibold text-red-700">
+                {emailErr}
+              </p>
+            ) : null}
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={emailBusy}
-                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
+                className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
               >
                 {emailBusy ? 'Sending…' : 'Send code'}
               </button>
@@ -511,7 +524,7 @@ export default function ProfilePage() {
                   setEmailStep('idle');
                   setEmailErr('');
                 }}
-                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
+                className="min-h-[44px] rounded-md border border-muted/80 px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>
@@ -524,23 +537,29 @@ export default function ProfilePage() {
             <p className="text-sm text-charcoal">
               Enter the 6-digit code we emailed to <span className="font-bold">{newEmail}</span>.
             </p>
-            <input
+            <Input
+              label="6-digit code"
               type="text"
               inputMode="numeric"
+              autoComplete="one-time-code"
               pattern="[0-9]*"
               maxLength={6}
               required
               value={emailCode}
               onChange={(e) => setEmailCode(e.target.value)}
-              placeholder="6-digit code"
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              placeholder="123456"
+              className="!border-muted/80 text-base"
             />
-            {emailErr ? <p className="text-sm text-red-700">{emailErr}</p> : null}
+            {emailErr ? (
+              <p role="alert" className="text-sm font-semibold text-red-700">
+                {emailErr}
+              </p>
+            ) : null}
             <div className="flex gap-2">
               <button
                 type="submit"
                 disabled={emailBusy}
-                className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream hover:bg-tan-darker disabled:opacity-60"
+                className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
               >
                 {emailBusy ? 'Verifying…' : 'Verify'}
               </button>
@@ -550,7 +569,7 @@ export default function ProfilePage() {
                   setEmailStep('idle');
                   setEmailErr('');
                 }}
-                className="rounded-md border border-line px-4 py-2 text-sm font-semibold text-charcoal"
+                className="min-h-[44px] rounded-md border border-muted/80 px-4 py-2 text-sm font-semibold text-charcoal"
               >
                 Cancel
               </button>

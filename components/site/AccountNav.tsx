@@ -32,12 +32,16 @@ interface SessionUser {
  * effect — without the pathname dependency, the header would keep showing
  * "Log In" after a successful login until a manual hard reload.
  *
+ * `hideLogout` (the mobile site menu) drops the Log Out button: the account
+ * pages carry their own, and a one-tap logout in a nav list is easy to hit
+ * by mistake.
+ *
  * Also re-checks on window focus/visibility: a login completed in another
  * tab (or a hard redirect from /login, which can land before this tab's
  * pathname effect would re-fire) otherwise leaves this header stale until
  * something else causes a pathname change.
  */
-export function AccountNav() {
+export function AccountNav({ hideLogout = false }: { hideLogout?: boolean } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -120,6 +124,7 @@ export function AccountNav() {
           My Account
         </Link>
       </li>
+      {hideLogout ? null : (
       <li>
         <button
           type="button"
@@ -129,6 +134,7 @@ export function AccountNav() {
           Log Out
         </button>
       </li>
+      )}
     </>
   );
 }

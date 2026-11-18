@@ -11,7 +11,8 @@ import { Spinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Textarea';
 import { StarRating } from '@/components/reviews/StarRating';
-import { CAFE_NAME } from '@/lib/constants';
+import Link from 'next/link';
+import { CAFE_NAME, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 
 interface OrderItemLite {
   id: string;
@@ -101,12 +102,12 @@ export default function FeedbackPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error ?? 'Something went wrong — please try again.');
+        setError(data.error ?? 'Something went wrong. Please try again.');
         return;
       }
       setSaved(true);
     } catch {
-      setError('Something went wrong — please try again.');
+      setError('Something went wrong. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -123,12 +124,24 @@ export default function FeedbackPage() {
   if (state.status === 'invalid') {
     const message =
       state.reason === 'expired'
-        ? "This feedback link has expired. If you'd still like to tell us something, just message us on WhatsApp."
+        ? "This feedback link has expired. If you'd still like to tell us something, give us a call."
         : "We couldn't find this feedback link. It may have been replaced by a newer one, or the link is incomplete.";
     return (
       <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-4 py-16 text-center">
-        <h1 className="text-xl font-bold text-charcoal">{CAFE_NAME}</h1>
-        <p className="text-sm text-muted">{message}</p>
+        <h1 className="text-xl font-bold text-charcoal">
+          {state.reason === 'expired' ? 'This feedback link has expired' : "We couldn't open this feedback link"}
+        </h1>
+        <p className="text-base text-muted">{message}</p>
+        {/* No WhatsApp number exists in lib/constants.ts, so the phone is the contact. */}
+        <a href={CAFE_PHONE_HREF} className="inline-flex min-h-[44px] items-center text-base font-semibold text-tan-dark underline">
+          Call {CAFE_PHONE_DISPLAY}
+        </a>
+        <Link
+          href="/menu"
+          className="inline-flex min-h-[44px] items-center rounded-md border border-line px-5 text-sm font-semibold text-charcoal transition-colors hover:border-tan hover:text-tan-dark"
+        >
+          Browse the menu
+        </Link>
       </div>
     );
   }
@@ -139,9 +152,9 @@ export default function FeedbackPage() {
     return (
       <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-4 py-16 text-center">
         <h1 className="text-xl font-bold text-charcoal">Thank you!</h1>
-        <p className="text-sm text-muted">
-          Your feedback for order {order.order_number} has been recorded. We read every one — thank you for taking
-          the time.
+        <p className="text-base text-muted">
+          Your feedback for order {order.order_number} has been recorded. We read every one, and we appreciate you
+          taking the time.
         </p>
         <Button variant="secondary" onClick={() => setSaved(false)}>
           Edit my feedback
@@ -154,17 +167,19 @@ export default function FeedbackPage() {
     <div className="mx-auto flex max-w-md flex-col gap-6 px-4 py-8">
       <div>
         <h1 className="text-xl font-bold text-charcoal">How was your order?</h1>
-        <p className="mt-1 text-sm text-muted">Order {order.order_number} · {CAFE_NAME}</p>
+        <p className="mt-1 text-sm text-muted">
+          Order <span className="font-mono tabular-nums">{order.order_number}</span> from {CAFE_NAME}
+        </p>
       </div>
 
       <div className="flex flex-col items-center gap-2 rounded-md border border-line bg-cream py-6 shadow-sm">
         <StarRating value={rating} onChange={setRating} size="lg" label="Rate your order" />
-        <p className="text-xs text-muted">{rating > 0 ? `${rating} out of 5` : 'Tap to rate'}</p>
+        <p aria-live="polite" className="text-sm text-muted">{rating > 0 ? `${rating} out of 5` : 'Tap to rate'}</p>
       </div>
 
       {order.items.length > 0 ? (
         <div className="rounded-md border border-line bg-cream p-4 shadow-sm">
-          <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-muted">How were the items?</h2>
+          <h2 className="mb-3 text-base font-bold text-charcoal">How were the items?</h2>
           <ul className="flex flex-col gap-3">
             {order.items.map((item) => (
               <li key={item.id} className="flex items-center justify-between gap-3">
@@ -179,22 +194,22 @@ export default function FeedbackPage() {
                       aria-pressed={thumbs[item.menu_item_id] === 'up'}
                       onClick={() => toggleThumb(item.menu_item_id as string, 'up')}
                       className={
-                        'rounded-md px-2 py-1.5 text-lg ' +
-                        (thumbs[item.menu_item_id] === 'up' ? 'bg-tan-dark text-cream' : 'bg-surface text-muted')
+                        'min-h-[44px] rounded-md px-4 text-sm font-semibold transition-colors ' +
+                        (thumbs[item.menu_item_id] === 'up' ? 'bg-tan-dark text-cream' : 'bg-surface text-charcoal')
                       }
                     >
-                      👍
+                      Liked it<span className="sr-only">: {item.name_snapshot}</span>
                     </button>
                     <button
                       type="button"
                       aria-pressed={thumbs[item.menu_item_id] === 'down'}
                       onClick={() => toggleThumb(item.menu_item_id as string, 'down')}
                       className={
-                        'rounded-md px-2 py-1.5 text-lg ' +
-                        (thumbs[item.menu_item_id] === 'down' ? 'bg-charcoal text-cream' : 'bg-surface text-muted')
+                        'min-h-[44px] rounded-md px-4 text-sm font-semibold transition-colors ' +
+                        (thumbs[item.menu_item_id] === 'down' ? 'bg-charcoal text-cream' : 'bg-surface text-charcoal')
                       }
                     >
-                      👎
+                      Not for me<span className="sr-only">: {item.name_snapshot}</span>
                     </button>
                   </div>
                 ) : null}
@@ -209,7 +224,7 @@ export default function FeedbackPage() {
         value={comment}
         onChange={(e) => setComment(e.target.value.slice(0, MAX_COMMENT))}
         rows={4}
-        placeholder="Tell us more…"
+        placeholder="Tell us more"
       />
 
       {error ? <p className="text-sm font-semibold text-red-700">{error}</p> : null}

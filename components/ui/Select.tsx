@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useId, type SelectHTMLAttributes } from 'react';
+import { forwardRef, useId, type ReactNode, type SelectHTMLAttributes } from 'react';
 
 export interface SelectOption {
   value: string;
@@ -8,7 +8,7 @@ export interface SelectOption {
 }
 
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
-  label?: string;
+  label?: ReactNode;
   error?: string;
   hint?: string;
   options: SelectOption[];
@@ -18,12 +18,16 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 
 /** Same labeled/error/hint shell as <Input>, for a fixed set of options (custom chevron since native selects can't be restyled directly). */
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select(
-  { label, error, hint, id, options, placeholder, className = '', ...rest },
+  { label, error, hint, id, options, placeholder, className = '', 'aria-describedby': describedByProp, ...rest },
   ref,
 ) {
   const autoId = useId();
   const selectId = id ?? autoId;
-  const describedBy = error ? `${selectId}-error` : hint ? `${selectId}-hint` : undefined;
+  // A caller's own aria-describedby (e.g. a hint rendered outside this
+  // component) is kept alongside the error/hint link, not replaced by it.
+  const describedBy =
+    [describedByProp, error ? `${selectId}-error` : hint ? `${selectId}-hint` : null].filter(Boolean).join(' ') ||
+    undefined;
 
   return (
     <div className="flex flex-col gap-1">
@@ -39,10 +43,10 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           aria-invalid={!!error || undefined}
           aria-describedby={describedBy}
           className={[
-            'min-h-[44px] w-full appearance-none rounded-md border bg-cream px-3 py-2 pr-9 text-charcoal outline-none transition-colors',
+            'min-h-[44px] w-full appearance-none rounded-md border bg-cream px-3 py-2 pr-9 text-base text-charcoal outline-none transition-colors',
             'focus:border-tan focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan',
             'disabled:cursor-not-allowed disabled:bg-surface disabled:opacity-60',
-            error ? 'border-red-600' : 'border-line',
+            error ? 'border-red-700' : 'border-muted/80',
             className,
           ]
             .filter(Boolean)

@@ -28,7 +28,7 @@ function SuggestPageContent({ flavourCounts, facets }: { flavourCounts: FlavourC
 
   const checkoutDisabledReason =
     openState && !openState.acceptingOrders
-      ? 'Checkout is unavailable right now — see notice above.'
+      ? 'Checkout is unavailable right now. See the notice at the top of the page.'
       : null;
 
   return (
@@ -46,6 +46,7 @@ function SuggestPageContent({ flavourCounts, facets }: { flavourCounts: FlavourC
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         settings={settings}
+        openState={openState}
         checkoutDisabledReason={checkoutDisabledReason}
       />
     </>
