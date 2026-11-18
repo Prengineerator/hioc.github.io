@@ -29,6 +29,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
 import { earnForShopOrder, reverseForShopOrder } from '@/lib/loyalty/ledger';
+import { loadReleasablePendingOrders } from '@/lib/shop/beaniesRelease';
 import { captureShopPayment } from '@/lib/shop/payments';
 import { isMissingShopSchema, toShopOrderRow, updateShopOrderIf } from '@/lib/shop/server';
 import { fetchShiprocketOrder, isShiprocketConfigured } from '@/lib/shop/shiprocket';
@@ -79,6 +80,75 @@ export async function onShopOrderCancelled(
 }
 
 /**
+ * The single-order expiry step, shared by the cron pass and the checkout release.
+ * Asks Razorpay first: gateway unreachable or a payment authorized -> 'skipped'
+ * (try again later); captured -> recovered as paid ('recovered', or 'skipped'
+ * when the capture was not handled); otherwise the order is expired and its
+ * Beanies reversed ('expired'; 'skipped' if it moved on meanwhile). Idempotent.
+ */
+export async function expireShopOrderIfUnpaid(
+  admin: SupabaseClient,
+  order: ShopOrderRow,
+): Promise<'expired' | 'recovered' | 'skipped'> {
+  if (order.razorpay_order_id) {
+    const attempts = await fetchOrderPaymentAttempts(order.razorpay_order_id);
+    if (!attempts) return 'skipped'; // gateway unreachable: try again next run
+    if (attempts.some((a) => a.status === 'authorized')) return 'skipped'; // may still capture
+    const captured = attempts.find((a) => a.status === 'captured');
+    if (captured) {
+      const cap = await captureShopPayment({
+        gatewayOrderId: order.razorpay_order_id,
+        gatewayPaymentId: captured.id,
+        method: captured.method,
+        capturedAmountPaise: captured.amount,
+      });
+      return cap.handled ? 'recovered' : 'skipped';
+    }
+  }
+  const updated = await updateShopOrderIf(admin, order.id, ['payment_pending'], {
+    status: 'expired',
+    cancel_reason: 'Payment not completed in time',
+  });
+  if (!updated) return 'skipped'; // it moved on (paid) meanwhile
+  try {
+    await reverseForShopOrder(order.id, 'payment not completed');
+  } catch (e) {
+    console.error('shop lifecycle: ledger reversal failed (the retry pass will redo it)', order.id, e);
+  }
+  return 'expired';
+}
+
+/**
+ * Before a signed-in customer's new checkout quotes or reserves Beanies: runs
+ * expireShopOrderIfUnpaid on their OWN earlier unpaid orders that hold Beanies
+ * (loadReleasablePendingOrders: older than 60 s, at most 5, not the order the
+ * current Idempotency-Key reuses), so Beanies from an abandoned or failed attempt
+ * are free again at once. Never throws: a failure is logged and checkout goes on.
+ */
+export async function releaseOwnPendingShopBeanies(
+  admin: SupabaseClient,
+  userId: string,
+  opts: { excludeIdempotencyKey?: string | null; now?: Date } = {},
+): Promise<{ expired: number; recovered: number }> {
+  const result = { expired: 0, recovered: 0 };
+  try {
+    const orders = await loadReleasablePendingOrders(admin, userId, opts);
+    for (const order of orders) {
+      try {
+        const outcome = await expireShopOrderIfUnpaid(admin, order);
+        if (outcome === 'expired') result.expired++;
+        else if (outcome === 'recovered') result.recovered++;
+      } catch (e) {
+        console.error('shop lifecycle: releasing an earlier order at checkout failed', order.id, e);
+      }
+    }
+  } catch (e) {
+    console.error('shop lifecycle: checkout release failed', e);
+  }
+  return result;
+}
+
+/**
  * Expires unpaid orders older than SHOP_PENDING_EXPIRE_MIN, after asking
  * Razorpay whether they were in fact paid. Returns counts.
  */
@@ -100,34 +170,9 @@ export async function expireStaleShopOrders(
 
   for (const raw of data ?? []) {
     try {
-      const order = toShopOrderRow(raw as Record<string, unknown>);
-      if (order.razorpay_order_id) {
-        const attempts = await fetchOrderPaymentAttempts(order.razorpay_order_id);
-        if (!attempts) continue; // gateway unreachable: try again next run
-        if (attempts.some((a) => a.status === 'authorized')) continue; // may still capture
-        const captured = attempts.find((a) => a.status === 'captured');
-        if (captured) {
-          const cap = await captureShopPayment({
-            gatewayOrderId: order.razorpay_order_id,
-            gatewayPaymentId: captured.id,
-            method: captured.method,
-            capturedAmountPaise: captured.amount,
-          });
-          if (cap.handled) result.recovered++;
-          continue;
-        }
-      }
-      const updated = await updateShopOrderIf(admin, order.id, ['payment_pending'], {
-        status: 'expired',
-        cancel_reason: 'Payment not completed in time',
-      });
-      if (!updated) continue; // it moved on (paid) meanwhile
-      try {
-        await reverseForShopOrder(order.id, 'payment not completed');
-      } catch (e) {
-        console.error('shop lifecycle: ledger reversal failed (the retry pass will redo it)', order.id, e);
-      }
-      result.expired++;
+      const outcome = await expireShopOrderIfUnpaid(admin, toShopOrderRow(raw as Record<string, unknown>));
+      if (outcome === 'expired') result.expired++;
+      else if (outcome === 'recovered') result.recovered++;
     } catch (e) {
       console.error('shop lifecycle: expiring an order failed', e);
     }

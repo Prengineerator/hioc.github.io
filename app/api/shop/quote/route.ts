@@ -81,6 +81,7 @@ export async function POST(request: Request) {
     buyer,
     coupon_code: couponCode,
     use_beanies: body.use_beanies !== false,
+    count_releasable_beanies: true,
   });
   if (!result.ok) return errorResponse(result.status, result.error);
 

@@ -19,6 +19,7 @@
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { findShopCoupon, loadAutoShopCoupons } from '@/lib/promotions/shopCoupons';
+import { releasableShopBeanies } from './beaniesRelease';
 import { getBalance, getLoyaltyConfig } from '@/lib/loyalty/ledger';
 import {
   couponSavingFor,
@@ -43,6 +44,13 @@ export interface QuoteRequest {
   buyer: ShopBuyer;
   coupon_code: string | null;
   use_beanies: boolean;
+  /**
+   * Quote only: count Beanies held by the buyer's own releasable pending orders
+   * (lib/shop/beaniesRelease.ts) as available, because checkout releases them
+   * first. Checkout itself leaves this off: it has already released what it can,
+   * so what is still held (a payment in flight) must not be counted.
+   */
+  count_releasable_beanies?: boolean;
 }
 
 export type ServerQuote =
@@ -62,6 +70,8 @@ export async function serverQuote(admin: SupabaseClient, req: QuoteRequest): Pro
     getLoyaltyConfig(),
     buyer.userId ? isRepeatCustomer(admin, buyer.userId) : Promise.resolve(false),
   ]);
+  // What checkout will free up first, so the quote shows the balance as it will be then.
+  const releasable = buyer.userId && req.count_releasable_beanies ? await releasableShopBeanies(admin, buyer.userId) : 0;
   if (!products.ok) {
     return {
       ok: false,
@@ -74,7 +84,7 @@ export async function serverQuote(admin: SupabaseClient, req: QuoteRequest): Pro
     ? {
         signed_in: signedIn,
         repeat_customer: repeat,
-        balance: signedIn ? balance : 0,
+        balance: signedIn ? balance + releasable : 0,
         min_redeem_points: config.min_redeem_points,
         inr_per_point: config.inr_per_point,
         points_per_inr: config.points_per_inr,

@@ -16,6 +16,7 @@ import { locationColumns, parseShopLocation, type ShopLocation } from '@/lib/sho
 import { paymentIntentFor } from '@/lib/shop/payments';
 import { parseCartItems } from '@/lib/shop/pricing';
 import { findShopOrderByIdempotencyKey, isMissingShopSchema, SHOP_MIGRATION_HINT, SHOP_V2_MIGRATION_HINT } from '@/lib/shop/server';
+import { releaseOwnPendingShopBeanies } from '@/lib/shop/lifecycle';
 import { isPaidStatus, shopOrderRef } from '@/lib/shop/status';
 import type { ShopOrderRow } from '@/lib/shop/types';
 import { runAfterResponse } from '@/lib/api/background';
@@ -57,6 +58,12 @@ const CHOOSE_ADDRESS = 'Choose a delivery address';
 // different cart is 409 idempotency_mismatch; with an expired / cancelled order,
 // 409 idempotency_expired. Two taps racing past the lookup are caught by the
 // unique index (23505) and answered the same way.
+//
+// Before pricing, a signed-in customer's own earlier unpaid orders that hold
+// Beanies (older than 60 s, at most 5, never the order this Idempotency-Key
+// reuses) go through the cron's single-order expiry step (lib/shop/lifecycle.ts
+// releaseOwnPendingShopBeanies: Razorpay asked first), so a retry after a failed
+// payment can use those Beanies at once. The quote counts them as available.
 //
 // Beanies are RESERVED here (the reserve_shop_beanies RPC, atomic with the
 // balance check). If that fails, or Razorpay refuses, or the order can't be
@@ -181,6 +188,11 @@ export async function POST(request: Request) {
     const existing = await findShopOrderByIdempotencyKey(admin, idempotencyKey);
     if (existing) return answerExisting(existing);
   }
+
+  // ---- free Beanies still held by this customer's own earlier unpaid checkouts ----
+  // (a failed or abandoned Razorpay window); the same expiry step the cron uses,
+  // so Razorpay is asked first. Never fails the checkout.
+  if (userId) await releaseOwnPendingShopBeanies(admin, userId, { excludeIdempotencyKey: idempotencyKey });
 
   // ---- the price, from the server ----
   const buyer = { userId, phone: address.address.phone, email: address.address.email };
