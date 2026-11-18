@@ -1,7 +1,10 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { getAuthUser } from '@/lib/api/auth';
 import { LoginForm } from './LoginForm';
 import { safeNextPath } from '@/lib/url';
+
+export const metadata: Metadata = { title: 'Log in' };
 
 // Customer login (ACC-1). A Server Component so an already-signed-in
 // visitor — including a phone-only account (see components/site/AccountNav

@@ -76,14 +76,16 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
               type="button"
               onClick={() => handleClick(order.id)}
               disabled={reorderingId !== null}
-              className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
+              className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
             >
               {reorderingId === order.id ? 'Adding…' : 'Add to cart'}
             </button>
           </div>
         ))}
       </div>
-      {notice ? <p className="mt-2 text-sm text-muted">{notice}</p> : null}
+      <p role="status" className="mt-2 text-sm text-muted">
+        {notice}
+      </p>
     </section>
   );
 }

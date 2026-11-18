@@ -3,11 +3,16 @@
 // read-only, per-request-dynamic page). Mirrors the owner dashboard's
 // "server component + admin/lib reads" convention.
 
+import type { Metadata } from 'next';
 import Link from 'next/link';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { buttonVariants } from '@/components/ui/Button';
 import { getAuthUser } from '@/lib/api/auth';
 import { getBalance, getLoyaltyConfig, getRecentTransactions } from '@/lib/loyalty/ledger';
 import { LOYALTY_UNIT, beaniesLabel, beaniesTagline, beaniesUnit } from '@/lib/loyalty/brand';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
+
+export const metadata: Metadata = { title: 'Rewards' };
 
 export const dynamic = 'force-dynamic';
 
@@ -21,9 +26,9 @@ export default async function RewardsPage() {
         <p className="mt-4 text-muted">Log in to see your Beanies balance and history.</p>
         <Link
           href="/login?next=/rewards"
-          className="mt-6 inline-block rounded-md bg-tan-dark px-6 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
+          className={buttonVariants({ size: 'lg', className: 'mt-6' })}
         >
-          Log In
+          Log in
         </Link>
       </div>
     );
@@ -43,11 +48,11 @@ export default async function RewardsPage() {
       ) : null}
 
       <div className="mt-6 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
-        <p className="text-xs uppercase tracking-wide text-muted">Your balance</p>
+        <p className="text-sm text-muted">Your balance</p>
         <p className="mt-1 font-mono text-4xl font-bold tabular-nums text-tan-dark">{beaniesLabel(balance)}</p>
         {config ? (
           <p className="mt-2 text-sm text-muted">
-            ≈ <span className="font-mono tabular-nums">₹{Math.floor(balance * config.inr_per_point)}</span> in
+            About <span className="font-mono tabular-nums">₹{Math.floor(balance * config.inr_per_point)}</span> in
             redeemable value
           </p>
         ) : null}
@@ -58,9 +63,16 @@ export default async function RewardsPage() {
       <div className="mt-8">
         <h2 className="mb-3 text-lg font-semibold text-charcoal">History</h2>
         {transactions.length === 0 ? (
-          <p className="rounded-md border border-line bg-cream p-6 text-center text-sm text-muted">
-            No Beanies activity yet — place an order to start earning.
-          </p>
+          <EmptyState
+            icon=""
+            heading="No Beanies activity yet"
+            body="Place an order and your Beanies will show up here."
+            action={
+              <Link href="/menu" className={buttonVariants()}>
+                Browse the menu
+              </Link>
+            }
+          />
         ) : (
           <ul className="flex flex-col gap-2">
             {transactions.map((tx) => (
@@ -77,7 +89,7 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
   if (!config) {
     return (
       <p className="mt-6 text-center text-sm text-muted">
-        The loyalty program isn&apos;t configured yet — check back soon.
+        The loyalty program isn&apos;t set up yet. Check back soon.
       </p>
     );
   }
@@ -86,18 +98,18 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
   const earnPct = Number((Number(config.points_per_inr) * 100).toFixed(2));
   return (
     <div className="mt-6 rounded-md border border-line bg-cream p-6 shadow-sm">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-charcoal">How Beanies work</h2>
-      <ul className="flex flex-col gap-1 text-sm text-charcoal">
+      <h2 className="mb-2 text-base font-semibold text-charcoal">How Beanies work</h2>
+      <ul className="flex list-disc flex-col gap-1 pl-5 text-sm text-charcoal">
         <li>
-          • Earn {earnPct}% of every completed, paid order back as {LOYALTY_UNIT.many} (₹100 = {earnPct} {beaniesUnit(earnPct)}).
+          Earn {earnPct}% of every completed, paid order back as {LOYALTY_UNIT.many} (₹100 = {earnPct} {beaniesUnit(earnPct)}).
         </li>
-        <li>• Redeem {LOYALTY_UNIT.many} for ₹{Number(config.inr_per_point)} each at checkout.</li>
-        <li>• Minimum {beaniesLabel(config.min_redeem_points)} to redeem.</li>
-        <li>• Redemption is capped at {config.max_redeem_pct}% of your bill.</li>
+        <li>Redeem {LOYALTY_UNIT.many} for ₹{Number(config.inr_per_point)} each at checkout.</li>
+        <li>Minimum {beaniesLabel(config.min_redeem_points)} to redeem.</li>
+        <li>Redemption is capped at {config.max_redeem_pct}% of your bill.</li>
         {config.points_expiry_days > 0 ? (
-          <li>• {LOYALTY_UNIT.many} expire {config.points_expiry_days} days after they&apos;re earned.</li>
+          <li>{LOYALTY_UNIT.many} expire {config.points_expiry_days} days after they&apos;re earned.</li>
         ) : (
-          <li>• {LOYALTY_UNIT.many} never expire.</li>
+          <li>{LOYALTY_UNIT.many} never expire.</li>
         )}
       </ul>
     </div>
@@ -117,10 +129,10 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
         <p className="text-sm font-semibold capitalize text-charcoal">{tx.type}</p>
         <p className="text-sm text-muted">
           {dateLabel}
-          {tx.note ? ` · ${tx.note}` : ''}
+          {tx.note ? `, ${tx.note}` : ''}
         </p>
       </div>
-      <span className={'shrink-0 font-mono font-bold tabular-nums ' + (positive ? 'text-green-600' : 'text-red-600')}>
+      <span className={'shrink-0 font-mono font-bold tabular-nums ' + (positive ? 'text-green-700' : 'text-red-700')}>
         {positive ? '+' : ''}
         {tx.points}
       </span>
