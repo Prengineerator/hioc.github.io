@@ -483,6 +483,8 @@ A row holds the step, the time, the browser's guest id (the `anonId` kept in loc
 
 **Owner → Suggestions → "Where people leave the wizard"**, for the selected window: opened → chose a feeling → asked for picks → added a pick to the cart, each with its count and its share of the step above. The unit is a visitor (one guest id), counted once however often they came back, and each step counts only the visitors who also reached the step above it, so the numbers only go down. The last step is not new data: it is the `added_to_cart` events of `suggestion_events` in the window, matched to those visitors through `suggestion_sessions.anon_id`. A browser with storage blocked keeps one guest id for the page (`getAnonId`), so its steps and its cart adds match within that page load; after a reload it is a new visitor.
 
+**Where visitors come from** is Owner → Traffic's job, not this table's: `/suggest` ("Ask Coffey") and `/coffey` ("About Coffey") are tracked ordering pages there, with its source, campaign tags and landing views, and its link maker builds tagged `/suggest` links (`docs/TRAFFIC-TRACKING.md`).
+
 **Retention and privacy.** Rows older than 13 months are deleted every Sunday by `/api/cron/purge-traffic`, with the traffic rows. The Privacy Policy describes the steps and the retention while `NEXT_PUBLIC_FLAG_SUGGEST` is on.
 
 | File | What it does |

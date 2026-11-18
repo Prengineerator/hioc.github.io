@@ -24,7 +24,7 @@ recorded stay visible.
 
 | Pages | Group |
 |---|---|
-| `/menu`, `/t/…` (table QR), `/checkout`, `/order/…`, `/order/…/receipt`, `/order/…/review`, `/order-confirmation/…`, `/account/orders` | Online ordering |
+| `/menu`, `/suggest` (Ask Coffey), `/coffey` (About Coffey), `/t/…` (table QR), `/checkout`, `/order/…`, `/order/…/receipt`, `/order/…/review`, `/order-confirmation/…`, `/account/orders` | Online ordering |
 | `/shop`, `/shop/order/…` | Shop |
 
 For each view of those pages, one row in `traffic_events` with:
@@ -85,6 +85,8 @@ goes and where it is placed, and copy the link. Good places to use one:
 | Instagram bio | `https://hioc.in/shop?utm_source=instagram&utm_medium=bio` |
 | Instagram story | `https://hioc.in/menu?utm_source=instagram&utm_medium=story&utm_campaign=diwali-offer` |
 | Google Business Profile "Order" link | `https://hioc.in/menu?utm_source=google&utm_medium=business-profile` |
+| Instagram story pointing at Ask Coffey | `https://hioc.in/suggest?utm_source=instagram&utm_medium=story&utm_campaign=ask-coffey` |
+| Table card "Not sure what to order?" | `https://hioc.in/suggest?utm_source=table&utm_medium=qr&utm_campaign=ask-coffey` |
 | QR code on the Instant Coffee jar | `https://hioc.in/shop?utm_source=jar&utm_medium=qr` |
 | Flyer or table card | `https://hioc.in/menu?utm_source=flyer&utm_medium=qr&utm_campaign=college-week` |
 
