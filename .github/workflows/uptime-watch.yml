@@ -1,0 +1,167 @@
+name: Uptime watch
+
+# Every 5 minutes: is hioc.in serving, and can it reach its database?
+#
+# This is the team's watchman (docs/AGENT-TEAM.md). It is deliberately not
+# Claude: it is a few lines of curl that run from GitHub, outside both Vercel
+# and Supabase, so it still works when either of them is the thing that broke.
+#
+#   healthy  — the home page answers 200 and /api/health answers 200.
+#              A 404 from /api/health also counts as healthy: it means the
+#              build being served predates the route (right after this file
+#              first merges, or after a rollback to an older build), and the
+#              home page check carries the verdict alone.
+#   down     — anything else, on three attempts 20 seconds apart. The run
+#              fails (a red X in the Actions tab), and the first failing run
+#              after a healthy one wakes the manager.
+#
+# Waking the manager means calling the manager scheduled task's API trigger,
+# which starts a Claude session that follows
+# .claude/skills/incident-manager/SKILL.md. The alert is sent once per outage,
+# so a long outage does not start a new session every 5 minutes. A wake call
+# that fails is tried again on the next check. The manager's own hourly run
+# covers an outage that lasts.
+#
+# Setup (once), in Settings → Secrets and variables → Actions:
+#   CLAUDE_MANAGER_FIRE_URL    the "Fire URL" of the manager task's API trigger
+#   CLAUDE_MANAGER_FIRE_TOKEN  the token generated for that trigger
+# docs/AGENT-TEAM.md, step 4, says where to find both. Until they are set the
+# check still runs and still goes red on an outage; it just cannot wake anyone.
+#
+# This repository is public, so its Actions logs are too. The steps below print
+# status codes and nothing else: never the fire URL, the token or the response.
+#
+# Two things to know about GitHub's scheduler: runs can start several minutes
+# late when GitHub is busy, and GitHub switches a scheduled workflow off after
+# 60 days without a commit to the repository. To test the alert path without an
+# outage, use "Run workflow" with "Send a test alert" ticked.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      test_alert:
+        description: Send a test alert to the manager (no outage needed)
+        type: boolean
+        default: false
+
+concurrency:
+  group: uptime-watch
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+
+env:
+  SITE: https://hioc.in
+
+jobs:
+  check:
+    name: Check hioc.in
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe the site
+        id: probe
+        run: |
+          probe() {
+            local code
+            code=$(curl -sL -o /dev/null -m 15 -A 'hioc-uptime-watch' -w '%{http_code}' "$1" || true)
+            echo "${code:-000}"
+          }
+          verdict=down
+          for attempt in 1 2 3; do
+            home=$(probe "$SITE/")
+            health=$(probe "$SITE/api/health")
+            echo "attempt $attempt: home page $home, health $health"
+            if [ "$home" = "200" ] && { [ "$health" = "200" ] || [ "$health" = "404" ]; }; then
+              verdict=healthy
+              break
+            fi
+            [ "$attempt" = "3" ] || sleep 20
+          done
+          {
+            echo "verdict=$verdict"
+            echo "home=$home"
+            echo "health=$health"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Has this outage been alerted already?
+        id: previous
+        if: steps.probe.outputs.verdict == 'down'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Look at the newest completed run of this workflow (the current run
+          # is still in progress, so it is not in the list). This outage counts
+          # as already alerted only if that run also found the site down AND
+          # its wake step did not fail: it either woke the manager, or was
+          # skipped because an earlier run in the same outage had. A wake that
+          # failed is tried again now. If a lookup fails, alert: a second alert
+          # costs less than a missed outage.
+          alerted=false
+          id=$(gh run list --workflow uptime-watch.yml --status completed --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)
+          if [ -n "$id" ]; then
+            steps=$(gh run view "$id" --json jobs \
+              --jq '.jobs[].steps[] | "\(.name)=\(.conclusion)"' 2>/dev/null || true)
+            down=$(printf '%s\n' "$steps" | grep -c '^Fail the run when the site is down=failure$' || true)
+            looked=$(printf '%s\n' "$steps" | grep -c '^Has this outage been alerted already?=success$' || true)
+            woke=$(printf '%s\n' "$steps" | grep -cE '^Wake the manager=(success|skipped)$' || true)
+            # "skipped" only means "alerted earlier" if that run got as far as
+            # deciding so. A run cut off before then also shows it as skipped.
+            if [ "$down" = "1" ] && [ "$looked" = "1" ] && [ "$woke" = "1" ]; then alerted=true; fi
+          fi
+          echo "already alerted: $alerted"
+          echo "alerted=$alerted" >> "$GITHUB_OUTPUT"
+
+      - name: Wake the manager
+        if: >-
+          inputs.test_alert == true ||
+          (steps.probe.outputs.verdict == 'down' && steps.previous.outputs.alerted != 'true')
+        env:
+          FIRE_URL: ${{ secrets.CLAUDE_MANAGER_FIRE_URL }}
+          FIRE_TOKEN: ${{ secrets.CLAUDE_MANAGER_FIRE_TOKEN }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+          HOME_CODE: ${{ steps.probe.outputs.home }}
+          HEALTH_CODE: ${{ steps.probe.outputs.health }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$FIRE_URL" ] || [ -z "$FIRE_TOKEN" ]; then
+            echo "::warning::CLAUDE_MANAGER_FIRE_URL / CLAUDE_MANAGER_FIRE_TOKEN are not set, so nobody was woken. See docs/AGENT-TEAM.md, step 4."
+            exit 0
+          fi
+          now=$(date -u +%Y-%m-%dT%H:%MZ)
+          # A real outage is always reported as one, even when the run was
+          # started by hand with the test box ticked.
+          if [ "$VERDICT" = "down" ]; then
+            text="Uptime watch at $now: hioc.in failed three checks over one minute. Home page HTTP $HOME_CODE, /api/health HTTP $HEALTH_CODE (000 means no answer). Run: $RUN_URL"
+          else
+            text="TEST alert from the uptime watch at $now, sent by hand to prove the alert path works. The watch measured: home page HTTP $HOME_CODE, /api/health HTTP $HEALTH_CODE (verdict: $VERDICT). Run: $RUN_URL"
+          fi
+          body=$(jq -n --arg text "$text" '{text: $text}')
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -m 30 -w '%{http_code}' -X POST "$FIRE_URL" \
+              -H "Authorization: Bearer $FIRE_TOKEN" \
+              -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "Content-Type: application/json" \
+              -d "$body" || true)
+            echo "wake attempt $attempt: HTTP ${code:-000}"
+            case "$code" in 2*) exit 0 ;; esac
+            [ "$attempt" = "3" ] || sleep 10
+          done
+          # Failing this step is what makes the next run try again.
+          echo "::error::The manager could not be woken. The next check will try again, and its hourly run will still pick the outage up."
+          exit 1
+
+      - name: Fail the run when the site is down
+        if: always() && steps.probe.outputs.verdict == 'down'
+        env:
+          HOME_CODE: ${{ steps.probe.outputs.home }}
+          HEALTH_CODE: ${{ steps.probe.outputs.health }}
+        run: |
+          echo "::error::hioc.in is down: home page HTTP $HOME_CODE, /api/health HTTP $HEALTH_CODE."
+          exit 1
