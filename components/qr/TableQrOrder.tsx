@@ -120,12 +120,11 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
       <div className="mx-auto max-w-3xl px-4 py-8 pb-28">
         <div className="mb-6 flex flex-col items-center text-center">
           <span className="mb-2 inline-flex items-center gap-2 rounded-full bg-tan-dark px-4 py-1.5 text-sm font-semibold text-cream">
-            <span aria-hidden>🍽️</span>
             Table {table.label}
           </span>
           <h1 className="text-2xl font-bold text-charcoal md:text-3xl">Order to your table</h1>
           <p className="mt-1 text-sm text-muted">
-            Add what you&apos;d like and pay securely from your phone — we&apos;ll bring it over.
+            Add what you&apos;d like and pay securely from your phone. We&apos;ll bring it over.
           </p>
         </div>
 
@@ -133,7 +132,7 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
 
         {/* Sticky under the site header, same as /menu. */}
         <div className="sticky top-[68px] z-30 -mx-4 border-b border-line bg-cream/95 px-4 pb-2 pt-3 backdrop-blur">
-          <MenuCategoryTabs active={category} onChange={setCategory} hidden={hiddenCategories} />
+          <MenuCategoryTabs wrapOnWide active={category} onChange={setCategory} hidden={hiddenCategories} />
         </div>
 
         <div className="mt-6">
@@ -141,7 +140,7 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
             <MenuGridSkeleton />
           ) : loadFailed ? (
             <EmptyState
-              icon="⚠️"
+              icon=""
               heading="Couldn't load the menu"
               body="Check your connection and try again."
               action={
@@ -181,11 +180,11 @@ function TableQrOrderContent({ token, table }: { token: string; table: ResolvedQ
             className="pointer-events-auto flex min-h-[52px] w-full animate-scale-in items-center justify-between gap-4 rounded-full bg-charcoal px-5 py-3 font-semibold text-cream shadow-elevated transition-transform hover:scale-[1.02] sm:w-auto"
           >
             <span>
-              {totalItems} item{totalItems === 1 ? '' : 's'} ·{' '}
+              {totalItems} item{totalItems === 1 ? '' : 's'},{' '}
               <span className="font-mono tabular-nums">₹{totalPrice}</span>
             </span>
             <span className="flex items-center gap-1">
-              Review order <span aria-hidden="true">→</span>
+              Review order
             </span>
           </button>
         </div>
