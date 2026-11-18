@@ -16,11 +16,13 @@
 // Packs are ground to order, so the same pack with another grind is its own
 // cart line. The grind changes neither the price nor the stock.
 
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/Button';
 import { Stepper } from '@/components/shop/InstantSection';
+import { HomeBlendPlaceholder } from '@/components/shop/HomeBlendPlaceholder';
 import { GRINDS, HOME_BLEND_HIGHLIGHTS, HOME_BLEND_IMAGE, HOME_BLEND_NAME, defaultHomeBlendPack, grindShort, packLabel } from '@/lib/shop/catalog';
+import { SELECT_PACK_EVENT, acceptedPackId } from '@/lib/shop/productLines';
 import { MAX_UNITS_PER_ORDER, rupees, type CartItem } from '@/lib/shop/pricing';
 import type { GrindCode, ShopProduct } from '@/lib/shop/types';
 
@@ -50,6 +52,19 @@ export function HomeBlendCard({
   const [added, setAdded] = useState<string | null>(null);
   const grindRef = useRef<HTMLInputElement>(null);
 
+  // A pack tile in the /shop product-line card chose a pack: select it (listed, in stock only).
+  useEffect(() => {
+    const onSelect = (e: Event) => {
+      const id = acceptedPackId((e as CustomEvent).detail, packs);
+      if (id) {
+        setPackId(id);
+        setAdded(null);
+      }
+    };
+    window.addEventListener(SELECT_PACK_EVENT, onSelect);
+    return () => window.removeEventListener(SELECT_PACK_EVENT, onSelect);
+  }, [packs]);
+
   if (packs.length === 0) return null;
 
   const pack = packs.find((p) => p.id === packId && p.in_stock) ?? defaultHomeBlendPack(packs);
@@ -74,7 +89,7 @@ export function HomeBlendCard({
 
   return (
     <section id="home-blend" aria-labelledby="home-blend-heading" className="scroll-mt-28">
-      <h2 id="home-blend-heading" className="text-xl font-bold text-charcoal">
+      <h2 id="home-blend-heading" tabIndex={-1} className="text-xl font-bold text-charcoal outline-none">
         Home Blend
       </h2>
       <p className="mt-1 text-sm text-muted">Our café blend for your kitchen, ground the way you brew.</p>
@@ -85,17 +100,7 @@ export function HomeBlendCard({
             <Image src={HOME_BLEND_IMAGE} alt={`${HOME_BLEND_NAME} pack`} fill sizes="(min-width: 768px) 288px, 100vw" className="object-contain p-4" />
           </div>
         ) : (
-          <div
-            role="img"
-            aria-label={`${HOME_BLEND_NAME} pack. Photo coming soon.`}
-            className="flex aspect-[4/3] flex-col items-center justify-center gap-1 border-b border-line bg-cream p-4 text-center md:aspect-auto md:border-b-0 md:border-r"
-          >
-            <span aria-hidden="true" className="text-4xl">
-              ☕
-            </span>
-            <span className="text-base font-bold text-charcoal">Signature Home Blend</span>
-            <span className="text-sm text-muted">Photo coming soon</span>
-          </div>
+          <HomeBlendPlaceholder className="aspect-[4/3] border-b border-line md:aspect-auto md:border-b-0 md:border-r" />
         )}
 
         <div className="p-4 md:p-6">

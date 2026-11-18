@@ -77,6 +77,13 @@ button {
   touch-action: manipulation;
 }
 
+/* Smooth in-page jumps (the /shop product-line cards), only when motion is welcome. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 /* Respect the OS-level "reduce motion" setting — mainly affects the Modal
    overlay/panel entrance animation and hover transitions added across
    components/ui. */

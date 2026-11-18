@@ -284,7 +284,14 @@ export function ShopExperience({
     return () => io.disconnect();
   }, [showTabs, step]);
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.location.hash === '#home-blend') setActiveSection('home-blend');
+    // Deep links and the product-line cards' CTAs (#instant / #home-blend).
+    const fromHash = () => {
+      if (window.location.hash === '#home-blend') setActiveSection('home-blend');
+      else if (window.location.hash === '#instant') setActiveSection('instant');
+    };
+    fromHash();
+    window.addEventListener('hashchange', fromHash);
+    return () => window.removeEventListener('hashchange', fromHash);
   }, []);
 
   // ---- cart edits ----

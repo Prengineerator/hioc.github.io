@@ -78,7 +78,7 @@ export function InstantSection({
 
   return (
     <section id="instant" aria-labelledby="flavours-heading" className="scroll-mt-28">
-      <h2 id="flavours-heading" className="text-xl font-bold text-charcoal">
+      <h2 id="flavours-heading" tabIndex={-1} className="text-xl font-bold text-charcoal outline-none">
         Instant Coffee
       </h2>
       <p className="mt-1 text-sm text-muted">
