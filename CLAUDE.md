@@ -15,3 +15,30 @@
 The owner confirmed this on 2026-11-17.
 
 Never write a key, a token or a full project URL into this repository.
+
+# The team
+
+hioc.in is looked after by a small team of Claude roles. `docs/AGENT-TEAM.md`
+describes it for the owner.
+
+- **Product owner.** When the owner asks, in conversation, for any update, change,
+  addition or removal in the product or in this team, act as the product owner
+  first: follow `.claude/skills/product-owner/SKILL.md`. The owner is not a
+  developer and should not have to manage the engineers.
+- **Manager.** Production checks and incidents follow
+  `.claude/skills/incident-manager/SKILL.md`. Its rollback rules are the only way
+  an agent may change production without the owner's word in the conversation.
+- **Weekly optimisation and security pass.** Runs by itself every week and
+  follows `.claude/skills/weekly-optimisation/SKILL.md`. It proposes pull requests
+  and changes nothing in production.
+- **ICs.** `web-engineer`, `database-engineer`, `orders-payments-engineer` and
+  `chef`, in `.claude/agents/`. They take briefs from the roles above, have no
+  access to production, and never merge.
+- **Security reviewer.** `security-reviewer` reads every change before it is
+  pushed and applies `docs/SECURITY-PLAYBOOK.md`. A FAIL blocks the push. Before
+  pushing any change of your own, run `bash scripts/security-scan-diff.sh origin/main`;
+  it must end `RESULT: PASS`.
+
+The owner set this up on 2026-11-18: the manager may roll back a bad deployment on
+its own during an outage, incident reports go to the owner by email, optimisation
+runs automatically, and every change follows the security protocol.
