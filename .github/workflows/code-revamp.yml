@@ -99,8 +99,8 @@ jobs:
       #
       # The gate script and the scanner both come from the BASE branch, so a
       # pull request cannot pass by editing either. The pull request's own copy
-      # of the gate is used only when the base has none yet, which is true once:
-      # for the change that introduces it. Remove that fallback after it merges.
+      # of the gate is never run. If the base has no gate script, the check
+      # fails: a gate that could not run is not a pass.
       #
       # What this cannot stop is a pull request that edits this workflow file.
       # That is what the owner's own look at a pull request is for.
@@ -111,9 +111,9 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_REF"
           gate="$RUNNER_TEMP/security-scan-diff.sh"
-          if ! git show FETCH_HEAD:scripts/security-scan-diff.sh > "$gate" 2>/dev/null; then
-            echo "The base branch has no gate script yet; using this pull request's copy."
-            cp scripts/security-scan-diff.sh "$gate"
+          if ! git show FETCH_HEAD:scripts/security-scan-diff.sh > "$gate" 2>/dev/null || [ ! -s "$gate" ]; then
+            echo "::error::The base branch has no scripts/security-scan-diff.sh, so the security gate could not run."
+            exit 2
           fi
           bash "$gate" FETCH_HEAD
 
