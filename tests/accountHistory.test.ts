@@ -11,6 +11,7 @@ import {
   filterOrderRowsByStatus,
   includeGuestOrdersByPhone,
   isActiveOrderStatus,
+  isValidHistoryChannel,
   isValidHistoryStatusFilter,
   mergeOrderRows,
   ownsOrder,
@@ -303,5 +304,16 @@ describe('filterOrderRowsByStatus', () => {
     expect(page.items.map((r) => r.id)).toEqual(['o2', 'g1']);
     expect(page.total).toBe(2);
     expect(page.hasMore).toBe(false);
+  });
+});
+
+describe('isValidHistoryChannel', () => {
+  it('accepts only all, cafe and shop', () => {
+    expect(isValidHistoryChannel('all')).toBe(true);
+    expect(isValidHistoryChannel('cafe')).toBe(true);
+    expect(isValidHistoryChannel('shop')).toBe(true);
+    expect(isValidHistoryChannel('web')).toBe(false);
+    expect(isValidHistoryChannel('')).toBe(false);
+    expect(isValidHistoryChannel(undefined)).toBe(false);
   });
 });

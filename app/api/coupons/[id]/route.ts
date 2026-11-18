@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getManagerUser } from '@/lib/api/auth';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 import { isUuid } from '@/lib/api/constants';
 import { parseCouponInput } from '@/lib/promotions/validate';
-import type { Coupon } from '@/lib/types';
+import type { Coupon, CouponChannel } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,15 +33,25 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const admin = createAdminSupabaseClient();
   // M9: fetch the current discount_type so a PATCH that only changes
   // discount_value still enforces the percent<=100 cap (type may not be in body).
-  const { data: existing } = await admin
+  // The stored channel too, so a scope-only PATCH is checked against it. A database without the
+  // column fails that read; retry for the type alone (every coupon there is café-only).
+  let { data: existing, error: existingError } = await admin
     .from('coupons')
-    .select('discount_type')
+    .select('discount_type, channel')
     .eq('id', id)
     .maybeSingle();
+  if (existingError && isMissingColumnError(existingError)) {
+    ({ data: existing } = (await admin
+      .from('coupons')
+      .select('discount_type')
+      .eq('id', id)
+      .maybeSingle()) as { data: typeof existing });
+  }
 
   const parsed = parseCouponInput(body, {
     partial: true,
     existingType: existing?.discount_type as 'percent' | 'flat' | undefined,
+    existingChannel: (existing as { channel?: CouponChannel } | null)?.channel,
   });
   if (typeof parsed === 'string') {
     return errorResponse(400, parsed);
@@ -49,12 +60,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     return errorResponse(400, 'No writable fields provided');
   }
 
-  const { data, error } = await admin
-    .from('coupons')
-    .update(parsed)
-    .eq('id', id)
-    .select('*')
-    .maybeSingle();
+  const update = (fields: typeof parsed) =>
+    admin.from('coupons').update(fields).eq('id', id).select('*').maybeSingle();
+  let { data, error } = await update(parsed);
+  if (error && isMissingColumnError(error) && parsed.channel !== undefined) {
+    // Migration not applied: only a café coupon can be saved, and it needs no channel column.
+    if (parsed.channel !== 'cafe') return errorResponse(503, 'Apply supabase/2026-11-shop-v2.sql to use shop coupons');
+    const { channel: _channel, ...withoutChannel } = parsed;
+    ({ data, error } = await update(withoutChannel));
+  }
 
   if (error) {
     if (error.code === '23505') {

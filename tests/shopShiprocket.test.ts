@@ -76,7 +76,7 @@ describe('buildShiprocketOrder', () => {
       weight: 0.7,
     });
     expect(body.order_items).toEqual([
-      { name: 'HIOC. Premium Instant Coffee — Signature Classic (50 g)', sku: 'HIOC-IC-CLASSIC-50G', units: 2, selling_price: 399, discount: 0, tax: 0 },
+      { name: 'HIOC. Premium Instant Coffee: Signature Classic (50 g)', sku: 'HIOC-IC-CLASSIC-50G', units: 2, selling_price: 399, discount: 0, tax: 0 },
     ]);
   });
 
@@ -113,6 +113,49 @@ describe('buildShiprocketOrder', () => {
 
   it('writes dates in India time', () => {
     expect(shiprocketDate('2026-11-12T20:00:00.000Z')).toBe('2026-11-13 01:30');
+  });
+});
+
+describe('buildShiprocketOrder, mixed orders (v2)', () => {
+  const mixedLines = [
+    { product_id: 'hazelnut', name: 'Nutty Hazelnut', sku: 'HIOC-IC-HAZELNUT-50G', unit_price_inr: 399, quantity: 2, line_total_inr: 798, line: 'instant' as const, pack_grams: 50, ship_weight_kg: 0.08 },
+    {
+      product_id: 'home-blend-500', name: 'Signature Home Blend', sku: 'HIOC-HB-500G-FLT', base_sku: 'HIOC-HB-500G', unit_price_inr: 699, quantity: 1,
+      line_total_inr: 699, line: 'home_blend' as const, pack_grams: 500, grind: 'filter' as const, grind_label: 'Pour-over / Filter', ship_weight_kg: 0.52,
+    },
+  ];
+  // 798 + 699 = 1497; offer 100 + coupon 75 + 30 Beanies = ₹30 off.
+  const mixed = (shipping: number) =>
+    shopOrder({
+      jar_count: 3, lines: mixedLines, subtotal_inr: 1497, discount_inr: 205, offer_discount_inr: 100, coupon_code: 'WELCOME', coupon_discount_inr: 75,
+      beanies_redeemed: 30, beanies_discount_inr: 30, shipping_inr: shipping, total_inr: 1497 - 205 + shipping, landmark: 'Opp. Metro Gate 2',
+    });
+
+  it.each([0, 49])('names items, uses line SKUs and bills what the customer paid (shipping %i)', (shipping) => {
+    const order = mixed(shipping);
+    const body = buildShiprocketOrder(order, PKG, 'Primary');
+    const items = body.order_items as { name: string; sku: string; units: number; selling_price: number }[];
+    expect(items.map((i) => i.name)).toEqual([
+      'HIOC. Premium Instant Coffee: Nutty Hazelnut (50 g)',
+      'HIOC. Signature Home Blend: 500 g, Pour-over / Filter',
+    ]);
+    expect(items.map((i) => i.sku)).toEqual(['HIOC-IC-HAZELNUT-50G', 'HIOC-HB-500G-FLT']);
+    expect(items.reduce((n, i) => n + i.units * i.selling_price, 0)).toBe(body.sub_total);
+    expect(body).toMatchObject({ sub_total: 1497, total_discount: 205, shipping_charges: shipping });
+    expect((body.sub_total as number) - (body.total_discount as number) + (body.shipping_charges as number)).toBe(order.total_inr);
+  });
+
+  it('puts the landmark in address line 2 and keeps the comment generic', () => {
+    const body = buildShiprocketOrder(mixed(49), PKG, 'Primary');
+    expect(body.billing_address_2).toBe('Near City Mall, Landmark: Opp. Metro Gate 2');
+    expect(body.comment).toBe('HIOC. online order (prepaid)');
+    expect(buildShiprocketOrder(shopOrder({ address_line2: '', landmark: 'Big Tree' }), PKG, 'P').billing_address_2).toBe('Landmark: Big Tree');
+    expect(buildShiprocketOrder(shopOrder({ address_line2: '', landmark: '' }), PKG, 'P').billing_address_2).toBe('');
+  });
+
+  it('adds the delivery pin link to the comment', () => {
+    const body = buildShiprocketOrder(shopOrder({ location_lat: 26.9124, location_lng: 75.7873, location_source: 'map' }), PKG, 'P');
+    expect(String(body.comment)).toMatch(/^HIOC\. online order \(prepaid\) · Delivery pin: https:\/\/.*maps/i);
   });
 });
 

@@ -4,6 +4,9 @@
 // fast reads (updated right after every ledger insert here), but every
 // balance read in this file recomputes from the ledger itself, so the cache
 // drifting never produces a wrong answer — only a slower one if it's stale.
+//
+// Shop orders: the shop's ledger rows carry shop_order_id instead of order_id and
+// land in the same account. See the "Shop orders (E5)" block further down.
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
@@ -407,6 +410,194 @@ export async function reverseForOrder(orderId: string): Promise<void> {
   }
 
   await syncAccountCache(admin, userId);
+}
+
+// ---------------------------------------------------------------------------
+// Shop orders (E5). Same ledger, same loyalty_accounts cache, but the rows are
+// keyed by shop_order_id (never order_id; a CHECK forbids both). Differences
+// from the café: earn waits for 'delivered', the base excludes shipping, the
+// spend-offer exclusion does not apply, and Beanies are RESERVED at checkout
+// through the reserve_shop_beanies RPC so the balance check and the insert are
+// one atomic step. Every function here logs and returns a fallback; none throws.
+// ---------------------------------------------------------------------------
+
+/** Goods paid on a shop order: total − shipping (Beanies spent are already out of the total). Pure. */
+export function shopEarnBaseInr(order: { total_inr: number; shipping_inr: number }): number {
+  const base = (Number(order.total_inr) || 0) - (Number(order.shipping_inr) || 0);
+  return Math.max(0, base);
+}
+
+export type ShopReserveResult = 'reserved' | 'already_reserved' | 'insufficient' | 'error';
+
+const UNIQUE_VIOLATION = '23505';
+
+/** Reserves Beanies at checkout (a 'redeem' row on the pending shop order), atomically in SQL. */
+export async function redeemForShopOrder(
+  shopOrderId: string,
+  userId: string,
+  points: number,
+  discountInr: number,
+  orderRef: string,
+): Promise<ShopReserveResult> {
+  if (!shopOrderId || !userId || !Number.isInteger(points) || points <= 0) return 'error';
+  try {
+    const admin = createAdminSupabaseClient();
+    const { data, error } = await admin.rpc('reserve_shop_beanies', {
+      p_user_id: userId,
+      p_shop_order_id: shopOrderId,
+      p_points: points,
+      p_note: `Used ${beaniesLabel(points)} for ₹${discountInr} off shop order ${orderRef}`,
+    });
+    if (error) {
+      // Includes a missing function (42883 / PGRST202): the caller refuses Beanies and re-quotes.
+      console.error('redeemForShopOrder: reserve failed', error);
+      return 'error';
+    }
+    if (data === 'reserved') {
+      await syncAccountCache(admin, userId);
+      return 'reserved';
+    }
+    if (data === 'already_reserved' || data === 'insufficient') return data;
+    console.error('redeemForShopOrder: unexpected reserve result', data);
+    return 'error';
+  } catch (err) {
+    console.error('redeemForShopOrder: failed', err);
+    return 'error';
+  }
+}
+
+/** Earns once a shop order is delivered and has an account. Returns points written (0 = nothing to do). Idempotent. */
+export async function earnForShopOrder(shopOrderId: string): Promise<number> {
+  if (!shopOrderId) return 0;
+  try {
+    const admin = createAdminSupabaseClient();
+    const { data: order, error: orderError } = await admin
+      .from('shop_orders')
+      .select('id, status, user_id, total_inr, shipping_inr, order_number')
+      .eq('id', shopOrderId)
+      .maybeSingle();
+    if (orderError) {
+      console.error('earnForShopOrder: order lookup failed', orderError);
+      return 0;
+    }
+    const o = order as {
+      status: string;
+      user_id: string | null;
+      total_inr: number;
+      shipping_inr: number;
+      order_number: number | string;
+    } | null;
+    if (!o || o.status !== 'delivered' || !o.user_id) return 0;
+
+    // Already earned, or already reversed (a reversed order must not earn later).
+    const { data: existing, error: existingError } = await admin
+      .from('loyalty_transactions')
+      .select('id, type')
+      .eq('shop_order_id', shopOrderId)
+      .in('type', ['earn', 'reverse']);
+    if (existingError) {
+      console.error('earnForShopOrder: idempotency check failed', existingError);
+      return 0;
+    }
+    if (existing && existing.length > 0) return 0;
+
+    const config = await getLoyaltyConfig();
+    if (!config) return 0;
+
+    const points = computeEarnedPoints(shopEarnBaseInr(o), config);
+    if (points <= 0) return 0;
+
+    const { error: insertError } = await admin.from('loyalty_transactions').insert({
+      user_id: o.user_id,
+      shop_order_id: shopOrderId,
+      order_id: null,
+      type: 'earn',
+      points,
+      note: `Earned on shop order HIOC-S${o.order_number}`,
+    });
+    if (insertError) {
+      // Another path (refresh, owner button, sweep) earned first: not an error.
+      if ((insertError as { code?: string }).code !== UNIQUE_VIOLATION) {
+        console.error('earnForShopOrder: insert failed', insertError);
+      }
+      return 0;
+    }
+
+    await syncAccountCache(admin, o.user_id);
+    return points;
+  } catch (err) {
+    console.error('earnForShopOrder: failed', err);
+    return 0;
+  }
+}
+
+/**
+ * Returns what a shop order moved (earn and redeem) in ONE 'reverse' row.
+ * Returns the net points given back to the customer (positive when spent
+ * Beanies come back, negative when an earn is taken back), 0 when nothing to do. Idempotent.
+ */
+export async function reverseForShopOrder(shopOrderId: string, reason: string): Promise<number> {
+  if (!shopOrderId) return 0;
+  try {
+    const admin = createAdminSupabaseClient();
+    const { data: rows, error: fetchError } = await admin
+      .from('loyalty_transactions')
+      .select('id, user_id, type, points')
+      .eq('shop_order_id', shopOrderId)
+      .in('type', ['earn', 'redeem']);
+    if (fetchError) {
+      console.error('reverseForShopOrder: lookup failed', fetchError);
+      return 0;
+    }
+    if (!rows || rows.length === 0) return 0;
+
+    const { data: existingReverse, error: existingError } = await admin
+      .from('loyalty_transactions')
+      .select('id')
+      .eq('shop_order_id', shopOrderId)
+      .eq('type', 'reverse')
+      .maybeSingle();
+    if (existingError) {
+      console.error('reverseForShopOrder: idempotency check failed', existingError);
+      return 0;
+    }
+    if (existingReverse) return 0;
+
+    const userId = rows[0].user_id as string | null;
+    if (!userId) return 0;
+    const net = rows.reduce((sum, row) => sum + (row.points as number), 0);
+    if (net === 0) return 0;
+
+    // The order number is only for the customer-facing note; its absence is fine.
+    const { data: orderRow } = await admin
+      .from('shop_orders')
+      .select('order_number')
+      .eq('id', shopOrderId)
+      .maybeSingle();
+    const orderNumber = (orderRow as { order_number?: number | string } | null)?.order_number;
+    const suffix = orderNumber != null ? ` (shop order HIOC-S${orderNumber})` : '';
+
+    const { error: insertError } = await admin.from('loyalty_transactions').insert({
+      user_id: userId,
+      shop_order_id: shopOrderId,
+      order_id: null,
+      type: 'reverse',
+      points: -net,
+      note: `Returned — ${reason}${suffix}`,
+    });
+    if (insertError) {
+      if ((insertError as { code?: string }).code !== UNIQUE_VIOLATION) {
+        console.error('reverseForShopOrder: insert failed', insertError);
+      }
+      return 0;
+    }
+
+    await syncAccountCache(admin, userId);
+    return -net;
+  } catch (err) {
+    console.error('reverseForShopOrder: failed', err);
+    return 0;
+  }
 }
 
 const LEDGER_PAGE_SIZE = 1000;

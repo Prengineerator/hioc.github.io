@@ -5,6 +5,7 @@ import { runAfterResponse } from '@/lib/api/background';
 import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
+import { onShopOrderDelivered } from '@/lib/shop/lifecycle';
 import { parseShippedInput } from '@/lib/shop/owner';
 import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
 import { canMarkDelivered, canMarkShipped } from '@/lib/shop/status';
@@ -16,8 +17,9 @@ export const dynamic = 'force-dynamic';
 // any other courier), or when the API is down:
 //   { action: 'mark_shipped', awb_code, courier_name? }   → shipped (customer
 //                                                           emailed tracking)
-//   { action: 'mark_delivered' }                          → delivered
-// Responds { order }.
+//   { action: 'mark_delivered' }                          → delivered (the
+//                                                           customer earns Beanies)
+// Responds { order } — { order, earned } for mark_delivered.
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   if (!(await getOwnerUser())) return unauthorized();
   if (!isUuid(params.id)) return notFound();
@@ -52,7 +54,8 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     if (!canMarkDelivered(order)) return errorResponse(409, 'Only a shipped order can be marked delivered.');
     const updated = await updateShopOrderIf(admin, order.id, ['shipped'], { status: 'delivered', delivered_at: now });
     if (!updated) return errorResponse(409, 'The order changed meanwhile — reload the page.');
-    return NextResponse.json({ order: updated });
+    const { earned } = await onShopOrderDelivered(updated);
+    return NextResponse.json({ order: updated, earned });
   }
 
   return errorResponse(400, "action must be 'mark_shipped' or 'mark_delivered'");

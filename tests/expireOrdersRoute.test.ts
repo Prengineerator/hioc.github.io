@@ -11,7 +11,9 @@ const state: {
   attemptsByGatewayOrder: Record<string, { id: string; status: string; amount: number }[] | null>;
   cancelled: string[];
   captured: string[];
-} = { stale: [], paymentsByOrder: {}, attemptsByGatewayOrder: {}, cancelled: [], captured: [] };
+  shopThrows: boolean;
+  shopCalls: string[];
+} = { stale: [], paymentsByOrder: {}, attemptsByGatewayOrder: {}, cancelled: [], captured: [], shopThrows: false, shopCalls: [] };
 
 vi.mock('@/lib/supabase-server', () => ({
   createAdminSupabaseClient: () => ({
@@ -57,6 +59,19 @@ vi.mock('@/lib/payments/reconcile', () => ({
 vi.mock('@/lib/loyalty/ledger', () => ({ reverseForOrder: () => Promise.resolve() }));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderEvent: () => Promise.resolve() }));
 
+// The shop pass is covered in tests/shopLifecycle.test.ts; here only its wiring.
+vi.mock('@/lib/shop/lifecycle', () => ({
+  expireStaleShopOrders: () => {
+    state.shopCalls.push('expire');
+    if (state.shopThrows) return Promise.reject(new Error('shop down'));
+    return Promise.resolve({ expired: 2, recovered: 1 });
+  },
+  sweepDeliveredShopOrders: () => {
+    state.shopCalls.push('sweep');
+    return Promise.resolve({ checked: 4, delivered: 3 });
+  },
+}));
+
 process.env.CRON_SECRET = 'cron_secret';
 
 // Imported after mocks are registered (vi.mock is hoisted).
@@ -85,6 +100,8 @@ beforeEach(() => {
   state.attemptsByGatewayOrder = {};
   state.cancelled = [];
   state.captured = [];
+  state.shopThrows = false;
+  state.shopCalls = [];
 });
 
 describe('GET /api/cron/expire-orders', () => {
@@ -94,7 +111,7 @@ describe('GET /api/cron/expire-orders', () => {
       { id: 'pay_ok', status: 'captured', amount: 25000 },
     ];
     const res = await run();
-    expect(await res.json()).toEqual({ expired: 0, recovered: 1 });
+    expect(await res.json()).toMatchObject({ expired: 0, recovered: 1 });
     expect(state.captured).toEqual(['rzp_order_1']);
     expect(state.cancelled).toEqual([]);
   });
@@ -102,22 +119,47 @@ describe('GET /api/cron/expire-orders', () => {
   it('cancels an order with no captured payment', async () => {
     state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_failed', status: 'failed', amount: 25000 }];
     const res = await run();
-    expect(await res.json()).toEqual({ expired: 1, recovered: 0 });
+    expect(await res.json()).toMatchObject({ expired: 1, recovered: 0 });
     expect(state.cancelled).toEqual(['order-1']);
   });
 
   it('leaves the order alone when Razorpay cannot be reached', async () => {
     state.attemptsByGatewayOrder.rzp_order_1 = null;
     const res = await run();
-    expect(await res.json()).toEqual({ expired: 0, recovered: 0 });
+    expect(await res.json()).toMatchObject({ expired: 0, recovered: 0 });
     expect(state.cancelled).toEqual([]);
   });
 
   it('leaves the order alone while a payment is only authorized', async () => {
     state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_auth', status: 'authorized', amount: 25000 }];
     const res = await run();
-    expect(await res.json()).toEqual({ expired: 0, recovered: 0 });
+    expect(await res.json()).toMatchObject({ expired: 0, recovered: 0 });
     expect(state.cancelled).toEqual([]);
+  });
+});
+
+describe('shop pass', () => {
+  it('reports the shop counts next to the café result', async () => {
+    state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_failed', status: 'failed', amount: 25000 }];
+    const body = await (await run()).json();
+    expect(body).toEqual({
+      expired: 1,
+      recovered: 0,
+      shop: { expired: 2, recovered: 1 },
+      shop_delivery: { checked: 4, delivered: 3 },
+    });
+    expect(state.shopCalls).toEqual(['expire', 'sweep']);
+  });
+
+  it('a throwing shop pass still returns the café result', async () => {
+    state.shopThrows = true;
+    state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_failed', status: 'failed', amount: 25000 }];
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await run();
+    spy.mockRestore();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ expired: 1, recovered: 0, shop: { expired: 0, recovered: 0 } });
+    expect(state.cancelled).toEqual(['order-1']);
   });
 });
 
@@ -126,14 +168,14 @@ describe('POST /api/cron/expire-orders — what pg_cron actually calls', () => {
     state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_failed', status: 'failed', amount: 25000 }];
     const res = await runPost();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ expired: 1, recovered: 0 });
+    expect(await res.json()).toMatchObject({ expired: 1, recovered: 0 });
     expect(state.cancelled).toEqual(['order-1']);
   });
 
   it('a POST with a valid bearer token still recovers an order whose payment was captured', async () => {
     state.attemptsByGatewayOrder.rzp_order_1 = [{ id: 'pay_ok', status: 'captured', amount: 25000 }];
     const res = await runPost();
-    expect(await res.json()).toEqual({ expired: 0, recovered: 1 });
+    expect(await res.json()).toMatchObject({ expired: 0, recovered: 1 });
     expect(state.captured).toEqual(['rzp_order_1']);
     expect(state.cancelled).toEqual([]);
   });

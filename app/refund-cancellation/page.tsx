@@ -3,7 +3,7 @@ import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
 import { BUSINESS, policyUpdated } from '@/lib/legal';
 import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import { rupees, SHIPPING_FEE_INR } from '@/lib/shop/pricing';
+import { DEFAULT_SHOP_SETTINGS, rupees } from '@/lib/shop/pricing';
 
 export const metadata: Metadata = { title: 'Refund & Cancellation Policy' };
 
@@ -147,11 +147,11 @@ export default function RefundPage() {
           courier. Shown only while the shop is switched on. */}
       {flags.shop ? (
         <PolicySection
-          heading={`${flags.coffeePass ? 8 : 7}. ${BUSINESS.name} Premium Instant Coffee (shipped orders)`}
+          heading={`${flags.coffeePass ? 8 : 7}. ${BUSINESS.name} Instant Coffee and Home Blend (shipped orders)`}
           id="instant-coffee"
         >
           <p>
-            These rules apply to Instant Coffee jars bought on our website and shipped to you, in
+            These rules apply to Instant Coffee jars and Home Blend packs bought on our website and shipped to you, in
             place of sections 1, 4 and 5 above (which are about café orders).
           </p>
           <ul className="list-disc pl-5">
@@ -163,21 +163,22 @@ export default function RefundPage() {
             </li>
             <li>
               <strong>Damaged, wrong or missing items:</strong> tell us within{' '}
-              <strong>48 hours of delivery</strong>, with a photo of the parcel and the jar, at{' '}
+              <strong>48 hours of delivery</strong>, with a photo of the parcel and the jar or pack, at{' '}
               <a href={BUSINESS.emailHref} className="text-tan-dark hover:underline">{BUSINESS.email}</a> or{' '}
               <a href={BUSINESS.phoneHref} className="text-tan-dark hover:underline">{BUSINESS.phoneDisplay}</a>.
-              We will send a replacement or refund the affected jars.
+              We will send a replacement or refund the affected jars or packs.
             </li>
             <li>
-              <strong>Returns:</strong> as a food product, opened jars cannot be returned, and we do
-              not accept returns for a change of mind.
+              <strong>Returns:</strong> as a food product, opened jars and packs cannot be returned, and
+              we do not accept returns for a change of mind. Home Blend is ground to order, so it
+              cannot be returned for a change of mind either.
             </li>
             <li>
               <strong>Lost or undeliverable parcels:</strong> if the courier loses your parcel, or
               we cannot ship to your pincode, we will reship it or refund you in full. If a parcel
               comes back to us because the address was incomplete or no one was available to
-              receive it, we will contact you to reship it (shipping is charged again, {rupees(SHIPPING_FEE_INR)}{' '}
-              an order) or to refund the jars.
+              receive it, we will contact you to reship it (shipping is charged again, {rupees(DEFAULT_SHOP_SETTINGS.shipping_fee_inr)}{' '}
+              an order) or to refund the order.
             </li>
             <li>
               <strong>Cancellation by us:</strong> if we cannot fulfil your order (for example, a

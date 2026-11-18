@@ -19,8 +19,10 @@ import { escapeHtml, staffEmailShell } from '@/lib/staff/emails';
 import { normalizeEmail } from '@/lib/email';
 import { absoluteUrl } from '@/lib/url';
 import { googleMapsLink, locationFromRow } from './location';
-import { jarsLabel, rupees } from './pricing';
-import { shopOrderRef, trackingUrl } from './status';
+import { getLoyaltyConfig, computeEarnedPoints, shopEarnBaseInr } from '@/lib/loyalty/ledger';
+import { lineItemLabel } from './catalog';
+import { rupees, unitsLabel } from './pricing';
+import { shopOrderDiscountBreakdown, shopOrderRef, trackingUrl } from './status';
 import type { ShopOrderRow } from './types';
 
 export const OWNER_SHOP_PATH = '/owner/shop';
@@ -37,11 +39,27 @@ function linesTable(order: ShopOrderRow): string {
   const row = (l: string, r: string, bold = false) =>
     `<tr><td style="padding:4px 0;${bold ? 'font-weight:bold;' : ''}">${l}</td><td style="padding:4px 0;text-align:right;${bold ? 'font-weight:bold;' : ''}">${r}</td></tr>`;
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;margin:8px 0 16px;">
-    ${order.lines.map((l) => row(`${escapeHtml(l.name)} × ${l.quantity}`, rupees(l.line_total_inr))).join('')}
-    ${order.discount_inr > 0 ? row(escapeHtml(order.offer_name ?? 'Offer'), `−${rupees(order.discount_inr)}`) : ''}
+    ${order.lines.map((l) => row(escapeHtml(lineItemLabel(l)), rupees(l.line_total_inr))).join('')}
+    ${shopOrderDiscountBreakdown(order)
+      .map((d) => row(escapeHtml(d.label), `−${rupees(d.amount_inr)}`))
+      .join('')}
     ${row('Shipping', order.shipping_inr === 0 ? 'Free' : rupees(order.shipping_inr))}
     ${row('Total paid', rupees(order.total_inr), true)}
   </table>`;
+}
+
+/** "You'll earn ~N Beanies when it's delivered" for an order with an account; '' when unknown. */
+async function beaniesLine(order: ShopOrderRow): Promise<string> {
+  if (!order.user_id) return '';
+  try {
+    const config = await getLoyaltyConfig();
+    if (!config) return '';
+    const points = computeEarnedPoints(shopEarnBaseInr(order), config);
+    if (!(points > 0)) return '';
+    return `<p style="font-size:14px;line-height:1.5;">You'll earn ~${points} Beanies when it's delivered.</p>`;
+  } catch {
+    return '';
+  }
 }
 
 function addressBlock(order: ShopOrderRow): string {
@@ -49,6 +67,7 @@ function addressBlock(order: ShopOrderRow): string {
     order.customer_name,
     order.address_line1,
     order.address_line2,
+    order.landmark ? `Landmark: ${order.landmark}` : '',
     `${order.city}, ${order.state} ${order.pincode}`,
     order.phone,
   ]
@@ -89,16 +108,18 @@ export async function sendShopPaidEmails(order: ShopOrderRow): Promise<void> {
   try {
     const owners = await ownerRecipients();
     const ownerBody = `
-      <p style="font-size:14px;line-height:1.5;">${jarsLabel(order.jar_count)} of Instant Coffee, paid online. Ship it from the Shop orders page.</p>
+      <p style="font-size:14px;line-height:1.5;">${unitsLabel(order.jar_count)}, paid online. Ship it from the Shop orders page.</p>
       ${linesTable(order)}
       <p style="font-size:14px;line-height:1.5;"><strong>Deliver to</strong><br>${addressBlock(order)}</p>
       ${pinLine(order)}
       ${button(absoluteUrl(OWNER_SHOP_PATH), 'Open Shop orders')}`;
     await Promise.all(owners.map((to) => send(to, `New online order ${ref} — ${rupees(order.total_inr)}`, `New online order ${ref}`, ownerBody)));
 
+    const earn = await beaniesLine(order);
     const customerBody = `
       <p style="font-size:14px;line-height:1.5;">Hi ${escapeHtml(order.customer_name.split(' ')[0])}, thank you! We've got your order and will pack it soon. We'll email you the tracking link once it ships.</p>
       ${linesTable(order)}
+      ${earn}
       <p style="font-size:14px;line-height:1.5;"><strong>Delivering to</strong><br>${addressBlock(order)}</p>
       ${button(absoluteUrl(shopOrderPath(order.id)), 'View your order')}`;
     await send(order.email, `Your HIOC. order ${ref} is confirmed`, `Order ${ref} confirmed`, customerBody);
@@ -113,7 +134,7 @@ export async function sendShopShippedEmail(order: ShopOrderRow): Promise<void> {
     const url = trackingUrl(order.awb_code);
     const courier = order.courier_name ? ` with ${escapeHtml(order.courier_name)}` : '';
     const body = `
-      <p style="font-size:14px;line-height:1.5;">Good news — your Instant Coffee is on its way${courier}.</p>
+      <p style="font-size:14px;line-height:1.5;">Good news — your order is on its way${courier}.</p>
       ${order.awb_code ? `<p style="font-size:14px;line-height:1.5;">Tracking number (AWB): <strong>${escapeHtml(order.awb_code)}</strong></p>` : ''}
       ${url ? button(url, 'Track your parcel') : button(absoluteUrl(shopOrderPath(order.id)), 'View your order')}`;
     await send(order.email, `Your HIOC. order ${ref} has shipped`, `Order ${ref} has shipped`, body);

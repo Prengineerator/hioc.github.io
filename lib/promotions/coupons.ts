@@ -12,6 +12,7 @@
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { normalizeIndianMobileHonouringPlus } from '@/lib/phone';
+import { couponChannelOf, couponCodePattern, couponWindowProblem, couponWorksIn } from '@/lib/promotions/couponRules';
 import type { Coupon } from '@/lib/types';
 
 // Marketing coupons (docs/MARKETING-AGENT-SPEC.md §1.7) are issued to ONE phone.
@@ -57,12 +58,18 @@ export async function validateAndComputeCoupon(
     return { ok: false, discountInr: 0, reason: 'Your cart is empty' };
   }
 
+  // Escaped pattern, so '%' / '_' typed by a visitor cannot probe for codes; null = never a code.
+  const pattern = couponCodePattern(trimmed);
+  if (pattern === null) {
+    return { ok: false, discountInr: 0, reason: 'Invalid coupon code' };
+  }
+
   const admin = createAdminSupabaseClient();
 
   const { data: row, error } = await admin
     .from('coupons')
     .select('*')
-    .ilike('code', trimmed)
+    .ilike('code', pattern)
     .maybeSingle();
 
   if (error) {
@@ -73,6 +80,16 @@ export async function validateAndComputeCoupon(
     return { ok: false, discountInr: 0, reason: 'Invalid coupon code' };
   }
   const coupon = row as Coupon;
+  // Second check: the row must really be the typed code, whatever the pattern matched.
+  if (String(coupon.code).toLowerCase() !== trimmed.toLowerCase()) {
+    return { ok: false, discountInr: 0, reason: 'Invalid coupon code' };
+  }
+
+  // CHANNEL — a shop-only coupon does not exist as far as the café is concerned: the same answer
+  // as a code that was never made, with no coupon attached (E7).
+  if (!couponWorksIn(coupon, 'cafe')) {
+    return { ok: false, discountInr: 0, reason: 'Invalid coupon code' };
+  }
 
   // PHONE LOCK — first, before ANY other rule, and a rejection here deliberately carries no
   // `coupon`: every later rejection returns the coupon row to the client (the checkout shows
@@ -96,16 +113,9 @@ export async function validateAndComputeCoupon(
     }
   }
 
-  if (!coupon.active) {
-    return { ok: false, discountInr: 0, reason: 'This coupon is no longer active', coupon };
-  }
-
-  const now = Date.now();
-  if (coupon.valid_from && now < Date.parse(coupon.valid_from)) {
-    return { ok: false, discountInr: 0, reason: 'This coupon is not active yet', coupon };
-  }
-  if (coupon.valid_to && now > Date.parse(coupon.valid_to)) {
-    return { ok: false, discountInr: 0, reason: 'This coupon has expired', coupon };
+  const windowProblem = couponWindowProblem(coupon, Date.now());
+  if (windowProblem) {
+    return { ok: false, discountInr: 0, reason: windowProblem, coupon };
   }
 
   if (coupon.min_order_inr > 0 && ctx.subtotalInr < coupon.min_order_inr) {
@@ -136,8 +146,36 @@ export async function validateAndComputeCoupon(
     }
   }
 
+  // A coupon that also works in the shop counts shop redemptions too, through the database
+  // function (café + paid shop orders, by account or phone). Café-only coupons keep the
+  // queries below exactly as they were. A database without the function falls back to them.
+  let sharedCounts: { total: number; mine: number } | null = null;
+  if (
+    couponChannelOf(coupon) === 'both' &&
+    (coupon.usage_limit > 0 || coupon.per_user_limit > 0)
+  ) {
+    const { data, error: rpcError } = await admin.rpc('coupon_usage_counts', {
+      p_coupon_id: coupon.id,
+      p_user_id: ctx.userId,
+      p_phone: ctx.counterPhone ?? null,
+    });
+    if (rpcError) {
+      if (rpcError.code !== '42883' && rpcError.code !== 'PGRST202') {
+        console.error('validateAndComputeCoupon: shared usage count failed', rpcError);
+        return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };
+      }
+    } else {
+      const first = (Array.isArray(data) ? data[0] : data) as { total_used?: number; mine_used?: number } | null;
+      sharedCounts = { total: Number(first?.total_used ?? 0), mine: Number(first?.mine_used ?? 0) };
+    }
+  }
+
   // Total usage limit (0 = unlimited).
-  if (coupon.usage_limit > 0) {
+  if (coupon.usage_limit > 0 && sharedCounts) {
+    if (sharedCounts.total >= coupon.usage_limit) {
+      return { ok: false, discountInr: 0, reason: 'This coupon has reached its usage limit', coupon };
+    }
+  } else if (coupon.usage_limit > 0) {
     // Count only redemptions on orders that weren't cancelled/rejected (H7) —
     // an abandoned/rejected order must not permanently burn a limited coupon.
     const { count, error: usageError } = await admin
@@ -165,17 +203,25 @@ export async function validateAndComputeCoupon(
     if (!ctx.userId && !heldViaCounterPhone) {
       return { ok: false, discountInr: 0, reason: 'Log in to use this coupon', coupon };
     }
-    let userUsage = admin
-      .from('coupon_redemptions')
-      .select('id, orders!inner(status)', { count: 'exact', head: true })
-      .eq('coupon_id', coupon.id);
-    if (ctx.userId) userUsage = userUsage.eq('user_id', ctx.userId);
-    const { count, error: userUsageError } = await userUsage.not('orders.status', 'in', '("cancelled","rejected")');
-    if (userUsageError) {
-      console.error('validateAndComputeCoupon: per-user count failed', userUsageError);
-      return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };
+    let userCount: number;
+    if (sharedCounts) {
+      // Signed in: this account's uses. Counter-linked phone holder: the phone is the one
+      // holder, so every redemption is theirs (the same rule as the café query below).
+      userCount = ctx.userId ? sharedCounts.mine : sharedCounts.total;
+    } else {
+      let userUsage = admin
+        .from('coupon_redemptions')
+        .select('id, orders!inner(status)', { count: 'exact', head: true })
+        .eq('coupon_id', coupon.id);
+      if (ctx.userId) userUsage = userUsage.eq('user_id', ctx.userId);
+      const { count, error: userUsageError } = await userUsage.not('orders.status', 'in', '("cancelled","rejected")');
+      if (userUsageError) {
+        console.error('validateAndComputeCoupon: per-user count failed', userUsageError);
+        return { ok: false, discountInr: 0, reason: 'Could not validate coupon — please try again', coupon };
+      }
+      userCount = count ?? 0;
     }
-    if ((count ?? 0) >= coupon.per_user_limit) {
+    if (userCount >= coupon.per_user_limit) {
       return {
         ok: false,
         discountInr: 0,
@@ -213,7 +259,7 @@ export async function validateAndComputeCoupon(
  * 'error' when the profile could not be read: the caller answers "try again" rather than
  * guessing either way.
  */
-async function redeemerHoldsAssignedPhone(
+export async function redeemerHoldsAssignedPhone(
   admin: ReturnType<typeof createAdminSupabaseClient>,
   userId: string | null,
   assignedPhone: string,

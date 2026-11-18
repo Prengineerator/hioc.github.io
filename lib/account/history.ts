@@ -2,6 +2,7 @@ import 'server-only';
 
 import { isTerminal } from '@/lib/orders/stateMachine';
 import type { OrderStatus } from '@/lib/types';
+import type { HistoryChannel, HistoryChannelFilter } from '@/lib/account/historyTypes';
 
 // Pure merge/dedupe/paginate/security/status-filter rules behind
 // GET /api/account/history (ACC-2, widened by the "customer login should
@@ -14,6 +15,9 @@ import type { OrderStatus } from '@/lib/types';
 // customer order-tracking page already use, and reusing it here (rather
 // than re-listing which statuses are terminal) is what guarantees "Active"
 // here can never silently drift from what the rest of the app calls active.
+//
+// Since the shop (E4) the merged list can also hold shop_orders rows; see
+// mergeChannelRows below.
 //
 // A caller's orders come from up to three Supabase queries run by the route
 // handler (owner-linked, and unclaimed guest orders matched by the caller's
@@ -185,4 +189,81 @@ export function ownsOrder(
     Boolean(order.customer_email) &&
     order.customer_email!.toLowerCase() === verifiedEmail
   );
+}
+
+// ---------------------------------------------------------------------------
+// Café + shop merge (docs/SHOP-V2-SPEC.md E4)
+// ---------------------------------------------------------------------------
+//
+// The history route now reads two tables (orders, shop_orders). Each list is
+// reduced to the same lightweight ChannelRow, merged here, filtered, and only
+// then paginated, so a page never overlaps or skips across the two tables.
+
+export function isValidHistoryChannel(value: unknown): value is HistoryChannelFilter {
+  return value === 'all' || value === 'cafe' || value === 'shop';
+}
+
+export interface ChannelRow {
+  id: string;
+  created_at: string;
+  channel: HistoryChannel;
+  /** Still moving toward the customer (café: not terminal; shop: paid / sent / shipped). */
+  active: boolean;
+}
+
+/**
+ * One list from any number of sources: each (channel, id) once, newest first.
+ * Equal timestamps are broken by channel then id (both descending), so the
+ * order is the same on every request and page 2 starts exactly where page 1
+ * ended.
+ */
+export function mergeChannelRows(sources: ChannelRow[][]): ChannelRow[] {
+  const seen = new Map<string, ChannelRow>();
+  for (const rows of sources) {
+    for (const row of rows) {
+      const key = `${row.channel}:${row.id}`;
+      if (!seen.has(key)) seen.set(key, row);
+    }
+  }
+  return [...seen.values()].sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at > b.created_at ? -1 : 1;
+    if (a.channel !== b.channel) return a.channel > b.channel ? -1 : 1;
+    if (a.id !== b.id) return a.id > b.id ? -1 : 1;
+    return 0;
+  });
+}
+
+/** Narrows merged rows by channel and Active/Past. Applied before pagination. */
+export function filterChannelRows(
+  rows: ChannelRow[],
+  channel: HistoryChannelFilter,
+  status: HistoryStatusFilter | null,
+): ChannelRow[] {
+  return rows.filter((row) => {
+    if (channel !== 'all' && row.channel !== channel) return false;
+    if (status === 'active') return row.active;
+    if (status === 'past') return !row.active;
+    return true;
+  });
+}
+
+/**
+ * Whether a shop order belongs to `userId`: it is theirs by user_id, or it is
+ * a guest order (user_id null) whose phone matches the CALLER's VERIFIED
+ * profile phone, or whose email matches the CALLER's verified login email.
+ * Same direction of trust as ownsOrder: what the order says is only compared
+ * with what the caller proved, and an order claimed by someone else never
+ * matches.
+ */
+export function ownsShopOrder(
+  order: { user_id: string | null; phone: string | null; email: string | null } | null | undefined,
+  userId: string,
+  profile: CallerProfile | null | undefined,
+  verifiedEmail: string | null = null,
+): boolean {
+  if (!order || !userId) return false;
+  if (order.user_id === userId) return true;
+  if (order.user_id) return false;
+  if (includeGuestOrdersByPhone(profile) && Boolean(order.phone) && order.phone === profile!.phone) return true;
+  return Boolean(verifiedEmail) && Boolean(order.email) && order.email!.toLowerCase() === verifiedEmail;
 }

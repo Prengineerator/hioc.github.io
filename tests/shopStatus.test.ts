@@ -203,3 +203,70 @@ describe("checking Shiprocket's bill against what the customer paid", () => {
     expect(shiprocketBillCheck(order)).toEqual({ state: 'differs', shiprocket: 599, paid: 648 });
   });
 });
+
+describe('v2 statuses, discount breakdown and views', () => {
+  it('labels expired and puts it on the Unpaid tab with payment_pending', async () => {
+    const s = await import('@/lib/shop/status');
+    expect(s.isShopOrderStatus('expired')).toBe(true);
+    expect(s.CUSTOMER_STATUS_LABEL.expired).toBe('Payment not completed');
+    expect(s.OWNER_STATUS_LABEL.expired).toBe('Expired');
+    expect(s.ownerTab('unpaid').statuses).toEqual(['payment_pending', 'expired']);
+    expect(s.isPaidStatus('expired')).toBe(false);
+    expect(s.PAID_STATUSES).toEqual(['paid', 'sent_to_shiprocket', 'shipped', 'delivered']);
+  });
+
+  it('isActiveShopStatus: paid, sent and shipped only', async () => {
+    const { isActiveShopStatus } = await import('@/lib/shop/status');
+    for (const s of ['paid', 'sent_to_shiprocket', 'shipped'] as const) expect(isActiveShopStatus(s)).toBe(true);
+    for (const s of ['payment_pending', 'delivered', 'cancelled', 'expired'] as const) expect(isActiveShopStatus(s)).toBe(false);
+  });
+
+  it('breaks a discount into offer, coupon and Beanies lines, omitting zeros', async () => {
+    const { shopOrderDiscountBreakdown } = await import('@/lib/shop/status');
+    const lines = shopOrderDiscountBreakdown(
+      shopOrder({ discount_inr: 150, offer_name: null, offer_discount_inr: 100, coupon_code: 'WELCOME', coupon_discount_inr: 40, beanies_redeemed: 1, beanies_discount_inr: 10 }),
+    );
+    expect(lines).toEqual([
+      { kind: 'offer', label: 'Introductory offer', amount_inr: 100 },
+      { kind: 'coupon', label: 'Coupon WELCOME', amount_inr: 40 },
+      { kind: 'beanies', label: '1 Beanie', amount_inr: 10 },
+    ]);
+    const onlyCoupon = shopOrderDiscountBreakdown(shopOrder({ coupon_code: 'X', coupon_discount_inr: 5 }));
+    expect(onlyCoupon).toHaveLength(1);
+    expect(shopOrderDiscountBreakdown(shopOrder())).toEqual([]);
+  });
+
+  it('reads a legacy row (discount_inr only) as one offer line', async () => {
+    const { shopOrderDiscountBreakdown } = await import('@/lib/shop/status');
+    expect(shopOrderDiscountBreakdown(shopOrder({ discount_inr: 199, offer_name: 'Launch offer', offer_discount_inr: 0, coupon_discount_inr: 0, beanies_discount_inr: 0 }))).toEqual([
+      { kind: 'offer', label: 'Launch offer', amount_inr: 199 },
+    ]);
+  });
+
+  it('toPublicView fills the v2 fields and still hides street, phone and email', async () => {
+    const { toPublicView } = await import('@/lib/shop/status');
+    const view = toPublicView(shopOrder({ user_id: null, jar_count: 2, discount_inr: 50, offer_discount_inr: 50 }), { beanies_to_earn: 8 });
+    expect(view.unit_count).toBe(2);
+    expect(view.is_guest).toBe(true);
+    expect(view.beanies_to_earn).toBe(8);
+    expect(view.discounts).toEqual([{ kind: 'offer', label: 'Introductory offer', amount_inr: 50 }]);
+    expect(toPublicView(shopOrder({ user_id: 'u1' })).is_guest).toBe(false);
+    expect(toPublicView(shopOrder()).beanies_to_earn).toBeNull();
+    const json = JSON.stringify(view);
+    expect(json).not.toContain('Rose Villa');
+    expect(json).not.toContain('+919876543210');
+    expect(json).not.toContain('riya@example.com');
+  });
+
+  it('toShopHistoryOrder keeps the parcel and tracking, not the person', async () => {
+    const { toShopHistoryOrder } = await import('@/lib/shop/status');
+    const h = toShopHistoryOrder(shopOrder({ awb_code: 'AWB1', jar_count: 3 }));
+    expect(h.unit_count).toBe(3);
+    expect(h.city).toBe('Jaipur');
+    expect(h.tracking_url).toContain('AWB1');
+    const json = JSON.stringify(h);
+    expect(json).not.toContain('Rose Villa');
+    expect(json).not.toContain('9876543210');
+    expect(json).not.toContain('riya@example.com');
+  });
+});

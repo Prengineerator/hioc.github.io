@@ -515,9 +515,14 @@ export interface Favorite {
 // --- Coupons & promotions (migration §5) -----------------------------------
 export type CouponDiscountType = 'percent' | 'flat';
 
+/** Where a coupon works (supabase/2026-11-shop-v2.sql). Absent before the migration = 'cafe'. */
+export type CouponChannel = 'cafe' | 'shop' | 'both';
+
 export interface CouponScope {
   item_ids?: string[];
   category?: string[];
+  /** Shop product ids; only meaningful for channel 'shop' or 'both'. Empty = every shop product. */
+  shop_product_ids?: string[];
 }
 
 export interface Coupon {
@@ -540,12 +545,18 @@ export interface Coupon {
   // that has not applied it, so both are optional: undefined = no campaign, no lock.
   campaign_id?: string | null; // the marketing campaign that issued this per-recipient code
   assigned_phone?: string | null; // E.164; only that phone's VERIFIED account may redeem it
+  // Shop v2 (supabase/2026-11-shop-v2.sql). Absent on a database without it: undefined = 'cafe'.
+  channel?: CouponChannel;
 }
 
 export interface CouponRedemption {
   id: string;
   coupon_id: string;
+  // Left `string` (not nullable) so existing café readers keep compiling; since the
+  // shop-v2 migration a shop redemption has order_id null and shop_order_id set.
   order_id: string;
+  shop_order_id?: string | null;
+  phone?: string | null; // +91XXXXXXXXXX, lets a guest's per-customer limit be counted
   user_id: string | null;
   discount_inr: number;
   created_at: string;
@@ -575,6 +586,7 @@ export interface LoyaltyTransaction {
   id: string;
   user_id: string;
   order_id: string | null;
+  shop_order_id?: string | null;
   type: LoyaltyTxType;
   points: number; // signed: +earn / -redeem
   note: string;

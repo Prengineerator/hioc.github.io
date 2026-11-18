@@ -1,4 +1,5 @@
-// Shiprocket API client for the Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md).
+// Shiprocket API client for the online shop (docs/INSTANT-COFFEE-SHOP.md, docs/SHOP-V2-SPEC.md E6):
+// Instant Coffee jars and Home Blend packs, alone or mixed in one order.
 // REST over fetch, no SDK, like lib/payments/gateway.ts.
 //
 // Setup (Shiprocket panel → Settings → API → Configure): create an API user.
@@ -17,6 +18,7 @@
 // what went wrong.
 
 import 'server-only';
+import { shiprocketItemName } from './catalog';
 import { googleMapsLink, locationFromRow } from './location';
 import { shopOrderRef } from './status';
 import type { ShopOrderRow, ShopPackage } from './types';
@@ -148,12 +150,19 @@ function splitName(full: string): { first: string; last: string } {
   return { first: parts[0] ?? full, last: parts.slice(1).join(' ') };
 }
 
+/** Shiprocket's address fields are short; keep address line 2 inside this. */
+const ADDRESS_2_MAX = 200;
+
 /**
- * The "Create custom order" body for a paid shop order. Pure (tested).
- * Prepaid only. Shipping is billed to the customer as shipping_charges;
- * sub_total is the jars at ₹399 each and the offer is total_discount, so
+ * The "Create custom order" body for a paid shop order (v2: instant jars, Home
+ * Blend packs or a mix). Pure (tested).
+ * Prepaid only. Each order line becomes one item: its Shiprocket name, its LINE
+ * SKU (base SKU + grind suffix), units and unit price. Shipping is billed to
+ * the customer as shipping_charges; sub_total is the goods before any discount
+ * and total_discount is everything taken off (offer + coupon + Beanies), so
  * Shiprocket's total (sub_total − total_discount + shipping_charges) is what
- * the customer paid. The billing address is the delivery address.
+ * the customer paid. The billing address is the delivery address, with the
+ * courier landmark appended to address line 2.
  */
 export function buildShiprocketOrder(
   order: ShopOrderRow,
@@ -165,9 +174,14 @@ export function buildShiprocketOrder(
   // (seen on the order in the Shiprocket panel), so the exact spot travels
   // with the shipment.
   const pin = locationFromRow(order);
-  const comment = ['HIOC. Premium Instant Coffee — online order (prepaid)', pin ? `Delivery pin: ${googleMapsLink(pin)}` : null]
+  const comment = ['HIOC. online order (prepaid)', pin ? `Delivery pin: ${googleMapsLink(pin)}` : null]
     .filter(Boolean)
     .join(' · ');
+  const landmark = order.landmark?.trim();
+  const address2 = [order.address_line2?.trim(), landmark ? `Landmark: ${landmark}` : null]
+    .filter(Boolean)
+    .join(', ')
+    .slice(0, ADDRESS_2_MAX);
   return {
     order_id: shopOrderRef(order.order_number),
     order_date: shiprocketDate(order.paid_at ?? order.created_at),
@@ -176,7 +190,7 @@ export function buildShiprocketOrder(
     billing_customer_name: first,
     billing_last_name: last,
     billing_address: order.address_line1,
-    billing_address_2: order.address_line2,
+    billing_address_2: address2,
     billing_city: order.city,
     billing_pincode: order.pincode,
     billing_state: order.state,
@@ -185,7 +199,7 @@ export function buildShiprocketOrder(
     billing_phone: order.phone.replace(/^\+91/, ''),
     shipping_is_billing: true,
     order_items: order.lines.map((l) => ({
-      name: `HIOC. Premium Instant Coffee — ${l.name} (50 g)`,
+      name: shiprocketItemName(l),
       sku: l.sku,
       units: l.quantity,
       selling_price: l.unit_price_inr,
@@ -196,9 +210,9 @@ export function buildShiprocketOrder(
     shipping_charges: order.shipping_inr,
     giftwrap_charges: 0,
     transaction_charges: 0,
-    // The online offer: the jars stay at ₹399 each on the items, and the offer
-    // is the order's discount. sub_total is the jars BEFORE the offer (the sum
-    // of the items): Shiprocket takes total_discount off sub_total itself, so
+    // The discounts (offer + coupon + Beanies): items stay at full price, and the
+    // total is the order's discount. sub_total is the goods BEFORE discounts (the
+    // sum of the items): Shiprocket takes total_discount off sub_total itself, so
     // sending the after-offer amount here took the offer off twice (#S1004:
     // ₹1197 of jars, ₹448 offer, paid ₹749, but Shiprocket showed ₹301).
     total_discount: order.discount_inr,

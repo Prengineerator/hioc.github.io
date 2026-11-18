@@ -4,7 +4,7 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { runAfterResponse } from '@/lib/api/background';
 import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
-import { validatePackage } from '@/lib/shop/catalog';
+import { defaultPackageForLines, validatePackage } from '@/lib/shop/catalog';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
 import { getShopOrder, saveShiprocketTotal, updateShopOrderIf } from '@/lib/shop/server';
 import { createShiprocketOrder, fetchShiprocketOrder, isShiprocketConfigured, SHIPROCKET_NOT_CONFIGURED } from '@/lib/shop/shiprocket';
@@ -17,7 +17,8 @@ const CLAIM_MS = 2 * 60 * 1000;
 
 // POST /api/owner/shop/orders/[id]/shiprocket — owner only. The one click:
 // creates this paid order in Shiprocket with the parcel the owner confirmed.
-// Body: { weight_kg, length_cm, breadth_cm, height_cm }. Responds
+// Body: { weight_kg, length_cm, breadth_cm, height_cm }, or none to use the
+// default parcel for the order's lines (defaultPackageForLines). Responds
 // { order, warning? }.
 //
 // Creating the Shiprocket order spends nothing; the courier, label and pickup
@@ -34,8 +35,11 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (!isUuid(params.id)) return notFound();
 
   const body = await parseJsonBody(request);
-  const pkg = validatePackage(body ?? {});
-  if (!pkg.ok) return errorResponse(400, pkg.error);
+  // A body with no parcel fields uses the default worked out from the order's
+  // lines; whatever the owner typed is validated as before.
+  const typed = body !== null && ['weight_kg', 'length_cm', 'breadth_cm', 'height_cm'].some((k) => body[k] !== undefined);
+  const pkg = typed ? validatePackage(body) : null;
+  if (pkg && !pkg.ok) return errorResponse(400, pkg.error);
 
   if (!isShiprocketConfigured()) return errorResponse(503, SHIPROCKET_NOT_CONFIGURED);
 
@@ -64,7 +68,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
   }
   if (!claimed) return errorResponse(409, 'This order is already being sent — give it a minute, then reload.');
 
-  const result = await createShiprocketOrder(order, pkg.pkg);
+  const parcel = pkg && pkg.ok ? pkg.pkg : defaultPackageForLines(order.lines);
+  const result = await createShiprocketOrder(order, parcel);
   if (!result.ok) {
     await admin.from('shop_orders').update({ shiprocket_sending_at: null }).eq('id', order.id);
     return errorResponse(502, result.error);
@@ -80,8 +85,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
     shiprocket_status: created.status,
     awb_code: created.awb,
     courier_name: created.courier,
-    package_weight_kg: pkg.pkg.weight_kg,
-    package_dims_cm: `${pkg.pkg.length_cm} × ${pkg.pkg.breadth_cm} × ${pkg.pkg.height_cm}`,
+    package_weight_kg: parcel.weight_kg,
+    package_dims_cm: `${parcel.length_cm} × ${parcel.breadth_cm} × ${parcel.height_cm}`,
     sent_to_shiprocket_at: now,
     shipped_at: shipped ? now : null,
     shiprocket_sending_at: null,

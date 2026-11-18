@@ -15,11 +15,17 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function ShopOrderPage({ params }: { params: { id: string } }) {
+export default function ShopOrderPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { save?: string };
+}) {
   if (!isUuid(params.id)) notFound();
   return (
     <div className="mx-auto max-w-2xl px-4 py-10 md:py-14">
-      <ShopOrderStatus orderId={params.id} />
+      <ShopOrderStatus orderId={params.id} save={searchParams.save === '1'} />
     </div>
   );
 }

@@ -9,9 +9,11 @@
 //
 // 'payment_pending' orders are checkouts whose payment never completed. They
 // stay out of the owner's lists (an "Unpaid" tab shows them) and need nothing
-// done: no money moved.
+// done: no money moved. A checkout left unpaid long enough becomes 'expired'
+// (the customer reads "Payment not completed"); the Unpaid tab holds both.
 
-import type { ShopOrderPublicView, ShopOrderRow, ShopOrderStatus } from './types';
+import { beaniesLabel } from '@/lib/loyalty/brand';
+import type { ShopDiscountLine, ShopHistoryOrder, ShopOrderPublicView, ShopOrderRow, ShopOrderStatus } from './types';
 
 export const SHOP_ORDER_STATUSES: readonly ShopOrderStatus[] = [
   'payment_pending',
@@ -20,6 +22,7 @@ export const SHOP_ORDER_STATUSES: readonly ShopOrderStatus[] = [
   'shipped',
   'delivered',
   'cancelled',
+  'expired',
 ];
 
 export function isShopOrderStatus(v: unknown): v is ShopOrderStatus {
@@ -34,6 +37,7 @@ export const CUSTOMER_STATUS_LABEL: Record<ShopOrderStatus, string> = {
   shipped: 'Shipped',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
+  expired: 'Payment not completed',
 };
 
 /** The owner's words for each step. */
@@ -44,6 +48,7 @@ export const OWNER_STATUS_LABEL: Record<ShopOrderStatus, string> = {
   shipped: 'Shipped',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
+  expired: 'Expired',
 };
 
 /** Paid and not yet cancelled: money was taken, so the order needs seeing to. */
@@ -53,13 +58,18 @@ export function isPaidStatus(status: ShopOrderStatus): boolean {
   return PAID_STATUSES.includes(status);
 }
 
+/** Money taken and the order still live (not delivered, not cancelled). */
+export function isActiveShopStatus(s: ShopOrderStatus): boolean {
+  return s === 'paid' || s === 'sent_to_shiprocket' || s === 'shipped';
+}
+
 /** The owner page's tabs, each a set of statuses. */
 export const OWNER_TABS = [
   { key: 'to_ship', label: 'To ship', statuses: ['paid'] },
   { key: 'with_courier', label: 'With courier', statuses: ['sent_to_shiprocket', 'shipped'] },
   { key: 'delivered', label: 'Delivered', statuses: ['delivered'] },
   { key: 'cancelled', label: 'Cancelled', statuses: ['cancelled'] },
-  { key: 'unpaid', label: 'Unpaid', statuses: ['payment_pending'] },
+  { key: 'unpaid', label: 'Unpaid', statuses: ['payment_pending', 'expired'] },
 ] as const satisfies readonly { key: string; label: string; statuses: readonly ShopOrderStatus[] }[];
 
 export type OwnerTabKey = (typeof OWNER_TABS)[number]['key'];
@@ -190,17 +200,58 @@ export function shopOrderRef(orderNumber: number): string {
   return `HIOC-S${orderNumber}`;
 }
 
+type DiscountFields = Pick<
+  ShopOrderRow,
+  | 'discount_inr'
+  | 'offer_name'
+  | 'offer_discount_inr'
+  | 'coupon_code'
+  | 'coupon_discount_inr'
+  | 'beanies_redeemed'
+  | 'beanies_discount_inr'
+>;
+
+/**
+ * The receipt's discount lines: offer, coupon, Beanies, each only when above
+ * zero. A legacy row (v1, before the split columns) has all three at 0 but a
+ * discount_inr above 0: that was the offer, so it reads as one offer line.
+ */
+export function shopOrderDiscountBreakdown(o: DiscountFields): ShopDiscountLine[] {
+  const offer = o.offer_discount_inr || 0;
+  const coupon = o.coupon_discount_inr || 0;
+  const beanies = o.beanies_discount_inr || 0;
+  const offerLabel = o.offer_name ?? 'Introductory offer';
+  if (offer === 0 && coupon === 0 && beanies === 0) {
+    return o.discount_inr > 0 ? [{ kind: 'offer', label: offerLabel, amount_inr: o.discount_inr }] : [];
+  }
+  const lines: ShopDiscountLine[] = [];
+  if (offer > 0) lines.push({ kind: 'offer', label: offerLabel, amount_inr: offer });
+  if (coupon > 0) lines.push({ kind: 'coupon', label: `Coupon ${o.coupon_code ?? ''}`.trim(), amount_inr: coupon });
+  if (beanies > 0) lines.push({ kind: 'beanies', label: beaniesLabel(o.beanies_redeemed), amount_inr: beanies });
+  return lines;
+}
+
 /** The customer's view of a row: no street, phone or email (see ShopOrderPublicView). */
-export function toPublicView(o: ShopOrderRow): ShopOrderPublicView {
+export function toPublicView(o: ShopOrderRow, extras?: { beanies_to_earn?: number | null }): ShopOrderPublicView {
   return {
     id: o.id,
     order_number: o.order_number,
     status: o.status,
     lines: o.lines,
     jar_count: o.jar_count,
+    unit_count: o.jar_count,
     subtotal_inr: o.subtotal_inr,
     discount_inr: o.discount_inr,
     offer_name: o.offer_name,
+    offer_discount_inr: o.offer_discount_inr,
+    coupon_code: o.coupon_code,
+    coupon_discount_inr: o.coupon_discount_inr,
+    beanies_redeemed: o.beanies_redeemed,
+    beanies_discount_inr: o.beanies_discount_inr,
+    intro_offer_applied: o.intro_offer_applied,
+    discounts: shopOrderDiscountBreakdown(o),
+    is_guest: o.user_id === null,
+    beanies_to_earn: extras?.beanies_to_earn ?? null,
     shipping_inr: o.shipping_inr,
     total_inr: o.total_inr,
     ship_to: { name: o.customer_name, city: o.city, state: o.state, pincode: o.pincode },
@@ -208,6 +259,26 @@ export function toPublicView(o: ShopOrderRow): ShopOrderPublicView {
     courier_name: o.courier_name,
     tracking_url: trackingUrl(o.awb_code),
     refunded_inr: o.refunded_inr,
+    created_at: o.created_at,
+    paid_at: o.paid_at,
+    shipped_at: o.shipped_at,
+    delivered_at: o.delivered_at,
+    cancelled_at: o.cancelled_at,
+  };
+}
+
+/** One row of the customer's shop order history: no address, phone or email. */
+export function toShopHistoryOrder(o: ShopOrderRow): ShopHistoryOrder {
+  return {
+    id: o.id,
+    order_number: o.order_number,
+    status: o.status,
+    lines: o.lines,
+    unit_count: o.jar_count,
+    total_inr: o.total_inr,
+    city: o.city,
+    awb_code: o.awb_code,
+    tracking_url: trackingUrl(o.awb_code),
     created_at: o.created_at,
     paid_at: o.paid_at,
     shipped_at: o.shipped_at,

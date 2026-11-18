@@ -3,6 +3,8 @@
 import type { ShopOrderRow } from '@/lib/shop/types';
 
 export function shopOrder(patch: Partial<ShopOrderRow> = {}): ShopOrderRow {
+  // A patched discount_inr is the offer's unless the test says otherwise.
+  const offerDefault = patch.discount_inr ?? 0;
   return {
     id: '7d0c3f0e-1b2a-4c5d-8e9f-0a1b2c3d4e5f',
     order_number: 1001,
@@ -12,6 +14,7 @@ export function shopOrder(patch: Partial<ShopOrderRow> = {}): ShopOrderRow {
     email: 'riya@example.com',
     address_line1: '12, Rose Villa, MG Road',
     address_line2: 'Near City Mall',
+    landmark: '',
     city: 'Jaipur',
     state: 'Rajasthan',
     pincode: '302001',
@@ -22,6 +25,20 @@ export function shopOrder(patch: Partial<ShopOrderRow> = {}): ShopOrderRow {
     subtotal_inr: 798,
     discount_inr: 0,
     offer_name: null,
+    offer_discount_inr: offerDefault,
+    coupon_id: null,
+    coupon_code: null,
+    coupon_discount_inr: 0,
+    beanies_redeemed: 0,
+    beanies_discount_inr: 0,
+    intro_offer_applied: false,
+    intro_offer_reused: false,
+    goods_weight_kg: null,
+    idempotency_key: null,
+    checkout_fingerprint: null,
+    save_address_label: null,
+    customer_address_id: null,
+    capture_effects_at: null,
     shipping_inr: 49,
     total_inr: 847,
     razorpay_order_id: 'order_R1',

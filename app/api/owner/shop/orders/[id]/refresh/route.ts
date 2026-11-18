@@ -5,6 +5,7 @@ import { runAfterResponse } from '@/lib/api/background';
 import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, unauthorized } from '@/lib/api/http';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
+import { onShopOrderDelivered } from '@/lib/shop/lifecycle';
 import { getShopOrder, saveShiprocketTotal, updateShopOrderIf } from '@/lib/shop/server';
 import { fetchShiprocketOrder } from '@/lib/shop/shiprocket';
 import { shiprocketBillWarning, shopStatusFromShiprocket } from '@/lib/shop/status';
@@ -57,6 +58,8 @@ export async function POST(_request: Request, { params }: { params: { id: string
   if (next === 'shipped' || (next === 'delivered' && order.status === 'sent_to_shiprocket')) {
     runAfterResponse(sendShopShippedEmail(updated));
   }
+
+  if (next === 'delivered') await onShopOrderDelivered(updated);
 
   const saved = state.total === null ? updated : await saveShiprocketTotal(admin, updated, state.total);
   const warning =

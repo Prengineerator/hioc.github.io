@@ -2,7 +2,11 @@
 // (app/api/coupons, app/api/coupons/[id]). Kept separate from coupons.ts (the
 // FND-3 contract stub) so that file stays focused on checkout-time validation.
 
-import type { Announcement, CouponDiscountType, CouponScope } from '@/lib/types';
+import type { Announcement, CouponChannel, CouponDiscountType, CouponScope } from '@/lib/types';
+import { couponChannelOf } from '@/lib/promotions/couponRules';
+
+const SHOP_PRODUCT_ID = /^[a-z0-9-]{1,40}$/;
+const MAX_SHOP_PRODUCT_IDS = 20;
 
 export interface CouponWritableFields {
   code?: string;
@@ -12,6 +16,7 @@ export interface CouponWritableFields {
   min_order_inr?: number;
   max_discount_inr?: number;
   scope?: CouponScope;
+  channel?: CouponChannel;
   valid_from?: string | null;
   valid_to?: string | null;
   usage_limit?: number;
@@ -34,7 +39,11 @@ const NONNEG_INT_FIELDS = [
  */
 export function parseCouponInput(
   body: Record<string, unknown>,
-  { partial, existingType }: { partial: boolean; existingType?: CouponDiscountType },
+  {
+    partial,
+    existingType,
+    existingChannel,
+  }: { partial: boolean; existingType?: CouponDiscountType; existingChannel?: CouponChannel },
 ): CouponWritableFields | string {
   const out: CouponWritableFields = {};
 
@@ -87,6 +96,16 @@ export function parseCouponInput(
     (out as Record<string, number>)[field] = value;
   }
 
+  if (body.channel !== undefined) {
+    if (body.channel !== 'cafe' && body.channel !== 'shop' && body.channel !== 'both') {
+      return "channel must be 'cafe', 'shop' or 'both'";
+    }
+    out.channel = body.channel;
+  }
+  // The channel this coupon will have once saved: this body's, else the stored one (a PATCH that
+  // only changes the scope must still be checked against it), else café.
+  const effectiveChannel = out.channel ?? couponChannelOf({ channel: existingChannel });
+
   if (body.scope !== undefined) {
     if (typeof body.scope !== 'object' || body.scope === null || Array.isArray(body.scope)) {
       return 'scope must be an object';
@@ -100,9 +119,29 @@ export function parseCouponInput(
     if (category !== undefined && (!Array.isArray(category) || category.some((v) => typeof v !== 'string'))) {
       return 'scope.category must be an array of strings';
     }
+    const shopIds = scope.shop_product_ids;
+    if (shopIds !== undefined) {
+      if (
+        !Array.isArray(shopIds) ||
+        shopIds.length > MAX_SHOP_PRODUCT_IDS ||
+        shopIds.some((v) => typeof v !== 'string' || !SHOP_PRODUCT_ID.test(v))
+      ) {
+        return `scope.shop_product_ids must be an array of at most ${MAX_SHOP_PRODUCT_IDS} product ids`;
+      }
+    }
+    if (shopIds !== undefined && (shopIds as string[]).length > 0 && effectiveChannel === 'cafe') {
+      return 'Shop product limits only apply to shop coupons';
+    }
+    if (
+      effectiveChannel === 'shop' &&
+      ((item_ids as string[] | undefined)?.length || (category as string[] | undefined)?.length)
+    ) {
+      return 'Item and category limits only apply to café coupons';
+    }
     out.scope = {
       item_ids: (item_ids as string[] | undefined) ?? [],
       category: (category as string[] | undefined) ?? [],
+      ...(shopIds !== undefined ? { shop_product_ids: shopIds as string[] } : {}),
     };
   }
 
