@@ -89,21 +89,17 @@ const TDR = `${TD} text-right font-mono`;
 const ROW = 'border-t border-[#f2efe9]';
 const TOTAL_ROW = 'border-t border-charcoal font-bold text-charcoal';
 
-// Print rules, active only while this page is open. The site header, footer and
-// owner nav hide themselves in print (print:hidden). Colours (check icons, shaded
-// totals) are kept in the printout, a table row is never cut in half, and the
-// page is A4 with a modest margin.
-const PRINT_CSS = `
-@media print {
-  @page { size: A4; margin: 12mm; }
-  html, body { background: #fff !important; }
-  [data-gst-report] { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  [data-gst-report] section { box-shadow: none !important; }
-  [data-gst-report] tr { break-inside: avoid; }
-  [data-gst-report] details > summary { list-style: none; }
-  [data-gst-report] section > h2, [data-gst-report] h3 { break-after: avoid; }
-}
-`;
+// Print rules. The site header, footer and owner nav hide themselves in print
+// (print:hidden). The rules for the report itself (colours such as check icons
+// and shaded totals kept in the printout, a table row never cut in half) are in
+// app/globals.css under [data-gst-report]. The two below are document-global:
+// @page cannot be scoped to an element, so they live with the page and apply
+// only while it is open, A4 with a modest margin and a white background. It is a
+// plain text child of <style>, never injected as raw HTML. React escapes <, >, &,
+// ' and " in that text, so it must never hold those (this string holds none);
+// rules that need them belong in app/globals.css.
+const PRINT_PAGE_CSS =
+  '@media print { @page { size: A4; margin: 12mm; } html, body { background: #fff !important; } }';
 
 export default async function OwnerGstReportPage({
   searchParams,
@@ -138,7 +134,7 @@ export default async function OwnerGstReportPage({
       data-gst-report=""
       className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6 print:max-w-none print:gap-3 print:p-0 print:text-[12px]"
     >
-      <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
+      <style>{PRINT_PAGE_CSS}</style>
 
       <div className="print:hidden">
         <ReportsNav active="gst" from={from} to={to} />

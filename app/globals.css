@@ -97,3 +97,15 @@ button {
     scroll-behavior: auto !important;
   }
 }
+
+/* Owner → Reports → GST (app/owner/reports/gst/page.tsx) prints cleanly to PDF:
+   colours (check icons, shaded totals) are kept, a table row is never cut in
+   half and a heading stays with what follows it. Scoped to the report's root
+   ([data-gst-report]); the page's A4 size and margin stay with the page. */
+@media print {
+  [data-gst-report] { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  [data-gst-report] section { box-shadow: none !important; }
+  [data-gst-report] tr { break-inside: avoid; }
+  [data-gst-report] details > summary { list-style: none; }
+  [data-gst-report] section > h2, [data-gst-report] h3 { break-after: avoid; }
+}
