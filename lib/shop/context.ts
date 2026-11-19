@@ -51,6 +51,8 @@ export interface QuoteRequest {
    * so what is still held (a payment in flight) must not be counted.
    */
   count_releasable_beanies?: boolean;
+  /** Owner-entered orders only (lib/shop/pricing.ts): whole rupees, at most 50% of the goods after offers. */
+  owner_discount_inr?: number;
 }
 
 export type ServerQuote =
@@ -92,7 +94,7 @@ export async function serverQuote(admin: SupabaseClient, req: QuoteRequest): Pro
       }
     : null;
 
-  const base = { products: products.products, items: req.items, settings, intro_eligible: introEligible, beanies };
+  const base = { products: products.products, items: req.items, settings, intro_eligible: introEligible, beanies, owner_discount_inr: req.owner_discount_inr };
 
   // A first pass without a coupon prices the lines (and refuses a bad cart), so
   // a coupon can be checked against what is really in the cart.

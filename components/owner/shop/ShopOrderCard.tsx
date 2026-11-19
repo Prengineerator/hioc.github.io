@@ -23,10 +23,11 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Badge } from '@/components/ui/Badge';
-import { Button } from '@/components/ui/Button';
+import { Button, buttonVariants } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { defaultPackageForLines, lineOf, packingChecklist } from '@/lib/shop/catalog';
 import { describePin, googleMapsLink, locationFromRow } from '@/lib/shop/location';
+import { needsLinkRetry, paymentLineOf, readCancelAnswer, readRetryAnswer, whatsappShareUrl } from '@/lib/shop/ownerNewOrder';
 import { jarsLabel, rupees, unitsLabel } from '@/lib/shop/pricing';
 import {
   canCancel,
@@ -43,6 +44,11 @@ import {
 import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
 
 type Panel = 'send' | 'ship' | 'cancel' | null;
+
+/** An owner-entered order whose payment link has not been paid yet. */
+function isAwaitingLink(o: Pick<ShopOrderRow, 'status' | 'payment_channel'>): boolean {
+  return o.status === 'payment_pending' && o.payment_channel === 'payment_link';
+}
 
 interface ActResult {
   error?: string;
@@ -96,6 +102,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
     text: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
   // Set after Cancel / Mark delivered: the order has left this tab, so the card
   // stays mounted (actions hidden) until the owner dismisses the result.
   const [settled, setSettled] = useState(false);
@@ -106,6 +113,12 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   const pkg0 = defaultPackageForLines(order.lines);
   const checklist = packingChecklist(order.lines);
   const discounts = shopOrderDiscountBreakdown(order);
+  const awaitingLink = isAwaitingLink(order);
+  const linkUnconfirmed = needsLinkRetry(order);
+  // The link a successful Retry link just made (the page data is refreshed behind it).
+  const [retried, setRetried] = useState<{ url: string; expiresAt: string | null } | null>(null);
+  const linkUrl = order.payment_link_url ?? retried?.url ?? null;
+  const paymentLine = paymentLineOf(order);
   const [pkg, setPkg] = useState({
     weight_kg: String(pkg0.weight_kg),
     length_cm: String(pkg0.length_cm),
@@ -169,21 +182,141 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   }
 
   const base = `/api/owner/shop/orders/${order.id}`;
+  const refundByHand = order.payment_channel === 'offline';
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(linkUrl ?? '');
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setMessage({ tone: 'error', text: 'Could not copy. The link is on the order in Razorpay; try again.' });
+    }
+  }
+
+  async function retryLink() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`${base}/payment-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry' }),
+      });
+      const out = readRetryAnswer(res.status, await res.json().catch(() => ({})));
+      if (out.kind === 'link') {
+        setRetried({ url: out.url, expiresAt: out.expiresAt });
+        setMessage({ tone: 'ok', text: 'The payment link is confirmed. Copy it or share it on WhatsApp.' });
+      } else if (out.kind === 'paid') {
+        setMessage({ tone: 'ok', text: 'Already paid: moved to To ship.' });
+        router.refresh();
+      } else if (out.kind === 'gone') {
+        setMessage({ tone: 'warn', text: out.message });
+        router.refresh();
+      } else {
+        setMessage({ tone: 'error', text: out.message });
+      }
+    } catch {
+      setMessage({ tone: 'error', text: 'Network error — please try again.' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendLink() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`${base}/payment-link`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resend' }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (res.ok) setMessage({ tone: 'ok', text: 'Link sent again by Razorpay.' });
+      else if (res.status === 409) {
+        setMessage({ tone: 'warn', text: data.error || 'This order is no longer waiting for its link. The list is refreshed.' });
+        router.refresh();
+      } else setMessage({ tone: 'error', text: data.error || "Razorpay didn't send the link. Copy it and send it yourself." });
+    } catch {
+      setMessage({ tone: 'error', text: 'Network error — please try again.' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Cancel: an unpaid link order (the link is closed first), a paid order refunded through
+  // Razorpay, or one paid by UPI / cash / bank transfer (refunded by hand: a reminder, not a refund).
+  async function cancelOrder() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`${base}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      const data = (await res.json().catch(() => ({}))) as ActResult & { refund_by_hand?: boolean };
+      if (!res.ok) {
+        const n = readCancelAnswer(res.status, data, order.total_inr);
+        setMessage({ tone: n.tone, text: n.text });
+        if (n.refresh) {
+          setPanel(null);
+          router.refresh();
+        }
+        return;
+      }
+      setPanel(null);
+      let text: string;
+      let tone: 'ok' | 'warn' = data.warning ? 'warn' : 'ok';
+      if (data.refund_by_hand) {
+        const n = readCancelAnswer(res.status, data, order.total_inr);
+        text = n.text;
+        tone = 'warn';
+      } else {
+        const n = data.beanies_returned ?? 0;
+        const beanies =
+          n > 0
+            ? ` ${n} ${n === 1 ? 'Beanie' : 'Beanies'} returned to the customer.`
+            : n < 0
+              ? ` ${-n} ${n === -1 ? 'Beanie' : 'Beanies'} taken back from the customer.`
+              : '';
+        const refunded = data.order?.refunded_inr ?? 0;
+        const money = refunded > 0 ? `Refunded ${rupees(refunded)}.` : awaitingLink ? 'Cancelled. The payment link is closed and nothing was charged.' : 'Cancelled (no online payment to refund).';
+        text = `${data.warning ? `${data.warning} ` : ''}${money}${beanies}`;
+      }
+      setMessage({ tone, text });
+      setSettled(true);
+      if (data.order?.status) setSettledStatus(data.order.status);
+    } catch {
+      setMessage({ tone: 'error', text: 'Network error — please try again.' });
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <li className="rounded-md border border-line bg-cream p-4 shadow-card">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="font-mono text-sm font-semibold tabular-nums text-charcoal">{ref}</p>
+          <p className="flex flex-wrap items-center gap-2 font-mono text-sm font-semibold tabular-nums text-charcoal">
+            {ref}
+            {order.source === 'owner' ? (
+              <Badge variant="outline" className="font-sans">
+                Added by owner
+              </Badge>
+            ) : null}
+          </p>
           <p className="text-xs text-muted">
             {order.paid_at ? `Paid ${when(order.paid_at)}` : `Started ${when(order.created_at)}`}
             {order.payment_method ? ` · ${order.payment_method.toUpperCase()}` : ''}
           </p>
+          {paymentLine ? <p className="text-xs font-semibold text-charcoal">{paymentLine}</p> : null}
         </div>
         <span
           className={`inline-block whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-bold ${STATUS_TONE[settledStatus ?? order.status]}`}
         >
-          {OWNER_STATUS_LABEL[settledStatus ?? order.status]}
+          {awaitingLink && !settledStatus ? 'Awaiting payment' : OWNER_STATUS_LABEL[settledStatus ?? order.status]}
         </span>
       </div>
 
@@ -235,7 +368,12 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             ) : null}
             {discounts.map((d) => (
               <div key={d.kind} className="flex justify-between gap-3">
-                <dt>{d.label}</dt>
+                <dt>
+                  {d.kind === 'owner' ? 'Owner discount' : d.label}
+                  {d.kind === 'owner' && order.owner_discount_reason ? (
+                    <span className="block text-xs text-muted">“{order.owner_discount_reason}”</span>
+                  ) : null}
+                </dt>
                 <dd className="font-mono tabular-nums">−{rupees(d.amount_inr)}</dd>
               </div>
             ))}
@@ -352,9 +490,54 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
         </p>
       ) : null}
 
+      {awaitingLink ? (
+        <div className="mt-3 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
+          {linkUnconfirmed && !retried ? (
+            <p>
+              <span className="font-semibold text-amber-800">Payment link not confirmed yet.</span>{' '}
+              <span className="text-muted">The customer may not have it. Tap Retry link to check with Razorpay.</span>
+            </p>
+          ) : (
+            <p>
+              <span className="font-semibold">Waiting for the customer to pay the link.</span>
+              {(retried?.expiresAt ?? order.payment_link_expires_at) ? <span className="text-muted"> Expires {when(retried?.expiresAt ?? order.payment_link_expires_at)} IST.</span> : null}
+            </p>
+          )}
+        </div>
+      ) : null}
+
       {/* Actions */}
       {settled ? null : (
       <div className="mt-4 flex flex-wrap gap-2">
+        {linkUnconfirmed && !retried ? (
+          <Button size="sm" loading={busy && panel === null} onClick={() => void retryLink()} disabled={busy}>
+            Retry link
+          </Button>
+        ) : null}
+        {awaitingLink && linkUrl ? (
+          <>
+            <Button size="sm" variant="secondary" onClick={() => void copyLink()} disabled={busy}>
+              {linkCopied ? 'Copied' : 'Copy link'}
+            </Button>
+            <a
+              href={whatsappShareUrl({ orderRef: ref, totalInr: order.total_inr, url: linkUrl })}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={buttonVariants({ size: 'sm', variant: 'secondary' })}
+            >
+              Share on WhatsApp
+            </a>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={busy && panel === null}
+              onClick={() => void resendLink()}
+              disabled={busy}
+            >
+              Resend link
+            </Button>
+          </>
+        ) : null}
         {canSendToShiprocket(order) ? (
           <Button size="sm" onClick={() => setPanel(panel === 'send' ? null : 'send')} disabled={busy}>
             Send to Shiprocket
@@ -393,7 +576,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             Mark delivered
           </Button>
         ) : null}
-        {canCancel(order) ? (
+        {canCancel(order) || awaitingLink ? (
           <Button
             size="sm"
             variant="ghost"
@@ -401,7 +584,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             onClick={() => setPanel(panel === 'cancel' ? null : 'cancel')}
             disabled={busy}
           >
-            Cancel &amp; refund
+            {awaitingLink ? 'Cancel' : refundByHand ? 'Cancel order' : 'Cancel & refund'}
           </Button>
         ) : null}
       </div>
@@ -501,22 +684,22 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           className="mt-3 rounded-md border border-red-200 bg-red-50 p-3"
           onSubmit={(e) => {
             e.preventDefault();
-            void act(`${base}/cancel`, 'POST', { reason }, (d) => {
-              const n = d.beanies_returned ?? 0;
-              const beanies =
-                n > 0
-                  ? ` ${n} ${n === 1 ? 'Beanie' : 'Beanies'} returned to the customer.`
-                  : n < 0
-                    ? ` ${-n} ${n === -1 ? 'Beanie' : 'Beanies'} taken back from the customer.`
-                    : '';
-              const refunded = d.order?.refunded_inr ?? 0;
-              const money = refunded > 0 ? `Refunded ${rupees(refunded)}.` : 'Cancelled (no online payment to refund).';
-              return `${money}${beanies}`;
-            }, true);
+            void cancelOrder();
           }}
         >
           <p className="text-sm text-charcoal">
-            This refunds <strong>{rupees(order.total_inr)}</strong> to the customer through Razorpay and can&apos;t be undone.
+            {awaitingLink ? (
+              <>The payment link is cancelled too, so the customer can no longer pay it. Nothing was charged, so there is nothing to refund.</>
+            ) : refundByHand ? (
+              <>
+                This cancels the order. It was paid outside the site, so nothing is refunded here: you will need to send{' '}
+                <strong>{rupees(order.total_inr)}</strong> back to the customer yourself.
+              </>
+            ) : (
+              <>
+                This refunds <strong>{rupees(order.total_inr)}</strong> to the customer through Razorpay and can&apos;t be undone.
+              </>
+            )}
             {order.status === 'shipped' ? ' The parcel is already with the courier — arrange its return in Shiprocket.' : ''}
             {order.status === 'sent_to_shiprocket' ? ' It will be cancelled in Shiprocket too.' : ''}
           </p>
@@ -525,7 +708,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           </div>
           <div className="mt-3 flex gap-2">
             <Button type="submit" size="sm" variant="danger" loading={busy}>
-              Cancel and refund {rupees(order.total_inr)}
+              {awaitingLink ? 'Cancel the order and the link' : refundByHand ? 'Cancel the order' : `Cancel and refund ${rupees(order.total_inr)}`}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setPanel(null)} disabled={busy}>
               Keep the order

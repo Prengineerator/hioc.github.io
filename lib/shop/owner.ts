@@ -158,6 +158,17 @@ function istDateTime(iso: string | null): string {
   return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
+const PAYMENT_CHANNEL_LABEL: Record<string, string> = {
+  checkout: 'Razorpay checkout',
+  payment_link: 'Razorpay payment link',
+  offline: 'Offline',
+};
+const OFFLINE_METHOD_LABEL: Record<string, string> = {
+  upi_direct: 'UPI to café',
+  cash: 'Cash',
+  bank_transfer: 'Bank transfer',
+};
+
 /** The shop orders as a sheet for the accountant (GET /api/owner/shop/orders/export). */
 export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
   return {
@@ -195,6 +206,12 @@ export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
       'Shiprocket order id',
       'AWB',
       'Courier',
+      'Source',
+      'Payment channel',
+      'Offline method',
+      'Payment reference',
+      'Owner discount (₹)',
+      'Owner discount reason',
     ],
     rows: orders.map((o) => [
       shopOrderRef(o.order_number),
@@ -234,6 +251,12 @@ export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
       o.shiprocket_order_id ?? '',
       o.awb_code ?? '',
       o.courier_name ?? '',
+      o.source === 'owner' ? 'owner' : 'website',
+      PAYMENT_CHANNEL_LABEL[o.payment_channel] ?? 'Razorpay checkout',
+      o.offline_method ? OFFLINE_METHOD_LABEL[o.offline_method] ?? o.offline_method : '',
+      o.payment_reference ?? '',
+      o.owner_discount_inr || 0,
+      o.owner_discount_reason ?? '',
     ]),
   };
 }

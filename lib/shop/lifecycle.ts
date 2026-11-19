@@ -3,6 +3,8 @@
 //   checkout   Beanies the customer spends are RESERVED (taken off their balance)
 //   captured   the reservation is KEPT: the order is paid
 //   expired    the order sat unpaid for 30 minutes: the reservation is RETURNED
+//              (owner-entered payment-link orders wait 48 hours for their link and
+//              hold no Beanies; see expireShopLinkOrders)
 //   cancelled  the owner cancels a paid order: the spend is RETURNED, and any
 //              Beanies EARNED from it are TAKEN BACK, in the same ledger row
 //   delivered  Beanies are EARNED (only now, never at payment)
@@ -27,10 +29,12 @@
 // find its order (captureShopPayment honours a paid-after-expiry order).
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
+import { isMissingColumnError, safeDbError } from '@/lib/api/postgrest';
+import { cancelGatewayPaymentLink, fetchGatewayPaymentLink, fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
 import { earnForShopOrder, reverseForShopOrder } from '@/lib/loyalty/ledger';
 import { loadReleasablePendingOrders } from '@/lib/shop/beaniesRelease';
-import { captureShopPayment } from '@/lib/shop/payments';
+import { captureShopPayment, captureShopPaymentLink, paidPaymentOfLink } from '@/lib/shop/payments';
+import { adoptLinkByReference } from '@/lib/shop/paymentLinkRecovery';
 import { isMissingShopSchema, toShopOrderRow, updateShopOrderIf } from '@/lib/shop/server';
 import { fetchShiprocketOrder, isShiprocketConfigured } from '@/lib/shop/shiprocket';
 import { shopStatusFromShiprocket } from '@/lib/shop/status';
@@ -90,6 +94,9 @@ export async function expireShopOrderIfUnpaid(
   admin: SupabaseClient,
   order: ShopOrderRow,
 ): Promise<'expired' | 'recovered' | 'skipped'> {
+  // A payment link is good for 48 hours: the 30-minute rule never applies. Its own
+  // pass (expireShopLinkOrders) decides, after reading the link at Razorpay.
+  if (order.payment_channel === 'payment_link') return 'skipped';
   if (order.razorpay_order_id) {
     const attempts = await fetchOrderPaymentAttempts(order.razorpay_order_id);
     if (!attempts) return 'skipped'; // gateway unreachable: try again next run
@@ -170,7 +177,10 @@ export async function expireStaleShopOrders(
 
   for (const raw of data ?? []) {
     try {
-      const outcome = await expireShopOrderIfUnpaid(admin, toShopOrderRow(raw as Record<string, unknown>));
+      const order = toShopOrderRow(raw as Record<string, unknown>);
+      // Payment-link orders wait for their own 48-hour link (expireShopLinkOrders below).
+      if (order.payment_channel === 'payment_link') continue;
+      const outcome = await expireShopOrderIfUnpaid(admin, order);
       if (outcome === 'expired') result.expired++;
       else if (outcome === 'recovered') result.recovered++;
     } catch (e) {
@@ -178,7 +188,137 @@ export async function expireStaleShopOrders(
     }
   }
 
+  const links = await expireShopLinkOrders(admin, now);
+  result.expired += links.expired;
+  result.recovered += links.recovered;
+
   await retryShopOrderReversals(admin, now);
+  return result;
+}
+
+/**
+ * One owner-entered payment-link order whose link is past its expiry. Razorpay is
+ * asked first: paid -> captured ('recovered'); the link still open (our clock ran
+ * ahead) -> cancelled at Razorpay so it can't be paid after we expire the order;
+ * unreachable or the cancel refused -> 'skipped' (next run). Otherwise the order
+ * becomes expired. Nothing was charged, and no Beanies were held. Idempotent.
+ */
+export async function expireShopLinkOrderIfUnpaid(
+  admin: SupabaseClient,
+  order: ShopOrderRow,
+): Promise<'expired' | 'recovered' | 'skipped'> {
+  if (order.payment_channel !== 'payment_link' || !order.razorpay_payment_link_id) return 'skipped';
+  const link = await fetchGatewayPaymentLink(order.razorpay_payment_link_id);
+  if (!link) return 'skipped'; // gateway unreachable: try again next run
+  const paid = paidPaymentOfLink(link);
+  if (paid) {
+    const cap = await captureShopPaymentLink({
+      paymentLinkId: link.id,
+      shopOrderId: order.id,
+      gatewayPaymentId: paid.id,
+      method: paid.method,
+      capturedAmountPaise: paid.amountPaise,
+    });
+    return cap.handled && cap.order.status !== 'payment_pending' && cap.order.status !== 'expired' ? 'recovered' : 'skipped';
+  }
+  if (link.status === 'paid' || link.status === 'partially_paid') return 'skipped'; // money moved but not readable: look again
+  if (link.status !== 'expired' && link.status !== 'cancelled') {
+    const closed = await cancelGatewayPaymentLink(link.id);
+    if (!closed) return 'skipped';
+  }
+  const updated = await updateShopOrderIf(admin, order.id, ['payment_pending'], {
+    status: 'expired',
+    cancel_reason: 'Payment link expired unpaid',
+  });
+  return updated ? 'expired' : 'skipped'; // 'skipped' when it moved on (paid or cancelled) meanwhile
+}
+
+/** The pass over payment-link orders past payment_link_expires_at. Never throws. */
+export async function expireShopLinkOrders(
+  admin: SupabaseClient,
+  now: Date = new Date(),
+): Promise<{ expired: number; recovered: number }> {
+  const result = { expired: 0, recovered: 0 };
+  try {
+    const { data, error } = await admin
+      .from('shop_orders')
+      .select('*')
+      .eq('status', 'payment_pending')
+      .eq('payment_channel', 'payment_link')
+      .lt('payment_link_expires_at', now.toISOString())
+      .limit(RETRY_LIMIT);
+    if (error) {
+      // Before supabase/2026-11-shop-owner-orders.sql there are no link orders to look for.
+      if (!isMissingShopSchema(error) && !isMissingColumnError(error)) console.error('shop lifecycle: link order query failed', safeDbError(error));
+      return result;
+    }
+    for (const raw of data ?? []) {
+      try {
+        const outcome = await expireShopLinkOrderIfUnpaid(admin, toShopOrderRow(raw as Record<string, unknown>));
+        if (outcome === 'expired') result.expired++;
+        else if (outcome === 'recovered') result.recovered++;
+      } catch (e) {
+        console.error('shop lifecycle: expiring a link order failed', e);
+      }
+    }
+    const unlinked = await expireUnlinkedShopLinkOrders(admin, now);
+    result.expired += unlinked.expired;
+    result.recovered += unlinked.recovered;
+  } catch (e) {
+    console.error('shop lifecycle: link expiry pass failed', safeDbError(e));
+  }
+  return result;
+}
+
+/** A link order older than this with no stored link id is looked up at Razorpay by its reference. */
+export const UNLINKED_LOOKUP_AFTER_MIN = 10;
+/** An unpaid link order with no link anywhere at Razorpay is expired after this long (the link's own life). */
+export const UNLINKED_EXPIRE_AFTER_HOURS = 48;
+
+/**
+ * Link orders the create call saved without a confirmed link (its answer never
+ * arrived). Older than 10 minutes: Razorpay is asked for the link by the reference we
+ * sent. Found -> stored, and captured when paid. None found and older than 48 hours ->
+ * expired. Razorpay unreachable -> left for the next run. Never throws.
+ */
+export async function expireUnlinkedShopLinkOrders(
+  admin: SupabaseClient,
+  now: Date = new Date(),
+): Promise<{ expired: number; recovered: number }> {
+  const result = { expired: 0, recovered: 0 };
+  try {
+    const { data, error } = await admin
+      .from('shop_orders')
+      .select('*')
+      .eq('status', 'payment_pending')
+      .eq('payment_channel', 'payment_link')
+      .is('razorpay_payment_link_id', null)
+      .lt('created_at', new Date(now.getTime() - UNLINKED_LOOKUP_AFTER_MIN * 60_000).toISOString())
+      .limit(RETRY_LIMIT);
+    if (error) {
+      if (!isMissingShopSchema(error) && !isMissingColumnError(error)) console.error('shop lifecycle: unlinked order query failed', safeDbError(error));
+      return result;
+    }
+    const tooOld = now.getTime() - UNLINKED_EXPIRE_AFTER_HOURS * 3600_000;
+    for (const raw of data ?? []) {
+      try {
+        const order = toShopOrderRow(raw as Record<string, unknown>);
+        const found = await adoptLinkByReference(admin, order);
+        if (found.state === 'paid') result.recovered++;
+        else if ((found.state === 'none' || found.state === 'closed') && new Date(order.created_at).getTime() < tooOld) {
+          const updated = await updateShopOrderIf(admin, order.id, ['payment_pending'], {
+            status: 'expired',
+            cancel_reason: 'Payment link expired unpaid',
+          });
+          if (updated) result.expired++;
+        }
+      } catch (e) {
+        console.error('shop lifecycle: checking an unlinked order failed', safeDbError(e));
+      }
+    }
+  } catch (e) {
+    console.error('shop lifecycle: unlinked order pass failed', safeDbError(e));
+  }
   return result;
 }
 

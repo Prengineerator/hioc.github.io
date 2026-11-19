@@ -34,6 +34,8 @@ export interface AddressFormProps {
   onChange: (patch: Partial<FormValues>) => void;
   errors?: { field: string; error: string } | null;
   withEmail?: boolean;
+  /** Leave the mobile number out when the page asks for it elsewhere (the owner's New order page asks first). */
+  hidePhone?: boolean;
   withLabel?: boolean;
   labelValue?: string;
   onLabelChange?: (label: string) => void;
@@ -77,6 +79,7 @@ export function AddressForm({
   onChange,
   errors,
   withEmail = false,
+  hidePhone = false,
   withLabel = false,
   labelValue = 'Home',
   onLabelChange,
@@ -173,6 +176,7 @@ export function AddressForm({
         error={err('customer_name')}
         disabled={disabled}
       />
+      {hidePhone ? null : (
       <Input
         id={id('phone')}
         label="Mobile number"
@@ -186,6 +190,7 @@ export function AddressForm({
         error={err('phone')}
         disabled={disabled}
       />
+      )}
       {withEmail ? (
         <Input
           id={id('email')}

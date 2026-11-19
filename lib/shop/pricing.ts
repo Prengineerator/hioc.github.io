@@ -14,6 +14,9 @@
 //   3 coupon        one auto-apply coupon or one typed code. It does NOT stack
 //                   with the offer: the bill takes whichever saves more (a tie
 //                   goes to the offer) and says which one it used.
+//   3b owner        an owner discount (owner-entered orders only, docs/SHOP-OWNER-
+//                   ORDERS-SPEC.md): whole rupees, at most 50% of the goods after
+//                   steps 2 and 3. Absent (the website) it is 0 and nothing changes.
 //   4 Beanies       signed-in repeat customers with a balance of at least the
 //                   minimum. At most beanies_max_redeem_pct % (5) of the goods
 //                   after steps 2 and 3, rounded down to whole Beanies, never
@@ -22,7 +25,7 @@
 //                   to free_shipping_min_inr (749) or more. It is by goods
 //                   value, so it works across both lines: 3 jars at 749 ship
 //                   free.
-//   6 total         subtotal - (offer + coupon + Beanies) + shipping. Always
+//   6 total         subtotal - (offer + coupon + owner + Beanies) + shipping. Always
 //                   more than 0: a coupon is capped at subtotal - 1.
 //
 // Caps: at most MAX_UNITS_PER_ORDER (12) units and MAX_PARCEL_KG (6) kg of
@@ -103,6 +106,8 @@ export function jarsLabel(n: number): string {
 // ---------------------------------------------------------------------------
 
 export const MAX_UNITS_PER_ORDER = 12;
+/** The most an owner discount may take: this percent of the goods after offers and coupons. */
+export const OWNER_DISCOUNT_MAX_PCT = 50;
 export const WHOLESALE_MESSAGE =
   'For more than 12 packs or 6 kg in one order, please call or email us — we do wholesale.';
 
@@ -243,6 +248,8 @@ export interface ShopPricingInput {
   /** The one coupon in play (typed or auto-picked), or null. */
   coupon: ShopCouponTerms | null;
   beanies: BeaniesContext | null;
+  /** Owner-entered orders only: whole rupees, 0 to 50% of the goods after offers. Absent = 0. */
+  owner_discount_inr?: number;
 }
 
 export interface ShopQuoteV2 {
@@ -274,7 +281,9 @@ export interface ShopQuoteV2 {
   };
   beanies_redeemed: number;
   beanies_discount_inr: number;
-  /** offer + coupon + Beanies. */
+  /** The owner's own discount (0 on the website). */
+  owner_discount_inr: number;
+  /** offer + coupon + owner + Beanies. */
   discount_inr: number;
   goods_after_discounts_inr: number;
   shipping_inr: number;
@@ -290,6 +299,10 @@ export type QuoteV2Result = ({ ok: true } & ShopQuoteV2) | { ok: false; error: s
 /** The whole price of an order: steps 1-6 in the header, in order. */
 export function quoteShopCart(input: ShopPricingInput): QuoteV2Result {
   const { products, items, settings, intro_eligible, coupon, beanies: bctx } = input;
+  const ownerAsked = input.owner_discount_inr ?? 0;
+  if (typeof ownerAsked !== 'number' || !Number.isInteger(ownerAsked) || ownerAsked < 0) {
+    return { ok: false, error: 'The owner discount must be a whole rupee amount' };
+  }
   const byId = new Map(products.map((p) => [p.id, p]));
 
   // Validate every item.
@@ -377,8 +390,19 @@ export function quoteShopCart(input: ShopPricingInput): QuoteV2Result {
   const intro_offer_applied = offer_discount_inr > 0;
   const couponUsed = coupon_discount_inr > 0 && coupon ? coupon : null;
 
-  // 4. Beanies.
+  // 3b. Owner discount, after the offer and coupon, before Beanies and shipping.
   const goodsAfterOffers = subtotal_inr - offer_discount_inr - coupon_discount_inr;
+  const ownerCap = Math.floor((goodsAfterOffers * OWNER_DISCOUNT_MAX_PCT) / 100);
+  if (ownerAsked > ownerCap) {
+    return {
+      ok: false,
+      error: `The owner discount can be at most ${rupees(ownerCap)} (${OWNER_DISCOUNT_MAX_PCT}% of ${rupees(goodsAfterOffers)}, the goods after offers).`,
+    };
+  }
+  const owner_discount_inr = ownerAsked;
+
+  // 4. Beanies (of the goods after the owner discount too).
+  const goodsAfterOwner = goodsAfterOffers - owner_discount_inr;
   const maxPct = settings.beanies_max_redeem_pct;
   let state: BeaniesState = 'unavailable';
   let points = 0;
@@ -387,8 +411,8 @@ export function quoteShopCart(input: ShopPricingInput): QuoteV2Result {
     if (!bctx.signed_in) state = 'guest';
     else if (!bctx.repeat_customer) state = 'first_order';
     else if (bctx.balance < bctx.min_redeem_points) state = 'below_min';
-    else if (goodsAfterOffers > 0 && bctx.inr_per_point > 0) {
-      const cap = Math.floor((Math.floor((goodsAfterOffers * maxPct) / 100)) / bctx.inr_per_point);
+    else if (goodsAfterOwner > 0 && bctx.inr_per_point > 0) {
+      const cap = Math.floor((Math.floor((goodsAfterOwner * maxPct) / 100)) / bctx.inr_per_point);
       points = Math.max(0, Math.min(bctx.balance, cap));
       if (points > 0) {
         beaniesDiscount = Math.floor(points * bctx.inr_per_point);
@@ -401,13 +425,13 @@ export function quoteShopCart(input: ShopPricingInput): QuoteV2Result {
   const beanies_discount_inr = applied ? beaniesDiscount : 0;
 
   // 5. Shipping, by goods value after every discount.
-  const goods_after_discounts_inr = goodsAfterOffers - beanies_discount_inr;
+  const goods_after_discounts_inr = goodsAfterOwner - beanies_discount_inr;
   const free = goods_after_discounts_inr >= settings.free_shipping_min_inr;
   const shipping_inr = free ? 0 : settings.shipping_fee_inr;
   const free_shipping_gap_inr = Math.max(0, settings.free_shipping_min_inr - goods_after_discounts_inr);
 
   // 6. Total.
-  const discount_inr = offer_discount_inr + coupon_discount_inr + beanies_discount_inr;
+  const discount_inr = offer_discount_inr + coupon_discount_inr + owner_discount_inr + beanies_discount_inr;
   const total_inr = subtotal_inr - discount_inr + shipping_inr;
   if (!(total_inr > 0)) return { ok: false, error: 'This order comes to ₹0. Please remove a discount.' };
 
@@ -445,6 +469,7 @@ export function quoteShopCart(input: ShopPricingInput): QuoteV2Result {
     },
     beanies_redeemed,
     beanies_discount_inr,
+    owner_discount_inr,
     discount_inr,
     goods_after_discounts_inr,
     shipping_inr,
