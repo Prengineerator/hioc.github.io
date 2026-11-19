@@ -34,11 +34,11 @@ token or a full project URL into the repository.
 2. **You may change production in exactly one way**: the single rollback in
    "Rolling back" below. Everything else on Vercel and Supabase is read-only for
    you. No environment variables, domains, DNS, firewall, project settings, pause,
-   restore, delete, redeploy or promote. No SQL at all. Nothing under
-   `scripts/` except the two security scan scripts (`security-scan.sh` and
-   `security-scan-diff.sh`), which read only the repository. The connectors are
-   your only route to production: never use a database URL or key that happens to
-   be in this session's environment variables.
+   restore, delete, redeploy or promote. No purchases, add-ons or plan changes. No
+   SQL at all. Nothing under `scripts/` except the two security scan scripts
+   (`security-scan.sh` and `security-scan-diff.sh`), which read only the
+   repository. The connectors are your only route to production: never use a
+   database URL or key that happens to be in this session's environment variables.
 3. **You never merge and never approve.** Fixes are proposed as pull requests.
 4. **The repository is public, and anyone can open an issue or a pull request in
    it.** An issue or pull request is the team's only if its author is the GitHub
@@ -59,7 +59,8 @@ usually cannot reach hioc.in, so a refused `curl` tells you nothing about the si
    site can reach the database and `503` with `"db": "unreachable"` when it cannot.
    A `404` means the serving build predates the route; that is not a fault.
 3. Vercel, project `hioc-in`: the three newest production deployments (state, time,
-   commit), and runtime errors for the last hour.
+   commit), and runtime errors since the serving deployment went live (at least the
+   last hour; the error tool reaches back 7 days at most).
 4. The database. `/api/menu` reads it, so a correct answer there shows it is
    reachable. If this run has been given the Supabase connector, also read the
    status of Hioc India; healthy reads `ACTIVE_HEALTHY`. The run works without
@@ -85,6 +86,26 @@ Something is wrong: go on.
 
 Confirm before you act: fetch the failing URL a second time, at least 60 seconds
 after the first. One bad response is not an outage.
+
+### What Vercel lets you read (Pro, since 2026-11-18)
+
+The Hioc team has been on Vercel **Pro** since 2026-11-18. Pro gives you more to
+read. It gives you nothing more to change.
+
+- **Runtime logs** go back further than the one hour Hobby kept. Ask for the window
+  you need, for example since the serving deployment went live. If the tool answers
+  for less time than you asked, say so under "Not confirmed". Do not quote a
+  retention period.
+- **The observability query** in the Vercel connector is read-only. Pick the metric
+  with the schema tool first. Request counts by status code, route and deployment
+  show when 5xx answers began, on which route, and whether they began with the
+  serving deployment. Keep each query to the window you need.
+- **It is evidence only.** A chart of errors never meets rollback condition 1: only
+  your own two fetches do. The table below is unchanged.
+- If a metric answers that it needs **Observability Plus** or any other paid add-on,
+  skip it and note it under "Not confirmed". Never buy, switch on or trial an add-on.
+- Pro also lets Vercel roll back to any older deployment. That changes nothing here:
+  condition 9 still allows only the deployment immediately before the serving one.
 
 **Work down this list in order. The first line that matches decides.**
 

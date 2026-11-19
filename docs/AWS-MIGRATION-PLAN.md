@@ -1,5 +1,7 @@
 # Moving hioc.in from Vercel to AWS: analysis and plan
 
+**Status, 2026-11-19:** Vercel Pro was taken on 2026-11-18. The AWS move is not planned.
+
 Written 2026-11-19, when the owner asked whether to move to AWS instead of paying for
 Vercel Pro, and whether it could be done the same day.
 

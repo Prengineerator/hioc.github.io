@@ -17,8 +17,9 @@ and stop.
 ## Rules for the whole run
 
 1. **Nothing reaches production from this run.** You open pull requests. You never
-   merge, deploy, promote or roll back. Vercel and Supabase are read-only for you,
-   and on Supabase you read only the project **"Hioc India"**. Never "Hioc Coffee".
+   merge, deploy, promote or roll back. Vercel and Supabase are read-only for you
+   (no purchases, add-ons or plan changes either), and on Supabase you read only
+   the project **"Hioc India"**. Never "Hioc Coffee".
    Nothing under `scripts/` except the two security scan scripts, and never a database URL
    or key that happens to be in this session's environment variables: the
    connectors are your only route to production.
@@ -112,10 +113,30 @@ duplicate or unused indexes, policies that re-evaluate per row, and the rest).
 
 ## Step 4 — Standing production errors
 
-Read the Vercel runtime errors for project `hioc-in` over the last 7 days. Take the
-most frequent error group that comes from HIOC's own code and brief the IC who owns
-that area (`web-engineer`, `orders-payments-engineer`). One or two groups a week,
-not all of them. Remove any personal data from the error text before passing it on.
+Read the Vercel runtime errors for project `hioc-in` over the last 7 days (the most
+that tool covers). Take the most frequent error group that comes from HIOC's own
+code and brief the IC who owns that area (`web-engineer`,
+`orders-payments-engineer`). One or two groups a week, not all of them. Remove any
+personal data from the error text before passing it on.
+
+The Hioc team has been on Vercel **Pro** since 2026-11-18, so the connector's
+observability query works too. It is read-only; pick metrics with the schema tool
+first. Use it for two things, over the last 7 days:
+
+- **Which errors matter.** Request counts by route and status code show how many
+  customers an error group really hits. Let that choose the group to brief.
+- **The slowest route.** Function duration by route (the 75th percentile) shows
+  where the site is slow. Brief the IC who owns the slowest route from HIOC's own
+  code. It is an optimisation like any other: same behaviour, proven by step 6.
+
+If a metric answers that it needs **Observability Plus** or any other paid add-on,
+skip it and say so under "Not done / not confirmed". Never buy, switch on or trial
+an add-on.
+
+**Spend.** Read the Hioc team's Vercel billing charges for the last 7 days. If usage
+(not the seat licence) looks set to go past the $20 of usage the plan includes each
+month, say so under "Needs your decision", naming the biggest item. Amounts go in
+your final message only, never in a pull request or issue.
 
 ## Step 5 — Security review of everything you changed
 

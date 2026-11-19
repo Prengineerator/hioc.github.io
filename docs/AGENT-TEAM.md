@@ -251,8 +251,11 @@ list, checks the site and finishes with "All clear — hioc.in is up."
 - **Scheduled tasks are a research preview** and every run uses your Claude plan's
   usage. The manager's hourly check is the largest share. The product owner can
   limit it to café hours if you ask.
-- **Vercel keeps one hour of logs on the current plan**, so the manager sees only
-  the last hour of detail.
+- **Vercel is on the Pro plan since 2026-11-18.** Logs now go back further than the
+  one hour the free Hobby plan kept, and the manager and the weekly pass can also
+  read Vercel's request and speed figures. They only read them: Pro gives no agent
+  more power over the site, and the manager still rolls back only to the release
+  just before the live one. No paid add-on is switched on.
 - **The fix is proposed, not applied.** After a rollback the site is working on the
   older release, and the fix waits for you to merge and promote it.
 - **Tests cannot see the live database.** A fix that depends on the database is

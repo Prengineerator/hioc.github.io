@@ -1,5 +1,10 @@
 # Splitting hioc.in into three Vercel projects (customer / staff / owner)
 
+> **Status, 2026-11-19.** The Hioc team moved to Vercel **Pro** on 2026-11-18.
+> In §4, options 1 and 2 still apply. Option 3 (split on Hobby) and task T5 no
+> longer do. §2 and §3 describe the account as it was on Hobby and are kept as a
+> record.
+
 Research and implementation plan, 2026-10-22. Written so that a cheaper
 implementation agent (Sonnet/Haiku class) can do every code task without
 re-doing the research, and so the owner can see which steps are theirs.
