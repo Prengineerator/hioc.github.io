@@ -5,8 +5,9 @@
 //
 // The request is created PENDING with `scheduled_for` = now + the store's
 // configured delay (default 30 min); the actual send happens later, driven by
-// the pg_cron poll → GET /api/cron/feedback-requests (Vercel Cron on this plan
-// is daily-only, so it cannot express a 30-minute delay itself).
+// the pg_cron poll → GET /api/cron/feedback-requests (the poll stays in Supabase
+// even though the plan is Vercel Pro since 2026-11-18: its guard skips the call when
+// nothing is due, which costs less than a Vercel cron every few minutes).
 
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';

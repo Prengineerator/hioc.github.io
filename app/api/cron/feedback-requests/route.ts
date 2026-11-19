@@ -13,8 +13,9 @@ export const dynamic = 'force-dynamic';
 // step with claim_feedback_requests()), via `net.http_post`, which issues a
 // POST — so POST is exported alongside GET (GET for a manual curl / a
 // Vercel-style trigger); both run the identical handler. NOT Vercel Cron:
-// Vercel's plan here only runs crons daily, which cannot express "30 minutes
-// after an arbitrary completion time". Protected by CRON_SECRET (Bearer),
+// the plan is Pro (since 2026-11-18), but the poll stays in Supabase on purpose, as its
+// guard skips the call when nothing is due, which costs less than a Vercel cron every
+// few minutes ("30 minutes after an arbitrary completion time" needs a frequent poll). Protected by CRON_SECRET (Bearer),
 // same fail-CLOSED posture as every other /api/cron/* route — an unset secret
 // disables the endpoint outright rather than leaving it runnable by anyone
 // who finds it.

@@ -51,6 +51,12 @@ export function issueOperatorCookieValue(op: string, dev: string): { value: stri
   return { value: signOperatorToken({ op, dev, iat }, s), iat };
 }
 
+/** Next.js's refusal to set a cookie outside a Route Handler/Server Action
+ * (ReadonlyRequestCookiesError). Matched by message: the class is not public API. */
+export function isReadonlyCookiesError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('Cookies can only be modified in a Server Action or Route Handler');
+}
+
 export interface OperatorActor {
   user: User;
   role: UserRole;
@@ -65,9 +71,13 @@ export interface OperatorActor {
  * from `profiles` every time — never cached).
  *
  * On success, slides the cookie's expiry (best-effort — a failed re-set here
- * must never fail the request it's riding along on; `cookies().set()` is only
- * legal inside a Route Handler/Server Action, which is the only context this
- * is ever called from).
+ * must never fail the request it's riding along on). `cookies().set()` is only
+ * legal inside a Route Handler/Server Action. This is also reached from staff
+ * Server Components and layouts (via getCounterActor()), where Next.js throws
+ * "Cookies can only be modified in a Server Action or Route Handler"; that
+ * specific refusal is expected there and skipped silently (isReadonlyCookiesError).
+ * The POS's own API calls are Route Handlers, so the expiry still slides on
+ * every one of them during a shift. Any other failure is still logged.
  */
 export async function resolveOperatorActor(): Promise<OperatorActor | null> {
   const s = secret();
@@ -112,9 +122,9 @@ export async function resolveOperatorActor(): Promise<OperatorActor | null> {
       cookies().set(OPERATOR_COOKIE, fresh.value, operatorCookieOptions(isProd()));
     }
   } catch (err) {
-    // Sliding is a convenience, not a correctness requirement — some call
-    // sites (e.g. during static generation) cannot set cookies at all.
-    console.error('resolveOperatorActor: could not slide the operator cookie', err);
+    // Sliding is a convenience, not a correctness requirement. Rendering a
+    // Server Component cannot set cookies at all: skip without logging.
+    if (!isReadonlyCookiesError(err)) console.error('resolveOperatorActor: could not slide the operator cookie', err);
   }
 
   return { user: authUser.user, role };

@@ -16,6 +16,8 @@ const state: {
   device: { id: string } | null;
   profileRole: string | null;
   authUser: { id: string; email?: string } | null;
+  setCalls: unknown[][];
+  setError: Error | null;
 } = {
   sessionUser: null,
   sessionRole: null,
@@ -23,12 +25,17 @@ const state: {
   device: null,
   profileRole: null,
   authUser: null,
+  setCalls: [],
+  setError: null,
 };
 
 vi.mock('next/headers', () => ({
   cookies: () => ({
     get: (name: string) => (name === 'hioc_operator' && state.operatorCookie ? { value: state.operatorCookie } : undefined),
-    set: () => {},
+    set: (...args: unknown[]) => {
+      state.setCalls.push(args);
+      if (state.setError) throw state.setError;
+    },
   }),
 }));
 
@@ -70,6 +77,8 @@ beforeEach(() => {
   state.device = null;
   state.profileRole = null;
   state.authUser = null;
+  state.setCalls = [];
+  state.setError = null;
   process.env.OPERATOR_JWT_SECRET = SECRET;
 });
 
@@ -146,6 +155,43 @@ describe('getCounterActor', () => {
 
     const actor = await getCounterActor();
     expect(actor).toEqual({ user: { id: 'owner-1' }, role: 'owner', via: 'session' });
+  });
+});
+
+describe('operator cookie sliding', () => {
+  function deviceSession() {
+    state.operatorCookie = signOperatorToken({ op: 'u1', dev: 'device-1', iat: Math.floor(Date.now() / 1000) }, SECRET);
+    state.device = { id: 'device-1' };
+    state.profileRole = 'staff';
+    state.authUser = { id: 'u1' };
+  }
+
+  it('re-sets the operator cookie on success (Route Handler path)', async () => {
+    deviceSession();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await getCounterActor())?.via).toBe('device');
+    expect(state.setCalls).toHaveLength(1);
+    expect(state.setCalls[0][0]).toBe('hioc_operator');
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it('skips silently, still authorising, when rendering a Server Component refuses cookies().set()', async () => {
+    deviceSession();
+    state.setError = new Error('Cookies can only be modified in a Server Action or Route Handler. Read more: https://nextjs.org/docs');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await getCounterActor()).toEqual({ user: { id: 'u1' }, role: 'staff', via: 'device' });
+    expect(err).not.toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it('still logs an unexpected cookie failure, and still authorises', async () => {
+    deviceSession();
+    state.setError = new Error('boom');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await getCounterActor())?.via).toBe('device');
+    expect(err).toHaveBeenCalledTimes(1);
+    err.mockRestore();
   });
 });
 

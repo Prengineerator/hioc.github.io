@@ -7,8 +7,10 @@ export const maxDuration = 60;
 
 // GET or POST /api/cron/marketing-send — polled by pg_cron every 5 minutes
 // (supabase/2026-10-marketing-agent.sql) via `net.http_post`, which issues a POST, so POST
-// is exported alongside GET; both run the identical handler. NOT Vercel Cron: its plan
-// here is daily-only, which cannot keep pace with a send queue.
+// is exported alongside GET; both run the identical handler. NOT Vercel Cron. The plan
+// is Pro (since 2026-11-18), so a 5-minute Vercel cron is possible, but the poll stays in
+// Supabase on purpose: its guard skips the call when nothing is due, which costs less than
+// a Vercel cron invocation every 5 minutes.
 //
 // Sends up to 50 queued messages a run, inside the IST send window, under the month's
 // budget and the day's cap — and does NOTHING unless the owner switched Sending ON. Every

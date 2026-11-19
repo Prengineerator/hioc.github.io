@@ -23,10 +23,10 @@ export const dynamic = 'force-dynamic';
 // Protected by CRON_SECRET and fails CLOSED when it is unset — same posture as
 // /api/cron/expire-orders.
 //
-// SCHEDULED DAILY (03:00 IST), not hourly. Vercel's Hobby plan permits at most
-// one run per day, and an over-frequent expression fails the DEPLOY outright
-// instead of degrading — which silently froze production on an old build until
-// it was tracked down. If the plan ever changes, hourly is a one-line edit.
+// SCHEDULED DAILY (03:00 IST), not hourly. This began as a Hobby-plan limit (one
+// run per day; an over-frequent expression failed the DEPLOY outright). The team
+// has been on Vercel Pro since 2026-11-18, so hourly is now allowed, but daily
+// stays because it loses nothing (see below) and every extra run costs money.
 //
 // Daily costs nothing here, by design: this job closes a session AT its shift
 // end, never at "now" (see `closeAt`). A once-a-day sweep therefore records
