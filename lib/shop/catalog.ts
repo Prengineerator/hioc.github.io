@@ -156,8 +156,18 @@ export const PRODUCT_LINES: Record<ShopProductLine, { title: string; anchor: 'in
 
 export const HOME_BLEND_NAME = 'HIOC. Signature Home Blend';
 
-/** The Home Blend pack photo. The owner sets '/images/shop/home-blend.png' once the image is added. */
-export const HOME_BLEND_IMAGE: string | null = null;
+/**
+ * The Home Blend pack images. These are an ILLUSTRATED stand-in (drawn as SVG,
+ * source in public/images/shop/home-blend.svg), not a photo. Swap in a studio
+ * photo under the same filenames: the portrait pack (594×792) and the landscape
+ * scene (880×476, same aspect as hero-jars.png). Set either to null to fall back
+ * to the "Photo coming soon" placeholder.
+ */
+export const HOME_BLEND_IMAGE: string | null = '/images/shop/home-blend.png';
+export const HOME_BLEND_HERO_IMAGE: string | null = '/images/shop/home-blend-hero.png';
+export const HOME_BLEND_IMAGE_ALT = `Illustration of a HIOC. Signature Home Blend coffee pack with roasted coffee beans`;
+export const HOME_BLEND_IMAGE_SIZE = { width: 594, height: 792 } as const;
+export const HOME_BLEND_HERO_SIZE = { width: 880, height: 476 } as const;
 
 /**
  * The pack the Home Blend card opens on: 250 g, the everyday size (the 100 g

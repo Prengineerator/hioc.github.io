@@ -10,6 +10,13 @@ export type ShopOrderStatus =
   | 'cancelled'
   | 'expired';
 
+/** Who entered the order: the customer on the website, or the owner by hand. */
+export type ShopOrderSource = 'web' | 'owner';
+/** How an order is paid: Checkout.js (website), a Razorpay payment link, or already paid offline. */
+export type ShopPaymentChannel = 'checkout' | 'payment_link' | 'offline';
+/** How an offline order was paid. */
+export type ShopOfflineMethod = 'upi_direct' | 'cash' | 'bank_transfer';
+
 /** Which catalogue line a product belongs to. */
 export type ShopProductLine = 'instant' | 'home_blend';
 
@@ -95,6 +102,18 @@ export interface ShopOrderRow extends ShopAddress {
   save_address_label: string | null;
   customer_address_id: string | null;
   capture_effects_at: string | null;
+  // Owner-entered orders (docs/SHOP-OWNER-ORDERS-SPEC.md). Absent on rows read
+  // before supabase/2026-11-shop-owner-orders.sql: read as a website order.
+  source: ShopOrderSource;
+  created_by: string | null;
+  payment_channel: ShopPaymentChannel;
+  offline_method: ShopOfflineMethod | null;
+  payment_reference: string | null;
+  owner_discount_inr: number;
+  owner_discount_reason: string | null;
+  razorpay_payment_link_id: string | null;
+  payment_link_url: string | null;
+  payment_link_expires_at: string | null;
   shipping_inr: number;
   total_inr: number;
   razorpay_order_id: string | null;
@@ -236,7 +255,7 @@ export type SavedAddressFields = Omit<ShopAddress, 'email'>;
 
 /** One line of the discount breakdown on a receipt. */
 export interface ShopDiscountLine {
-  kind: 'offer' | 'coupon' | 'beanies';
+  kind: 'offer' | 'coupon' | 'beanies' | 'owner';
   label: string;
   amount_inr: number;
 }

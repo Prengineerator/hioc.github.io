@@ -16,6 +16,7 @@
 
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { ShopOfferSettings } from '@/components/owner/shop/ShopOfferSettings';
+import { buttonVariants } from '@/components/ui/Button';
 import { ShopOrderCard } from '@/components/owner/shop/ShopOrderCard';
 import { ShopProductsCard } from '@/components/owner/shop/ShopProductsCard';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
@@ -24,6 +25,7 @@ import { isGatewayConfigured } from '@/lib/payments/gateway';
 import { PLACEHOLDER_PRICE_INR } from '@/lib/shop/catalog';
 import { shopLineStats } from '@/lib/shop/ownerStats';
 import { rupees } from '@/lib/shop/pricing';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 import { isMissingShopSchema, loadShopProducts, loadShopSettings, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
 import { isShiprocketConfigured } from '@/lib/shop/shiprocket';
 import { OWNER_STATUS_LABEL, OWNER_TABS, ownerTab, shiprocketBillCheck, shopOrderRef } from '@/lib/shop/status';
@@ -54,21 +56,36 @@ function SetupItem({ ok, children }: { ok: boolean; children: React.ReactNode })
   );
 }
 
+type Admin = ReturnType<typeof createAdminSupabaseClient>;
+
+/**
+ * The orders for one tab. "Awaiting payment" is the payment-link orders still unpaid; "Unpaid" is
+ * everything else that never completed (abandoned website checkouts, and any expired order). The
+ * channel filter needs supabase/2026-11-shop-owner-orders.sql: before it, Awaiting is empty and
+ * Unpaid is unfiltered (there are no link orders yet).
+ */
+async function loadTabOrders(admin: Admin, tab: ReturnType<typeof ownerTab>) {
+  const read = (filtered: boolean) => {
+    let q = admin.from('shop_orders').select('*').in('status', [...tab.statuses]);
+    if (filtered && tab.key === 'awaiting_payment') q = q.eq('payment_channel', 'payment_link');
+    if (filtered && tab.key === 'unpaid') q = q.or('status.eq.expired,payment_channel.neq.payment_link');
+    return q.order(tab.key === 'to_ship' ? 'paid_at' : 'created_at', { ascending: tab.key === 'to_ship' }).limit(LIST_LIMIT);
+  };
+  const first = await read(true);
+  if (first.error && isMissingColumnError(first.error)) {
+    return tab.key === 'awaiting_payment' ? { data: [], error: null } : read(false);
+  }
+  return first;
+}
+
 export default async function OwnerShopPage({ searchParams }: { searchParams: { tab?: string } }) {
   const tab = ownerTab(searchParams.tab);
   const admin = createAdminSupabaseClient();
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [productsResult, listResult, countsResult, recentResult, settings, billsResult] = await Promise.all([
+  const [productsResult, listResult, countsResult, recentResult, settings, billsResult, awaitingResult] = await Promise.all([
     loadShopProducts(admin),
-    admin
-      .from('shop_orders')
-      .select('*')
-      .in('status', [...tab.statuses])
-      .order(tab.key === 'to_ship' ? 'paid_at' : 'created_at', {
-        ascending: tab.key === 'to_ship',
-      })
-      .limit(LIST_LIMIT),
+    loadTabOrders(admin, tab),
     admin.from('shop_orders').select('status').in('status', ['paid', 'sent_to_shiprocket', 'shipped']),
     // lines + shipping_inr feed the per-line stats; before the v2 migration
     // shipping_inr is still there (v1), and lines carry no `line` (read as instant).
@@ -81,6 +98,13 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
       .select('order_number, total_inr, shiprocket_order_id, shiprocket_total_inr')
       .in('status', ['sent_to_shiprocket', 'shipped'])
       .not('shiprocket_total_inr', 'is', null),
+    // Owner-entered orders waiting on their payment link. An error (the owner-order
+    // migration not applied yet) reads as none.
+    admin
+      .from('shop_orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'payment_pending')
+      .eq('payment_channel', 'payment_link'),
   ]);
 
   const missingSchema = (!productsResult.ok && productsResult.missingSchema) || isMissingShopSchema(listResult.error);
@@ -91,6 +115,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
     const key = OWNER_TABS.find((t) => (t.statuses as readonly string[]).includes(r.status))?.key;
     if (key) open.set(key, (open.get(key) ?? 0) + 1);
   }
+  if (!awaitingResult.error && awaitingResult.count) open.set('awaiting_payment', awaitingResult.count);
 
   type Recent = {
     status: ShopOrderStatus;
@@ -141,11 +166,14 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
         <div>
           <h1 className="text-2xl font-bold text-charcoal">Shop orders</h1>
           <p className="text-sm text-muted">
-            Instant Coffee and Home Blend bought on the website. Pack them, send them to Shiprocket, and the customer gets the tracking link
+            Instant Coffee and Home Blend bought on the website, or added here when a customer phones or WhatsApps. Pack them, send them to Shiprocket, and the customer gets the tracking link
             by email.
           </p>
         </div>
-        <div className="flex gap-3 text-sm">
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <Link href="/owner/shop/new" className={buttonVariants({ size: 'lg' })}>
+            New order
+          </Link>
           {flags.shop ? (
             <Link href="/shop" className="font-semibold text-tan-dark underline">
               View the shop
@@ -244,7 +272,11 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
 
           {missingSchema ? null : orders.length === 0 ? (
             <p className="mt-6 rounded-md border border-line bg-surface p-6 text-center text-sm text-muted">
-              {tab.key === 'to_ship' ? 'Nothing to ship right now.' : 'No orders here.'}
+              {tab.key === 'to_ship'
+                ? 'Nothing to ship right now.'
+                : tab.key === 'awaiting_payment'
+                  ? 'No orders are waiting for a payment link to be paid.'
+                  : 'No orders here.'}
             </p>
           ) : (
             <ul className="mt-4 space-y-4">

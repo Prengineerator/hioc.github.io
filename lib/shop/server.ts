@@ -2,7 +2,7 @@
 
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { isMissingColumnError } from '@/lib/api/postgrest';
+import { isMissingColumnError, safeDbError } from '@/lib/api/postgrest';
 import { shopOfferFromSettings, shopSettingsFromRow } from './pricing';
 import { PAID_STATUSES } from './status';
 import type { ShopLine, ShopOffer, ShopOrderRow, ShopProduct, ShopProductLine, ShopSettings } from './types';
@@ -243,6 +243,23 @@ export function toShopOrderRow(raw: Record<string, unknown>): ShopOrderRow {
       typeof raw.customer_address_id === 'string' && raw.customer_address_id ? raw.customer_address_id : null,
     capture_effects_at:
       typeof raw.capture_effects_at === 'string' && raw.capture_effects_at ? raw.capture_effects_at : null,
+    // Owner-order columns: absent before supabase/2026-11-shop-owner-orders.sql (read as a website order).
+    source: raw.source === 'owner' ? 'owner' : 'web',
+    created_by: typeof raw.created_by === 'string' && raw.created_by ? raw.created_by : null,
+    payment_channel: raw.payment_channel === 'payment_link' || raw.payment_channel === 'offline' ? raw.payment_channel : 'checkout',
+    offline_method:
+      raw.offline_method === 'upi_direct' || raw.offline_method === 'cash' || raw.offline_method === 'bank_transfer'
+        ? raw.offline_method
+        : null,
+    payment_reference: typeof raw.payment_reference === 'string' && raw.payment_reference ? raw.payment_reference : null,
+    owner_discount_inr: Number(raw.owner_discount_inr ?? 0) || 0,
+    owner_discount_reason:
+      typeof raw.owner_discount_reason === 'string' && raw.owner_discount_reason ? raw.owner_discount_reason : null,
+    razorpay_payment_link_id:
+      typeof raw.razorpay_payment_link_id === 'string' && raw.razorpay_payment_link_id ? raw.razorpay_payment_link_id : null,
+    payment_link_url: typeof raw.payment_link_url === 'string' && raw.payment_link_url ? raw.payment_link_url : null,
+    payment_link_expires_at:
+      typeof raw.payment_link_expires_at === 'string' && raw.payment_link_expires_at ? raw.payment_link_expires_at : null,
   };
 }
 
@@ -287,7 +304,7 @@ export async function updateShopOrderIf(
     .select('*')
     .maybeSingle();
   if (error) {
-    console.error('shop: order update failed', id, error);
+    console.error('shop: order update failed', id, safeDbError(error));
     return null;
   }
   return data ? toShopOrderRow(data as Record<string, unknown>) : null;

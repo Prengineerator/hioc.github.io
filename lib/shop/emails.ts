@@ -106,14 +106,19 @@ async function ownerRecipients(): Promise<string[]> {
 export async function sendShopPaidEmails(order: ShopOrderRow): Promise<void> {
   const ref = shopOrderRef(order.order_number);
   try {
-    const owners = await ownerRecipients();
-    const ownerBody = `
+    // The owner typed an owner-entered order in themselves: no "new order" alert to them.
+    if (order.source !== 'owner') {
+      const owners = await ownerRecipients();
+      const ownerBody = `
       <p style="font-size:14px;line-height:1.5;">${unitsLabel(order.jar_count)}, paid online. Ship it from the Shop orders page.</p>
       ${linesTable(order)}
       <p style="font-size:14px;line-height:1.5;"><strong>Deliver to</strong><br>${addressBlock(order)}</p>
       ${pinLine(order)}
       ${button(absoluteUrl(OWNER_SHOP_PATH), 'Open Shop orders')}`;
-    await Promise.all(owners.map((to) => send(to, `New online order ${ref} — ${rupees(order.total_inr)}`, `New online order ${ref}`, ownerBody)));
+      await Promise.all(owners.map((to) => send(to, `New online order ${ref} — ${rupees(order.total_inr)}`, `New online order ${ref}`, ownerBody)));
+    }
+    // Owner-entered orders may have no email ('' = none): then there is nobody to write to.
+    if (!order.email) return;
 
     const earn = await beaniesLine(order);
     const customerBody = `
@@ -129,6 +134,7 @@ export async function sendShopPaidEmails(order: ShopOrderRow): Promise<void> {
 }
 
 export async function sendShopShippedEmail(order: ShopOrderRow): Promise<void> {
+  if (!order.email) return; // an owner-entered order with no email
   const ref = shopOrderRef(order.order_number);
   try {
     const url = trackingUrl(order.awb_code);
@@ -144,9 +150,12 @@ export async function sendShopShippedEmail(order: ShopOrderRow): Promise<void> {
 }
 
 export async function sendShopCancelledEmail(order: ShopOrderRow): Promise<void> {
+  if (!order.email) return; // an owner-entered order with no email
   const ref = shopOrderRef(order.order_number);
   try {
-    const refund = order.refunded_inr
+    const refund = order.refunded_inr && order.payment_channel === 'offline'
+      ? `<p style="font-size:14px;line-height:1.5;">We'll return the <strong>${rupees(order.refunded_inr)}</strong> you paid us directly, the way you paid.</p>`
+      : order.refunded_inr
       ? `<p style="font-size:14px;line-height:1.5;">We've refunded <strong>${rupees(order.refunded_inr)}</strong> to the way you paid. Banks usually take 5–7 working days to show it.</p>`
       : '';
     const body = `

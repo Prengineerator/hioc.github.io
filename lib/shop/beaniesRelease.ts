@@ -44,6 +44,8 @@ export async function loadReleasablePendingOrders(
     return ((data ?? []) as Record<string, unknown>[])
       .map((raw) => toShopOrderRow(raw))
       .filter((o) => !(key && o.idempotency_key === key))
+      // Owner-entered orders reserve no Beanies and wait on their own link.
+      .filter((o) => o.source !== 'owner' && o.payment_channel !== 'payment_link')
       .slice(0, RELEASE_MAX_ORDERS);
   } catch (e) {
     console.error('shop beanies release: lookup threw', e);

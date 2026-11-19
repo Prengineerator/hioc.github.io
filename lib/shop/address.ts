@@ -137,11 +137,15 @@ function asRaw(raw: unknown): Raw {
  * +91XXXXXXXXXX, email lowercased, everything trimmed. The first problem found
  * is returned with the field it belongs to. The email is checked after the
  * name and phone and before the street, as the form orders its fields.
+ * `emailOptional` (the owner's New order page only) lets a blank email through as ''.
  */
-export function validateShopAddress(raw: unknown): AddressResult {
+export function validateShopAddress(raw: unknown, opts: { emailOptional?: boolean } = {}): AddressResult {
   const r = asRaw(raw);
-  const email = normalizeEmail(clean(r.email));
-  const core = validateCore(r, () => (email ? null : { ok: false, field: 'email', error: 'Enter a valid email address' }));
+  const typed = clean(r.email);
+  // Owner-entered orders: a blank email means none ('' on the order); a typed one must still be valid.
+  const none = opts.emailOptional === true && typed === '';
+  const email = none ? '' : normalizeEmail(typed);
+  const core = validateCore(r, () => (email !== null ? null : { ok: false, field: 'email', error: 'Enter a valid email address' }));
   if (!core.ok) return core;
   return { ok: true, address: { ...core.core, email: email as string } };
 }

@@ -33,3 +33,17 @@ export function isMissingColumnError(error: PostgrestLikeError | null | undefine
   const message = error.message ?? '';
   return /column .* does not exist/i.test(message) || /could not find the .* column of/i.test(message);
 }
+
+/**
+ * A database error reduced to what is safe to log: its code and message. Never
+ * `details` or `hint`: for a failed CHECK, PostgREST's `details` is "Failing row
+ * contains (...)", i.e. the customer's name, phone and address.
+ */
+export function safeDbError(error: unknown): { code?: string; message?: string } {
+  if (typeof error !== 'object' || error === null) return { message: String(error).slice(0, 200) };
+  const e = error as { code?: unknown; message?: unknown };
+  return {
+    ...(typeof e.code === 'string' ? { code: e.code } : {}),
+    ...(typeof e.message === 'string' ? { message: e.message.slice(0, 300) } : {}),
+  };
+}

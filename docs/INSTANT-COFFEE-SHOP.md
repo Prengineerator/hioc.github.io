@@ -265,10 +265,13 @@ Work top to bottom. Each step says where to do it.
      is not about 0.1 kg, change `BOX_WEIGHT_KG` in `lib/shop/catalog.ts`.
    - c. Box sizes come from `defaultPackageForLines()` in `lib/shop/catalog.ts`.
      They can be changed for any order in the Send to Shiprocket dialog.
-10. **Add the Home Blend photo.** Put the image at
-   `public/images/shop/home-blend.png`, then set `HOME_BLEND_IMAGE` to
-   `'/images/shop/home-blend.png'` in `lib/shop/catalog.ts` and deploy. For
-   sharper jar pictures, see "Images" below.
+10. **Replace the Home Blend illustration with a photo (when you have one).**
+   The shop shows a drawn stand-in of the pack today (see "Images" below). For
+   a real photo, save a transparent PNG over `public/images/shop/home-blend.png`
+   (one pack, about 800 px tall) and `public/images/shop/home-blend-hero.png`
+   (a wide scene, 880×476), keep the names, and deploy. Then change
+   `HOME_BLEND_IMAGE_ALT` in `lib/shop/catalog.ts` from "Illustration of…" to a
+   description of the photo.
 11. **Review the money settings** on `/owner/shop`: the shipping fee (₹49), the
     free-shipping minimum (₹749), the Beanies cap (5%) and the introductory
     offer tiers.
@@ -347,8 +350,14 @@ Maps link in the order comment.
 `jar-<flavour>.png`. They are cut from the launch poster with a
 background-removal model (transparent PNGs with a soft shadow). For sharper
 pictures on big screens, swap in studio shots under the same names (transparent
-PNG, about 900 px tall for one jar). The Home Blend photo goes in
-`public/images/shop/home-blend.png` (step 10).
+PNG, about 900 px tall for one jar).
+
+The Home Blend images are an **illustration**, not a photo: a drawn charcoal
+pouch with the HIOC. label and roasted beans, made from the SVG sources
+`home-blend.svg` (one pack: the phone thumbnail and the ordering card) and
+`home-blend-hero.svg` (the wide scene on the product card). The alt text says
+"Illustration of…". The real bag may look different, so swap in studio photos
+under the same PNG names when they exist (step 10).
 
 ## Files
 

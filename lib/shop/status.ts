@@ -66,11 +66,14 @@ export function isActiveShopStatus(s: ShopOrderStatus): boolean {
 /** The owner page's tabs, each a set of statuses. */
 export const OWNER_TABS = [
   { key: 'to_ship', label: 'To ship', statuses: ['paid'] },
+  // Owner-entered orders waiting for their payment link to be paid. Same status as an abandoned
+  // website checkout, told apart by payment_channel (the Unpaid tab leaves these out).
+  { key: 'awaiting_payment', label: 'Awaiting payment', statuses: ['payment_pending'], channel: 'payment_link' },
   { key: 'with_courier', label: 'With courier', statuses: ['sent_to_shiprocket', 'shipped'] },
   { key: 'delivered', label: 'Delivered', statuses: ['delivered'] },
   { key: 'cancelled', label: 'Cancelled', statuses: ['cancelled'] },
   { key: 'unpaid', label: 'Unpaid', statuses: ['payment_pending', 'expired'] },
-] as const satisfies readonly { key: string; label: string; statuses: readonly ShopOrderStatus[] }[];
+] as const satisfies readonly { key: string; label: string; statuses: readonly ShopOrderStatus[]; channel?: 'payment_link' }[];
 
 export type OwnerTabKey = (typeof OWNER_TABS)[number]['key'];
 
@@ -209,7 +212,8 @@ type DiscountFields = Pick<
   | 'coupon_discount_inr'
   | 'beanies_redeemed'
   | 'beanies_discount_inr'
->;
+> &
+  Partial<Pick<ShopOrderRow, 'owner_discount_inr'>>;
 
 /**
  * The receipt's discount lines: offer, coupon, Beanies, each only when above
@@ -220,13 +224,15 @@ export function shopOrderDiscountBreakdown(o: DiscountFields): ShopDiscountLine[
   const offer = o.offer_discount_inr || 0;
   const coupon = o.coupon_discount_inr || 0;
   const beanies = o.beanies_discount_inr || 0;
+  const owner = o.owner_discount_inr || 0;
   const offerLabel = o.offer_name ?? 'Introductory offer';
-  if (offer === 0 && coupon === 0 && beanies === 0) {
+  if (offer === 0 && coupon === 0 && beanies === 0 && owner === 0) {
     return o.discount_inr > 0 ? [{ kind: 'offer', label: offerLabel, amount_inr: o.discount_inr }] : [];
   }
   const lines: ShopDiscountLine[] = [];
   if (offer > 0) lines.push({ kind: 'offer', label: offerLabel, amount_inr: offer });
   if (coupon > 0) lines.push({ kind: 'coupon', label: `Coupon ${o.coupon_code ?? ''}`.trim(), amount_inr: coupon });
+  if (owner > 0) lines.push({ kind: 'owner', label: 'Special discount', amount_inr: owner });
   if (beanies > 0) lines.push({ kind: 'beanies', label: beaniesLabel(o.beanies_redeemed), amount_inr: beanies });
   return lines;
 }

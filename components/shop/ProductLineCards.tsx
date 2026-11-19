@@ -2,7 +2,15 @@ import Image from 'next/image';
 import { HomeBlendPlaceholder } from '@/components/shop/HomeBlendPlaceholder';
 import { JumpLink, PackTileButton } from '@/components/shop/ShopJump';
 import { buttonVariants } from '@/components/ui/Button';
-import { HOME_BLEND_HIGHLIGHTS, HOME_BLEND_IMAGE, HOME_BLEND_NAME, PRODUCT_HIGHLIGHTS } from '@/lib/shop/catalog';
+import {
+  HOME_BLEND_HERO_IMAGE,
+  HOME_BLEND_HERO_SIZE,
+  HOME_BLEND_HIGHLIGHTS,
+  HOME_BLEND_IMAGE,
+  HOME_BLEND_IMAGE_ALT,
+  HOME_BLEND_IMAGE_SIZE,
+  PRODUCT_HIGHLIGHTS,
+} from '@/lib/shop/catalog';
 import { rupees } from '@/lib/shop/pricing';
 import { homeBlendFromLabel, homeBlendTiles, productLinesToShow } from '@/lib/shop/productLines';
 
@@ -139,9 +147,28 @@ export function ProductLineCards({ instantCount, homeBlendPacks, price, intro, w
           <div className="flex flex-1 items-start gap-4 p-4 md:flex-col md:items-stretch md:gap-0 md:p-0">
             <div className="relative w-24 shrink-0 overflow-hidden rounded-lg md:w-full md:rounded-none">
               <DesktopRibbon text={welcomeBack ? 'Welcome back' : 'New'} />
-              {HOME_BLEND_IMAGE ? (
-                <div className="relative aspect-square md:aspect-[880/476]" style={{ background: WARM }}>
-                  <Image src={HOME_BLEND_IMAGE} alt={`${HOME_BLEND_NAME} pack`} fill sizes={SIZES} className="object-contain p-2 md:p-4" />
+              {HOME_BLEND_IMAGE || HOME_BLEND_HERO_IMAGE ? (
+                <div style={{ background: WARM }}>
+                  {HOME_BLEND_IMAGE ? (
+                    <Image
+                      src={HOME_BLEND_IMAGE}
+                      alt={HOME_BLEND_IMAGE_ALT}
+                      width={HOME_BLEND_IMAGE_SIZE.width}
+                      height={HOME_BLEND_IMAGE_SIZE.height}
+                      sizes={SIZES}
+                      className={`aspect-square w-full object-contain p-2 ${HOME_BLEND_HERO_IMAGE ? 'md:hidden' : 'md:aspect-[880/476] md:p-4'}`}
+                    />
+                  ) : null}
+                  {HOME_BLEND_HERO_IMAGE ? (
+                    <Image
+                      src={HOME_BLEND_HERO_IMAGE}
+                      alt={HOME_BLEND_IMAGE_ALT}
+                      width={HOME_BLEND_HERO_SIZE.width}
+                      height={HOME_BLEND_HERO_SIZE.height}
+                      sizes={SIZES}
+                      className={`h-auto w-full md:px-2 md:py-7 ${HOME_BLEND_IMAGE ? 'hidden md:block' : ''}`}
+                    />
+                  ) : null}
                 </div>
               ) : (
                 <HomeBlendPlaceholder compact warm className="aspect-square md:aspect-[880/476] md:pt-8" />

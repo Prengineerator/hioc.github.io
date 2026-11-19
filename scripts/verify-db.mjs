@@ -1625,6 +1625,89 @@ async function checkShopV2() {
   else fail('coupon_usage_counts() answers', errKind(usage) === 'no_function' || /could not find the function/i.test(errText(usage)) ? hint : errText(usage));
 }
 
+// Shop orders added by the owner (supabase/2026-11-shop-owner-orders.sql).
+// Every constraint is probed with a DOOMED insert (see errKind): the row's
+// created_by is the nil UUID, which is not a user, so a row that satisfies every
+// CHECK stops at the foreign key ('fk') and nothing is written. A row a CHECK
+// rejects comes back 'check'. order_number is given explicitly so a failed
+// insert never burns a number from the shop order sequence.
+async function checkShopOwnerOrders() {
+  heading('SHOP-4 · shop orders added by the owner', '2026-11-shop-owner-orders.sql');
+  const hint = 'apply supabase/2026-11-shop-owner-orders.sql';
+
+  const cols = 'source,created_by,payment_channel,offline_method,payment_reference,owner_discount_inr,owner_discount_reason,razorpay_payment_link_id,payment_link_url,payment_link_expires_at';
+  const colProbe = await rest(`/shop_orders?select=${cols}&limit=1`);
+  if (colProbe.ok) pass('shop_orders owner-order columns exist', `${cols.split(',').length} columns`);
+  else {
+    fail('shop_orders owner-order columns exist', errKind(colProbe) === 'no_column' || errKind(colProbe) === 'no_table' ? hint : errText(colProbe));
+    skip('shop_orders owner-order constraints', 'the columns are missing');
+  }
+
+  if (colProbe.ok) {
+    const base = {
+      order_number: 999999999,
+      customer_name: 'verify-db probe',
+      phone: '+919999999999',
+      email: '',
+      address_line1: 'verify-db probe line',
+      city: 'Probe',
+      state: 'Probe',
+      pincode: '600001',
+      lines: [],
+      jar_count: 1,
+      subtotal_inr: 1000,
+      discount_inr: 0,
+      shipping_inr: 0,
+      total_inr: 1000,
+      created_by: BOGUS_ORDER_ID,
+    };
+    const attempt = (over) => rest('/shop_orders', { method: 'POST', body: { ...base, ...over }, prefer: 'return=minimal' });
+    const link = { razorpay_payment_link_id: 'plink_verify_db', payment_link_url: 'https://example.invalid/x', payment_link_expires_at: '2099-01-01T00:00:00Z' };
+
+    // Positive control: a valid owner order with an empty email reaches the FK.
+    expectKind('an owner order with no email passes every CHECK', await attempt({ source: 'owner' }), 'fk',
+      'stopped at the foreign key, as intended');
+    expectKind('a valid offline payment passes every CHECK',
+      await attempt({ source: 'owner', payment_channel: 'offline', offline_method: 'cash', payment_reference: 'CASH-1' }), 'fk');
+    expectKind('a valid payment-link order passes every CHECK',
+      await attempt({ source: 'owner', payment_channel: 'payment_link', ...link }), 'fk');
+    expectKind('an owner discount of exactly 50% passes',
+      await attempt({ source: 'owner', discount_inr: 500, owner_discount_inr: 500, owner_discount_reason: 'regular customer', total_inr: 500 }), 'fk');
+
+    // Negative cases: each must be refused by a CHECK.
+    expectKind('an email of 1-2 characters is refused', await attempt({ email: 'a@' }), 'check');
+    expectKind('an unknown source is refused', await attempt({ source: 'phone' }), 'check');
+    expectKind('an offline method without payment_channel offline is refused', await attempt({ offline_method: 'cash' }), 'check');
+    expectKind('an offline payment without a method is refused',
+      await attempt({ payment_channel: 'offline', payment_reference: 'REF-123' }), 'check');
+    expectKind('an offline payment without a reference is refused',
+      await attempt({ payment_channel: 'offline', offline_method: 'upi_direct' }), 'check');
+    expectKind('an unpaid payment-link order without its link passes (the link is added after the row)',
+      await attempt({ source: 'owner', payment_channel: 'payment_link', status: 'payment_pending' }), 'fk');
+    expectKind('a paid payment-link order without its link id is refused',
+      await attempt({ source: 'owner', payment_channel: 'payment_link', status: 'paid', payment_link_url: link.payment_link_url, payment_link_expires_at: link.payment_link_expires_at }), 'check');
+    expectKind('an owner discount without a reason is refused',
+      await attempt({ discount_inr: 100, owner_discount_inr: 100, total_inr: 900 }), 'check');
+    expectKind('an owner discount over 50% is refused',
+      await attempt({ discount_inr: 501, owner_discount_inr: 501, owner_discount_reason: 'too generous', total_inr: 499 }), 'check');
+    expectKind('discount_inr must add up with the owner discount',
+      await attempt({ discount_inr: 100, owner_discount_inr: 50, owner_discount_reason: 'regular customer', total_inr: 900 }), 'check');
+  }
+
+  // shop_intro_claims.email is nullable. NOT NULL is checked before the foreign
+  // key, so 'fk' means the column accepted the NULL.
+  const claim = await rest('/shop_intro_claims', {
+    method: 'POST',
+    body: { shop_order_id: BOGUS_ORDER_ID, phone: '+919999999999', email: null },
+    prefer: 'return=minimal',
+  });
+  if (errKind(claim) === 'fk') pass('shop_intro_claims.email accepts NULL');
+  else if (errKind(claim) === 'not_null') fail('shop_intro_claims.email accepts NULL', hint);
+  else if (claim.ok) fail('shop_intro_claims.email accepts NULL', 'the probe insert unexpectedly SUCCEEDED');
+  else if (errKind(claim) === 'no_table') fail('shop_intro_claims.email accepts NULL', 'apply supabase/2026-11-shop-v2.sql first');
+  else fail('shop_intro_claims.email accepts NULL', errText(claim));
+}
+
 // ---------------------------------------------------------------------------
 // Coffee Pass — prepaid plans sold and redeemed as drinks
 // (docs/COFFEE-PASS-SPEC.md, supabase/2026-10-coffee-pass.sql). Customer-facing
@@ -2436,6 +2519,7 @@ async function main() {
   await checkInstantCoffeeShop();
   await checkShopShiprocketTotal();
   await checkShopV2();
+  await checkShopOwnerOrders();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();
