@@ -18,6 +18,11 @@ export const maxDuration = 60;
 /** A booking in flight holds its claim this long; after that a retry may go. */
 const CLAIM_MS = 2 * 60 * 1000;
 
+/** The label goes in the answer only if it really is a PDF; otherwise the card falls back to Print label (the label route checks too). */
+function isPdf(b64: string | null): b64 is string {
+  return Boolean(b64) && Buffer.from(b64 as string, 'base64').subarray(0, 5).toString('latin1') === '%PDF-';
+}
+
 const CHECK_AMAZON = "Amazon may have booked this — check Amazon Shipping before booking again.";
 
 /**
@@ -25,10 +30,17 @@ const CHECK_AMAZON = "Amazon may have booked this — check Amazon Shipping befo
  * the claim's stale check can never pass and both carriers refuse the order until
  * the owner clears it (amazon/release-hold). Logs the order id only.
  */
-async function hold(admin: ReturnType<typeof createAdminSupabaseClient>, orderId: string): Promise<void> {
-  const { error } = await admin.from('shop_orders').update({ amazon_booking_at: AMAZON_HOLD_SENTINEL }).eq('id', orderId);
-  if (error) console.error('owner shop amazon book: could not set the hold', orderId);
+async function hold(admin: ReturnType<typeof createAdminSupabaseClient>, orderId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { error } = await admin.from('shop_orders').update({ amazon_booking_at: AMAZON_HOLD_SENTINEL }).eq('id', orderId);
+    if (!error) return true;
+  }
+  console.error('owner shop amazon book: could not set the hold', orderId);
+  return false;
 }
+
+/** Added to a 500 when the hold could not be written: the order is not locked. */
+const NOT_LOCKED = ' This order is NOT locked: do not book it again until you have checked Amazon Shipping.';
 
 // POST /api/owner/shop/orders/[id]/amazon/book — owner only. Books the service
 // the owner picked on the café's own Amazon Shipping account. THIS CHARGES the
@@ -114,8 +126,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
     if (result.ambiguous) {
       // It may have been booked: keep the order held (never release), and send the owner to Amazon.
       console.error('owner shop amazon book: unclear purchase result', order.id);
-      await hold(admin, order.id);
-      return errorResponse(500, `${CHECK_AMAZON} (${result.error})`);
+      const held = await hold(admin, order.id);
+      return errorResponse(500, `${CHECK_AMAZON} (${result.error})${held ? '' : NOT_LOCKED}`);
     }
     await admin.from('shop_orders').update({ amazon_booking_at: null }).eq('id', order.id);
     return errorResponse(502, result.error);
@@ -128,10 +140,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const ref = shopOrderRef(order.order_number);
   if (purchase.packageClientReferenceId && purchase.packageClientReferenceId !== ref) {
     console.error('owner shop amazon book: Amazon answered for a different reference', order.id, purchase.shipmentId);
-    await hold(admin, order.id);
+    const held = await hold(admin, order.id);
     return errorResponse(
       500,
-      `Amazon Shipping's answer (shipment ${purchase.shipmentId}) names a different order, so it was not saved to this one. Check that shipment in Amazon Shipping and cancel it if it is wrong. This order is on hold.`,
+      `Amazon Shipping's answer (shipment ${purchase.shipmentId}) names a different order, so it was not saved to this one. Check that shipment in Amazon Shipping and cancel it if it is wrong.${held ? ' This order is on hold.' : NOT_LOCKED}`,
     );
   }
 
@@ -154,16 +166,16 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (!updated) {
     console.error('owner shop amazon book: booked but not saved', order.id, purchase.shipmentId);
     // Hold the order for good, then try to at least record the shipment id and tracking number.
-    await hold(admin, order.id);
+    const held = await hold(admin, order.id);
     const { error: minimalError } = await admin
       .from('shop_orders')
-      .update({ amazon_shipment_id: purchase.shipmentId, awb_code: purchase.trackingId })
+      .update({ carrier: 'amazon', amazon_shipment_id: purchase.shipmentId, awb_code: purchase.trackingId })
       .eq('id', order.id)
       .eq('status', 'paid');
     if (minimalError) console.error('owner shop amazon book: minimal save failed too', order.id);
     return errorResponse(
       500,
-      `Booked with Amazon Shipping (shipment ${purchase.shipmentId}) but this page could not save it. Don't book it again — reload, and if it still shows "To ship", look the shipment up in Amazon Shipping. This order is on hold.`,
+      `Booked with Amazon Shipping (shipment ${purchase.shipmentId}) but this page could not save it. Don't book it again — reload, and if it still shows "To ship", look the shipment up in Amazon Shipping.${held ? ' This order is on hold.' : NOT_LOCKED}`,
     );
   }
 
@@ -173,7 +185,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     : 'Booked with Amazon Shipping, but Amazon sent no tracking number yet. Print the label; the customer was not emailed.';
   return NextResponse.json({
     order: updated,
-    ...(purchase.labelBase64 ? { label: purchase.labelBase64 } : {}),
+    ...(isPdf(purchase.labelBase64) ? { label: purchase.labelBase64 } : {}),
     ...(warning ? { warning } : {}),
   });
 }

@@ -15,6 +15,7 @@ const s = {
   refunds: [] as { paymentId: string; amount: number }[],
   failSave: false,
   amazonColumnsMissing: false,
+  holdFailures: 0,
   shiprocketCreates: 0,
 };
 
@@ -111,6 +112,11 @@ vi.mock('@/lib/supabase-server', () => ({
         select: () => chain,
         // An awaited update with no select (a release or a hold).
         then: (resolve: (v: unknown) => void) => {
+          if (patch.amazon_booking_at === '9999-12-31T00:00:00.000Z' && s.holdFailures > 0) {
+            s.holdFailures--;
+            resolve({ data: null, error: { code: 'XX000', message: 'blip' } });
+            return;
+          }
           apply();
           resolve({ data: null, error: null });
         },
@@ -173,6 +179,7 @@ beforeEach(() => {
   resetAmazonTokenCache();
   docContents = 'JVBERi0xLjQ=';
   s.amazonColumnsMissing = false;
+  s.holdFailures = 0;
   s.shiprocketCreates = 0;
   s.order = null;
   s.earned = [];
@@ -345,7 +352,7 @@ describe('POST amazon/book', () => {
     expect(s.shippedEmails).toEqual([]);
     // The hold never expires, and the shipment id and tracking number are recorded by the minimal second write.
     expect(s.order!.amazon_booking_at).toBe('9999-12-31T00:00:00.000Z');
-    expect(s.order).toMatchObject({ amazon_shipment_id: 'SHP1', awb_code: 'TRK1', status: 'paid' });
+    expect(s.order).toMatchObject({ carrier: 'amazon', amazon_shipment_id: 'SHP1', awb_code: 'TRK1', status: 'paid' });
   });
 
   describe.each([
@@ -379,6 +386,42 @@ describe('POST amazon/book', () => {
       purchaseAnswer = () => json({ payload: { shipmentId: 'SHP2', packageDocumentDetails: [{ trackingId: 'TRK2' }] } });
       expect((await book(req(BOOK()), params)).status).toBe(200);
     });
+  });
+
+  it('retries a failed hold once, and says the order is NOT locked when it still fails', async () => {
+    purchaseAnswer = () => new Response('<html>', { status: 200 });
+    s.order = shopOrder({ id: ID });
+    s.holdFailures = 1;
+    let res = await book(req(BOOK()), params);
+    expect((await res.json()).error).not.toContain('NOT locked');
+    expect(s.order!.amazon_booking_at).toBe('9999-12-31T00:00:00.000Z');
+
+    s.order = shopOrder({ id: ID });
+    s.holdFailures = 2;
+    res = await book(req(BOOK()), params);
+    const msg = (await res.json()).error as string;
+    expect(res.status).toBe(500);
+    expect(msg).toContain('NOT locked');
+    expect(msg).toContain('check');
+    expect(s.order!.amazon_booking_at).not.toBe('9999-12-31T00:00:00.000Z');
+  });
+
+  it('leaves the label out of the answer when it is not a PDF', async () => {
+    purchaseAnswer = () => json({ payload: { shipmentId: 'SHP1', packageDocumentDetails: [{ trackingId: 'TRK1', packageDocuments: [{ type: 'LABEL', contents: Buffer.from('<html>x').toString('base64') }] }] } });
+    s.order = shopOrder({ id: ID });
+    const body = await (await book(req(BOOK()), params)).json();
+    expect(body.order.status).toBe('shipped');
+    expect(body.label).toBeUndefined();
+  });
+
+  it('a 401 on purchase is a refusal: no retry, claim released, 502', async () => {
+    purchaseAnswer = () => json({ message: 'expired token' }, 401);
+    s.order = shopOrder({ id: ID });
+    const res = await book(req(BOOK()), params);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toContain('Amazon refused the login — try again');
+    expect(purchases()).toHaveLength(1);
+    expect(s.order!.amazon_booking_at).toBeNull();
   });
 
   it('a definite refusal (Amazon 4xx with reasons) is not held', async () => {
@@ -543,6 +586,31 @@ describe('POST cancel (Cancel order and refund)', () => {
     expect(body.order.status).toBe('cancelled');
     expect(body.warning).toContain("Amazon Shipping didn't cancel the label");
     expect(s.refunds).toHaveLength(1);
+  });
+
+  it('a stuck booking (paid, held, shipment id recorded, carrier not set) has its label cancelled too', async () => {
+    s.order = shopOrder({ id: ID, status: 'paid', amazon_shipment_id: 'SHP1', awb_code: 'TRK1', amazon_booking_at: '9999-12-31T00:00:00.000Z' });
+    const body = await (await cancelOrder(req({}), params)).json();
+    expect(body.order.status).toBe('cancelled');
+    expect(body.warning).toBeUndefined();
+    expect(cancels()).toHaveLength(1);
+    expect(cancels()[0].url).toContain('/shipments/SHP1/cancel');
+    expect(s.refunds).toHaveLength(1);
+  });
+
+  it('a stuck booking whose Amazon cancel fails still cancels the order, with a warning to cancel it in Amazon Shipping', async () => {
+    cancelAnswer = () => json({ errors: [{ code: 'Nope' }] }, 400);
+    s.order = shopOrder({ id: ID, status: 'paid', amazon_shipment_id: 'SHP1' });
+    const body = await (await cancelOrder(req({}), params)).json();
+    expect(body.order.status).toBe('cancelled');
+    expect(body.warning).toContain('Cancel it in Amazon Shipping');
+  });
+
+  it('a held order with no shipment id warns the owner to check Amazon', async () => {
+    s.order = shopOrder({ id: ID, status: 'paid', amazon_booking_at: '9999-12-31T00:00:00.000Z' });
+    const body = await (await cancelOrder(req({}), params)).json();
+    expect(cancels()).toHaveLength(0);
+    expect(body.warning).toContain('check Amazon Shipping');
   });
 
   it('a collected parcel is not cancelled at Amazon; the owner is told to arrange the return', async () => {

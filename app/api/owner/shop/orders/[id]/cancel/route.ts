@@ -14,7 +14,7 @@ import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
 import { cancelAmazonShipment } from '@/lib/shop/amazonShipping';
 import { cancelShiprocketOrder } from '@/lib/shop/shiprocket';
 import type { ShopOrderRow } from '@/lib/shop/types';
-import { canCancel, canCancelAmazonLabel, isAmazonOrder, PAID_STATUSES, shouldCancelInShiprocket } from '@/lib/shop/status';
+import { amazonBookingHeld, canCancel, canCancelAmazonLabel, PAID_STATUSES, shouldCancelInShiprocket } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,16 +99,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
     refundedInr = order.total_inr;
   }
 
+  const hasAmazon = Boolean(order.amazon_shipment_id);
   let warning: string | null = null;
   if (shouldCancelInShiprocket(order)) {
     const sr = await cancelShiprocketOrder(order.shiprocket_order_id as string);
     if (!sr.ok) warning = `${refundByHand ? 'Cancelled' : 'Refunded'}, but Shiprocket didn't cancel the shipment (${sr.error}). Cancel it in the Shiprocket panel.`;
-  } else if (canCancelAmazonLabel(order)) {
+  } else if (hasAmazon && (order.status !== 'shipped' || canCancelAmazonLabel({ ...order, carrier: 'amazon' }))) {
     // An Amazon label the courier hasn't collected: call it off too (best effort, like Shiprocket).
+    // Any order with a shipment id counts, whatever `carrier` says: a booking whose full save
+    // failed (still 'paid', held) has the id but maybe no carrier.
     const az = await cancelAmazonShipment(order.amazon_shipment_id as string);
     if (!az.ok) warning = `${refundByHand ? 'Cancelled' : 'Refunded'}, but Amazon Shipping didn't cancel the label (${az.error}). Cancel it in Amazon Shipping.`;
-  } else if (order.status === 'shipped' && isAmazonOrder(order)) {
+  } else if (order.status === 'shipped' && hasAmazon) {
     warning = `${refundByHand ? 'Cancelled' : 'Refunded'}. The parcel is already with Amazon Shipping — arrange its return with Amazon.`;
+  } else if (amazonBookingHeld(order)) {
+    warning = `${refundByHand ? 'Cancelled' : 'Refunded'}. An Amazon booking for this order was never confirmed — check Amazon Shipping and cancel any label it made.`;
   } else if (order.status === 'shipped') {
     warning = `${refundByHand ? 'Cancelled' : 'Refunded'}. The parcel is already with the courier — arrange its return in the Shiprocket panel.`;
   }

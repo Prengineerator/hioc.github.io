@@ -206,6 +206,8 @@ type CallResult = { ok: true; data: unknown } | { ok: false; status: number; err
 const TOKEN_TIMEOUT_MS = 10_000;
 const CALL_TIMEOUT_MS = 15_000;
 export const PURCHASE_TIMEOUT_MS = 25_000;
+/** A purchase renews the token first when it has less than this left. */
+const PURCHASE_MIN_TOKEN_LIFE_MS = 5 * 60 * 1000;
 
 /** Only the codes of an Amazon error body: never its message or details. */
 function errorCodes(body: unknown): string[] {
@@ -258,13 +260,17 @@ async function token(creds: AmazonCredentials, fresh: boolean) {
 /** An authenticated call; a 401 renews the token and tries once more. */
 async function call(
   path: string,
-  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; query?: Record<string, string>; timeoutMs?: number },
+  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; query?: Record<string, string>; timeoutMs?: number; purchase?: boolean },
 ): Promise<CallResult> {
   const creds = credentials();
   if (!creds) return { ok: false, status: 0, error: amazonNotConfiguredMessage(), ambiguous: false };
   const host = process.env.AMAZON_SHIPPING_SANDBOX?.trim() === '1' ? AMAZON_API.sandboxHost : AMAZON_API.host;
   const qs = init.query ? `?${new URLSearchParams(init.query).toString()}` : '';
-  for (const fresh of [false, true]) {
+  // A purchase spends money, so it makes ONE attempt: no 401 retry (that would double the
+  // worst case: token 10 s + purchase 25 s must stay under the route's 60 s). Instead the
+  // token is renewed up front when it has under 5 minutes left, and a 401 is a refusal.
+  const renewFirst = init.purchase === true && (!cachedToken || cachedToken.expiresAt - Date.now() < PURCHASE_MIN_TOKEN_LIFE_MS);
+  for (const fresh of init.purchase ? [renewFirst] : [false, true]) {
     const t = await token(creds, fresh);
     if (!t.ok) return { ok: false, status: 0, error: t.error, ambiguous: false }; // never sent
     let res: Response;
@@ -284,6 +290,10 @@ async function call(
     } catch {
       console.error(`amazon shipping ${init.method} ${path} request failed`);
       return { ok: false, status: 0, error: UNREACHABLE, ambiguous: true }; // sent, outcome unknown
+    }
+    if (res.status === 401 && init.purchase) {
+      cachedToken = null;
+      return { ok: false, status: 401, error: 'Amazon refused the login — try again.', ambiguous: false }; // refused before booking
     }
     if (res.status === 401 && !fresh) {
       cachedToken = null;
@@ -564,6 +574,7 @@ export async function purchaseAmazonShipment(
     method: 'POST',
     body: { requestToken, rateId, requestedDocumentSpecification: AMAZON_API.documentSpecification },
     timeoutMs: PURCHASE_TIMEOUT_MS,
+    purchase: true,
   });
   if (!result.ok) return { ok: false, error: result.error, ambiguous: result.ambiguous };
   const purchase = parseAmazonPurchase(result.data);

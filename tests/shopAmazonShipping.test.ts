@@ -433,3 +433,32 @@ describe('signed quote', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = saved;
   });
 });
+
+describe('purchase timing and the token', () => {
+  it('renews the token first when it has under 5 minutes left, and uses a cached one with more', async () => {
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000_000);
+    await getAmazonTracking('T1'); // caches a token (expires ~59 min on)
+    expect(calls.filter((c) => isToken(c.url))).toHaveLength(1);
+    responder = (url) => (isToken(url) ? json({ access_token: 'acc2', expires_in: 3600 }) : json({ payload: { shipmentId: 'S1' } }));
+    await purchaseAmazonShipment('rt', 'R1');
+    expect(calls.filter((c) => isToken(c.url))).toHaveLength(1); // plenty of life left: reused
+    now.mockReturnValue(1_000_000 + 55 * 60 * 1000); // ~4 minutes left (a minute is already held back)
+    await purchaseAmazonShipment('rt', 'R1');
+    expect(calls.filter((c) => isToken(c.url))).toHaveLength(2);
+    expect(calls.at(-1)?.headers['x-amz-access-token']).toBe('acc2');
+  });
+
+  it('a 401 on purchase is one attempt, no retry, no new login: a definite refusal', async () => {
+    responder = (url) => (isToken(url) ? json({ access_token: 'acc1', expires_in: 3600 }) : json({ message: 'bad token' }, 401));
+    const r = await purchaseAmazonShipment('rt', 'R1');
+    expect(r).toEqual({ ok: false, error: 'Amazon refused the login — try again.', ambiguous: false });
+    expect(calls.filter((c) => !isToken(c.url))).toHaveLength(1);
+    expect(calls.filter((c) => isToken(c.url))).toHaveLength(1);
+  });
+
+  it('keeps the worst case under the route’s 60 s: token 10 s + purchase 25 s', async () => {
+    const { PURCHASE_TIMEOUT_MS } = await import('@/lib/shop/amazonShipping');
+    expect(10_000 + PURCHASE_TIMEOUT_MS).toBeLessThan(60_000);
+  });
+});
