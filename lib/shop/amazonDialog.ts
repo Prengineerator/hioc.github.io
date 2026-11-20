@@ -80,8 +80,27 @@ export function labelBlobFromBase64(b64: string): Blob | null {
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes.length ? new Blob([bytes], { type: 'application/pdf' }) : null;
+    // Only a real PDF is opened; anything else falls back to the Print label link.
+    const isPdf = bytes.length >= 5 && String.fromCharCode(...bytes.subarray(0, 5)) === '%PDF-';
+    return isPdf ? new Blob([bytes], { type: 'application/pdf' }) : null;
   } catch {
     return null;
   }
+}
+
+export const BOOKING_UNCLEAR_MESSAGE = 'Amazon may have booked this — check Amazon Shipping before booking again.';
+
+/**
+ * What to tell the owner when Book did not come back as a success. `data` is the
+ * parsed body, or null when it could not be read. A message from our own routes
+ * is shown as it is; a gateway timeout, a network failure (status 0) or an
+ * unreadable body means we cannot tell whether Amazon booked, so say so.
+ */
+export function bookFailure(status: number, data: unknown): { message: string; unclear: boolean } {
+  const err = typeof data === 'object' && data !== null ? (data as Record<string, unknown>).error : undefined;
+  if (typeof err === 'string' && err.trim() && status !== 504) return { message: err, unclear: false };
+  if (status === 0 || status === 504 || data === null || status === 502 || status === 503) {
+    return { message: BOOKING_UNCLEAR_MESSAGE, unclear: true };
+  }
+  return { message: `Something went wrong (HTTP ${status}).`, unclear: false };
 }

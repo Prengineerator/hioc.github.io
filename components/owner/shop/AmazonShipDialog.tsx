@@ -8,9 +8,11 @@
 // check, IST dates) are in lib/shop/amazonDialog.ts.
 
 import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import {
+  bookFailure,
   formatDeliveryBy,
   isPriceListStale,
   NO_AMAZON_SERVICE_MESSAGE,
@@ -48,6 +50,7 @@ export function AmazonShipDialog({
   const [pricing, setPricing] = useState(false);
   const [booking, setBooking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
   const inFlight = useRef(false);
   const busy = pricing || booking !== null;
 
@@ -64,7 +67,7 @@ export function AmazonShipDialog({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     return { res, data };
   }
 
@@ -77,7 +80,7 @@ export function AmazonShipDialog({
     try {
       const { res, data } = await post('rates', pkg);
       if (!res.ok) {
-        setError(typeof data.error === 'string' && data.error ? data.error : `Something went wrong (HTTP ${res.status}).`);
+        setError(typeof data?.error === 'string' && data.error ? data.error : `Something went wrong (HTTP ${res.status}).`);
         return;
       }
       const out = readRatesAnswer(data);
@@ -101,13 +104,17 @@ export function AmazonShipDialog({
     setError(null);
     try {
       const { res, data } = await post('book', { quote: rate.quote });
-      if (!res.ok) {
-        setError(typeof data.error === 'string' && data.error ? data.error : `Something went wrong (HTTP ${res.status}).`);
+      if (!res.ok || data === null) {
+        const f = bookFailure(res.status, data);
+        setError(f.message);
+        // A hold the server set shows up once the card reloads.
+        if (f.unclear) router.refresh();
         return;
       }
       onBooked(data as AmazonBookedAnswer);
     } catch {
-      setError('Network error. Check the order before trying again: Amazon may already have booked it.');
+      setError(bookFailure(0, null).message);
+      router.refresh();
     } finally {
       inFlight.current = false;
       setBooking(null);
