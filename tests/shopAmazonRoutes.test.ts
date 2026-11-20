@@ -613,6 +613,17 @@ describe('POST cancel (Cancel order and refund)', () => {
     expect(body.warning).toContain('check Amazon Shipping');
   });
 
+  it('a delivered Amazon order is cancelled and refunded with no Amazon cancel call and no carrier warning', async () => {
+    s.order = amazonShipped({ status: 'delivered', amazon_status: 'Delivered', delivered_at: '2026-11-22T10:00:00.000Z' });
+    const res = await cancelOrder(req({ reason: 'customer asked' }), params);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.order.status).toBe('cancelled');
+    expect(body.warning).toBeUndefined();
+    expect(cancels()).toHaveLength(0);
+    expect(s.refunds).toEqual([{ paymentId: 'pay_P1', amount: 847 }]);
+  });
+
   it('a collected parcel is not cancelled at Amazon; the owner is told to arrange the return', async () => {
     s.order = amazonShipped({ amazon_status: 'InTransit' });
     const body = await (await cancelOrder(req({}), params)).json();

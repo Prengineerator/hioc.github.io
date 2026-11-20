@@ -104,9 +104,10 @@ export async function POST(request: Request, { params }: { params: { id: string 
   if (shouldCancelInShiprocket(order)) {
     const sr = await cancelShiprocketOrder(order.shiprocket_order_id as string);
     if (!sr.ok) warning = `${refundByHand ? 'Cancelled' : 'Refunded'}, but Shiprocket didn't cancel the shipment (${sr.error}). Cancel it in the Shiprocket panel.`;
-  } else if (hasAmazon && (order.status !== 'shipped' || canCancelAmazonLabel({ ...order, carrier: 'amazon' }))) {
+  } else if (hasAmazon && (order.status === 'paid' || (order.status === 'shipped' && canCancelAmazonLabel({ ...order, carrier: 'amazon' })))) {
     // An Amazon label the courier hasn't collected: call it off too (best effort, like Shiprocket).
-    // Any order with a shipment id counts, whatever `carrier` says: a booking whose full save
+    // Never for a delivered order (nothing to cancel, and, like a delivered Shiprocket order, no
+    // carrier warning). Any order with a shipment id counts, whatever `carrier` says: a booking whose full save
     // failed (still 'paid', held) has the id but maybe no carrier.
     const az = await cancelAmazonShipment(order.amazon_shipment_id as string);
     if (!az.ok) warning = `${refundByHand ? 'Cancelled' : 'Refunded'}, but Amazon Shipping didn't cancel the label (${az.error}). Cancel it in Amazon Shipping.`;
