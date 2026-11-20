@@ -36,8 +36,9 @@ import { loadReleasablePendingOrders } from '@/lib/shop/beaniesRelease';
 import { captureShopPayment, captureShopPaymentLink, paidPaymentOfLink } from '@/lib/shop/payments';
 import { adoptLinkByReference } from '@/lib/shop/paymentLinkRecovery';
 import { isMissingShopSchema, toShopOrderRow, updateShopOrderIf } from '@/lib/shop/server';
+import { getAmazonTracking, hasAmazonCredentials } from '@/lib/shop/amazonShipping';
 import { fetchShiprocketOrder, isShiprocketConfigured } from '@/lib/shop/shiprocket';
-import { shopStatusFromShiprocket } from '@/lib/shop/status';
+import { shopStatusFromAmazon, shopStatusFromShiprocket } from '@/lib/shop/status';
 import type { ShopOrderRow } from '@/lib/shop/types';
 
 /** Unpaid orders older than this are expired. */
@@ -366,15 +367,63 @@ async function retryShopOrderReversals(admin: SupabaseClient, now: Date): Promis
 }
 
 /**
- * Catches deliveries nobody clicked: shipped orders are checked against
- * Shiprocket and moved to delivered (earning Beanies). One failure never stops the rest.
+ * Catches deliveries nobody clicked: shipped orders are checked against their
+ * carrier (Shiprocket, and Amazon Shipping for Amazon orders) and moved to
+ * delivered (earning Beanies). Each carrier is handled on its own, whether or
+ * not the other is configured. One failure never stops the rest.
  */
 export async function sweepDeliveredShopOrders(
   admin: SupabaseClient,
   limit = 50,
 ): Promise<{ checked: number; delivered: number }> {
   const result = { checked: 0, delivered: 0 };
-  if (!isShiprocketConfigured()) return result;
+  if (isShiprocketConfigured()) await sweepShiprocketOrders(admin, limit, result);
+  if (hasAmazonCredentials()) await sweepAmazonOrders(admin, limit, result);
+  return result;
+}
+
+/** Shipped Amazon orders: Amazon's tracking says Delivered -> delivered. */
+async function sweepAmazonOrders(admin: SupabaseClient, limit: number, result: { checked: number; delivered: number }): Promise<void> {
+  try {
+    const { data, error } = await admin
+      .from('shop_orders')
+      .select('*')
+      .eq('status', 'shipped')
+      .eq('carrier', 'amazon')
+      .not('amazon_shipment_id', 'is', null)
+      .order('shipped_at', { ascending: true })
+      .limit(limit);
+    if (error) {
+      // Before supabase/2026-11-shop-amazon-shipping.sql there are no Amazon orders to look for.
+      if (!isMissingShopSchema(error) && !isMissingColumnError(error)) console.error('shop lifecycle: Amazon delivery sweep query failed', safeDbError(error));
+      return;
+    }
+    for (const raw of data ?? []) {
+      try {
+        const order = toShopOrderRow(raw as Record<string, unknown>);
+        if (!order.awb_code) continue;
+        result.checked++;
+        const tr = await getAmazonTracking(order.awb_code);
+        if (!tr.ok) continue;
+        if (shopStatusFromAmazon(order.status, tr.tracking.status) !== 'delivered') continue;
+        const updated = await updateShopOrderIf(admin, order.id, ['shipped'], {
+          status: 'delivered',
+          delivered_at: new Date().toISOString(),
+          amazon_status: tr.tracking.status,
+        });
+        if (!updated) continue;
+        await onShopOrderDelivered(updated);
+        result.delivered++;
+      } catch (e) {
+        console.error('shop lifecycle: sweeping an Amazon order failed', safeDbError(e));
+      }
+    }
+  } catch (e) {
+    console.error('shop lifecycle: Amazon delivery sweep failed', safeDbError(e));
+  }
+}
+
+async function sweepShiprocketOrders(admin: SupabaseClient, limit: number, result: { checked: number; delivered: number }): Promise<void> {
   const { data, error } = await admin
     .from('shop_orders')
     .select('*')
@@ -384,7 +433,7 @@ export async function sweepDeliveredShopOrders(
     .limit(limit);
   if (error) {
     if (!isMissingShopSchema(error)) console.error('shop lifecycle: delivery sweep query failed', error);
-    return result;
+    return;
   }
 
   for (const raw of data ?? []) {
@@ -407,5 +456,4 @@ export async function sweepDeliveredShopOrders(
       console.error('shop lifecycle: sweeping an order failed', e);
     }
   }
-  return result;
 }

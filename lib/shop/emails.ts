@@ -137,8 +137,9 @@ export async function sendShopShippedEmail(order: ShopOrderRow): Promise<void> {
   if (!order.email) return; // an owner-entered order with no email
   const ref = shopOrderRef(order.order_number);
   try {
-    const url = trackingUrl(order.awb_code);
-    const courier = order.courier_name ? ` with ${escapeHtml(order.courier_name)}` : '';
+    const url = trackingUrl(order.awb_code, order.carrier);
+    const courierName = order.courier_name || (order.carrier === 'amazon' ? 'Amazon Shipping' : '');
+    const courier = courierName ? ` with ${escapeHtml(courierName)}` : '';
     const body = `
       <p style="font-size:14px;line-height:1.5;">Good news — your order is on its way${courier}.</p>
       ${order.awb_code ? `<p style="font-size:14px;line-height:1.5;">Tracking number (AWB): <strong>${escapeHtml(order.awb_code)}</strong></p>` : ''}

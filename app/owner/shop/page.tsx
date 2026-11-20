@@ -26,7 +26,8 @@ import { PLACEHOLDER_PRICE_INR } from '@/lib/shop/catalog';
 import { shopLineStats } from '@/lib/shop/ownerStats';
 import { rupees } from '@/lib/shop/pricing';
 import { isMissingColumnError } from '@/lib/api/postgrest';
-import { isMissingShopSchema, loadShopProducts, loadShopSettings, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
+import { amazonColumnsReady, isMissingShopSchema, loadShopProducts, loadShopSettings, SHOP_MIGRATION_HINT, toShopOrderRow } from '@/lib/shop/server';
+import { amazonMissingSettings, isAmazonShippingConfigured } from '@/lib/shop/amazonShipping';
 import { isShiprocketConfigured } from '@/lib/shop/shiprocket';
 import { OWNER_STATUS_LABEL, OWNER_TABS, ownerTab, shiprocketBillCheck, shopOrderRef } from '@/lib/shop/status';
 import type { ShopLine, ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
@@ -158,6 +159,11 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
 
   const razorpay = isGatewayConfigured();
   const shiprocket = isShiprocketConfigured();
+  // Amazon Shipping is ready when its settings are in Vercel AND the database has
+  // its columns (supabase/2026-11-shop-amazon-shipping.sql). amazonMissing names the
+  // Vercel settings still empty (names only), for the button's note.
+  const amazonMissing = amazonMissingSettings();
+  const amazon = isAmazonShippingConfigured() && (await amazonColumnsReady(admin));
   const setupDone = !missingSchema && !v2Missing && razorpay && shiprocket && flags.shop && blendReady;
 
   return (
@@ -281,7 +287,7 @@ export default async function OwnerShopPage({ searchParams }: { searchParams: { 
           ) : (
             <ul className="mt-4 space-y-4">
               {orders.map((o) => (
-                <ShopOrderCard key={o.id} order={o} shiprocketReady={shiprocket} />
+                <ShopOrderCard key={o.id} order={o} shiprocketReady={shiprocket} amazonReady={amazon} amazonMissing={amazonMissing} />
               ))}
             </ul>
           )}

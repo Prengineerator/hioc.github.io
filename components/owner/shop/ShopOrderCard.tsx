@@ -93,7 +93,17 @@ function addressText(o: ShopOrderRow): string {
     .join('\n');
 }
 
-export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow; shiprocketReady: boolean }) {
+export function ShopOrderCard({
+  order,
+  shiprocketReady,
+}: {
+  order: ShopOrderRow;
+  shiprocketReady: boolean;
+  /** Amazon Shipping set up in Vercel and the database file applied. Passed by the page; the Amazon UI (web engineer) uses it. */
+  amazonReady?: boolean;
+  /** Names of the AMAZON_SHIPPING_* settings still empty in Vercel. */
+  amazonMissing?: string[];
+}) {
   const router = useRouter();
   const [panel, setPanel] = useState<Panel>(null);
   const [busy, setBusy] = useState(false);

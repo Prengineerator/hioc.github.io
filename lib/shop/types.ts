@@ -130,6 +130,18 @@ export interface ShopOrderRow extends ShopAddress {
    * supabase/2026-11-shop-shiprocket-total.sql is applied.
    */
   shiprocket_total_inr: number | null;
+  // Amazon Shipping (docs/AMAZON-SHIPPING-SPEC.md). Absent before
+  // supabase/2026-11-shop-amazon-shipping.sql is applied: read as null.
+  // carrier is null on orders not yet booked, and on older Shiprocket orders
+  // (carrier null + shiprocket_order_id set counts as Shiprocket: orderCarrier()).
+  carrier: 'shiprocket' | 'amazon' | null;
+  amazon_shipment_id: string | null;
+  amazon_service_name: string | null;
+  /** What the café paid Amazon for the label, in rupees. Not what the customer paid. */
+  amazon_charge_inr: number | null;
+  amazon_status: string | null;
+  /** The short claim taken while a booking is in flight (a double tap can't buy two labels). */
+  amazon_booking_at: string | null;
   awb_code: string | null;
   courier_name: string | null;
   package_weight_kg: number | string | null;

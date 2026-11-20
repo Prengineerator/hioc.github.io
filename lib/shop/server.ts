@@ -11,6 +11,11 @@ export const SHOP_MIGRATION_HINT = 'apply supabase/2026-11-instant-coffee-shop.s
 /** For what needs the v2 columns, tables and functions (Home Blend, addresses, Beanies, coupons). */
 export const SHOP_V2_MIGRATION_HINT = 'apply supabase/2026-11-shop-v2.sql first';
 
+/** For what needs the Amazon Shipping columns (docs/AMAZON-SHIPPING-SPEC.md). */
+export const AMAZON_MIGRATION_HINT = 'apply supabase/2026-11-shop-amazon-shipping.sql first';
+/** What the Amazon actions answer while the database lacks those columns. */
+export const AMAZON_SCHEMA_MISSING_MESSAGE = `Amazon Shipping can't be used yet: ${AMAZON_MIGRATION_HINT}`;
+
 /** True when the error is a database without the shop tables yet. */
 export function isMissingShopSchema(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error) return false;
@@ -216,6 +221,18 @@ export function toShopOrderRow(raw: Record<string, unknown>): ShopOrderRow {
         : Number.isFinite(Number(raw.shiprocket_total_inr))
           ? Number(raw.shiprocket_total_inr)
           : null,
+    // Amazon Shipping columns: absent before supabase/2026-11-shop-amazon-shipping.sql (read as null).
+    carrier: raw.carrier === 'amazon' || raw.carrier === 'shiprocket' ? raw.carrier : null,
+    amazon_shipment_id: typeof raw.amazon_shipment_id === 'string' && raw.amazon_shipment_id ? raw.amazon_shipment_id : null,
+    amazon_service_name: typeof raw.amazon_service_name === 'string' && raw.amazon_service_name ? raw.amazon_service_name : null,
+    amazon_charge_inr:
+      raw.amazon_charge_inr === null || raw.amazon_charge_inr === undefined || raw.amazon_charge_inr === ''
+        ? null
+        : Number.isFinite(Number(raw.amazon_charge_inr))
+          ? Number(raw.amazon_charge_inr)
+          : null,
+    amazon_status: typeof raw.amazon_status === 'string' && raw.amazon_status ? raw.amazon_status : null,
+    amazon_booking_at: typeof raw.amazon_booking_at === 'string' && raw.amazon_booking_at ? raw.amazon_booking_at : null,
     cancel_reason: typeof raw.cancel_reason === 'string' ? raw.cancel_reason : '',
     address_line2: typeof raw.address_line2 === 'string' ? raw.address_line2 : '',
     // v2 columns: absent on rows read before the v2 migration is applied.
@@ -325,4 +342,14 @@ export async function saveShiprocketTotal(admin: SupabaseClient, order: ShopOrde
     return order;
   }
   return { ...order, shiprocket_total_inr: total };
+}
+
+/**
+ * Do the Amazon Shipping columns exist yet? Reads one of them. False only when
+ * the database says the column is missing; any other failure reads as true so a
+ * passing blip never hides the feature (the action itself then reports it).
+ */
+export async function amazonColumnsReady(admin: SupabaseClient): Promise<boolean> {
+  const { error } = await admin.from('shop_orders').select('amazon_booking_at').limit(1);
+  return !isMissingColumnError(error);
 }
