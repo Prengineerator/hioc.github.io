@@ -1562,6 +1562,58 @@ async function checkShopShiprocketTotal() {
   } else fail('shop_orders.shiprocket_total_inr exists', errText(r));
 }
 
+// Shop orders: ship with Amazon Shipping (supabase/2026-11-shop-amazon-shipping.sql).
+// Column probe is a read. The CHECK probes insert a row that can never land:
+// created_by is the nil UUID (not a user), so a row passing every CHECK stops
+// at the foreign key ('fk') and a row a CHECK refuses comes back 'check'.
+// order_number is explicit so no shop order number is burned.
+async function checkShopAmazonShipping() {
+  heading('SHOP-5 · Amazon Shipping columns', '2026-11-shop-amazon-shipping.sql');
+  const hint = 'apply supabase/2026-11-shop-amazon-shipping.sql';
+  const cols = 'carrier,amazon_shipment_id,amazon_service_name,amazon_charge_inr,amazon_status,amazon_booking_at';
+  const r = await rest(`/shop_orders?select=${cols}&limit=1`);
+  if (r.ok) pass('shop_orders Amazon Shipping columns exist', `${cols.split(',').length} columns`);
+  else {
+    fail('shop_orders Amazon Shipping columns exist', errKind(r) === 'no_column' || /carrier|amazon_/i.test(errText(r)) ? hint : errText(r));
+    skip('shop_orders carrier / amazon_charge_inr CHECKs', 'the columns are missing');
+    return;
+  }
+
+  const asAnon = await rest('/shop_orders?select=carrier&limit=1', { key: ANON });
+  if (asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0) {
+    fail('shop_orders carrier is not readable by the anon key', 'RLS is off or a policy was added');
+  } else pass('shop_orders carrier is not readable by the anon key');
+
+  const base = {
+    order_number: 999999998,
+    customer_name: 'verify-db probe',
+    phone: '+919999999999',
+    email: '',
+    address_line1: 'verify-db probe line',
+    city: 'Probe',
+    state: 'Probe',
+    pincode: '600001',
+    lines: [],
+    jar_count: 1,
+    subtotal_inr: 1000,
+    discount_inr: 0,
+    shipping_inr: 0,
+    total_inr: 1000,
+    created_by: BOGUS_ORDER_ID,
+  };
+  const attempt = (over) => rest('/shop_orders', { method: 'POST', body: { ...base, ...over }, prefer: 'return=minimal' });
+  const control = await attempt({ source: 'owner', carrier: 'amazon', amazon_charge_inr: 0 });
+  if (errKind(control) !== 'fk') {
+    skip('shop_orders carrier / amazon_charge_inr CHECKs',
+      control.ok ? 'the control insert unexpectedly SUCCEEDED' : `control probe did not reach the foreign key (${errKind(control)}: ${errText(control)})`);
+    return;
+  }
+  pass('an Amazon order with a zero charge passes every CHECK', 'stopped at the foreign key, as intended');
+  expectKind('carrier shiprocket passes', await attempt({ source: 'owner', carrier: 'shiprocket' }), 'fk');
+  expectKind('an unknown carrier is refused', await attempt({ source: 'owner', carrier: 'dtdc' }), 'check');
+  expectKind('a negative Amazon charge is refused', await attempt({ source: 'owner', carrier: 'amazon', amazon_charge_inr: -1 }), 'check');
+}
+
 // Shop v2: Home Blend, saved addresses, shop coupons, Beanies on shop orders
 // (supabase/2026-11-shop-v2.sql). Reads only: the functions that write
 // (reserve_shop_beanies, claim_shop_intro_offer, record_shop_coupon_redemption,
@@ -2520,6 +2572,7 @@ async function main() {
   await checkShopShiprocketTotal();
   await checkShopV2();
   await checkShopOwnerOrders();
+  await checkShopAmazonShipping();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();

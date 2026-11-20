@@ -11,9 +11,10 @@ import { captureShopPaymentLink, paidPaymentOfLink } from '@/lib/shop/payments';
 import { adoptLinkByReference } from '@/lib/shop/paymentLinkRecovery';
 import { parseCancelReason } from '@/lib/shop/owner';
 import { getShopOrder, updateShopOrderIf } from '@/lib/shop/server';
+import { cancelAmazonShipment } from '@/lib/shop/amazonShipping';
 import { cancelShiprocketOrder } from '@/lib/shop/shiprocket';
 import type { ShopOrderRow } from '@/lib/shop/types';
-import { canCancel, PAID_STATUSES, shouldCancelInShiprocket } from '@/lib/shop/status';
+import { amazonBookingHeld, canCancel, canCancelAmazonLabel, PAID_STATUSES, shouldCancelInShiprocket } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +25,9 @@ const REFUND_PENDING = 'pending';
 // Cancels a paid order and refunds the full amount to the customer through
 // Razorpay. If the order is in Shiprocket and not yet with a courier, it is
 // cancelled there too (best-effort: a failure comes back as `warning`, to do
-// in the Shiprocket panel). A shipped parcel is the owner's to recall in
+// in the Shiprocket panel). An Amazon Shipping label the courier hasn't collected
+// is cancelled the same way (a failure comes back as `warning`, to do in Amazon
+// Shipping). A shipped parcel is the owner's to recall in
 // Shiprocket; the refund still goes. The refund is the money paid (total_inr); Beanies spent
 // are returned to the customer's balance, not refunded as money, and Beanies
 // earned from the order are taken back. Responds { order, warning?, beanies_returned }.
@@ -96,10 +99,22 @@ export async function POST(request: Request, { params }: { params: { id: string 
     refundedInr = order.total_inr;
   }
 
+  const hasAmazon = Boolean(order.amazon_shipment_id);
   let warning: string | null = null;
   if (shouldCancelInShiprocket(order)) {
     const sr = await cancelShiprocketOrder(order.shiprocket_order_id as string);
     if (!sr.ok) warning = `${refundByHand ? 'Cancelled' : 'Refunded'}, but Shiprocket didn't cancel the shipment (${sr.error}). Cancel it in the Shiprocket panel.`;
+  } else if (hasAmazon && (order.status === 'paid' || (order.status === 'shipped' && canCancelAmazonLabel({ ...order, carrier: 'amazon' })))) {
+    // An Amazon label the courier hasn't collected: call it off too (best effort, like Shiprocket).
+    // Never for a delivered order (nothing to cancel, and, like a delivered Shiprocket order, no
+    // carrier warning). Any order with a shipment id counts, whatever `carrier` says: a booking whose full save
+    // failed (still 'paid', held) has the id but maybe no carrier.
+    const az = await cancelAmazonShipment(order.amazon_shipment_id as string);
+    if (!az.ok) warning = `${refundByHand ? 'Cancelled' : 'Refunded'}, but Amazon Shipping didn't cancel the label (${az.error}). Cancel it in Amazon Shipping.`;
+  } else if (order.status === 'shipped' && hasAmazon) {
+    warning = `${refundByHand ? 'Cancelled' : 'Refunded'}. The parcel is already with Amazon Shipping — arrange its return with Amazon.`;
+  } else if (amazonBookingHeld(order)) {
+    warning = `${refundByHand ? 'Cancelled' : 'Refunded'}. An Amazon booking for this order was never confirmed — check Amazon Shipping and cancel any label it made.`;
   } else if (order.status === 'shipped') {
     warning = `${refundByHand ? 'Cancelled' : 'Refunded'}. The parcel is already with the courier — arrange its return in the Shiprocket panel.`;
   }

@@ -6,7 +6,7 @@ import type { CsvTable } from '@/lib/reports/csv';
 import { grindLabel, lineOf, PLACEHOLDER_PRICE_INR } from './catalog';
 import { googleMapsLink, locationFromRow } from './location';
 import { normalizeOfferTiers } from './pricing';
-import { OWNER_STATUS_LABEL, shopOrderRef } from './status';
+import { OWNER_STATUS_LABEL, orderCarrier, shopOrderRef } from './status';
 import type { ShopOrderRow } from './types';
 
 const AWB_RE = /^[A-Za-z0-9-]{4,40}$/;
@@ -169,6 +169,8 @@ const OFFLINE_METHOD_LABEL: Record<string, string> = {
   bank_transfer: 'Bank transfer',
 };
 
+const CARRIER_LABEL: Record<string, string> = { shiprocket: 'Shiprocket', amazon: 'Amazon Shipping' };
+
 /** The shop orders as a sheet for the accountant (GET /api/owner/shop/orders/export). */
 export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
   return {
@@ -206,6 +208,8 @@ export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
       'Shiprocket order id',
       'AWB',
       'Courier',
+      'Carrier',
+      'Amazon label (₹)',
       'Source',
       'Payment channel',
       'Offline method',
@@ -251,6 +255,8 @@ export function shopOrdersCsvTable(orders: readonly ShopOrderRow[]): CsvTable {
       o.shiprocket_order_id ?? '',
       o.awb_code ?? '',
       o.courier_name ?? '',
+      CARRIER_LABEL[orderCarrier(o) ?? ''] ?? '',
+      o.amazon_charge_inr ?? '',
       o.source === 'owner' ? 'owner' : 'website',
       PAYMENT_CHANNEL_LABEL[o.payment_channel] ?? 'Razorpay checkout',
       o.offline_method ? OFFLINE_METHOD_LABEL[o.offline_method] ?? o.offline_method : '',

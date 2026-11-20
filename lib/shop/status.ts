@@ -81,9 +81,75 @@ export function ownerTab(key: string | null | undefined): (typeof OWNER_TABS)[nu
   return OWNER_TABS.find((t) => t.key === key) ?? OWNER_TABS[0];
 }
 
-/** The owner may send to Shiprocket only a paid order not already sent. */
-export function canSendToShiprocket(order: Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'>): boolean {
-  return order.status === 'paid' && !order.shiprocket_order_id;
+/**
+ * Far-future value written to amazon_booking_at when an Amazon booking may have
+ * happened but isn't recorded (an unclear answer, or booked but not saved). The
+ * claim's stale check (older than 2 minutes) never passes for it, and both
+ * carriers refuse the order until the owner clears it with "I checked Amazon".
+ */
+export const AMAZON_HOLD_SENTINEL = '9999-12-31T00:00:00.000Z';
+
+/** Is the order held because an Amazon booking may exist that this page doesn't know about? */
+export function amazonBookingHeld(order: Partial<Pick<ShopOrderRow, 'amazon_booking_at'>>): boolean {
+  return typeof order.amazon_booking_at === 'string' && order.amazon_booking_at.startsWith('9999');
+}
+
+type SendFields = Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'> & Partial<Pick<ShopOrderRow, 'amazon_shipment_id' | 'amazon_booking_at'>>;
+
+/** The owner may send to Shiprocket only a paid order not already sent (to Shiprocket or Amazon), and not held. */
+export function canSendToShiprocket(order: SendFields): boolean {
+  return order.status === 'paid' && !order.shiprocket_order_id && !order.amazon_shipment_id && !amazonBookingHeld(order);
+}
+
+/** The owner may book Amazon Shipping only for a paid order not already sent (to Shiprocket or Amazon), and not held. */
+export function canShipWithAmazon(order: SendFields): boolean {
+  return order.status === 'paid' && !order.shiprocket_order_id && !order.amazon_shipment_id && !amazonBookingHeld(order);
+}
+
+/**
+ * Which carrier has the parcel. Older Shiprocket orders have carrier null, so
+ * a Shiprocket order id with no carrier counts as Shiprocket (no backfill).
+ */
+export function orderCarrier(
+  order: Partial<Pick<ShopOrderRow, 'carrier' | 'shiprocket_order_id' | 'amazon_shipment_id'>>,
+): 'shiprocket' | 'amazon' | null {
+  if (order.carrier === 'amazon') return 'amazon';
+  if (order.carrier === 'shiprocket') return 'shiprocket';
+  if (order.shiprocket_order_id) return 'shiprocket';
+  return null;
+}
+
+/** An order booked on the café's Amazon Shipping account (and not since cancelled). */
+export function isAmazonOrder(order: Pick<ShopOrderRow, 'carrier' | 'amazon_shipment_id'>): boolean {
+  return order.carrier === 'amazon' && Boolean(order.amazon_shipment_id);
+}
+
+/** Amazon statuses that mean the courier has not collected the parcel yet (or won't). */
+const AMAZON_UNCOLLECTED = ['pretransit', 'pickupcancelled'];
+const amazonKey = (v: string | null | undefined) => (v ?? '').toLowerCase().replace(/[^a-z]/g, '');
+
+/**
+ * The Amazon label can be cancelled only before pickup: an Amazon order that is
+ * with the courier ('shipped') whose last Amazon status is empty, PreTransit or
+ * PickupCancelled.
+ */
+export function canCancelAmazonLabel(
+  order: Pick<ShopOrderRow, 'status' | 'carrier' | 'amazon_shipment_id' | 'amazon_status'>,
+): boolean {
+  if (!isAmazonOrder(order) || order.status !== 'shipped') return false;
+  const k = amazonKey(order.amazon_status);
+  return k === '' || AMAZON_UNCOLLECTED.includes(k);
+}
+
+/**
+ * What Amazon's tracking status means for ours: 'delivered' (from 'shipped'
+ * only) or null to stay put. It never moves an order backwards, and only the
+ * exact status Delivered counts: Rejected, Undeliverable, Lost, DeliveryAttempted
+ * and the rest never read as delivered.
+ */
+export function shopStatusFromAmazon(current: ShopOrderStatus, amazonStatus: string | null | undefined): ShopOrderStatus | null {
+  if (current !== 'shipped') return null;
+  return amazonKey(amazonStatus) === 'delivered' ? 'delivered' : null;
 }
 
 /** Marking shipped by hand (an AWB from the Shiprocket panel or any courier). */
@@ -192,10 +258,19 @@ export function shiprocketBillWarning(order: BillFields): string | null {
   return `Shiprocket's bill says ${inr(check.shiprocket)}, but the customer paid ${inr(check.paid)}. That wrong amount goes on Shiprocket's invoice, its emails to the customer and the parcel's declared value. Correct the order in the Shiprocket panel before a courier is booked.`;
 }
 
-/** The customer's tracking page for an AWB, on Shiprocket's tracking site. */
-export function trackingUrl(awb: string | null | undefined): string | null {
+/** Amazon Shipping's public tracking page (confirm against Amazon's docs). */
+export const AMAZON_TRACKING_PAGE = 'https://track.amazon.in/tracking/';
+
+/**
+ * The customer's tracking page for an AWB: Amazon's public page for an Amazon
+ * order (carrier 'amazon'), Shiprocket's tracking site otherwise.
+ */
+export function trackingUrl(awb: string | null | undefined, carrier?: ShopOrderRow['carrier'] | null): string | null {
   const code = (awb ?? '').trim();
-  return code ? `https://shiprocket.co/tracking/${encodeURIComponent(code)}` : null;
+  if (!code) return null;
+  return carrier === 'amazon'
+    ? `${AMAZON_TRACKING_PAGE}${encodeURIComponent(code)}`
+    : `https://shiprocket.co/tracking/${encodeURIComponent(code)}`;
 }
 
 /** "HIOC-S1001": the number on the order page, emails, and Shiprocket's order id. */
@@ -263,7 +338,7 @@ export function toPublicView(o: ShopOrderRow, extras?: { beanies_to_earn?: numbe
     ship_to: { name: o.customer_name, city: o.city, state: o.state, pincode: o.pincode },
     awb_code: o.awb_code,
     courier_name: o.courier_name,
-    tracking_url: trackingUrl(o.awb_code),
+    tracking_url: trackingUrl(o.awb_code, o.carrier),
     refunded_inr: o.refunded_inr,
     created_at: o.created_at,
     paid_at: o.paid_at,
@@ -284,7 +359,7 @@ export function toShopHistoryOrder(o: ShopOrderRow): ShopHistoryOrder {
     total_inr: o.total_inr,
     city: o.city,
     awb_code: o.awb_code,
-    tracking_url: trackingUrl(o.awb_code),
+    tracking_url: trackingUrl(o.awb_code, o.carrier),
     created_at: o.created_at,
     paid_at: o.paid_at,
     shipped_at: o.shipped_at,

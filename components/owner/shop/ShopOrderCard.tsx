@@ -2,8 +2,13 @@
 
 // One order on Owner → Shop orders, with what can be done to it next:
 //   To ship         Send to Shiprocket (the one click, after checking the
-//                   parcel's weight and size) · Mark shipped by hand · Cancel
+//                   parcel's weight and size) · Ship with Amazon Shipping (see
+//                   Amazon's prices and dates, then Book this one) · Mark
+//                   shipped by hand · Cancel
 //   In Shiprocket   Refresh from Shiprocket · Mark shipped by hand · Cancel
+//   With courier, an Amazon order
+//                   Refresh from Amazon · Print label · Cancel the Amazon
+//                   label (before pickup only) · Mark delivered · Cancel
 //   Shipped         Refresh · Mark delivered · Cancel & refund
 //   Delivered       Cancel & refund (e.g. arrived damaged)
 // Every action calls an /api/owner/shop route and refreshes the server page.
@@ -25,6 +30,8 @@ import { useRouter } from 'next/navigation';
 import { Badge } from '@/components/ui/Badge';
 import { Button, buttonVariants } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { AmazonShipDialog, type AmazonBookedAnswer } from './AmazonShipDialog';
+import { isAmazonBookingHeld, labelBlobFromBase64 } from '@/lib/shop/amazonDialog';
 import { defaultPackageForLines, lineOf, packingChecklist } from '@/lib/shop/catalog';
 import { describePin, googleMapsLink, locationFromRow } from '@/lib/shop/location';
 import { needsLinkRetry, paymentLineOf, readCancelAnswer, readRetryAnswer, whatsappShareUrl } from '@/lib/shop/ownerNewOrder';
@@ -32,8 +39,12 @@ import { jarsLabel, rupees, unitsLabel } from '@/lib/shop/pricing';
 import {
   canCancel,
   canMarkDelivered,
+  canCancelAmazonLabel,
   canMarkShipped,
+  canShipWithAmazon,
   canSendToShiprocket,
+  isAmazonOrder,
+  orderCarrier,
   OWNER_STATUS_LABEL,
   shiprocketBillCheck,
   shiprocketBillWarning,
@@ -43,7 +54,7 @@ import {
 } from '@/lib/shop/status';
 import type { ShopOrderRow, ShopOrderStatus } from '@/lib/shop/types';
 
-type Panel = 'send' | 'ship' | 'cancel' | null;
+type Panel = 'send' | 'amazon' | 'amazonCancel' | 'ship' | 'cancel' | null;
 
 /** An owner-entered order whose payment link has not been paid yet. */
 function isAwaitingLink(o: Pick<ShopOrderRow, 'status' | 'payment_channel'>): boolean {
@@ -93,7 +104,19 @@ function addressText(o: ShopOrderRow): string {
     .join('\n');
 }
 
-export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow; shiprocketReady: boolean }) {
+export function ShopOrderCard({
+  order,
+  shiprocketReady,
+  amazonReady = false,
+  amazonMissing = [],
+}: {
+  order: ShopOrderRow;
+  shiprocketReady: boolean;
+  /** Amazon Shipping set up in Vercel and the database file applied (passed by the page). */
+  amazonReady?: boolean;
+  /** Names of the AMAZON_SHIPPING_* settings still empty in Vercel. */
+  amazonMissing?: string[];
+}) {
   const router = useRouter();
   const [panel, setPanel] = useState<Panel>(null);
   const [busy, setBusy] = useState(false);
@@ -130,11 +153,15 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
   const [reason, setReason] = useState('');
 
   const ref = shopOrderRef(order.order_number);
-  const tracking = trackingUrl(order.awb_code);
+  const tracking = trackingUrl(order.awb_code, orderCarrier(order));
+  const amazonOrder = isAmazonOrder(order);
+  const amazonHeld = isAmazonBookingHeld(order);
+  const canRefreshAmazon = amazonOrder && order.status === 'shipped';
+  const [labelBooked, setLabelBooked] = useState(false);
   const pin = locationFromRow(order);
   const canRefresh = Boolean(order.shiprocket_order_id) && (order.status === 'sent_to_shiprocket' || order.status === 'shipped');
-  const bill = shiprocketBillCheck(order);
-  const billWarning = shiprocketBillWarning(order);
+  const bill = amazonOrder ? null : shiprocketBillCheck(order);
+  const billWarning = amazonOrder ? null : shiprocketBillWarning(order);
 
   async function act(path: string, method: 'POST' | 'PATCH', body: unknown, done: string | ((data: ActResult) => string), keepResult = false) {
     setBusy(true);
@@ -166,6 +193,26 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
     } finally {
       setBusy(false);
     }
+  }
+
+  // The label came back with the booking: open it. If the browser blocks the new tab,
+  // Print label stays on the card.
+  function openLabel(b64: string) {
+    const blob = labelBlobFromBase64(b64);
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+
+  function amazonBooked(data: AmazonBookedAnswer) {
+    if (data.label) openLabel(data.label);
+    setPanel(null);
+    setLabelBooked(true);
+    const text = 'Booked with Amazon Shipping. Print the label, stick it on the box and hand it to the Amazon pickup.';
+    setMessage(data.warning ? { tone: 'warn', text: `${data.warning} ${text}` } : { tone: 'ok', text });
+    setSettled(true);
+    setSettledStatus('shipped');
   }
 
   async function copyAddress() {
@@ -423,8 +470,23 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
         </div>
       </div>
 
-      {order.shiprocket_order_id || order.awb_code ? (
+      {order.shiprocket_order_id || order.awb_code || amazonOrder ? (
         <div className="mt-3 rounded-md bg-surface px-3 py-2 text-sm text-charcoal">
+          {amazonOrder ? (
+            <p>
+              Amazon Shipping
+              {order.amazon_service_name ? ` · ${order.amazon_service_name}` : ''}
+              {order.amazon_charge_inr != null ? ` · ${rupees(order.amazon_charge_inr)}` : ''}
+              {order.package_dims_cm ? (
+                <span className="text-muted">
+                  {' '}
+                  · {order.package_weight_kg} kg, {order.package_dims_cm} cm
+                </span>
+              ) : null}
+            </p>
+          ) : null}
+          {amazonOrder && !order.awb_code ? <p className="text-xs text-muted">No tracking number yet. Press Refresh from Amazon.</p> : null}
+          {amazonOrder && order.amazon_status ? <p>Amazon says: {order.amazon_status}</p> : null}
           {order.shiprocket_order_id ? (
             <p>
               Shiprocket order <span className="font-mono tabular-nums">{order.shiprocket_order_id}</span>
@@ -439,7 +501,7 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           ) : null}
           {order.awb_code ? (
             <p>
-              {order.courier_name ? `${order.courier_name} · ` : ''}AWB <span className="font-mono tabular-nums">{order.awb_code}</span>
+              {amazonOrder ? 'Tracking number' : `${order.courier_name ? `${order.courier_name} · ` : ''}AWB`} <span className="font-mono tabular-nums">{order.awb_code}</span>
               {tracking ? (
                 <>
                   {' '}
@@ -487,6 +549,12 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
       {order.refund_id === 'pending' && order.status !== 'cancelled' ? (
         <p className="mt-3 text-sm font-semibold text-amber-800">
           A refund was started but not confirmed. Check this payment in the Razorpay dashboard before trying again.
+        </p>
+      ) : null}
+
+      {amazonHeld ? (
+        <p role="alert" className="mt-3 rounded-md border border-amber-600 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+          An Amazon booking for this order may have gone through. Check Amazon Shipping first.
         </p>
       ) : null}
 
@@ -538,9 +606,46 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
             </Button>
           </>
         ) : null}
-        {canSendToShiprocket(order) ? (
+        {amazonHeld ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={busy && panel === null}
+            onClick={() => void act(`${base}/amazon/release-hold`, 'POST', {}, 'Released. You can book this order again.')}
+            disabled={busy}
+          >
+            I checked Amazon — nothing was booked
+          </Button>
+        ) : null}
+        {canSendToShiprocket(order) && !amazonHeld ? (
           <Button size="sm" onClick={() => setPanel(panel === 'send' ? null : 'send')} disabled={busy}>
             Send to Shiprocket
+          </Button>
+        ) : null}
+        {canShipWithAmazon(order) && !amazonHeld ? (
+          <Button size="sm" onClick={() => setPanel(panel === 'amazon' ? null : 'amazon')} disabled={busy}>
+            Ship with Amazon Shipping
+          </Button>
+        ) : null}
+        {canRefreshAmazon ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={busy && panel === null}
+            onClick={() => void act(`${base}/amazon/refresh`, 'POST', {}, 'Updated from Amazon.')}
+            disabled={busy}
+          >
+            Refresh from Amazon
+          </Button>
+        ) : null}
+        {amazonOrder && order.status === 'shipped' ? (
+          <a href={`${base}/amazon/label`} target="_blank" rel="noopener noreferrer" className={buttonVariants({ size: 'sm', variant: 'secondary' })}>
+            Print label
+          </a>
+        ) : null}
+        {canCancelAmazonLabel(order) ? (
+          <Button size="sm" variant="ghost" className="text-red-700" onClick={() => setPanel(panel === 'amazonCancel' ? null : 'amazonCancel')} disabled={busy}>
+            Cancel the Amazon label
           </Button>
         ) : null}
         {canRefresh ? (
@@ -648,6 +753,36 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
         </form>
       ) : null}
 
+      {panel === 'amazon' ? (
+        <AmazonShipDialog
+          base={base}
+          initialParcel={pkg}
+          ready={amazonReady}
+          missing={amazonMissing}
+          onBooked={amazonBooked}
+          onClose={() => setPanel(null)}
+        />
+      ) : null}
+
+      {panel === 'amazonCancel' ? (
+        <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
+          <p className="text-sm text-charcoal">Cancel this Amazon label? The order goes back to To ship.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="danger"
+              loading={busy}
+              onClick={() => void act(`${base}/amazon/cancel-label`, 'POST', {}, 'Label cancelled — the order is back in To ship.', true)}
+            >
+              Cancel the Amazon label
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPanel(null)} disabled={busy}>
+              Keep the label
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {panel === 'ship' ? (
         <form
           className="mt-3 rounded-md border border-line p-3"
@@ -700,7 +835,13 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
                 This refunds <strong>{rupees(order.total_inr)}</strong> to the customer through Razorpay and can&apos;t be undone.
               </>
             )}
-            {order.status === 'shipped' ? ' The parcel is already with the courier — arrange its return in Shiprocket.' : ''}
+            {order.status === 'shipped' && amazonOrder
+              ? canCancelAmazonLabel(order)
+                ? ' The Amazon label will be cancelled too.'
+                : ' The parcel is already with the courier — arrange its return with Amazon Shipping.'
+              : order.status === 'shipped'
+                ? ' The parcel is already with the courier — arrange its return in Shiprocket.'
+                : ''}
             {order.status === 'sent_to_shiprocket' ? ' It will be cancelled in Shiprocket too.' : ''}
           </p>
           <div className="mt-3">
@@ -725,6 +866,11 @@ export function ShopOrderCard({ order, shiprocketReady }: { order: ShopOrderRow;
           >
             {message.text}
           </p>
+          {settled && labelBooked ? (
+            <a href={`${base}/amazon/label`} target="_blank" rel="noopener noreferrer" className={buttonVariants({ size: 'sm' })}>
+              Print label
+            </a>
+          ) : null}
           {settled ? (
             <Button size="sm" variant="secondary" onClick={() => router.refresh()}>
               Dismiss
