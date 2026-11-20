@@ -3,7 +3,7 @@
 Product owner spec, 2026-11-20. Builds on `docs/INSTANT-COFFEE-SHOP.md`,
 `docs/SHOP-V2-SPEC.md` (E6) and `docs/SHOP-OWNER-ORDERS-SPEC.md`.
 
-Status: **waiting for the owner's yes on the short answer.** No code until then.
+Status: **approved by the owner on 2026-11-20.** Being built.
 
 ## The short answer
 
