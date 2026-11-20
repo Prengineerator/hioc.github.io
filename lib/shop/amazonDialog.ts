@@ -95,12 +95,14 @@ export const BOOKING_UNCLEAR_MESSAGE = 'Amazon may have booked this — check Am
  * parsed body, or null when it could not be read. A message from our own routes
  * is shown as it is; a gateway timeout, a network failure (status 0) or an
  * unreadable body means we cannot tell whether Amazon booked, so say so.
+ * `refresh` says the card should reload: the server may have put a hold on the
+ * order. Every 500 from /book can mean that, so it keeps our message and refreshes.
  */
-export function bookFailure(status: number, data: unknown): { message: string; unclear: boolean } {
+export function bookFailure(status: number, data: unknown): { message: string; unclear: boolean; refresh: boolean } {
   const err = typeof data === 'object' && data !== null ? (data as Record<string, unknown>).error : undefined;
-  if (typeof err === 'string' && err.trim() && status !== 504) return { message: err, unclear: false };
+  if (typeof err === 'string' && err.trim() && status !== 504) return { message: err, unclear: false, refresh: status === 500 };
   if (status === 0 || status === 504 || data === null || status === 502 || status === 503) {
-    return { message: BOOKING_UNCLEAR_MESSAGE, unclear: true };
+    return { message: BOOKING_UNCLEAR_MESSAGE, unclear: true, refresh: true };
   }
-  return { message: `Something went wrong (HTTP ${status}).`, unclear: false };
+  return { message: `Something went wrong (HTTP ${status}).`, unclear: false, refresh: status === 500 };
 }

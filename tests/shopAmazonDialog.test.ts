@@ -70,16 +70,16 @@ describe('isAmazonBookingHeld', () => {
 
 describe('bookFailure', () => {
   it('shows our own error as it is', () => {
-    expect(bookFailure(409, { error: 'Already booking.' })).toEqual({ message: 'Already booking.', unclear: false });
-    expect(bookFailure(502, { error: 'Amazon refused.' })).toEqual({ message: 'Amazon refused.', unclear: false });
-    expect(bookFailure(500, { error: 'Amazon may have booked this — check.' }).unclear).toBe(false);
+    expect(bookFailure(409, { error: 'Already booking.' })).toEqual({ message: 'Already booking.', unclear: false, refresh: false });
+    expect(bookFailure(502, { error: 'Amazon refused.' })).toEqual({ message: 'Amazon refused.', unclear: false, refresh: false });
+    expect(bookFailure(500, { error: 'Booked but not saved.' })).toEqual({ message: 'Booked but not saved.', unclear: false, refresh: true });
   });
   it('says Amazon may have booked on gateway timeouts, network failures and unreadable bodies', () => {
     for (const [status, data] of [[504, {}], [504, { error: 'x' }], [502, {}], [503, {}], [0, null], [500, null], [502, null]] as const) {
-      expect(bookFailure(status, data)).toEqual({ message: BOOKING_UNCLEAR_MESSAGE, unclear: true });
+      expect(bookFailure(status, data)).toEqual({ message: BOOKING_UNCLEAR_MESSAGE, unclear: true, refresh: true });
     }
   });
   it('keeps a plain HTTP message for other body-less errors', () => {
-    expect(bookFailure(400, {})).toEqual({ message: 'Something went wrong (HTTP 400).', unclear: false });
+    expect(bookFailure(400, {})).toEqual({ message: 'Something went wrong (HTTP 400).', unclear: false, refresh: false });
   });
 });

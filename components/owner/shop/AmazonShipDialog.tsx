@@ -108,7 +108,7 @@ export function AmazonShipDialog({
         const f = bookFailure(res.status, data);
         setError(f.message);
         // A hold the server set shows up once the card reloads.
-        if (f.unclear) router.refresh();
+        if (f.refresh) router.refresh();
         return;
       }
       onBooked(data as AmazonBookedAnswer);
