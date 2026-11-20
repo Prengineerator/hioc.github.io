@@ -159,4 +159,16 @@ describe('shopOrdersCsvTable', () => {
     expect(col(t, 'Intro offer reused')).toBe('');
     expect(col(t, 'Items')).toBe('Signature Classic × 2');
   });
+
+  it('adds the carrier and what the café paid Amazon for the label', () => {
+    const none = shopOrdersCsvTable([shopOrder({})]);
+    expect(col(none, 'Carrier')).toBe('');
+    expect(col(none, 'Amazon label (₹)')).toBe('');
+    const sr = shopOrdersCsvTable([shopOrder({ shiprocket_order_id: '123' })]);
+    expect(col(sr, 'Carrier')).toBe('Shiprocket');
+    const az = shopOrdersCsvTable([shopOrder({ carrier: 'amazon', amazon_shipment_id: 'SHP1', amazon_charge_inr: 62 })]);
+    expect(az.rows[0]).toHaveLength(az.columns.length);
+    expect(col(az, 'Carrier')).toBe('Amazon Shipping');
+    expect(col(az, 'Amazon label (₹)')).toBe(62);
+  });
 });

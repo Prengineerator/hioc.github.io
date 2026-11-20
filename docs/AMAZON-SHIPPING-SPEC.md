@@ -45,8 +45,8 @@ The Amazon button uses **the café's own Amazon Shipping account** and its rates
   (its wallet or its billing, however that account is set up), not the Shiprocket
   wallet.
 - Worked example: a customer buys 3 jars for ₹749 and pays ₹0 shipping. The owner
-  taps Get Amazon prices and sees, say, "Standard · ₹62 · by Mon 24 Nov" and
-  "Express · ₹95 · by Sat 22 Nov" (example figures; the real ones come from
+  taps Get Amazon prices and sees, say, "Standard · ₹62 · by Tue 24 Nov" and
+  "Express · ₹95 · by Sun 22 Nov" (example figures; the real ones come from
   Amazon). The owner books Standard. The customer still paid ₹749; Amazon charges
   the café ₹62. The order card shows "Amazon Shipping · Standard · ₹62" so the
   owner can see what each parcel cost.
