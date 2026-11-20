@@ -6,7 +6,8 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { amazonColumnsReady, AMAZON_SCHEMA_MISSING_MESSAGE, getShopOrder } from '@/lib/shop/server';
 import { amazonNotConfiguredMessage, getAmazonRates, isAmazonShippingConfigured } from '@/lib/shop/amazonShipping';
 import { defaultPackageForLines, validatePackage } from '@/lib/shop/catalog';
-import { canShipWithAmazon } from '@/lib/shop/status';
+import { signAmazonQuote } from '@/lib/shop/amazonQuote';
+import { amazonBookingHeld, canShipWithAmazon } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,12 +19,16 @@ export const dynamic = 'force-dynamic';
 //           confirmed, same limits as the Shiprocket dialog), or no body / {} to
 //           use the default parcel for the order's lines (defaultPackageForLines).
 // Response 200: {
-//   requestToken: string,            // pass back unchanged to /book; it expires
+//   requestToken: string,            // Amazon's token (informational; /book needs only `quote`)
 //   rates: [{ rateId, serviceName, carrierName,
 //             chargeInr: number,     // rupees, cheapest first
-//             deliveryBy: string | null }],   // ISO time, null if Amazon gave none
+//             deliveryBy: string | null,   // ISO time, null if Amazon gave none
+//             quote: string }],      // signed, opaque: send it to /book as { quote }
 //   parcel: { weight_kg, length_cm, breadth_cm, height_cm },  // what was priced
 // }
+// Each `quote` is an HMAC-signed bundle of this order's id, Amazon's requestToken
+// and rateId, the service name, the price shown and the parcel, valid 15 minutes.
+// /book takes those from the verified quote, never from the browser.
 // Errors: { error } with 400 (bad parcel), 404, 409 (not a paid, unsent order),
 //   502 (Amazon refused or has no service for the pincode: the message says so,
 //   "use Shiprocket"), 503 (Amazon not set up, naming the missing Vercel
@@ -46,11 +51,22 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const order = lookup.order;
   if (!order) return notFound();
   if (!canShipWithAmazon(order)) {
-    return errorResponse(409, order.status === 'paid' ? 'This order has already been sent with a courier.' : 'Only a paid order can be shipped with Amazon.');
+    return errorResponse(
+      409,
+      amazonBookingHeld(order)
+        ? 'An Amazon booking for this order is unconfirmed. Check Amazon Shipping, then tell this page what you found.'
+        : order.status === 'paid' ? 'This order has already been sent with a courier.' : 'Only a paid order can be shipped with Amazon.',
+    );
   }
 
   const parcel = pkg && pkg.ok ? pkg.pkg : defaultPackageForLines(order.lines);
   const result = await getAmazonRates(order, parcel);
   if (!result.ok) return errorResponse(502, result.error);
-  return NextResponse.json({ requestToken: result.requestToken, rates: result.rates, parcel });
+  const signed = [];
+  for (const r of result.rates) {
+    const quote = signAmazonQuote({ orderId: order.id, requestToken: result.requestToken, rateId: r.rateId, serviceName: r.serviceName, chargeInr: r.chargeInr, parcel });
+    if (!quote) return errorResponse(503, 'Could not sign the Amazon prices just now — please try again.');
+    signed.push({ ...r, quote });
+  }
+  return NextResponse.json({ requestToken: result.requestToken, rates: signed, parcel });
 }

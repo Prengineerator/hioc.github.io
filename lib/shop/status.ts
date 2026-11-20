@@ -81,18 +81,29 @@ export function ownerTab(key: string | null | undefined): (typeof OWNER_TABS)[nu
   return OWNER_TABS.find((t) => t.key === key) ?? OWNER_TABS[0];
 }
 
-/** The owner may send to Shiprocket only a paid order not already sent (to Shiprocket or Amazon). */
-export function canSendToShiprocket(
-  order: Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'> & Partial<Pick<ShopOrderRow, 'amazon_shipment_id'>>,
-): boolean {
-  return order.status === 'paid' && !order.shiprocket_order_id && !order.amazon_shipment_id;
+/**
+ * Far-future value written to amazon_booking_at when an Amazon booking may have
+ * happened but isn't recorded (an unclear answer, or booked but not saved). The
+ * claim's stale check (older than 2 minutes) never passes for it, and both
+ * carriers refuse the order until the owner clears it with "I checked Amazon".
+ */
+export const AMAZON_HOLD_SENTINEL = '9999-12-31T00:00:00.000Z';
+
+/** Is the order held because an Amazon booking may exist that this page doesn't know about? */
+export function amazonBookingHeld(order: Partial<Pick<ShopOrderRow, 'amazon_booking_at'>>): boolean {
+  return typeof order.amazon_booking_at === 'string' && order.amazon_booking_at.startsWith('9999');
 }
 
-/** The owner may book Amazon Shipping only for a paid order not already sent (to Shiprocket or Amazon). */
-export function canShipWithAmazon(
-  order: Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'> & Partial<Pick<ShopOrderRow, 'amazon_shipment_id'>>,
-): boolean {
-  return order.status === 'paid' && !order.shiprocket_order_id && !order.amazon_shipment_id;
+type SendFields = Pick<ShopOrderRow, 'status' | 'shiprocket_order_id'> & Partial<Pick<ShopOrderRow, 'amazon_shipment_id' | 'amazon_booking_at'>>;
+
+/** The owner may send to Shiprocket only a paid order not already sent (to Shiprocket or Amazon), and not held. */
+export function canSendToShiprocket(order: SendFields): boolean {
+  return order.status === 'paid' && !order.shiprocket_order_id && !order.amazon_shipment_id && !amazonBookingHeld(order);
+}
+
+/** The owner may book Amazon Shipping only for a paid order not already sent (to Shiprocket or Amazon), and not held. */
+export function canShipWithAmazon(order: SendFields): boolean {
+  return order.status === 'paid' && !order.shiprocket_order_id && !order.amazon_shipment_id && !amazonBookingHeld(order);
 }
 
 /**

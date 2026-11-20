@@ -59,11 +59,10 @@ describe('labelBlobFromBase64', () => {
 });
 
 describe('isAmazonBookingHeld', () => {
-  const now = Date.parse('2026-11-20T10:00:00Z');
-  it('is true only for a paid order with a far-future claim', () => {
-    expect(isAmazonBookingHeld({ status: 'paid', amazon_booking_at: '2099-01-01T00:00:00Z' }, now)).toBe(true);
-    expect(isAmazonBookingHeld({ status: 'paid', amazon_booking_at: '2026-11-20T09:59:00Z' }, now)).toBe(false);
-    expect(isAmazonBookingHeld({ status: 'paid', amazon_booking_at: null }, now)).toBe(false);
-    expect(isAmazonBookingHeld({ status: 'shipped', amazon_booking_at: '2099-01-01T00:00:00Z' }, now)).toBe(false);
+  it('is true only for a paid order carrying the server hold', () => {
+    expect(isAmazonBookingHeld({ status: 'paid', amazon_booking_at: '9999-12-31T00:00:00.000Z' })).toBe(true);
+    expect(isAmazonBookingHeld({ status: 'paid', amazon_booking_at: '2026-11-20T09:59:00Z' })).toBe(false);
+    expect(isAmazonBookingHeld({ status: 'paid', amazon_booking_at: null })).toBe(false);
+    expect(isAmazonBookingHeld({ status: 'shipped', amazon_booking_at: '9999-12-31T00:00:00.000Z' })).toBe(false);
   });
 });

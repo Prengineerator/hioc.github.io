@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getOwnerUser } from '@/lib/api/auth';
+import { isMissingColumnError } from '@/lib/api/postgrest';
 import { runAfterResponse } from '@/lib/api/background';
 import { isUuid } from '@/lib/api/constants';
 import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/http';
@@ -8,7 +9,7 @@ import { defaultPackageForLines, validatePackage } from '@/lib/shop/catalog';
 import { sendShopShippedEmail } from '@/lib/shop/emails';
 import { getShopOrder, saveShiprocketTotal, updateShopOrderIf } from '@/lib/shop/server';
 import { createShiprocketOrder, fetchShiprocketOrder, isShiprocketConfigured, SHIPROCKET_NOT_CONFIGURED } from '@/lib/shop/shiprocket';
-import { canSendToShiprocket, shiprocketBillWarning } from '@/lib/shop/status';
+import { amazonBookingHeld, canSendToShiprocket, shiprocketBillWarning } from '@/lib/shop/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,19 +50,33 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const order = lookup.order;
   if (!order) return notFound();
   if (!canSendToShiprocket(order)) {
-    return errorResponse(409, order.shiprocket_order_id ? 'This order is already in Shiprocket.' : 'Only a paid order can be sent to Shiprocket.');
+    return errorResponse(
+      409,
+      order.shiprocket_order_id
+        ? 'This order is already in Shiprocket.'
+        : amazonBookingHeld(order) || order.amazon_shipment_id
+          ? 'This order has an Amazon Shipping booking (or an unconfirmed one) — check Amazon Shipping first.'
+          : 'Only a paid order can be sent to Shiprocket.',
+    );
   }
 
   const cutoff = new Date(Date.now() - CLAIM_MS).toISOString();
-  const { data: claimed, error: claimError } = await admin
-    .from('shop_orders')
-    .update({ shiprocket_sending_at: new Date().toISOString() })
-    .eq('id', order.id)
-    .eq('status', 'paid')
-    .is('shiprocket_order_id', null)
-    .or(`shiprocket_sending_at.is.null,shiprocket_sending_at.lt."${cutoff}"`)
-    .select('id')
-    .maybeSingle();
+  // The claim also refuses an order Amazon has booked or is booking (the other carrier's
+  // claim does the same for us). Before supabase/2026-11-shop-amazon-shipping.sql those
+  // columns don't exist: the query then errors with a missing column, and the old claim runs.
+  const claim = (withAmazon: boolean) => {
+    let q = admin
+      .from('shop_orders')
+      .update({ shiprocket_sending_at: new Date().toISOString() })
+      .eq('id', order.id)
+      .eq('status', 'paid')
+      .is('shiprocket_order_id', null)
+      .or(`shiprocket_sending_at.is.null,shiprocket_sending_at.lt."${cutoff}"`);
+    if (withAmazon) q = q.is('amazon_shipment_id', null).or(`amazon_booking_at.is.null,amazon_booking_at.lt."${cutoff}"`);
+    return q.select('id').maybeSingle();
+  };
+  let { data: claimed, error: claimError } = await claim(true);
+  if (claimError && isMissingColumnError(claimError)) ({ data: claimed, error: claimError } = await claim(false));
   if (claimError) {
     console.error('owner shop send: claim failed', claimError);
     return errorResponse(500, 'Could not start sending — please try again.');

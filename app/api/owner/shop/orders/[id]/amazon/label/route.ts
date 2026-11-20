@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 //
 // Request:  none.
 // Response 200: the label as a PDF (Content-Type application/pdf,
-//           Cache-Control no-store). Open it in a new tab.
+//           Cache-Control no-store, X-Content-Type-Options nosniff). Open it in a new tab.
 // Errors: { error } with 404, 409 (not an Amazon order), 502 (Amazon would not
 //   give the label), 503.
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
@@ -31,13 +31,15 @@ export async function GET(_request: Request, { params }: { params: { id: string 
   const label = await getAmazonLabel(order.amazon_shipment_id as string, ref);
   if (!label.ok) return errorResponse(502, label.error);
   const pdf = Buffer.from(label.labelBase64, 'base64');
-  if (pdf.length === 0) return errorResponse(502, 'Amazon Shipping sent an empty label.');
+  // Serve only what really is a PDF (never an HTML or script payload under our origin).
+  if (pdf.subarray(0, 5).toString('latin1') !== '%PDF-') return errorResponse(502, 'Amazon Shipping sent a label that is not a PDF.');
   return new Response(new Uint8Array(pdf), {
     status: 200,
     headers: {
       'Content-Type': 'application/pdf',
       'Content-Disposition': `inline; filename="${ref}-label.pdf"`,
       'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
     },
   });
 }

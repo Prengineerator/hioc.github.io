@@ -193,7 +193,26 @@ export function amazonErrorMessage(body: unknown, status: number): string {
   return msg ? `Amazon Shipping: ${msg}` : `Amazon Shipping answered HTTP ${status}`;
 }
 
-type CallResult = { ok: true; data: unknown } | { ok: false; status: number; error: string };
+/**
+ * ambiguous: true when the request may have reached Amazon and done its work
+ * (network error or timeout after sending, a 5xx, a 4xx with no errors body).
+ * false when it was definitely refused or never sent (not configured, login
+ * failed, 401 twice, a 4xx that came with an errors body). Only the purchase
+ * cares: it spends money.
+ */
+type CallResult = { ok: true; data: unknown } | { ok: false; status: number; error: string; ambiguous: boolean };
+
+/** Time limits on every Amazon request (the purchase gets longer, still well under the claim and the route's maxDuration). */
+const TOKEN_TIMEOUT_MS = 10_000;
+const CALL_TIMEOUT_MS = 15_000;
+export const PURCHASE_TIMEOUT_MS = 25_000;
+
+/** Only the codes of an Amazon error body: never its message or details. */
+function errorCodes(body: unknown): string[] {
+  const errors = asObject(body).errors;
+  return (Array.isArray(errors) ? errors : []).map((e) => str(asObject(e).code) ?? '?').slice(0, 5);
+}
+const hasErrorsBody = (body: unknown): boolean => Array.isArray(asObject(body).errors) && (asObject(body).errors as unknown[]).length > 0;
 
 async function login(creds: AmazonCredentials): Promise<{ ok: true; token: string } | { ok: false; error: string }> {
   try {
@@ -207,6 +226,8 @@ async function login(creds: AmazonCredentials): Promise<{ ok: true; token: strin
         client_secret: creds.clientSecret,
       }).toString(),
       cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     });
     const body = asObject(await res.json().catch(() => ({})));
     const token = typeof body.access_token === 'string' ? body.access_token : '';
@@ -237,15 +258,15 @@ async function token(creds: AmazonCredentials, fresh: boolean) {
 /** An authenticated call; a 401 renews the token and tries once more. */
 async function call(
   path: string,
-  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; query?: Record<string, string> },
+  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown; query?: Record<string, string>; timeoutMs?: number },
 ): Promise<CallResult> {
   const creds = credentials();
-  if (!creds) return { ok: false, status: 0, error: amazonNotConfiguredMessage() };
+  if (!creds) return { ok: false, status: 0, error: amazonNotConfiguredMessage(), ambiguous: false };
   const host = process.env.AMAZON_SHIPPING_SANDBOX?.trim() === '1' ? AMAZON_API.sandboxHost : AMAZON_API.host;
   const qs = init.query ? `?${new URLSearchParams(init.query).toString()}` : '';
   for (const fresh of [false, true]) {
     const t = await token(creds, fresh);
-    if (!t.ok) return { ok: false, status: 0, error: t.error };
+    if (!t.ok) return { ok: false, status: 0, error: t.error, ambiguous: false }; // never sent
     let res: Response;
     try {
       res = await fetch(`${host}${path}${qs}`, {
@@ -257,10 +278,12 @@ async function call(
         },
         body: init.body === undefined ? undefined : JSON.stringify(init.body),
         cache: 'no-store',
+        redirect: 'error',
+        signal: AbortSignal.timeout(init.timeoutMs ?? CALL_TIMEOUT_MS),
       });
     } catch {
       console.error(`amazon shipping ${init.method} ${path} request failed`);
-      return { ok: false, status: 0, error: UNREACHABLE };
+      return { ok: false, status: 0, error: UNREACHABLE, ambiguous: true }; // sent, outcome unknown
     }
     if (res.status === 401 && !fresh) {
       cachedToken = null;
@@ -268,13 +291,18 @@ async function call(
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      // Only the error list is logged; a success body (it may carry a label) never is.
-      console.error(`amazon shipping ${init.method} ${path} failed (${res.status})`, asObject(data).errors ?? '');
-      return { ok: false, status: res.status, error: amazonErrorMessage(data, res.status) };
+      // Only the status and the error codes are logged: never a message or details (they can carry customer data).
+      console.error(`amazon shipping ${init.method} ${path} failed (${res.status})`, errorCodes(data));
+      return {
+        ok: false,
+        status: res.status,
+        error: amazonErrorMessage(data, res.status),
+        ambiguous: !(res.status === 401 || (res.status >= 400 && res.status < 500 && hasErrorsBody(data))),
+      };
     }
     return { ok: true, data };
   }
-  return { ok: false, status: 401, error: 'Amazon Shipping refused the login.' };
+  return { ok: false, status: 401, error: 'Amazon Shipping refused the login.', ambiguous: false };
 }
 
 /** Amazon wraps answers in { payload }; read either. */
@@ -447,6 +475,8 @@ export interface AmazonPurchase {
   trackingId: string | null;
   /** What Amazon says the label costs, when the answer carries it. */
   chargeInr: number | null;
+  /** The package reference Amazon echoed (should be the order's HIOC-S number), or null if it echoed none. */
+  packageClientReferenceId: string | null;
   /** The label PDF, base64, when the answer carries it. Never logged. */
   labelBase64: string | null;
   deliveryBy: string | null;
@@ -474,6 +504,7 @@ export function parseAmazonPurchase(body: unknown): AmazonPurchase | null {
     shipmentId,
     trackingId: str(first.trackingId),
     chargeInr: amount(p.totalCharge),
+    packageClientReferenceId: str(first.packageClientReferenceId),
     labelBase64: labelFrom(p.packageDocumentDetails),
     deliveryBy: isoOrNull(window.end) ?? isoOrNull(window.start),
   };
@@ -516,19 +547,27 @@ export async function getAmazonRates(order: ShopOrderRow, pkg: ShopPackage): Pro
   return parseAmazonRates(result.data);
 }
 
-/** Books the chosen rate on the café's Amazon Shipping account: this one spends money. */
+/**
+ * Books the chosen rate on the café's Amazon Shipping account: this one spends money.
+ * A failure carries `ambiguous`: false means Amazon definitely did not book it
+ * (never sent, or refused with an errors body), so the caller may let the owner
+ * try again; true means it MAY have booked (network error or timeout after
+ * sending, a 5xx, a 2xx with no shipment id or an unreadable body), so the
+ * caller must keep the order held and send the owner to check Amazon.
+ */
 export async function purchaseAmazonShipment(
   requestToken: string,
   rateId: string,
-): Promise<{ ok: true; purchase: AmazonPurchase } | { ok: false; error: string }> {
-  if (!credentials()) return { ok: false, error: amazonNotConfiguredMessage() };
+): Promise<{ ok: true; purchase: AmazonPurchase } | { ok: false; error: string; ambiguous: boolean }> {
+  if (!credentials()) return { ok: false, error: amazonNotConfiguredMessage(), ambiguous: false };
   const result = await call(AMAZON_API.purchasePath, {
     method: 'POST',
     body: { requestToken, rateId, requestedDocumentSpecification: AMAZON_API.documentSpecification },
+    timeoutMs: PURCHASE_TIMEOUT_MS,
   });
-  if (!result.ok) return { ok: false, error: result.error };
+  if (!result.ok) return { ok: false, error: result.error, ambiguous: result.ambiguous };
   const purchase = parseAmazonPurchase(result.data);
-  if (!purchase) return { ok: false, error: 'Amazon Shipping did not confirm the booking (no shipment id came back).' };
+  if (!purchase) return { ok: false, error: 'Amazon Shipping did not confirm the booking (no shipment id came back).', ambiguous: true };
   return { ok: true, purchase };
 }
 

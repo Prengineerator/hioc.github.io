@@ -17,6 +17,7 @@ import {
   type AmazonShipFrom,
 } from '@/lib/shop/amazonShipping';
 import { canCancelAmazonLabel, canSendToShiprocket, canShipWithAmazon, orderCarrier, shopStatusFromAmazon, trackingUrl } from '@/lib/shop/status';
+import { signAmazonQuote, verifyAmazonQuote } from '@/lib/shop/amazonQuote';
 import { shopOrder } from './helpers/shopFixture';
 
 // The Amazon Shipping client (lib/shop/amazonShipping.ts) with fetch stubbed:
@@ -69,6 +70,7 @@ const ENV = {
 };
 
 beforeEach(() => {
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'placeholder-service-role-key';
   for (const [k, v] of Object.entries(ENV)) process.env[k] = v;
   delete process.env.AMAZON_SHIPPING_SANDBOX;
   resetAmazonTokenCache();
@@ -176,7 +178,7 @@ describe('reading Amazon answers', () => {
   it('reads a purchase: shipment, tracking number, label, charge when present', () => {
     expect(
       parseAmazonPurchase({ payload: { shipmentId: 'SHP1', packageDocumentDetails: [{ packageClientReferenceId: 'HIOC-S1001', trackingId: 'TRK123', packageDocuments: [{ type: 'LABEL', format: 'PDF', contents: 'JVBERi0=' }] }], promise: { deliveryWindow: { end: '2026-11-24T18:00:00Z' } } } }),
-    ).toEqual({ shipmentId: 'SHP1', trackingId: 'TRK123', chargeInr: null, labelBase64: 'JVBERi0=', deliveryBy: '2026-11-24T18:00:00.000Z' });
+    ).toEqual({ shipmentId: 'SHP1', trackingId: 'TRK123', chargeInr: null, packageClientReferenceId: 'HIOC-S1001', labelBase64: 'JVBERi0=', deliveryBy: '2026-11-24T18:00:00.000Z' });
     expect(parseAmazonPurchase({ payload: { shipmentId: 'SHP2', totalCharge: { value: 58, unit: 'INR' } } })).toMatchObject({ shipmentId: 'SHP2', trackingId: null, chargeInr: 58, labelBase64: null });
     expect(parseAmazonPurchase({ payload: {} })).toBeNull();
   });
@@ -344,12 +346,90 @@ describe('not configured', () => {
     expect(amazonMissingSettings()).toEqual(['AMAZON_SHIPPING_REFRESH_TOKEN', 'AMAZON_SHIPPING_FROM_PINCODE']);
     expect(amazonNotConfiguredMessage()).toBe('Amazon Shipping is not set up yet: add AMAZON_SHIPPING_REFRESH_TOKEN, AMAZON_SHIPPING_FROM_PINCODE in Vercel.');
     expect(await getAmazonRates(shopOrder(), PKG)).toEqual({ ok: false, error: amazonNotConfiguredMessage() });
-    expect(await purchaseAmazonShipment('rt', 'R1')).toEqual({ ok: false, error: amazonNotConfiguredMessage() });
+    expect(await purchaseAmazonShipment('rt', 'R1')).toEqual({ ok: false, error: amazonNotConfiguredMessage(), ambiguous: false });
     expect(calls).toHaveLength(0);
   });
 
   it('is configured with everything set', () => {
     expect(isAmazonShippingConfigured()).toBe(true);
     expect(amazonMissingSettings()).toEqual([]);
+  });
+});
+
+describe('purchase: definite refusal or unclear', () => {
+  const answer = (fn: (url: string) => Response | never) => {
+    responder = (url) => (isToken(url) ? json({ access_token: 'acc1', expires_in: 3600 }) : fn(url));
+  };
+
+  it.each([
+    ['a 4xx with an errors body', () => json({ errors: [{ code: 'RateExpired', message: 'expired' }] }, 400)],
+    ['a 401 with an errors body, twice', () => json({ errors: [{ code: 'Unauthorized' }] }, 401)],
+  ])('%s is a definite refusal', async (_n, fn) => {
+    answer(fn);
+    const r = await purchaseAmazonShipment('rt', 'R1');
+    expect(r).toMatchObject({ ok: false, ambiguous: false });
+  });
+
+  it('a refused login never reached the purchase: definite', async () => {
+    responder = () => json({ error: 'invalid_grant' }, 400);
+    expect(await purchaseAmazonShipment('rt', 'R1')).toMatchObject({ ok: false, ambiguous: false });
+    expect(calls.every((c) => isToken(c.url))).toBe(true);
+  });
+
+  it.each([
+    ['a 5xx', () => json({}, 502)],
+    ['a 4xx with no errors body', () => json({ message: 'x' }, 400)],
+    ['a 200 with no shipment id', () => json({ payload: {} })],
+    ['a 200 with an unreadable body', () => new Response('<html>', { status: 200 })],
+  ])('%s is unclear', async (_n, fn) => {
+    answer(fn);
+    expect(await purchaseAmazonShipment('rt', 'R1')).toMatchObject({ ok: false, ambiguous: true });
+  });
+
+  it('a network error or timeout after sending is unclear', async () => {
+    resetAmazonTokenCache();
+    let n = 0;
+    vi.stubGlobal('fetch', vi.fn((url: string) => (isToken(url) ? Promise.resolve(json({ access_token: 'a', expires_in: 3600 })) : (n++, Promise.reject(new DOMException('timed out', 'TimeoutError'))))));
+    expect(await purchaseAmazonShipment('rt', 'R1')).toMatchObject({ ok: false, ambiguous: true });
+    expect(n).toBe(1);
+  });
+
+  it('every Amazon fetch has a timeout and refuses redirects, the token call included', async () => {
+    await getAmazonTracking('T1');
+    const inits = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls.map((c) => c[1]);
+    expect(inits).toHaveLength(2);
+    for (const init of inits) {
+      expect(init.redirect).toBe('error');
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    }
+  });
+
+  it('logs only the status and error codes, never an Amazon message or details', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    answer(() => json({ errors: [{ code: 'InvalidInput', message: 'Riya Sharma, 12 Rose Villa is not serviceable', details: '9876543210' }] }, 400));
+    await getAmazonTracking('T1');
+    const logged = JSON.stringify(log.mock.calls);
+    expect(logged).toContain('InvalidInput');
+    expect(logged).toContain('400');
+    expect(logged).not.toContain('Riya');
+    expect(logged).not.toContain('9876543210');
+  });
+});
+
+describe('signed quote', () => {
+  const base = { orderId: 'o1', requestToken: 'rt', rateId: 'R1', serviceName: 'Standard', chargeInr: 62, parcel: PKG };
+
+  it('round-trips for its order and refuses another order, tampering, expiry and a missing secret', () => {
+    const q = signAmazonQuote(base, 1_000)!;
+    expect(verifyAmazonQuote(q, 'o1', 2_000)).toMatchObject({ ok: true, quote: { rateId: 'R1', chargeInr: 62, serviceName: 'Standard', parcel: PKG } });
+    expect(verifyAmazonQuote(q, 'o2', 2_000).ok).toBe(false);
+    expect(verifyAmazonQuote(q.replace(/\.(.)/, (_m, c) => `.${c === 'A' ? 'B' : 'A'}`), 'o1', 2_000).ok).toBe(false);
+    expect(verifyAmazonQuote(q, 'o1', 1_000 + 15 * 60 * 1000 + 1)).toMatchObject({ ok: false, error: expect.stringContaining('expired') });
+    expect(verifyAmazonQuote(undefined, 'o1').ok).toBe(false);
+    const saved = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    expect(signAmazonQuote(base)).toBeNull();
+    expect(verifyAmazonQuote(q, 'o1', 2_000).ok).toBe(false);
+    process.env.SUPABASE_SERVICE_ROLE_KEY = saved;
   });
 });

@@ -1,5 +1,6 @@
 // Pure helpers for the "Ship with Amazon Shipping" dialog on Owner → Shop orders
 // (components/owner/shop/AmazonShipDialog.tsx). Client-safe: no server imports.
+import { amazonBookingHeld } from './status';
 
 export interface AmazonParcelFields {
   weight_kg: string;
@@ -64,15 +65,10 @@ export function readRatesAnswer(data: unknown): {
 /**
  * An earlier booking may have gone through and the server is holding the order
  * (amazon_booking_at set far in the future). A normal claim lasts minutes.
- * TODO: use amazonBookingHeld from lib/shop/status.ts once it lands.
+ * Same rule as the server (amazonBookingHeld in lib/shop/status.ts), for a paid order.
  */
-export function isAmazonBookingHeld(
-  order: { status: string; amazon_booking_at?: string | null },
-  now: number = Date.now(),
-): boolean {
-  if (order.status !== 'paid' || !order.amazon_booking_at) return false;
-  const t = new Date(order.amazon_booking_at).getTime();
-  return Number.isFinite(t) && t > now + 60 * 60 * 1000;
+export function isAmazonBookingHeld(order: { status: string; amazon_booking_at?: string | null }): boolean {
+  return order.status === 'paid' && amazonBookingHeld(order);
 }
 
 /** Plain words when Amazon returned no usable service. */

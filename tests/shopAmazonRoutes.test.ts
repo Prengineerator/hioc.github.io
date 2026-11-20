@@ -14,6 +14,8 @@ const s = {
   shippedEmails: [] as string[],
   refunds: [] as { paymentId: string; amount: number }[],
   failSave: false,
+  amazonColumnsMissing: false,
+  shiprocketCreates: 0,
 };
 
 vi.mock('@/lib/api/auth', () => ({ getOwnerUser: () => Promise.resolve({ id: 'owner' }) }));
@@ -30,6 +32,16 @@ vi.mock('@/lib/payments/gateway', () => ({
     s.refunds.push({ paymentId, amount });
     return Promise.resolve({ id: 'rfnd_1' });
   },
+}));
+vi.mock('@/lib/shop/shiprocket', () => ({
+  isShiprocketConfigured: () => true,
+  SHIPROCKET_NOT_CONFIGURED: 'x',
+  createShiprocketOrder: () => {
+    s.shiprocketCreates++;
+    return Promise.resolve({ ok: true, created: { shiprocketOrderId: '5001', shipmentId: null, status: 'NEW', awb: null, courier: null } });
+  },
+  fetchShiprocketOrder: () => Promise.resolve({ ok: false, error: 'skip' }),
+  cancelShiprocketOrder: () => Promise.resolve({ ok: true }),
 }));
 vi.mock('@/lib/shop/payments', () => ({ captureShopPayment: () => Promise.resolve({ handled: false }) }));
 vi.mock('@/lib/shop/lifecycle', () => ({
@@ -50,48 +62,74 @@ vi.mock('@/lib/shop/server', async (orig) => ({
   },
 }));
 vi.mock('@/lib/supabase-server', () => ({
-  createAdminSupabaseClient: () => {
-    const chain: Record<string, unknown> & { patch?: Record<string, unknown> } = {};
-    const apply = () => {
-      if (s.order && chain.patch) s.order = { ...s.order, ...chain.patch } as ShopOrderRow;
-    };
-    Object.assign(chain, {
-      update: (patch: Record<string, unknown>) => {
-        chain.patch = patch;
-        return chain;
-      },
-      eq: () => chain,
-      in: () => chain,
-      is: () => chain,
-      or: () => chain,
-      select: () => chain,
-      // An awaited update with no select (the claim release).
-      then: (resolve: (v: unknown) => void) => {
-        apply();
-        resolve({ data: null, error: null });
-      },
-      maybeSingle: () => {
-        const o = s.order;
-        const patch = chain.patch ?? {};
-        if (typeof patch.amazon_booking_at === 'string') {
-          // The booking claim: only while paid, unsent and not claimed in the last 2 minutes.
-          const fresh = o?.amazon_booking_at && Date.now() - new Date(o.amazon_booking_at).getTime() < 2 * 60 * 1000;
-          if (!o || o.status !== 'paid' || o.shiprocket_order_id || o.amazon_shipment_id || fresh) return Promise.resolve({ data: null, error: null });
+  // A fake of the shop_orders table that really evaluates the filters a claim sends
+  // (eq, is null, or(a.is.null,a.lt."iso")), so the claims' shape is tested.
+  createAdminSupabaseClient: () => ({
+    rpc: () => Promise.resolve({ error: null }),
+    from: () => {
+      const f = { eq: [] as [string, unknown][], isNull: [] as string[], ors: [] as string[] };
+      let patch: Record<string, unknown> = {};
+      const chain: Record<string, unknown> = {};
+      const apply = () => {
+        if (s.order) s.order = { ...s.order, ...patch } as ShopOrderRow;
+      };
+      const row = () => s.order as unknown as Record<string, unknown>;
+      const matches = () => {
+        const o = row();
+        if (!o) return false;
+        if (f.eq.some(([c, v]) => (c === 'id' ? false : new Date(String(o[c] ?? '')).getTime() !== new Date(String(v)).getTime() && o[c] !== v))) return false;
+        if (f.isNull.some((c) => o[c] !== null && o[c] !== undefined)) return false;
+        return f.ors.every((clause) =>
+          clause.split(',').some((part) => {
+            const m = /^(\w+)\.(is\.null|lt\."([^"]+)")$/.exec(part);
+            if (!m) return false;
+            const v = o[m[1]] as string | null | undefined;
+            if (m[2] === 'is.null') return v === null || v === undefined;
+            return Boolean(v) && new Date(v as string).getTime() < new Date(m[3]).getTime();
+          }),
+        );
+      };
+      const usesAmazonColumns = () => f.isNull.includes('amazon_shipment_id') || f.ors.some((c) => c.includes('amazon_booking_at'));
+      Object.assign(chain, {
+        update: (p: Record<string, unknown>) => {
+          patch = p;
+          return chain;
+        },
+        eq: (c: string, v: unknown) => {
+          f.eq.push([c, v]);
+          return chain;
+        },
+        in: () => chain,
+        is: (c: string) => {
+          f.isNull.push(c);
+          return chain;
+        },
+        or: (c: string) => {
+          f.ors.push(c);
+          return chain;
+        },
+        select: () => chain,
+        // An awaited update with no select (a release or a hold).
+        then: (resolve: (v: unknown) => void) => {
           apply();
-          return Promise.resolve({ data: { id: ID }, error: null });
-        }
-        if (patch.refund_id === 'pending') {
-          if (!o || o.refund_id) return Promise.resolve({ data: null, error: null });
+          resolve({ data: null, error: null });
+        },
+        maybeSingle: () => {
+          if (s.amazonColumnsMissing && usesAmazonColumns()) return Promise.resolve({ data: null, error: { code: '42703', message: 'column does not exist' } });
+          const ok = Boolean(s.order) && matches() && (patch.refund_id !== 'pending' || !s.order!.refund_id);
+          if (!ok) return Promise.resolve({ data: null, error: null });
           apply();
-          return Promise.resolve({ data: { id: ID }, error: null });
-        }
-        return Promise.resolve({ data: null, error: null });
-      },
-    });
-    return { from: () => chain, rpc: () => Promise.resolve({ error: null }) };
-  },
+          return Promise.resolve({ data: s.order, error: null });
+        },
+      });
+      return chain;
+    },
+  }),
 }));
 
+const { POST: shiprocket } = await import('@/app/api/owner/shop/orders/[id]/shiprocket/route');
+const { POST: releaseHold } = await import('@/app/api/owner/shop/orders/[id]/amazon/release-hold/route');
+const { signAmazonQuote } = await import('@/lib/shop/amazonQuote');
 const { POST: rates } = await import('@/app/api/owner/shop/orders/[id]/amazon/rates/route');
 const { POST: book } = await import('@/app/api/owner/shop/orders/[id]/amazon/book/route');
 const { GET: label } = await import('@/app/api/owner/shop/orders/[id]/amazon/label/route');
@@ -102,12 +140,16 @@ const { resetAmazonTokenCache } = await import('@/lib/shop/amazonShipping');
 
 const params = { params: { id: ID } };
 const req = (body?: unknown) => new Request('http://localhost/x', { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
-const BOOK = { requestToken: 'rt-1', rateId: 'R1', serviceName: 'Standard', chargeInr: 62 };
+const PARCEL = { weight_kg: 0.7, length_cm: 20, breadth_cm: 12, height_cm: 10 };
+const quoteOf = (patch: Partial<{ orderId: string; serviceName: string; chargeInr: number }> = {}) =>
+  signAmazonQuote({ orderId: ID, requestToken: 'rt-1', rateId: 'R1', serviceName: 'Standard', chargeInr: 62, parcel: PARCEL, ...patch });
+const BOOK = () => ({ quote: quoteOf() });
 
 type Call = { url: string; method: string; body: unknown };
 let calls: Call[] = [];
 let tracking = 'InTransit';
 let purchaseAnswer: () => Response;
+let docContents = 'JVBERi0xLjQ=';
 let cancelAnswer: () => Response;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const purchases = () => calls.filter((c) => c.method === 'POST' && c.url.endsWith('/shipping/v2/shipments'));
@@ -127,7 +169,11 @@ const ENV: Record<string, string> = {
 
 beforeEach(() => {
   for (const [k, v] of Object.entries(ENV)) process.env[k] = v;
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||= 'placeholder-service-role-key';
   resetAmazonTokenCache();
+  docContents = 'JVBERi0xLjQ=';
+  s.amazonColumnsMissing = false;
+  s.shiprocketCreates = 0;
   s.order = null;
   s.earned = [];
   s.shippedEmails = [];
@@ -150,8 +196,14 @@ beforeEach(() => {
           { rateId: 'R1', serviceName: 'Standard', totalCharge: { value: 62, unit: 'INR' }, promise: { deliveryWindow: { end: '2026-11-24T18:00:00Z' } } },
         ] } }));
       }
-      if (url.endsWith('/shipping/v2/shipments') && init.method === 'POST') return Promise.resolve(purchaseAnswer());
-      if (url.includes('/documents')) return Promise.resolve(json({ payload: { shipmentId: 'SHP1', packageDocumentDetails: [{ packageDocuments: [{ type: 'LABEL', contents: 'JVBERi0xLjQ=' }] }] } }));
+      if (url.endsWith('/shipping/v2/shipments') && init.method === 'POST') {
+        try {
+          return Promise.resolve(purchaseAnswer());
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      }
+      if (url.includes('/documents')) return Promise.resolve(json({ payload: { shipmentId: 'SHP1', packageDocumentDetails: [{ packageDocuments: [{ type: 'LABEL', contents: docContents }] }] } }));
       if (url.includes('/shipping/v2/tracking')) return Promise.resolve(json({ payload: { trackingId: 'TRK1', summary: { status: tracking } } }));
       if (url.endsWith('/cancel')) return Promise.resolve(cancelAnswer());
       return Promise.resolve(json({}));
@@ -207,7 +259,7 @@ describe('POST amazon/rates', () => {
 describe('POST amazon/book', () => {
   it('books once: the order ships with Amazon, the label comes back, the email goes, a second tap is 409', async () => {
     s.order = shopOrder({ id: ID });
-    const res = await book(req(BOOK), params);
+    const res = await book(req(BOOK()), params);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.label).toBe('JVBERi0xLjQ=');
@@ -221,68 +273,159 @@ describe('POST amazon/book', () => {
     expect(purchases()[0].body).toMatchObject({ requestToken: 'rt-1', rateId: 'R1' });
     expect(s.shippedEmails).toEqual([ID]);
 
-    const again = await book(req(BOOK), params);
+    const again = await book(req(BOOK()), params);
     expect(again.status).toBe(409);
     expect(purchases()).toHaveLength(1);
   });
 
   it('a double tap while the first is in flight is 409 and buys nothing', async () => {
     s.order = shopOrder({ id: ID, amazon_booking_at: new Date().toISOString() });
-    expect((await book(req(BOOK), params)).status).toBe(409);
+    expect((await book(req(BOOK()), params)).status).toBe(409);
     expect(purchases()).toHaveLength(0);
     // A claim older than 2 minutes is stale: a retry may go.
     s.order = shopOrder({ id: ID, amazon_booking_at: new Date(Date.now() - 3 * 60 * 1000).toISOString() });
-    expect((await book(req(BOOK), params)).status).toBe(200);
+    expect((await book(req(BOOK()), params)).status).toBe(200);
     expect(purchases()).toHaveLength(1);
   });
 
   it('releases the claim when Amazon refuses, so the owner can try again', async () => {
     purchaseAnswer = () => json({ errors: [{ code: 'RateExpired', message: 'The rate has expired' }] }, 400);
     s.order = shopOrder({ id: ID });
-    const res = await book(req(BOOK), params);
+    const res = await book(req(BOOK()), params);
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe('Amazon Shipping: The rate has expired');
     expect(s.order!.status).toBe('paid');
     expect(s.order!.amazon_booking_at).toBeNull();
     expect(s.shippedEmails).toEqual([]);
     purchaseAnswer = () => json({ payload: { shipmentId: 'SHP9', packageDocumentDetails: [{ trackingId: 'TRK9' }] } });
-    expect((await book(req(BOOK), params)).status).toBe(200);
+    expect((await book(req(BOOK()), params)).status).toBe(200);
     expect(s.order!.amazon_shipment_id).toBe('SHP9');
   });
 
   it('trusts the charge Amazon returns over the one the owner saw', async () => {
     purchaseAnswer = () => json({ payload: { shipmentId: 'SHP1', totalCharge: { value: 58.5, unit: 'INR' }, packageDocumentDetails: [{ trackingId: 'TRK1' }] } });
     s.order = shopOrder({ id: ID });
-    const body = await (await book(req(BOOK), params)).json();
+    const body = await (await book(req(BOOK()), params)).json();
     expect(body.order.amazon_charge_inr).toBe(58.5);
     expect(body.label).toBeUndefined();
   });
 
-  it('refuses a bad request before touching Amazon', async () => {
+  it('takes the service, price and parcel from the signed quote, not the browser', async () => {
     s.order = shopOrder({ id: ID });
-    expect((await book(req({ ...BOOK, chargeInr: -5 }), params)).status).toBe(400);
-    expect((await book(req({ ...BOOK, chargeInr: 'abc' }), params)).status).toBe(400);
-    expect((await book(req({ ...BOOK, rateId: '' }), params)).status).toBe(400);
-    expect((await book(req({ ...BOOK, requestToken: undefined }), params)).status).toBe(400);
-    expect((await book(req({ ...BOOK, serviceName: '' }), params)).status).toBe(400);
-    expect((await book(req({ ...BOOK, weight_kg: 0, length_cm: 1, breadth_cm: 1, height_cm: 1 }), params)).status).toBe(400);
-    expect(calls).toHaveLength(0);
+    const res = await book(req({ quote: quoteOf({ serviceName: 'Express', chargeInr: 95 }), serviceName: 'Hacked', chargeInr: 1, weight_kg: 19 }), params);
+    const { order } = await res.json();
+    expect(order).toMatchObject({ amazon_service_name: 'Express', amazon_charge_inr: 95, package_weight_kg: 0.7, package_dims_cm: '20 × 12 × 10' });
   });
 
-  it('says plainly not to book again when Amazon booked but the save failed', async () => {
+  it('refuses a missing, forged, other-order or expired quote before touching Amazon', async () => {
+    s.order = shopOrder({ id: ID });
+    const good = quoteOf()!;
+    const [body, sig] = good.split('.');
+    const forged = `${Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(body, 'base64url').toString()), chargeInr: 1 })).toString('base64url')}.${sig}`;
+    expect((await book(req({}), params)).status).toBe(400);
+    expect((await book(req({ quote: 'nonsense' }), params)).status).toBe(400);
+    expect((await book(req({ quote: forged }), params)).status).toBe(400);
+    expect((await book(req({ quote: quoteOf({ orderId: '11111111-1111-4111-8111-111111111111' }) }), params)).status).toBe(400);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 16 * 60 * 1000);
+    const late = await book(req({ quote: good }), params);
+    expect(late.status).toBe(400);
+    expect((await late.json()).error).toMatch(/expired/);
+    expect(calls).toHaveLength(0);
+    vi.restoreAllMocks();
+  });
+
+  it('says plainly not to book again when Amazon booked but the save failed, and holds the order', async () => {
     s.order = shopOrder({ id: ID });
     s.failSave = true;
-    const res = await book(req(BOOK), params);
+    const res = await book(req(BOOK()), params);
     expect(res.status).toBe(500);
     const msg = (await res.json()).error as string;
     expect(msg).toContain('SHP1');
     expect(msg).toContain("Don't book it again");
     expect(s.shippedEmails).toEqual([]);
+    // The hold never expires, and the shipment id and tracking number are recorded by the minimal second write.
+    expect(s.order!.amazon_booking_at).toBe('9999-12-31T00:00:00.000Z');
+    expect(s.order).toMatchObject({ amazon_shipment_id: 'SHP1', awb_code: 'TRK1', status: 'paid' });
+  });
+
+  describe.each([
+    ['a network error after sending', () => { throw new Error('ECONNRESET'); }],
+    ['a 5xx', () => json({ message: 'upstream' }, 503)],
+    ['a 200 with no shipment id', () => json({ payload: {} })],
+    ['a 200 with an unreadable body', () => new Response('<html>oops', { status: 200 })],
+    ['a 4xx with no errors body', () => json({}, 400)],
+  ] as [string, () => Response][])('an unclear answer: %s', (_name, answer) => {
+    it('keeps the order held, answers 500, and refuses a rebook until the owner clears the hold', async () => {
+      purchaseAnswer = answer;
+      s.order = shopOrder({ id: ID });
+      const res = await book(req(BOOK()), params);
+      expect(res.status).toBe(500);
+      expect((await res.json()).error).toContain('Amazon may have booked this — check Amazon Shipping before booking again');
+      expect(s.order!.status).toBe('paid');
+      expect(s.order!.amazon_booking_at).toBe('9999-12-31T00:00:00.000Z');
+      expect(s.shippedEmails).toEqual([]);
+
+      // Held: Amazon again and Shiprocket both refuse, buying nothing.
+      expect((await book(req(BOOK()), params)).status).toBe(409);
+      expect((await rates(req({}), params)).status).toBe(409);
+      expect((await shiprocket(req({}), params)).status).toBe(409);
+      expect(purchases()).toHaveLength(1);
+      expect(s.shiprocketCreates).toBe(0);
+
+      // "I checked Amazon: nothing was booked" clears it; then a booking can go.
+      const released = await releaseHold(req(), params);
+      expect(released.status).toBe(200);
+      expect((await released.json()).order.amazon_booking_at).toBeNull();
+      purchaseAnswer = () => json({ payload: { shipmentId: 'SHP2', packageDocumentDetails: [{ trackingId: 'TRK2' }] } });
+      expect((await book(req(BOOK()), params)).status).toBe(200);
+    });
+  });
+
+  it('a definite refusal (Amazon 4xx with reasons) is not held', async () => {
+    purchaseAnswer = () => json({ errors: [{ code: 'InvalidInput', message: 'Bad pincode' }] }, 400);
+    s.order = shopOrder({ id: ID });
+    expect((await book(req(BOOK()), params)).status).toBe(502);
+    expect(s.order!.amazon_booking_at).toBeNull();
+  });
+
+  it('a request that never went out (login refused) is not held', async () => {
+    (fetch as unknown as { mockImplementation: (f: unknown) => void }).mockImplementation((url: string) =>
+      Promise.resolve(url.includes('/auth/o2/token') ? json({ error: 'invalid_grant' }, 400) : json({})),
+    );
+    s.order = shopOrder({ id: ID });
+    expect((await book(req(BOOK()), params)).status).toBe(502);
+    expect(s.order!.amazon_booking_at).toBeNull();
+  });
+
+  it('does not save or email a booking whose reference names another order; it holds the order', async () => {
+    purchaseAnswer = () => json({ payload: { shipmentId: 'SHP7', packageDocumentDetails: [{ packageClientReferenceId: 'HIOC-S9999', trackingId: 'TRK7' }] } });
+    s.order = shopOrder({ id: ID });
+    const res = await book(req(BOOK()), params);
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toContain('SHP7');
+    expect(s.order!.status).toBe('paid');
+    expect(s.order!.amazon_shipment_id).toBeNull();
+    expect(s.order!.amazon_booking_at).toBe('9999-12-31T00:00:00.000Z');
+    expect(s.shippedEmails).toEqual([]);
+  });
+
+  it('accepts a booking whose reference matches', async () => {
+    purchaseAnswer = () => json({ payload: { shipmentId: 'SHP8', packageDocumentDetails: [{ packageClientReferenceId: 'HIOC-S1001', trackingId: 'TRK8' }] } });
+    s.order = shopOrder({ id: ID });
+    expect((await book(req(BOOK()), params)).status).toBe(200);
+  });
+
+  it('refuses while a Shiprocket send is in flight (the claim needs shiprocket_sending_at null or stale)', async () => {
+    s.order = shopOrder({ id: ID, shiprocket_sending_at: new Date().toISOString() });
+    expect((await book(req(BOOK()), params)).status).toBe(409);
+    expect(purchases()).toHaveLength(0);
+    s.order = shopOrder({ id: ID, shiprocket_sending_at: new Date(Date.now() - 3 * 60 * 1000).toISOString() });
+    expect((await book(req(BOOK()), params)).status).toBe(200);
   });
 
   it('refuses an order already with Shiprocket without calling Amazon', async () => {
     s.order = shopOrder({ id: ID, shiprocket_order_id: 'sr1' });
-    expect((await book(req(BOOK), params)).status).toBe(409);
+    expect((await book(req(BOOK()), params)).status).toBe(409);
     expect(calls).toHaveLength(0);
   });
 });
@@ -407,5 +550,91 @@ describe('POST cancel (Cancel order and refund)', () => {
     const body = await (await cancelOrder(req({}), params)).json();
     expect(cancels()).toHaveLength(0);
     expect(body.warning).toContain('already with Amazon Shipping');
+  });
+});
+
+describe('rates quote', () => {
+  it('gives every price a signed quote that books exactly that service, price and parcel', async () => {
+    s.order = shopOrder({ id: ID });
+    const { rates: list } = await (await rates(req({ weight_kg: 1.2, length_cm: 25, breadth_cm: 15, height_cm: 10 }), params)).json();
+    expect(list.map((r: { quote: string }) => typeof r.quote)).toEqual(['string', 'string']);
+    const express = list.find((r: { rateId: string }) => r.rateId === 'R2');
+    const res = await book(req({ quote: express.quote }), params);
+    expect(res.status).toBe(200);
+    expect((await res.json()).order).toMatchObject({ amazon_service_name: 'Express', amazon_charge_inr: 95, package_weight_kg: 1.2, package_dims_cm: '25 × 15 × 10' });
+    expect(purchases()[0].body).toMatchObject({ requestToken: 'rt-1', rateId: 'R2' });
+  });
+});
+
+describe('the two carriers refuse each other', () => {
+  it('Shiprocket send is refused while an Amazon booking is in flight, held or recorded, and sends nothing', async () => {
+    for (const patch of [
+      { amazon_booking_at: new Date().toISOString() },
+      { amazon_booking_at: '9999-12-31T00:00:00.000Z' },
+      { amazon_shipment_id: 'SHP1' },
+    ]) {
+      s.order = shopOrder({ id: ID, ...patch });
+      expect((await shiprocket(req({}), params)).status).toBe(409);
+    }
+    expect(s.shiprocketCreates).toBe(0);
+  });
+
+  it('the Shiprocket claim itself refuses a fresh Amazon claim the page has not read yet', async () => {
+    // The order read says free, but by the time the claim runs an Amazon booking has started.
+    s.order = shopOrder({ id: ID });
+    s.order = { ...s.order!, amazon_booking_at: new Date().toISOString() };
+    expect((await shiprocket(req({}), params)).status).toBe(409);
+    expect(s.shiprocketCreates).toBe(0);
+  });
+
+  it('Shiprocket still sends a normal order, and a stale Amazon claim does not block it', async () => {
+    s.order = shopOrder({ id: ID });
+    expect((await shiprocket(req({}), params)).status).toBe(200);
+    expect(s.shiprocketCreates).toBe(1);
+    s.order = shopOrder({ id: ID, amazon_booking_at: new Date(Date.now() - 3 * 60 * 1000).toISOString() });
+    expect((await shiprocket(req({}), params)).status).toBe(200);
+    expect(s.shiprocketCreates).toBe(2);
+  });
+
+  it('Shiprocket still works before the Amazon SQL is applied (the claim retries without the Amazon columns)', async () => {
+    s.amazonColumnsMissing = true;
+    s.order = shopOrder({ id: ID });
+    const res = await shiprocket(req({}), params);
+    expect(res.status).toBe(200);
+    expect(s.shiprocketCreates).toBe(1);
+    expect(s.order!.status).toBe('sent_to_shiprocket');
+  });
+});
+
+describe('POST amazon/release-hold', () => {
+  it('clears a hold only while paid with no Amazon shipment on record', async () => {
+    s.order = shopOrder({ id: ID, amazon_booking_at: '9999-12-31T00:00:00.000Z' });
+    const res = await releaseHold(req(), params);
+    expect(res.status).toBe(200);
+    expect((await res.json()).order).toMatchObject({ status: 'paid', amazon_booking_at: null });
+  });
+
+  it('refuses when there is no hold, a shipment is recorded, or the order has moved on', async () => {
+    s.order = shopOrder({ id: ID });
+    expect((await releaseHold(req(), params)).status).toBe(409);
+    s.order = shopOrder({ id: ID, amazon_booking_at: new Date().toISOString() }); // a live claim is not the sentinel
+    expect((await releaseHold(req(), params)).status).toBe(409);
+    s.order = shopOrder({ id: ID, amazon_booking_at: '9999-12-31T00:00:00.000Z', amazon_shipment_id: 'SHP1' });
+    expect((await releaseHold(req(), params)).status).toBe(409);
+    expect(s.order!.amazon_booking_at).toBe('9999-12-31T00:00:00.000Z');
+    s.order = shopOrder({ id: ID, status: 'shipped', amazon_booking_at: '9999-12-31T00:00:00.000Z' });
+    expect((await releaseHold(req(), params)).status).toBe(409);
+  });
+});
+
+describe('GET amazon/label safety', () => {
+  it('sets nosniff and refuses bytes that are not a PDF', async () => {
+    s.order = amazonShipped();
+    const ok = await label(new Request('http://localhost/x'), params);
+    expect(ok.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    docContents = Buffer.from('<html><script>alert(1)</script>').toString('base64');
+    const bad = await label(new Request('http://localhost/x'), params);
+    expect(bad.status).toBe(502);
+    expect(bad.headers.get('Content-Type')).not.toBe('application/pdf');
   });
 });
