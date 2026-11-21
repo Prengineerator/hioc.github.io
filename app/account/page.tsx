@@ -226,7 +226,7 @@ export default function AccountHomePage() {
 
         <div className={TILE_CLASS}>
           <Link
-            href="/rewards"
+            href="/account/rewards"
             className="flex flex-1 flex-col justify-between gap-2 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
           >
             <span className="flex items-center gap-2">
@@ -276,7 +276,7 @@ export default function AccountHomePage() {
         </Link>
         {/* HIOC Ritual (docs/COFFEE-PASS-SPEC.md): only while the feature is on. */}
         {flags.coffeePass ? (
-          <Link href="/ritual" className="inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline">
+          <Link href="/account/ritual" className="inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline">
             {PASS_PROGRAM_NAME}
           </Link>
         ) : null}

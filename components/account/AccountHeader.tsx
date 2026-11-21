@@ -11,9 +11,9 @@ const LINKS = [
   { href: '/account', label: 'Overview' },
   { href: '/account/orders', label: 'Orders' },
   { href: '/account/favorites', label: 'Favourites' },
-  { href: '/rewards', label: 'Rewards' },
+  { href: '/account/rewards', label: 'Rewards' },
   // HIOC Ritual: only while the feature is on.
-  ...(flags.coffeePass ? [{ href: '/ritual', label: PASS_SHORT_NAME }] : []),
+  ...(flags.coffeePass ? [{ href: '/account/ritual', label: PASS_SHORT_NAME }] : []),
   { href: '/account/profile', label: 'Profile' },
 ];
 
