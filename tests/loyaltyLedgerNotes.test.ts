@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The `note` written on a NEW ledger row is shown to the customer on /rewards.
+// The `note` written on a NEW ledger row is shown to the customer on /account/rewards.
 // Existing rows keep whatever they were written with; only new rows speak in
 // Beanies.
 

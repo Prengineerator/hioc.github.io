@@ -50,7 +50,7 @@ const notePanel = 'rounded-md border border-tan bg-surface px-4 py-3 text-sm tex
  * The interactive part of /ritual: choosing a plan and a drink and seeing the
  * price (RitualBuilder), the purchase (checkout, Razorpay, waiting for the pass to
  * appear), and "Your Ritual" for a signed-in customer. The hero, "How it works" and the terms are
- * static and render on the server around it (app/ritual/page.tsx).
+ * static and render on the server around it (components/passes/RitualPage.tsx).
  */
 export function RitualExperience({ signedIn: signedInAtLoad }: { signedIn: boolean }) {
   const offerState = useRitualOffer({ fresh: true });
