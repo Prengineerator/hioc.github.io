@@ -1,15 +1,14 @@
 // /account/ritual — HIOC Ritual inside the account shell (ACC nav stays visible).
-// The /account layout already guards the session; this page just mirrors
-// the standalone /ritual page, with the flag guard still in place.
+// The one real Ritual page for signed-in customers: /ritual redirects here. The
+// /account layout guards the session (and 404s signed-out visitors while the
+// flag is off); the flag guard is repeated here for signed-in ones.
 
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getAuthUser } from '@/lib/api/auth';
 import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
-import { HowItWorks } from '@/components/passes/HowItWorks';
-import { RitualExperience } from '@/components/passes/RitualExperience';
-import { RitualTerms } from '@/components/passes/RitualTerms';
+import { RitualPage } from '@/components/passes/RitualPage';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,22 +19,8 @@ export const metadata: Metadata = {
 
 export default async function AccountRitualPage() {
   if (!flags.coffeePass) notFound();
+  // The layout already gates the session; read it here too (request-cached, so
+  // no extra round trip) rather than assume it.
   const user = await getAuthUser();
-
-  return (
-    <>
-      <header>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-tan-dark">Prepaid coffee plans</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-charcoal md:text-4xl">{PASS_PROGRAM_NAME}</h1>
-        <p className="mt-3 max-w-xl text-muted">
-          Your daily cup, sorted. Prepay your coffee and save — then just order as usual and we&apos;ll
-          count the cups for you.
-        </p>
-      </header>
-
-      <RitualExperience signedIn={user !== null} />
-      <HowItWorks />
-      <RitualTerms />
-    </>
-  );
+  return <RitualPage signedIn={user !== null} />;
 }

@@ -99,7 +99,7 @@ export function orderTypeLabel(order: Pick<Order, 'order_type' | 'table_id'>): s
 
 // ---------------------------------------------------------------------------
 // Shop orders (docs/SHOP-V2-SPEC.md E4). Pure, client-safe: the account home,
-// the orders page, the confirmation page and /rewards all word a shop order
+// the orders page, the confirmation page and /account/rewards all word a shop order
 // the same way.
 // ---------------------------------------------------------------------------
 
@@ -172,7 +172,7 @@ export function beaniesWorth(balance: number, inrPerPoint: number): string {
 
 /**
  * Finds the shop order number ("HIOC-S1004") inside a Beanies ledger note and
- * splits the note around it, so /rewards can show the number in mono as a link.
+ * splits the note around it, so /account/rewards can show the number in mono as a link.
  * Null when the note has none.
  */
 export function splitShopRefFromNote(note: string | null | undefined): { before: string; ref: string; after: string } | null {

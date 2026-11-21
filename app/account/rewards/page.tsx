@@ -1,7 +1,8 @@
-// /account/rewards — Rewards inside the account shell (ACC nav stays visible).
-// The /account layout already guards the session; this page trusts it and
-// renders the same content as the standalone /rewards page, minus its own
-// session-gate (the layout handles that).
+// Customer Rewards page (LOY-1/CUS-067), inside the account shell (ACC nav stays
+// visible). The one real Rewards page: /rewards redirects here. Server component:
+// reads the caller's session + loyalty ledger directly (no client fetch waterfall
+// needed for a read-only, per-request-dynamic page). The /account layout already
+// sends signed-out visitors to login (next=/account/rewards).
 
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -86,6 +87,8 @@ function HowItWorks({ config }: { config: LoyaltyConfig | null }) {
       </p>
     );
   }
+  // points_per_inr × 100 is both the % back and the points per ₹100; rounded to
+  // dodge float noise (0.07 × 100 = 7.000000000000001).
   const earnPct = Number((Number(config.points_per_inr) * 100).toFixed(2));
   return (
     <div className="rounded-md border border-line bg-cream p-6 shadow-sm">
@@ -114,6 +117,8 @@ function TransactionRow({ tx }: { tx: LoyaltyTransaction }) {
     month: 'short',
     year: 'numeric',
   });
+  // A shop ledger row (docs/SHOP-V2-SPEC.md E5) carries shop_order_id: badge it
+  // (icon + text) and show the order number from the note, linked to the order.
   const shopNote = tx.shop_order_id ? splitShopRefFromNote(tx.note) : null;
   return (
     <li className="flex items-center justify-between gap-3 rounded-md border border-line bg-cream px-4 py-3">

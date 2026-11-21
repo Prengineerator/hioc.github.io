@@ -68,7 +68,7 @@ export function LoginForm({ initialNext }: { initialNext: string | null }) {
   // No explicit `?next=` means the visitor just navigated to /login
   // directly: send them to their orders (what customers come back for),
   // not "/". An explicit `next` (e.g. /account/orders from the account
-  // gate, or /rewards from the rewards page) always wins.
+  // gate, or /account/rewards from the rewards page) always wins.
   const next = initialNext ?? '/account/orders';
   // "Back to menu" goes back to where they were headed (e.g. /checkout) when
   // that's a safe internal path, otherwise to the menu, not the home page.
