@@ -35,7 +35,7 @@ export default async function LoginPage({
   const user = await getAuthUser();
   if (user) {
     // Already logged in — go straight to what `next` asked for (e.g.
-    // /account/orders from the account gate, /rewards from the rewards
+    // /account/orders from the account gate, /account/rewards from the rewards
     // page), or /account when nothing specific was asked for.
     redirect(next ?? '/account');
   }

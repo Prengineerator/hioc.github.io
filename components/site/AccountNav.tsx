@@ -13,11 +13,11 @@ interface SessionUser {
 }
 
 // The header avatar menu (docs/SHOP-V2-SPEC.md E4): every account destination is
-// one tap from here. Beanies goes to /rewards.
+// one tap from here.
 const ACCOUNT_LINKS = [
   { href: '/account/orders', label: 'Orders' },
   { href: '/account/addresses', label: 'Addresses' },
-  { href: '/rewards', label: 'Beanies' },
+  { href: '/account/rewards', label: 'Beanies' },
   { href: '/account/profile', label: 'Profile' },
 ] as const;
 
