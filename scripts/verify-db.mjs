@@ -1282,6 +1282,23 @@ async function checkCashCounts() {
   if (perStaff.ok) pass('payroll_runs.user_id exists (payroll finalized per staffer)');
   else fail('payroll_runs.user_id exists (payroll finalized per staffer)', errKind(perStaff) === 'no_column' ? 'apply supabase/2026-11-payroll-per-staff.sql' : errText(perStaff));
 
+  // Staff salary advances (2026-11-staff-advances.sql): the amount actually
+  // deducted on a finalized line, and the owner-only advances table.
+  const advLine = await rest('/payroll_run_lines?select=advance_inr&limit=1');
+  if (advLine.ok) pass('payroll_run_lines.advance_inr exists');
+  else fail('payroll_run_lines.advance_inr exists', errKind(advLine) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advLine));
+
+  // staff_advances is owner-only. The anon probe does not need a row: the
+  // REVOKE makes PostgREST refuse anon even on an empty table.
+  const advTable = await rest('/staff_advances?select=id&limit=1');
+  if (advTable.ok) pass('staff_advances exists');
+  else fail('staff_advances exists', errKind(advTable) === 'no_table' || errKind(advTable) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advTable));
+  if (advTable.ok) {
+    const anonAdv = await rest('/staff_advances?select=id&limit=1', { key: ANON });
+    if (!anonAdv.ok) pass('staff_advances is not readable by the anon key', `anon was refused (${errText(anonAdv)})`);
+    else fail('staff_advances is not readable by the anon key', 'RLS/REVOKE is missing: apply supabase/2026-11-staff-advances.sql');
+  }
+
   for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages']) {
     const r = await rest(`/${table}?select=id&limit=1`);
     if (!r.ok) {

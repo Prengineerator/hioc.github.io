@@ -242,3 +242,46 @@ describe('renderPayslipEmail', () => {
     expect(text).toContain('Payslip for Staff');
   });
 });
+
+describe('renderPayslipEmail — salary advance', () => {
+  it('shows the advance as its own negative line and still adds up to net pay', () => {
+    const { html, text } = renderPayslipEmail(
+      line({
+        base_pay_inr: 18_000,
+        advance_inr: 5000,
+        net_pay_inr: 13_000,
+        detail: { net_before_deductions_inr: 18_000, advance_outstanding_inr: 5000, advance_carried_inr: 0 },
+      }),
+      run,
+      'Ravi',
+    );
+    expect(text).toContain('Pay for hours worked (180h 0m): ₹18,000');
+    expect(text).toContain('Salary advance: −₹5,000');
+    expect(text).toContain('Net pay: ₹13,000');
+    expect(text).not.toContain('still to recover');
+    expect(html).toContain('Salary advance');
+    expect(html).toContain('color:#b42318;');
+  });
+
+  it('says what is still to recover next month, without making it a deduction', () => {
+    const { html, text } = renderPayslipEmail(
+      line({
+        advance_inr: 9000,
+        net_pay_inr: 0,
+        detail: { net_before_deductions_inr: 9000, advance_outstanding_inr: 12_000, advance_carried_inr: 3000 },
+      }),
+      run,
+      'Ravi',
+    );
+    expect(text).toContain('Salary advance: −₹9,000');
+    expect(text).toContain('Advance still to recover next month: ₹3,000');
+    expect(html).toContain('Advance still to recover next month: ₹3,000');
+    expect(text).toContain('Net pay: ₹0');
+  });
+
+  it('shows no advance lines when there is none', () => {
+    const { text } = renderPayslipEmail(line(), run, 'Ravi');
+    expect(text).not.toContain('Salary advance');
+    expect(text).not.toContain('still to recover');
+  });
+});

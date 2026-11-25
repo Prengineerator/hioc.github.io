@@ -33,6 +33,15 @@ interface DayInput {
   isLate: boolean;
 }
 
+interface AdvanceItem {
+  id: string;
+  given_on: string;
+  amount_inr: number;
+  note: string;
+  /** Counted by a finalized month — cannot be removed until that month is reversed. */
+  locked: boolean;
+}
+
 interface Line {
   user_id: string;
   name: string;
@@ -61,6 +70,13 @@ interface Line {
   appliedDeductions: { late: boolean; cashShortage: boolean };
   netBeforeDeductionsInr: number;
   deductionsClamped: boolean;
+  /** Advance still owed going into this month (draft: before taking; finalized: frozen). */
+  advanceOutstandingInr: number;
+  /** Advance taken off (finalized lines only; a draft previews it via settle()). */
+  advanceInr: number;
+  advanceCarriedInr: number;
+  advances: AdvanceItem[];
+  advanceCarriedFromEarlierInr: number;
   netPayInr: number;
   unconfigured: boolean;
   blocked: boolean;
@@ -115,11 +131,24 @@ function monthLabel(month: string): string {
  * shown before finalizing is the number finalize freezes.
  */
 function netWith(l: Line, c: Choice): number {
-  if (l.finalized) return l.netPayInr;
+  return settle(l, c).net;
+}
+
+/**
+ * Mirrors computePayrollLine's order: earned → ticked deductions (clamped at 0)
+ * → advance = min(outstanding, what is left). A finalized line is read back.
+ */
+function settle(l: Line, c: Choice): { net: number; advance: number; carried: number } {
+  if (l.finalized) {
+    return { net: l.netPayInr, advance: l.advanceInr ?? 0, carried: l.advanceCarriedInr ?? 0 };
+  }
   const taken =
     (c.late ? l.proposedDeductions.lateInr : 0) + (c.cash ? l.proposedDeductions.cashShortageInr : 0);
   const raw = l.netBeforeDeductionsInr - taken;
-  return taken > 0 && raw < 0 ? 0 : raw;
+  const afterDeductions = taken > 0 && raw < 0 ? 0 : raw;
+  const outstanding = l.advanceOutstandingInr ?? 0;
+  const advance = Math.min(outstanding, Math.max(0, afterDeductions));
+  return { net: afterDeductions - advance, advance, carried: outstanding - advance };
 }
 
 function takenWith(l: Line, c: Choice): number {
@@ -189,11 +218,12 @@ export function PayrollScreen() {
     return data.lines.reduce(
       (a, l) => ({
         net: a.net + netWith(l, choiceFor(l.user_id)),
+        advances: a.advances + settle(l, choiceFor(l.user_id)).advance,
         proposed: a.proposed + (l.finalized ? 0 : proposedTotal(l)),
         people: a.people + (l.unconfigured ? 0 : 1),
         finalized: a.finalized + (l.finalized ? 1 : 0),
       }),
-      { net: 0, proposed: 0, people: 0, finalized: 0 },
+      { net: 0, advances: 0, proposed: 0, people: 0, finalized: 0 },
     );
   }, [data, choiceFor]);
 
@@ -260,6 +290,8 @@ export function PayrollScreen() {
       'Late deducted',
       'Cash shortage (proposed)',
       'Cash shortage deducted',
+      'Advance deducted',
+      'Advance carried to next month',
       'Net pay',
     ];
     const rows = data.lines.map((l) => {
@@ -287,6 +319,8 @@ export function PayrollScreen() {
         late ? 'Yes' : 'No',
         l.proposedDeductions.cashShortageInr,
         cash ? 'Yes' : 'No',
+        settle(l, c).advance,
+        settle(l, c).carried,
         netWith(l, c),
       ];
     });
@@ -341,10 +375,11 @@ export function PayrollScreen() {
           ) : null}
 
           {totals ? (
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
               <Stat label="Finalized" value={`${totals.finalized} of ${data.lines.length}`} />
               <Stat label="People paid" value={String(totals.people)} />
               <Stat label="Deductions proposed" value={rupees(totals.proposed)} />
+              <Stat label="Advances this month" value={rupees(totals.advances)} />
               <Stat label="Total payout" value={rupees(totals.net)} strong />
             </div>
           ) : null}
@@ -360,7 +395,7 @@ export function PayrollScreen() {
             renderRowAfter={(l) =>
               expanded === l.user_id ? (
                 <tr className="border-b border-[#f0f0f0] bg-[#faf7f4]">
-                  <td colSpan={7} className="px-3 py-3">
+                  <td colSpan={8} className="px-3 py-3">
                     <Derivation line={l} />
                     {l.finalized ? (
                       <FinalizedPanel
@@ -368,6 +403,7 @@ export function PayrollScreen() {
                         busy={busyUser === l.user_id}
                         error={rowError[l.user_id] ?? ''}
                         onReverse={(reason) => reverse(l, reason)}
+                        onAdvanceChanged={load}
                       />
                     ) : (
                       <DraftPanel
@@ -379,6 +415,7 @@ export function PayrollScreen() {
                         anyBusy={busyUser !== null}
                         error={rowError[l.user_id] ?? ''}
                         onFinalize={() => finalize(l)}
+                        onAdvanceChanged={load}
                       />
                     )}
                   </td>
@@ -472,6 +509,26 @@ export function PayrollScreen() {
                 },
               },
               {
+                key: 'advance',
+                header: 'Advance',
+                filter: 'number',
+                align: 'right',
+                value: (l) => settle(l, choiceFor(l.user_id)).advance,
+                cellClassName: 'whitespace-nowrap',
+                render: (l) => {
+                  const { advance, carried } = settle(l, choiceFor(l.user_id));
+                  if (advance <= 0 && carried <= 0) return '—';
+                  return (
+                    <>
+                      {advance > 0 ? <span className="text-red-700">−{rupees(advance)}</span> : '—'}
+                      {carried > 0 ? (
+                        <span className="block text-[11px] text-muted">{rupees(carried)} to next month</span>
+                      ) : null}
+                    </>
+                  );
+                },
+              },
+              {
                 key: 'net',
                 header: 'Net',
                 filter: 'number',
@@ -483,7 +540,8 @@ export function PayrollScreen() {
             ]}
           />
           <p className="mt-2 text-xs text-muted">
-            {monthLabel(month)} · Earned = base + overtime + adjustments, before any deduction.
+            {monthLabel(month)} · Earned = base + overtime + adjustments, before any deduction or
+            advance.
           </p>
         </>
       ) : null}
@@ -500,6 +558,7 @@ function DraftPanel({
   anyBusy,
   error,
   onFinalize,
+  onAdvanceChanged,
 }: {
   line: Line;
   month: string;
@@ -509,10 +568,11 @@ function DraftPanel({
   anyBusy: boolean;
   error: string;
   onFinalize: () => void;
+  onAdvanceChanged: () => void;
 }) {
   const { lateInr, cashShortageInr } = line.proposedDeductions;
   const taken = takenWith(line, choice);
-  const net = netWith(line, choice);
+  const { net, advance, carried } = settle(line, choice);
   const cannot = line.blocked
     ? 'Clear the unapproved days on the attendance sheet first.'
     : line.unconfigured
@@ -520,6 +580,8 @@ function DraftPanel({
       : '';
 
   return (
+    <>
+    <AdvancesBox line={line} advance={advance} carried={carried} onChanged={onAdvanceChanged} />
     <div className="mt-4 rounded-md border border-line bg-white p-3">
       <h3 className="text-sm font-bold text-charcoal">Deductions</h3>
       {lateInr === 0 && cashShortageInr === 0 ? (
@@ -573,7 +635,8 @@ function DraftPanel({
 
       <p className="mt-3 text-sm text-charcoal">
         Earned {rupees(line.netBeforeDeductionsInr)}
-        {taken > 0 ? ` − deductions ${rupees(taken)}` : ''} = <strong>Net {rupees(net)}</strong>
+        {taken > 0 ? ` − deductions ${rupees(taken)}` : ''}
+        {advance > 0 ? ` − advance ${rupees(advance)}` : ''} = <strong>Net {rupees(net)}</strong>
         {taken > 0 && net === 0 ? (
           <span className="ml-1 text-amber-800">
             (deductions exceed this month&apos;s pay — net is held at ₹0 and the rest is not carried over)
@@ -597,6 +660,173 @@ function DraftPanel({
       </p>
       {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
     </div>
+    </>
+  );
+}
+
+function shortDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
+}
+
+/**
+ * The Advances box: what carried in, this month's advances (with Remove), an
+ * Add form, and one line adding it up. After an add or remove the month is
+ * reloaded so every number on the row follows.
+ */
+function AdvancesBox({
+  line,
+  advance,
+  carried,
+  onChanged,
+}: {
+  line: Line;
+  advance: number;
+  carried: number;
+  onChanged: () => void;
+}) {
+  const today = istDateIso();
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(today);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const monthTotal = line.advances.reduce((s, a) => s + a.amount_inr, 0);
+
+  async function call(method: 'POST' | 'DELETE', payload: Record<string, unknown>): Promise<boolean> {
+    setBusy(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/owner/payroll/advances', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        setErr((await res.json().catch(() => ({}))).error ?? 'Could not save.');
+        return false;
+      }
+      onChanged();
+      return true;
+    } catch {
+      setErr('Could not save.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    const n = Number(amount);
+    if (!Number.isInteger(n) || n < 1) {
+      setErr('Enter the amount in whole rupees.');
+      return;
+    }
+    const ok = await call('POST', { user_id: line.user_id, amount_inr: n, given_on: date, note });
+    if (ok) {
+      setAmount('');
+      setNote('');
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-md border border-line bg-white p-3">
+      <h3 className="text-sm font-bold text-charcoal">Advances</h3>
+      {line.advanceCarriedFromEarlierInr > 0 ? (
+        <p className="mt-1 text-sm text-charcoal">
+          Carried from earlier <strong>{rupees(line.advanceCarriedFromEarlierInr)}</strong>
+        </p>
+      ) : null}
+      {line.advances.length === 0 ? (
+        <p className="mt-1 text-sm text-muted">No advances dated this month.</p>
+      ) : (
+        <ul className="mt-2 space-y-1">
+          {line.advances.map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-charcoal">
+              <span className="w-14 shrink-0">{shortDate(a.given_on)}</span>
+              <strong>{rupees(a.amount_inr)}</strong>
+              <span className="min-w-0 flex-1 break-words text-muted">{a.note}</span>
+              {line.finalized && !a.locked ? (
+                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">
+                  comes off next month
+                </span>
+              ) : null}
+              <button
+                type="button"
+                disabled={busy || a.locked}
+                title={a.locked ? 'Already counted in a finalized month. Reverse that month first.' : undefined}
+                onClick={() => void call('DELETE', { id: a.id })}
+                className="rounded-md border border-red-700 px-2 py-0.5 text-xs font-bold text-red-700 disabled:opacity-40"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-end gap-2">
+        <label className="text-xs text-muted">
+          Amount ₹
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={100000}
+            step={1}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="mt-0.5 block w-28 rounded-md border border-[#ddd] px-2 py-1.5 text-sm text-charcoal"
+          />
+        </label>
+        <label className="text-xs text-muted">
+          Date
+          <input
+            type="date"
+            max={today}
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="mt-0.5 block rounded-md border border-[#ddd] px-2 py-1.5 text-sm text-charcoal"
+          />
+        </label>
+        <label className="min-w-[8rem] flex-1 text-xs text-muted">
+          Note (optional)
+          <input
+            type="text"
+            maxLength={200}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. UPI, rent"
+            className="mt-0.5 block w-full rounded-md border border-[#ddd] px-2 py-1.5 text-sm text-charcoal"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy || !amount}
+          onClick={() => void add()}
+          className="rounded-md bg-tan-dark px-4 py-1.5 text-sm font-bold text-cream disabled:opacity-50"
+        >
+          {busy ? 'Saving…' : 'Add advance'}
+        </button>
+      </div>
+      {line.finalized ? (
+        <p className="mt-2 text-xs text-muted">
+          Advances added now come off the next month that isn&apos;t finalized yet.
+        </p>
+      ) : null}
+      {err ? <p className="mt-2 text-sm text-red-700">{err}</p> : null}
+
+      <p className="mt-3 text-sm text-charcoal">
+        {line.finalized ? 'Advance owed when finalized' : 'Advance to take off'}{' '}
+        {rupees(line.advanceOutstandingInr)}
+        {' · '}taken this month {rupees(advance)} · to next month {rupees(carried)}
+      </p>
+    </div>
   );
 }
 
@@ -605,17 +835,26 @@ function FinalizedPanel({
   busy,
   error,
   onReverse,
+  onAdvanceChanged,
 }: {
   line: Line;
   busy: boolean;
   error: string;
   onReverse: (reason: string) => void;
+  onAdvanceChanged: () => void;
 }) {
   const [reason, setReason] = useState('');
   const runId = line.run?.id ?? null;
   const { lateInr, cashShortageInr } = line.proposedDeductions;
 
   return (
+    <>
+    <AdvancesBox
+      line={line}
+      advance={line.advanceInr ?? 0}
+      carried={line.advanceCarriedInr ?? 0}
+      onChanged={onAdvanceChanged}
+    />
     <div className="mt-4 rounded-md border border-green-300 bg-white p-3">
       <h3 className="text-sm font-bold text-green-900">
         Finalized{line.run?.finalized_at ? ` ${payslipSentAtLabel(line.run.finalized_at)}` : ''}
@@ -643,6 +882,8 @@ function FinalizedPanel({
             {line.adjustmentReason ? ` — ${line.adjustmentReason}` : ''}
           </li>
         ) : null}
+        {line.advanceInr > 0 ? <li>Salary advance −{rupees(line.advanceInr)}</li> : null}
+        {line.advanceCarriedInr > 0 ? <li>{rupees(line.advanceCarriedInr)} carried to next month</li> : null}
         <li>
           <strong>Net {rupees(line.netPayInr)}</strong>
         </li>
@@ -679,6 +920,7 @@ function FinalizedPanel({
       </div>
       {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
     </div>
+    </>
   );
 }
 

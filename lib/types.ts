@@ -1102,8 +1102,28 @@ export interface PayrollRunLine {
    * net_pay_inr (clamped at 0, never negative — see detail.deductions_clamped).
    */
   cash_shortage_inr: number;
+  /**
+   * Salary advance actually taken off in this finalized line (0/absent when
+   * none). Needs payroll_run_lines.advance_inr (supabase/2026-11-staff-advances.sql);
+   * absent on rows read before that column exists.
+   */
+  advance_inr?: number;
   net_pay_inr: number;
   detail: Record<string, unknown>;
+}
+
+/** A salary advance the owner gave a staffer (staff_advances; soft-deleted via removed_at). */
+export interface StaffAdvance {
+  id: string;
+  user_id: string;
+  amount_inr: number;
+  /** IST calendar date, YYYY-MM-DD. */
+  given_on: string;
+  note: string;
+  created_by: string | null;
+  created_at: string;
+  removed_at: string | null;
+  removed_by: string | null;
 }
 
 // ---------------------------------------------------------------------------
