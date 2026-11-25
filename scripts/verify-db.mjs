@@ -1288,12 +1288,22 @@ async function checkCashCounts() {
   if (advLine.ok) pass('payroll_run_lines.advance_inr exists');
   else fail('payroll_run_lines.advance_inr exists', errKind(advLine) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advLine));
 
-  for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages', 'staff_advances']) {
+  // staff_advances is owner-only. The anon probe does not need a row: the
+  // REVOKE makes PostgREST refuse anon even on an empty table.
+  const advTable = await rest('/staff_advances?select=id&limit=1');
+  if (advTable.ok) pass('staff_advances exists');
+  else fail('staff_advances exists', errKind(advTable) === 'no_table' || errKind(advTable) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advTable));
+  if (advTable.ok) {
+    const anonAdv = await rest('/staff_advances?select=id&limit=1', { key: ANON });
+    if (!anonAdv.ok) pass('staff_advances is not readable by the anon key', `anon was refused (${errText(anonAdv)})`);
+    else fail('staff_advances is not readable by the anon key', 'RLS/REVOKE is missing: apply supabase/2026-11-staff-advances.sql');
+  }
+
+  for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages']) {
     const r = await rest(`/${table}?select=id&limit=1`);
     if (!r.ok) {
       const kind = errKind(r);
-      const fix = table === 'staff_advances' ? 'supabase/2026-11-staff-advances.sql' : 'supabase/2026-09-cash-counts.sql';
-      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? `apply ${fix}` : errText(r));
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(r));
       continue;
     }
     pass(`${table} exists`);
