@@ -3,6 +3,7 @@ import { getOwnerUser } from '@/lib/api/auth';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse, parseJsonBody } from '@/lib/api/http';
 import { istDateIso } from '@/lib/api/date';
+import { isUuid } from '@/lib/api/constants';
 import { isAdvanceCounted } from '@/lib/payroll/advances';
 
 export const dynamic = 'force-dynamic';
@@ -18,8 +19,9 @@ const MISSING_TABLE = 'Run supabase/2026-11-staff-advances.sql on Hioc India fir
 
 function isMissingRelation(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error) return false;
-  if (error.code === '42P01' || error.code === 'PGRST205') return true;
-  return /relation .* does not exist|could not find the table|schema cache/i.test(error.message ?? '');
+  // Codes only: PGRST002 ("schema cache", PostgREST cannot reach the database)
+  // is an outage, not a missing table.
+  return error.code === '42P01' || error.code === 'PGRST205';
 }
 
 function isRealDate(s: string): boolean {
@@ -37,7 +39,7 @@ export async function POST(request: Request) {
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
 
   const userId = typeof body.user_id === 'string' ? body.user_id : '';
-  if (!userId) return errorResponse(400, 'user_id is required.');
+  if (!isUuid(userId)) return errorResponse(400, 'user_id is required.');
 
   const amount = body.amount_inr;
   if (typeof amount !== 'number' || !Number.isInteger(amount) || amount < 1 || amount > MAX_ADVANCE_INR) {
@@ -89,7 +91,7 @@ export async function DELETE(request: Request) {
   const body = await parseJsonBody(request);
   if (!body) return errorResponse(400, 'Request body must be a JSON object');
   const id = typeof body.id === 'string' ? body.id : '';
-  if (!id) return errorResponse(400, 'id is required.');
+  if (!isUuid(id)) return errorResponse(400, 'id is required.');
 
   const admin = createAdminSupabaseClient();
 

@@ -176,6 +176,7 @@ vi.mock('@/lib/supabase-server', () => ({
           return chain;
         },
         gt: () => chain,
+        range: () => chain,
         lt: () => chain,
         neq: () => chain,
         is: (c: string, v: unknown) => {

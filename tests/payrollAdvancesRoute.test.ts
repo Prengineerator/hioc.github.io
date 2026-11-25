@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // advance already taken off a finalized month cannot be removed.
 
 type Row = Record<string, unknown>;
+const UID = '11111111-1111-4111-8111-111111111111';
+const AID = '22222222-2222-4222-8222-222222222222';
 type PgError = { code?: string; message?: string };
 
 const state: {
@@ -43,9 +45,9 @@ vi.mock('@/lib/supabase-server', () => ({
         if (table === 'staff_advances') {
           if (op === 'insert') {
             if (state.insertError) return { data: null, error: state.insertError };
-            return { data: { id: 'adv-1', ...state.inserted }, error: null };
+            return { data: { id: AID, ...state.inserted }, error: null };
           }
-          if (op === 'update') return { data: state.advance && !state.advance.removed_at ? { id: 'adv-1' } : null, error: null };
+          if (op === 'update') return { data: state.advance && !state.advance.removed_at ? { id: AID } : null, error: null };
           if (state.selectError) return { data: null, error: state.selectError };
           return { data: state.advance, error: null };
         }
@@ -95,12 +97,12 @@ function req(method: string, body: unknown) {
 }
 
 const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
-const good = { user_id: 'staff-1', amount_inr: 3000, given_on: today, note: ' UPI, rent ' };
+const good = { user_id: UID, amount_inr: 3000, given_on: today, note: ' UPI, rent ' };
 
 beforeEach(() => {
   state.owner = { id: 'owner-1' };
-  state.profile = { id: 'staff-1', role: 'staff' };
-  state.advance = { id: 'adv-1', user_id: 'staff-1', given_on: '2026-11-08', created_at: '2026-11-08T06:00:00Z', removed_at: null };
+  state.profile = { id: UID, role: 'staff' };
+  state.advance = { id: AID, user_id: UID, given_on: '2026-11-08', created_at: '2026-11-08T06:00:00Z', removed_at: null };
   state.finalizedRuns = [];
   state.insertError = null;
   state.selectError = null;
@@ -113,7 +115,7 @@ describe('advances route — authorization', () => {
   it('403s a non-owner on POST and DELETE', async () => {
     state.owner = null;
     expect((await POST(req('POST', good))).status).toBe(403);
-    expect((await DELETE(req('DELETE', { id: 'adv-1' }))).status).toBe(403);
+    expect((await DELETE(req('DELETE', { id: AID }))).status).toBe(403);
     expect(state.inserted).toBeNull();
     expect(state.updated).toBeNull();
   });
@@ -124,12 +126,22 @@ describe('advances route — POST', () => {
     const res = await POST(req('POST', good));
     expect(res.status).toBe(200);
     expect(state.inserted).toEqual({
-      user_id: 'staff-1',
+      user_id: UID,
       amount_inr: 3000,
       given_on: today,
       note: 'UPI, rent',
       created_by: 'owner-1',
     });
+  });
+
+  it('400s on a user_id that is not a UUID', async () => {
+    expect((await POST(req('POST', { ...good, user_id: 'staff-1' }))).status).toBe(400);
+    expect(state.inserted).toBeNull();
+  });
+
+  it('does not treat PGRST002 (an outage) as a missing table', async () => {
+    state.insertError = { code: 'PGRST002', message: 'Could not query the database for the schema cache. Retrying.' };
+    expect((await POST(req('POST', good))).status).toBe(500);
   });
 
   it('allows a missing note', async () => {
@@ -185,7 +197,7 @@ describe('advances route — POST', () => {
 
 describe('advances route — DELETE', () => {
   it('soft-removes an advance and records who', async () => {
-    const res = await DELETE(req('DELETE', { id: 'adv-1' }));
+    const res = await DELETE(req('DELETE', { id: AID }));
     expect(res.status).toBe(200);
     expect(state.updated?.removed_by).toBe('owner-1');
     expect(typeof state.updated?.removed_at).toBe('string');
@@ -193,44 +205,48 @@ describe('advances route — DELETE', () => {
 
   it('404s when the advance is missing or already removed', async () => {
     state.advance = null;
-    expect((await DELETE(req('DELETE', { id: 'nope' }))).status).toBe(404);
-    state.advance = { id: 'adv-1', user_id: 'staff-1', given_on: '2026-11-08', created_at: '2026-11-08T06:00:00Z', removed_at: '2026-11-09T00:00:00Z' };
-    expect((await DELETE(req('DELETE', { id: 'adv-1' }))).status).toBe(404);
+    expect((await DELETE(req('DELETE', { id: '33333333-3333-4333-8333-333333333333' }))).status).toBe(404);
+    state.advance = { id: AID, user_id: UID, given_on: '2026-11-08', created_at: '2026-11-08T06:00:00Z', removed_at: '2026-11-09T00:00:00Z' };
+    expect((await DELETE(req('DELETE', { id: AID }))).status).toBe(404);
     expect(state.updated).toBeNull();
   });
 
   it('409s once a finalized month on or after its date has taken it off', async () => {
     state.finalizedRuns = [
-      { id: 'run-1', user_id: 'staff-1', period_end: '2026-11-30', finalized_at: '2026-12-01T00:00:00Z' },
+      { id: 'run-1', user_id: UID, period_end: '2026-11-30', finalized_at: '2026-12-01T00:00:00Z' },
     ];
-    const res = await DELETE(req('DELETE', { id: 'adv-1' }));
+    const res = await DELETE(req('DELETE', { id: AID }));
     expect(res.status).toBe(409);
     expect((await res.json()).error).toBe(
       'This advance was already counted in a finalized month. Reverse that month first.',
     );
     expect(state.updated).toBeNull();
-    expect(state.lockFilter).toMatchObject({ user_id: 'staff-1', status: 'finalized', 'period_end>=': '2026-11-08' });
+    expect(state.lockFilter).toMatchObject({ user_id: UID, status: 'finalized', 'period_end>=': '2026-11-08' });
   });
 
   it('allows removing an advance added AFTER the month was finalized', async () => {
-    state.advance = { id: 'adv-1', user_id: 'staff-1', given_on: '2026-11-28', created_at: '2026-12-02T06:00:00Z', removed_at: null };
+    state.advance = { id: AID, user_id: UID, given_on: '2026-11-28', created_at: '2026-12-02T06:00:00Z', removed_at: null };
     state.finalizedRuns = [
-      { id: 'run-1', user_id: 'staff-1', period_end: '2026-11-30', finalized_at: '2026-12-01T00:00:00Z' },
+      { id: 'run-1', user_id: UID, period_end: '2026-11-30', finalized_at: '2026-12-01T00:00:00Z' },
     ];
-    expect((await DELETE(req('DELETE', { id: 'adv-1' }))).status).toBe(200);
+    expect((await DELETE(req('DELETE', { id: AID }))).status).toBe(200);
   });
 
   it('allows removing an advance dated after the finalized period', async () => {
-    state.advance = { id: 'adv-1', user_id: 'staff-1', given_on: '2026-12-03', created_at: '2026-11-01T00:00:00Z', removed_at: null };
+    state.advance = { id: AID, user_id: UID, given_on: '2026-12-03', created_at: '2026-11-01T00:00:00Z', removed_at: null };
     state.finalizedRuns = [
-      { id: 'run-1', user_id: 'staff-1', period_end: '2026-11-30', finalized_at: '2026-12-01T00:00:00Z' },
+      { id: 'run-1', user_id: UID, period_end: '2026-11-30', finalized_at: '2026-12-01T00:00:00Z' },
     ];
-    expect((await DELETE(req('DELETE', { id: 'adv-1' }))).status).toBe(200);
+    expect((await DELETE(req('DELETE', { id: AID }))).status).toBe(200);
   });
 
   it('503s when the table is missing', async () => {
     state.selectError = { code: '42P01', message: 'relation "staff_advances" does not exist' };
-    expect((await DELETE(req('DELETE', { id: 'adv-1' }))).status).toBe(503);
+    expect((await DELETE(req('DELETE', { id: AID }))).status).toBe(503);
+  });
+
+  it('400s on an id that is not a UUID', async () => {
+    expect((await DELETE(req('DELETE', { id: 'adv-1' }))).status).toBe(400);
   });
 
   it('400s without an id', async () => {

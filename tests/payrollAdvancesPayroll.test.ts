@@ -14,6 +14,7 @@ const state: {
   linesSelectError: PgError | null;
   insertedLines: Row[] | null;
   gtFilters: [string, number][];
+  insertedRuns: number;
 } = {
   runs: [],
   runLines: [],
@@ -22,6 +23,7 @@ const state: {
   linesSelectError: null,
   insertedLines: null,
   gtFilters: [],
+  insertedRuns: 0,
 };
 
 vi.mock('@/lib/supabase-server', () => ({
@@ -32,7 +34,10 @@ vi.mock('@/lib/supabase-server', () => ({
       const filters: Row = {};
       const isNull: string[] = [];
       let inF: { col: string; vals: unknown[] } | null = null;
+      let rangeOf: [number, number] | null = null;
       const chain: Row = {};
+      // Like PostgREST: at most 1,000 rows per request, whatever was asked for.
+      const page = (rows: Row[]) => (rangeOf ? rows.slice(rangeOf[0], Math.min(rangeOf[1] + 1, rangeOf[0] + 1000)) : rows.slice(0, 1000));
       const ok = (r: Row) =>
         Object.entries(filters).every(([k, v]) => r[k] === v) &&
         isNull.every((k) => r[k] === null || r[k] === undefined) &&
@@ -44,16 +49,19 @@ vi.mock('@/lib/supabase-server', () => ({
         if (table === 'staff_employment') return { data: employment, error: null };
         if (table === 'staff_advances') {
           if (state.advancesError) return { data: null, error: state.advancesError };
-          return { data: state.advances.filter(ok), error: null };
+          return { data: page(state.advances.filter(ok)), error: null };
         }
         if (table === 'payroll_runs') {
-          if (op === 'insert') return { data: { id: 'run-new' }, error: null };
-          return { data: state.runs.filter(ok), error: null };
+          if (op === 'insert') {
+            state.insertedRuns += 1;
+            return { data: { id: 'run-new' }, error: null };
+          }
+          return { data: page(state.runs.filter(ok)), error: null };
         }
         if (table === 'payroll_run_lines') {
           if (op === 'insert') return { data: null, error: null };
           if (state.linesSelectError) return { data: null, error: state.linesSelectError };
-          return { data: state.runLines.filter(ok), error: null };
+          return { data: page(state.runLines.filter(ok)), error: null };
         }
         return { data: [], error: null };
       };
@@ -80,6 +88,10 @@ vi.mock('@/lib/supabase-server', () => ({
         },
         gt: (c: string, v: number) => {
           state.gtFilters.push([c, v]);
+          return chain;
+        },
+        range: (a: number, b: number) => {
+          rangeOf = [a, b];
           return chain;
         },
         gte: () => chain,
@@ -176,6 +188,7 @@ beforeEach(() => {
   state.linesSelectError = null;
   state.insertedLines = null;
   state.gtFilters = [];
+  state.insertedRuns = 0;
 });
 
 describe('payroll GET with advances', () => {
@@ -320,5 +333,50 @@ describe('payroll finalize with advances', () => {
     expect('advance_inr' in row).toBe(false);
     expect((row.detail as Row).advance_ids).toBeUndefined();
     expect(row.net_pay_inr).toBe(926);
+  });
+});
+
+describe('payroll advances — paging and outages', () => {
+  it('still counts a finalized deduction past the first 1,000 rows (no double take)', async () => {
+    // 1,200 finalized runs of other people, then Ravi's own run in row 1,201.
+    const filler = Array.from({ length: 1200 }, (_, i) => ({
+      id: `run-f${i}`,
+      user_id: `other-${i}`,
+      status: 'finalized',
+      period_start: '2026-01-01',
+      period_end: '2026-01-31',
+      finalized_at: '2026-02-01T00:00:00Z',
+    }));
+    state.runs = [
+      ...filler,
+      { id: 'run-late', user_id: 'staff-1', status: 'finalized', period_start: '2026-07-01', period_end: '2026-07-31', finalized_at: '2026-08-01T00:00:00Z' },
+    ];
+    state.runLines = [
+      ...filler.map((r) => ({ run_id: r.id, user_id: r.user_id, advance_inr: 1 })),
+      { run_id: 'run-late', user_id: 'staff-1', advance_inr: 1000 },
+    ];
+    state.advances = [adv({ amount_inr: 1000, given_on: '2026-07-05', created_at: '2026-07-05T06:00:00Z' })];
+    const l = await ravi(await getMonth());
+    expect(l.advanceOutstandingInr).toBe(0);
+    expect(l.netPayInr).toBe(926);
+  });
+
+  it.each([
+    ['PGRST002', 'Could not query the database for the schema cache. Retrying.'],
+    ['57014', 'canceling statement due to statement timeout'],
+  ])('fails GET and writes no run when the advances read errors with %s', async (code, message) => {
+    state.advancesError = { code, message };
+    expect((await getMonth()).status).toBe(500);
+    expect((await finalize()).status).toBe(500);
+    expect(state.insertedRuns).toBe(0);
+    expect(state.insertedLines).toBeNull();
+  });
+
+  it('does not read a message-only "schema cache" error as a missing column', async () => {
+    state.runs = [
+      { id: 'run-j', user_id: 'staff-1', status: 'finalized', period_start: '2026-07-01', period_end: '2026-07-31', finalized_at: 'x' },
+    ];
+    state.linesSelectError = { message: 'column payroll_run_lines.advance_inr does not exist' };
+    expect((await getMonth()).status).toBe(500);
   });
 });

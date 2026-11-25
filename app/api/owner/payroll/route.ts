@@ -11,6 +11,7 @@ import {
   type PayrollDayInput,
 } from '@/lib/payroll/compute';
 import { outstandingAdvanceInr, advancesInMonthInr, isAdvanceCounted, type TakenFact } from '@/lib/payroll/advances';
+import { fetchAll, type PageResult } from '@/lib/reports/reconcileServer';
 import { sendPayslipsForRun } from '@/lib/payroll/payslipEmail';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, PayrollRun, PayrollRunLine, StaffEmployment } from '@/lib/types';
@@ -114,28 +115,48 @@ interface AdvanceContext {
 /**
  * Salary advances (docs/STAFF-ADVANCES-SPEC.md). staff_advances and
  * payroll_run_lines.advance_inr come from supabase/2026-11-staff-advances.sql,
- * which may not be applied yet: a missing table or column just means "no
- * advances", so payroll keeps working exactly as before. Any other error
- * throws — guessing zero would overpay someone.
+ * which may not be applied yet: ONLY a missing table (PGRST205 / 42P01) or a
+ * missing column (42703 / PGRST204) means "no advances", so payroll keeps
+ * working as before. Any other error (a timeout, PGRST002 while PostgREST
+ * cannot reach the database) throws: reading it as zero would let a finalize
+ * take no advance, or take one twice.
+ *
+ * Every read is paged (fetchAll) with a stable order: PostgREST silently cuts
+ * a read at 1,000 rows, and these tables grow for ever. A partial list of
+ * finalized runs would drop their lines from `taken` and double-deduct.
  */
 async function loadAdvanceContext(admin: ReturnType<typeof createAdminSupabaseClient>): Promise<AdvanceContext> {
-  const { data: advRows, error: advErr } = await admin
-    .from('staff_advances')
-    .select('id, user_id, amount_inr, given_on, note, created_at, removed_at')
-    .is('removed_at', null);
-  if (advErr && !isMissingRelation(advErr)) throw new Error('Could not load advances');
+  let advances: AdvanceRow[] = [];
+  try {
+    advances = await fetchAll<AdvanceRow>(
+      (from, to) =>
+        admin
+          .from('staff_advances')
+          .select('id, user_id, amount_inr, given_on, note, created_at, removed_at')
+          .is('removed_at', null)
+          .order('id')
+          .range(from, to) as unknown as PromiseLike<PageResult<AdvanceRow>>,
+    );
+  } catch (err) {
+    if (!isMissingTable(err)) throw new Error('Could not load advances');
+  }
 
-  const { data: runRows, error: runErr } = await admin
-    .from('payroll_runs')
-    .select('id, user_id, period_end, finalized_at')
-    .eq('status', 'finalized');
-  if (runErr) throw new Error('Could not load payroll runs');
-  const finalizedRuns = ((runRows ?? []) as {
-    id: string;
-    user_id: string | null;
-    period_end: string;
-    finalized_at: string | null;
-  }[]).filter((r) => r.user_id) as {
+  type RunFact = { id: string; user_id: string | null; period_end: string; finalized_at: string | null };
+  let runRows: RunFact[];
+  try {
+    runRows = await fetchAll<RunFact>(
+      (from, to) =>
+        admin
+          .from('payroll_runs')
+          .select('id, user_id, period_end, finalized_at')
+          .eq('status', 'finalized')
+          .order('id')
+          .range(from, to) as unknown as PromiseLike<PageResult<RunFact>>,
+    );
+  } catch {
+    throw new Error('Could not load payroll runs');
+  }
+  const finalizedRuns = runRows.filter((r) => r.user_id) as {
     id: string;
     user_id: string;
     period_end: string;
@@ -144,23 +165,31 @@ async function loadAdvanceContext(admin: ReturnType<typeof createAdminSupabaseCl
 
   let taken: TakenFact[] = [];
   if (finalizedRuns.length > 0) {
-    const { data: lineRows, error: lineErr } = await admin
-      .from('payroll_run_lines')
-      .select('run_id, user_id, advance_inr')
-      .gt('advance_inr', 0);
-    // A missing advance_inr column is the not-yet-migrated case: nothing taken.
-    if (lineErr && !isMissingColumn(lineErr)) throw new Error('Could not load payroll lines');
-    if (!lineErr) {
+    try {
+      const lineRows = await fetchAll<{ run_id: string; user_id: string; advance_inr: number | null }>(
+        (from, to) =>
+          admin
+            .from('payroll_run_lines')
+            .select('run_id, user_id, advance_inr')
+            .gt('advance_inr', 0)
+            .order('id')
+            .range(from, to) as unknown as PromiseLike<
+            PageResult<{ run_id: string; user_id: string; advance_inr: number | null }>
+          >,
+      );
       // Filtered by run in memory: an .in() over every finalized run id would
       // grow the request URL forever.
       const finalizedIds = new Set(finalizedRuns.map((r) => r.id));
-      taken = ((lineRows ?? []) as { run_id: string; user_id: string; advance_inr: number | null }[])
+      taken = lineRows
         .filter((r) => finalizedIds.has(r.run_id))
         .map((r) => ({ user_id: r.user_id, advance_inr: r.advance_inr, run_status: 'finalized' }));
+    } catch (err) {
+      // A missing advance_inr column is the not-yet-migrated case: nothing taken.
+      if (!isMissingColumn(err)) throw new Error('Could not load payroll lines');
     }
   }
   return {
-    advances: advanceRowsOrEmpty(advErr, advRows),
+    advances,
     taken,
     finalizedRuns: finalizedRuns.map((r) => ({
       user_id: r.user_id,
@@ -170,14 +199,15 @@ async function loadAdvanceContext(admin: ReturnType<typeof createAdminSupabaseCl
   };
 }
 
-function advanceRowsOrEmpty(err: unknown, rows: unknown): AdvanceRow[] {
-  return err ? [] : ((rows ?? []) as AdvanceRow[]);
+function isMissingTable(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === 'PGRST205' || code === '42P01';
 }
 
-function isMissingColumn(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === '42703' || error.code === 'PGRST204') return true;
-  return /column .* does not exist|could not find the .* column/i.test(error.message ?? '');
+
+function isMissingColumn(err: unknown): boolean {
+  const code = (err as { code?: string } | null)?.code;
+  return code === '42703' || code === 'PGRST204';
 }
 
 /** A priced day plus the clock times the payslip's day-by-day table shows. */
@@ -478,8 +508,9 @@ export async function GET(request: Request) {
       .eq('period_start', bounds.from)
       .eq('period_end', bounds.to)
       .eq('status', 'finalized'),
-    computePeriod(month),
+    computePeriod(month).catch(() => null),
   ]);
+  if (!computed) return errorResponse(500, 'Could not load payroll. Try again in a moment.');
   const runs = ((runRows ?? []) as PayrollRun[]).filter((r) => r.user_id);
 
   const frozenByUser = new Map<string, ReturnType<typeof frozenLine>>();
@@ -640,7 +671,8 @@ export async function POST(request: Request) {
     return errorResponse(409, 'This person is already finalized for that month. Reverse it first to change anything.');
   }
 
-  const computed = await computePeriod(month);
+  const computed = await computePeriod(month).catch(() => null);
+  if (!computed) return errorResponse(500, 'Could not load payroll. Try again in a moment.');
   const draft = computed.lines.find((l) => l.user_id === userId);
   if (!draft) return errorResponse(404, "That person isn't on this month's payroll.");
 
