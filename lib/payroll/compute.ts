@@ -142,6 +142,13 @@ export interface PayrollLine {
    * remainder into a future run is out of scope — this just flags it.
    */
   deductionsClamped: boolean;
+  /** Salary advance still owed going into this month, whole rupees (0 when none). */
+  advanceOutstandingInr: number;
+  /** The advance ACTUALLY taken off this month: min(outstanding, net after deductions). */
+  advanceInr: number;
+  /** Outstanding advance that did not fit this month and carries to the next. */
+  advanceCarriedInr: number;
+  /** Net pay AFTER the deductions chosen and the advance. Never below 0. */
   netPayInr: number;
   /** True when no employment record covered any day — report, never pay zero silently. */
   unconfigured: boolean;
@@ -191,6 +198,34 @@ function settleDeductions(
   };
 }
 
+/**
+ * Salary advance comes off LAST, out of what the chosen deductions left, and
+ * whatever does not fit carries (the caller works the next month's balance out
+ * fresh from the advances table, so nothing is stored here to carry).
+ */
+function settleAdvance(
+  netAfterDeductionsInr: number,
+  outstandingRaw: number,
+): Pick<PayrollLine, 'advanceOutstandingInr' | 'advanceInr' | 'advanceCarriedInr' | 'netPayInr'> {
+  const outstanding = Math.max(0, Math.floor(Number.isFinite(outstandingRaw) ? outstandingRaw : 0));
+  const taken = Math.min(outstanding, Math.max(0, netAfterDeductionsInr));
+  return {
+    advanceOutstandingInr: outstanding,
+    advanceInr: taken,
+    advanceCarriedInr: outstanding - taken,
+    netPayInr: netAfterDeductionsInr - taken,
+  };
+}
+
+function withAdvance<T extends { netPayInr: number }>(
+  settled: T,
+  outstanding: number,
+): Omit<T, 'netPayInr'> & ReturnType<typeof settleAdvance> {
+  const { netPayInr: _net, ...rest } = settled;
+  void _net;
+  return { ...rest, ...settleAdvance(settled.netPayInr, outstanding) };
+}
+
 /** Round half-up to whole rupees. */
 export function paiseToRupees(paise: number): number {
   return Math.sign(paise) * Math.round(Math.abs(paise) / 100);
@@ -232,8 +267,13 @@ export function computePayrollLine(params: {
    * deduction is a proposal the owner confirms per staffer at finalize.
    */
   apply?: DeductionChoices;
+  /**
+   * Salary advance still owed for this staffer (whole rupees; see
+   * lib/payroll/advances.ts). Taken off last, after the ticked deductions.
+   */
+  advanceOutstandingInr?: number;
 }): PayrollLine {
-  const { days, rules, adjustmentsInr = 0, apply = {} } = params;
+  const { days, rules, adjustmentsInr = 0, apply = {}, advanceOutstandingInr = 0 } = params;
   const proposedCashShortageInr = Math.max(0, Math.round(params.cashShortageInr ?? 0));
 
   const employed = days.filter((d) => d.employmentKey !== null);
@@ -264,7 +304,7 @@ export function computePayrollLine(params: {
       adjustmentsInr,
       proposedDeductions,
       netBeforeDeductionsInr: adjustmentsInr,
-      ...settleDeductions(adjustmentsInr, proposedDeductions, apply),
+      ...withAdvance(settleDeductions(adjustmentsInr, proposedDeductions, apply), advanceOutstandingInr),
       unconfigured: true,
       blocked,
       segments: [],
@@ -365,7 +405,10 @@ export function computePayrollLine(params: {
     adjustmentsInr,
     proposedDeductions,
     netBeforeDeductionsInr,
-    ...settleDeductions(netBeforeDeductionsInr, proposedDeductions, apply),
+    ...withAdvance(
+      settleDeductions(netBeforeDeductionsInr, proposedDeductions, apply),
+      advanceOutstandingInr,
+    ),
     unconfigured: false,
     blocked,
     segments,

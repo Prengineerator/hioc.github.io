@@ -187,6 +187,7 @@ export function renderPayslipEmail(
     adjustment_reason?: unknown;
     days?: unknown;
     net_before_deductions_inr?: unknown;
+    advance_carried_inr?: unknown;
   };
   const adjustmentReason =
     typeof detail.adjustment_reason === 'string' ? detail.adjustment_reason.trim() : '';
@@ -231,6 +232,17 @@ export function renderPayslipEmail(
       negative: true,
     });
   }
+  // Salary advance (docs/STAFF-ADVANCES-SPEC.md), already frozen into net_pay_inr.
+  // `earned` above is the pre-advance figure (net_before_deductions_inr never
+  // includes the advance), so the lines still add up to net pay.
+  const advanceTaken = line.advance_inr ?? 0;
+  if (advanceTaken > 0) {
+    moneyRows.push({
+      label: 'Salary advance',
+      value: `−${rupees(advanceTaken)}`,
+      negative: true,
+    });
+  }
   if (line.adjustments_inr !== 0) {
     const label = adjustmentReason ? `Adjustment — ${adjustmentReason}` : 'Adjustment';
     moneyRows.push({
@@ -239,6 +251,13 @@ export function renderPayslipEmail(
       negative: line.adjustments_inr < 0,
     });
   }
+
+  // Informational only — not a deduction from this month's pay.
+  const advanceCarried =
+    typeof detail.advance_carried_inr === 'number' && detail.advance_carried_inr > 0
+      ? detail.advance_carried_inr
+      : 0;
+  const carryNote = advanceCarried > 0 ? `Advance still to recover next month: ${rupees(advanceCarried)}` : '';
 
   const rowHtml = (r: PayslipRow) =>
     `<tr><td style="padding:4px 0;color:#6b6b6b;font-size:13px;">${escapeHtml(r.label)}</td><td style="padding:4px 0;text-align:right;font-size:13px;${
@@ -271,7 +290,11 @@ export function renderPayslipEmail(
      <hr style="border:none;border-top:1px solid #eee;margin:16px 0;" />
      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${moneyRows.map(rowHtml).join('')}
        <tr><td style="padding:10px 0 0;font-weight:bold;font-size:15px;">Net pay</td><td style="padding:10px 0 0;text-align:right;font-weight:bold;font-size:15px;">${rupees(line.net_pay_inr)}</td></tr>
-     </table>
+     </table>${
+       carryNote
+         ? `<p style="font-size:13px;color:#6b6b6b;margin:10px 0 0;">${escapeHtml(carryNote)}</p>`
+         : ''
+     }
      <p style="font-size:12px;color:#8a8a8a;line-height:1.5;margin-top:20px;">Questions about this payslip? Ask ${escapeHtml(CAFE_NAME)}'s owner.</p>`,
   );
 
@@ -293,6 +316,7 @@ export function renderPayslipEmail(
     ...moneyRows.map((r) => `${r.label}: ${r.value}`),
     '',
     `Net pay: ${rupees(line.net_pay_inr)}`,
+    ...(carryNote ? [carryNote] : []),
   ].join('\n');
 
   return { subject: `Your ${CAFE_NAME} payslip — ${month}`, html, text };

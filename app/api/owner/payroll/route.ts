@@ -10,6 +10,7 @@ import {
   DEFAULT_PAID_LEAVES_PER_MONTH,
   type PayrollDayInput,
 } from '@/lib/payroll/compute';
+import { outstandingAdvanceInr, advancesInMonthInr, isAdvanceCounted, type TakenFact } from '@/lib/payroll/advances';
 import { sendPayslipsForRun } from '@/lib/payroll/payslipEmail';
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import type { AttendanceSession, PayrollRun, PayrollRunLine, StaffEmployment } from '@/lib/types';
@@ -92,16 +93,132 @@ function isMissingRelation(error: { code?: string; message?: string } | null | u
   return /relation .* does not exist|could not find the table|schema cache/i.test(error.message ?? '');
 }
 
+interface AdvanceRow {
+  id: string;
+  user_id: string;
+  amount_inr: number;
+  given_on: string;
+  note: string | null;
+  created_at: string;
+  removed_at: string | null;
+}
+
+interface AdvanceContext {
+  advances: AdvanceRow[];
+  /** advance_inr of every finalized run line, any period (reversed runs excluded). */
+  taken: TakenFact[];
+  /** Every finalized run, any period — what locks an advance. */
+  finalizedRuns: { user_id: string; period_end: string; finalized_at: string | null }[];
+}
+
+/**
+ * Salary advances (docs/STAFF-ADVANCES-SPEC.md). staff_advances and
+ * payroll_run_lines.advance_inr come from supabase/2026-11-staff-advances.sql,
+ * which may not be applied yet: a missing table or column just means "no
+ * advances", so payroll keeps working exactly as before. Any other error
+ * throws — guessing zero would overpay someone.
+ */
+async function loadAdvanceContext(admin: ReturnType<typeof createAdminSupabaseClient>): Promise<AdvanceContext> {
+  const { data: advRows, error: advErr } = await admin
+    .from('staff_advances')
+    .select('id, user_id, amount_inr, given_on, note, created_at, removed_at')
+    .is('removed_at', null);
+  if (advErr && !isMissingRelation(advErr)) throw new Error('Could not load advances');
+
+  const { data: runRows, error: runErr } = await admin
+    .from('payroll_runs')
+    .select('id, user_id, period_end, finalized_at')
+    .eq('status', 'finalized');
+  if (runErr) throw new Error('Could not load payroll runs');
+  const finalizedRuns = ((runRows ?? []) as {
+    id: string;
+    user_id: string | null;
+    period_end: string;
+    finalized_at: string | null;
+  }[]).filter((r) => r.user_id) as {
+    id: string;
+    user_id: string;
+    period_end: string;
+    finalized_at: string | null;
+  }[];
+
+  let taken: TakenFact[] = [];
+  if (finalizedRuns.length > 0) {
+    const { data: lineRows, error: lineErr } = await admin
+      .from('payroll_run_lines')
+      .select('run_id, user_id, advance_inr')
+      .gt('advance_inr', 0);
+    // A missing advance_inr column is the not-yet-migrated case: nothing taken.
+    if (lineErr && !isMissingColumn(lineErr)) throw new Error('Could not load payroll lines');
+    if (!lineErr) {
+      // Filtered by run in memory: an .in() over every finalized run id would
+      // grow the request URL forever.
+      const finalizedIds = new Set(finalizedRuns.map((r) => r.id));
+      taken = ((lineRows ?? []) as { run_id: string; user_id: string; advance_inr: number | null }[])
+        .filter((r) => finalizedIds.has(r.run_id))
+        .map((r) => ({ user_id: r.user_id, advance_inr: r.advance_inr, run_status: 'finalized' }));
+    }
+  }
+  return {
+    advances: advanceRowsOrEmpty(advErr, advRows),
+    taken,
+    finalizedRuns: finalizedRuns.map((r) => ({
+      user_id: r.user_id,
+      period_end: r.period_end,
+      finalized_at: r.finalized_at,
+    })),
+  };
+}
+
+function advanceRowsOrEmpty(err: unknown, rows: unknown): AdvanceRow[] {
+  return err ? [] : ((rows ?? []) as AdvanceRow[]);
+}
+
+function isMissingColumn(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === '42703' || error.code === 'PGRST204') return true;
+  return /column .* does not exist|could not find the .* column/i.test(error.message ?? '');
+}
+
 /** A priced day plus the clock times the payslip's day-by-day table shows. */
 type PayrollDay = PayrollDayInput & { firstIn: string | null; lastOut: string | null };
+
+/** This month's advances for one staffer, as the screen lists them. */
+function advanceViewFor(
+  userId: string,
+  bounds: { from: string; to: string },
+  ctx: AdvanceContext,
+  outstanding: number,
+) {
+  const mine = ctx.advances
+    .filter((a) => a.user_id === userId && !a.removed_at && a.given_on >= bounds.from && a.given_on <= bounds.to)
+    .sort((a, b) => a.given_on.localeCompare(b.given_on) || a.id.localeCompare(b.id));
+  return {
+    advances: mine.map((a) => ({
+      id: a.id,
+      given_on: a.given_on,
+      amount_inr: a.amount_inr,
+      note: a.note ?? '',
+      locked: isAdvanceCounted(a, ctx.finalizedRuns),
+    })),
+    advanceCarriedFromEarlierInr: Math.max(0, outstanding - advancesInMonthInr(userId, bounds, ctx.advances)),
+  };
+}
 
 async function computePeriod(month: string) {
   const bounds = monthBounds(month)!;
   const admin = createAdminSupabaseClient();
   const settings = await getAttendanceSettings();
 
-  const [{ data: profileRows }, { data: sessionRows }, { data: markRows }, { data: leaveRows }, employment, shortageRows] =
-    await Promise.all([
+  const [
+    { data: profileRows },
+    { data: sessionRows },
+    { data: markRows },
+    { data: leaveRows },
+    employment,
+    shortageRows,
+    advanceCtx,
+  ] = await Promise.all([
       admin.from('profiles').select('id, name, role').in('role', ['staff', 'manager', 'owner']),
       admin
         .from('attendance_sessions')
@@ -121,6 +238,7 @@ async function computePeriod(month: string) {
         .lte('leave_date', bounds.to),
       loadEmploymentRows(bounds.from, bounds.to),
       loadUnconsumedApprovedShortages(admin, bounds),
+      loadAdvanceContext(admin),
     ]);
 
   const people = (profileRows ?? []) as { id: string; name: string; role: string }[];
@@ -206,6 +324,14 @@ async function computePeriod(month: string) {
       };
     });
 
+    const advanceOutstanding = outstandingAdvanceInr({
+      userId: person.id,
+      monthEnd: bounds.to,
+      advances: advanceCtx.advances,
+      taken: advanceCtx.taken,
+    });
+    const advanceView = advanceViewFor(person.id, bounds, advanceCtx, advanceOutstanding);
+
     const line = computePayrollLine({
       days: dayInputs,
       rules: {
@@ -214,6 +340,7 @@ async function computePeriod(month: string) {
         paidLeavesPerMonth: DEFAULT_PAID_LEAVES_PER_MONTH,
       },
       cashShortageInr: shortageByUser.get(person.id) ?? 0,
+      advanceOutstandingInr: advanceOutstanding,
     });
 
     return {
@@ -221,6 +348,7 @@ async function computePeriod(month: string) {
       name: displayNames.get(person.id) ?? 'Unknown staff',
       role: person.role,
       ...line,
+      ...advanceView,
       days: dayInputs,
     };
   });
@@ -233,6 +361,7 @@ async function computePeriod(month: string) {
     // Internal bookkeeping for POST's finalize step (which rows to mark
     // consumed) — not part of the public GET shape, see the GET handler.
     shortageRows,
+    advanceCtx,
     rulesSnapshot: {
       // Expected hours = (days in month − this) × contracted hours.
       paid_leaves_per_month: DEFAULT_PAID_LEAVES_PER_MONTH,
@@ -266,6 +395,11 @@ function rulesFromSnapshot(snapshot: ComputedPeriod['rulesSnapshot']) {
  */
 function frozenLine(row: PayrollRunLine, run: PayrollRun, liveName: string | undefined) {
   const d = (row.detail ?? {}) as Record<string, unknown>;
+  const advanceInr = row.advance_inr ?? 0;
+  const advanceCarriedInr =
+    typeof d.advance_carried_inr === 'number' ? d.advance_carried_inr : 0;
+  const advanceOutstandingInr =
+    typeof d.advance_outstanding_inr === 'number' ? d.advance_outstanding_inr : advanceInr + advanceCarriedInr;
   const days = Array.isArray(d.days)
     ? (d.days as { date: string; status: string; worked: number; ot: number; late: boolean }[])
     : [];
@@ -301,9 +435,12 @@ function frozenLine(row: PayrollRunLine, run: PayrollRun, liveName: string | und
     netBeforeDeductionsInr:
       typeof d.net_before_deductions_inr === 'number'
         ? d.net_before_deductions_inr
-        : row.net_pay_inr + row.deductions_inr + row.cash_shortage_inr,
+        : row.net_pay_inr + row.deductions_inr + row.cash_shortage_inr + advanceInr,
     deductionsClamped: Boolean(d.deductions_clamped ?? d.cash_shortage_clamped),
     adjustmentReason: typeof d.adjustment_reason === 'string' ? d.adjustment_reason : '',
+    advanceOutstandingInr,
+    advanceInr,
+    advanceCarriedInr,
     netPayInr: row.net_pay_inr,
     unconfigured: false,
     blocked: false,
@@ -365,12 +502,22 @@ export async function GET(request: Request) {
   const lines = [
     ...computed.lines.map((l) => {
       const frozen = frozenByUser.get(l.user_id);
-      if (frozen) return frozen;
+      if (frozen) {
+        return {
+          ...frozen,
+          ...advanceViewFor(l.user_id, bounds, computed.advanceCtx, frozen.advanceOutstandingInr),
+        };
+      }
       return { ...l, finalized: false as const, run: null, adjustmentReason: '' };
     }),
     // Someone finalized this month who is no longer on the staff list (role
     // changed) must still show — what they were paid doesn't go away.
-    ...[...frozenByUser.values()].filter((f) => !computed.lines.some((l) => l.user_id === f.user_id)),
+    ...[...frozenByUser.values()]
+      .filter((f) => !computed.lines.some((l) => l.user_id === f.user_id))
+      .map((f) => ({
+        ...f,
+        ...advanceViewFor(f.user_id, bounds, computed.advanceCtx, f.advanceOutstandingInr),
+      })),
   ];
 
   return NextResponse.json({
@@ -389,6 +536,7 @@ function runLineRow(
   draft: DraftLine,
   line: ReturnType<typeof computePayrollLine>,
   adjustmentReason: string,
+  advanceIds: string[],
 ) {
   const seg = line.segments[0];
   return {
@@ -413,6 +561,9 @@ function runLineRow(
     cash_shortage_inr: line.cashShortageInr,
     adjustments_inr: line.adjustmentsInr,
     net_pay_inr: line.netPayInr,
+    // Only sent when there is one, so finalize still works before
+    // payroll_run_lines.advance_inr exists (supabase/2026-11-staff-advances.sql).
+    ...(line.advanceInr > 0 ? { advance_inr: line.advanceInr } : {}),
     // The day-by-day derivation is frozen with the run. PAY-3 renders it, and
     // it is what makes the number trusted rather than re-checked.
     detail: {
@@ -423,6 +574,13 @@ function runLineRow(
       applied_deductions: line.appliedDeductions,
       net_before_deductions_inr: line.netBeforeDeductionsInr,
       deductions_clamped: line.deductionsClamped,
+      ...(line.advanceOutstandingInr > 0
+        ? {
+            advance_outstanding_inr: line.advanceOutstandingInr,
+            advance_carried_inr: line.advanceCarriedInr,
+            advance_ids: advanceIds,
+          }
+        : {}),
       days: draft.days.map((d) => ({
         date: d.date,
         status: d.status,
@@ -507,6 +665,9 @@ export async function POST(request: Request) {
     // let it go, but never sees a different number.
     cashShortageInr: draft.proposedDeductions.cashShortageInr,
     apply,
+    // Worked out fresh from the advances table and finalized runs a moment
+    // ago in computePeriod — the same figure the draft previewed.
+    advanceOutstandingInr: draft.advanceOutstandingInr,
   });
 
   const { data: runRow, error: runErr } = await admin
@@ -531,7 +692,15 @@ export async function POST(request: Request) {
   }
   const run = runRow as PayrollRun;
 
-  const row = runLineRow(run.id, draft, line, adjustment?.reason ?? '');
+  const row = runLineRow(
+    run.id,
+    draft,
+    line,
+    adjustment?.reason ?? '',
+    computed.advanceCtx.advances
+      .filter((a) => a.user_id === userId && a.given_on <= bounds.to)
+      .map((a) => a.id),
+  );
   const { error: lineErr } = await admin.from('payroll_run_lines').insert([row]);
   if (lineErr) {
     // Leave no half-written run behind: a finalized run with no line would

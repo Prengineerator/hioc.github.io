@@ -175,6 +175,7 @@ vi.mock('@/lib/supabase-server', () => ({
           ctx.lte[c] = v;
           return chain;
         },
+        gt: () => chain,
         lt: () => chain,
         neq: () => chain,
         is: (c: string, v: unknown) => {
