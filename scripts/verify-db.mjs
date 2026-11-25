@@ -1282,11 +1282,18 @@ async function checkCashCounts() {
   if (perStaff.ok) pass('payroll_runs.user_id exists (payroll finalized per staffer)');
   else fail('payroll_runs.user_id exists (payroll finalized per staffer)', errKind(perStaff) === 'no_column' ? 'apply supabase/2026-11-payroll-per-staff.sql' : errText(perStaff));
 
-  for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages']) {
+  // Staff salary advances (2026-11-staff-advances.sql): the amount actually
+  // deducted on a finalized line, and the owner-only advances table.
+  const advLine = await rest('/payroll_run_lines?select=advance_inr&limit=1');
+  if (advLine.ok) pass('payroll_run_lines.advance_inr exists');
+  else fail('payroll_run_lines.advance_inr exists', errKind(advLine) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advLine));
+
+  for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages', 'staff_advances']) {
     const r = await rest(`/${table}?select=id&limit=1`);
     if (!r.ok) {
       const kind = errKind(r);
-      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(r));
+      const fix = table === 'staff_advances' ? 'supabase/2026-11-staff-advances.sql' : 'supabase/2026-09-cash-counts.sql';
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? `apply ${fix}` : errText(r));
       continue;
     }
     pass(`${table} exists`);
