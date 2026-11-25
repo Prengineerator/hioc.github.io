@@ -106,10 +106,14 @@ month*.
   advance last means nothing you are owed is dropped.
 - **No negative pay.** Net never goes below ₹0. Whatever the month cannot cover
   is carried.
-- **Locked once paid.** An advance cannot be removed once a month on or after
-  its date has been finalized for that person, because it has already been taken
-  off their pay. Reverse that month first. A removed advance is kept on record,
-  marked removed, with who removed it and when.
+- **Locked once counted.** An advance cannot be removed once a finalized month
+  has counted it. That means it was already noted when a month on or after its
+  date was finalized for that person, so it is part of what that month took off
+  or carried. Reverse that month first. An advance added *after* its month was
+  finalized (example 4) has not been counted yet. It shows on that month's row as
+  "comes off next month" and can still be removed until the next month is
+  finalized. A removed advance is kept on record, marked removed, with who
+  removed it and when.
 - **Mistake guards.** Whole rupees only, from ₹1 to ₹1,00,000 per entry, never a
   future date. A larger amount can be entered as two entries.
 - **Owner only.** The advances list and the routes that change it check for the
