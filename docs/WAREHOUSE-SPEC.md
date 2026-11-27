@@ -85,7 +85,7 @@ created already `picked`.
 | `warehouse_batches` | what is in the warehouse: `qty_received`, `qty_remaining`, `expiry_date`, source (`purchase` / `return` / `count` / `transit_back`), `supplier` |
 | `warehouse_movements` | the warehouse ledger: `purchase`, `dispatch`, `return_in`, `waste`, `count`, `transit_back`, `transit_extra`, signed, with any shortfall. One dispatch row per (request, item). |
 | `warehouse_alert_settings` | one row: alerts on, email the owner logins, extra emails, WhatsApp numbers |
-| `warehouse_alerts` | one row per alert attempt (event, request, channel, address, sent/failed/skipped, reason). A unique index means an address is sent the same alert only once. |
+| `warehouse_alerts` | one row per alert attempt (event, request, channel, address, sent/failed/skipped, reason). A unique index means an address is sent the same alert only once. `event` also allows `pickup_assigned` (the delivery person's WhatsApp list, WH-D17), added by `supabase/2026-11-warehouse-pickup-alert.sql`, which runs after `2026-11-warehouse.sql`. The same unique index covers it. |
 | `inventory_movements.kind` | adds `return_out` (left the store for the warehouse), `transit_back` and `transit_extra` (a return's settlement on the store side) |
 | `inventory_batches.source` | adds `transit_back` |
 
@@ -305,8 +305,10 @@ owner, and its button opens the owner portal, which a delivery person can't use.
 ### The owner's steps (in this order)
 
 1. **Meta:** create the template below and wait for approval.
-2. **Database:** the owner's developer runs one small file in the Supabase SQL editor on **Hioc
-   India**. It is written with the build, and lets the alert log hold the new kind of row.
+2. **Database:** the owner's developer runs `supabase/2026-11-warehouse-pickup-alert.sql` in the
+   Supabase SQL editor on **Hioc India**, after `2026-11-warehouse.sql` and before step 3. It lets
+   the alert log hold the new kind of row, changes nothing else, and is safe to re-run. To check:
+   `npm run verify:db` shows the two `warehouse_alerts.event CHECK` lines as ✓.
 3. **Vercel:** set `WHATSAPP_TPL_STOCK_PICKUP=stock_pickup_1` (Production and Preview) and redeploy.
 4. **Numbers:** check that each team member who delivers has a mobile number on their staff profile,
    and type the driver's number when choosing a driver.
