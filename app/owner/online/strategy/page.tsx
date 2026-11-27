@@ -7,7 +7,7 @@ import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card, inr } from '@/components/owner/dashboard';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { loadStrategyData, type StrategyData } from '@/lib/online-settlements/loadStrategy';
-import { buildStrategy, type Anatomy, type KpiResult, type KpiStatus, type StrategyResult } from '@/lib/online-settlements/strategy';
+import { buildStrategy, type Anatomy, type KpiResult, type KpiStatus, type OpenBilling, type StrategyResult } from '@/lib/online-settlements/strategy';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,6 +54,17 @@ const thNum = 'py-1.5 pr-3 text-right';
 const td = 'py-1.5 pr-3';
 const tdNum = 'py-1.5 pr-3 text-right tabular-nums';
 
+function OpenBillingNote({ o }: { o: OpenBilling }) {
+  const weeks = o.weeks.length === 1 ? `the week of ${o.weeks[0]}` : `the weeks of ${o.weeks.join(' and ')}`;
+  return (
+    <p className="mt-2 text-xs text-muted">
+      One open billing question affects this table: {weeks} {o.weeks.length === 1 ? 'was' : 'were'} billed well under the usual
+      rate. If it is later billed at the usual rate, about {inr(o.extraFee)} more is due; the marketing fee would be{' '}
+      {pct(o.marketingShare)} of menu sales, in your bank {inrOrDash(o.bankPerOrder)} an order and {inr(o.bankPerDay)} a day.
+    </p>
+  );
+}
+
 function Scorecard({ s }: { s: StrategyResult }) {
   return (
     <Card title="Scorecard">
@@ -87,6 +98,7 @@ function Scorecard({ s }: { s: StrategyResult }) {
         </table>
       </div>
       <p className="mt-2 text-xs text-muted">Close means within 5% of the target on the wrong side.</p>
+      {s.openBilling ? <OpenBillingNote o={s.openBilling} /> : null}
     </Card>
   );
 }
@@ -227,7 +239,7 @@ function Weeks({ s }: { s: StrategyResult }) {
           <tbody>
             {[...s.weeks].reverse().map((w) => (
               <tr key={w.start} className="border-t border-[#f2efe9] text-charcoal">
-                <td className={`${td} whitespace-nowrap`}>{w.label}</td>
+                <td className={`${td} whitespace-nowrap`}>{w.full ? w.label : `${w.label} (part week)`}</td>
                 <td className={`${tdNum} font-bold`}>{inr(w.fee)}</td>
                 <td className={tdNum}>{inr(w.salesLinked)}</td>
                 <td className={tdNum}>{inr(w.fixedAds)}</td>
@@ -287,7 +299,7 @@ export default async function OwnerOnlineStrategyPage() {
   } catch (err) {
     console.error('owner online strategy: load failed', err);
   }
-  const s = data?.migrated ? buildStrategy({ orders: data.orders, deductions: data.deductions }) : null;
+  const s = data?.migrated ? buildStrategy({ orders: data.orders, deductions: data.deductions, firstOrderDay: data.firstOrderDay }) : null;
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">

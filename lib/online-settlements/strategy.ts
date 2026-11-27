@@ -18,8 +18,10 @@ import { addDays, bucketLabel, istDay, spreadDeduction, weekStart, type Deductio
 //                   bill is a whole rupee before 18% GST (a fixed-budget pack),
 //                   else 'sales_linked' (a fee that moves with the week's
 //                   sales: the café's Grow Maxx plan)
-//   new customer    a customer whose first delivered order, among ALL loaded
-//                   orders, falls in the window
+//   new customer    a customer whose first delivered order falls in the window
+//                   (or week). The first-order day comes from `firstOrderDay`,
+//                   built from every delivered order ever; without it, from the
+//                   loaded orders only
 //   in your bank    payout of every order in the window, any status,
 //                   minus marketing
 
@@ -122,8 +124,8 @@ export type TierKey = 'none' | 'under199' | 't199' | 't349' | 't499' | 'other';
 export const TIERS: { key: TierKey; label: string }[] = [
   { key: 'none', label: 'No offer' },
   { key: 'under199', label: 'Minimum order under ₹199' },
-  { key: 't199', label: '₹199–348' },
-  { key: 't349', label: '₹349–498' },
+  { key: 't199', label: '₹199–299' },
+  { key: 't349', label: '₹349–449' },
   { key: 't499', label: '₹499 and up' },
   { key: 'other', label: 'Other offer codes' },
 ];
@@ -150,6 +152,19 @@ export interface WeekRow {
   effectiveRate: number | null;
   orders: number;
   newCustomers: number;
+  /** False for a final week whose Sunday is after the window's end: the billing rules skip it. */
+  full: boolean;
+}
+
+/** What the scorecard would show if the under-billed weeks in the current window were billed at the usual rate. */
+export interface OpenBilling {
+  /** Labels of the under-billed full weeks inside the current window. */
+  weeks: string[];
+  /** Fee incl. GST that would still be due. */
+  extraFee: number;
+  marketingShare: number | null;
+  bankPerOrder: number | null;
+  bankPerDay: number;
 }
 
 export interface Action {
@@ -168,6 +183,7 @@ export interface StrategyResult {
   ladder: LadderRow[];
   weeks: WeekRow[];
   billingNotes: string[];
+  openBilling: OpenBilling | null;
   actions: Action[];
 }
 
@@ -254,6 +270,8 @@ interface WindowStats {
   menuSales: number;
   marketing: { salesLinked: number; fixedAds: number; total: number };
   newCustomers: number;
+  /** Payout of every order in the window, less marketing. */
+  bank: number;
 }
 
 function windowStats(
@@ -261,7 +279,7 @@ function windowStats(
   days: Map<StrategyOrderRow, string>,
   ads: StrategyDeductionRow[],
   classes: Map<string, CampaignClass>,
-  firstSeen: Map<string, string>,
+  firstSeen: ReadonlyMap<string, string>,
   from: string,
   to: string,
 ): WindowStats {
@@ -297,7 +315,7 @@ function windowStats(
     bankPerOrder: delivered > 0 ? bank / delivered : null,
     bankPerDay: bank / WINDOW_DAYS,
   };
-  return { values, delivered, menuSales: menu, marketing, newCustomers };
+  return { values, delivered, menuSales: menu, marketing, newCustomers, bank };
 }
 
 const EMPTY: StrategyResult = {
@@ -310,6 +328,7 @@ const EMPTY: StrategyResult = {
   ladder: [],
   weeks: [],
   billingNotes: [],
+  openBilling: null,
   actions: [],
 };
 
@@ -318,6 +337,8 @@ export function buildStrategy(input: {
   deductions: StrategyDeductionRow[];
   /** The last IST day of the current window; default the latest delivered order's day. */
   asOf?: string;
+  /** customer_ref → IST day of that customer's first delivered order ever. Without it, derived from `orders`. */
+  firstOrderDay?: ReadonlyMap<string, string>;
 }): StrategyResult {
   const orders = input.orders.filter((o) => o.platform === 'zomato');
   const ads = input.deductions.filter((d) => d.platform === 'zomato' && d.kind === 'ads');
@@ -330,14 +351,20 @@ export function buildStrategy(input: {
   const previous = { from: addDays(end, -(2 * WINDOW_DAYS - 1)), to: addDays(end, -WINDOW_DAYS) };
   const classes = classifyCampaigns(ads);
 
-  // First delivered day of each customer over everything loaded, so a regular
-  // whose first order predates the window is not counted as new.
-  const firstSeen = new Map<string, string>();
-  for (const o of orders) {
-    if (o.status !== 'delivered' || !o.customer_ref) continue;
-    const day = days.get(o) as string;
-    const seen = firstSeen.get(o.customer_ref);
-    if (seen === undefined || day < seen) firstSeen.set(o.customer_ref, day);
+  // First delivered day of each customer, so a regular whose first order predates the
+  // window is not counted as new. The loader passes it over all history; otherwise it is
+  // derived from the loaded orders.
+  let firstSeen: ReadonlyMap<string, string>;
+  if (input.firstOrderDay) firstSeen = input.firstOrderDay;
+  else {
+    const derived = new Map<string, string>();
+    for (const o of orders) {
+      if (o.status !== 'delivered' || !o.customer_ref) continue;
+      const day = days.get(o) as string;
+      const seen = derived.get(o.customer_ref);
+      if (seen === undefined || day < seen) derived.set(o.customer_ref, day);
+    }
+    firstSeen = derived;
   }
 
   const cur = windowStats(orders, days, ads, classes, firstSeen, current.from, current.to);
@@ -434,8 +461,41 @@ export function buildStrategy(input: {
       effectiveRate: netSales > 0 ? m.salesLinked / GST / netSales : null,
       orders: delivered,
       newCustomers,
+      full: stop <= end,
     });
-    if (stop <= end && delivered > 0 && m.total === 0) billingNotes.push(`No marketing fee billed for ${bucketLabel(start, 'week')}`);
+  }
+
+  // Billing rules, full weeks only. `usual` is the median sales-linked rate of the full weeks
+  // at 3% or more (needs three); a full week with orders billed under half of it gets one note.
+  const fullWeeks = weeks.filter((w) => w.full);
+  const rates = fullWeeks
+    .map((w) => w.effectiveRate)
+    .filter((x): x is number => x !== null && x >= 0.03)
+    .sort((a, b) => a - b);
+  const usual = rates.length >= 3 ? (rates.length % 2 ? rates[(rates.length - 1) / 2] : (rates[rates.length / 2 - 1] + rates[rates.length / 2]) / 2) : null;
+  const underBilled: WeekRow[] = [];
+  for (const w of fullWeeks) {
+    if (w.orders === 0) continue;
+    if (usual !== null && w.effectiveRate !== null && w.effectiveRate < usual / 2) {
+      underBilled.push(w);
+      billingNotes.push(
+        `The week of ${w.label} was billed ${rupees(w.salesLinked)}, ${percent(w.effectiveRate)} of net sales against a usual ${percent(usual)}. Ask Zomato whether the plan was off for part of that week`,
+      );
+    } else if (w.fee === 0) billingNotes.push(`No marketing fee billed for ${w.label}`);
+  }
+  let openBilling: OpenBilling | null = null;
+  const inCurrent = underBilled.filter((w) => w.start >= current.from && addDays(w.start, 6) <= current.to);
+  if (usual !== null && inCurrent.length) {
+    const extraFee = inCurrent.reduce((t, w) => t + Math.max(0, usual * w.netSales * GST - w.salesLinked), 0);
+    const marketing = cur.marketing.total + extraFee;
+    const bank = cur.bank - extraFee;
+    openBilling = {
+      weeks: inCurrent.map((w) => w.label),
+      extraFee: r2(extraFee),
+      marketingShare: cur.menuSales > 0 ? marketing / cur.menuSales : null,
+      bankPerOrder: cur.delivered > 0 ? bank / cur.delivered : null,
+      bankPerDay: bank / WINDOW_DAYS,
+    };
   }
   // A sales-linked bill labelled as one day that is a big slice of that day's sales is probably
   // a bill for several days written with one date.
@@ -449,7 +509,7 @@ export function buildStrategy(input: {
     }
   }
 
-  const result: StrategyResult = { hasData: true, end, current, previous, kpis, anatomy, ladder, weeks, billingNotes, actions: [] };
+  const result: StrategyResult = { hasData: true, end, current, previous, kpis, anatomy, ladder, weeks, billingNotes, openBilling, actions: [] };
   result.actions = buildActions(result, cur, orders, days);
   return result;
 }
@@ -502,14 +562,18 @@ function buildActions(
   const mkt = k('marketingShare');
   const fresh = k('newCustomersPerWeek');
   if ((mkt.current !== null && mkt.status !== 'met') || fresh.status !== 'met') {
-    const perNew = cur.newCustomers > 0 ? `${rupees(cur.marketing.total / cur.newCustomers)} per new customer` : 'no new customers to spread it over';
+    const weekly = `${(fresh.current ?? 0).toFixed(1)} a week, target ${fresh.target}`;
+    const first =
+      cur.newCustomers > 0
+        ? `${cur.newCustomers} ${cur.newCustomers === 1 ? 'customer' : 'customers'} ordered for the first time in the same 4 weeks (${weekly}): ${rupees(cur.marketing.total / cur.newCustomers)} of marketing fee per new customer if every one is credited to it.`
+        : `No customers ordered for the first time in the same 4 weeks (${weekly}), so there is no new customer to credit the fee to.`;
     actions.push({
       key: 'marketing',
       title: 'Check what marketing is buying',
       detail:
         `Marketing cost ${rupees(cur.marketing.total)} in the last 4 weeks` +
         `${mkt.current !== null ? `, ${percent(mkt.current)} of menu sales (target: at most ${percent(mkt.target)})` : ''}. ` +
-        `That brought ${cur.newCustomers} new customers (${(fresh.current ?? 0).toFixed(1)} a week, target ${fresh.target}): ${perNew}.`,
+        first,
     });
   }
   if (r.billingNotes.length) {

@@ -66,11 +66,16 @@ week by week with any bills that look wrong.
   plus GST), otherwise a *sales-linked fee* (the café's Grow Maxx plan), which moves with the week's sales.
 - **Offers**: the minimum order is the number after `ON` at the end of the offer code
   (`SmartPromos GETOFF120ON199` is 199). Orders on offers under ₹199 are the "low minimum" share.
-- **New customers**: customers whose first delivered order in all loaded orders (the last 400 days) falls in the
-  window, per week.
+- **New customers**: customers whose first delivered order ever falls in the window, per week. Orders are read
+  for the last 400 days, but the first-order day comes from a second, light read of every delivered Zomato order,
+  so an old regular never counts as new.
 - **In your bank**: the payout of every order in the window, any status, minus marketing; per order and per day.
 - **Billing notes**: a sales-linked bill labelled as one day that is over 25% of that day's net sales (net order
-  value minus GST from the customer), and any full week with orders but no marketing fee billed.
+  value minus GST from the customer), and any full Monday–Sunday week with orders whose sales-linked fee is under
+  half the usual rate (the median of the full weeks at 3% or more, needing three of them; zero counts), or, when
+  there is no usual rate, any such week with no fee at all. A final week that is not yet complete is marked
+  "(part week)" and skipped by these rules. When an under-billed week is inside the current window the page shows
+  the extra fee due at the usual rate and what the marketing share and bank figures would then be.
 
 The targets are the `STRATEGY_TARGETS` constant in `lib/online-settlements/strategy.ts`: change a number
 there. Math is in `strategy.ts`, reads in `loadStrategy.ts`.

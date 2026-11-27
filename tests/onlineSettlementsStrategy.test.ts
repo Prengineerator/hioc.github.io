@@ -240,8 +240,8 @@ describe('offer ladder', () => {
     expect(ladder.map((t) => t.label)).toEqual([
       'No offer',
       'Minimum order under ₹199',
-      '₹199–348',
-      '₹349–498',
+      '₹199–299',
+      '₹349–449',
       '₹499 and up',
       'Other offer codes',
     ]);
@@ -292,6 +292,28 @@ describe('new customers', () => {
     });
     expect(r.weeks.find((w) => w.start === '2026-11-09')!.newCustomers).toBe(1);
     expect(r.weeks.find((w) => w.start === '2026-10-26')!.newCustomers).toBe(0);
+  });
+});
+
+describe('new customers from the full history', () => {
+  it('uses firstOrderDay: a regular whose first order was 500 days back is not new, though only the in-window order is loaded', () => {
+    const loaded = [
+      order({ order_id: '1', day: '2026-11-10', customer_ref: 'regular', menu_sales_inr: 300 }),
+      order({ order_id: '2', day: '2026-11-11', customer_ref: 'fresh', menu_sales_inr: 300 }),
+    ];
+    const without = buildStrategy({ orders: loaded, deductions: [], asOf: ASOF });
+    expect(kpi(without, 'newCustomersPerWeek').current).toBeCloseTo(2 / 4, 6); // both look new from the loaded orders alone
+    const r = buildStrategy({
+      orders: loaded,
+      deductions: [],
+      asOf: ASOF,
+      firstOrderDay: new Map([
+        ['regular', '2025-07-10'], // 500 days before the window
+        ['fresh', '2026-11-11'],
+      ]),
+    });
+    expect(kpi(r, 'newCustomersPerWeek').current).toBeCloseTo(1 / 4, 6);
+    expect(r.weeks.find((w) => w.start === '2026-11-09')!.newCustomers).toBe(1);
   });
 });
 
@@ -362,7 +384,9 @@ describe('actions', () => {
     expect(low).toContain('raise the SmartPromos minimum order to ₹199');
     const mkt = r.actions[2].detail;
     expect(mkt).toContain('₹341'); // the fee
-    expect(mkt).toContain('₹170 per new customer'); // 340.85 over 2 new customers
+    expect(mkt).toContain('2 customers ordered for the first time in the same 4 weeks');
+    expect(mkt).toContain('₹170 of marketing fee per new customer if every one is credited to it'); // 340.85 over 2 new customers
+    expect(mkt).not.toContain('brought');
     expect(r.actions.length).toBeLessThanOrEqual(5);
   });
 
@@ -388,5 +412,65 @@ describe('actions', () => {
     const r = build();
     expect(r.actions.at(-1)).toMatchObject({ key: 'billing' });
     expect(r.actions.at(-1)!.detail).toContain('No marketing fee billed for 5 Oct – 11 Oct');
+  });
+});
+
+describe('under-billed weeks', () => {
+  // One ₹1,000 order a week (net sales 1,000, payout 600) and a sales-linked bill per week, before GST:
+  // 70.4, 60.4, 80.4 (weeks of 5, 12, 19 Oct), 10.4 (26 Oct: the odd one out), then 70.4 three times.
+  // Rates 7.04% ×4, 6.04%, 8.04% and 1.04%: usual = median of the six at 3% or more = 7.04%.
+  const weekly: [string, string, number][] = [
+    ['2026-10-05', '2026-10-07', 70.4],
+    ['2026-10-12', '2026-10-14', 60.4],
+    ['2026-10-19', '2026-10-21', 80.4],
+    ['2026-10-26', '2026-10-28', 10.4],
+    ['2026-11-02', '2026-11-04', 70.4],
+    ['2026-11-09', '2026-11-11', 70.4],
+    ['2026-11-16', '2026-11-18', 70.4],
+  ];
+  const fixtureOrders = weekly.map(([, day], i) => order({ order_id: `w${i}`, day, menu_sales_inr: 1000, payout_inr: 600 }));
+  const bills = (skipLast = false) =>
+    weekly
+      .filter((_, i) => !(skipLast && i === 6))
+      .map(([start, , before], i) =>
+        ad({ ref: `G${i}`, amount_inr: before * 1.18, period_start: start, period_end: `${start.slice(0, 8)}${String(Number(start.slice(8)) + 6).padStart(2, '0')}` }),
+      );
+  const fixed = (d: StrategyDeductionRow[]) => d.map((x) => (x.ref === 'G3' ? { ...x, period_end: '2026-11-01' } : x));
+
+  it('notes the week billed under half the usual rate once, not as a zero fee', () => {
+    const r = buildStrategy({ orders: fixtureOrders, deductions: fixed(bills()), asOf: ASOF });
+    expect(r.billingNotes).toEqual([
+      'The week of 26 Oct – 1 Nov was billed ₹12, 1.0% of net sales against a usual 7.0%. Ask Zomato whether the plan was off for part of that week',
+    ]);
+  });
+
+  it('works out the open billing: extra fee and the three KPIs', () => {
+    const r = buildStrategy({ orders: fixtureOrders, deductions: fixed(bills()), asOf: ASOF });
+    const o = r.openBilling!;
+    expect(o.weeks).toEqual(['26 Oct – 1 Nov']);
+    expect(o.extraFee).toBeCloseTo(70.8, 2); // 7.04% × 1,000 × 1.18 = 83.072, less 12.272 billed
+    expect(o.marketingShare).toBeCloseTo(332.288 / 4000, 5); // (261.488 + 70.8) over 4 × 1,000
+    expect(o.bankPerOrder).toBeCloseTo(2067.712 / 4, 1);
+    expect(o.bankPerDay).toBeCloseTo(2067.712 / 28, 2);
+    expect(kpi(r, 'marketingShare').current).toBeCloseTo(261.488 / 4000, 6); // the scorecard itself is unchanged
+  });
+
+  it('has no open billing without an under-billed week, or without a usual rate', () => {
+    const even = buildStrategy({ orders: fixtureOrders, deductions: fixed(bills()).map((d) => (d.ref === 'G3' ? { ...d, amount_inr: 83.072 } : d)), asOf: ASOF });
+    expect(even.openBilling).toBeNull();
+    expect(even.billingNotes).toEqual([]);
+    // fewer than three weeks at 3% or more: the rule is skipped and the zero-fee note still applies
+    const thin = buildStrategy({ orders: fixtureOrders, deductions: [], asOf: ASOF });
+    expect(thin.openBilling).toBeNull();
+    expect(thin.billingNotes).toContain('No marketing fee billed for 5 Oct – 11 Oct');
+  });
+
+  it('marks a part week and keeps it out of the billing rules', () => {
+    const r = buildStrategy({ orders: fixtureOrders, deductions: fixed(bills(true)), asOf: '2026-11-19' }); // a Thursday
+    expect(r.weeks[7]).toMatchObject({ start: '2026-11-16', full: false, fee: 0, orders: 1 });
+    expect(r.weeks[6].full).toBe(true);
+    expect(r.billingNotes).toHaveLength(1);
+    expect(r.billingNotes[0]).toContain('26 Oct – 1 Nov');
+    expect(r.openBilling!.weeks).toEqual(['26 Oct – 1 Nov']);
   });
 });
