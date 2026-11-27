@@ -11,6 +11,8 @@
 //     = public HTTPS logo URL, only if the approved template has an image header]
 //     feedback template: WHATSAPP_TPL_FEEDBACK (default 'order_feedback_1')
 //     [, WHATSAPP_TPL_FEEDBACK_LANG] — see docs/WHATSAPP-FEEDBACK-TEMPLATE.md
+//     Beanies update template: WHATSAPP_TPL_BEANIES (no default) [, WHATSAPP_TPL_BEANIES_LANG]
+//     — see docs/BEANIES-UPDATE-SPEC.md
 //   SMS (Twilio):              TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM
 
 import type { NotificationChannel, NotificationEvent } from '@/lib/types';
@@ -63,6 +65,10 @@ function whatsappTemplateName(event: NotificationEvent): string {
     // quick-reply buttons + a dynamic URL button — see
     // docs/WHATSAPP-FEEDBACK-TEMPLATE.md and lib/feedback/payload.ts.
     feedback: process.env.WHATSAPP_TPL_FEEDBACK || 'order_feedback_1',
+    // Beanies account update (docs/BEANIES-UPDATE-SPEC.md), Utility template
+    // `hioc_beanies_update_1`. No default: dormant until Meta approves it and the
+    // name is saved (the engine skips with a logged reason while this is empty).
+    beanies: process.env.WHATSAPP_TPL_BEANIES || '',
   };
   return map[event];
 }
@@ -89,6 +95,7 @@ function whatsappTemplateLang(event: NotificationEvent): string {
     cancelled: process.env.WHATSAPP_TPL_CANCELLED_LANG,
     bill: process.env.WHATSAPP_TPL_BILL_LANG,
     feedback: process.env.WHATSAPP_TPL_FEEDBACK_LANG,
+    beanies: process.env.WHATSAPP_TPL_BEANIES_LANG,
   };
   return perEvent[event] || process.env.WHATSAPP_TPL_LANG || 'en';
 }

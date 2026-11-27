@@ -9,6 +9,24 @@ import { formatIstTime } from '@/lib/store/hours';
 import { CAFE_NAME } from '@/lib/constants';
 import { absoluteUrl } from '@/lib/url';
 
+/**
+ * The facts of the Beanies account update (event 'beanies'), already formatted
+ * for the message. Built by the engine from the ledger; see
+ * docs/BEANIES-UPDATE-SPEC.md for what each variable means.
+ */
+export interface BeaniesUpdateFacts {
+  /** First name of the account holder, or 'there'. */
+  name: string;
+  /** Beanies earned on this order. */
+  earned: number;
+  /** Balance after this order. */
+  balance: number;
+  /** Whole rupees the balance is worth. */
+  valueInr: number;
+  /** IST day the oldest unspent Beanies expire, e.g. "5 Dec". */
+  expiryDate: string;
+}
+
 export interface RenderedMessage {
   event: NotificationEvent;
   body: string;
@@ -55,7 +73,11 @@ function paymentLabel(method: PaymentMethod | null): string {
   }
 }
 
-export function renderNotification(order: Order, event: NotificationEvent): RenderedMessage {
+export function renderNotification(
+  order: Order,
+  event: NotificationEvent,
+  beanies?: BeaniesUpdateFacts,
+): RenderedMessage {
   const num = `#${formatOrderNumber(order.order_number)}`;
   const name = order.customer_name?.split(' ')[0] || 'there';
   const link = statusLink(order);
@@ -111,6 +133,15 @@ export function renderNotification(order: Order, event: NotificationEvent): Rend
         body: `Hi ${name}, how was your order ${num} at ${CAFE_NAME}? Reply "Loved it", "Okay" or "Not happy", or rate it here: ${link}`,
       };
     }
+    case 'beanies': {
+      // Same wording as the approved hioc_beanies_update_1 template. Facts only,
+      // no invitation back: that is what keeps it a Utility message.
+      const f = beanies ?? { name, earned: 0, balance: 0, valueInr: 0, expiryDate: '-' };
+      return {
+        event,
+        body: `Hi ${f.name}, you earned ${f.earned} HIOC Beanies on order ${formatOrderNumber(order.order_number)}. Your balance is ${f.balance} Beanies, worth ₹${f.valueInr}. The oldest of them expire on ${f.expiryDate}. Reply STOP to stop these updates.`,
+      };
+    }
   }
 }
 
@@ -118,7 +149,11 @@ export function renderNotification(order: Order, event: NotificationEvent): Rend
 // templates, not free text, for proactive messages). The ORDER must match the
 // {{1}},{{2}},… placeholders in each registered template (see the template table
 // in the setup notes). Values are never empty (Meta rejects empty params).
-export function templateVarsFor(order: Order, event: NotificationEvent): string[] {
+export function templateVarsFor(
+  order: Order,
+  event: NotificationEvent,
+  beanies?: BeaniesUpdateFacts,
+): string[] {
   const num = formatOrderNumber(order.order_number);
   const name = order.customer_name?.split(' ')[0] || 'there';
   const link = statusLink(order);
@@ -153,5 +188,12 @@ export function templateVarsFor(order: Order, event: NotificationEvent): string[
       // exactly as formatOrderNumber prints it (e.g. "HIOC-001089") — the
       // template body has no literal '#' before it (unlike order_bill_1).
       return [name, num];
+    case 'beanies': {
+      // hioc_beanies_update_1: {{1}}first name {{2}}Beanies earned {{3}}order number
+      // as formatOrderNumber prints it, e.g. HIOC-001042 (no '#' in the template) {{4}}balance {{5}}₹ value, bare number
+      // {{6}}expiry date of the oldest unspent Beanies, IST, e.g. "5 Dec".
+      const f = beanies ?? { name, earned: 0, balance: 0, valueInr: 0, expiryDate: '-' };
+      return [f.name, String(f.earned), num, String(f.balance), String(f.valueInr), f.expiryDate];
+    }
   }
 }

@@ -79,6 +79,16 @@ export function whatsappReminderHealth(): { configured: boolean; missing: string
   return { configured: missing.length === 0, missing };
 }
 
+/**
+ * The Beanies account update (docs/BEANIES-UPDATE-SPEC.md) goes straight to the
+ * WhatsApp adapter, like the bill, so it needs the Cloud API credentials and the
+ * approved template NAME (WHATSAPP_TPL_BEANIES has no default: dormant until set).
+ */
+export function whatsappBeaniesHealth(): { configured: boolean; missing: string[] } {
+  const missing = missingFrom(['WHATSAPP_TOKEN', 'WHATSAPP_PHONE_ID', 'WHATSAPP_TPL_BEANIES']);
+  return { configured: missing.length === 0, missing };
+}
+
 /** Email bill channel (Resend). */
 export function emailBillHealth(): ChannelHealth {
   const missing = missingFrom(['RESEND_API_KEY', 'RESEND_FROM']);

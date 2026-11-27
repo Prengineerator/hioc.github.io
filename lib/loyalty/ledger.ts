@@ -14,6 +14,7 @@ import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { isMissingColumnError } from '@/lib/api/postgrest';
 import { expiryCutoff, pointsToExpire, type ExpiryRow } from '@/lib/loyalty/expiry';
+import { expiryDateFor } from '@/lib/marketing/points';
 import { LOYALTY_UNIT, beaniesLabel } from '@/lib/loyalty/brand';
 import type { LoyaltyConfig, LoyaltyTransaction } from '@/lib/types';
 import { spendOfferOnBill } from '@/lib/orders/offers';
@@ -253,9 +254,13 @@ async function hasSpendOfferOnBill(admin: Admin, orderId: string): Promise<boole
   return data ? spendOfferOnBill(data as { offer_name?: string | null; offer_discount_inr?: number | null }) : false;
 }
 
-/** Earns points for a completed, paid order (idempotent per order). No Beanies on a bill with a spend offer. */
-export async function earnForOrder(orderId: string): Promise<void> {
-  if (!orderId) return;
+/**
+ * Earns points for a completed, paid order (idempotent per order). No Beanies on a bill with a spend offer.
+ * Returns the Beanies it credited just now: 0 when nothing was credited (no account, not paid,
+ * spend offer, already earned, or a failure). The WhatsApp Beanies update fires only on > 0.
+ */
+export async function earnForOrder(orderId: string): Promise<number> {
+  if (!orderId) return 0;
   const admin = createAdminSupabaseClient();
 
   const order = await loadOrderForLoyalty(admin, orderId);
@@ -263,12 +268,12 @@ export async function earnForOrder(orderId: string): Promise<void> {
   // never earns; only completed + paid orders earn. A counter order linked by
   // phone (VAL-2) reaches this point exactly like a web order does.
   if (!order || !order.loyaltyUserId || order.status !== 'completed' || order.payment_status !== 'paid') {
-    return;
+    return 0;
   }
 
   // A bill with a spend offer on it ("spend ₹1099, get the jar at ₹49") earns
   // no Beanies: that offer can't be combined with them (lib/orders/offers.ts).
-  if (await hasSpendOfferOnBill(admin, orderId)) return;
+  if (await hasSpendOfferOnBill(admin, orderId)) return 0;
 
   // Idempotency: never double-earn for the same order.
   const { data: existing, error: existingError } = await admin
@@ -279,16 +284,16 @@ export async function earnForOrder(orderId: string): Promise<void> {
     .maybeSingle();
   if (existingError) {
     console.error('earnForOrder: idempotency check failed', existingError);
-    return;
+    return 0;
   }
-  if (existing) return;
+  if (existing) return 0;
 
   const config = await getLoyaltyConfig();
-  if (!config) return;
+  if (!config) return 0;
 
   const amountInr = order.total_inr ?? order.subtotal_inr ?? 0;
   const points = computeEarnedPoints(amountInr, config);
-  if (points <= 0) return;
+  if (points <= 0) return 0;
 
   const { error: insertError } = await admin.from('loyalty_transactions').insert({
     user_id: order.loyaltyUserId,
@@ -299,10 +304,11 @@ export async function earnForOrder(orderId: string): Promise<void> {
   });
   if (insertError) {
     console.error('earnForOrder: insert failed', insertError);
-    return;
+    return 0;
   }
 
   await syncAccountCache(admin, order.loyaltyUserId);
+  return points;
 }
 
 /**
@@ -601,6 +607,51 @@ export async function reverseForShopOrder(shopOrderId: string, reason: string): 
 }
 
 const LEDGER_PAGE_SIZE = 1000;
+
+export interface BeaniesStatement {
+  /** Ledger balance (never below zero). */
+  balance: number;
+  /** Whole rupees the balance is worth (balance x inr_per_point, floored like a redemption). */
+  valueInr: number;
+  /** When the oldest unspent Beanies expire (FIFO, lib/loyalty/expiry.ts rules); null = never / nothing unspent. */
+  expiresAt: Date | null;
+}
+
+/**
+ * What the customer's Beanies look like right now, for the WhatsApp account update.
+ * Reads the ledger (so call it after the earn row is written). Pure reads; returns
+ * null, never throws, when anything can't be read: better no message than a wrong one.
+ */
+export async function getBeaniesStatement(userId: string): Promise<BeaniesStatement | null> {
+  if (!userId) return null;
+  try {
+    const config = await getLoyaltyConfig();
+    if (!config) return null;
+    const admin = createAdminSupabaseClient();
+    const rows: ExpiryRow[] = [];
+    for (let from = 0; ; from += LEDGER_PAGE_SIZE) {
+      const { data, error } = await admin
+        .from('loyalty_transactions')
+        .select('points, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, from + LEDGER_PAGE_SIZE - 1);
+      if (error) {
+        console.error('getBeaniesStatement: ledger lookup failed', error);
+        return null;
+      }
+      for (const row of data ?? []) rows.push({ points: row.points as number, created_at: row.created_at as string });
+      if (!data || data.length < LEDGER_PAGE_SIZE) break;
+    }
+    const balance = Math.max(0, Math.floor(rows.reduce((sum, r) => sum + r.points, 0)));
+    const valueInr = Math.floor(balance * (Number(config.inr_per_point) || 0));
+    return { balance, valueInr, expiresAt: expiryDateFor(rows, config.points_expiry_days) };
+  } catch (err) {
+    console.error('getBeaniesStatement: failed', err);
+    return null;
+  }
+}
 const EXPIRE_INSERT_CHUNK = 500;
 
 /**

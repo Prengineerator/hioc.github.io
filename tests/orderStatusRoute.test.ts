@@ -64,19 +64,22 @@ vi.mock('@/lib/permissions', () => ({
 // RCT-1: the route fires sendBillNotification at settle (to === 'completed').
 // Hoisted so the vi.mock factory can reference the spy, and so tests can assert
 // on it.
-const { sendBillNotification } = vi.hoisted(() => ({
-  sendBillNotification: vi.fn(() => Promise.resolve({ email: false, whatsapp: false })),
+const { sendBillNotification, sendBeaniesUpdateNotification, earnForOrder } = vi.hoisted(() => ({
+  sendBillNotification: vi.fn((..._args: unknown[]) => Promise.resolve({ email: false, whatsapp: false })),
+  sendBeaniesUpdateNotification: vi.fn((..._args: unknown[]) => Promise.resolve({ sent: true })),
+  earnForOrder: vi.fn((_id: string) => Promise.resolve(0)),
 }));
 vi.mock('@/lib/notifications/engine', () => ({
   sendOrderNotification: () => Promise.resolve({ sent: true }),
   sendBillNotification,
+  sendBeaniesUpdateNotification,
 }));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderEvent: () => Promise.resolve() }));
 vi.mock('@/lib/store/settings', () => ({ getStoreSettings: () => Promise.resolve({ default_prep_min: 15 }) }));
 // Phase-2 added loyalty earn/reverse hooks to the status route; mock them so the
 // route imports without pulling in the real (server-only) ledger module.
 vi.mock('@/lib/loyalty/ledger', () => ({
-  earnForOrder: () => Promise.resolve(),
+  earnForOrder,
   reverseForOrder: () => Promise.resolve(),
 }));
 // Inventory: a completed order's recipe usage comes off stock
@@ -117,6 +120,9 @@ beforeEach(() => {
   state.compPatch = undefined;
   state.amendmentRow = undefined;
   sendBillNotification.mockClear();
+  sendBeaniesUpdateNotification.mockClear();
+  earnForOrder.mockReset();
+  earnForOrder.mockResolvedValue(0);
   consumeStockForOrder.mockClear();
 });
 
@@ -176,6 +182,66 @@ describe('PATCH /api/orders/[id]/status', () => {
     expect(sendBillNotification).toHaveBeenCalledTimes(1);
     // …and takes the order's recipe usage off stock, attributed to the actor.
     expect(consumeStockForOrder).toHaveBeenCalledWith(UUID, 'staff-1');
+  });
+
+  describe('Beanies WhatsApp update (docs/BEANIES-UPDATE-SPEC.md)', () => {
+    const completing = (over: Record<string, unknown> = {}) => {
+      state.current = {
+        id: UUID, status: 'ready', version: 3, customer_phone: '+919000000000',
+        order_number: 1042, order_type: 'takeaway', payment_status: 'paid',
+        user_id: 'web-user-1', customer_user_id: null, ...over,
+      };
+      state.updated = { ...state.current, status: 'completed', version: 4 };
+    };
+
+    it('sends after the bill, for the account earnForOrder credited, with the Beanies earned', async () => {
+      completing();
+      earnForOrder.mockResolvedValue(25);
+      const order: string[] = [];
+      sendBillNotification.mockImplementationOnce(() => {
+        order.push('bill');
+        return Promise.resolve({ email: false, whatsapp: false });
+      });
+      sendBeaniesUpdateNotification.mockImplementationOnce(() => {
+        order.push('beanies');
+        return Promise.resolve({ sent: true });
+      });
+      const res = await PATCH(req({ status: 'completed' }), params);
+      expect(res.status).toBe(200);
+      expect(order).toEqual(['bill', 'beanies']);
+      expect(sendBeaniesUpdateNotification).toHaveBeenCalledTimes(1);
+      expect(sendBeaniesUpdateNotification.mock.calls[0][0]).toMatchObject({ userId: 'web-user-1', earned: 25 });
+    });
+
+    it('uses the linked customer account for a counter order', async () => {
+      completing({ user_id: null, customer_user_id: 'linked-1' });
+      earnForOrder.mockResolvedValue(25);
+      await PATCH(req({ status: 'completed' }), params);
+      expect(sendBeaniesUpdateNotification.mock.calls[0][0]).toMatchObject({ userId: 'linked-1' });
+    });
+
+    it('sends nothing when the order earned no Beanies', async () => {
+      completing();
+      earnForOrder.mockResolvedValue(0);
+      await PATCH(req({ status: 'completed' }), params);
+      expect(sendBeaniesUpdateNotification).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing when the order is not paid (comp-less unpaid completion is refused anyway)', async () => {
+      completing({ payment_status: 'unpaid' });
+      state.updated = { ...state.current, status: 'completed', version: 4, payment_status: 'unpaid' };
+      earnForOrder.mockResolvedValue(25);
+      await PATCH(req({ status: 'completed' }), params);
+      expect(sendBeaniesUpdateNotification).not.toHaveBeenCalled();
+    });
+
+    it('still answers 200 and never throws when the send fails', async () => {
+      completing();
+      earnForOrder.mockResolvedValue(25);
+      sendBeaniesUpdateNotification.mockRejectedValueOnce(new Error('boom'));
+      const res = await PATCH(req({ status: 'completed' }), params);
+      expect(res.status).toBe(200);
+    });
   });
 
   it('does NOT fire the settle bill on a non-completing transition', async () => {

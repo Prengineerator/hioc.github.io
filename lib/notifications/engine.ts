@@ -17,13 +17,17 @@ import {
   type NotificationAdapter,
   type SendInput,
 } from '@/lib/notifications/adapters';
-import { renderNotification, templateVarsFor } from '@/lib/notifications/templates';
+import { renderNotification, templateVarsFor, type BeaniesUpdateFacts } from '@/lib/notifications/templates';
+import { getBeaniesStatement } from '@/lib/loyalty/ledger';
+import { firstName, formatShortDate } from '@/lib/marketing/templates';
+import { phoneStorageForms, toE164 } from '@/lib/marketing/server/repo';
 import { renderBillEmail } from '@/lib/notifications/billEmail';
 import {
   blockedProviderVars,
   emailBillHealth,
   providerSkipReason,
   warnIfMisconfigured,
+  whatsappBeaniesHealth,
   whatsappBillHealth,
   whatsappReminderHealth,
 } from '@/lib/notifications/health';
@@ -517,4 +521,95 @@ export async function sendBillNotification(
   }
 
   return result;
+}
+
+/**
+ * The expiry date for the Beanies update, "5 Dec" (IST calendar day, no year).
+ * A credit already past its expiry but not yet swept is still spendable, so it
+ * reads as today rather than a date in the past (same clamp the marketing
+ * planner uses).
+ */
+export function beaniesExpiryText(expiresAt: Date, now: Date = new Date()): string {
+  return formatShortDate(expiresAt.getTime() < now.getTime() ? now : expiresAt);
+}
+
+/**
+ * The WhatsApp Beanies account update (docs/BEANIES-UPDATE-SPEC.md): one
+ * informational Utility message per café order that earned Beanies, template
+ * `hioc_beanies_update_1`. Sent right after the bill by the status route only.
+ *
+ * Deliberately NOT gated on flags.marketing, marketing_consent or the marketing
+ * kill switch; it IS gated on flags.notifications and on WHATSAPP_TPL_BEANIES
+ * being set (skip logged while it is not). The phone is ONLY the beneficiary
+ * account's verified profile phone, never order.customer_phone. A STOP in
+ * whatsapp_opt_outs (any spelling) skips it, and a failed opt-out read skips it
+ * too (fail closed). Idempotent per (order, 'beanies', 'whatsapp') through
+ * deliverAndLog. Never throws.
+ */
+export async function sendBeaniesUpdateNotification(params: {
+  order: Order;
+  /** The account earnForOrder credited (loyaltyUserIdFor the order). */
+  userId: string | null;
+  /** What earnForOrder returned. */
+  earned: number;
+}): Promise<{ sent: boolean; skipped?: string; error?: string }> {
+  const { order, userId, earned } = params;
+  try {
+    if (!flags.notifications) return { sent: false, skipped: 'notifications_disabled' };
+    if (!Number.isFinite(earned) || earned <= 0 || !userId) return { sent: false, skipped: 'nothing_earned' };
+
+    const admin = createAdminSupabaseClient();
+    const skip = async (reason: string) => {
+      await logSkip(admin, order, 'beanies', 'whatsapp', reason);
+      return { sent: false, skipped: reason };
+    };
+
+    const health = whatsappBeaniesHealth();
+    if (!health.configured) return skip(`not_configured:${health.missing.join(',')}`);
+
+    const { data: profile, error: profileError } = await admin
+      .from('profiles')
+      .select('name, phone, phone_verified')
+      .eq('id', userId)
+      .maybeSingle();
+    if (profileError) {
+      console.error('beanies update: profile lookup failed', profileError);
+      return skip('profile_lookup_failed');
+    }
+    const phone = profile?.phone_verified === true ? toE164(profile.phone as string | null) : null;
+    if (!phone) return skip('no_verified_phone');
+
+    const { data: optOuts, error: optOutError } = await admin
+      .from('whatsapp_opt_outs')
+      .select('phone')
+      .in('phone', phoneStorageForms(phone));
+    if (optOutError) {
+      console.error('beanies update: opt-out lookup failed', optOutError);
+      return skip('opt_out_lookup_failed');
+    }
+    if ((optOuts ?? []).length > 0) return skip('opted_out');
+
+    const statement = await getBeaniesStatement(userId);
+    if (!statement) return skip('ledger_unreadable');
+    if (!statement.expiresAt) return skip('no_expiry_date');
+
+    const facts: BeaniesUpdateFacts = {
+      name: firstName(profile?.name as string | null),
+      earned,
+      balance: statement.balance,
+      valueInr: statement.valueInr,
+      expiryDate: beaniesExpiryText(statement.expiresAt),
+    };
+    const r = await deliverAndLog(admin, order, 'beanies', whatsappAdapter, {
+      to: phone,
+      channel: 'whatsapp',
+      body: renderNotification(order, 'beanies', facts).body,
+      event: 'beanies',
+      templateVars: templateVarsFor(order, 'beanies', facts),
+    });
+    return { sent: r.sent, skipped: r.skipped, error: r.error };
+  } catch (err) {
+    console.error('sendBeaniesUpdateNotification failed', err);
+    return { sent: false, skipped: 'error' };
+  }
 }

@@ -6,12 +6,13 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isOrderStatus, isUuid } from '@/lib/api/constants';
 import { canTransition } from '@/lib/orders/stateMachine';
 import { getStoreSettings } from '@/lib/store/settings';
-import { sendBillNotification, sendOrderNotification } from '@/lib/notifications/engine';
+import { sendBeaniesUpdateNotification, sendBillNotification, sendOrderNotification } from '@/lib/notifications/engine';
 import { enqueueFeedbackRequest } from '@/lib/feedback/enqueue';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { runAfterResponse } from '@/lib/api/background';
 import { earnForOrder, reverseForOrder } from '@/lib/loyalty/ledger';
+import { loyaltyUserIdFor } from '@/lib/loyalty/beneficiary';
 import { consumeStockForOrder } from '@/lib/inventory/server';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import type { Order, OrderType, PaymentStatus } from '@/lib/types';
@@ -211,8 +212,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   // Ledger writes stay inline: they decide the order's points balance and must
   // land before we reply.
   const completedSale = to === 'completed' && current.order_kind !== 'coffee_pass';
+  let beaniesEarned = 0;
   if (completedSale) {
-    await earnForOrder(id);
+    // Beanies credited just now (0 = nothing): drives the WhatsApp Beanies update below.
+    beaniesEarned = Number(await earnForOrder(id)) || 0;
   } else if (to === 'rejected' || to === 'cancelled') {
     await reverseForOrder(id);
   }
@@ -259,6 +262,23 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 
       // Push the change to any live customer status page (< 2s, F2).
       await broadcastOrderEvent(id, to);
+
+      // Beanies account update (docs/BEANIES-UPDATE-SPEC.md): after the bill and
+      // after the status page has been told, so a slow WhatsApp call never holds
+      // up the customer's screen. Only for a paid sale that earned Beanies just
+      // now. Never throws; idempotent per order in the engine. Not a marketing
+      // message: no marketing gate.
+      if (completedSale && order.payment_status === 'paid' && beaniesEarned > 0) {
+        try {
+          await sendBeaniesUpdateNotification({
+            order,
+            userId: loyaltyUserIdFor(current as { user_id?: string | null; customer_user_id?: string | null }),
+            earned: beaniesEarned,
+          });
+        } catch (beaniesError) {
+          console.error('beanies update notification failed', beaniesError);
+        }
+      }
     })(),
   );
 
