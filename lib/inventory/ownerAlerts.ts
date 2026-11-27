@@ -374,7 +374,7 @@ async function buildAlert(admin: SupabaseClient, event: OwnerAlertEvent, request
   };
 }
 
-export async function alreadySent(admin: SupabaseClient, event: WarehouseAlertEvent, requestId: string, channel: AlertChannel, to: string) {
+async function alreadySent(admin: SupabaseClient, event: WarehouseAlertEvent, requestId: string, channel: AlertChannel, to: string) {
   const { data } = await admin
     .from('warehouse_alerts')
     .select('id')
@@ -391,7 +391,7 @@ export async function alreadySent(admin: SupabaseClient, event: WarehouseAlertEv
 export async function logAlert(
   admin: SupabaseClient,
   row: { event: WarehouseAlertEvent; requestId: string; channel: AlertChannel; to: string; status: AlertStatus; detail: string; providerRef: string },
-): Promise<{ code?: string; message?: string } | null> {
+): Promise<{ code?: string } | null> {
   const { error } = await admin.from('warehouse_alerts').insert({
     event: row.event,
     request_id: row.requestId,
@@ -403,7 +403,7 @@ export async function logAlert(
   });
   // Postgres echoes the failing row (it holds the address) in the error detail, so only the code is logged.
   if (error) console.error('warehouse_alerts log insert failed', row.event, error.code);
-  return error ?? null;
+  return error ? { code: error.code } : null;
 }
 
 /**

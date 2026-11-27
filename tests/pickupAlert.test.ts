@@ -24,7 +24,9 @@ const state: {
   insertError: { code: string; message: string } | null;
   insertThrows: boolean;
   updates: Row[];
-} = { request: {}, profiles: [], staff: [], alerts: [], insertError: null, insertThrows: false, updates: [] };
+  staffReadError: { code: string; message: string } | null;
+  hideReads: number;
+} = { request: {}, profiles: [], staff: [], alerts: [], insertError: null, insertThrows: false, updates: [], staffReadError: null, hideReads: 0 };
 
 vi.mock('@/lib/flags', () => ({ flags: new Proxy({}, { get: () => true }) }));
 vi.mock('@/lib/url', () => ({ absoluteUrl: (p: string) => `https://hioc.in${p}` }));
@@ -80,7 +82,10 @@ function makeAdmin() {
             }
             return Promise.resolve({ data: state.request, error: null });
           }
-          if (table === 'staff_accounts') return Promise.resolve({ data: state.staff.find((p) => p.user_id === filters.user_id) ?? null, error: null });
+          if (table === 'staff_accounts') {
+            if (state.staffReadError) return Promise.resolve({ data: null, error: state.staffReadError });
+            return Promise.resolve({ data: state.staff.find((p) => p.user_id === filters.user_id) ?? null, error: null });
+          }
           return Promise.resolve({ data: null, error: null });
         },
         then: (resolve: (v: unknown) => void) => {
@@ -92,6 +97,10 @@ function makeAdmin() {
             if (counting) {
               const n = state.alerts.filter((r) => r.event === filters.event && r.status === filters.status && String(r.created_at) >= since).length;
               return resolve({ data: null, count: n, error: null });
+            }
+            if (state.hideReads > 0) {
+              state.hideReads -= 1;
+              return resolve({ data: [], error: null });
             }
             return resolve({
               data: state.alerts.filter(
@@ -155,6 +164,8 @@ beforeEach(() => {
   state.insertError = null;
   state.insertThrows = false;
   state.updates = [];
+  state.staffReadError = null;
+  state.hideReads = 0;
   waSend.mockReset();
   waSend.mockImplementation(() => Promise.resolve({ ok: true, providerRef: 'wamid.1', error: '' }));
   sendStockAssignedEmail.mockClear();
@@ -373,8 +384,68 @@ describe('claim before send, and the provider', () => {
     expect(pickupRows()[0]).toMatchObject({ status: 'sent' });
     expect(String(pickupRows()[0].detail)).toMatch(/not confirmed/i);
     vi.useRealTimers();
-    expect((await assign({ assigneeId: VIKRAM })).json).toMatchObject({ whatsapp: 'already_sent' });
+    expect((await assign({ assigneeId: VIKRAM })).json).toMatchObject({ whatsapp: 'not_confirmed' });
     expect(waSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('an earlier row that nobody confirmed', () => {
+  const earlier = (detail: string) => ({
+    id: 'e1', event: 'pickup_assigned', request_id: REQ, channel: 'whatsapp', to_address: '+919812345678', status: 'sent', detail, created_at: new Date().toISOString(),
+  });
+
+  it('still "sending" or "Not confirmed": not_confirmed, nothing sent', async () => {
+    for (const detail of ['sending', 'Not confirmed: no answer from WhatsApp within 8 seconds. It may still arrive.']) {
+      state.alerts = [earlier(detail)];
+      expect((await assign({ assigneeId: VIKRAM })).json).toMatchObject({ whatsapp: 'not_confirmed' });
+    }
+    expect(waSend).not.toHaveBeenCalled();
+  });
+
+  it('confirmed by WhatsApp (empty detail): already_sent', async () => {
+    state.alerts = [earlier('')];
+    expect((await assign({ assigneeId: VIKRAM })).json).toMatchObject({ whatsapp: 'already_sent' });
+    expect(waSend).not.toHaveBeenCalled();
+  });
+
+  it('a 23505 on the claim with an unconfirmed row: not_confirmed, nothing sent', async () => {
+    state.alerts = [earlier('sending')];
+    state.hideReads = 1; // the first read misses it (a race); the claim is then refused
+    expect((await assign({ assigneeId: VIKRAM })).json).toMatchObject({ whatsapp: 'not_confirmed' });
+    expect(waSend).not.toHaveBeenCalled();
+  });
+
+  it('a 23505 on the claim with a confirmed row: already_sent', async () => {
+    state.alerts = [earlier('')];
+    state.hideReads = 1;
+    expect((await assign({ assigneeId: VIKRAM })).json).toMatchObject({ whatsapp: 'already_sent' });
+  });
+});
+
+describe('a failed read is not "no number saved"', () => {
+  it('a staff_accounts read error: failed, no row, nothing sent, log has the code and no number', async () => {
+    state.staffReadError = { code: '57014', message: 'timeout +919812345678' };
+    const err = quiet();
+    const r = await assign({ assigneeId: VIKRAM });
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ ok: true, emailed: 'sent', whatsapp: 'failed' });
+    expect(state.alerts).toEqual([]);
+    expect(waSend).not.toHaveBeenCalled();
+    const logged = JSON.stringify(err.mock.calls);
+    expect(logged).toContain('57014');
+    expect(logged).not.toContain('9812345678');
+  });
+});
+
+describe('the owner alert log helper', () => {
+  it('logAlert returns only the code, never the database error', async () => {
+    const { logAlert } = await import('@/lib/inventory/ownerAlerts');
+    state.insertError = { code: '23514', message: 'Failing row contains (+919812345678)' };
+    quiet();
+    const out = await logAlert(makeAdmin() as never, { event: 'pickup_assigned', requestId: REQ, channel: 'whatsapp', to: '+919812345678', status: 'sent', detail: '', providerRef: '' });
+    expect(out).toEqual({ code: '23514' });
+    state.insertError = null;
+    expect(await logAlert(makeAdmin() as never, { event: 'pickup_assigned', requestId: REQ, channel: 'whatsapp', to: '', status: 'skipped', detail: 'x', providerRef: '' })).toBeNull();
   });
 });
 

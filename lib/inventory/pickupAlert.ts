@@ -30,7 +30,7 @@ import { whatsappAdapter } from '@/lib/notifications/adapters';
 import { indianE164HonouringPlus } from '@/lib/phone';
 import { formatQty } from '@/lib/inventory/rules';
 import type { PickupResult } from '@/lib/inventory/pickupNotice';
-import { alreadySent, logAlert, waVar } from '@/lib/inventory/ownerAlerts';
+import { logAlert, waVar } from '@/lib/inventory/ownerAlerts';
 
 export type { PickupResult };
 
@@ -87,6 +87,32 @@ type ReqRow = {
   stock_request_lines: { qty_requested: number; inventory_items: { name: string; unit: string } | null }[] | null;
 };
 
+/**
+ * The 'sent' row for this number and request, if any, and whether WhatsApp
+ * confirmed it. Still "sending" (the function stopped before the answer) or
+ * "Not confirmed…" (no answer in time) means nobody knows it arrived.
+ */
+async function readSent(
+  admin: SupabaseClient,
+  requestId: string,
+  to: string,
+): Promise<{ found: boolean; confirmed: boolean; error?: string }> {
+  const { data, error } = await admin
+    .from('warehouse_alerts')
+    .select('detail')
+    .eq('event', 'pickup_assigned')
+    .eq('request_id', requestId)
+    .eq('channel', 'whatsapp')
+    .eq('to_address', to)
+    .eq('status', 'sent')
+    .limit(1);
+  if (error) return { found: false, confirmed: false, error: error.code ?? '' };
+  const row = (Array.isArray(data) ? data[0] : null) as { detail?: string | null } | null;
+  if (!row) return { found: false, confirmed: false };
+  const detail = row.detail ?? '';
+  return { found: true, confirmed: !(detail === 'sending' || detail.startsWith('Not confirmed')) };
+}
+
 const TIMED_OUT = Symbol('timed out');
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
@@ -121,6 +147,11 @@ export async function sendPickupAlert(
         .maybeSingle(),
       admin.from('staff_accounts').select('phone').eq('user_id', args.userId).maybeSingle(),
     ]);
+    if (reqRes.error || acctRes.error) {
+      // A failed read is not "no number saved": no row, no send.
+      console.error('pickup alert: could not read the request or the number', reqRes.error?.code ?? '', acctRes.error?.code ?? '');
+      return 'failed';
+    }
     const req = (reqRes.data as ReqRow | null) ?? null;
     if (!req) {
       console.error('pickup alert: request not found');
@@ -132,7 +163,12 @@ export async function sendPickupAlert(
       await logAlert(admin, { ...base, to: '', status: 'skipped', detail: 'No WhatsApp number saved for the delivery person' });
       return 'no_number';
     }
-    if (await alreadySent(admin, 'pickup_assigned', requestId, 'whatsapp', to)) return 'already_sent';
+    const existing = await readSent(admin, requestId, to);
+    if (existing.error) {
+      console.error('pickup alert: could not check earlier sends', existing.error);
+      return 'failed';
+    }
+    if (existing.found) return existing.confirmed ? 'already_sent' : 'not_confirmed';
 
     // Daily limit: fail closed if it cannot be counted.
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -166,7 +202,10 @@ export async function sendPickupAlert(
       .select('id')
       .maybeSingle();
     if (claim.error) {
-      if (claim.error.code === '23505') return 'already_sent';
+      if (claim.error.code === '23505') {
+        const raced = await readSent(admin, requestId, to);
+        return raced.found && !raced.confirmed ? 'not_confirmed' : 'already_sent';
+      }
       console.error(
         `pickup alert: the attempt could not be recorded (code ${claim.error.code ?? 'unknown'}), so nothing was sent. ` +
           `If the code is 23514, run ${PICKUP_MIGRATION_FILE} on the live database (Hioc India).`,
