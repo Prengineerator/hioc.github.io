@@ -11,7 +11,7 @@ Every customer who earns Beanies on a café order gets one short WhatsApp
 **account update**. It goes right after their bill, whether or not they ever
 tapped "Yes, send me offers":
 
-> Hi Asha, you earned 25 HIOC Beanies on order #1042. Your balance is 120
+> Hi Asha, you earned 25 HIOC Beanies on order HIOC-001042. Your balance is 120
 > Beanies, worth ₹120. The oldest of them expire on 5 Dec. Reply STOP to stop
 > these updates.
 
@@ -46,14 +46,14 @@ move from sending on their own to **Approve first**.
   English.
 
   ```
-  Hi {{1}}, you earned {{2}} HIOC Beanies on order #{{3}}. Your balance is {{4}} Beanies, worth ₹{{5}}. The oldest of them expire on {{6}}. Reply STOP to stop these updates.
+  Hi {{1}}, you earned {{2}} HIOC Beanies on order {{3}}. Your balance is {{4}} Beanies, worth ₹{{5}}. The oldest of them expire on {{6}}. Reply STOP to stop these updates.
   ```
 
   | Var | Meaning | Sample |
   |---|---|---|
   | `{{1}}` | First name, or "there" | `Asha` |
   | `{{2}}` | Beanies earned on this order | `25` |
-  | `{{3}}` | Order number | `1042` |
+  | `{{3}}` | Order number as printed on the bill (no `#` in front) | `HIOC-001042` |
   | `{{4}}` | Balance after this order | `120` |
   | `{{5}}` | ₹ value of the balance, bare number | `120` |
   | `{{6}}` | Date the oldest unspent Beanies expire, IST, e.g. `5 Dec` | `5 Dec` |
