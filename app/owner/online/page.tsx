@@ -468,7 +468,15 @@ export default async function OwnerOnlineOrdersPage({
         </p>
       </div>
 
-      <Filters range={range} platform={platform} />
+      <div className="flex flex-wrap items-center gap-3">
+        <Filters range={range} platform={platform} />
+        <Link
+          href="/owner/online/strategy"
+          className="rounded-full border border-tan-dark bg-white px-3 py-1 text-xs font-bold text-charcoal hover:bg-tan-dark hover:text-white"
+        >
+          Strategy and targets
+        </Link>
+      </div>
       <OutOfPeriod behind={behind} range={range} platform={platform} today={today} />
 
       {!data ? (

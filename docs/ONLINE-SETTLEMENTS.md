@@ -50,6 +50,31 @@ Code: `lib/online-settlements/` (parsers `zomato.ts` and `swiggy.ts`, shared cel
 `mailbox.ts`, pipeline `ingest.ts`, money math `summary.ts`), routes in `app/api/cron/online-reports` and
 `app/api/owner/online-reports/`.
 
+## Strategy and targets
+
+Owner → Online orders → **Strategy and targets** (`/owner/online/strategy`) is a scorecard worked out from the
+same stored reports each time the page opens, so it updates itself when a new weekly report is read. Zomato
+only for now (Swiggy has too little data). It shows the last 4 weeks against the 4 weeks before and nine
+targets (met, close = within 5% on the wrong side, or off target), a short list of what to do next, an average
+order broken into where the money goes, the offers used grouped by their minimum order, and the marketing fee
+week by week with any bills that look wrong.
+
+- **Window**: 28 days ending on the latest delivered order's day (IST); the previous window is the 28 days
+  before. Shares and averages are over delivered orders.
+- **Marketing**: every `ADS` deduction, spread evenly over the days it covers, GST included. All bills sharing
+  a campaign id are one campaign: *fixed-budget ads* if every bill is a whole rupee before 18% GST (a budget
+  plus GST), otherwise a *sales-linked fee* (the café's Grow Maxx plan), which moves with the week's sales.
+- **Offers**: the minimum order is the number after `ON` at the end of the offer code
+  (`SmartPromos GETOFF120ON199` is 199). Orders on offers under ₹199 are the "low minimum" share.
+- **New customers**: customers whose first delivered order in all loaded orders (the last 400 days) falls in the
+  window, per week.
+- **In your bank**: the payout of every order in the window, any status, minus marketing; per order and per day.
+- **Billing notes**: a sales-linked bill labelled as one day that is over 25% of that day's net sales (net order
+  value minus GST from the customer), and any full week with orders but no marketing fee billed.
+
+The targets are the `STRATEGY_TARGETS` constant in `lib/online-settlements/strategy.ts`: change a number
+there. Math is in `strategy.ts`, reads in `loadStrategy.ts`.
+
 ## What each platform's report holds
 
 | | Zomato | Swiggy |

@@ -130,7 +130,7 @@ export function istDay(ts: string): string {
   return new Date(new Date(ts).getTime() + IST_MS).toISOString().slice(0, 10);
 }
 
-function addDays(day: string, k: number): string {
+export function addDays(day: string, k: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + k * DAY_MS).toISOString().slice(0, 10);
 }
 
