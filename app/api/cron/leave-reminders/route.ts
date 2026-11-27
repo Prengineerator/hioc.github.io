@@ -3,6 +3,7 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { errorResponse } from '@/lib/api/http';
 import { plannableWeek, daysUntilDeadline } from '@/lib/leave/week';
 import { istBusinessDate } from '@/lib/attendance/businessDate';
+import { reminderPhoneMap } from '@/lib/leave/reminderPhone';
 import type { LeaveRequest, LeaveReminderKind } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,7 @@ interface Recipient {
   id: string;
   name: string;
   role: string;
-  phone: string;
+  phone: string | null;
 }
 
 export async function GET(request: Request) {
@@ -57,16 +58,28 @@ export async function GET(request: Request) {
 
   const admin = createAdminSupabaseClient();
 
-  const [{ data: profileRows }, { data: leaveRows }] = await Promise.all([
-    admin.from('profiles').select('id, name, role, phone').in('role', ['staff', 'manager']),
+  // Numbers come from staff_accounts.phone (what the owner types on the Staff
+  // screen), NOT profiles.phone, which is the customer-account number.
+  const [{ data: profileRows }, { data: leaveRows }, { data: staffRows, error: staffError }] = await Promise.all([
+    admin.from('profiles').select('id, name, role').in('role', ['staff', 'manager']),
     admin
       .from('leave_requests')
       .select('user_id, status')
       .eq('week_start', week.weekStart)
       .neq('status', 'withdrawn'),
+    admin.from('staff_accounts').select('user_id, phone'),
   ]);
 
-  const people = (profileRows ?? []) as Recipient[];
+  if (staffError) {
+    // Code only: never log row data or phone numbers.
+    console.error('leave reminder: staff_accounts read failed', (staffError as { code?: string }).code);
+  }
+  const phones = reminderPhoneMap(staffError ? [] : (staffRows as { user_id?: unknown; phone?: unknown }[] | null));
+
+  const people: Recipient[] = ((profileRows ?? []) as Omit<Recipient, 'phone'>[]).map((p) => ({
+    ...p,
+    phone: phones.get(p.id) ?? null,
+  }));
   const requests = (leaveRows ?? []) as Pick<LeaveRequest, 'user_id' | 'status'>[];
   const planned = new Set(requests.map((r) => r.user_id));
   const pending = requests.filter((r) => r.status === 'requested').length;
@@ -115,9 +128,11 @@ export async function GET(request: Request) {
   for (const target of targets) {
     const skipReason = !templateConfigured
       ? 'WHATSAPP_TPL_LEAVE_REMINDER not configured — awaiting Meta template approval'
-      : !target.person.phone
-        ? 'no phone number on the staff profile'
-        : 'leave reminder template approved but the send is not implemented yet';
+      : staffError
+        ? 'could not read staff phone numbers (staff_accounts)'
+        : !target.person.phone
+          ? 'no valid mobile number in the Phone field on the owner portal Staff screen'
+          : 'leave reminder template approved but the send is not implemented yet';
 
     // Idempotent on (user, week, kind, channel, day): a retried or twice-run
     // cron must not nudge the same person twice.

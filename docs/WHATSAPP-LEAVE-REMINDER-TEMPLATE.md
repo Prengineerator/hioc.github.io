@@ -68,7 +68,7 @@ Name it `leave_decide_reminder_1` and it will need its own env var.
 
 1. Set `WHATSAPP_TPL_LEAVE_REMINDER=leave_plan_reminder_1` in Vercel (Production **and** Preview).
 2. Confirm `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_ID` are already set — they are, since the bill sends.
-3. Make sure staff have phone numbers on `profiles.phone`. The cron logs `no phone number on the staff profile` per person otherwise, which is visible in `leave_reminder_log`.
+3. Make sure every team member has a valid Indian mobile number in the **Phone** field on the owner portal's Staff screen (Staff → Add/Edit → "Phone (optional)"). That number is stored in `staff_accounts.phone`. `profiles.phone` is the customer-account number and is not used. The cron logs `no valid mobile number in the Phone field on the owner portal Staff screen` per person otherwise (or `could not read staff phone numbers (staff_accounts)` if the read itself fails), which is visible in `leave_reminder_log`.
 4. Wire the send itself. **This is a code change, small but real** — `app/api/cron/leave-reminders/route.ts` currently computes the skip reason where the send belongs; the adapter call goes exactly there, and the row's `status` becomes `sent`.
 5. Verify: `select kind, status, skip_reason, count(*) from leave_reminder_log group by 1,2,3;`
 
