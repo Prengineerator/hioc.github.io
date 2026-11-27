@@ -69,6 +69,9 @@ cp .env.local.example .env.local
 # then paste the three values in
 ```
 
+The live project is **"Hioc India"**. The older "Hioc Coffee" project is retired; never
+point these values at it. Read `CLAUDE.md` at the repo root before running any script.
+
 ## One-time Supabase setup (for a non-technical cafe owner)
 
 1. **Create a free Supabase project**
@@ -154,8 +157,8 @@ To build for production: `npm run build` then `npm run start`.
 Any host that runs Next.js works (e.g. Vercel is the simplest — connect the repo,
 add the three env vars above in the project's settings, deploy). No separate
 backend or server to stand up — the API routes ship inside the Next.js app itself.
-On Vercel, serverless functions are pinned to `icn1` (Seoul) via `vercel.json` so
-they sit next to the Supabase database in `ap-northeast-2`.
+On Vercel, serverless functions are pinned to `bom1` (Mumbai) via `vercel.json` so
+they sit next to the Supabase database (the "Hioc India" project) in `ap-south-1`.
 
 ## What's in the seed menu
 
@@ -185,7 +188,9 @@ they sit next to the Supabase database in `ap-northeast-2`.
   item is a manual toggle in `/staff/menu` — nothing auto-disables an item.
   (Stock tracking — requests, POS-verified receiving with expiry dates,
   recipes, and auto-hiding an item whose ingredient runs out — now exists
-  behind a flag: see `docs/INVENTORY-SPEC.md`.)
+  behind a flag: see `docs/INVENTORY-SPEC.md`. A warehouse — the owner's
+  stock sheet, requests filled from it with transit, delivery people,
+  matching and owner alerts — is behind its own flag: `docs/WAREHOUSE-SPEC.md`.)
 - **No analytics/reporting dashboard.** `/staff` shows only today's live queue
   (or `?all=true` via the API) — no sales totals, best-sellers, or exports.
 - **No multi-location support.** The app assumes a single cafe/pickup location

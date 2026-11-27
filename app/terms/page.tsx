@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS, RITUAL_POLICY_UPDATED } from '@/lib/legal';
+import { BUSINESS, policyUpdated } from '@/lib/legal';
 import { flags } from '@/lib/flags';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 
@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: 'Terms & Conditions' };
 
 export default function TermsPage() {
   return (
-    <PolicyLayout title="Terms & Conditions" updated={flags.coffeePass ? RITUAL_POLICY_UPDATED : undefined}>
+    <PolicyLayout title="Terms & Conditions" updated={policyUpdated(flags)}>
       <p>
         These Terms &amp; Conditions (&ldquo;Terms&rdquo;) govern your use of the {BUSINESS.name}{' '}
         website and order-ahead service, operated by {BUSINESS.legalName}. By placing an order or
@@ -19,8 +19,19 @@ export default function TermsPage() {
         <p>
           {BUSINESS.name} is a café offering an order-ahead service: you browse our menu, place an
           order online, and collect it at our counter at {BUSINESS.address}. Orders are prepared for
-          pickup; we do not currently offer delivery.
+          pickup; we do not currently offer delivery{flags.shop ? ' of café orders' : ''}.
         </p>
+        {/* Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md): only while it is switched on. */}
+        {flags.shop ? (
+          <p>
+            We also sell packaged {BUSINESS.name} Premium Instant Coffee online, paid in advance and
+            shipped by courier to addresses in India. How those orders are shipped, cancelled and
+            refunded is set out in our{' '}
+            <a href="/shipping-delivery" className="text-tan-dark hover:underline">Shipping &amp; Delivery</a> and{' '}
+            <a href="/refund-cancellation" className="text-tan-dark hover:underline">Refund &amp; Cancellation</a>{' '}
+            policies.
+          </p>
+        ) : null}
       </PolicySection>
 
       <PolicySection heading="2. Eligibility">

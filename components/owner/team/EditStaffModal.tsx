@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import { ToggleSwitch } from '@/components/ui/ToggleSwitch';
+import { flags } from '@/lib/flags';
 import {
   LOGIN_DOMAIN,
   loginEmailFor,
@@ -29,6 +30,7 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
   const [phone, setPhone] = useState('');
   const [role, setRole] = useState<ManageableRole>('staff');
   const [handlesCash, setHandlesCash] = useState(true);
+  const [warehouseAccess, setWarehouseAccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const [touched, setTouched] = useState(false);
@@ -44,6 +46,7 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
     setPhone(member.phone ?? '');
     setRole(member.role === 'manager' ? 'manager' : 'staff');
     setHandlesCash(member.handlesCash ?? true);
+    setWarehouseAccess(member.warehouseAccess === true);
     setFormError('');
     setTouched(false);
   }, [member]);
@@ -76,6 +79,9 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
     setSubmitting(true);
     try {
       const body: UpdateStaffBody = { name: name.trim(), role, phone: phone.trim(), handlesCash };
+      // Only when it changed, so editing anything else still saves on a
+      // database without supabase/2026-11-warehouse-access.sql.
+      if (warehouseAccess !== (member.warehouseAccess === true)) body.warehouseAccess = warehouseAccess;
       if (normalizedLoginId) body.loginId = normalizedLoginId;
       if (normalizedPersonalEmail) body.personalEmail = normalizedPersonalEmail;
 
@@ -155,6 +161,20 @@ export function EditStaffModal({ member, onClose, onUpdated }: EditStaffModalPro
           </span>
           <ToggleSwitch checked={handlesCash} onChange={setHandlesCash} label="Handles cash" />
         </div>
+        {/* WH-D16: a manager already works the warehouse side, so the switch
+            is only for staff. */}
+        {flags.warehouse && role === 'staff' ? (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-line p-3">
+            <span>
+              <span className="block text-sm font-bold text-charcoal">Warehouse runs</span>
+              <span className="block text-xs text-muted">
+                Can record what is taken from the warehouse and send stock back to it. Someone else still counts it in at the
+                store.
+              </span>
+            </span>
+            <ToggleSwitch checked={warehouseAccess} onChange={setWarehouseAccess} label="Warehouse runs" />
+          </div>
+        ) : null}
         {formError ? (
           <p role="alert" className="text-sm font-bold text-red-700">
             {formError}

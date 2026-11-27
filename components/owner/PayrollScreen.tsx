@@ -1,10 +1,13 @@
 'use client';
 
-// PAY-3 / PAY-4 / PAY-5 — review a month, finalize it, export it.
+// PAY-3 / PAY-4 / PAY-5 — review a month, finalize it ONE STAFFER AT A TIME,
+// export it.
 //
 // The expandable derivation is not a nicety. An owner who cannot see where a
 // number came from will re-check it by hand, and then the product has saved
-// them nothing. Every row opens into the days that produced it.
+// them nothing. Every row opens into the days that produced it — and, for a
+// draft, into the deductions the rules propose, none of which is taken until
+// the owner ticks it.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { istDateIso } from '@/lib/api/date';
@@ -13,7 +16,9 @@ import { DataTable } from '@/components/ui/DataTable';
 interface Segment {
   monthlySalaryInr: number;
   contractedHoursPerDay: number;
-  workingDays: number;
+  daysInMonth: number;
+  paidLeaves: number;
+  payableDays: number;
   expectedMinutes: number;
   paidMinutes: number;
   otMinutes: number;
@@ -28,9 +33,21 @@ interface DayInput {
   isLate: boolean;
 }
 
+interface AdvanceItem {
+  id: string;
+  given_on: string;
+  amount_inr: number;
+  note: string;
+  /** Counted by a finalized month — cannot be removed until that month is reversed. */
+  locked: boolean;
+}
+
 interface Line {
   user_id: string;
   name: string;
+  /** Payroll is finalized per staffer; a finalized line is a frozen snapshot. */
+  finalized: boolean;
+  run: { id: string; finalized_at: string | null } | null;
   daysPresent: number;
   daysHalf: number;
   daysAbsent: number;
@@ -42,13 +59,24 @@ interface Line {
   lateMarks: number;
   basePayInr: number;
   otPayInr: number;
+  /** Late-mark deduction actually taken (finalized lines only; 0 on a draft). */
   deductionsInr: number;
-  // CC-5 (docs/PHASE-5-CASH-COUNTS.md): approved cash-drawer shortages
-  // already deducted into netPayInr; cashShortageClamped is true when the
-  // shortage exceeded what was left to pay, so net pay was clamped at 0.
+  /** Cash shortage actually taken (finalized lines only; 0 on a draft). */
   cashShortageInr: number;
-  cashShortageClamped: boolean;
   adjustmentsInr: number;
+  adjustmentReason: string;
+  /** What the rules would deduct — shown, never taken without the owner's tick. */
+  proposedDeductions: { lateInr: number; cashShortageInr: number };
+  appliedDeductions: { late: boolean; cashShortage: boolean };
+  netBeforeDeductionsInr: number;
+  deductionsClamped: boolean;
+  /** Advance still owed going into this month (draft: before taking; finalized: frozen). */
+  advanceOutstandingInr: number;
+  /** Advance taken off (finalized lines only; a draft previews it via settle()). */
+  advanceInr: number;
+  advanceCarriedInr: number;
+  advances: AdvanceItem[];
+  advanceCarriedFromEarlierInr: number;
   netPayInr: number;
   unconfigured: boolean;
   blocked: boolean;
@@ -56,18 +84,16 @@ interface Line {
   days: DayInput[];
 }
 
-interface Draft {
+interface Month {
   month: string;
-  finalized: false;
   lines: Line[];
+  finalizedCount: number;
   blocked: boolean;
 }
 
-interface Finalized {
-  month: string;
-  finalized: true;
-  run: { id: string; finalized_at: string; period_start: string; period_end: string };
-  lines: Record<string, unknown>[];
+interface Choice {
+  late: boolean;
+  cash: boolean;
 }
 
 // SA-5 — mirrors lib/payroll/payslipEmail.ts's PayslipStatus.
@@ -80,11 +106,58 @@ interface PayslipStatus {
   sentAt: string | null;
 }
 
+const NO_CHOICE: Choice = { late: false, cash: false };
+
 const rupees = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const hm = (m: number) => `${Math.floor(m / 60)}h ${m % 60}m`;
 
 function currentMonth(): string {
   return istDateIso().slice(0, 7);
+}
+
+function monthLabel(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  if (!y || !m) return month;
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-IN', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/**
+ * Net pay with the ticked deductions taken. Mirrors settleDeductions in
+ * lib/payroll/compute.ts exactly (whole rupees, clamped at 0), so the number
+ * shown before finalizing is the number finalize freezes.
+ */
+function netWith(l: Line, c: Choice): number {
+  return settle(l, c).net;
+}
+
+/**
+ * Mirrors computePayrollLine's order: earned → ticked deductions (clamped at 0)
+ * → advance = min(outstanding, what is left). A finalized line is read back.
+ */
+function settle(l: Line, c: Choice): { net: number; advance: number; carried: number } {
+  if (l.finalized) {
+    return { net: l.netPayInr, advance: l.advanceInr ?? 0, carried: l.advanceCarriedInr ?? 0 };
+  }
+  const taken =
+    (c.late ? l.proposedDeductions.lateInr : 0) + (c.cash ? l.proposedDeductions.cashShortageInr : 0);
+  const raw = l.netBeforeDeductionsInr - taken;
+  const afterDeductions = taken > 0 && raw < 0 ? 0 : raw;
+  const outstanding = l.advanceOutstandingInr ?? 0;
+  const advance = Math.min(outstanding, Math.max(0, afterDeductions));
+  return { net: afterDeductions - advance, advance, carried: outstanding - advance };
+}
+
+function takenWith(l: Line, c: Choice): number {
+  if (l.finalized) return l.deductionsInr + l.cashShortageInr;
+  return (c.late ? l.proposedDeductions.lateInr : 0) + (c.cash ? l.proposedDeductions.cashShortageInr : 0);
+}
+
+function proposedTotal(l: Line): number {
+  return l.proposedDeductions.lateInr + l.proposedDeductions.cashShortageInr;
 }
 
 /** Escapes a CSV cell, including the leading characters Excel treats as formulas. */
@@ -97,11 +170,13 @@ function csvCell(value: string | number): string {
 
 export function PayrollScreen() {
   const [month, setMonth] = useState(currentMonth);
-  const [data, setData] = useState<Draft | Finalized | null>(null);
+  const [data, setData] = useState<Month | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [choices, setChoices] = useState<Record<string, Choice>>({});
+  const [busyUser, setBusyUser] = useState<string | null>(null);
+  const [rowError, setRowError] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,98 +200,80 @@ export function PayrollScreen() {
     void load();
   }, [load]);
 
-  const draft = data && !data.finalized ? (data as Draft) : null;
-  const finalized = data && data.finalized ? (data as Finalized) : null;
-
-  const [payslips, setPayslips] = useState<PayslipStatus[]>([]);
-  const [payslipsLoading, setPayslipsLoading] = useState(false);
-  const [payslipsError, setPayslipsError] = useState('');
-  const [resendBusy, setResendBusy] = useState<string | null>(null); // a userId, or 'all'
-
-  const loadPayslips = useCallback(async (runId: string) => {
-    setPayslipsLoading(true);
-    setPayslipsError('');
-    try {
-      const res = await fetch(`/api/owner/payroll/payslips?runId=${encodeURIComponent(runId)}`, {
-        cache: 'no-store',
-      });
-      if (!res.ok) {
-        setPayslipsError((await res.json().catch(() => ({}))).error ?? 'Could not load payslip status.');
-        setPayslips([]);
-        return;
-      }
-      const body = await res.json();
-      setPayslips(Array.isArray(body.statuses) ? body.statuses : []);
-    } catch {
-      setPayslipsError('Could not load payslip status.');
-    } finally {
-      setPayslipsLoading(false);
-    }
-  }, []);
-
-  const finalizedRunId = finalized?.run?.id ?? null;
+  // A new month starts with nothing ticked — deductions are never carried over.
   useEffect(() => {
-    if (finalizedRunId) {
-      void loadPayslips(finalizedRunId);
-    } else {
-      setPayslips([]);
-      setPayslipsError('');
-    }
-  }, [finalizedRunId, loadPayslips]);
+    setChoices({});
+    setRowError({});
+    setExpanded(null);
+  }, [month]);
 
-  async function resendPayslip(userId?: string) {
-    if (!finalizedRunId) return;
-    setResendBusy(userId ?? 'all');
-    try {
-      const res = await fetch('/api/owner/payroll/payslips', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(userId ? { runId: finalizedRunId, userId } : { runId: finalizedRunId }),
-      });
-      if (res.ok) await loadPayslips(finalizedRunId);
-    } finally {
-      setResendBusy(null);
-    }
+  const choiceFor = useCallback((userId: string) => choices[userId] ?? NO_CHOICE, [choices]);
+
+  function setChoice(userId: string, patch: Partial<Choice>) {
+    setChoices((prev) => ({ ...prev, [userId]: { ...(prev[userId] ?? NO_CHOICE), ...patch } }));
   }
 
   const totals = useMemo(() => {
-    if (!draft) return null;
-    return draft.lines.reduce(
+    if (!data) return null;
+    return data.lines.reduce(
       (a, l) => ({
-        net: a.net + l.netPayInr,
-        base: a.base + l.basePayInr,
-        ot: a.ot + l.otPayInr,
+        net: a.net + netWith(l, choiceFor(l.user_id)),
+        advances: a.advances + settle(l, choiceFor(l.user_id)).advance,
+        proposed: a.proposed + (l.finalized ? 0 : proposedTotal(l)),
         people: a.people + (l.unconfigured ? 0 : 1),
+        finalized: a.finalized + (l.finalized ? 1 : 0),
       }),
-      { net: 0, base: 0, ot: 0, people: 0 },
+      { net: 0, advances: 0, proposed: 0, people: 0, finalized: 0 },
     );
-  }, [draft]);
+  }, [data, choiceFor]);
 
-  async function finalize() {
-    if (!draft) return;
-    setBusy(true);
-    setError('');
+  async function finalize(l: Line) {
+    const c = choiceFor(l.user_id);
+    setBusyUser(l.user_id);
+    setRowError((p) => ({ ...p, [l.user_id]: '' }));
     try {
       const res = await fetch('/api/owner/payroll', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ month }),
+        body: JSON.stringify({ month, user_id: l.user_id, apply: { late: c.late, cash_shortage: c.cash } }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError((body.error as string) ?? 'Could not finalize.');
+        setRowError((p) => ({ ...p, [l.user_id]: (body.error as string) ?? 'Could not finalize.' }));
         return;
       }
       await load();
     } finally {
-      setBusy(false);
+      setBusyUser(null);
+    }
+  }
+
+  async function reverse(l: Line, reason: string) {
+    setBusyUser(l.user_id);
+    setRowError((p) => ({ ...p, [l.user_id]: '' }));
+    try {
+      const res = await fetch('/api/owner/payroll', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ month, user_id: l.user_id, reason }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRowError((p) => ({ ...p, [l.user_id]: (body.error as string) ?? 'Could not reverse.' }));
+        return;
+      }
+      setChoice(l.user_id, NO_CHOICE);
+      await load();
+    } finally {
+      setBusyUser(null);
     }
   }
 
   function exportCsv() {
-    if (!draft) return;
+    if (!data) return;
     const header = [
       'Name',
+      'Status',
       'Days present',
       'Half days',
       'Absent',
@@ -227,28 +284,46 @@ export function PayrollScreen() {
       'Late marks',
       'Base pay',
       'OT pay',
-      'Deductions',
-      'Cash shortage',
       'Adjustments',
+      'Earned',
+      'Late deduction (proposed)',
+      'Late deducted',
+      'Cash shortage (proposed)',
+      'Cash shortage deducted',
+      'Advance deducted',
+      'Advance carried to next month',
       'Net pay',
     ];
-    const rows = draft.lines.map((l) => [
-      l.name,
-      l.daysPresent,
-      l.daysHalf,
-      l.daysAbsent,
-      l.daysOff,
-      l.daysPaidLeave,
-      (l.workedMinutes / 60).toFixed(2),
-      (l.otMinutes / 60).toFixed(2),
-      l.lateMarks,
-      l.basePayInr,
-      l.otPayInr,
-      l.deductionsInr,
-      l.cashShortageInr,
-      l.adjustmentsInr,
-      l.netPayInr,
-    ]);
+    const rows = data.lines.map((l) => {
+      const c = choiceFor(l.user_id);
+      const late = l.finalized ? l.appliedDeductions.late : c.late && l.proposedDeductions.lateInr > 0;
+      const cash = l.finalized
+        ? l.appliedDeductions.cashShortage
+        : c.cash && l.proposedDeductions.cashShortageInr > 0;
+      return [
+        l.name,
+        l.finalized ? 'Finalized' : 'Draft',
+        l.daysPresent,
+        l.daysHalf,
+        l.daysAbsent,
+        l.daysOff,
+        l.daysPaidLeave,
+        (l.workedMinutes / 60).toFixed(2),
+        (l.otMinutes / 60).toFixed(2),
+        l.lateMarks,
+        l.basePayInr,
+        l.otPayInr,
+        l.adjustmentsInr,
+        l.netBeforeDeductionsInr,
+        l.proposedDeductions.lateInr,
+        late ? 'Yes' : 'No',
+        l.proposedDeductions.cashShortageInr,
+        cash ? 'Yes' : 'No',
+        settle(l, c).advance,
+        settle(l, c).carried,
+        netWith(l, c),
+      ];
+    });
     const csv = [header, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
@@ -269,7 +344,7 @@ export function PayrollScreen() {
             onChange={(e) => setMonth(e.target.value)}
             className="rounded-md border border-[#ddd] px-3 py-2 text-sm"
           />
-          {draft ? (
+          {data ? (
             <button
               type="button"
               onClick={exportCsv}
@@ -284,72 +359,27 @@ export function PayrollScreen() {
       {loading ? <p className="mt-6 text-sm text-muted">Loading…</p> : null}
       {error ? <p className="mt-4 text-sm text-red-700">{error}</p> : null}
 
-      {data?.finalized ? (
-        <div className="mt-6 rounded-md border border-green-300 bg-green-50 p-4 text-sm text-green-900">
-          <strong>Finalized.</strong> These figures are frozen with the rules that produced them —
-          later changes to attendance or pay rules will not alter them.
-        </div>
-      ) : null}
-
-      {finalized ? (
-        <div className="mt-6 rounded-md border border-line bg-white p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-bold text-charcoal">Payslips</h2>
-            <button
-              type="button"
-              disabled={resendBusy !== null || payslipsLoading || !payslips.some((p) => p.status !== 'sent')}
-              onClick={() => resendPayslip()}
-              className="rounded-md border border-charcoal px-3 py-1.5 text-xs font-bold text-charcoal disabled:opacity-50"
-            >
-              {resendBusy === 'all' ? 'Sending…' : 'Send all unsent'}
-            </button>
-          </div>
-          <p className="mt-1 text-xs text-muted">
-            Sent to each staffer&apos;s personal email when the month was finalized.
+      {data ? (
+        <>
+          <p className="mt-4 text-sm text-muted">
+            Open a person to review their month, tick any deductions you want to take, and finalize
+            them. Nothing is deducted unless you tick it. Each person is finalized on their own.
           </p>
 
-          {payslipsLoading ? <p className="mt-3 text-xs text-muted">Loading…</p> : null}
-          {payslipsError ? <p className="mt-3 text-xs text-red-700">{payslipsError}</p> : null}
-
-          <ul className="mt-3 divide-y divide-[#f0f0f0]">
-            {payslips.map((p) => (
-              <li key={p.userId} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-bold text-charcoal">{p.name}</p>
-                  <PayslipStatusText p={p} />
-                </div>
-                <button
-                  type="button"
-                  disabled={resendBusy !== null || !p.toEmail}
-                  onClick={() => resendPayslip(p.userId)}
-                  className="shrink-0 rounded-md border border-charcoal px-3 py-1 text-xs font-bold text-charcoal disabled:opacity-50"
-                >
-                  {resendBusy === p.userId ? 'Sending…' : 'Resend'}
-                </button>
-              </li>
-            ))}
-            {!payslipsLoading && payslips.length === 0 && !payslipsError ? (
-              <li className="py-2 text-xs text-muted">No staff on this run.</li>
-            ) : null}
-          </ul>
-        </div>
-      ) : null}
-
-      {draft ? (
-        <>
-          {draft.blocked ? (
+          {data.blocked ? (
             <p className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              Some days still need approval on the attendance sheet. Payroll can be reviewed but
-              <strong> not finalized</strong> until they&apos;re cleared — a run that included a
-              guessed day would freeze the guess.
+              Some people still have days that need approval on the attendance sheet. They can be
+              reviewed but <strong>not finalized</strong> until those days are cleared — a payroll
+              that included a guessed day would freeze the guess.
             </p>
           ) : null}
 
           {totals ? (
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <Stat label="People" value={String(totals.people)} />
-              <Stat label="Base" value={rupees(totals.base)} />
-              <Stat label="Overtime" value={rupees(totals.ot)} />
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <Stat label="Finalized" value={`${totals.finalized} of ${data.lines.length}`} />
+              <Stat label="People paid" value={String(totals.people)} />
+              <Stat label="Deductions proposed" value={rupees(totals.proposed)} />
+              <Stat label="Advances this month" value={rupees(totals.advances)} />
               <Stat label="Total payout" value={rupees(totals.net)} strong />
             </div>
           ) : null}
@@ -357,7 +387,7 @@ export function PayrollScreen() {
           <DataTable
             className="mt-6"
             scrollClassName="rounded-md border border-line bg-white"
-            rows={draft.lines}
+            rows={data.lines}
             rowKey={(l) => l.user_id}
             cellPadding="px-3 py-2"
             headerTextClassName="text-sm font-bold text-charcoal"
@@ -367,6 +397,27 @@ export function PayrollScreen() {
                 <tr className="border-b border-[#f0f0f0] bg-[#faf7f4]">
                   <td colSpan={8} className="px-3 py-3">
                     <Derivation line={l} />
+                    {l.finalized ? (
+                      <FinalizedPanel
+                        line={l}
+                        busy={busyUser === l.user_id}
+                        error={rowError[l.user_id] ?? ''}
+                        onReverse={(reason) => reverse(l, reason)}
+                        onAdvanceChanged={load}
+                      />
+                    ) : (
+                      <DraftPanel
+                        line={l}
+                        month={month}
+                        choice={choiceFor(l.user_id)}
+                        onChoice={(patch) => setChoice(l.user_id, patch)}
+                        busy={busyUser === l.user_id}
+                        anyBusy={busyUser !== null}
+                        error={rowError[l.user_id] ?? ''}
+                        onFinalize={() => finalize(l)}
+                        onAdvanceChanged={load}
+                      />
+                    )}
                   </td>
                 </tr>
               ) : null
@@ -382,6 +433,11 @@ export function PayrollScreen() {
                 render: (l) => (
                   <>
                     <span className="font-bold text-charcoal">{l.name}</span>
+                    {l.finalized ? (
+                      <span className="ml-2 rounded bg-green-100 px-1.5 py-0.5 text-[10px] text-green-900">
+                        finalized
+                      </span>
+                    ) : null}
                     {l.unconfigured ? (
                       <span className="ml-2 rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700">
                         no salary set
@@ -424,81 +480,512 @@ export function PayrollScreen() {
                 render: (l) => (l.otMinutes ? hm(l.otMinutes) : '—'),
               },
               {
-                key: 'base',
-                header: 'Base',
+                key: 'earned',
+                header: 'Earned',
                 filter: 'number',
                 align: 'right',
-                value: (l) => l.basePayInr,
-                render: (l) => rupees(l.basePayInr),
+                value: (l) => l.netBeforeDeductionsInr,
+                render: (l) => rupees(l.netBeforeDeductionsInr),
               },
               {
                 key: 'deduct',
-                header: 'Deduct',
+                header: 'Deductions',
                 filter: 'number',
                 align: 'right',
-                value: (l) => l.deductionsInr,
-                cellClassName: 'text-muted',
-                render: (l) => (l.deductionsInr ? `−${rupees(l.deductionsInr)}` : '—'),
+                value: (l) => takenWith(l, choiceFor(l.user_id)),
+                cellClassName: 'whitespace-nowrap',
+                render: (l) => {
+                  const taken = takenWith(l, choiceFor(l.user_id));
+                  const proposed = proposedTotal(l);
+                  if (taken > 0) return <span className="text-red-700">−{rupees(taken)}</span>;
+                  if (proposed > 0) {
+                    return (
+                      <span className="text-muted" title="Proposed — not deducted unless you tick it">
+                        {rupees(proposed)} {l.finalized ? 'not taken' : 'proposed'}
+                      </span>
+                    );
+                  }
+                  return '—';
+                },
               },
               {
-                key: 'shortage',
-                header: 'Shortage',
+                key: 'advance',
+                header: 'Advance',
                 filter: 'number',
                 align: 'right',
-                value: (l) => l.cashShortageInr,
-                cellClassName: 'text-muted',
-                render: (l) =>
-                  l.cashShortageInr ? (
-                    <a
-                      href="/owner/cash"
-                      onClick={(e) => e.stopPropagation()}
-                      className="text-red-700 underline"
-                      title="Review cash shortages"
-                    >
-                      −{rupees(l.cashShortageInr)}
-                    </a>
-                  ) : (
-                    '—'
-                  ),
+                value: (l) => settle(l, choiceFor(l.user_id)).advance,
+                cellClassName: 'whitespace-nowrap',
+                render: (l) => {
+                  const { advance, carried } = settle(l, choiceFor(l.user_id));
+                  if (advance <= 0 && carried <= 0) return '—';
+                  return (
+                    <>
+                      {advance > 0 ? <span className="text-red-700">−{rupees(advance)}</span> : '—'}
+                      {carried > 0 ? (
+                        <span className="block text-[11px] text-muted">{rupees(carried)} to next month</span>
+                      ) : null}
+                    </>
+                  );
+                },
               },
               {
                 key: 'net',
                 header: 'Net',
                 filter: 'number',
                 align: 'right',
-                value: (l) => l.netPayInr,
+                value: (l) => netWith(l, choiceFor(l.user_id)),
                 cellClassName: 'font-bold text-charcoal',
-                render: (l) => (
-                  <>
-                    {rupees(l.netPayInr)}
-                    {l.cashShortageClamped ? (
-                      <span
-                        className="ml-1 rounded bg-red-100 px-1 py-0.5 text-[10px] font-normal text-red-800"
-                        title="The approved cash shortage was more than this person had left to be paid this month. Net pay was clamped at ₹0 — the remainder is not carried over."
-                      >
-                        shortage exceeded pay
-                      </span>
-                    ) : null}
-                  </>
-                ),
+                render: (l) => rupees(netWith(l, choiceFor(l.user_id))),
               },
             ]}
           />
-
-          <button
-            type="button"
-            disabled={busy || draft.blocked}
-            onClick={finalize}
-            className="mt-6 rounded-md bg-tan-dark px-5 py-3 text-sm font-bold text-cream disabled:opacity-50"
-            title={draft.blocked ? 'Clear the unapproved days first' : undefined}
-          >
-            {busy ? 'Finalizing…' : 'Finalize this month'}
-          </button>
           <p className="mt-2 text-xs text-muted">
-            Finalizing freezes these numbers and the rules behind them. Attendance for the month
-            can&apos;t be edited afterwards without reversing the run.
+            {monthLabel(month)} · Earned = base + overtime + adjustments, before any deduction or
+            advance.
           </p>
         </>
+      ) : null}
+    </div>
+  );
+}
+
+function DraftPanel({
+  line,
+  month,
+  choice,
+  onChoice,
+  busy,
+  anyBusy,
+  error,
+  onFinalize,
+  onAdvanceChanged,
+}: {
+  line: Line;
+  month: string;
+  choice: Choice;
+  onChoice: (patch: Partial<Choice>) => void;
+  busy: boolean;
+  anyBusy: boolean;
+  error: string;
+  onFinalize: () => void;
+  onAdvanceChanged: () => void;
+}) {
+  const { lateInr, cashShortageInr } = line.proposedDeductions;
+  const taken = takenWith(line, choice);
+  const { net, advance, carried } = settle(line, choice);
+  const cannot = line.blocked
+    ? 'Clear the unapproved days on the attendance sheet first.'
+    : line.unconfigured
+      ? 'Set a salary on the Team screen first.'
+      : '';
+
+  return (
+    <>
+    <AdvancesBox line={line} advance={advance} carried={carried} onChanged={onAdvanceChanged} />
+    <div className="mt-4 rounded-md border border-line bg-white p-3">
+      <h3 className="text-sm font-bold text-charcoal">Deductions</h3>
+      {lateInr === 0 && cashShortageInr === 0 ? (
+        <p className="mt-1 text-sm text-muted">No deductions proposed this month.</p>
+      ) : (
+        <>
+          <p className="mt-1 text-xs text-muted">
+            Proposed by the rules. Tick the ones you want to deduct — anything left unticked is not
+            deducted.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {lateInr > 0 ? (
+              <li>
+                <label className="flex cursor-pointer items-start gap-2 text-sm text-charcoal">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={choice.late}
+                    disabled={busy}
+                    onChange={(e) => onChoice({ late: e.target.checked })}
+                  />
+                  <span>
+                    Late marks — {line.lateMarks} late {line.lateMarks === 1 ? 'day' : 'days'}:{' '}
+                    <strong>{rupees(lateInr)}</strong>
+                  </span>
+                </label>
+              </li>
+            ) : null}
+            {cashShortageInr > 0 ? (
+              <li>
+                <label className="flex cursor-pointer items-start gap-2 text-sm text-charcoal">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={choice.cash}
+                    disabled={busy}
+                    onChange={(e) => onChoice({ cash: e.target.checked })}
+                  />
+                  <span>
+                    Cash shortage (approved): <strong>{rupees(cashShortageInr)}</strong> ·{' '}
+                    <a href="/owner/cash" className="underline">
+                      review on Cash
+                    </a>
+                  </span>
+                </label>
+              </li>
+            ) : null}
+          </ul>
+        </>
+      )}
+
+      <p className="mt-3 text-sm text-charcoal">
+        Earned {rupees(line.netBeforeDeductionsInr)}
+        {taken > 0 ? ` − deductions ${rupees(taken)}` : ''}
+        {advance > 0 ? ` − advance ${rupees(advance)}` : ''} = <strong>Net {rupees(net)}</strong>
+        {taken > 0 && net === 0 ? (
+          <span className="ml-1 text-amber-800">
+            (deductions exceed this month&apos;s pay — net is held at ₹0 and the rest is not carried over)
+          </span>
+        ) : null}
+      </p>
+
+      <button
+        type="button"
+        disabled={anyBusy || Boolean(cannot)}
+        onClick={onFinalize}
+        className="mt-3 rounded-md bg-tan-dark px-4 py-2 text-sm font-bold text-cream disabled:opacity-50"
+        title={cannot || undefined}
+      >
+        {busy ? 'Finalizing…' : `Finalize ${line.name} — ${rupees(net)}`}
+      </button>
+      {cannot ? <p className="mt-2 text-xs text-amber-800">{cannot}</p> : null}
+      <p className="mt-2 text-xs text-muted">
+        Freezes {line.name}&apos;s {monthLabel(month)} and emails their payslip. Their attendance for
+        the month can&apos;t be edited afterwards without reversing. Other staff are not affected.
+      </p>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </div>
+    </>
+  );
+}
+
+function shortDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  });
+}
+
+/**
+ * The Advances box: what carried in, this month's advances (with Remove), an
+ * Add form, and one line adding it up. After an add or remove the month is
+ * reloaded so every number on the row follows.
+ */
+function AdvancesBox({
+  line,
+  advance,
+  carried,
+  onChanged,
+}: {
+  line: Line;
+  advance: number;
+  carried: number;
+  onChanged: () => void;
+}) {
+  const today = istDateIso();
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(today);
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const monthTotal = line.advances.reduce((s, a) => s + a.amount_inr, 0);
+
+  async function call(method: 'POST' | 'DELETE', payload: Record<string, unknown>): Promise<boolean> {
+    setBusy(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/owner/payroll/advances', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        setErr((await res.json().catch(() => ({}))).error ?? 'Could not save.');
+        return false;
+      }
+      onChanged();
+      return true;
+    } catch {
+      setErr('Could not save.');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function add() {
+    const n = Number(amount);
+    if (!Number.isInteger(n) || n < 1) {
+      setErr('Enter the amount in whole rupees.');
+      return;
+    }
+    const ok = await call('POST', { user_id: line.user_id, amount_inr: n, given_on: date, note });
+    if (ok) {
+      setAmount('');
+      setNote('');
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-md border border-line bg-white p-3">
+      <h3 className="text-sm font-bold text-charcoal">Advances</h3>
+      {line.advanceCarriedFromEarlierInr > 0 ? (
+        <p className="mt-1 text-sm text-charcoal">
+          Carried from earlier <strong>{rupees(line.advanceCarriedFromEarlierInr)}</strong>
+        </p>
+      ) : null}
+      {line.advances.length === 0 ? (
+        <p className="mt-1 text-sm text-muted">No advances dated this month.</p>
+      ) : (
+        <ul className="mt-2 space-y-1">
+          {line.advances.map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-charcoal">
+              <span className="w-14 shrink-0">{shortDate(a.given_on)}</span>
+              <strong>{rupees(a.amount_inr)}</strong>
+              <span className="min-w-0 flex-1 break-words text-muted">{a.note}</span>
+              {line.finalized && !a.locked ? (
+                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-900">
+                  comes off next month
+                </span>
+              ) : null}
+              <button
+                type="button"
+                disabled={busy || a.locked}
+                title={a.locked ? 'Already counted in a finalized month. Reverse that month first.' : undefined}
+                onClick={() => void call('DELETE', { id: a.id })}
+                className="rounded-md border border-red-700 px-2 py-0.5 text-xs font-bold text-red-700 disabled:opacity-40"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-end gap-2">
+        <label className="text-xs text-muted">
+          Amount ₹
+          <input
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={100000}
+            step={1}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="mt-0.5 block w-28 rounded-md border border-[#ddd] px-2 py-1.5 text-sm text-charcoal"
+          />
+        </label>
+        <label className="text-xs text-muted">
+          Date
+          <input
+            type="date"
+            max={today}
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="mt-0.5 block rounded-md border border-[#ddd] px-2 py-1.5 text-sm text-charcoal"
+          />
+        </label>
+        <label className="min-w-[8rem] flex-1 text-xs text-muted">
+          Note (optional)
+          <input
+            type="text"
+            maxLength={200}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. UPI, rent"
+            className="mt-0.5 block w-full rounded-md border border-[#ddd] px-2 py-1.5 text-sm text-charcoal"
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy || !amount}
+          onClick={() => void add()}
+          className="rounded-md bg-tan-dark px-4 py-1.5 text-sm font-bold text-cream disabled:opacity-50"
+        >
+          {busy ? 'Saving…' : 'Add advance'}
+        </button>
+      </div>
+      {line.finalized ? (
+        <p className="mt-2 text-xs text-muted">
+          Advances added now come off the next month that isn&apos;t finalized yet.
+        </p>
+      ) : null}
+      {err ? <p className="mt-2 text-sm text-red-700">{err}</p> : null}
+
+      <p className="mt-3 text-sm text-charcoal">
+        {line.finalized ? 'Advance owed when finalized' : 'Advance to take off'}{' '}
+        {rupees(line.advanceOutstandingInr)}
+        {' · '}taken this month {rupees(advance)} · to next month {rupees(carried)}
+      </p>
+    </div>
+  );
+}
+
+function FinalizedPanel({
+  line,
+  busy,
+  error,
+  onReverse,
+  onAdvanceChanged,
+}: {
+  line: Line;
+  busy: boolean;
+  error: string;
+  onReverse: (reason: string) => void;
+  onAdvanceChanged: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const runId = line.run?.id ?? null;
+  const { lateInr, cashShortageInr } = line.proposedDeductions;
+
+  return (
+    <>
+    <AdvancesBox
+      line={line}
+      advance={line.advanceInr ?? 0}
+      carried={line.advanceCarriedInr ?? 0}
+      onChanged={onAdvanceChanged}
+    />
+    <div className="mt-4 rounded-md border border-green-300 bg-white p-3">
+      <h3 className="text-sm font-bold text-green-900">
+        Finalized{line.run?.finalized_at ? ` ${payslipSentAtLabel(line.run.finalized_at)}` : ''}
+      </h3>
+      <p className="mt-1 text-xs text-muted">
+        Frozen with the rules that produced it — later changes to attendance or pay rules will not
+        alter it.
+      </p>
+      <ul className="mt-2 space-y-1 text-sm text-charcoal">
+        {lateInr > 0 ? (
+          <li>
+            Late marks {rupees(lateInr)} — {line.appliedDeductions.late ? 'deducted' : 'not deducted'}
+          </li>
+        ) : null}
+        {cashShortageInr > 0 ? (
+          <li>
+            Cash shortage {rupees(cashShortageInr)} —{' '}
+            {line.appliedDeductions.cashShortage ? 'deducted' : 'not deducted'}
+          </li>
+        ) : null}
+        {line.adjustmentsInr ? (
+          <li>
+            Adjustment {line.adjustmentsInr > 0 ? '+' : '−'}
+            {rupees(Math.abs(line.adjustmentsInr))}
+            {line.adjustmentReason ? ` — ${line.adjustmentReason}` : ''}
+          </li>
+        ) : null}
+        {line.advanceInr > 0 ? <li>Salary advance −{rupees(line.advanceInr)}</li> : null}
+        {line.advanceCarriedInr > 0 ? <li>{rupees(line.advanceCarriedInr)} carried to next month</li> : null}
+        <li>
+          <strong>Net {rupees(line.netPayInr)}</strong>
+        </li>
+      </ul>
+
+      {runId ? <PayslipRow runId={runId} /> : null}
+
+      <div className="mt-4 border-t border-[#f0f0f0] pt-3">
+        <label className="block text-xs font-bold text-charcoal" htmlFor={`reverse-${line.user_id}`}>
+          Reverse {line.name}&apos;s payroll
+        </label>
+        <div className="mt-1 flex flex-wrap gap-2">
+          <input
+            id={`reverse-${line.user_id}`}
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason (required)"
+            className="min-w-0 flex-1 rounded-md border border-[#ddd] px-3 py-1.5 text-sm"
+          />
+          <button
+            type="button"
+            disabled={busy || !reason.trim()}
+            onClick={() => onReverse(reason.trim())}
+            className="rounded-md border border-red-700 px-3 py-1.5 text-sm font-bold text-red-700 disabled:opacity-50"
+          >
+            {busy ? 'Reversing…' : 'Reverse'}
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-muted">
+          Unlocks their attendance for the month so it can be corrected and finalized again. The
+          reversed payroll stays on record.
+        </p>
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </div>
+    </>
+  );
+}
+
+function PayslipRow({ runId }: { runId: string }) {
+  const [status, setStatus] = useState<PayslipStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setFailed('');
+    try {
+      const res = await fetch(`/api/owner/payroll/payslips?runId=${encodeURIComponent(runId)}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        setFailed((await res.json().catch(() => ({}))).error ?? 'Could not load payslip status.');
+        return;
+      }
+      const body = await res.json();
+      setStatus(Array.isArray(body.statuses) && body.statuses[0] ? body.statuses[0] : null);
+    } catch {
+      setFailed('Could not load payslip status.');
+    } finally {
+      setLoading(false);
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function resend() {
+    if (!status) return;
+    setSending(true);
+    try {
+      const res = await fetch('/api/owner/payroll/payslips', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId, userId: status.userId }),
+      });
+      if (res.ok) await load();
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md bg-[#faf7f4] px-3 py-2">
+      <div className="min-w-0">
+        <p className="text-xs font-bold text-charcoal">Payslip</p>
+        {loading ? <p className="text-xs text-muted">Loading…</p> : null}
+        {failed ? <p className="text-xs text-red-700">{failed}</p> : null}
+        {!loading && !failed && status ? <PayslipStatusText p={status} /> : null}
+      </div>
+      {status ? (
+        <button
+          type="button"
+          disabled={sending || !status.toEmail}
+          onClick={resend}
+          className="shrink-0 rounded-md border border-charcoal px-3 py-1 text-xs font-bold text-charcoal disabled:opacity-50"
+        >
+          {sending ? 'Sending…' : status.status === 'sent' ? 'Resend' : 'Send'}
+        </button>
       ) : null}
     </div>
   );
@@ -510,25 +997,13 @@ function Derivation({ line }: { line: Line }) {
     <div>
       {line.segments.map((s, i) => (
         <p key={i} className="text-sm text-charcoal">
-          {rupees(s.monthlySalaryInr)}/month over <strong>{s.workingDays}</strong> working days ×{' '}
-          {s.contractedHoursPerDay}h = {hm(s.expectedMinutes)} expected · {hm(s.paidMinutes)} paid
+          {rupees(s.monthlySalaryInr)}/month over <strong>{s.payableDays}</strong> days ({s.daysInMonth}{' '}
+          − {s.paidLeaves} paid leaves) × {s.contractedHoursPerDay}h = {hm(s.expectedMinutes)} expected ·{' '}
+          {hm(s.paidMinutes)} paid
           {s.otMinutes ? ` · ${hm(s.otMinutes)} OT` : ''}
           {s.lateMarks ? ` · ${s.lateMarks} late` : ''}
         </p>
       ))}
-      {line.cashShortageInr > 0 ? (
-        <p className="mt-2 text-sm text-red-700">
-          Cash shortage (approved): −{rupees(line.cashShortageInr)} ·{' '}
-          <a href="/owner/cash" className="underline">
-            review on Cash
-          </a>
-          {line.cashShortageClamped ? (
-            <span className="ml-1 text-amber-800">
-              — exceeded net pay this month; the remainder is not carried over.
-            </span>
-          ) : null}
-        </p>
-      ) : null}
       <div className="mt-2 flex flex-wrap gap-1">
         {worked.map((d) => (
           <span

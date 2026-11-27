@@ -6,8 +6,12 @@ import {
   flattenAddons,
   initialSelection,
   invalidGroups,
+  preselectedSuggestions,
+  stripCoversPresets,
   suggestedOptionIds,
   toggleOption,
+  vetPresets,
+  visibleHints,
 } from '@/lib/menu/customization';
 import { basePriceInr, DEFAULT_WEIGHT_GRAMS, isSoldByWeight } from '@/lib/menu/weight';
 import { ItemCustomizer } from '@/components/menu/ItemCustomizer';
@@ -21,9 +25,13 @@ export function MenuItemCustomizeModal({
   initialSelection: presets,
   suggestedOptions,
   hint,
+  onAdded,
 }: {
   item: MenuItem;
   onClose: () => void;
+  /** Called with the item's name once it has been added to the cart (the menu
+   * page announces it from its one live region). */
+  onAdded?: (name: string) => void;
   /** Options to open with already chosen (group id → option ids), e.g. the
    * sugar level Coffey picked on /suggest. Vetted by lib/menu/customization
    * initialSelection(): anything invalid for its group falls back to the
@@ -53,7 +61,19 @@ export function MenuItemCustomizeModal({
 
   const variant = item.variants.find((v) => v.id === variantId) ?? item.variants[0];
 
-  const hints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+  // What Coffey preselected: the suggested options that are in the VETTED presets
+  // it passed in. An option merely selected on open (a required group's default)
+  // or only highlighted (the older flavour tip) is not "set up". Read once.
+  const [coffey] = useState(() => {
+    const vetted = vetPresets(item, presets);
+    return { vetted, options: preselectedSuggestions(suggestedOptions, vetted) };
+  });
+  const coffeyOptions = coffey.options;
+  // The panel replaces the hint lines only when it has a chip for every
+  // preselected option; otherwise the hints stay (and the panel still shows).
+  const stripCovers = stripCoversPresets(item, coffey.vetted, coffeyOptions, selected);
+  const allHints = typeof hint === 'string' ? (hint ? [hint] : []) : (hint ?? []);
+  const hints = visibleHints(allHints, stripCovers);
 
   const suggestedIds = useMemo(() => suggestedOptionIds(item, suggestedOptions), [item, suggestedOptions]);
 
@@ -82,17 +102,18 @@ export function MenuItemCustomizeModal({
       },
       qty,
     );
+    onAdded?.(item.name);
     onClose();
   }
 
   const footer = (
     <div className="flex items-center gap-3">
-      <div className="flex items-center gap-3 rounded-md border border-line px-3 py-1">
+      <div className="flex items-center gap-1 rounded-md border border-line px-1">
         <button
           type="button"
           aria-label="Decrease quantity"
           onClick={() => setQty((q) => Math.max(1, q - 1))}
-          className="flex h-6 w-6 items-center justify-center rounded-full bg-charcoal text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-charcoal text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
         >
           &minus;
         </button>
@@ -101,7 +122,7 @@ export function MenuItemCustomizeModal({
           type="button"
           aria-label="Increase quantity"
           onClick={() => setQty((q) => q + 1)}
-          className="flex h-6 w-6 items-center justify-center rounded-full bg-tan-dark text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-tan-dark text-cream focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tan"
         >
           +
         </button>
@@ -109,7 +130,7 @@ export function MenuItemCustomizeModal({
       <Button disabled={!canSubmit} onClick={handleAdd} className="flex-1">
         {canSubmit ? (
           <>
-            Add to Cart · <span className="font-mono tabular-nums">₹{unitPrice * qty}</span>
+            Add to Cart <span className="ml-2 font-mono tabular-nums">₹{unitPrice * qty}</span>
           </>
         ) : needsWeight ? (
           'Choose a weight'
@@ -121,7 +142,10 @@ export function MenuItemCustomizeModal({
   );
 
   return (
-    <Modal open onClose={onClose} title={item.name} subtitle={item.description || undefined} footer={footer} dense>
+    <Modal open onClose={onClose} title={item.name} footer={footer} dense>
+      {/* The full description lives in the body: the Modal's subtitle clamps to
+          two lines, which cut most descriptions short. */}
+      {item.description ? <p className="mb-3 text-sm text-muted">{item.description}</p> : null}
       {hints.length > 0 ? (
         <div role="status" className="mb-3 space-y-1 text-sm text-muted">
           {hints.map((line) => (
@@ -138,6 +162,7 @@ export function MenuItemCustomizeModal({
         instructions={instructions}
         onInstructionsChange={setInstructions}
         suggestedOptionIds={suggestedIds}
+        coffeyOptions={coffeyOptions}
         weightGrams={weightGrams}
         onWeightChange={byWeight ? setWeightGrams : undefined}
       />

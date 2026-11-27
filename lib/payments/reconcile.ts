@@ -68,6 +68,7 @@ export async function captureGatewayPayment(params: {
     );
   }
 
+  // The Razorpay sub-method (upi/card/online) is kept on the payments row only.
   const method: PaymentMethod = mapRazorpayMethod(params.method);
 
   await admin
@@ -105,7 +106,13 @@ export async function captureGatewayPayment(params: {
   const isPassSale = current.order_kind === 'coffee_pass';
   const shouldAdvance = !isPassSale && from === 'placed' && canTransition(from, 'received', 'system').ok;
 
-  const patch: Record<string, unknown> = { payment_status: 'paid', payment_method: method };
+  const patch: Record<string, unknown> = {
+    payment_status: 'paid',
+    // Always 'online' on the order whatever the sub-method: an app-paid order
+    // must not land in counter UPI/card, and 'online' is what marks the gateway
+    // as owner of the payment (no change-payment at the counter, gateway refunds).
+    payment_method: 'online' as PaymentMethod,
+  };
   if (shouldAdvance) {
     patch.status = 'received';
     patch.version = (current.version as number) + 1;

@@ -13,6 +13,7 @@ import {
   FunnelCard,
   MoodMixCard,
   PersonalisedCard,
+  PresetsCard,
   RevenueCard,
   TopPicksTable,
   WindowTabs,
@@ -20,11 +21,13 @@ import {
 } from '@/components/owner/suggestions/OverviewWidgets';
 import { PairingsCard } from '@/components/owner/suggestions/PairingsWidget';
 import { TraitsTab } from '@/components/owner/suggestions/TraitsTab';
+import { WizardFunnelCard } from '@/components/owner/suggestions/WizardFunnelWidget';
 import { flags } from '@/lib/flags';
 import { startOfTodayIstIso } from '@/lib/api/date';
 import { dailyBudgetUsdMicros } from '@/lib/suggest/models';
 import { getPairingStats } from '@/lib/suggest/pairingStatsQuery';
 import { getLatestDigest, getSuggestionStats } from '@/lib/suggest/queries';
+import { getWizardFunnel } from '@/lib/suggest/wizardStepsStore';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,10 +84,11 @@ export default async function OwnerSuggestionsPage({
   const windowKey = parseWindow(searchParams?.window);
   const windowStart = windowStartFor(windowKey);
 
-  const [{ stats, missingTables }, digest, pairings] = await Promise.all([
+  const [{ stats, missingTables }, digest, pairings, wizardFunnel] = await Promise.all([
     getSuggestionStats(windowStart),
     getLatestDigest(),
     getPairingStats(windowStart),
+    getWizardFunnel(windowStart),
   ]);
 
   return (
@@ -113,8 +117,11 @@ export default async function OwnerSuggestionsPage({
       )}
 
       <WindowTabs active={windowKey} />
+      {/* Before the picks (COFFEY-SPEC §10.7), then the sessions funnel after them. */}
+      <WizardFunnelCard result={wizardFunnel} />
       <FunnelCard stats={stats} />
       <RevenueCard stats={stats} />
+      <PresetsCard stats={stats} />
       <PairingsCard stats={pairings.stats} missingTable={pairings.missingTable} enabled={flags.checkoutPairings} />
       <MoodMixCard stats={stats} />
       <TopPicksTable stats={stats} />

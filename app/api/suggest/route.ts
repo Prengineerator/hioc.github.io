@@ -22,6 +22,13 @@ export const dynamic = 'force-dynamic';
 // on a slow decider call, so this carries margin above the decider budget.
 export const maxDuration = 20;
 
+// The events CHECK refuses 'preset_shown' until
+// supabase/2026-11-coffey-preset-events.sql is applied. Say so once per server
+// instance instead of on every request.
+let presetCheckLogged = false;
+const PRESET_CHECK_MESSAGE =
+  "suggest route: 'preset_shown' refused by the suggestion_events CHECK; apply supabase/2026-11-coffey-preset-events.sql (logged once per instance)";
+
 type AdminClient = ReturnType<typeof createAdminSupabaseClient>;
 
 // The menu + traits and 30-day popularity loaders (and their 60 s cache) live in
@@ -230,12 +237,54 @@ export async function POST(request: Request) {
 
   if (persisted) {
     const shownIds = [...(result.usualItemId ? [result.usualItemId] : []), ...result.pickIds];
-    if (shownIds.length > 0) {
+
+    // One 'preset_shown' per final PICK (never the usual) that carries add-on
+    // presets: how many picks went out with a preselected add-on, and what it
+    // costs (COFFEY-SPEC §11.7). A SEPARATE insert from 'shown' because the
+    // events CHECK refuses the new name until
+    // supabase/2026-11-coffey-preset-events.sql is applied, and a refused row
+    // must never take the 'shown' rows down with it.
+    const presetRows = result.picks
+      .filter((pick) => (pick.addonPresets?.length ?? 0) > 0)
+      .map((pick) => ({
+        session_id: sessionId,
+        event: 'preset_shown',
+        menu_item_id: pick.menuItemId,
+        value_inr: (pick.addonPresets ?? []).reduce((sum, p) => sum + p.priceInr, 0),
+      }));
+
+    // The two inserts are independent (both only need the session row), so they
+    // run concurrently. Each is best-effort: a failure of one never affects the
+    // other or the response.
+    const writeShown = async () => {
+      if (shownIds.length === 0) return;
       const { error: eventsError } = await admin
         .from('suggestion_events')
         .insert(shownIds.map((menuItemId) => ({ session_id: sessionId, event: 'shown', menu_item_id: menuItemId })));
       if (eventsError) console.error('suggest route: shown events insert failed (best-effort)', eventsError);
-    }
+    };
+    const writePresetShown = async () => {
+      if (presetRows.length === 0) return;
+      try {
+        const { error: presetError } = await admin.from('suggestion_events').insert(presetRows);
+        if (presetError) {
+          if (presetError.code === '23514') {
+            if (!presetCheckLogged) {
+              presetCheckLogged = true;
+              console.error(PRESET_CHECK_MESSAGE, presetError);
+            }
+          } else {
+            console.error('suggest route: preset_shown events insert failed (best-effort)', presetError);
+          }
+        }
+      } catch (err) {
+        console.error('suggest route: preset_shown events insert threw (best-effort)', err);
+      }
+    };
+    await Promise.allSettled([
+      writeShown().catch((err) => console.error('suggest route: shown events insert threw (best-effort)', err)),
+      writePresetShown(),
+    ]);
   }
 
   const refinesLeft = Math.max(0, SUGGEST_LIMITS.refines - refineChainDepth);
@@ -247,6 +296,7 @@ export async function POST(request: Request) {
     picks: result.picks,
     source: result.source,
     relaxHint: result.relaxHint,
+    unmet: result.unmet,
     refinesLeft,
     items: result.items,
   };

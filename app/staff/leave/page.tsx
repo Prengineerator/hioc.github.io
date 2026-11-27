@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 import { getCounterActor } from '@/lib/api/auth';
 import { hasPermission } from '@/lib/permissions';

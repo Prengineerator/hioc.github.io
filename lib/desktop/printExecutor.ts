@@ -17,6 +17,7 @@ import { getBrandHeaderRaster } from '@/lib/print/brandHeaderRaster';
 import type { TicketBlock, TicketDoc } from '@/lib/print/ticketDoc';
 import { describePrintJob, type PrintJob } from '@/lib/pos/printQueue';
 import { kotItemsQuery } from '@/lib/print/kotAddition';
+import { localPrintOrder, localTicketDoc } from '@/lib/print/localTicket';
 import { printUrl } from '@/lib/staff/autoPrint';
 
 /**
@@ -93,10 +94,18 @@ export function createDesktopExecutor(
 
     // Fetched at most once and shared across every printer/copy this job
     // routes to — a KOT going to kitchen AND bar prints the SAME snapshot of
-    // the order, not two independently-fetched ones taken moments apart.
+    // the order, not two independently-fetched ones taken moments apart. A
+    // placement's first attempt needs no fetch at all: the job carries the
+    // order the create answer returned, and the doc is built here with the
+    // same code the ticket route runs (lib/print/localTicket.ts).
+    const carried = localPrintOrder(job);
     let ticketDocPromise: Promise<TicketDoc> | null = null;
     const getTicketDoc = () => {
-      if (!ticketDocPromise) ticketDocPromise = fetchTicketDoc(job.orderId, job.type, job.itemIds);
+      if (!ticketDocPromise) {
+        ticketDocPromise = carried
+          ? Promise.resolve().then(() => localTicketDoc(carried, job.type, job.itemIds))
+          : fetchTicketDoc(job.orderId, job.type, job.itemIds);
+      }
       return ticketDocPromise;
     };
 
@@ -120,7 +129,9 @@ export function createDesktopExecutor(
           }
 
           // system + driver — the shell prints the existing staff-gated HTML
-          // ticket page off-screen, silently, with no Chrome print dialog.
+          // ticket page off-screen, silently, with no Chrome print dialog. It
+          // still loads that page from the server: the shell can only print a
+          // URL, and taking HTML from the page needs a desktop app release.
           const path = printUrl(job.orderId, job.type, job.itemIds);
           const url = `${window.location.origin}${path}${path.includes('?') ? '&' : '?'}silent=1`;
           let confirmed = true;

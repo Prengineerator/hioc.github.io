@@ -23,7 +23,7 @@
 // the MenuItem rows the engine is handed, plus the optional override map.
 
 import type { AddonGroup, AddonOption, MenuItem } from '@/lib/types';
-import { flavourFamiliesOf } from './flavor';
+import { flavourFamiliesOf } from './families';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
 import {
@@ -224,8 +224,10 @@ interface Reach {
  * item does not have it natively (flavourFamiliesOf), and — if the customer
  * set a sweetness — the item's own level plus the option's lift stays within
  * the sweetness tolerance of what they chose ("Not sweet + caramel" never
- * routes through a syrup that blows the ceiling). No requested flavours means
- * no reach at all.
+ * routes through a syrup that blows the ceiling). "Not sweet" goes further: an
+ * option that adds any sweetness (sweetness_delta > 0: a syrup, a sauce) is never
+ * reachable, only one with no lift (a sparkling-water serve). No requested
+ * flavours means no reach at all.
  */
 function reachesFor(
   item: Pick<MenuItem, 'name' | 'addon_groups'>,
@@ -255,6 +257,8 @@ function reachesFor(
       const roleIndex = reachRoles.indexOf(optionTraits.role);
       if (roleIndex === -1) continue;
       if (baseLevel + optionTraits.sweetness_delta > ceiling) continue;
+      // "Not sweet" never gets a sweetening add-on preselected: a syrup is sugar.
+      if (inputs.sweetness === 'none' && optionTraits.sweetness_delta > 0) continue;
 
       for (const family of missing) {
         if (!optionTraits.flavour_families.includes(family)) continue;

@@ -10,7 +10,7 @@
 // the counter, and a product that stops service gets switched off.
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 
 const DISMISS_KEY = 'hioc.attendance.nudgeDismissedOn';

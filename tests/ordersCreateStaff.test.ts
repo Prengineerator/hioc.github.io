@@ -30,6 +30,12 @@ const state: {
   sessionUser: { id: string } | null;
   tableRow: Record<string, unknown> | null;
   menuRows: Record<string, unknown>[];
+  /** What a read of menu_offers (Promotions → Offers) answers. */
+  offerRows?: Record<string, unknown>[];
+  /** What a read of spend_offers answers. */
+  spendRows?: Record<string, unknown>[];
+  /** The once-per-customer record written for a spend offer. */
+  redemptionInsert?: Record<string, unknown>;
   orderInsert?: Record<string, unknown>;
   /** The order_items bulk insert (one row per line). */
   itemsInsert?: Record<string, unknown>[];
@@ -49,12 +55,23 @@ vi.mock('@/lib/supabase-server', () => ({
         eq: () => chain,
         not: () => chain,
         in: () =>
-          // The only `.in()` caller is the menu_items validation fetch.
-          Promise.resolve({ data: state.menuRows, error: null }),
+          // The menu_items validation fetch, and the live offers on those items.
+          Promise.resolve({
+            data:
+              table === 'menu_offers'
+                ? (state.offerRows ?? [])
+                : table === 'spend_offers'
+                  ? (state.spendRows ?? [])
+                  : table === 'spend_offer_redemptions'
+                    ? []
+                    : state.menuRows,
+            error: null,
+          }),
         insert: (payload: Record<string, unknown>) => {
           if (table === 'orders') state.orderInsert = payload;
           if (table === 'order_items') state.itemsInsert = payload as unknown as Record<string, unknown>[];
           if (table === 'order_status_events') state.eventRow = payload;
+          if (table === 'spend_offer_redemptions') state.redemptionInsert = payload;
           // orders / order_items chain on into `.select().single()`; the addon
           // and event inserts are awaited directly and resolve here.
           if (table === 'orders' || table === 'order_items') {
@@ -158,6 +175,9 @@ beforeEach(() => {
   state.itemsInsert = undefined;
   state.eventRow = undefined;
   state.couponCtx = undefined;
+  state.offerRows = undefined;
+  state.spendRows = undefined;
+  state.redemptionInsert = undefined;
   state.tableRow = { id: TABLE_ID, label: 'T1', is_active: true };
   state.menuRows = [
     {
@@ -254,6 +274,122 @@ describe('POST /api/orders — staff dine-in (FND3-2/3)', () => {
     expect(res.status).toBe(201);
     expect(state.orderInsert?.created_by).toBe('ravi');
     expect(state.eventRow?.actor_id).toBe('ravi');
+  });
+
+  it('an item with a live offer: lines at the regular price with the offer snapshot, the offer inside discount_inr', async () => {
+    // Instant Coffee, ₹399 a jar (the menu row is untouched), and its offer in
+    // Promotions → Offers: 1/2/3 for ₹299/₹499/₹599 (2026-10-item-offers.sql).
+    state.menuRows = [
+      {
+        ...state.menuRows[0],
+        name: 'Instant Coffee',
+        gst_exempt: true,
+        menu_item_variants: [{ id: VARIANT_ID, label: 'Classic', price_inr: 399, sort_order: 0 }],
+      },
+    ];
+    state.offerRows = [
+      {
+        id: '55555555-5555-4555-8555-555555555555',
+        name: 'Instant Coffee offer',
+        menu_item_id: MENU_ID,
+        tier_prices: [299, 499, 599],
+        active: true,
+        valid_from: null,
+        valid_to: null,
+      },
+    ];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({
+      subtotal_inr: 798,
+      discount_inr: 299,
+      offer_discount_inr: 299,
+      tax_inr: 0,
+      total_inr: 499,
+    });
+    expect(state.itemsInsert?.[0]).toMatchObject({
+      price_inr_snapshot: 399,
+      line_total_inr: 798,
+      offer_name: 'Instant Coffee offer',
+      offer_prices: [299, 499, 599],
+      offer_unit_inr: 399,
+    });
+  });
+
+  it('a spend offer ("spend ₹1099, get the jar at ₹49"): the order keeps its label and the offer it was priced with', async () => {
+    const JAR = '77777777-7777-4777-8777-777777777777';
+    const JAR_V = '77777777-7777-4777-8777-7777777777a1';
+    state.menuRows = [
+      { ...state.menuRows[0], menu_item_variants: [{ id: VARIANT_ID, label: 'Regular', price_inr: 1099, sort_order: 0 }] },
+      {
+        id: JAR,
+        name: 'Instant Coffee',
+        category: 'In-store',
+        is_available: true,
+        unavailable_until: null,
+        gst_exempt: true,
+        in_store_only: true,
+        menu_item_variants: [{ id: JAR_V, label: 'Classic', price_inr: 399, sort_order: 0 }],
+        menu_item_addon_groups: [],
+      },
+    ];
+    const spend = { id: '66666666-6666-4666-8666-666666666666', name: 'Instant Coffee at ₹49', menu_item_id: JAR, min_spend_inr: 1099, price_inr: 49 };
+    state.spendRows = [{ ...spend, active: true, valid_from: null, valid_to: null }];
+    const items = [
+      { menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 1, addon_option_ids: [] },
+      { menu_item_id: JAR, variant_id: JAR_V, quantity: 1, addon_option_ids: [] },
+    ];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items, customer_phone: '9876543210' }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({
+      subtotal_inr: 1498,
+      discount_inr: 350,
+      offer_discount_inr: 350,
+      offer_name: 'Instant Coffee at ₹49',
+      spend_offers: [spend],
+    });
+    expect(state.itemsInsert?.[1]).toMatchObject({ offer_unit_inr: 399, line_total_inr: 399 });
+    // Once per customer: the number is recorded against the order.
+    expect(state.redemptionInsert).toEqual({ spend_offer_id: spend.id, phone: '+919876543210', order_id: ORDER_ID });
+  });
+
+  it('a spend offer with no phone number on the order is not given (once per customer)', async () => {
+    const JAR = '77777777-7777-4777-8777-777777777777';
+    const JAR_V = '77777777-7777-4777-8777-7777777777a1';
+    state.menuRows = [
+      { ...state.menuRows[0], menu_item_variants: [{ id: VARIANT_ID, label: 'Regular', price_inr: 1099, sort_order: 0 }] },
+      {
+        id: JAR,
+        name: 'Instant Coffee',
+        category: 'In-store',
+        is_available: true,
+        unavailable_until: null,
+        gst_exempt: true,
+        menu_item_variants: [{ id: JAR_V, label: 'Classic', price_inr: 399, sort_order: 0 }],
+        menu_item_addon_groups: [],
+      },
+    ];
+    state.spendRows = [
+      { id: '66666666-6666-4666-8666-666666666666', name: 'Instant Coffee at ₹49', menu_item_id: JAR, min_spend_inr: 1099, price_inr: 49, active: true, valid_from: null, valid_to: null },
+    ];
+    const items = [
+      { menu_item_id: MENU_ID, variant_id: VARIANT_ID, quantity: 1, addon_option_ids: [] },
+      { menu_item_id: JAR, variant_id: JAR_V, quantity: 1, addon_option_ids: [] },
+    ];
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({ subtotal_inr: 1498, discount_inr: 0, total_inr: 1498 + 55 });
+    expect(state.orderInsert).not.toHaveProperty('offer_name');
+    expect(state.redemptionInsert).toBeUndefined();
+  });
+
+  it('an order with no offer item never sends the offer columns (pre-migration safe)', async () => {
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).not.toHaveProperty('offer_discount_inr');
+    expect(state.orderInsert).not.toHaveProperty('offer_name');
+    expect(state.orderInsert).not.toHaveProperty('spend_offers');
+    expect(state.itemsInsert?.[0]).not.toHaveProperty('offer_prices');
   });
 
   it('400s a dine-in order with no table', async () => {
@@ -436,5 +572,91 @@ describe('POST /api/orders — who may vouch for a coupon\'s phone (CouponContex
     expect(state.couponCtx).toBeDefined();
     expect(state.couponCtx?.counterPhone).toBeNull();
     expect(state.couponCtx?.userId).toBe('cust-1');
+  });
+});
+
+// Manager discount (lib/orders/manualDiscount.ts, 2026-11-manual-discount.sql):
+// an amount and a reason a manager or the owner types at the POS. The role is
+// the counter actor's, read on the server — a staff operator, or anyone off the
+// counter, is refused whatever the body says.
+describe('POST /api/orders — manager discount', () => {
+  const discounted = (extra: Record<string, unknown> = {}) =>
+    req({
+      order_type: 'dine_in',
+      table_id: TABLE_ID,
+      items: oneLatte,
+      manual_discount: { amount_inr: 40, reason: '  Regular, birthday ' },
+      ...extra,
+    });
+
+  it('a manager: comes off before GST and the order keeps the amount, the reason and who gave it', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager', via: 'device' };
+    // 2 × ₹100 = ₹200, - ₹40 = ₹160, GST 5% = ₹8 → ₹168 (dine-in: no packaging).
+    const res = await POST(discounted({ expected_total_inr: 168 }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({
+      subtotal_inr: 200,
+      discount_inr: 40,
+      tax_inr: 8,
+      total_inr: 168,
+      manual_discount_inr: 40,
+      manual_discount_reason: 'Regular, birthday',
+      manual_discount_by: 'mgr-1',
+      created_by: 'mgr-1',
+    });
+  });
+
+  it('the owner may too', async () => {
+    state.actor = { user: { id: 'owner-1' }, role: 'owner' };
+    const res = await POST(discounted());
+    expect(res.status).toBe(201);
+    expect(state.orderInsert?.manual_discount_by).toBe('owner-1');
+  });
+
+  it('a staff operator is refused, and nothing is created', async () => {
+    state.actor = { user: { id: 'ravi' }, role: 'staff', via: 'device' };
+    const res = await POST(discounted());
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/manager or the owner/i);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('a website customer is refused', async () => {
+    state.sessionUser = { id: 'cust-1' };
+    const res = await POST(
+      req({
+        customer_name: 'A',
+        customer_phone: '9000000000',
+        pickup_slot_label: 'ASAP',
+        items: oneLatte,
+        manual_discount: { amount_inr: 40, reason: 'please' },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/manager or the owner/i);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('a discount without a reason is a 400', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager' };
+    const res = await POST(discounted({ manual_discount: { amount_inr: 40, reason: '' } }));
+    expect(res.status).toBe(400);
+    expect(state.orderInsert).toBeUndefined();
+  });
+
+  it('never more than the bill has left: a ₹500 discount on a ₹200 bill makes it ₹0, paid', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager' };
+    const res = await POST(discounted({ manual_discount: { amount_inr: 500, reason: 'Comp — long wait' } }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).toMatchObject({ discount_inr: 200, manual_discount_inr: 200, tax_inr: 0, total_inr: 0, payment_status: 'paid' });
+  });
+
+  it('an order without one never sends the columns (pre-migration safe)', async () => {
+    state.actor = { user: { id: 'mgr-1' }, role: 'manager' };
+    const res = await POST(req({ order_type: 'dine_in', table_id: TABLE_ID, items: oneLatte }));
+    expect(res.status).toBe(201);
+    expect(state.orderInsert).not.toHaveProperty('manual_discount_inr');
+    expect(state.orderInsert).not.toHaveProperty('manual_discount_reason');
+    expect(state.orderInsert).not.toHaveProperty('manual_discount_by');
   });
 });

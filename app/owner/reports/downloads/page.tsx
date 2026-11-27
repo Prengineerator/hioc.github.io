@@ -6,6 +6,7 @@
 
 import { istDateIso } from '@/lib/api/date';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
+import { ReportsNav } from '@/components/owner/ReportsNav';
 import { Card } from '@/components/owner/dashboard';
 import { BUSINESS } from '@/lib/legal';
 import { getStoreSettings } from '@/lib/store/settings';
@@ -54,24 +55,11 @@ export default async function OwnerReportDownloadsPage({
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
+      <ReportsNav active="downloads" from={from} to={to} />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-charcoal">Downloads</h1>
           <p className="text-sm text-muted">Month-end CSV reports for your accountant: GST, sales, cash, staff and loyalty.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href={`/owner/reports?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Reports
-          </Link>
-          <Link
-            href={`/owner/reports/insights?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Insights
-          </Link>
         </div>
       </div>
 
@@ -168,6 +156,15 @@ export default async function OwnerReportDownloadsPage({
                   />
                 ) : null}
               </ul>
+              {group === 'sales' ? (
+                <p className="mt-3 text-xs text-muted">
+                  Prefer to read it on screen, or cut it another way?{' '}
+                  <Link href={`/owner/reports/sales?from=${from}&to=${to}`} className="font-semibold text-charcoal underline">
+                    Open Items &amp; custom
+                  </Link>
+                  .
+                </p>
+              ) : null}
               {group === 'loyalty' ? (
                 <p className="mt-3 text-xs text-muted">
                   Prefer to read it on screen?{' '}

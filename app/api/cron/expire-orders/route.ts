@@ -5,6 +5,7 @@ import { reverseForOrder } from '@/lib/loyalty/ledger';
 import { broadcastOrderEvent } from '@/lib/realtime/broadcast';
 import { fetchOrderPaymentAttempts } from '@/lib/payments/gateway';
 import { captureGatewayPayment } from '@/lib/payments/reconcile';
+import { expireStaleShopOrders, sweepDeliveredShopOrders } from '@/lib/shop/lifecycle';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,6 +62,11 @@ async function reconcileWithGateway(
 // job `expire-orders-poll`), because the Vercel plan only runs crons daily.
 // The daily entry in vercel.json (08:30 IST) is kept as a backstop. Covers menu orders and HIOC Ritual pass-sale orders
 // (order_kind = 'coffee_pass') alike — both sit at status 'placed' until paid.
+// After the café pass, a shop pass expires unpaid shop orders (returning their
+// reserved Beanies) and sweeps shipped orders for deliveries; since this runs
+// 4 times a day, including 00:00 IST, it is also the spec's nightly sweep. The
+// shop pass is isolated (a failure never fails the café pass) and runs
+// regardless of flags.shop, for money safety.
 // Protected by CRON_SECRET (Bearer). Fails CLOSED: if CRON_SECRET is unset the
 // endpoint is disabled (401), so it can never be triggered publicly.
 async function handle(request: Request) {
@@ -120,7 +126,20 @@ async function handle(request: Request) {
     expired++;
   }
 
-  return NextResponse.json({ expired, recovered });
+  let shop = { expired: 0, recovered: 0 };
+  let shopDelivery = { checked: 0, delivered: 0 };
+  try {
+    shop = await expireStaleShopOrders(admin);
+  } catch (e) {
+    console.error('expire-orders: shop expiry pass failed', e);
+  }
+  try {
+    shopDelivery = await sweepDeliveredShopOrders(admin);
+  } catch (e) {
+    console.error('expire-orders: shop delivery sweep failed', e);
+  }
+
+  return NextResponse.json({ expired, recovered, shop, shop_delivery: shopDelivery });
 }
 
 // GET — Vercel's daily backstop cron (vercel.json) and manual triggering

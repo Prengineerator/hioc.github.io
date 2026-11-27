@@ -89,6 +89,12 @@ const config: Config = {
           '35%': { opacity: '0.9' },
           '100%': { opacity: '0', transform: 'translateY(-6px)' },
         },
+        // The staff header's "screen on its way" bar (components/staff/
+        // StaffHeader.tsx, lib/staff/navPending.ts): a segment sweeping across.
+        'nav-progress': {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(300%)' },
+        },
       },
       animation: {
         // Used by components/ui/Modal.tsx for the overlay + panel entrance.
@@ -96,6 +102,7 @@ const config: Config = {
         'scale-in': 'scale-in 150ms ease-out',
         shake: 'shake 400ms ease-in-out',
         steam: 'steam 2.8s ease-in-out infinite',
+        'nav-progress': 'nav-progress 1.1s ease-in-out infinite',
       },
     },
   },

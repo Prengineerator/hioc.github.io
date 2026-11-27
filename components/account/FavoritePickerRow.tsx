@@ -1,6 +1,6 @@
 'use client';
 
-// A single row in the "browse menu to add favorites" picker (ACC-5) — no
+// A single row in the "browse menu to add favourites" picker (ACC-5) — no
 // add-to-cart affordance here (that lives on the favorited-items grid via
 // MenuItemCard); this row is purely for hearting an item.
 
@@ -58,10 +58,12 @@ export function FavoritePickerRow({
         type="button"
         onClick={handleAdd}
         disabled={saving}
-        aria-label={`Save ${item.name} to favorites`}
-        className="text-lg text-tan-dark transition-colors hover:text-tan-dark disabled:opacity-60"
+        aria-label={`Save ${item.name} to favourites`}
+        className="flex min-h-[44px] min-w-[44px] items-center justify-center text-tan-dark transition-colors hover:text-tan-dark disabled:opacity-60"
       >
-        ♡
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round">
+          <path d="M12 21s-7.5-4.6-9.5-9.2C1.1 8.3 3 5 6.4 5c2 0 3.6 1.1 4.6 2.6h2C14 6.1 15.600 5 17.600 5 21 5 22.900 8.300 21.500 11.800 19.500 16.400 12 21 12 21z" />
+        </svg>
       </button>
     </div>
   );

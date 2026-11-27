@@ -17,6 +17,7 @@ import {
   parseReceiveLines,
   parseRecipeLines,
   parseRequestLines,
+  parseVendorHeader,
   recipeFor,
   summarizeStock,
   suggestedRequestQty,
@@ -219,6 +220,40 @@ describe('receiving', () => {
     expect(lineHasDiscrepancy({ qty_picked: 10, qty_received: 8 })).toBe(true);
     expect(lineHasDiscrepancy({ qty_picked: 10, qty_received: 10 })).toBe(false);
     expect(lineHasDiscrepancy({ qty_picked: 10, qty_received: null })).toBe(false);
+  });
+});
+
+describe('stock from vendor (INV-D14)', () => {
+  it('needs the vendor’s name, trimmed, 2–80 characters', () => {
+    for (const vendor of [undefined, null, '', '   ', 'A', 42, ['Sharma']]) {
+      const r = parseVendorHeader({ vendor });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.message).toMatch(/vendor/i);
+    }
+    expect(parseVendorHeader({ vendor: 'x'.repeat(81) }).ok).toBe(false);
+    expect(parseVendorHeader({ vendor: 'x'.repeat(80) }).ok).toBe(true);
+    expect(parseVendorHeader({ vendor: '  Sharma Dairy ' })).toEqual({
+      ok: true,
+      header: { vendor: 'Sharma Dairy', billRef: '', note: '' },
+    });
+  });
+
+  it('takes an optional bill number (≤ 40) and note (≤ 200), trimmed', () => {
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', billRef: ' 1043 ', note: ' Paid cash ' })).toEqual({
+      ok: true,
+      header: { vendor: 'Sharma Dairy', billRef: '1043', note: 'Paid cash' },
+    });
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', billRef: 'x'.repeat(41) }).ok).toBe(false);
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', billRef: 'x'.repeat(40) }).ok).toBe(true);
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', note: 'x'.repeat(201) }).ok).toBe(false);
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', note: 'x'.repeat(200) }).ok).toBe(true);
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', billRef: 1043 }).ok).toBe(false);
+    expect(parseVendorHeader({ vendor: 'Sharma Dairy', note: { text: 'x' } }).ok).toBe(false);
+  });
+
+  it('treats a non-object body as having no vendor', () => {
+    expect(parseVendorHeader(null).ok).toBe(false);
+    expect(parseVendorHeader('Sharma Dairy').ok).toBe(false);
   });
 });
 

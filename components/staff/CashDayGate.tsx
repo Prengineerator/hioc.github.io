@@ -11,14 +11,18 @@
 // The staff layout passes the step it read on the server, so a fresh load
 // never flashes the POS. After that the layout stays mounted across
 // navigations, so the step is re-read here: when the cash screen opens or
-// closes a day, when the window regains focus, every few minutes, and at the
-// moment the open day ends — a counter left on overnight locks at 3:00 am.
+// closes a day, when the window regains focus, every few minutes while the
+// tab is visible, and at the moment the open day ends — a counter left on
+// overnight locks at 3:00 am, hidden or not. Each read is a function call, so
+// a hidden tab skips the few-minute check (the return to it reads at once) and
+// a focus right after another read is not a second one.
 // A failed read keeps the last step: the server fails open, never this.
 
 import { useCallback, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { CashDayManager } from '@/components/staff/CashDayManager';
 import { isGatedStaffPath, type CashDayGateStep } from '@/lib/cash/autoEnd';
+import { REFOCUS_MIN_GAP_MS } from '@/lib/realtime/hooks';
 
 const RECHECK_MS = 5 * 60 * 1000;
 // setTimeout's ceiling (~24.8 days); a later end is re-armed by the next check.
@@ -53,11 +57,25 @@ export function CashDayGate({
   }, []);
 
   useEffect(() => {
-    const onFocus = () => void recheck();
-    window.addEventListener('focus', onFocus);
-    const t = setInterval(recheck, RECHECK_MS);
+    // The first step came with the server render a moment ago.
+    let lastCheck = Date.now();
+    const visible = () => document.visibilityState === 'visible';
+    const check = () => {
+      lastCheck = Date.now();
+      void recheck();
+    };
+    // focus and visibilitychange fire together on a return to the tab.
+    const onReturn = () => {
+      if (visible() && Date.now() - lastCheck >= REFOCUS_MIN_GAP_MS) check();
+    };
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    const t = setInterval(() => {
+      if (visible()) check();
+    }, RECHECK_MS);
     return () => {
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
       clearInterval(t);
     };
   }, [recheck]);

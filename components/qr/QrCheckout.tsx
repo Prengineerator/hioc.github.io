@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { flags } from '@/lib/flags';
+import { getTrafficAttribution } from '@/lib/traffic/client';
 import { createClient } from '@/lib/supabase';
 import { usePhoneOtp } from '@/lib/hooks/usePhoneOtp';
 import { GetOtpButton, PhoneOtpPanel } from '@/components/checkout/PhoneOtpPanel';
@@ -163,7 +164,7 @@ export function QrCheckout({
       return;
     }
     if (mustVerify) {
-      setPhoneError('Verify this number first — tap "Get OTP" and enter the code from WhatsApp.');
+      setPhoneError('Verify this number first: tap "Get OTP" and enter the code from WhatsApp.');
       return;
     }
     if (email.trim() && normalizeEmail(email) === null) {
@@ -193,6 +194,8 @@ export function QrCheckout({
             special_instructions: i.specialInstructions,
             ...(i.weightGrams != null ? { weight_grams: i.weightGrams } : {}),
           })),
+          // Where this visit came from (docs/TRAFFIC-TRACKING.md); left out when off or declined.
+          traffic: getTrafficAttribution(flags.trafficTracking),
         }),
       });
 
@@ -213,7 +216,7 @@ export function QrCheckout({
           openRazorpayCheckout(data.payment, {
             name,
             phone,
-            description: `HIOC · Table ${table.label}`,
+            description: `HIOC, table ${table.label}`,
             onSuccess: () => router.push(`/order/${data.order.id}`),
             onDismiss: () => router.push(`/order/${data.order.id}`),
             onFailure: () => router.push(`/order/${data.order.id}`),
@@ -230,7 +233,7 @@ export function QrCheckout({
       const data = await res.json().catch(() => ({ error: 'Unknown error' }));
       setServerError(data.error ?? 'Unknown error');
     } catch {
-      setServerError('Network error — please check your connection.');
+      setServerError('Network error. Please check your connection.');
     } finally {
       setSubmitting(false);
     }
@@ -257,12 +260,12 @@ export function QrCheckout({
         <button
           type="button"
           onClick={onBackToMenu}
-          className="text-sm font-semibold text-tan-dark hover:underline"
+          className="inline-flex min-h-[44px] items-center text-sm font-semibold text-tan-dark hover:underline"
         >
-          &larr; Add more
+          Add more
         </button>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-surface px-3 py-1 text-xs font-semibold text-charcoal">
-          <span aria-hidden>🍽️</span> Table {table.label}
+          Table {table.label}
         </span>
       </div>
 
@@ -298,29 +301,29 @@ export function QrCheckout({
                 type="button"
                 aria-label={`Remove ${item.name}`}
                 onClick={() => removeItem(item.key)}
-                className="shrink-0 text-sm text-muted hover:text-charcoal"
+                className="inline-flex min-h-[44px] shrink-0 items-center text-sm text-muted hover:text-charcoal"
               >
                 Remove
               </button>
             </div>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3 rounded-md border border-line px-3 py-1">
+              <div className="flex items-center gap-1 rounded-md border border-line px-1">
                 <button
                   type="button"
-                  aria-label="Decrease quantity"
+                  aria-label={`Decrease quantity of ${item.name}`}
                   onClick={() => decrement(item.key)}
-                  className="flex h-5 w-5 items-center justify-center rounded-full bg-charcoal text-xs text-cream"
+                  className="flex h-11 w-11 items-center justify-center rounded-md text-lg text-charcoal transition-colors hover:bg-surface"
                 >
                   &minus;
                 </button>
-                <span className="min-w-[1.25rem] text-center text-sm font-mono font-semibold tabular-nums text-charcoal">
+                <span aria-live="polite" className="min-w-[1.5rem] text-center text-sm font-mono font-semibold tabular-nums text-charcoal">
                   {item.qty}
                 </span>
                 <button
                   type="button"
-                  aria-label="Increase quantity"
+                  aria-label={`Increase quantity of ${item.name}`}
                   onClick={() => increment(item.key)}
-                  className="flex h-5 w-5 items-center justify-center rounded-full bg-tan-dark text-xs text-cream"
+                  className="flex h-11 w-11 items-center justify-center rounded-md text-lg text-tan-dark transition-colors hover:bg-surface"
                 >
                   +
                 </button>
@@ -352,7 +355,7 @@ export function QrCheckout({
             <span className="font-normal text-muted">
               {phoneRequired
                 ? '(we send your bill here on WhatsApp)'
-                : '(optional — for your bill on WhatsApp)'}
+                : '(optional, for your bill on WhatsApp)'}
             </span>
           </label>
           <div className="flex gap-2">
@@ -386,7 +389,7 @@ export function QrCheckout({
         </div>
         <div>
           <label htmlFor="qr-email" className="mb-1 block text-sm font-semibold text-charcoal">
-            Email <span className="font-normal text-muted">(optional — for your bill)</span>
+            Email <span className="font-normal text-muted">(optional, for your bill)</span>
           </label>
           <input
             id="qr-email"
@@ -433,13 +436,13 @@ export function QrCheckout({
       </div>
 
       <p className="mb-4 rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
-        Pay securely now — your order joins the kitchen queue as soon as payment is confirmed, and
+        Pay securely now. Your order joins the kitchen queue as soon as payment is confirmed, and
         we&apos;ll bring it to table {table.label}.
       </p>
 
       <p className="mb-4 text-sm text-muted">
         If you share your number, you agree to receive your bill and order updates on it via
-        WhatsApp/SMS. We use it only for this order — never for marketing.
+        WhatsApp/SMS. We use it only for this order, never for marketing.
       </p>
 
       <button
@@ -449,7 +452,7 @@ export function QrCheckout({
         className="w-full rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
       >
         {submitting ? (
-          'Placing order…'
+          'Placing order...'
         ) : !storeAcceptingOrders ? (
           'Ordering unavailable right now'
         ) : mustVerify ? (

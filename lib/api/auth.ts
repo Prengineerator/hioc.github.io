@@ -1,5 +1,6 @@
 // Session verification for Route Handlers.
 
+import { requestCache as cache } from '@/lib/api/requestCache';
 import type { User } from '@supabase/supabase-js';
 import { createServerSupabaseClient } from '@/lib/supabase-server';
 import type { ActorRole, UserRole } from '@/lib/types';
@@ -51,7 +52,7 @@ export function isStaffRole(role: UserRole | null): boolean {
  * `null` if there is no valid session. Use this for routes any signed-in
  * user may call; use `getStaffUser()` below for staff-only routes.
  */
-export async function getAuthUser(): Promise<User | null> {
+async function getAuthUserUncached(): Promise<User | null> {
   const supabase = createServerSupabaseClient();
   const {
     data: { user },
@@ -176,3 +177,9 @@ export async function getCounterManager(): Promise<{ user: User; role: UserRole;
   if (!actor) return null;
   return actor.role === 'manager' || actor.role === 'owner' ? actor : null;
 }
+
+
+/** Per-request memo: a page render (layout + page + helpers) reads this
+ * once instead of up to three times. Outside a React render (Route
+ * Handlers) cache() simply calls through, so behaviour there is unchanged. */
+export const getAuthUser = cache(getAuthUserUncached);

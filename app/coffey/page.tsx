@@ -4,7 +4,7 @@ import { CoffeyMascot } from '@/components/coffey/CoffeyMascot';
 import { buttonVariants } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { flags } from '@/lib/flags';
-import { FLAVOUR_FAMILIES, MAX_MOODS, MOODS, SUGGEST_LIMITS, SWEETNESS_PREFS, SWEETNESS_SCALE } from '@/lib/suggest/types';
+import { FLAVOUR_FAMILIES, MOODS, SUGGEST_LIMITS, SWEETNESS_SCALE } from '@/lib/suggest/types';
 import { TRAIT_DIMENSIONS, TRAIT_QUESTION_COUNT } from '@/lib/suggest/traitVocabulary';
 
 // "Meet Coffey" (docs/COFFEY-SPEC.md §6.3): the article behind the home page's
@@ -27,19 +27,19 @@ function capitalise(s: string): string {
 }
 
 const PICKS = count(SUGGEST_LIMITS.picks); // "three"
-// The sweetness scale's steps: everything except the separate "Any".
-const SWEETNESS_STEPS = SWEETNESS_PREFS.filter((p) => p !== 'any').length;
 
 export const metadata: Metadata = {
   title: 'Meet Coffey',
+  // The suggest feature is off by default: keep the explainer out of search until it ships.
+  robots: flags.suggest ? undefined : { index: false },
   description: `Meet Coffey, the HIOC. pick-helper: tell it how you feel and what sounds good, and it picks ${PICKS} things from our real menu, each with a reason.`,
 };
 
 // "How I choose": the four steps of the pipeline, in order. The numbers on the
 // badges are the positions in this list, not typed in.
 const HOW_STEPS: { title: string; body: string }[] = [
-  { title: 'Your rules first', body: "Anything that doesn't fit is set aside." },
-  { title: 'A shortlist', body: "I rank what's left by your mood, flavours, sweetness and the time of day." },
+  { title: 'Your choices first', body: "Anything that doesn't fit what you picked is set aside." },
+  { title: 'A shortlist', body: "I rank what's left by your mood and the time of day." },
   { title: 'Jev decides', body: 'Jev, a decision AI from TypeSafe AI, grades every shortlisted item for you.' },
   {
     title: `${capitalise(PICKS)} different picks`,
@@ -88,7 +88,7 @@ export default function CoffeyPage() {
             the reading order down the columns is the source order. */}
         <ul role="list" className="mt-6 space-y-4 md:columns-2 md:gap-4 md:space-y-0">
           <Capability icon="💭" title="I read your mood">
-            {capitalise(count(MOODS.length))} feelings to choose from, and you can pick up to {count(MAX_MOODS)}.
+            {capitalise(count(MOODS.length))} feelings to choose from. Tap the one that fits and I take it from there.
           </Capability>
 
           <Capability icon="📋" title="I know the whole menu">
@@ -110,7 +110,9 @@ export default function CoffeyPage() {
 
           <Capability icon="✅" title="I respect your rules">
             If you ask for iced, caffeine-free, a budget, or not-too-sweet, I never show you something that breaks it.
-            Those rules are checked in code on every request, not left to the AI.
+            Ask for a flavour, strong or smooth coffee, or a sweetness, and I only pick things that fit whenever the
+            menu has enough of them. When it doesn&apos;t, I say so. All of this is checked in code on every request,
+            not left to the AI.
           </Capability>
 
           <Capability icon="🔀" title={`${capitalise(PICKS)} different picks`}>
@@ -118,7 +120,8 @@ export default function CoffeyPage() {
           </Capability>
 
           <Capability icon="🏷️" title="Every pick says why">
-            A one-line reason, plus &ldquo;why it matches&rdquo; tags.
+            A one-line reason, plus &ldquo;why it matches&rdquo; tags in the words you picked, shown only when the
+            pick really has them.
           </Capability>
 
           <Capability icon="🍬" title="Sugar, your way">
@@ -163,14 +166,12 @@ export default function CoffeyPage() {
             there&apos;s a card for each.
           </Reason>
           <Reason>
-            <strong>Feelings come mixed</strong>, so you can pick {count(MAX_MOODS)}.
+            <strong>Sweetness is more than yes or no</strong>, so I ask for a level: not sweet, lightly sweet or
+            sweet.
           </Reason>
           <Reason>
-            <strong>Sweetness is a scale</strong>, not a yes/no, so there are {count(SWEETNESS_STEPS)} steps.
-          </Reason>
-          <Reason>
-            <strong>Too many choices make choosing harder</strong>, so I keep questions short and give you {PICKS}{' '}
-            picks, not a long list.
+            <strong>Too many choices make choosing harder</strong>, so every question after the first is optional, I
+            only offer flavours the menu can serve, and you get {PICKS} picks, not a long list.
           </Reason>
           <Reason>
             <strong>Some choices go together</strong>, like a drink and a bite, so you can tick more than one.

@@ -29,6 +29,12 @@ export interface TransitionContext {
   orderType?: OrderType;
   paymentStatus?: PaymentStatus;
   isComp?: boolean;
+  /**
+   * What is still owed on a paid bill changed after it was paid
+   * (orders.balance_due_inr, lib/orders/paidChange.ts). Absent / ≤ 0 = nothing
+   * owed: a balance the café owes BACK never holds an order.
+   */
+  balanceDueInr?: number;
 }
 
 export interface TransitionRule {
@@ -77,14 +83,23 @@ export const TRANSITIONS: readonly TransitionRule[] = [
     // could be completed with the money never collected. A context-free call
     // (how the UIs ask "is this a legal move?") has no payment facts and is
     // left to the server, which always passes them.
-    guard: (ctx) =>
-      ctx.paymentStatus === undefined || ctx.paymentStatus === 'paid' || !!ctx.isComp
-        ? { ok: true }
-        : {
-            ok: false,
-            code: 'payment_required',
-            message: 'Collect payment before completing this order',
-          },
+    //
+    // A paid bill changed afterwards that still has money owed on it is held
+    // the same way: completing it would let the table leave without paying the
+    // difference. Collect it, or let it go with a reason, on Settle.
+    guard: (ctx) => {
+      if (!(ctx.paymentStatus === undefined || ctx.paymentStatus === 'paid' || !!ctx.isComp)) {
+        return { ok: false, code: 'payment_required', message: 'Collect payment before completing this order' };
+      }
+      if ((ctx.balanceDueInr ?? 0) > 0 && !ctx.isComp) {
+        return {
+          ok: false,
+          code: 'payment_required',
+          message: `Collect the ₹${ctx.balanceDueInr} balance before completing this order`,
+        };
+      }
+      return { ok: true };
+    },
   },
   // A ready order nobody collects can be cancelled by a manager (H4) rather
   // than wrongly force-completed (which would earn loyalty on an uncollected order).

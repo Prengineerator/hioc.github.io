@@ -61,7 +61,14 @@ export function preloadRazorpay(): void {
 export interface OpenCheckoutOptions {
   name: string;
   phone: string;
+  /** Prefilled in the payment window when known (the Instant Coffee shop asks for it). */
+  email?: string;
   description?: string;
+  /**
+   * Where the success handler verifies the signature. Café orders use the
+   * default; the Instant Coffee shop passes '/api/shop/verify'.
+   */
+  verifyPath?: string;
   /** Payment succeeded and its signature was verified server-side. */
   onSuccess: () => void;
   /** Modal closed without a success; `lastFailure` is set if an attempt failed. */
@@ -72,9 +79,11 @@ export interface OpenCheckoutOptions {
   onPaymentFailed?: (description: string) => void;
 }
 
-async function verifyPayment(response: RazorpaySuccessResponse): Promise<string | null> {
+const DEFAULT_VERIFY_PATH = '/api/payments/verify';
+
+async function verifyPayment(response: RazorpaySuccessResponse, path: string): Promise<string | null> {
   try {
-    const res = await fetch('/api/payments/verify', {
+    const res = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -116,10 +125,10 @@ export async function openRazorpayCheckout(
     name: 'Hioc',
     description: opts.description ?? 'Order payment',
     order_id: intent.gatewayOrderId,
-    prefill: { name: opts.name, contact: opts.phone },
+    prefill: { name: opts.name, contact: opts.phone, ...(opts.email ? { email: opts.email } : {}) },
     theme: { color: '#8a6446' }, // tan-dark: Razorpay puts white text on it (brand tan is 3.4:1)
     handler: async (response: RazorpaySuccessResponse) => {
-      const error = await verifyPayment(response);
+      const error = await verifyPayment(response, opts.verifyPath ?? DEFAULT_VERIFY_PATH);
       if (error) {
         opts.onFailure?.(error);
         return;

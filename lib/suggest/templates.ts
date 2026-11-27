@@ -9,24 +9,24 @@
 
 import { flavourFamiliesOf } from './flavor';
 import { moodsOf } from './inputs';
-import { preferenceFits } from './score';
 import { selectDiversePicks } from './select';
-import { achievableSweetness } from './sugar';
+import { intensityOf, satisfiesChoice } from './promises';
+import { deliveredSweetness } from './sugar';
 import { sweetnessLevel, sweetnessTarget } from './sweetness';
 import { lintReason, sanitizeNote } from './tone';
 import { FLAVOUR_FAMILY_INFO, MOOD_INFO } from './traitVocabulary';
 import type {
-  Budget,
   Candidate,
   FlavourAddonSuggestion,
   FlavourFamily,
+  MadeTo,
   MenuItemTraits,
   Mood,
   SuggestInputs,
   SuggestionPick,
   SweetnessPref,
 } from './types';
-import { CURRENT_TRAITS_VERSION, SUGGEST_LIMITS } from './types';
+import { CURRENT_TRAITS_VERSION, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 
 function capReason(text: string): string {
   const clean = sanitizeNote(text);
@@ -142,6 +142,10 @@ const INTENSITY_WORD = ['gentle', 'mellow', 'full-flavoured', 'bold'] as const;
  *   0–1 unsweetened · 2–3 lightly sweet · 4–5 medium-sweet · 6–8 sweet ·
  *   9–10 dessert-sweet
  */
+/** From this delivered level up, a pick kept for "Not sweet" reads "barely
+ * sweet" rather than "unsweetened" (descriptorsFor). */
+const BARELY_SWEET_FROM = 2;
+
 function sweetnessWord(level: number): string {
   if (level <= 1) return 'unsweetened';
   if (level <= 3) return 'lightly sweet';
@@ -184,20 +188,39 @@ function descriptorsFor(
   inputs: SuggestInputs,
   sugarAdjustable: boolean,
   withSweetness = true,
+  made: MadeTo | null = null,
 ): Descriptor[] {
   const all: Descriptor[] = [];
 
-  if (traits.kind === 'drink' && isFiniteNumber(traits.intensity)) {
-    const word = INTENSITY_WORD[Math.min(3, Math.max(0, Math.round(traits.intensity)))];
+  // The intensity the customer will get: with a shot preselected, the made one.
+  const lift = made?.intensityLift ?? 0;
+  if (traits.kind === 'drink' && (isFiniteNumber(traits.intensity) || lift > 0)) {
+    const intensity = lift > 0 ? intensityOf(traits) + lift : (traits.intensity as number);
+    const word = INTENSITY_WORD[Math.min(3, Math.max(0, Math.round(intensity)))];
     all.push({ alone: word, paired: word, asked: inputs.strength !== 'any' });
   }
 
-  const inherent = sweetnessLevel(traits);
+  // The delivered level counts what a preselected syrup adds.
+  const inherent = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + (made?.sweetnessLift ?? 0));
   const target = sweetnessTarget(inputs.sweetness);
   if (!withSweetness) {
     // The add-on decides how sweet it ends up; say nothing rather than guess.
   } else if (target !== null) {
-    const word = sweetnessWord(achievableSweetness(inherent, sugarAdjustable, target));
+    // A pick that keeps the customer's choice is called by the customer's own
+    // word for it, even where the delivered level sits at the edge of the band
+    // (a 4 for "lightly sweet" would otherwise read "medium-sweet"); one that
+    // does not keep it is described as they will actually get it.
+    // One exception: "Not sweet" is kept up to level 3 (a latte is milk-sweet at
+    // 2–3 with no sugar in it), and "unsweetened" would be a claim about what is
+    // in the cup that a level-2 or -3 item cannot make, so those read "barely
+    // sweet" — still the customer's direction, and true.
+    const kept = satisfiesChoice('sweetness', { name: '', traits, sugarAdjustable, made: made ?? undefined }, inputs) === true;
+    const delivered = deliveredSweetness(inherent, sugarAdjustable, target);
+    const word = !kept
+      ? sweetnessWord(delivered)
+      : inputs.sweetness === 'none' && delivered >= BARELY_SWEET_FROM
+        ? 'barely sweet'
+        : sweetnessWord(target);
     all.push({ alone: word, paired: word, asked: true });
   } else if ((inherent <= 1 && traits.kind !== 'food') || inherent >= 8) {
     const word = sweetnessWord(inherent);
@@ -265,6 +288,7 @@ export function templateReason(
   name = '',
   sugarAdjustable = false,
   addon: FlavourAddonSuggestion | null = null,
+  made: MadeTo | null = null,
 ): string {
   const v2 = (traits.traits_version ?? 1) >= CURRENT_TRAITS_VERSION;
   const phrase = flavourPhraseFor(traits, inputs, name, v2, addon);
@@ -302,7 +326,7 @@ export function templateReason(
   }
 
   // v2: richest sentence first, then progressively plainer until one fits.
-  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable, !phrase?.fromAddon);
+  const descriptors = descriptorsFor(traits, inputs, sugarAdjustable, !phrase?.fromAddon, made);
   const attempts: string[] = [];
   for (let d = descriptors.length; d >= 0; d--) {
     for (const p of phrases) attempts.push(richSentence(descriptors.slice(0, d), p, clause));
@@ -330,89 +354,62 @@ const SWEETNESS_TAG: Record<Exclude<SweetnessPref, 'any'>, string> = {
   very: 'Very sweet',
 };
 
-/** The budget label — the ceiling the customer chose (the wizard's chips read
- * "Up to ₹100 / ₹150 / ₹200"). */
-const BUDGET_TAG: Record<Exclude<Budget, 'any'>, string> = {
-  under_100: 'Up to ₹100',
-  under_150: 'Up to ₹150',
-  under_200: 'Up to ₹200',
-};
-
-/** A strength or body sub-fit at least this good counts as "matched" (2/3: an
- * intensity-2 drink for "strong", an intensity-1 one for "smooth & milky"). */
-const TAG_MATCH_FIT = 0.66;
-
 export const MAX_MATCH_TAGS = 3;
 
 /** What a match tag needs to know about an item — a Candidate satisfies it as
  * is, and the "usual" (which isn't a Candidate) is built from its menu row.
  * `addonFlavourFamilies` is optional: absent means none. */
-export type MatchTagSubject = Pick<Candidate, 'name' | 'traits' | 'sugarAdjustable' | 'addonFlavourFamilies'>;
+export type MatchTagSubject = Pick<Candidate, 'name' | 'traits' | 'sugarAdjustable' | 'addonFlavourFamilies' | 'made'>;
 
 /**
  * §4.6 — at most MAX_MATCH_TAGS labels saying why this item suits what the
  * customer asked for, in priority order:
- *  1. the feeling it fits (the first of theirs that it does)
- *  2. the flavour family they asked for that it belongs to — or, when it only
- *     gets one from an add-on, "<Family> add-on" (COFFEY-ADDONS-PAIRINGS-SPEC §3.3)
- *  3. their sweetness label, only when the sweetness they can get from the item
- *     (sugar counted) is in the SAME band as what they chose — the band the
- *     reason's descriptor is drawn from (sweetnessWord), so the tag can never
- *     contradict the sentence beside it
- *  4. Strong / Smooth & milky, when asked for and the coffee is that
- *  5. Iced / Hot, when asked for
- *  6. Light & refreshing / Rich & filling, when asked for and the item is that
- *  7. their budget ceiling ("Up to ₹150")
- *  8. Caffeine-free, when asked for
- * "Matched" uses the same sub-fits the ranking used (score.ts preferenceFits),
- * so a tag never claims what the score didn't see.
+ *  1. the flavour family they asked for that the item carries itself (an
+ *     add-on flavour earns no tag: the item does not have it)
+ *  2. their sweetness label
+ *  3. Strong / Smooth & milky
+ *  4. Iced / Hot, when they chose a temperature and the item is that
+ *  5. Light & refreshing / Rich & filling
+ *  6. Caffeine-free, when asked for
+ *  7. the feeling it fits (the first of theirs that it does) — last, so it
+ *     is the first to be cut when there are more than three
+ * Every tag about a choice (flavour, sweetness, strength, body) appears only
+ * when satisfiesChoice(...) is true — the same test the engine narrows the pool
+ * and reports `unmet` with — so a tag never claims what the pick does not have.
  */
 export function matchTagsFor(subject: MatchTagSubject, inputs: SuggestInputs): string[] {
   const { traits } = subject;
-  const fits = preferenceFits(inputs, subject);
   const tags: string[] = [];
 
-  const mood = moodsOf(inputs).find((m) => fitsMood(traits, m));
-  if (mood) tags.push(MOOD_INFO[mood].tag);
-
-  const family = requestedFamilyOf(inputs, subject.name, traits);
-  if (family) {
-    tags.push(FLAVOUR_FAMILY_INFO[family].tag);
-  } else {
-    const viaAddon = inputs.flavours.find((f) => subject.addonFlavourFamilies?.includes(f));
-    if (viaAddon) tags.push(`${FLAVOUR_FAMILY_INFO[viaAddon].tag} add-on`);
+  if (satisfiesChoice('flavours', subject, inputs) === true) {
+    // Its own family when it has one, else the one the preselected add-on supplies.
+    const family =
+      requestedFamilyOf(inputs, subject.name, traits) ?? inputs.flavours.find((f) => subject.made?.families.includes(f)) ?? null;
+    if (family) tags.push(FLAVOUR_FAMILY_INFO[family].tag);
   }
 
-  const target = sweetnessTarget(inputs.sweetness);
-  if (target !== null && inputs.sweetness !== 'any') {
-    // Same band as the target, not merely near it: an item at 4 for "lightly
-    // sweet" (3) reads "medium-sweet" in its reason, so it earns no "Lightly sweet"
-    // tag. (The reason describes the SAME achievable level — descriptorsFor.)
-    const achievable = achievableSweetness(sweetnessLevel(traits), subject.sugarAdjustable, target);
-    if (sweetnessWord(achievable) === sweetnessWord(target)) tags.push(SWEETNESS_TAG[inputs.sweetness]);
+  if (inputs.sweetness !== 'any' && satisfiesChoice('sweetness', subject, inputs) === true) {
+    tags.push(SWEETNESS_TAG[inputs.sweetness]);
   }
 
-  if (fits.strength !== null && fits.strength >= TAG_MATCH_FIT) {
+  if (satisfiesChoice('strength', subject, inputs) === true) {
     if (inputs.strength === 'strong') tags.push('Strong');
     else if (inputs.strength === 'mild') tags.push('Smooth & milky');
   }
 
-  if (
-    traits.kind === 'drink' &&
-    inputs.temperature !== 'either' &&
-    (traits.temperature === inputs.temperature || traits.temperature === 'either')
-  ) {
+  if (traits.kind === 'drink' && inputs.temperature !== 'either' && traits.temperature === inputs.temperature) {
     tags.push(inputs.temperature === 'iced' ? 'Iced' : 'Hot');
   }
 
-  if (fits.body !== null && fits.body >= TAG_MATCH_FIT) {
+  if (satisfiesChoice('body', subject, inputs) === true) {
     if (inputs.body === 'light') tags.push('Light & refreshing');
     else if (inputs.body === 'rich') tags.push('Rich & filling');
   }
 
-  if (inputs.budget !== 'any') tags.push(BUDGET_TAG[inputs.budget]);
-
   if (inputs.needs.includes('no_caffeine') && traits.caffeine === 'none') tags.push('Caffeine-free');
+
+  const mood = moodsOf(inputs).find((m) => fitsMood(traits, m));
+  if (mood) tags.push(MOOD_INFO[mood].tag);
 
   return tags.slice(0, MAX_MATCH_TAGS);
 }

@@ -6,6 +6,14 @@ import { errorResponse, notFound, parseJsonBody, unauthorized } from '@/lib/api/
 import { isUuid } from '@/lib/api/constants';
 import { recomputeOrderTotals, statusAfterAdd } from '@/lib/orders/amend';
 import {
+  loadActiveOffers,
+  loadActiveSpendOffers,
+  loadSpendOfferBlocks,
+  recordSpendRedemption,
+  releaseSpendRedemption,
+} from '@/lib/orders/offersServer';
+import { mergeSpendSnapshot, parseSpendSnapshot, type SpendOffer } from '@/lib/orders/offers';
+import {
   MAX_EDIT_REASON_LENGTH,
   planSettleEdit,
   settleEditBlockReason,
@@ -18,6 +26,19 @@ import {
   shapeMenuItem,
   type MenuItemRow,
 } from '@/lib/orders/lines';
+import {
+  PAID_BILL_LOCKED,
+  balanceOf,
+  changeableState,
+  isPaidBill,
+  lastLineMessage,
+  notChangeableMessage,
+  nextBalance,
+  originalTenderRow,
+  paidChangeAudit,
+  paidChangeBlockReason,
+  type OriginalTender,
+} from '@/lib/orders/paidChange';
 import { getStoreSettings } from '@/lib/store/settings';
 import { switchesFromSettings } from '@/lib/menu/menuSwitches';
 import { toOrderResponse, type OrderRowWithItems } from '@/lib/api/orders';
@@ -31,10 +52,10 @@ export const dynamic = 'force-dynamic';
 
 type RouteParams = { params: { id: string } };
 
-// The non-terminal, pre-settle states in which an order can still be corrected
-// (FND3-4). Terminal (completed/rejected/cancelled) and pre-accept (placed)
-// orders are not open for a void.
-const OPEN_STATUSES: OrderStatus[] = ['accepted', 'preparing', 'ready'];
+// Which orders can still be corrected (FND3-4) is lib/orders/paidChange.ts
+// changeableState: the open states (accepted / preparing / ready), plus a paid
+// dine-in bill marked Completed earlier the same day. Other terminal
+// (completed / rejected / cancelled) and pre-accept (placed) orders are not.
 
 // The subset of the loaded order + lines the recompute + preconditions need.
 type OrderLine = {
@@ -49,6 +70,12 @@ type OrderLine = {
   pass_drinks?: number;
   /** Rupees a HIOC Ritual cup paid for on this line; absent before 2026-10-coffee-pass.sql. */
   pass_covered_inr?: number;
+  menu_item_id: string;
+  name_snapshot: string;
+  /** The multi-buy offer the line was sold under; absent before 2026-10-item-offers.sql. */
+  offer_name?: string | null;
+  offer_prices?: number[] | null;
+  offer_unit_inr?: number | null;
 };
 type LoadedOrder = {
   id: string;
@@ -56,11 +83,33 @@ type LoadedOrder = {
   version: number;
   order_type: OrderType;
   payment_status: string;
+  payment_method?: string | null;
+  /** The bill as it stands — what a change to a PAID bill measures its balance from. */
+  total_inr: number | null;
+  subtotal_inr: number;
+  /** When the bill was first paid (trg_orders_paid_at); absent before 2026-09-cash-counts.sql. */
+  paid_at?: string | null;
+  /** The difference still to settle on a paid bill; absent before 2026-11-paid-order-changes.sql. */
+  balance_due_inr?: number;
+  /** When the paid bill was first changed; absent before 2026-11-paid-order-changes.sql. */
+  paid_amended_at?: string | null;
+  /** When the order was placed: a completed paid bill can be changed only that day. */
+  created_at: string;
   /** 'coffee_pass' for the sale of a HIOC Ritual; absent before 2026-10-coffee-pass.sql (= a menu order). */
   order_kind?: string;
   discount_inr: number;
   /** What HIOC Ritual cups cover on the order; absent before 2026-10-coffee-pass.sql. */
   pass_discount_inr?: number;
+  /** The multi-buy offer part of discount_inr; absent before 2026-10-item-offers.sql. */
+  offer_discount_inr?: number;
+  /** The manager-discount part of discount_inr; absent before 2026-11-manual-discount.sql. */
+  manual_discount_inr?: number;
+  /** The offer row's label when a spend offer is on the bill; absent before 2026-11-spend-offers.sql. */
+  offer_name?: string | null;
+  /** The spend offers on the order's items when it was priced (2026-11-spend-offers.sql). */
+  spend_offers?: unknown;
+  /** Stored form (+91…), or '' for a walk-in with no number: the once-per-customer key. */
+  customer_phone?: string | null;
   order_items: OrderLine[] | null;
 };
 
@@ -85,6 +134,175 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
   return passDiscountInr !== (order.pass_discount_inr ?? 0) ? { pass_discount_inr: passDiscountInr } : {};
 }
 
+// Same rule for the multi-buy offer part of the discount (lib/orders/offers.ts):
+// written back only when a void, edit or add changed it, so an order with no
+// offer never sends the column (pre-2026-10-item-offers.sql safe).
+function offerDiscountPatch(order: LoadedOrder, offerDiscountInr: number): { offer_discount_inr?: number } {
+  return offerDiscountInr !== (order.offer_discount_inr ?? 0) ? { offer_discount_inr: offerDiscountInr } : {};
+}
+
+// And for a manager discount (lib/orders/manualDiscount.ts): it only changes
+// when a correction takes the bill below it, so an order without one never
+// sends the column (pre-2026-11-manual-discount.sql safe).
+function manualDiscountPatch(order: LoadedOrder, manualDiscountInr: number): { manual_discount_inr?: number } {
+  return manualDiscountInr !== (order.manual_discount_inr ?? 0) ? { manual_discount_inr: manualDiscountInr } : {};
+}
+
+// Once per customer (spend offers): an order that already has one keeps its
+// right to it through any correction; one that hasn't can only gain it (an add
+// past the minimum, a void that makes it the better offer) when the customer's
+// number hasn't had it. Void and edit never look anything up: without the offer
+// already on the order they leave it off (silently — nothing was promised).
+function holdsSpendOffer(order: LoadedOrder): boolean {
+  return (order.offer_name ?? '').trim() !== '';
+}
+
+function silentlyBlocked(offers: readonly SpendOffer[]): Map<string, string> {
+  return new Map(offers.map((o) => [o.id, '']));
+}
+
+// After the guarded write: record the customer's spend offer when this
+// correction gave it, release it when this correction took it away.
+async function syncSpendRedemption(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  order: LoadedOrder,
+  bill: { offer_kind: string; spend_offer_id: string | null },
+): Promise<void> {
+  const held = holdsSpendOffer(order);
+  if (bill.offer_kind === 'spend' && bill.spend_offer_id && !held && order.customer_phone) {
+    await recordSpendRedemption(admin, { offerId: bill.spend_offer_id, phone: order.customer_phone, orderId: order.id });
+  } else if (held && bill.offer_kind !== 'spend') {
+    await releaseSpendRedemption(admin, order.id);
+  }
+}
+
+// The offer row's label: kept on the order only for a spend offer (a multi-buy
+// label is read off the lines), and written back only when it changes, so an
+// order that never had a spend offer never sends the column.
+function offerNamePatch(
+  order: LoadedOrder,
+  bill: { offer_discount_inr: number; offer_kind: string; offer_label: string },
+): { offer_name?: string | null } {
+  const next = bill.offer_discount_inr > 0 && bill.offer_kind === 'spend' ? bill.offer_label : null;
+  return next !== (order.offer_name ?? null) ? { offer_name: next } : {};
+}
+
+// --- Changing a PAID dine-in bill (lib/orders/paidChange.ts) -----------------
+//
+// Add, void and edit all work on a paid dine-in bill too. The bill is
+// recomputed exactly as for an unpaid one, and the change in its total goes into
+// orders.balance_due_inr, settled later (POST /api/orders/[id]/balance). The
+// order stays 'paid'. The first change also records the original single
+// counter tender as an order_payments row (originalTenderRow), so the drawer and
+// the reports keep counting what was really taken, not the new total.
+
+type PaidPlan =
+  | { paid: false }
+  | {
+      paid: true;
+      /** The bill's total before this change. */
+      oldTotal: number;
+      /** What was still outstanding before this change. */
+      balance: number;
+      /** No change was made to this paid bill before: stamp paid_amended_at. */
+      firstChange: boolean;
+      /** The original tender to write as a row first, when it has none. */
+      tender: OriginalTender | null;
+    };
+
+/**
+ * Whether this order may be changed as it is paid (or not), and what a change
+ * to a paid bill needs. `lockedMessage` is the op's own refusal for a paid bill
+ * that can't be changed — every order type but dine-in, as before.
+ */
+async function planPaidChange(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  order: LoadedOrder,
+  lockedMessage: string,
+): Promise<{ ok: true; plan: PaidPlan } | { ok: false; response: NextResponse }> {
+  if (!isPaidBill(order)) return { ok: true, plan: { paid: false } };
+  const blocked = paidChangeBlockReason(order);
+  if (blocked) {
+    return { ok: false, response: errorResponse(409, blocked === PAID_BILL_LOCKED ? lockedMessage : blocked) };
+  }
+  // Only a bill with no tender rows needs its payment written as one.
+  let tender = originalTenderRow(order, false);
+  if (tender) {
+    const { data, error } = await admin.from('order_payments').select('id').eq('order_id', order.id).limit(1);
+    if (error) return { ok: false, response: errorResponse(500, 'Failed to load how the bill was paid') };
+    if ((data ?? []).length > 0) tender = null;
+  }
+  return {
+    ok: true,
+    plan: {
+      paid: true,
+      oldTotal: order.total_inr ?? order.subtotal_inr,
+      balance: balanceOf(order),
+      firstChange: !order.paid_amended_at,
+      tender,
+    },
+  };
+}
+
+/** The balance columns a change to a paid bill writes along with its new totals (none for an unpaid one). */
+function paidPatch(plan: PaidPlan, newTotal: number, nowIso: string): { balance_due_inr?: number; paid_amended_at?: string } {
+  if (!plan.paid) return {};
+  return {
+    balance_due_inr: nextBalance(plan.balance, plan.oldTotal, newTotal),
+    ...(plan.firstChange ? { paid_amended_at: nowIso } : {}),
+  };
+}
+
+/** What a change to a paid bill adds to its audit row (nothing for an unpaid one). */
+function paidAuditFields(plan: PaidPlan, newTotal: number): Record<string, unknown> {
+  if (!plan.paid) return {};
+  return paidChangeAudit(plan.oldTotal, newTotal, nextBalance(plan.balance, plan.oldTotal, newTotal));
+}
+
+/**
+ * Writes the original tender as a row, before the guarded update (so the drawer
+ * never sees the new total without it). Returns the row's id so a lost race or
+ * a failed write can take it back out; null id = nothing needed writing.
+ */
+async function writeOriginalTender(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  orderId: string,
+  plan: PaidPlan,
+): Promise<{ ok: true; id: string | null } | { ok: false }> {
+  if (!plan.paid || !plan.tender) return { ok: true, id: null };
+  const { data, error } = await admin
+    .from('order_payments')
+    .insert({
+      order_id: orderId,
+      method: plan.tender.method,
+      amount_inr: plan.tender.amount_inr,
+      tendered_inr: null,
+      // Taken when the bill was paid, by whoever settled it then (not recorded
+      // for a single-tender settle) — not by the person changing it now.
+      created_by: null,
+      created_at: plan.tender.created_at,
+    })
+    .select('id')
+    .single();
+  if (error || !data) {
+    console.error(`order ${orderId}: could not record the original payment before changing the paid bill`, error);
+    return { ok: false };
+  }
+  return { ok: true, id: (data as { id: string }).id };
+}
+
+/** Best-effort removal of the original-tender row this request wrote. */
+async function removeOriginalTender(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  id: string | null,
+): Promise<void> {
+  if (!id) return;
+  const { error } = await admin.from('order_payments').delete().eq('id', id);
+  if (error) console.error('original tender rollback failed', error, id);
+}
+
+const TENDER_WRITE_FAILED = 'Could not record how the bill was paid — nothing was changed. Please try again.';
+
 // POST /api/orders/[id]/amend — correct an open order. Three operations:
 //
 //   { item_id, reason }              → VOID a wrongly-punched line (FND3-4, UI POS-4)
@@ -95,10 +313,13 @@ function passDiscountPatch(order: LoadedOrder, passDiscountInr: number): { pass_
 //
 // All three refuse a HIOC Ritual sale (order_kind 'coffee_pass') outright (409).
 //
-// All three share the same invariants: the order must be open and unpaid,
-// totals are recomputed SERVER-SIDE under the optimistic `version` guard, a lost
-// race rolls the change back rather than half-applying it, and every amendment
-// is audited in order_amendments.
+// All three share the same invariants: the order must be open and unpaid —
+// or, for a dine-in bill paid at the counter, paid (the change in the total
+// becomes a balance settled later, see "Changing a PAID dine-in bill" above) —
+// totals are recomputed SERVER-SIDE under the optimistic `version` guard (and
+// only while the payment status is still the one read), a lost race rolls the
+// change back rather than half-applying it, and every amendment is audited in
+// order_amendments.
 //
 // They differ in authorization, deliberately. A void REDUCES what a customer
 // owes and is manager-gated (`void_line`, D4). An add increases an unpaid tab —
@@ -176,13 +397,21 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   // Preconditions — each a 409 (a conflict with the order's current state).
-  if (!OPEN_STATUSES.includes(order.status)) {
-    return errorResponse(409, 'This order can no longer be corrected — it is not open.');
+  // Open, or a paid dine-in bill marked Completed earlier today (lib/orders/
+  // paidChange.ts completedPaidChangeable).
+  if (!changeableState(order)) {
+    return errorResponse(409, notChangeableMessage(order, 'This order can no longer be corrected — it is not open.'));
   }
-  // Post-payment fixes go through the Phase-2 refund path, never a silent void.
-  if (order.payment_status === 'paid') {
-    return errorResponse(409, 'This order is already paid — correct it through a refund, not a void.');
-  }
+  // A paid bill: only a dine-in bill paid at the counter, and then the void
+  // leaves a balance to give back — never a silent change to what was paid.
+  // Every other paid order is corrected through the refund path, as before.
+  const paidCheck = await planPaidChange(
+    admin,
+    order,
+    'This order is already paid — correct it through a refund, not a void.',
+  );
+  if (!paidCheck.ok) return paidCheck.response;
+  const paid = paidCheck.plan;
   if (target.voided) {
     return errorResponse(409, 'That line is already voided.');
   }
@@ -191,7 +420,10 @@ export async function POST(request: Request, { params }: RouteParams) {
   // voiding it would leave zero lines.
   const nonVoidedCount = items.filter((line) => !line.voided).length;
   if (nonVoidedCount <= 1) {
-    return errorResponse(409, 'Void would empty the order — cancel the order instead.');
+    return errorResponse(
+      409,
+      isPaidBill(order) ? lastLineMessage(order) : 'Void would empty the order — cancel the order instead.',
+    );
   }
 
   // Void the line (never delete — snapshot rule; a fired KOT may reference it).
@@ -209,11 +441,25 @@ export async function POST(request: Request, { params }: RouteParams) {
   const remaining = items.map((line) =>
     line.id === itemId ? { ...line, voided: true } : line,
   );
+  const unvoid = () =>
+    admin
+      .from('order_items')
+      .update({ voided: false, void_reason: '', voided_by: null, voided_at: null })
+      .eq('id', itemId);
+  const tender = await writeOriginalTender(admin, id, paid);
+  if (!tender.ok) {
+    await unvoid();
+    return errorResponse(500, TENDER_WRITE_FAILED);
+  }
   const bill = recomputeOrderTotals({
     items: remaining,
     settings,
     orderType: order.order_type,
     discountInr: order.discount_inr,
+    offerDiscountInr: order.offer_discount_inr ?? 0,
+    manualDiscountInr: order.manual_discount_inr ?? 0,
+    spendOffers: parseSpendSnapshot(order.spend_offers),
+    spendBlocked: holdsSpendOffer(order) ? undefined : silentlyBlocked(parseSpendSnapshot(order.spend_offers)),
   });
 
   // Persist the new totals UNDER THE OPTIMISTIC VERSION GUARD. If a concurrent
@@ -229,24 +475,33 @@ export async function POST(request: Request, { params }: RouteParams) {
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
+      ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...manualDiscountPatch(order, bill.manual_discount_inr),
+      ...offerNamePatch(order, bill),
+      ...paidPatch(paid, bill.total_inr, nowIso),
       version: order.version + 1,
     })
     .eq('id', id)
     .eq('version', order.version)
+    // Settling or refunding doesn't bump `version`: a bill paid (or refunded) on
+    // another till since it was read must not be changed as if it weren't.
+    .eq('payment_status', order.payment_status)
     .select('id')
     .maybeSingle();
 
+  if (updateError || !guarded) {
+    await unvoid();
+    await removeOriginalTender(admin, tender.id);
+  }
   if (updateError) return errorResponse(500, 'Failed to update the order total');
   if (!guarded) {
-    await admin
-      .from('order_items')
-      .update({ voided: false, void_reason: '', voided_by: null, voided_at: null })
-      .eq('id', itemId);
     return errorResponse(
       409,
       'Order was updated by someone else — please re-check the order and try again.',
     );
   }
+
+  await syncSpendRedemption(admin, order, bill);
 
   // Audit the correction (who/what/when + payload) — only after the guarded write
   // commits, so a lost-race amend leaves no phantom audit row (FND3-4 / open enum).
@@ -254,7 +509,12 @@ export async function POST(request: Request, { params }: RouteParams) {
     order_id: id,
     staff_id: user.id,
     kind: 'void_item',
-    payload: { order_item_id: itemId, reason, line_total_inr: target.line_total_inr },
+    payload: {
+      order_item_id: itemId,
+      reason,
+      line_total_inr: target.line_total_inr,
+      ...paidAuditFields(paid, bill.total_inr),
+    },
   });
 
   // The staff board already updates via postgres_changes on the orders row; this
@@ -326,28 +586,53 @@ async function addLines(
   if (order.order_kind === 'coffee_pass') return errorResponse(409, RITUAL_SALE_LOCKED);
   const existingItems: OrderLine[] = order.order_items ?? [];
 
-  if (!OPEN_STATUSES.includes(order.status)) {
-    return errorResponse(409, 'This order can no longer be changed — it is not open.');
+  if (!changeableState(order)) {
+    return errorResponse(409, notChangeableMessage(order, 'This order can no longer be changed — it is not open.'));
   }
-  // A paid order's bill is settled; adding to it would silently change what the
-  // customer already paid. Start a new order instead.
-  if (order.payment_status === 'paid') {
-    return errorResponse(409, 'This order is already paid — start a new order for anything else.');
-  }
+  // A paid bill: a dine-in bill paid at the counter takes the items, and what
+  // they cost becomes a balance to collect. Any other paid order stays as it was
+  // paid — start a new order instead.
+  const paidCheck = await planPaidChange(
+    admin,
+    order,
+    'This order is already paid — start a new order for anything else.',
+  );
+  if (!paidCheck.ok) return paidCheck.response;
+  const paid = paidCheck.plan;
 
   // Price the new lines against the live menu (server-authoritative).
+  // A jar added to a tab takes the offer live now (Promotions → Offers).
   const menuIds = [...new Set(parsed.map((i) => i.menu_item_id))];
-  const { data: menuRows, error: menuError } = await admin
-    .from('menu_items')
-    .select(MENU_ITEM_SELECT)
-    .in('id', menuIds);
+  // Spend offers: the live ones on any item the order will then have, so an
+  // add that takes the bill past a minimum earns the offer.
+  const billItemIds = [
+    ...new Set([...menuIds, ...existingItems.filter((l) => !l.voided).map((l) => l.menu_item_id).filter(Boolean)]),
+  ];
+  const [{ data: menuRows, error: menuError }, offersByItem, liveSpend] = await Promise.all([
+    admin.from('menu_items').select(MENU_ITEM_SELECT).in('id', menuIds),
+    loadActiveOffers(admin, menuIds),
+    loadActiveSpendOffers(admin, billItemIds),
+  ]);
   if (menuError) return errorResponse(500, 'Failed to validate order items');
 
   const menuById = new Map(
     (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
   );
-  const resolved = resolveOrderLines(parsed, menuById, switchesFromSettings(storeSettings));
+  const resolved = resolveOrderLines(
+    parsed,
+    menuById,
+    switchesFromSettings(storeSettings),
+    offersByItem,
+    new Set(liveSpend.map((o) => o.menu_item_id)),
+  );
   if (!resolved.ok) return errorResponse(400, resolved.error);
+  const storedSpend = parseSpendSnapshot(order.spend_offers);
+  const spendOffers: SpendOffer[] = mergeSpendSnapshot(storedSpend, liveSpend, billItemIds);
+  // Once per customer: unless this order has the offer already, the number on
+  // it must not have had it on another order.
+  const spendBlocked = holdsSpendOffer(order)
+    ? undefined
+    : await loadSpendOfferBlocks(admin, spendOffers, order.customer_phone || null, id);
 
   // Insert the lines, tracking ids so a lost version race can roll them back.
   const insertedIds: string[] = [];
@@ -375,6 +660,12 @@ async function addLines(
     }
   }
 
+  const tender = await writeOriginalTender(admin, id, paid);
+  if (!tender.ok) {
+    await rollbackLines(admin, insertedIds);
+    return errorResponse(500, TENDER_WRITE_FAILED);
+  }
+
   // Recompute from EVERY non-voided line — the ones already on the order plus
   // the ones just added. Same shared recompute the void path uses (dine-in
   // packaging rule and discount clamp included).
@@ -388,6 +679,14 @@ async function addLines(
       line_total_inr: l.line_total_inr,
       gst_exempt: l.gst_exempt,
       pass_covered_inr: 0,
+      // A jar added to a tab counts with the jars already on it (one offer).
+      menu_item_id: l.menu_item_id,
+      name_snapshot: l.name_snapshot,
+      quantity: l.quantity,
+      offer_name: l.offer_name ?? null,
+      offer_prices: l.offer_prices ?? null,
+      offer_unit_inr: l.offer_unit_inr ?? null,
+      price_inr_snapshot: l.price_inr_snapshot,
     })),
   ];
   const bill = recomputeOrderTotals({
@@ -395,6 +694,10 @@ async function addLines(
     settings,
     orderType: order.order_type,
     discountInr: order.discount_inr,
+    offerDiscountInr: order.offer_discount_inr ?? 0,
+    manualDiscountInr: order.manual_discount_inr ?? 0,
+    spendOffers,
+    spendBlocked,
   });
 
   // New items have to be made: an order the kitchen had marked Ready goes back
@@ -411,27 +714,42 @@ async function addLines(
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
+      ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...manualDiscountPatch(order, bill.manual_discount_inr),
+      ...offerNamePatch(order, bill),
+      // A spend offer that came live for an item this add brought: kept on the
+      // order for later corrections. Only written when it grew.
+      ...(spendOffers.length > storedSpend.length ? { spend_offers: spendOffers } : {}),
+      ...paidPatch(paid, bill.total_inr, new Date().toISOString()),
       version: order.version + 1,
       ...(nextStatus !== order.status ? { status: nextStatus } : {}),
     })
     .eq('id', id)
     .eq('version', order.version)
+    // Settling doesn't bump `version`: a bill settled on another till since it
+    // was read must not take the items as if it were still unpaid (the extra
+    // would never be collected).
+    .eq('payment_status', order.payment_status)
     .select('id')
     .maybeSingle();
 
   if (updateError) {
     await rollbackLines(admin, insertedIds);
+    await removeOriginalTender(admin, tender.id);
     return errorResponse(500, 'Failed to update the order total');
   }
   if (!guarded) {
     // Someone else changed the order first. Remove the lines we just added so the
     // re-presented order is clean, and make the caller re-check — never force.
     await rollbackLines(admin, insertedIds);
+    await removeOriginalTender(admin, tender.id);
     return errorResponse(
       409,
       'Order was updated by someone else — please re-check the order and try again.',
     );
   }
+
+  await syncSpendRedemption(admin, order, bill);
 
   // Audit only after the guarded write commits, so a lost race leaves no
   // phantom row (same rule as the void path).
@@ -454,6 +772,7 @@ async function addLines(
         line_total_inr: l.line_total_inr,
       })),
       added_inr: resolved.subtotalInr,
+      ...paidAuditFields(paid, bill.total_inr),
     },
   });
   if (auditError) {
@@ -541,12 +860,17 @@ async function editLines(
   if (!data) return notFound();
   const order = data as LoadedOrder;
 
-  // A Ritual sale, a paid bill, or an order that isn't open — one message each.
+  // A Ritual sale, a paid bill that can't be changed, or an order that isn't
+  // open — one message each. A dine-in bill paid at the counter can be lowered:
+  // the difference becomes a balance to give back.
   const blocked = settleEditBlockReason(order);
   if (blocked) return errorResponse(409, blocked);
+  const paidCheck = await planPaidChange(admin, order, PAID_BILL_LOCKED);
+  if (!paidCheck.ok) return paidCheck.response;
+  const paid = paidCheck.plan;
 
   const items: OrderLine[] = order.order_items ?? [];
-  const plan = planSettleEdit(items, body.changes);
+  const plan = planSettleEdit(items, body.changes, lastLineMessage(order));
   if (!plan.ok) return errorResponse(plan.status, plan.error);
 
   // Write the lines, tracking what landed so a failure or a lost version race can
@@ -570,6 +894,12 @@ async function editLines(
     applied.push(change);
   }
 
+  const tender = await writeOriginalTender(admin, id, paid);
+  if (!tender.ok) {
+    await rollbackEdits(admin, applied);
+    return errorResponse(500, TENDER_WRITE_FAILED);
+  }
+
   // Recompute from the lines as they now stand. A removed line leaves the bill (and
   // its pass cover goes with it, the database having given the cups back); a
   // reduced line carries no pass cup (plan refuses those), so its cover is 0.
@@ -578,13 +908,20 @@ async function editLines(
   const edited = items.map((line) => {
     const change = changeById.get(line.id);
     if (!change) return line;
-    return change.remove ? { ...line, voided: true } : { ...line, line_total_inr: change.to_line_total_inr };
+    // The new quantity too: a multi-buy offer counts units, not rupees.
+    return change.remove
+      ? { ...line, voided: true }
+      : { ...line, quantity: change.to_quantity, line_total_inr: change.to_line_total_inr };
   });
   const bill = recomputeOrderTotals({
     items: edited,
     settings,
     orderType: order.order_type,
     discountInr: order.discount_inr,
+    offerDiscountInr: order.offer_discount_inr ?? 0,
+    manualDiscountInr: order.manual_discount_inr ?? 0,
+    spendOffers: parseSpendSnapshot(order.spend_offers),
+    spendBlocked: holdsSpendOffer(order) ? undefined : silentlyBlocked(parseSpendSnapshot(order.spend_offers)),
   });
 
   const { data: guarded, error: updateError } = await admin
@@ -596,29 +933,39 @@ async function editLines(
       discount_inr: bill.discount_inr,
       total_inr: bill.total_inr,
       ...passDiscountPatch(order, bill.pass_discount_inr),
+      ...offerDiscountPatch(order, bill.offer_discount_inr),
+      ...manualDiscountPatch(order, bill.manual_discount_inr),
+      ...offerNamePatch(order, bill),
+      ...paidPatch(paid, bill.total_inr, nowIso),
       version: order.version + 1,
     })
     .eq('id', id)
     .eq('version', order.version)
     // Settling doesn't bump `version`, so the bill being settled on another till
-    // in the meantime is caught here: it must not be lowered once it is paid.
-    .neq('payment_status', 'paid')
+    // in the meantime is caught here: an unpaid bill must not be lowered once it
+    // is paid (nothing would give the difference back), nor a paid one once it
+    // has been refunded.
+    .eq('payment_status', order.payment_status)
     .select('id')
     .maybeSingle();
 
   if (updateError) {
     await rollbackEdits(admin, applied);
+    await removeOriginalTender(admin, tender.id);
     return errorResponse(500, 'Failed to update the order total');
   }
   if (!guarded) {
     // Someone else changed the order first. Put every line back so the
     // re-presented order is clean, and make the caller re-check — never force.
     await rollbackEdits(admin, applied);
+    await removeOriginalTender(admin, tender.id);
     return errorResponse(
       409,
       'Order was updated by someone else — please re-check the order and try again.',
     );
   }
+
+  await syncSpendRedemption(admin, order, bill);
 
   // Audit only after the guarded write commits (a lost race leaves no phantom
   // row). A removal is a void in everything but where it was done, so it reuses
@@ -634,7 +981,13 @@ async function editLines(
       staff_id: user.id,
       kind: c.remove ? 'void_item' : 'change_qty',
       payload: c.remove
-        ? { order_item_id: c.item_id, reason, line_total_inr: c.from_line_total_inr, via: 'settle_edit' }
+        ? {
+            order_item_id: c.item_id,
+            reason,
+            line_total_inr: c.from_line_total_inr,
+            via: 'settle_edit',
+            ...paidAuditFields(paid, bill.total_inr),
+          }
         : {
             order_item_id: c.item_id,
             reason,
@@ -642,6 +995,7 @@ async function editLines(
             to_quantity: c.to_quantity,
             from_line_total_inr: c.from_line_total_inr,
             to_line_total_inr: c.to_line_total_inr,
+            ...paidAuditFields(paid, bill.total_inr),
           },
     })),
   );

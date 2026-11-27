@@ -1,17 +1,14 @@
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 import { PosOrderEntry, type AddToOrderTarget } from '@/components/staff/PosOrderEntry';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { isUuid } from '@/lib/api/constants';
-import { OrderingOffNotice } from '@/components/staff/OrderingOffNotice';
-import { getStaffSurface } from '@/lib/staff/surface';
-import { getStoreSettings } from '@/lib/store/settings';
-import { canTakeOrders } from '@/lib/staff/surfaceRules';
+import { TakeOrdersGate } from '@/components/staff/TakeOrdersGate';
+import { changeableState, isPaidBill, paidChangeBlockReason, type PaidChangeOrder } from '@/lib/orders/paidChange';
 
-// The states in which an order can still take more items (mirrors the amend
-// route's OPEN_STATUSES — the route is the real gate; this just avoids offering
-// a flow that would 409).
-const OPEN_STATUSES = ['accepted', 'preparing', 'ready'];
+// Which orders can still take more items is lib/orders/paidChange.ts
+// changeableState, the amend route's own rule — the route is the real gate;
+// this just avoids offering a flow that would 409.
 
 /**
  * TAB-2: resolves `?add=<orderId>` into the target the entry screen needs.
@@ -23,14 +20,17 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
   if (!orderId || !isUuid(orderId)) return null;
 
   const admin = createAdminSupabaseClient();
+  // `*` rather than a column list: the paid-bill columns (2026-11-paid-order-
+  // changes.sql) are read by paidChangeBlockReason, and naming them would fail
+  // the lookup on a database without them.
   const { data } = await admin
     .from('orders')
-    .select('id, order_number, status, payment_status, tables(label)')
+    .select('*, tables(label)')
     .eq('id', orderId)
     .maybeSingle();
 
   if (!data) return null;
-  const row = data as unknown as {
+  const row = data as unknown as PaidChangeOrder & {
     id: string;
     order_number: number;
     status: string;
@@ -39,11 +39,17 @@ async function resolveAddTarget(orderId: string | null): Promise<AddToOrderTarge
     // inferred type is an array — accept either rather than guess.
     tables?: { label: string } | { label: string }[] | null;
   };
-  if (!OPEN_STATUSES.includes(row.status) || row.payment_status === 'paid') return null;
+  // Open, or a paid dine-in bill marked Completed earlier today (it reopens to
+  // Preparing when the items are added — lib/orders/paidChange.ts).
+  if (!changeableState(row)) return null;
+  // A paid bill takes more items only when it is a dine-in bill paid at the
+  // counter: what they cost becomes a balance to collect (lib/orders/paidChange).
+  const paid = isPaidBill(row);
+  if (paid && paidChangeBlockReason(row)) return null;
 
   const table = Array.isArray(row.tables) ? row.tables[0] : row.tables;
 
-  return { id: row.id, orderNumber: row.order_number, tableLabel: table?.label ?? null };
+  return { id: row.id, orderNumber: row.order_number, tableLabel: table?.label ?? null, paid };
 }
 
 // Staff POS-lite order entry (POS-1). The /staff/** layout already gates this
@@ -74,12 +80,6 @@ export default async function NewOrderPage({
     );
   }
 
-  // Taking orders: the POS always; the staff website only when switched on.
-  const [surface, storeSettings] = await Promise.all([getStaffSurface(), getStoreSettings()]);
-  if (!canTakeOrders(surface, storeSettings.staff_web_ordering)) {
-    return <OrderingOffNotice />;
-  }
-
   // POS-3 deep-link: /staff/orders/new?table=<id> pre-selects that dine-in table
   // (PosOrderEntry validates it against the active tables and ignores an unknown
   // id). Only a single string value is meaningful.
@@ -96,5 +96,20 @@ export default async function NewOrderPage({
   // becomes a navigation target, so it is never taken from the query as-is.
   const returnTo = addToOrder && searchParams.back === 'settle' ? '/staff/settle' : undefined;
 
-  return <PosOrderEntry initialTableId={initialTableId} addToOrder={addToOrder} returnTo={returnTo} />;
+  // Taking orders: the POS always; the staff website only when switched on.
+  // Read from the shell the layout already resolved (TakeOrdersGate), not the
+  // database again: a plain New order now does no server work of its own, so
+  // the tap lands as fast as the sign-in check allows.
+  // The key gives each context (counter, a table, an add) its own screen, so
+  // moving between them starts from that context's own draft.
+  return (
+    <TakeOrdersGate>
+      <PosOrderEntry
+        key={addToOrder ? `add:${addToOrder.id}` : initialTableId ? `table:${initialTableId}` : 'counter'}
+        initialTableId={initialTableId}
+        addToOrder={addToOrder}
+        returnTo={returnTo}
+      />
+    </TakeOrdersGate>
+  );
 }

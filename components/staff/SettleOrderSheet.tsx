@@ -1,9 +1,10 @@
 'use client';
 
-// One unpaid bill, opened from the Settle list: what is on it, what it comes
+// One bill, opened from the Settle list (unpaid, or paid with a balance left)
+// or from an order's "Edit order" (any bill that can still be changed — a paid
+// dine-in one included, lib/orders/paidChange.ts): what is on it, what it comes
 // to, and — for a person the owner has allowed (`settle_edit_order`, Team →
-// Permissions) — lowering it before it is settled: a quantity down, a line off,
-// each with a reason. "Add items" hands over to the running-tab add flow (the
+// Permissions) — lowering it: a quantity down, a line off, each with a reason. "Add items" hands over to the running-tab add flow (the
 // kitchen gets a ticket for exactly what was added); "Settle" goes on to the
 // payment step with whatever the bill now is.
 //
@@ -28,7 +29,10 @@ import {
 import { STATUS_LABELS } from '@/lib/orders/stateMachine';
 import { PASS_SHORT_NAME } from '@/lib/passes/brand';
 import { RITUAL_SALE_LABEL, cupsOnOrder, isRitualSale, ritualBillRow } from '@/lib/pos/ritual';
+import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
+import { manualDiscountStaffLabel } from '@/lib/orders/manualDiscount';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
+import { balanceOf, describeBalance, settledInr } from '@/lib/orders/paidChange';
 import type { Order, OrderItem } from '@/lib/types';
 
 type OrderWithItems = Order & { items: OrderItem[] };
@@ -79,6 +83,10 @@ export function SettleOrderSheet({
   const [error, setError] = useState<string | null>(null);
 
   const ritualSale = isRitualSale(order);
+  // A paid bill changed after it was paid (lib/orders/paidChange.ts): what is
+  // left to settle is its balance, not its total.
+  const paidBill = order.payment_status === 'paid';
+  const balance = paidBill ? balanceOf(order) : 0;
   const blockReason = settleEditBlockReason(order);
   const editable = canEdit && blockReason === null;
   const canAdd = canAddItems && blockReason === null;
@@ -109,7 +117,7 @@ export function SettleOrderSheet({
   // will accept (and "would empty the order" is said before the tap, not after).
   const plan = useMemo(() => (changes.length > 0 ? planSettleEdit(order.items, changes) : null), [changes, order.items]);
   const planError = plan && !plan.ok ? plan.error : null;
-  const reduction = plan?.ok ? editReductionInr(plan.changes) : 0;
+  const reduction = plan?.ok ? editReductionInr(plan.changes, order.items, order) : 0;
   const reason = reasonChoice === 'Other' ? reasonText.trim() : reasonChoice;
   const canSave = dirty && !saving && plan?.ok === true && reason !== '';
 
@@ -202,22 +210,30 @@ export function SettleOrderSheet({
                 </SurfaceLink>
               )
             ) : null}
-            <button
-              type="button"
-              onClick={() => onSettle(order)}
-              disabled={busyWithEdit}
-              className="min-h-[44px] flex-1 rounded-md bg-tan-dark px-5 text-sm font-bold text-cream hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Settle {rupees(totalOf(order))}
-            </button>
+            {paidBill && balance === 0 ? null : (
+              <button
+                type="button"
+                onClick={() => onSettle(order)}
+                disabled={busyWithEdit}
+                className="min-h-[44px] flex-1 rounded-md bg-tan-dark px-5 text-sm font-bold text-cream hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {balance > 0
+                  ? `Collect ${rupees(balance)}`
+                  : balance < 0
+                    ? `Give back ${rupees(-balance)}`
+                    : `Settle ${rupees(totalOf(order))}`}
+              </button>
+            )}
           </div>
         </div>
       }
     >
       {editable ? (
         <p className="mb-2 text-xs text-muted">
-          Lower a quantity or remove a line before settling.
-          {canAdd ? ' To add more, use Add items.' : ''}
+          {paidBill
+            ? 'This bill is already paid — lower a quantity or remove a line, and the difference is given back.'
+            : 'Lower a quantity or remove a line before settling.'}
+          {canAdd ? (paidBill ? ' Add items to charge for more.' : ' To add more, use Add items.') : ''}
         </p>
       ) : null}
 
@@ -327,8 +343,19 @@ export function SettleOrderSheet({
           {plan?.ok ? (
             <>
               <p className="text-sm font-bold text-charcoal">
-                <span className="font-mono tabular-nums">−{rupees(reduction)}</span> before tax
+                <span className="font-mono tabular-nums">
+                  {reduction >= 0 ? '−' : '+'}
+                  {rupees(Math.abs(reduction))}
+                </span>{' '}
+                before tax
               </p>
+              {reduction < 0 ? (
+                // Removing items took the rest of the bill under a spend offer's
+                // minimum, so that item is back at its regular price.
+                <p className="mt-0.5 text-xs font-semibold text-tan-dark">
+                  The bill goes up: an offer no longer applies after this change.
+                </p>
+              ) : null}
               <p className="mt-0.5 text-xs text-muted">GST and the total are recalculated when you save.</p>
             </>
           ) : null}
@@ -405,12 +432,25 @@ export function SettleOrderSheet({
         <BillRow label="Subtotal" value={order.subtotal_inr} />
         {order.tax_inr > 0 ? <BillRow label="GST" value={order.tax_inr} /> : null}
         {order.packaging_inr > 0 ? <BillRow label="Packaging" value={order.packaging_inr} /> : null}
-        {order.discount_inr > 0 ? <BillRow label="Discount" value={-order.discount_inr} /> : null}
+        {discountRows(order, orderOfferLabel(order), 'Discount', manualDiscountStaffLabel(order.manual_discount_reason)).map((row) => (
+          <BillRow key={row.label} label={row.label} value={-row.amountInr} />
+        ))}
         {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}
         <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
           <span className="font-bold text-charcoal">Total</span>
           <span className="text-lg font-bold tabular-nums text-tan-dark">{rupees(totalOf(order))}</span>
         </div>
+        {paidBill && balance !== 0 ? (
+          <>
+            <BillRow label="Already paid" value={-settledInr(order)} />
+            <div className="mt-1 flex items-center justify-between">
+              <span className="font-bold text-charcoal">{balance > 0 ? 'Balance to collect' : 'To give back'}</span>
+              <span className="font-bold tabular-nums text-red-800" aria-label={describeBalance(balance)}>
+                {rupees(Math.abs(balance))}
+              </span>
+            </div>
+          </>
+        ) : null}
       </div>
     </Modal>
   );

@@ -334,6 +334,87 @@ async function checkNotifyDelivery() {
   else fail('probe row removed from notifications', `${leftRows} row(s) still present — DELETE FROM notifications WHERE provider_ref='${SENTINEL}' BY HAND`);
 }
 
+// Beanies account update (docs/BEANIES-UPDATE-SPEC.md,
+// supabase/2026-11-beanies-update.sql). Same doomed-insert technique as check 1:
+// a notifications row against the nil-UUID order must die on the FOREIGN KEY, not
+// the CHECK, so nothing is ever written. The negative control proves the CHECK
+// still exists and 'feedback' (live today, kept by this migration) is still
+// allowed.
+async function checkBeaniesUpdate() {
+  heading('BEANIES · account update delivery-log event', '2026-11-beanies-update.sql');
+  const attempt = (event) => doomedInsert('notifications', {
+    order_id: BOGUS_ORDER_ID, channel: 'whatsapp', event,
+    status: 'sent', provider_ref: SENTINEL,
+  });
+  expectKind("notifications.event CHECK accepts 'beanies'", await attempt('beanies'), 'fk', 'reached the FK, so the CHECK passed');
+  expectKind("notifications.event CHECK still accepts 'feedback'", await attempt('feedback'), 'fk', 'reached the FK, so the CHECK passed');
+  expectKind('notifications.event CHECK still rejects an unknown event', await attempt(`bogus_${RUN_ID}`), 'check', 'widened, not dropped');
+}
+
+// Web push (docs/WEB-PUSH-SPEC.md, supabase/2026-11-web-push.sql). Each insert
+// below is doomed by a CHECK or by the FK on push_subscriptions.user_id. If the
+// schema has drifted and a push_sends row lands anyway, doomedInsert records its
+// id and checkCleanup deletes it. push_consent_events is deliberately NOT probed
+// with a write: it has no FK and an append-only trigger, so a stray row could
+// not be cleaned up. Its CHECKs, the partial unique index and the trigger are
+// checked by the migration's own Verify block in the SQL editor.
+const WEB_PUSH_TABLES = {
+  push_subscriptions: ['id', 'user_id', 'endpoint', 'p256dh', 'auth', 'user_agent', 'created_at', 'last_success_at'],
+  push_consent_events: ['id', 'user_id', 'action', 'source', 'endpoint_hash', 'created_at'],
+  push_sends: ['id', 'title', 'body', 'url', 'kind', 'sent_by', 'sent_on', 'device_count', 'delivered', 'failed', 'clicked', 'created_at'],
+};
+
+async function checkWebPush() {
+  heading('WEB PUSH · subscriptions, consent log, sends', '2026-11-web-push.sql');
+  const hint = 'apply supabase/2026-11-web-push.sql';
+
+  let missing = false;
+  for (const [table, cols] of Object.entries(WEB_PUSH_TABLES)) {
+    const res = await rest(`/${table}?select=${cols.join(',')}&limit=1`);
+    if (res.ok) { pass(`${table} exists`, `${cols.length} column(s) selectable`); continue; }
+    const kind = errKind(res);
+    if (kind === 'no_table' || kind === 'no_column') { missing = true; fail(`${table} exists`, `${hint} — ${errText(res)}`); }
+    else fail(`${table} exists`, `${kind}: ${errText(res)}`);
+  }
+  if (missing) return;
+
+  // RLS with no policy: anon must not read or write any of the three.
+  for (const table of Object.keys(WEB_PUSH_TABLES)) {
+    const read = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    const rows = Array.isArray(read.body) ? read.body.length : -1;
+    if (!read.ok || rows === 0) pass(`anon cannot read ${table}`, read.ok ? 'RLS returned 0 rows' : `refused (${read.status})`);
+    else fail(`anon cannot read ${table}`, `anon read ${rows} row(s)`);
+  }
+  const anonWrite = await rest('/push_subscriptions', {
+    key: ANON, method: 'POST', prefer: 'return=minimal',
+    body: { user_id: BOGUS_ORDER_ID, endpoint: `https://example.invalid/${SENTINEL}`, p256dh: 'x', auth: 'x' },
+  });
+  if (anonWrite.ok) {
+    fail('anon cannot insert into push_subscriptions', 'insert SUCCEEDED for anon');
+    await rest(`/push_subscriptions?endpoint=eq.${encodeURIComponent(`https://example.invalid/${SENTINEL}`)}`, { method: 'DELETE' });
+  } else pass('anon cannot insert into push_subscriptions', `refused (${anonWrite.status})`);
+
+  // push_subscriptions: a well-formed row reaches the FK (bogus user), junk does not.
+  const goodSub = {
+    user_id: BOGUS_ORDER_ID, endpoint: `https://example.invalid/${SENTINEL}`, p256dh: 'p', auth: 'a',
+  };
+  const sub = await doomedInsert('push_subscriptions', goodSub);
+  expectKind('push_subscriptions accepts a well-formed row', sub, 'fk', 'reached the FK, so every CHECK passed');
+  const junkSub = await doomedInsert('push_subscriptions', { ...goodSub, endpoint: 'not-a-url' });
+  expectKind('push_subscriptions rejects a non-https endpoint', junkSub, 'check', 'constraint is present');
+  const longSub = await doomedInsert('push_subscriptions', { ...goodSub, p256dh: 'x'.repeat(201) });
+  expectKind('push_subscriptions rejects an oversize key', longSub, 'check', 'constraint is present');
+
+  // push_sends has no FK either; each row below is invalid in exactly one way.
+  const sendBase = { title: 't', body: 'b', url: '/', kind: 'test', sent_on: '2000-01-01' };
+  const badKind = await doomedInsert('push_sends', { ...sendBase, kind: 'everyone' });
+  expectKind("push_sends.kind CHECK rejects anything but broadcast/test", badKind, 'check', 'constraint is present');
+  const longTitle = await doomedInsert('push_sends', { ...sendBase, title: 'x'.repeat(41) });
+  expectKind('push_sends rejects a title over 40 characters', longTitle, 'check', 'constraint is present');
+  const longBody = await doomedInsert('push_sends', { ...sendBase, body: 'x'.repeat(121) });
+  expectKind('push_sends rejects a body over 120 characters', longBody, 'check', 'constraint is present');
+}
+
 // ---------------------------------------------------------------------------
 // 2 — TAB-1: adding to an open order is an amendment, not a second order.
 // ---------------------------------------------------------------------------
@@ -1277,6 +1358,28 @@ async function checkCashCounts() {
   if (line.ok) pass('payroll_run_lines.cash_shortage_inr exists');
   else fail('payroll_run_lines.cash_shortage_inr exists', errKind(line) === 'no_column' ? 'apply supabase/2026-09-cash-counts.sql' : errText(line));
 
+  // Payroll is finalized per staffer: the per-staff code writes payroll_runs.user_id.
+  const perStaff = await rest('/payroll_runs?select=user_id&limit=1');
+  if (perStaff.ok) pass('payroll_runs.user_id exists (payroll finalized per staffer)');
+  else fail('payroll_runs.user_id exists (payroll finalized per staffer)', errKind(perStaff) === 'no_column' ? 'apply supabase/2026-11-payroll-per-staff.sql' : errText(perStaff));
+
+  // Staff salary advances (2026-11-staff-advances.sql): the amount actually
+  // deducted on a finalized line, and the owner-only advances table.
+  const advLine = await rest('/payroll_run_lines?select=advance_inr&limit=1');
+  if (advLine.ok) pass('payroll_run_lines.advance_inr exists');
+  else fail('payroll_run_lines.advance_inr exists', errKind(advLine) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advLine));
+
+  // staff_advances is owner-only. The anon probe does not need a row: the
+  // REVOKE makes PostgREST refuse anon even on an empty table.
+  const advTable = await rest('/staff_advances?select=id&limit=1');
+  if (advTable.ok) pass('staff_advances exists');
+  else fail('staff_advances exists', errKind(advTable) === 'no_table' || errKind(advTable) === 'no_column' ? 'apply supabase/2026-11-staff-advances.sql' : errText(advTable));
+  if (advTable.ok) {
+    const anonAdv = await rest('/staff_advances?select=id&limit=1', { key: ANON });
+    if (!anonAdv.ok) pass('staff_advances is not readable by the anon key', `anon was refused (${errText(anonAdv)})`);
+    else fail('staff_advances is not readable by the anon key', 'RLS/REVOKE is missing: apply supabase/2026-11-staff-advances.sql');
+  }
+
   for (const table of ['cash_counts', 'cash_movements', 'cash_count_overrides', 'cash_shortages']) {
     const r = await rest(`/${table}?select=id&limit=1`);
     if (!r.ok) {
@@ -1420,6 +1523,287 @@ async function checkInventory() {
   } else {
     pass('inventory_set_addon_recipe_scopes is not callable by the anon key');
   }
+
+  // ── Stock from vendor (supabase/2026-11-vendor-stock-in.sql, INV-D14)
+  heading('INV-13 · stock from vendor', '2026-11-vendor-stock-in.sql');
+  const vendorHint = 'apply supabase/2026-11-vendor-stock-in.sql';
+
+  const supplierCol = await rest('/inventory_batches?select=supplier&limit=1');
+  if (supplierCol.ok) pass('inventory_batches.supplier exists');
+  else fail('inventory_batches.supplier exists', errKind(supplierCol) === 'no_column' ? vendorHint : errText(supplierCol));
+
+  // An empty delivery is refused before anything is written: the service role
+  // must reach that refusal, and anon must not reach the function at all.
+  const emptyDelivery = { p_actor: null, p_device_id: null, p_supplier: 'verify-db', p_bill_ref: '', p_note: '', p_lines: [] };
+  const vendorSvc = await rest('/rpc/inventory_receive_vendor', { method: 'POST', body: emptyDelivery });
+  if (!vendorSvc.ok && errKind(vendorSvc) === 'raised' && /nothing to receive/i.test(errText(vendorSvc))) {
+    pass('inventory_receive_vendor is installed', 'an empty delivery was refused');
+  } else {
+    fail('inventory_receive_vendor is installed', vendorSvc.ok ? `unexpected result ${JSON.stringify(vendorSvc.body)}` : `${vendorHint} — ${errText(vendorSvc)}`);
+  }
+  const vendorAnon = await rest('/rpc/inventory_receive_vendor', { method: 'POST', body: emptyDelivery, key: ANON });
+  if (vendorAnon.ok || errKind(vendorAnon) === 'raised') {
+    fail('inventory_receive_vendor is not callable by the anon key', 'EXECUTE was granted to anon — re-run the REVOKEs');
+  } else {
+    pass('inventory_receive_vendor is not callable by the anon key');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Warehouse (docs/WAREHOUSE-SPEC.md, supabase/2026-11-warehouse.sql): the
+// warehouse's own batches and ledger, the owner-alert settings and log, the
+// columns added to stock_requests / stock_request_lines, and the functions.
+// Every probe is a read, or a call on a request that does not exist (refused
+// by the function before it writes anything).
+// ---------------------------------------------------------------------------
+async function checkWarehouse() {
+  heading('WH-1 · warehouse tables, columns, functions + lockdown', '2026-11-warehouse.sql');
+  const hint = 'apply supabase/2026-11-warehouse.sql (after 2026-10-inventory.sql)';
+
+  for (const [table, col] of [
+    ['warehouse_items', 'item_id'],
+    ['warehouse_batches', 'id'],
+    ['warehouse_movements', 'id'],
+    ['warehouse_alerts', 'id'],
+    ['warehouse_alert_settings', 'is_singleton'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    if (table === 'warehouse_alert_settings' && (!Array.isArray(r.body) || r.body.length !== 1)) {
+      fail('warehouse_alert_settings has its one row', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    const asAnon = await rest(`/${table}?select=${col}&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+
+  for (const [table, cols] of [
+    ['stock_requests', 'route,deliverer_name,deliverer_phone,resolved_by,resolved_at,resolution_note'],
+    ['stock_request_lines', 'dispatch_expiry,resolution,resolved_qty'],
+  ]) {
+    const r = await rest(`/${table}?select=${cols}&limit=1`);
+    if (r.ok) pass(`${table}: ${cols.split(',').join(', ')} exist`);
+    else fail(`${table}: ${cols.split(',').join(', ')} exist`, errKind(r) === 'no_column' ? hint : errText(r));
+  }
+
+  // WH-D16: a staffer the owner gives the warehouse run (dispatch + send back).
+  const access = await rest('/staff_accounts?select=warehouse_access&limit=1');
+  if (access.ok) pass('staff_accounts.warehouse_access exists');
+  else fail('staff_accounts.warehouse_access exists', errKind(access) === 'no_column' ? 'apply supabase/2026-11-warehouse-access.sql' : errText(access));
+
+  // A request that does not exist: the service role reaches the function's own
+  // refusal (it is installed); anon must not reach the function at all.
+  for (const [fn, body] of [
+    ['warehouse_dispatch', { p_request_id: randomUUID(), p_actor: null, p_lines: [] }],
+    ['warehouse_resolve', { p_request_id: randomUUID(), p_actor: null, p_note: '', p_lines: [] }],
+    ['warehouse_receive_return', { p_request_id: randomUUID(), p_actor: null, p_lines: [] }],
+  ]) {
+    const svc = await rest(`/rpc/${fn}`, { method: 'POST', body });
+    if (!svc.ok && errKind(svc) === 'raised' && /request not found/i.test(errText(svc))) pass(`${fn} is installed`, 'an unknown request was refused');
+    else fail(`${fn} is installed`, svc.ok ? `unexpected result ${JSON.stringify(svc.body)}` : `${hint} — ${errText(svc)}`);
+    const anon = await rest(`/rpc/${fn}`, { method: 'POST', body, key: ANON });
+    if (anon.ok || errKind(anon) === 'raised') fail(`${fn} is not callable by the anon key`, 'EXECUTE was granted to anon — re-run the REVOKEs');
+    else pass(`${fn} is not callable by the anon key`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md,
+// supabase/2026-11-instant-coffee-shop.sql): the flavours, the online offer
+// and the shipped orders (with the offer and delivery-pin columns), all
+// service-role only. Reads only.
+// ---------------------------------------------------------------------------
+async function checkInstantCoffeeShop() {
+  heading('SHOP-1 · instant coffee shop tables + lockdown', '2026-11-instant-coffee-shop.sql');
+  const hint = 'apply supabase/2026-11-instant-coffee-shop.sql';
+
+  for (const [table, col] of [
+    ['shop_products', 'id,price_inr,in_stock'],
+    ['shop_orders', 'id,order_number,status,discount_inr,offer_name,location_lat,location_lng,razorpay_order_id,shiprocket_order_id,awb_code'],
+    ['shop_settings', 'is_singleton,offer_active,offer_tier_prices'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=3`);
+    if (!r.ok) {
+      const kind = errKind(r);
+      fail(`${table} exists`, kind === 'no_table' || kind === 'no_column' ? hint : errText(r));
+      continue;
+    }
+    pass(`${table} exists`);
+    if (table === 'shop_products' && (!Array.isArray(r.body) || r.body.length < 3)) {
+      fail('shop_products has the three flavours', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    if (table === 'shop_settings' && (!Array.isArray(r.body) || r.body.length !== 1)) {
+      fail('shop_settings has its one row', `found ${Array.isArray(r.body) ? r.body.length : '?'} — re-run ${hint}`);
+    }
+    const asAnon = await rest(`/${table}?select=${col.split(',')[0]}&limit=1`, { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail(`${table} is not readable by the anon key`, 'RLS is off or a policy was added');
+    else pass(`${table} is not readable by the anon key`);
+  }
+}
+
+// Shop orders: Shiprocket's own order total, checked against what the
+// customer paid on /owner/shop (supabase/2026-11-shop-shiprocket-total.sql).
+// Without it the app skips that check. Reads only.
+async function checkShopShiprocketTotal() {
+  heading('SHOP-2 · Shiprocket bill check', '2026-11-shop-shiprocket-total.sql');
+  const r = await rest('/shop_orders?select=shiprocket_total_inr&limit=1');
+  if (r.ok) pass('shop_orders.shiprocket_total_inr exists');
+  else if (errKind(r) === 'no_column' || /shiprocket_total_inr/i.test(errText(r))) {
+    fail('shop_orders.shiprocket_total_inr exists', "/owner/shop can't check Shiprocket's bill — apply supabase/2026-11-shop-shiprocket-total.sql");
+  } else fail('shop_orders.shiprocket_total_inr exists', errText(r));
+}
+
+// Shop v2: Home Blend, saved addresses, shop coupons, Beanies on shop orders
+// (supabase/2026-11-shop-v2.sql). Reads only: the functions that write
+// (reserve_shop_beanies, claim_shop_intro_offer, record_shop_coupon_redemption,
+// make_customer_address_default) are deliberately never called here.
+async function checkShopV2() {
+  heading('SHOP-3 · shop v2: Home Blend, saved addresses, Beanies, shop coupons', '2026-11-shop-v2.sql');
+  const hint = 'apply supabase/2026-11-shop-v2.sql';
+
+  // Column probes: a select of the new columns fails if any is missing.
+  const probes = [
+    ['shop_products', 'line,display_name,pack_grams,ship_weight_kg,listed,requires_grind,description'],
+    ['shop_settings', 'shipping_fee_inr,free_shipping_min_inr,beanies_max_redeem_pct'],
+    ['shop_orders', 'landmark,offer_discount_inr,coupon_id,coupon_code,coupon_discount_inr,beanies_redeemed,beanies_discount_inr,intro_offer_applied,intro_offer_reused,goods_weight_kg,idempotency_key,save_address_label,customer_address_id,capture_effects_at'],
+    ['coupons', 'channel'],
+    ['coupon_redemptions', 'shop_order_id,phone'],
+    ['loyalty_transactions', 'shop_order_id'],
+  ];
+  for (const [table, cols] of probes) {
+    const r = await rest(`/${table}?select=${cols}&limit=1`);
+    if (r.ok) pass(`${table} new columns exist`, cols.split(',').length > 3 ? `${cols.split(',').length} columns` : cols);
+    else fail(`${table} new columns exist`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+  }
+
+  const blends = await rest('/shop_products?select=id&id=in.(home-blend-250,home-blend-500,home-blend-1kg)');
+  if (blends.ok && Array.isArray(blends.body)) {
+    if (blends.body.length === 3) pass('the three Home Blend sizes exist');
+    else fail('the three Home Blend sizes exist', `found ${blends.body.length} of 3 — ${hint}`);
+  } else fail('the three Home Blend sizes exist', errText(blends));
+
+  // shop_intro_claims: exists, and the anon key sees nothing.
+  const claims = await rest('/shop_intro_claims?select=shop_order_id&limit=1');
+  if (!claims.ok) {
+    fail('shop_intro_claims exists', errKind(claims) === 'no_table' ? hint : errText(claims));
+  } else {
+    pass('shop_intro_claims exists');
+    const asAnon = await rest('/shop_intro_claims?select=shop_order_id&limit=1', { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail('shop_intro_claims is not readable by the anon key', 'RLS is off or a policy was added');
+    else pass('shop_intro_claims is not readable by the anon key');
+  }
+
+  // customer_addresses: exists, and the anon key reads no rows.
+  const addrs = await rest('/customer_addresses?select=id&limit=1');
+  if (!addrs.ok) {
+    fail('customer_addresses exists', errKind(addrs) === 'no_table' ? hint : errText(addrs));
+  } else {
+    pass('customer_addresses exists');
+    const asAnon = await rest('/customer_addresses?select=id&limit=1', { key: ANON });
+    const leaked = asAnon.ok && Array.isArray(asAnon.body) && asAnon.body.length > 0;
+    if (leaked) fail('customer_addresses is not readable by the anon key', 'RLS is off or a policy was added');
+    else pass('customer_addresses is not readable by the anon key');
+  }
+
+  // coupon_usage_counts only reads; the nil coupon has no redemptions, so it
+  // returns one row of zeros.
+  const usage = await rest('/rpc/coupon_usage_counts', {
+    method: 'POST',
+    body: { p_coupon_id: '00000000-0000-0000-0000-000000000000', p_user_id: null, p_phone: null },
+  });
+  if (usage.ok) pass('coupon_usage_counts() answers', 'read-only');
+  else fail('coupon_usage_counts() answers', errKind(usage) === 'no_function' || /could not find the function/i.test(errText(usage)) ? hint : errText(usage));
+}
+
+// Shop orders added by the owner (supabase/2026-11-shop-owner-orders.sql).
+// Every constraint is probed with a DOOMED insert (see errKind): the row's
+// created_by is the nil UUID, which is not a user, so a row that satisfies every
+// CHECK stops at the foreign key ('fk') and nothing is written. A row a CHECK
+// rejects comes back 'check'. order_number is given explicitly so a failed
+// insert never burns a number from the shop order sequence.
+async function checkShopOwnerOrders() {
+  heading('SHOP-4 · shop orders added by the owner', '2026-11-shop-owner-orders.sql');
+  const hint = 'apply supabase/2026-11-shop-owner-orders.sql';
+
+  const cols = 'source,created_by,payment_channel,offline_method,payment_reference,owner_discount_inr,owner_discount_reason,razorpay_payment_link_id,payment_link_url,payment_link_expires_at';
+  const colProbe = await rest(`/shop_orders?select=${cols}&limit=1`);
+  if (colProbe.ok) pass('shop_orders owner-order columns exist', `${cols.split(',').length} columns`);
+  else {
+    fail('shop_orders owner-order columns exist', errKind(colProbe) === 'no_column' || errKind(colProbe) === 'no_table' ? hint : errText(colProbe));
+    skip('shop_orders owner-order constraints', 'the columns are missing');
+  }
+
+  if (colProbe.ok) {
+    const base = {
+      order_number: 999999999,
+      customer_name: 'verify-db probe',
+      phone: '+919999999999',
+      email: '',
+      address_line1: 'verify-db probe line',
+      city: 'Probe',
+      state: 'Probe',
+      pincode: '600001',
+      lines: [],
+      jar_count: 1,
+      subtotal_inr: 1000,
+      discount_inr: 0,
+      shipping_inr: 0,
+      total_inr: 1000,
+      created_by: BOGUS_ORDER_ID,
+    };
+    const attempt = (over) => rest('/shop_orders', { method: 'POST', body: { ...base, ...over }, prefer: 'return=minimal' });
+    const link = { razorpay_payment_link_id: 'plink_verify_db', payment_link_url: 'https://example.invalid/x', payment_link_expires_at: '2099-01-01T00:00:00Z' };
+
+    // Positive control: a valid owner order with an empty email reaches the FK.
+    expectKind('an owner order with no email passes every CHECK', await attempt({ source: 'owner' }), 'fk',
+      'stopped at the foreign key, as intended');
+    expectKind('a valid offline payment passes every CHECK',
+      await attempt({ source: 'owner', payment_channel: 'offline', offline_method: 'cash', payment_reference: 'CASH-1' }), 'fk');
+    expectKind('a valid payment-link order passes every CHECK',
+      await attempt({ source: 'owner', payment_channel: 'payment_link', ...link }), 'fk');
+    expectKind('an owner discount of exactly 50% passes',
+      await attempt({ source: 'owner', discount_inr: 500, owner_discount_inr: 500, owner_discount_reason: 'regular customer', total_inr: 500 }), 'fk');
+
+    // Negative cases: each must be refused by a CHECK.
+    expectKind('an email of 1-2 characters is refused', await attempt({ email: 'a@' }), 'check');
+    expectKind('an unknown source is refused', await attempt({ source: 'phone' }), 'check');
+    expectKind('an offline method without payment_channel offline is refused', await attempt({ offline_method: 'cash' }), 'check');
+    expectKind('an offline payment without a method is refused',
+      await attempt({ payment_channel: 'offline', payment_reference: 'REF-123' }), 'check');
+    expectKind('an offline payment without a reference is refused',
+      await attempt({ payment_channel: 'offline', offline_method: 'upi_direct' }), 'check');
+    expectKind('an unpaid payment-link order without its link passes (the link is added after the row)',
+      await attempt({ source: 'owner', payment_channel: 'payment_link', status: 'payment_pending' }), 'fk');
+    expectKind('a paid payment-link order without its link id is refused',
+      await attempt({ source: 'owner', payment_channel: 'payment_link', status: 'paid', payment_link_url: link.payment_link_url, payment_link_expires_at: link.payment_link_expires_at }), 'check');
+    expectKind('an owner discount without a reason is refused',
+      await attempt({ discount_inr: 100, owner_discount_inr: 100, total_inr: 900 }), 'check');
+    expectKind('an owner discount over 50% is refused',
+      await attempt({ discount_inr: 501, owner_discount_inr: 501, owner_discount_reason: 'too generous', total_inr: 499 }), 'check');
+    expectKind('discount_inr must add up with the owner discount',
+      await attempt({ discount_inr: 100, owner_discount_inr: 50, owner_discount_reason: 'regular customer', total_inr: 900 }), 'check');
+  }
+
+  // shop_intro_claims.email is nullable. NOT NULL is checked before the foreign
+  // key, so 'fk' means the column accepted the NULL.
+  const claim = await rest('/shop_intro_claims', {
+    method: 'POST',
+    body: { shop_order_id: BOGUS_ORDER_ID, phone: '+919999999999', email: null },
+    prefer: 'return=minimal',
+  });
+  if (errKind(claim) === 'fk') pass('shop_intro_claims.email accepts NULL');
+  else if (errKind(claim) === 'not_null') fail('shop_intro_claims.email accepts NULL', hint);
+  else if (claim.ok) fail('shop_intro_claims.email accepts NULL', 'the probe insert unexpectedly SUCCEEDED');
+  else if (errKind(claim) === 'no_table') fail('shop_intro_claims.email accepts NULL', 'apply supabase/2026-11-shop-v2.sql first');
+  else fail('shop_intro_claims.email accepts NULL', errText(claim));
 }
 
 // ---------------------------------------------------------------------------
@@ -1596,6 +1980,51 @@ async function checkSellByWeight() {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-buy offers (supabase/2026-10-item-offers.sql): owner-made offers
+// (Promotions → Offers) taken off the bill as their own row
+// (lib/orders/offers.ts). Orders work without it (no offer can exist, and the
+// offer columns are only written on lines that have one); Promotions → Offers
+// answers with the migration hint until it is in. Reads only.
+// ---------------------------------------------------------------------------
+async function checkItemOffers() {
+  heading('Multi-buy offers: menu_offers + order_items.offer_* + orders.offer_discount_inr', '2026-10-item-offers.sql');
+  const hint = 'apply supabase/2026-10-item-offers.sql';
+  for (const [table, col] of [
+    ['menu_offers', 'tier_prices'],
+    ['order_items', 'offer_id'],
+    ['order_items', 'offer_name'],
+    ['order_items', 'offer_prices'],
+    ['order_items', 'offer_unit_inr'],
+    ['orders', 'offer_discount_inr'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Spend offers (supabase/2026-11-spend-offers.sql): "spend ₹1099, get one jar at
+// ₹49" (lib/orders/offers.ts billOffers). Orders work without it (no spend offer
+// can exist, and the order columns are only written when one applies);
+// Promotions → Offers → Spend & get answers with the migration hint. Reads only.
+// ---------------------------------------------------------------------------
+async function checkSpendOffers() {
+  heading('Spend offers: spend_offers + spend_offer_redemptions + orders.spend_offers / offer_name', '2026-11-spend-offers.sql');
+  const hint = 'apply supabase/2026-11-spend-offers.sql';
+  for (const [table, col] of [
+    ['spend_offers', 'min_spend_inr'],
+    ['spend_offer_redemptions', 'phone'],
+    ['orders', 'spend_offers'],
+    ['orders', 'offer_name'],
+  ]) {
+    const r = await rest(`/${table}?select=${col}&limit=1`);
+    if (r.ok) pass(`${table}.${col} exists`);
+    else fail(`${table}.${col} exists`, errKind(r) === 'no_column' || errKind(r) === 'no_table' ? hint : errText(r));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Add-on approvals (supabase/2026-10-addon-change-requests.sql): add-on group
 // changes from the POS are held in menu_change_requests (target 'addon_group')
 // for the owner, like menu item changes. Item requests and the owner's own
@@ -1737,6 +2166,21 @@ async function checkSuggestionEngine() {
     event: `bogus_${RUN_ID}`,
   });
   expectKind("suggestion_events.event CHECK rejects 'bogus'", bogusEvent, 'check', 'constraint is present, not merely dropped');
+
+  // The three preset events (2026-11-coffey-preset-events.sql). Until it is
+  // applied the CHECK refuses them, which the app tolerates (the server logs
+  // and carries on), so that is a skip naming the file, not a failure.
+  for (const name of ['preset_shown', 'preset_removed', 'preset_kept']) {
+    const attempt = await doomedInsert('suggestion_events', { session_id: BOGUS_SESSION_ID, event: name });
+    if (!attempt.ok && errKind(attempt) === 'check') {
+      skip(
+        `suggestion_events.event CHECK accepts '${name}'`,
+        'apply supabase/2026-11-coffey-preset-events.sql (the owner dashboard add-on card reads zero until then)',
+      );
+    } else {
+      expectKind(`suggestion_events.event CHECK accepts '${name}'`, attempt, 'fk', 'reached the FK, so the CHECK passed');
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2100,6 +2544,49 @@ async function checkCoffeeAddonsPairings() {
   }
 }
 
+// First-party traffic tracking (docs/TRAFFIC-TRACKING.md). Read-only: the
+// table is service-role only, so this selects every column the API writes and
+// Owner → Traffic reads, and writes nothing.
+const TRAFFIC_COLUMNS = [
+  'id', 'created_at', 'event', 'session_id', 'page_group', 'route', 'landing', 'source', 'referrer_host',
+  'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'device', 'country', 'city',
+  'order_id', 'shop_order_id', 'value_inr',
+];
+
+async function checkTrafficTracking() {
+  heading('TRAFFIC · first-party tracking table', '2026-11-traffic-tracking.sql');
+  const hint = 'apply supabase/2026-11-traffic-tracking.sql';
+  const res = await rest(`/traffic_events?select=${TRAFFIC_COLUMNS.join(',')}&limit=1`);
+  if (res.ok) {
+    pass('traffic_events exists', `${TRAFFIC_COLUMNS.length} column(s) selectable`);
+    return;
+  }
+  const kind = errKind(res);
+  if (kind === 'no_table' || kind === 'no_column') fail('traffic_events exists', `${hint} — ${errText(res)}`);
+  else fail('traffic_events exists', `${kind}: ${errText(res)}`);
+}
+
+// Coffey wizard step tracking (docs/COFFEY-SPEC.md §10.7,
+// supabase/2026-11-coffey-wizard-steps.sql). Read-only, like the traffic and
+// add-ons probes above: the table is service-role only, so this selects every
+// column the API writes and Owner → Suggestions reads, and writes nothing. The
+// CHECKs and RLS need a write to prove, so the migration's own Verify block
+// checks them from the SQL editor instead.
+const WIZARD_STEP_COLUMNS = ['id', 'anon_id', 'user_id', 'step', 'created_at'];
+
+async function checkCoffeyWizardSteps() {
+  heading('COFFEY · wizard step tracking table', '2026-11-coffey-wizard-steps.sql');
+  const hint = 'apply supabase/2026-11-coffey-wizard-steps.sql';
+  const res = await rest(`/suggestion_wizard_steps?select=${WIZARD_STEP_COLUMNS.join(',')}&limit=1`);
+  if (res.ok) {
+    pass('suggestion_wizard_steps exists', `${WIZARD_STEP_COLUMNS.length} column(s) selectable`);
+    return;
+  }
+  const kind = errKind(res);
+  if (kind === 'no_table' || kind === 'no_column') fail('suggestion_wizard_steps exists', `${hint} — ${errText(res)}`);
+  else fail('suggestion_wizard_steps exists', `${kind}: ${errText(res)}`);
+}
+
 async function main() {
   const project = BASE.replace(/^https?:\/\//, '');
   process.stdout.write(`verify-db — probing ${project}\n`);
@@ -2107,6 +2594,8 @@ async function main() {
 
   await checkBillObservability();
   await checkNotifyDelivery();
+  await checkBeaniesUpdate();
+  await checkWebPush();
   await checkRunningTab();
   await checkSplitPayments();
   await checkIdempotencyKeys();
@@ -2126,13 +2615,22 @@ async function main() {
   await checkCoffeyTraitsV2();
   await checkCoffeeAddonsPairings();
   await checkInventory();
+  await checkWarehouse();
+  await checkInstantCoffeeShop();
+  await checkShopShiprocketTotal();
+  await checkShopV2();
+  await checkShopOwnerOrders();
   await checkCoffeePass();
   await checkCoffeePassPerDrink();
   await checkSellByWeight();
+  await checkItemOffers();
+  await checkSpendOffers();
   await checkAddonApprovals();
   await checkSettleEditOrder();
   await checkMarketingAgent();
   await checkOnlineSettlements();
+  await checkTrafficTracking();
+  await checkCoffeyWizardSteps();
   await checkCleanup();
 
   process.stdout.write(`\n${'-'.repeat(64)}\n`);

@@ -1,12 +1,21 @@
-import { redirect } from 'next/navigation';
+import type { Metadata } from 'next';
+import { notFound, redirect } from 'next/navigation';
 import { headers } from 'next/headers';
 import { getAuthUser } from '@/lib/api/auth';
+import { flags } from '@/lib/flags';
 import { AccountHeader } from '@/components/account/AccountHeader';
+
+export const metadata: Metadata = { title: 'My account' };
 
 // Customer account surface (ACC-1..5). middleware.ts only gates /staff and
 // /owner (this contract's off-limits files), so /account does its own
 // server-side session check here — the single gate for everything under it.
 export default async function AccountLayout({ children }: { children: React.ReactNode }) {
+  // Flag off: /account/ritual does not exist, so a signed-out visitor gets a
+  // 404 rather than a login redirect that ends in a 404.
+  if (!flags.coffeePass && (headers().get('x-pathname') ?? '').startsWith('/account/ritual')) {
+    notFound();
+  }
   const user = await getAuthUser();
   if (!user) {
     // Send them back to what they actually asked for (e.g. a "view my
@@ -20,9 +29,10 @@ export default async function AccountLayout({ children }: { children: React.Reac
   }
 
   return (
-    <div className="min-h-screen bg-[#faf7f4]">
+    <div className="min-h-screen bg-surface/40">
       <AccountHeader />
-      <main className="mx-auto max-w-3xl px-4 py-8">{children}</main>
+      {/* A div, not <main>: the root layout already provides the page's <main>. */}
+      <div className="mx-auto max-w-3xl px-4 py-8">{children}</div>
     </div>
   );
 }

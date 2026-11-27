@@ -17,22 +17,39 @@ import Image from 'next/image';
 import { SurfaceLink as Link, useSurfaceHref } from '@/components/SurfaceLink';
 import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { StoreOpenState } from '@/lib/store/hours';
+import { computeStoreOpenState, type StoreOpenState } from '@/lib/store/hours';
+import type { StoreSettings } from '@/lib/types';
+import { sameOpenState, STORE_BADGE_TICK_MS, storeBadgeTick } from '@/lib/staff/storeBadge';
 import { flags } from '@/lib/flags';
 import { logoutButtonLabel, logoutDestination } from '@/lib/staff/pinUi';
 import { COUNTER_MODE_HREFS } from '@/lib/staff/newOrderWatch';
-import { isActiveTab, staffNav, type StaffTab } from '@/lib/staff/staffNav';
+import { isActiveTab, PREFETCHED_TABS, staffNav, type StaffTab } from '@/lib/staff/staffNav';
+import { NAV_SHORTCUTS } from '@/lib/staff/shortcuts';
+import { finishNavigation, startNavigation, usePendingNavigation } from '@/lib/staff/navPending';
+import { POS_REFRESH_EVENT } from '@/lib/staff/posRefresh';
+import { clearSnapshots } from '@/lib/pos/localSnapshot';
+import { clearAllDrafts } from '@/lib/pos/draftOrder';
+import { resetOrdersFeed } from '@/lib/staff/ordersFeed';
+import { isDesktopApp } from '@/lib/desktop/isDesktopApp';
+import { SHOW_SHORTCUTS_EVENT, useRunPosRefresh } from '@/components/staff/PosShortcuts';
 import { SETTINGS_ROOT } from '@/lib/staff/settingsNav';
 import { useStaffShell } from '@/components/staff/StaffShell';
 import { OpenDrawerButton } from '@/components/staff/OpenDrawerButton';
 import { MenuRequestsBadge } from '@/components/staff/menu/MenuRequestsBadge';
 import { MenuRequestsPanel } from '@/components/staff/menu/MenuRequestsPanel';
 import { publishStaffMenuRequestsChanged } from '@/components/staff/menu/menuEvents';
+import {
+  invalidateSharedJson,
+  sharedJson,
+  STORE_CHANGED_EVENT,
+  STORE_SETTINGS_MAX_AGE_MS,
+  STORE_SETTINGS_URL,
+} from '@/lib/pos/sharedJson';
+import { REFOCUS_MIN_GAP_MS } from '@/lib/realtime/hooks';
 import { useCancelMenuRequest } from '@/components/staff/menu/useCancelMenuRequest';
 import { usePendingMenuRequests } from '@/components/staff/menu/usePendingMenuRequests';
 
 const MENU_HREF = '/staff/menu';
-
 
 export interface StaffPinControls {
   /** "Switch" once an operator is known, "Lock" beforehand (StaffPinOverlay
@@ -97,6 +114,17 @@ export function StaffHeader({
   // The list behind the Menu badge: in the bar (md+) or inline in the phone drawer.
   const [pendingOpen, setPendingOpen] = useState<'bar' | 'drawer' | null>(null);
   const closePending = useCallback(() => setPendingOpen(null), []);
+  // The screen a tap (or a shortcut) is on its way to: the tab lights up and a
+  // bar runs under the header from the tap until the screen is there.
+  const navigatingTo = usePendingNavigation();
+  const runRefresh = useRunPosRefresh();
+  const [refreshing, setRefreshing] = useState(false);
+  // Screen keys are Ctrl+letter in the desktop app, Alt+letter in a browser
+  // (lib/staff/shortcuts.ts). Read after mount: the bridge is client-only.
+  const [navMod, setNavMod] = useState<'Ctrl' | 'Alt' | null>(null);
+  useEffect(() => {
+    setNavMod(isDesktopApp() ? 'Ctrl' : 'Alt');
+  }, []);
 
   // Counter mode keeps only what the counter works from, and no More menu.
   // POS vs staff website (lib/staff/staffNav.ts); counter mode then keeps only
@@ -114,6 +142,15 @@ export function StaffHeader({
   const more = shell.counterMode ? [] : nav.more;
   const active = (tab: StaffTab) => isActiveTab(pathname, toHref(tab.href), toHref(SETTINGS_ROOT));
   const moreActive = more.find(active);
+  const tabTitle = (tab: StaffTab) => {
+    const sc = NAV_SHORTCUTS.find((x) => x.href === tab.href);
+    return sc && navMod ? `${tab.label} (${navMod}+${sc.letter})` : undefined;
+  };
+  // Marks the navigation as started; a tap on the screen already showing is not one.
+  const onTabClick = (tab: StaffTab) => {
+    if (!active(tab)) startNavigation(tab.href);
+  };
+  const tabPrefetch = (tab: StaffTab) => (PREFETCHED_TABS.includes(tab.href) ? true : undefined);
   // Menu changes waiting for the owner: a badge button beside "More" (where the
   // Menu entry hides) and on the entry itself, opening the list so a request can
   // be cancelled from anywhere; a dot on the phone hamburger. One fetch for the
@@ -141,27 +178,68 @@ export function StaffHeader({
   );
 
   // S7: live "is the store taking orders" badge, doubling as a quick link to
-  // /staff/settings/store. Best-effort — a failed fetch just hides it.
-  // Refreshed on a poll, on focus, and on 'hioc:store-changed'.
+  // /staff/settings/store. Best-effort — a failed fetch keeps the last state.
+  // While the tab is visible the open state is re-derived from the held
+  // settings every minute and the settings re-read every 5 minutes
+  // (lib/staff/storeBadge.ts); also on a return to the tab, on F5, and at once
+  // on 'hioc:store-changed'. It was every 15 s, visible or not, then every
+  // minute: 60 function calls an hour for a pill that changes a few times a day.
   useEffect(() => {
     let cancelled = false;
+    let lastLoad = 0;
+    let settings: StoreSettings | null = null;
+    const show = (next: StoreOpenState | null) => setOpenState((prev) => (sameOpenState(prev, next) ? prev : next));
     const load = () => {
-      fetch('/api/store-settings', { cache: 'no-store' })
-        .then((res) => res.json())
-        .then((data) => {
-          if (!cancelled) setOpenState(data.openState ?? null);
-        })
-        .catch(() => {});
+      lastLoad = Date.now();
+      void sharedJson<{ settings?: StoreSettings | null; openState?: StoreOpenState | null }>(
+        STORE_SETTINGS_URL,
+        STORE_SETTINGS_MAX_AGE_MS,
+      ).then((data) => {
+        if (cancelled || !data) return;
+        settings = data.settings ?? null;
+        show(data.openState ?? null);
+      });
+    };
+    const visible = () => document.visibilityState === 'visible';
+    const onReturn = () => {
+      if (visible() && Date.now() - lastLoad >= REFOCUS_MIN_GAP_MS) load();
+    };
+    const onStoreChanged = () => {
+      invalidateSharedJson(STORE_SETTINGS_URL);
+      load();
     };
     load();
-    const poll = setInterval(load, 15000);
-    window.addEventListener('focus', load);
-    window.addEventListener('hioc:store-changed', load);
+    const poll = setInterval(() => {
+      if (!visible()) return;
+      if (storeBadgeTick({ now: Date.now(), lastLoad, hasSettings: settings !== null }) === 'fetch') load();
+      else if (settings) show(computeStoreOpenState(settings));
+    }, STORE_BADGE_TICK_MS);
+    window.addEventListener('focus', onReturn);
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener(STORE_CHANGED_EVENT, onStoreChanged);
+    window.addEventListener(POS_REFRESH_EVENT, load);
     return () => {
       cancelled = true;
       clearInterval(poll);
-      window.removeEventListener('focus', load);
-      window.removeEventListener('hioc:store-changed', load);
+      window.removeEventListener('focus', onReturn);
+      document.removeEventListener('visibilitychange', onReturn);
+      window.removeEventListener(STORE_CHANGED_EVENT, onStoreChanged);
+      window.removeEventListener(POS_REFRESH_EVENT, load);
+    };
+  }, []);
+
+  // The refresh icon turns for a moment on every refresh, from this button or F5.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const onRefresh = () => {
+      setRefreshing(true);
+      if (t) clearTimeout(t);
+      t = setTimeout(() => setRefreshing(false), 900);
+    };
+    window.addEventListener(POS_REFRESH_EVENT, onRefresh);
+    return () => {
+      window.removeEventListener(POS_REFRESH_EVENT, onRefresh);
+      if (t) clearTimeout(t);
     };
   }, []);
 
@@ -173,6 +251,12 @@ export function StaffHeader({
       fetch('/api/device/operator', { method: 'DELETE' }),
       fetch('/api/auth/logout', { method: 'POST' }),
     ]);
+
+    // What this machine kept for the screens (tables, orders, a half-punched
+    // order) belongs to this shift: the next person starts from the server.
+    clearSnapshots();
+    clearAllDrafts();
+    resetOrdersFeed();
 
     const { href, hardReload } = logoutDestination(Boolean(pinControls));
     if (hardReload) {
@@ -192,6 +276,7 @@ export function StaffHeader({
     setMoreOpen(false);
     setAccountOpen(false);
     setPendingOpen(null);
+    finishNavigation(); // the new screen is up
   }, [pathname]);
 
   // Nothing waiting any more (or the drawer shut): the list has nothing to show.
@@ -262,6 +347,22 @@ export function StaffHeader({
     </button>
   );
 
+  const refreshLabel = 'Refresh the data on screen (F5) — keeps the order you are punching';
+  const refreshButton = (
+    <button
+      type="button"
+      onClick={runRefresh}
+      aria-label={refreshLabel}
+      title={refreshLabel}
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-cream/30 text-lg text-cream transition-colors hover:bg-cream/10"
+    >
+      <span aria-hidden className={'inline-block leading-none ' + (refreshing ? 'animate-spin' : '')}>
+        ↻
+      </span>
+    </button>
+  );
+  const showShortcuts = () => window.dispatchEvent(new Event(SHOW_SHORTCUTS_EVENT));
+
   const tabLabel = (tab: StaffTab) =>
     tab.href === '/staff' && shell.newOrderCount > 0 ? (
       <>
@@ -291,10 +392,16 @@ export function StaffHeader({
                 <li key={tab.href}>
                   <Link
                     href={tab.href}
+                    prefetch={tabPrefetch(tab)}
+                    onClick={() => onTabClick(tab)}
+                    title={tabTitle(tab)}
                     aria-current={active(tab) ? 'page' : undefined}
+                    aria-busy={navigatingTo === tab.href ? true : undefined}
                     className={
                       'flex min-h-[40px] items-center whitespace-nowrap rounded-md px-3 font-bold transition-colors ' +
-                      (active(tab) ? 'bg-cream/10 text-tan' : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
+                      (active(tab) || navigatingTo === tab.href
+                        ? 'bg-cream/10 text-tan'
+                        : 'text-cream/75 hover:bg-cream/5 hover:text-cream')
                     }
                   >
                     {tabLabel(tab)}
@@ -326,6 +433,7 @@ export function StaffHeader({
                             <Link
                               href={tab.href}
                               role="menuitem"
+                              onClick={() => onTabClick(tab)}
                               className={
                                 (showMenuBadge(tab) ? 'flex-1 ' : '') +
                                 'block px-4 py-2.5 text-sm font-bold ' +
@@ -377,6 +485,7 @@ export function StaffHeader({
           {/* DRW-2: POS only, and only inside the POS app (the button checks). */}
           {shell.surface === 'pos' ? <OpenDrawerButton /> : null}
           <span className="hidden lg:inline-flex">{storePill}</span>
+          {refreshButton}
           {soundButton}
           <span className="hidden md:inline-flex">{counterButton}</span>
 
@@ -427,6 +536,28 @@ export function StaffHeader({
                     ))}
                   </ul>
                 ) : null}
+                <div className="mt-3 flex flex-col gap-1 border-t border-cream/10 pt-2">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setAccountOpen(false);
+                      showShortcuts();
+                    }}
+                    className="flex items-center justify-between rounded-md px-2 py-2 text-left text-sm font-bold text-cream/85 hover:bg-cream/5 hover:text-cream"
+                  >
+                    Keyboard shortcuts <span className="text-xs font-normal text-cream/50">F1</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => window.location.reload()}
+                    title="Reloads the whole app. Use it if a screen is stuck; an order being punched is kept."
+                    className="flex items-center justify-between rounded-md px-2 py-2 text-left text-sm font-bold text-cream/85 hover:bg-cream/5 hover:text-cream"
+                  >
+                    Reload app <span className="text-xs font-normal text-cream/50">Ctrl+R</span>
+                  </button>
+                </div>
                 <div className="mt-3 flex flex-col gap-2">
                   {pinControls ? (
                     <button
@@ -479,6 +610,8 @@ export function StaffHeader({
                 const link = (
                   <Link
                     href={tab.href}
+                    prefetch={tabPrefetch(tab)}
+                    onClick={() => onTabClick(tab)}
                     aria-current={active(tab) ? 'page' : undefined}
                     className={
                       (showMenuBadge(tab) ? 'flex-1 ' : '') +
@@ -515,6 +648,13 @@ export function StaffHeader({
             <div className="flex flex-wrap items-center gap-2">
               {counterButton}
               {storePill}
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="flex h-10 items-center rounded-md border border-cream/30 px-3 text-sm font-bold text-cream hover:bg-cream/10"
+              >
+                Reload app
+              </button>
             </div>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 leading-tight" title={userEmail}>
@@ -541,6 +681,14 @@ export function StaffHeader({
               </div>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {/* A screen change on its way (see navPending): a bar under the header
+          from the tap until the screen is up, so a tap never looks ignored. */}
+      {navigatingTo ? (
+        <div aria-hidden className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-cream/10">
+          <div className="h-full w-1/3 animate-nav-progress bg-tan" />
         </div>
       ) : null}
     </header>

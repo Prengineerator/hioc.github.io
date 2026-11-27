@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
 
 /** Shown on New order / Tables on the staff website while it may not take

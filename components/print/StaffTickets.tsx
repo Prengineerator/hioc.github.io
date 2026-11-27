@@ -11,17 +11,17 @@ import { BUSINESS } from '@/lib/legal';
 import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import {
   ORDER_TYPE_LABEL,
-  PAYMENT_BANNER_LABEL,
   formatIstDateTime,
   formatIstDateShort,
 } from '@/lib/print/labels';
 import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
 import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
-import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { describeBillPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel } from '@/lib/pos/ritual';
-import { passCoveredNote, passValidTillText } from '@/lib/print/ticketModel';
+import { passCoveredNote, passValidTillText, receiptBalance, receiptBanner } from '@/lib/print/ticketModel';
 import { lineSizeSuffix } from '@/lib/menu/weight';
+import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
 
 function Divider() {
   return <div className="my-3 border-t border-dashed border-black" />;
@@ -321,6 +321,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
   const billNo = formatOrderNumber(order.order_number);
   const settleDiscount = order.settle_discount_inr ?? 0;
   const tip = order.tip_inr ?? 0;
+  const balance = receiptBalance(order);
   const hasPointsRows = redeemed > 0 || points > 0 || (order.points_balance !== null && order.points_balance !== undefined);
   // HIOC Ritual — mirrors buildReceiptBlocks: the cups' cover as its own row
   // after Discount, "(Ritual ×N)" under a covered line, and "Valid till …" under
@@ -333,7 +334,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
       <div className="text-center">
         <BrandHeader />
         <p className="mt-1 text-sm font-bold">
-          {PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase()}
+          {receiptBanner(order)}
         </p>
         <p className="text-[11px]">RETAIL INVOICE</p>
         <p className="text-xs font-bold">{BUSINESS.legalName}</p>
@@ -408,7 +409,10 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
       <div className="flex flex-col gap-1 text-xs">
         <BillRow label="Total Qty" value={String(totalQty)} />
         <BillRow label="Sub Total" value={money(order.subtotal_inr)} />
-        {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`(${money(order.discount_inr)})`} /> : null}
+        {/* The multi-buy offer, then the coupon/Beanies discount (lib/orders/offers.ts). */}
+        {discountRows(order, orderOfferLabel({ ...order, items: activeItems }), discountLabel).map((row) => (
+          <BillRow key={row.label} label={row.label} value={`(${money(row.amountInr)})`} />
+        ))}
         {passCovered > 0 ? (
           <BillRow label={ritualBillLabel(cupsOnOrder(activeItems))} value={`(${money(passCovered)})`} />
         ) : null}
@@ -424,12 +428,22 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         {settleDiscount > 0 || tip > 0 ? (
           <div className="flex items-center justify-between font-bold">
             <span>Received</span>
-            <span>{money(total - settleDiscount + tip)}</span>
+            <span>{money(total - balance - settleDiscount + tip)}</span>
           </div>
+        ) : null}
+        {/* A paid bill changed after it was paid — mirrors buildReceiptBlocks. */}
+        {balance !== 0 ? (
+          <>
+            <BillRow label="Paid" value={money(total - balance)} />
+            <div className="flex items-center justify-between font-bold">
+              <span>{balance > 0 ? 'Balance due' : 'To refund'}</span>
+              <span>{money(Math.abs(balance))}</span>
+            </div>
+          </>
         ) : null}
         {order.payment_status === 'paid' && order.payment_method ? (
           <p className="text-center">
-            Paid via {describeOrderPayment(order)}
+            Paid via {describeBillPayment(order)}
           </p>
         ) : null}
       </div>

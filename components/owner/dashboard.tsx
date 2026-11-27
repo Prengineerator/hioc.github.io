@@ -172,7 +172,7 @@ const PAY_METHODS = [
   ['cash', 'Cash'],
   ['upi', 'UPI'],
   ['card', 'Card'],
-  ['online', 'Online (website)'],
+  ['online', 'App paid (website)'],
   ['swiggy_dineout', 'Swiggy Dineout'],
   ['zomato_district', 'Zomato District'],
 ] as const;

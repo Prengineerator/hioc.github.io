@@ -1,7 +1,7 @@
 'use client';
 
 // Checkout "Pairs well with your order" card (docs/COFFEY-ADDONS-PAIRINGS-SPEC.md
-// §1.2, §4.2, §4.3). Sits directly under the "Your Order" card (CartSummary) and
+// §1.2, §4.2, §4.3). Sits under the checkout fields (the page hands it to the form) and
 // offers up to three things that go with what is already in the cart, each with
 // an Add button.
 //
@@ -120,7 +120,7 @@ export function PairsWellWithCard({ rows, onAdd }: { rows: PairingRow[]; onAdd: 
       <ul className="flex flex-col divide-y divide-line">
         {rows.map((row) => (
           <li key={row.item.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
-            <MenuItemImage item={row.item} className="h-14 w-14 shrink-0" />
+            <MenuItemImage item={row.item} className="h-14 w-14 shrink-0" missing="placeholder" />
             <div className="min-w-0 flex-1">
               <div className="flex items-start gap-2">
                 <span

@@ -4,7 +4,7 @@
 // on the shelf, flagged when low, expiring, expired, or when sales ran past
 // the records ("count needed"). Anyone can tap "Request stock"; a manager or
 // the owner also adds/edits items, counts, writes off, and — at the POS —
-// receives a delivery that had no request behind it.
+// adds stock bought straight from a vendor ("Stock from vendor", INV-D14).
 
 import { useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
@@ -13,7 +13,10 @@ import {
   formatQty,
   INVENTORY_UNITS,
   UNIT_LABELS,
-  suggestedRequestQty,
+  VENDOR_BILL_REF_MAX,
+  VENDOR_NAME_MAX,
+  VENDOR_NAME_MIN,
+  VENDOR_NOTE_MAX,
   type InventoryUnit,
 } from '@/lib/inventory/rules';
 import {
@@ -25,9 +28,21 @@ import {
   shortDate,
   type InventoryItemView,
   type ItemsPayload,
+  type PersonRef,
 } from '@/components/staff/inventory/client';
 import type { StaffSurface } from '@/lib/staff/surfaceRules';
 import { flags } from '@/lib/flags';
+import { ReturnModal } from '@/components/staff/inventory/ReturnModal';
+import { RequestStockModal, type RequestStep } from '@/components/staff/inventory/RequestStockModal';
+import { useRequestDraft } from '@/components/staff/inventory/useRequestDraft';
+import {
+  addToDraft,
+  draftCount,
+  isInDraft,
+  removeFromDraft,
+  seedDraftWithLowItems,
+  suggestedQtyText,
+} from '@/lib/inventory/requestDraft';
 
 type Filter = 'all' | 'attention';
 
@@ -50,15 +65,44 @@ export function StockTab({
   surface,
   reload,
   onRequested,
+  assignees = [],
+  actorId,
+  canSendBack,
 }: {
   data: ItemsPayload;
   surface: StaffSurface;
   reload: () => Promise<void>;
   onRequested: () => void;
+  /** Who can carry a return to the warehouse (managers, and staff with
+   * warehouse access, get the list). */
+  assignees?: PersonRef[];
+  /** Whose request draft this is (each person, each PIN operator, keeps their own). */
+  actorId?: string;
+  /** May send stock back to the warehouse: a manager, or a staffer with
+   * warehouse access (WH-D16). Absent = managers only. */
+  canSendBack?: boolean;
 }) {
+  // docs/WAREHOUSE-SPEC.md: requests are filled from the warehouse, and a
+  // manager (or a staffer with warehouse access) can send stock back to it.
+  const warehouse = flags.warehouse;
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [notice, setNotice] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
-  const [requestOpen, setRequestOpen] = useState(false);
+  // The request being built: this person's own draft, reviewed before it is
+  // sent (INV-D22). requestStep is which step of the sheet is open, or null.
+  const draftApi = useRequestDraft(actorId);
+  const { draft, loaded: draftLoaded, update: updateDraft } = draftApi;
+  const inRequest = draftCount(draft);
+  const [requestStep, setRequestStep] = useState<RequestStep | null>(null);
+  const openRequest = (step: RequestStep) => {
+    // A fresh request starts with the low items suggested, as before.
+    if (step === 'choose' && draftLoaded && inRequest === 0) {
+      const seeded = seedDraftWithLowItems(data.items);
+      if (draftCount(seeded) > 0) updateDraft(() => seeded);
+    }
+    setRequestStep(step);
+  };
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [editing, setEditing] = useState<InventoryItemView | 'new' | null>(null);
   const [adjusting, setAdjusting] = useState<{ item: InventoryItemView; kind: 'waste' | 'count' } | null>(null);
@@ -94,12 +138,18 @@ export function StockTab({
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={primaryButton} onClick={() => setRequestOpen(true)}>
-          Request stock
+        <button type="button" className={primaryButton} onClick={() => openRequest('choose')}>
+          {warehouse ? 'Request from warehouse' : 'Request stock'}
+          {inRequest > 0 ? ` (${inRequest})` : ''}
         </button>
+        {warehouse && (canSendBack ?? data.canManage) ? (
+          <button type="button" className={secondaryButton} onClick={() => setReturnOpen(true)}>
+            Send back to warehouse
+          </button>
+        ) : null}
         {data.canManage && surface === 'pos' ? (
           <button type="button" className={secondaryButton} onClick={() => setDeliveryOpen(true)}>
-            Receive delivery
+            Stock from vendor
           </button>
         ) : null}
         {data.canManage ? (
@@ -108,6 +158,12 @@ export function StockTab({
           </button>
         ) : null}
       </div>
+
+      {notice ? (
+        <p role="status" className="mt-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          {notice}
+        </p>
+      ) : null}
 
       <AutoHidePanel data={data} reload={reload} />
 
@@ -170,6 +226,29 @@ export function StockTab({
                       {i.openRequestNumbers.length > 0 ? (
                         <Chip tone="green">Requested #{i.openRequestNumbers.join(', #')}</Chip>
                       ) : null}
+                      {i.isActive ? (
+                        isInDraft(draft, i.id) ? (
+                          <button
+                            type="button"
+                            className="min-h-[36px] rounded-full border border-tan-dark bg-tan-dark px-3 text-xs font-bold text-cream"
+                            onClick={() => updateDraft((d) => removeFromDraft(d, i.id))}
+                            aria-pressed="true"
+                            aria-label={`${i.name} is in your request — remove it`}
+                          >
+                            ✓ In request
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="min-h-[36px] rounded-full border border-[#ddd] bg-white px-3 text-xs font-bold text-charcoal hover:border-charcoal"
+                            onClick={() => updateDraft((d) => addToDraft(d, i.id, suggestedQtyText(i)))}
+                            aria-pressed="false"
+                            aria-label={`Add ${i.name} to your request`}
+                          >
+                            + Add
+                          </button>
+                        )
+                      ) : null}
                     </div>
                   </div>
 
@@ -184,7 +263,11 @@ export function StockTab({
                               <span>
                                 {formatQty(b.qtyRemaining, i.unit)}
                                 <span className="ml-2 text-xs text-muted">
-                                  {b.source === 'count' ? 'from a count' : `received ${shortDate(b.receivedAt)}`}
+                                  {b.source === 'count'
+                                    ? 'from a count'
+                                    : b.supplier
+                                      ? `from ${b.supplier} · received ${shortDate(b.receivedAt)}`
+                                      : `received ${shortDate(b.receivedAt)}`}
                                 </span>
                               </span>
                               <span
@@ -229,24 +312,65 @@ export function StockTab({
         ))
       )}
 
-      {requestOpen ? (
+      {returnOpen ? (
+        <ReturnModal
+          items={data.items}
+          people={assignees}
+          onClose={() => setReturnOpen(false)}
+          onDone={async (message) => {
+            setReturnOpen(false);
+            setNotice(message);
+            await reload();
+          }}
+        />
+      ) : null}
+      {/* The request being built, always one tap from review. */}
+      {inRequest > 0 && requestStep === null ? (
+        <div className="sticky bottom-3 z-20 mt-6 flex flex-wrap items-center justify-between gap-2 rounded-md border border-charcoal bg-charcoal px-4 py-3 text-cream shadow-elevated">
+          <span className="text-sm font-semibold">
+            Your request: {inRequest} item{inRequest === 1 ? '' : 's'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="min-h-[44px] rounded-md border border-cream/30 px-3 text-sm font-bold text-cream hover:bg-cream/10"
+              onClick={() => openRequest('choose')}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="min-h-[44px] rounded-md bg-tan px-4 text-sm font-bold text-cream hover:bg-tan-dark"
+              onClick={() => openRequest('review')}
+            >
+              Review &amp; send
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {requestStep ? (
         <RequestStockModal
-          items={data.items.filter((i) => i.isActive)}
-          onClose={() => setRequestOpen(false)}
-          onDone={async () => {
-            setRequestOpen(false);
+          warehouse={warehouse}
+          items={data.items}
+          draftApi={draftApi}
+          initialStep={requestStep}
+          onClose={() => setRequestStep(null)}
+          onSent={async (message) => {
+            setRequestStep(null);
+            setNotice(message);
             await reload();
             onRequested();
           }}
         />
       ) : null}
       {deliveryOpen ? (
-        <DeliveryModal
+        <VendorStockModal
           items={data.items.filter((i) => i.isActive)}
           today={data.today}
           onClose={() => setDeliveryOpen(false)}
-          onDone={async () => {
+          onDone={async (message) => {
             setDeliveryOpen(false);
+            setNotice(message);
             await reload();
           }}
         />
@@ -320,130 +444,9 @@ function AutoHidePanel({ data, reload }: { data: ItemsPayload; reload: () => Pro
   );
 }
 
-// ── Request stock ───────────────────────────────────────────────────────────
+// ── Stock from vendor (no request, INV-D14) ─────────────────────────────────
 
-function RequestStockModal({
-  items,
-  onClose,
-  onDone,
-}: {
-  items: InventoryItemView[];
-  onClose: () => void;
-  onDone: () => Promise<void>;
-}) {
-  // Low items not already on an open request start ticked, at the suggested qty.
-  const [qty, setQty] = useState<Record<string, string>>(() => {
-    const init: Record<string, string> = {};
-    for (const i of items) {
-      if (i.low && i.openRequestNumbers.length === 0) {
-        const s = suggestedRequestQty({ par_level: i.parLevel, reorder_qty: i.reorderQty }, i.onHand);
-        init[i.id] = s > 0 ? String(s) : '';
-      }
-    }
-    return init;
-  });
-  const [note, setNote] = useState('');
-  const [query, setQuery] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  const chosen = Object.keys(qty);
-  const shown = items.filter((i) => chosen.includes(i.id) || (query.trim() && i.name.toLowerCase().includes(query.trim().toLowerCase())));
-
-  async function submit() {
-    setError('');
-    const lines = chosen.map((id) => ({ itemId: id, qty: Number(qty[id]) }));
-    if (lines.length === 0) return setError('Pick at least one item.');
-    const bad = lines.find((l) => !Number.isFinite(l.qty) || l.qty <= 0);
-    if (bad) return setError(`Enter a quantity for ${items.find((i) => i.id === bad.itemId)?.name ?? 'every item'}.`);
-    setBusy(true);
-    const res = await api('/api/inventory/requests', 'POST', { lines, note });
-    setBusy(false);
-    if (!res.ok) return setError(res.error);
-    await onDone();
-  }
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title="Request stock"
-      subtitle="Low items are already added. A manager assigns someone to pick it."
-      footer={
-        <div className="flex items-center justify-between gap-2">
-          {error ? <p className="text-sm text-red-700">{error}</p> : <span className="text-sm text-muted">{chosen.length} item(s)</span>}
-          <button type="button" className={primaryButton} onClick={submit} disabled={busy}>
-            {busy ? 'Sending…' : 'Send request'}
-          </button>
-        </div>
-      }
-    >
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Find an item to add"
-        className={inputClass}
-        aria-label="Find an item to add"
-      />
-      <ul className="mt-3 divide-y divide-[#eee]">
-        {shown.map((i) => {
-          const on = i.id in qty;
-          return (
-            <li key={i.id} className="flex items-center gap-3 py-2">
-              <input
-                type="checkbox"
-                checked={on}
-                className="h-5 w-5"
-                aria-label={`Request ${i.name}`}
-                onChange={(e) =>
-                  setQty((prev) => {
-                    const next = { ...prev };
-                    if (e.target.checked) {
-                      const s = suggestedRequestQty({ par_level: i.parLevel, reorder_qty: i.reorderQty }, i.onHand);
-                      next[i.id] = s > 0 ? String(s) : '';
-                    } else delete next[i.id];
-                    return next;
-                  })
-                }
-              />
-              <span className="flex-1 text-sm">
-                <span className="font-semibold text-charcoal">{i.name}</span>
-                <span className="block text-xs text-muted">
-                  {formatQty(i.onHand, i.unit)} on hand
-                  {i.openRequestNumbers.length ? ` · already on #${i.openRequestNumbers.join(', #')}` : ''}
-                </span>
-              </span>
-              {on ? (
-                <label className="flex items-center gap-1 text-sm">
-                  <input
-                    type="number"
-                    min={0}
-                    step="any"
-                    inputMode="decimal"
-                    value={qty[i.id]}
-                    onChange={(e) => setQty((prev) => ({ ...prev, [i.id]: e.target.value }))}
-                    className={`${inputBase} w-24 text-right tabular-nums`}
-                    aria-label={`Quantity of ${i.name}`}
-                  />
-                  <span className="w-10 text-muted">{UNIT_LABELS[i.unit]}</span>
-                </label>
-              ) : null}
-            </li>
-          );
-        })}
-        {shown.length === 0 ? <li className="py-4 text-center text-sm text-muted">Search to add an item.</li> : null}
-      </ul>
-      <label className="mt-3 block text-sm">
-        <span className="text-charcoal">Note (optional)</span>
-        <input value={note} onChange={(e) => setNote(e.target.value)} className={`${inputClass} mt-1`} placeholder="e.g. needed before the evening rush" />
-      </label>
-    </Modal>
-  );
-}
-
-// ── Receive a delivery (no request) ─────────────────────────────────────────
-
-function DeliveryModal({
+function VendorStockModal({
   items,
   today,
   onClose,
@@ -452,24 +455,41 @@ function DeliveryModal({
   items: InventoryItemView[];
   today: string;
   onClose: () => void;
-  onDone: () => Promise<void>;
+  onDone: (message: string) => Promise<void>;
 }) {
+  const [vendor, setVendor] = useState('');
+  const [billRef, setBillRef] = useState('');
+  const [note, setNote] = useState('');
   const [rows, setRows] = useState<Record<string, { qty: string; expiry: string }>>({});
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const chosen = Object.keys(rows);
   const shown = items.filter((i) => chosen.includes(i.id) || (query.trim() && i.name.toLowerCase().includes(query.trim().toLowerCase())));
+  const vendorName = vendor.trim();
+  const canSubmit = vendorName.length >= VENDOR_NAME_MIN && chosen.length > 0;
 
   async function submit() {
     setError('');
+    if (vendorName.length < VENDOR_NAME_MIN) return setError('Enter the vendor’s name.');
     const lines = chosen.map((id) => ({ itemId: id, qty: Number(rows[id].qty), expiryDate: rows[id].expiry || null }));
     if (lines.length === 0) return setError('Add what arrived.');
     setBusy(true);
-    const res = await api('/api/inventory/receipts', 'POST', { lines });
+    const res = await api<{ batches?: number; vendorRecorded?: boolean }>('/api/inventory/receipts', 'POST', {
+      vendor: vendorName,
+      billRef: billRef.trim(),
+      note: note.trim(),
+      lines,
+    });
     setBusy(false);
     if (!res.ok) return setError(res.error);
-    await onDone();
+    const count = res.data.batches ?? lines.filter((l) => l.qty > 0).length;
+    const what = `${count} item${count === 1 ? '' : 's'}`;
+    await onDone(
+      res.data.vendorRecorded === false
+        ? `Added ${what} to stock. The vendor’s name was not saved — apply supabase/2026-11-vendor-stock-in.sql.`
+        : `Added ${what} from ${vendorName} to stock.`,
+    );
   }
 
   return (
@@ -477,18 +497,54 @@ function DeliveryModal({
       open
       onClose={onClose}
       size="lg"
-      title="Receive delivery"
-      subtitle="For stock that arrived without a request. Count each item and enter its expiry date."
+      title="Stock from vendor"
+      subtitle="For stock bought straight from a vendor — not a warehouse or store-room request. Count each item and enter its expiry date."
       footer={
         <div className="flex items-center justify-between gap-2">
           {error ? <p className="text-sm text-red-700">{error}</p> : <span />}
-          <button type="button" className={primaryButton} onClick={submit} disabled={busy}>
+          <button type="button" className={primaryButton} onClick={submit} disabled={busy || !canSubmit}>
             {busy ? 'Saving…' : 'Add to stock'}
           </button>
         </div>
       }
     >
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find an item" className={inputClass} aria-label="Find an item" />
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <label className="block text-sm sm:col-span-2">
+          <span className="text-muted">Vendor name</span>
+          <input
+            value={vendor}
+            onChange={(e) => setVendor(e.target.value)}
+            maxLength={VENDOR_NAME_MAX}
+            placeholder="e.g. Sharma Dairy"
+            className={`${inputClass} mt-1`}
+            aria-label="Vendor name"
+            autoFocus
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-muted">Bill / invoice no. (optional)</span>
+          <input
+            value={billRef}
+            onChange={(e) => setBillRef(e.target.value)}
+            maxLength={VENDOR_BILL_REF_MAX}
+            className={`${inputClass} mt-1`}
+            aria-label="Bill or invoice number"
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="text-muted">Note (optional)</span>
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={VENDOR_NOTE_MAX}
+            placeholder="e.g. Paid cash"
+            className={`${inputClass} mt-1`}
+            aria-label="Note"
+          />
+        </label>
+      </div>
+      <p className="mt-4 text-xs font-bold uppercase tracking-[0.15em] text-muted">What arrived</p>
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find an item" className={`${inputClass} mt-2`} aria-label="Find an item" />
       <ul className="mt-3 divide-y divide-[#eee]">
         {shown.map((i) => {
           const row = rows[i.id];
@@ -540,6 +596,7 @@ export function QtyExpiryInputs({
   onChange,
   name,
   expected,
+  expectedVerb = 'Picked',
 }: {
   unit: InventoryUnit;
   tracksExpiry: boolean;
@@ -550,6 +607,8 @@ export function QtyExpiryInputs({
   name: string;
   /** What was picked — a different count is highlighted as a discrepancy. */
   expected?: number | null;
+  /** How `expected` is described: 'Picked', or 'Sent' for a warehouse transfer. */
+  expectedVerb?: string;
 }) {
   const n = Number(qty);
   const mismatch = expected !== undefined && expected !== null && qty !== '' && Number.isFinite(n) && n !== expected;
@@ -568,7 +627,7 @@ export function QtyExpiryInputs({
           className={`${inputClass} mt-1 text-right tabular-nums ${mismatch ? 'border-amber-500' : ''}`}
           aria-label={`Quantity of ${name} that arrived`}
         />
-        {mismatch ? <span className="mt-1 block text-xs font-semibold text-amber-800">Picked {expected} — this will be flagged</span> : null}
+        {mismatch ? <span className="mt-1 block text-xs font-semibold text-amber-800">{expectedVerb} {expected} — this will be flagged</span> : null}
       </label>
       <label className="block text-sm">
         <span className="text-muted">Expiry date{tracksExpiry ? '' : ' (optional)'}</span>

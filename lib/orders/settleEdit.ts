@@ -16,6 +16,14 @@
 
 import { isUuid } from '@/lib/api/constants';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
+import { billOffers, parseSpendSnapshot, splitOrderDiscount, type BillOfferLine } from '@/lib/orders/offers';
+import {
+  COMPLETED_PAID_LATE,
+  completedPaidChangeable,
+  isPaidBill,
+  paidChangeBlockReason,
+  type PaidChangeOrder,
+} from '@/lib/orders/paidChange';
 import type { OrderStatus } from '@/lib/types';
 
 /**
@@ -42,7 +50,7 @@ export interface SettleEditChange {
 }
 
 /** What the rules need from an order. */
-export interface SettleEditOrder {
+export interface SettleEditOrder extends PaidChangeOrder {
   status: OrderStatus;
   payment_status: string;
   /** 'coffee_pass' for a HIOC Ritual sale; absent = a menu order. */
@@ -79,10 +87,20 @@ export type SettleEditPlan =
 /**
  * Why this order can't be edited right now, or null when it can. The order's
  * state only — whether this person may edit is the permission's business.
+ *
+ * A PAID bill can be edited too when it is a dine-in bill paid at the counter
+ * (lib/orders/paidChange.ts): the difference becomes a balance settled later.
  */
 export function settleEditBlockReason(order: SettleEditOrder): string | null {
   if (order.order_kind === 'coffee_pass') return `A ${PASS_PROGRAM_NAME} sale can't be changed — cancel it instead.`;
-  if (order.payment_status === 'paid') return 'This bill is already paid.';
+  if (isPaidBill(order)) {
+    const paidBlock = paidChangeBlockReason(order);
+    if (paidBlock) return paidBlock;
+    // A paid dine-in bill marked Completed once served can still be changed
+    // that day; from an earlier day it stays (COMPLETED_PAID_LATE).
+    if (completedPaidChangeable(order)) return null;
+    if (order.status === 'completed') return COMPLETED_PAID_LATE;
+  }
   if (SETTLE_EDIT_STATUSES.includes(order.status)) return null;
   if (order.status === 'received') return 'Accept this order on Orders before changing it.';
   if (order.status === 'completed') return 'A completed order can’t be changed — its stock has already been used.';
@@ -101,7 +119,12 @@ export function canReduceLine(line: Pick<SettleEditLine, 'voided' | 'quantity' |
  * write. Quantities only go down (0 removes the line); unchanged lines are
  * dropped; the order must keep at least one line.
  */
-export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): SettleEditPlan {
+export function planSettleEdit(
+  lines: SettleEditLine[],
+  rawChanges: unknown,
+  /** What to say when the edit would remove every line (lib/orders/paidChange.ts lastLineMessage). */
+  emptyMessage = 'That would empty the order — cancel the order instead.',
+): SettleEditPlan {
   if (!Array.isArray(rawChanges) || rawChanges.length === 0) {
     return { ok: false, status: 400, error: 'changes must be a non-empty array' };
   }
@@ -155,16 +178,59 @@ export function planSettleEdit(lines: SettleEditLine[], rawChanges: unknown): Se
 
   const removed = new Set(changes.filter((c) => c.remove).map((c) => c.item_id));
   if (!lines.some((l) => !l.voided && !removed.has(l.id))) {
-    return { ok: false, status: 409, error: 'That would empty the order — cancel the order instead.' };
+    return { ok: false, status: 409, error: emptyMessage };
   }
 
   return { ok: true, changes };
 }
 
-/** What an edit takes off the bill before tax and packaging (for the sheet's preview). */
-export function editReductionInr(changes: PlannedEdit[]): number {
-  return changes.reduce(
+/**
+ * What an edit takes off the bill before tax and packaging (for the sheet's
+ * preview). With the order's lines, the offers the edit changes are netted off
+ * the same way the amend route re-derives them (lib/orders/amend.ts): one jar
+ * off "2 for ₹499" lowers the bill by ₹200, not ₹399; and an edit that takes
+ * the rest of the bill under a spend offer's minimum puts that jar back at its
+ * regular price. `order` carries the spend offers kept on it and whether a
+ * coupon or Beanies is on it (which keeps a spend offer off).
+ */
+export function editReductionInr(
+  changes: PlannedEdit[],
+  lines?: readonly (BillOfferLine & { id: string; pass_covered_inr?: number | null })[],
+  order?: {
+    spend_offers?: unknown;
+    discount_inr?: number;
+    offer_discount_inr?: number | null;
+    manual_discount_inr?: number | null;
+  },
+): number {
+  const linesOff = changes.reduce(
     (sum, c) => sum + (c.remove ? c.from_line_total_inr : c.from_line_total_inr - c.to_line_total_inr),
     0,
   );
+  if (!lines) return linesOff;
+  const byId = new Map(changes.map((c) => [c.item_id, c]));
+  const after = lines.map((line) => {
+    const change = byId.get(line.id);
+    if (!change) return line;
+    return change.remove
+      ? { ...line, voided: true }
+      : { ...line, quantity: change.to_quantity, line_total_inr: change.to_line_total_inr };
+  });
+  const spendOffers = parseSpendSnapshot(order?.spend_offers);
+  // Only a coupon or Beanies keeps a spend offer off — not a manager discount.
+  const otherDiscountApplied = order
+    ? splitOrderDiscount({
+        discount_inr: order.discount_inr ?? 0,
+        offer_discount_inr: order.offer_discount_inr,
+        manual_discount_inr: order.manual_discount_inr,
+      }).otherInr > 0
+    : false;
+  const offersOf = (ls: typeof lines) =>
+    billOffers({
+      lines: ls,
+      spendOffers,
+      otherDiscountApplied,
+      passCoveredInr: ls.filter((l) => !l.voided).reduce((sum, l) => sum + Math.max(0, l.pass_covered_inr ?? 0), 0),
+    }).discountInr;
+  return linesOff - (offersOf(lines) - offersOf(after));
 }

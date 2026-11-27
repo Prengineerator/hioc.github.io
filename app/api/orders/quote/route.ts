@@ -16,10 +16,13 @@ import {
   type MenuItemRow,
   type ResolvedLine,
 } from '@/lib/orders/lines';
-import { afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { afterOffers, afterPass, allocateOrderPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { billOffers, offerTaxableShare, type BillOffersResult, type SpendOffer } from '@/lib/orders/offers';
+import { loadActiveOffers, loadActiveSpendOffers, loadSpendOfferBlocks } from '@/lib/orders/offersServer';
 import { parsePassDrinks, passShortfallMessage } from '@/lib/passes/rules';
 import type { PassShortfall, PassSummary } from '@/lib/passes/types';
 import { indianE164HonouringPlus } from '@/lib/phone';
+import { canGiveManualDiscount, MANUAL_DISCOUNT_FORBIDDEN, parseManualDiscount } from '@/lib/orders/manualDiscount';
 
 export const dynamic = 'force-dynamic';
 
@@ -77,6 +80,12 @@ export async function POST(request: Request) {
   if (!passDrinksParsed.ok) return errorResponse(400, passDrinksParsed.error);
   const requestedPassDrinks = passDrinksParsed.value;
 
+  // A manager discount to preview (lib/orders/manualDiscount.ts). Checked
+  // against the caller's role once the actor is known, below.
+  const manualParsed = parseManualDiscount(body.manual_discount);
+  if (!manualParsed.ok) return errorResponse(400, manualParsed.error);
+  const manualRequest = manualParsed.value;
+
   // With `items` the server prices the cart itself and the client's subtotal is
   // ignored altogether (a spoofed one cannot even preview a wrong bill). Without
   // it this is the older subtotal-only preview, which cannot see which drinks a
@@ -132,6 +141,10 @@ export async function POST(request: Request) {
   // that's a round trip shaved off of every keystroke's re-quote, not just one.
   const [user, actor, settings] = await Promise.all([getAuthUser(), getCounterActor(), getStoreSettings()]);
   const isStaff = actor !== null;
+  // The same rule POST /api/orders charges by: only a manager or the owner may.
+  if (manualRequest && !canGiveManualDiscount(actor?.role)) {
+    return errorResponse(403, MANUAL_DISCOUNT_FORBIDDEN);
+  }
   // The admin client is made only when something needs it: the anonymous,
   // subtotal-only preview (the common case) touches no table at all.
   let adminClient: ReturnType<typeof createAdminSupabaseClient> | null = null;
@@ -144,17 +157,26 @@ export async function POST(request: Request) {
   let subtotalInr: number;
   let taxableInr: number;
   let resolvedLines: ResolvedLine[] | null = null;
+  let spendOffers: SpendOffer[] = [];
   if (parsedItems) {
     const menuIds = [...new Set(parsedItems.map((i) => i.menu_item_id))];
-    const { data: menuRows, error: menuError } = await admin()
-      .from('menu_items')
-      .select(MENU_ITEM_SELECT)
-      .in('id', menuIds);
+    const [{ data: menuRows, error: menuError }, offersByItem, liveSpend] = await Promise.all([
+      admin().from('menu_items').select(MENU_ITEM_SELECT).in('id', menuIds),
+      loadActiveOffers(admin(), menuIds),
+      loadActiveSpendOffers(admin(), menuIds),
+    ]);
+    spendOffers = liveSpend;
     if (menuError) return errorResponse(500, 'Failed to validate order items');
     const menuById = new Map(
       (menuRows ?? []).map((row) => [row.id, shapeMenuItem(row as unknown as MenuItemRow)]),
     );
-    const resolved = resolveOrderLines(parsedItems, menuById, switchesFromSettings(settings));
+    const resolved = resolveOrderLines(
+      parsedItems,
+      menuById,
+      switchesFromSettings(settings),
+      offersByItem,
+      new Set(spendOffers.map((o) => o.menu_item_id)),
+    );
     if (!resolved.ok) return errorResponse(400, resolved.error);
     resolvedLines = resolved.lines;
     subtotalInr = resolved.subtotalInr;
@@ -207,13 +229,26 @@ export async function POST(request: Request) {
     };
   }
   // What a coupon and Beanies are computed on once the pass has been applied.
-  const payableAfterPass = afterPass(subtotalInr, passCoveredInr);
+  // Offers (lib/orders/offers.ts): only a quote priced from items can have them
+  // (the legacy subtotal-only quote has no lines to count). As at create: first
+  // without a spend offer (it can't be combined with a coupon or Beanies), and
+  // tried once neither turns out to be applied.
+  const noOffers: BillOffersResult = { discountInr: 0, offers: [], label: '', notes: [], kind: 'none' };
+  // Once per customer, by phone (the number typed at the counter, or the web
+  // checkout's): no number, or one that has had it, keeps a spend offer off.
+  const spendBlocked = await loadSpendOfferBlocks(admin(), spendOffers, toStoredPhone(customer_phone));
+  const priceOffers = (otherDiscountApplied: boolean) =>
+    resolvedLines
+      ? billOffers({ lines: resolvedLines, spendOffers, passCoveredInr, otherDiscountApplied, spendBlocked })
+      : noOffers;
+  let offerResult = priceOffers(true);
+  const payableAfterOffers = afterOffers(afterPass(subtotalInr, passCoveredInr), offerResult.discountInr);
 
   let couponResult: Awaited<ReturnType<typeof validateAndComputeCoupon>> | null = null;
   let couponDiscountInr = 0;
   if (typeof coupon_code === 'string' && coupon_code.trim().length > 0) {
     couponResult = await validateAndComputeCoupon(coupon_code.trim(), {
-      subtotalInr: payableAfterPass,
+      subtotalInr: payableAfterOffers,
       userId,
       itemIds,
       categories: cats,
@@ -222,7 +257,7 @@ export async function POST(request: Request) {
       counterPhone: isStaff ? indianE164HonouringPlus(customer_phone) : null,
     });
     if (couponResult.ok) {
-      couponDiscountInr = Math.min(couponResult.discountInr, payableAfterPass);
+      couponDiscountInr = Math.min(couponResult.discountInr, payableAfterOffers);
     }
   }
 
@@ -232,7 +267,7 @@ export async function POST(request: Request) {
   if (userId) {
     balance = await getBalance(userId);
     if (typeof redeem_points === 'number' && redeem_points > 0) {
-      const remaining = Math.max(0, payableAfterPass - couponDiscountInr);
+      const remaining = Math.max(0, payableAfterOffers - couponDiscountInr);
       // `balance` was just fetched above for the response's own `balance`
       // field — hand it to quoteRedemption so it doesn't re-scan
       // loyalty_transactions for the same number a moment later.
@@ -243,6 +278,9 @@ export async function POST(request: Request) {
     }
   }
 
+  if (couponDiscountInr + pointsDiscountInr === 0) offerResult = priceOffers(false);
+  const offerDiscountInr = offerResult.discountInr;
+
   // Exactly the create path's bill: pass, then coupon, then Beanies, GST on the
   // taxable base with the covered rupees out of it, and the dine-in packaging
   // rule (lib/orders/passPricing.ts holds the one copy).
@@ -250,12 +288,27 @@ export async function POST(request: Request) {
     settings,
     subtotalInr,
     taxableSubtotalInr: taxableInr,
+    offerDiscountInr,
+    ...(resolvedLines ? { offerTaxableShare: offerTaxableShare(resolvedLines) } : {}),
     couponDiscountInr,
     pointsDiscountInr,
+    manualDiscountInr: manualRequest?.amountInr ?? 0,
     passCoveredInr,
     passCoveredTaxableInr,
     isDineIn,
   });
 
-  return NextResponse.json({ bill, coupon: couponResult, points: pointsResult, balance, pass });
+  // `offers`: one entry per offer on the bill, for the bill's offer row
+  // (bill.offer_discount_inr is their total, inside bill.discount_inr).
+  // `offer_notes`: why an offer the cart qualifies for isn't on it (a spend
+  // offer next to a coupon or Beanies), for the counter screen.
+  return NextResponse.json({
+    bill,
+    coupon: couponResult,
+    points: pointsResult,
+    balance,
+    pass,
+    offers: offerResult.offers,
+    offer_notes: offerResult.notes,
+  });
 }

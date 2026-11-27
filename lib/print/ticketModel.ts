@@ -24,9 +24,10 @@ import {
   formatIstDateTime,
   formatIstDateShort,
 } from '@/lib/print/labels';
-import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { describeBillPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel, validTillLabel } from '@/lib/pos/ritual';
+import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
 
 // Thermal code pages (the ones ESC/POS printers actually ship with) have no
 // ₹ glyph — it prints as a mangled box or a wrong currency sign depending on
@@ -259,6 +260,17 @@ function buildKotSlipBlocks(
 // only. Starts with the brandHeader placeholder — logo + "हाईओक" / "HIOC."
 // — resolved to a raster image by printExecutor.ts's resolveBrandHeader; see
 // ticketDoc.ts for the fallback if that resolution ever fails.
+/** The difference left on a paid bill changed after it was paid (0 when none). Shared with ReceiptTicket. */
+export function receiptBalance(order: Pick<StaffPrintOrder, 'payment_status' | 'balance_due_inr'>): number {
+  return order.payment_status === 'paid' ? (order.balance_due_inr ?? 0) : 0;
+}
+
+/** The receipt's top banner: PAID / UNPAID / …, or BALANCE DUE on a paid bill that still owes. Shared with ReceiptTicket. */
+export function receiptBanner(order: Pick<StaffPrintOrder, 'payment_status' | 'balance_due_inr'>): string {
+  if (receiptBalance(order) > 0) return 'BALANCE DUE';
+  return PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase();
+}
+
 function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   const isDineIn = order.order_type === 'dine_in';
   const activeItems = order.items.filter((i) => !i.voided);
@@ -273,7 +285,7 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
     { kind: 'brandHeader' },
     {
       kind: 'text',
-      text: PAYMENT_BANNER_LABEL[order.payment_status] ?? order.payment_status.toUpperCase(),
+      text: receiptBanner(order),
       align: 'center',
       bold: true,
     },
@@ -363,8 +375,10 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   blocks.push({ kind: 'divider' });
   blocks.push({ kind: 'row', left: 'Total Qty', right: String(totalQty) });
   blocks.push({ kind: 'row', left: 'Sub Total', right: formatMoney(order.subtotal_inr) });
-  if (order.discount_inr > 0) {
-    blocks.push({ kind: 'row', left: discountLabel, right: `(${formatMoney(order.discount_inr)})` });
+  // The multi-buy offer first ("Instant Coffee offer"), then the coupon/Beanies
+  // discount: both inside discount_inr (lib/orders/offers.ts).
+  for (const row of discountRows(order, orderOfferLabel({ ...order, items: activeItems }), discountLabel)) {
+    blocks.push({ kind: 'row', left: row.label, right: `(${formatMoney(row.amountInr)})` });
   }
   // What HIOC Ritual cups covered, kept apart from the coupon/Beanies discount
   // above (total = subtotal + tax + packaging - discount - pass cover).
@@ -394,14 +408,26 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   if (tip > 0) {
     blocks.push({ kind: 'row', left: 'Tip', right: formatMoney(tip) });
   }
+  // A paid bill changed after it was paid (lib/orders/paidChange.ts): what was
+  // paid, and the difference still to settle. Same rows in ReceiptTicket (HTML).
+  const balance = receiptBalance(order);
   if (settleDiscount > 0 || tip > 0) {
-    blocks.push({ kind: 'row', left: 'Received', right: formatMoney(total - settleDiscount + tip), bold: true });
+    blocks.push({ kind: 'row', left: 'Received', right: formatMoney(total - balance - settleDiscount + tip), bold: true });
+  }
+  if (balance !== 0) {
+    blocks.push({ kind: 'row', left: 'Paid', right: formatMoney(total - balance) });
+    blocks.push({
+      kind: 'row',
+      left: balance > 0 ? 'Balance due' : 'To refund',
+      right: formatMoney(Math.abs(balance)),
+      bold: true,
+    });
   }
 
   if (order.payment_status === 'paid' && order.payment_method) {
     blocks.push({
       kind: 'text',
-      text: `Paid via ${describeOrderPayment(order)}`,
+      text: `Paid via ${describeBillPayment(order)}`,
       align: 'center',
     });
   }

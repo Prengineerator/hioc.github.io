@@ -3,7 +3,15 @@ import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { getCounterActor } from '@/lib/api/auth';
 import { errorResponse, unauthorized } from '@/lib/api/http';
 import { rateLimitOk } from '@/lib/api/rateLimit';
-import { mergeCustomerSuggestions, nameSearchTerm, phoneSearchPrefix } from '@/lib/customers/phoneSearch';
+import {
+  mergeCustomerSuggestions,
+  nameSearchTerm,
+  phoneSearchPrefix,
+  searchIsComplete,
+  SEARCH_ACCOUNTS_LIMIT,
+  SEARCH_LEGACY_LIMIT,
+  SEARCH_ORDERS_LIMIT,
+} from '@/lib/customers/phoneSearch';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,17 +45,17 @@ export async function GET(request: Request) {
   const admin = createAdminSupabaseClient();
   // nameSearchTerm() already stripped the pattern wildcards, so % is ours alone.
   const pattern = prefix ? `${prefix}%` : `%${term}%`;
-  const accountsQuery = admin.from('profiles').select('phone, name').eq('phone_verified', true).limit(20);
+  const accountsQuery = admin.from('profiles').select('phone, name').eq('phone_verified', true).limit(SEARCH_ACCOUNTS_LIMIT);
   const ordersQuery = admin.from('orders').select('customer_phone, customer_name, created_at');
   const legacyQuery = admin.from('legacy_customers').select('phone, name, order_count, last_order_at');
   const [accounts, orders, legacy] = await Promise.all([
     prefix ? accountsQuery.like('phone', pattern) : accountsQuery.not('phone', 'is', null).ilike('name', pattern),
     (prefix ? ordersQuery.like('customer_phone', pattern) : ordersQuery.not('customer_phone', 'is', null).ilike('customer_name', pattern))
       .order('created_at', { ascending: false })
-      .limit(200),
+      .limit(SEARCH_ORDERS_LIMIT),
     (prefix ? legacyQuery.like('phone', pattern) : legacyQuery.ilike('name', pattern))
       .order('last_order_at', { ascending: false, nullsFirst: false })
-      .limit(20),
+      .limit(SEARCH_LEGACY_LIMIT),
   ]);
   for (const [label, r] of [
     ['accounts', accounts],
@@ -57,11 +65,22 @@ export async function GET(request: Request) {
     if (r.error) console.error(`customers/search: ${label} query failed`, r.error);
   }
 
-  return NextResponse.json({
-    customers: mergeCustomerSuggestions({
-      accounts: accounts.data ?? [],
-      orders: orders.data ?? [],
-      legacy: legacy.data ?? [],
-    }),
+  const customers = mergeCustomerSuggestions({
+    accounts: accounts.data ?? [],
+    orders: orders.data ?? [],
+    legacy: legacy.data ?? [],
   });
+  // `complete` lets the POS narrow this list itself as more digits are typed
+  // (searchIsComplete), instead of asking again per digit. It adds no
+  // customer data, only whether the answer was cut short.
+  // Name matches are a "contains" search and can't be narrowed that way.
+  if (!prefix) return NextResponse.json({ customers });
+  const complete = searchIsComplete({
+    accounts: accounts.data?.length ?? 0,
+    orders: orders.data?.length ?? 0,
+    legacy: legacy.data?.length ?? 0,
+    merged: customers.length,
+    failed: Boolean(accounts.error || orders.error || legacy.error),
+  });
+  return NextResponse.json({ customers, complete });
 }

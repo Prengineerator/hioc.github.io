@@ -90,3 +90,51 @@ export function mergeCustomerSuggestions(sources: Sources, limit = MAX_SUGGESTIO
     .slice(0, limit)
     .map(({ nameRank: _rank, ...row }) => row);
 }
+
+/** Row limits per source in GET /api/customers/search. */
+export const SEARCH_ACCOUNTS_LIMIT = 20;
+export const SEARCH_ORDERS_LIMIT = 200;
+export const SEARCH_LEGACY_LIMIT = 20;
+
+/**
+ * Whether a phone search returned EVERY match, not just the first six. True
+ * only when no source hit its row limit, nothing failed, and the merged list
+ * came in under MAX_SUGGESTIONS. Then a longer number's matches are exactly
+ * this list filtered, with the same counts and order, and the POS can narrow
+ * it as more digits are typed instead of asking the server for each one.
+ */
+export function searchIsComplete(opts: {
+  accounts: number;
+  orders: number;
+  legacy: number;
+  merged: number;
+  failed: boolean;
+}): boolean {
+  return (
+    !opts.failed &&
+    opts.accounts < SEARCH_ACCOUNTS_LIMIT &&
+    opts.orders < SEARCH_ORDERS_LIMIT &&
+    opts.legacy < SEARCH_LEGACY_LIMIT &&
+    opts.merged < MAX_SUGGESTIONS
+  );
+}
+
+export interface PhoneSearchAnswer {
+  /** The digits searched for, without +91. */
+  digits: string;
+  customers: CustomerSuggestion[];
+  complete: boolean;
+}
+
+/**
+ * The suggestions for `digits` worked out from an earlier answer, or null when
+ * only the server can say. An answer for the same digits is reused as it is;
+ * a complete answer for a shorter prefix of them is filtered.
+ */
+export function suggestionsFromAnswer(answer: PhoneSearchAnswer, digits: string): CustomerSuggestion[] | null {
+  if (answer.digits === digits) return answer.customers;
+  if (answer.complete && digits.startsWith(answer.digits)) {
+    return answer.customers.filter((c) => c.phone.startsWith(digits));
+  }
+  return null;
+}

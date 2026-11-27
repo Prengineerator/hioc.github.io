@@ -13,7 +13,9 @@
 
 import { Suspense, useState, type FormEvent } from 'react';
 import Image from 'next/image';
-import Link from 'next/link';
+// SurfaceLink, not next/link: on owner.hioc.in a plain relative /staff/login
+// resolved to /owner/staff/login, a 404. SurfaceLink sends it to the staff host.
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function OwnerLoginPage() {

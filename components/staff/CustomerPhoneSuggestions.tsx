@@ -5,14 +5,31 @@
 // drop down — name, number, last visit. Picking one fills the number; the exact
 // lookup then does the rest (name, points, Last orders).
 
-import { useEffect, useState } from 'react';
-import { nameSearchTerm, phoneSearchPrefix, type CustomerSuggestion } from '@/lib/customers/phoneSearch';
+import { useEffect, useRef, useState } from 'react';
+import {
+  nameSearchTerm,
+  phoneSearchPrefix,
+  suggestionsFromAnswer,
+  type CustomerSuggestion,
+  type PhoneSearchAnswer,
+} from '@/lib/customers/phoneSearch';
 
 const DEBOUNCE_MS = 250;
+/** How long an answer is reused while a number is typed, corrected and retyped. */
+const ANSWER_TTL_MS = 60_000;
+const MAX_KEPT_ANSWERS = 12;
 
-/** Matches for what's in the phone field; [] when there's nothing to suggest. */
+/**
+ * Matches for what's in the phone field; [] when there's nothing to suggest.
+ *
+ * Typing 9876543 used to ask the server four times (4, 5, 6 and 7 digits).
+ * Answers are kept for a minute: a backspace reuses one as it is, and once an
+ * answer is complete (the server found every match) the next digits narrow it
+ * here, with no request at all.
+ */
 export function useCustomerSuggestions(raw: string, enabled = true): CustomerSuggestion[] {
   const [matches, setMatches] = useState<CustomerSuggestion[]>([]);
+  const answers = useRef<(PhoneSearchAnswer & { at: number })[]>([]);
   const prefix = enabled ? phoneSearchPrefix(raw) : null;
 
   useEffect(() => {
@@ -20,11 +37,27 @@ export function useCustomerSuggestions(raw: string, enabled = true): CustomerSug
       setMatches([]);
       return undefined;
     }
+    const digits = prefix.slice(3);
+    const now = Date.now();
+    answers.current = answers.current.filter((a) => now - a.at < ANSWER_TTL_MS);
+    for (const answer of answers.current) {
+      const known = suggestionsFromAnswer(answer, digits);
+      if (known) {
+        setMatches(known);
+        return undefined;
+      }
+    }
     let cancelled = false;
     const t = setTimeout(() => {
-      fetch(`/api/customers/search?q=${encodeURIComponent(prefix.slice(3))}`, { cache: 'no-store' })
+      fetch(`/api/customers/search?q=${encodeURIComponent(digits)}`, { cache: 'no-store' })
         .then((res) => (res.ok ? res.json() : null))
-        .then((data: { customers?: CustomerSuggestion[] } | null) => {
+        .then((data: { customers?: CustomerSuggestion[]; complete?: boolean } | null) => {
+          if (data) {
+            answers.current = [
+              { digits, customers: data.customers ?? [], complete: data.complete === true, at: Date.now() },
+              ...answers.current,
+            ].slice(0, MAX_KEPT_ANSWERS);
+          }
           if (!cancelled) setMatches(data?.customers ?? []);
         })
         .catch(() => {});

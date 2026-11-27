@@ -253,5 +253,36 @@ export async function unpaidOrdersSince(admin: Admin, openedAtIso: string, until
   if (untilIso) query = query.lte('created_at', untilIso);
   const { data, error } = await query.order('created_at', { ascending: true }).limit(200);
   if (error) throw new Error(`unpaidOrdersSince: orders query failed: ${error.message}`);
-  return (data ?? []) as UnpaidOrder[];
+  const unpaid = (data ?? []) as UnpaidOrder[];
+  const owing = await balancesOwedSince(admin, openedAtIso, untilIso);
+  return owing.length === 0
+    ? unpaid
+    : [...unpaid, ...owing].sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+/**
+ * Paid bills changed after they were paid that still have money OWED on them
+ * (lib/orders/paidChange.ts), as close-screen entries for the amount owed —
+ * the same "settle it before closing, or its cash lands after the count".
+ * Best-effort: a database without 2026-11-paid-order-changes.sql (or any
+ * failure here) adds nothing rather than stopping the drawer from closing.
+ */
+async function balancesOwedSince(admin: Admin, openedAtIso: string, untilIso?: string): Promise<UnpaidOrder[]> {
+  try {
+    let query = admin
+      .from('orders')
+      .select('id, order_number, balance_due_inr, created_at')
+      .eq('payment_status', 'paid')
+      .gt('balance_due_inr', 0)
+      .in('status', LIVE_ORDER_STATUSES)
+      .gte('created_at', openedAtIso);
+    if (untilIso) query = query.lte('created_at', untilIso);
+    const { data, error } = await query.order('created_at', { ascending: true }).limit(200);
+    if (error) return [];
+    return ((data ?? []) as { id: string; order_number: number; balance_due_inr: number; created_at: string }[]).map(
+      (o) => ({ id: o.id, order_number: o.order_number, total_inr: o.balance_due_inr, created_at: o.created_at }),
+    );
+  } catch {
+    return [];
+  }
 }

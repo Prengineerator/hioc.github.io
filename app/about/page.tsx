@@ -6,7 +6,7 @@ import { buttonVariants } from '@/components/ui/Button';
 export const metadata: Metadata = {
   title: 'About',
   description:
-    'The HIOC. story — a pure-vegetarian cafe rooted in Kamla Nagar, Agra.',
+    'The HIOC. story: a pure-vegetarian cafe rooted in Kamla Nagar, Agra.',
 };
 
 export default function AboutPage() {
@@ -22,7 +22,7 @@ export default function AboutPage() {
             className="h-auto w-full rounded-md object-contain"
           />
           <p className="mt-2 text-center text-sm text-muted">
-            The HIOC. cart — where it all started.
+            The HIOC. cart, where it all started.
           </p>
         </div>
         <div className="text-center md:text-left">
@@ -30,28 +30,28 @@ export default function AboutPage() {
             HIOC<span className="text-tan-dark">.</span>
           </h1>
           <p className="mt-2 italic tracking-wide text-muted">
-            High on Coffee — Rooted in Kamla Nagar
+            High on Coffee, rooted in Kamla Nagar
           </p>
         </div>
       </section>
 
       <section className="mx-auto mt-12 flex max-w-2xl flex-col gap-6 leading-relaxed text-charcoal">
         <p>
-          Before we had four walls, HIOC. started as an idea on wheels —
+          Before we had four walls, HIOC. started as an idea on wheels:
           coffee brewed fresh and rolled out to wherever people gathered.
           These days you&apos;ll find us parked for good at E-773, E Block,
-          Ghatwasan, Kamla Nagar, Agra — the wheels stopped rolling, but we&apos;re
+          Ghatwasan, Kamla Nagar, Agra. The wheels stopped rolling, but we&apos;re
           still every bit as High on Coffee as we started out.
         </p>
         <p>
           We&apos;re a pure-vegetarian café, and coffee and waffles are what
-          we do best — hand-brewed cups alongside crisp, golden waffles made
+          we do best: hand-brewed cups alongside crisp, golden waffles made
           to order. Skipping dairy? Ask for oat milk or soya milk with any
           coffee on the menu, no questions asked.
         </p>
         <p>
           HIOC. is meant to be easy — pop in, grab a table, and stay a
-          while. A relaxed, wallet-friendly cafe — a coffee-and-waffle stop
+          while. A relaxed, wallet-friendly cafe: a coffee-and-waffle stop
           for two typically runs around ₹350.
         </p>
       </section>

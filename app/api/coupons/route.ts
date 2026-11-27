@@ -9,6 +9,7 @@ import type { Coupon } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 const MAX_COUPONS = 200;
+const SHOP_MIGRATION_HINT = 'Apply supabase/2026-11-shop-v2.sql to use shop coupons';
 
 // GET /api/coupons — staff/owner only. Lists coupons for the owner promotions
 // UI (newest first).
@@ -64,11 +65,15 @@ export async function POST(request: Request) {
   }
 
   const admin = createAdminSupabaseClient();
-  const { data, error } = await admin
-    .from('coupons')
-    .insert(parsed)
-    .select('*')
-    .single();
+  const insert = (fields: typeof parsed) => admin.from('coupons').insert(fields).select('*').single();
+  let { data, error } = await insert(parsed);
+  if (error && isMissingColumnError(error) && parsed.channel !== undefined) {
+    // Migration not applied. A café coupon needs no channel column, so save it without one;
+    // a shop coupon cannot be saved until the migration is applied.
+    if (parsed.channel !== 'cafe') return errorResponse(503, SHOP_MIGRATION_HINT);
+    const { channel: _channel, ...withoutChannel } = parsed;
+    ({ data, error } = await insert(withoutChannel));
+  }
 
   if (error) {
     if (error.code === '23505') {

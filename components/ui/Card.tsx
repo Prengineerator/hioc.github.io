@@ -33,7 +33,7 @@ export function Card({
         'rounded-md border border-line bg-cream shadow-card',
         PADDING_CLASSES[padding],
         interactive
-          ? 'transition-all duration-150 hover:-translate-y-0.5 hover:border-tan hover:shadow-elevated'
+          ? 'transition-[transform,box-shadow,border-color] duration-150 hover:-translate-y-0.5 hover:border-tan hover:shadow-elevated'
           : '',
         className,
       ]

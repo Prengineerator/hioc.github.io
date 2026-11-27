@@ -6,6 +6,7 @@ import { getBalance, getLoyaltyConfig, computeEarnedPoints } from '@/lib/loyalty
 import { getStaffDisplayNames } from '@/lib/staff/displayName';
 import { DEFAULT_KOT_ROUTING, readKotRouting, type KotRouting } from '@/lib/print/kotRouting';
 import type { OrderStatus } from '@/lib/types';
+import { spendOfferOnBill } from '@/lib/orders/offers';
 
 // The order shape the staff KOT/receipt/token print pages render: the customer
 // receipt loader's output (order + items + addons + coupon label) plus the
@@ -211,7 +212,10 @@ export async function getStaffPrintOrder(id: string): Promise<StaffPrintOrder | 
     !NEVER_EARNS.has(order.status) &&
     // CP-D13: buying a pass earns no Beanies (the pass is already the discount),
     // and earnForOrder is never called for one, so nothing may be projected.
-    order.order_kind !== 'coffee_pass'
+    order.order_kind !== 'coffee_pass' &&
+    // Nor does a bill with a spend offer on it (the ₹49 jar): earnForOrder
+    // skips it, so the receipt must not promise any.
+    !spendOfferOnBill(order)
   ) {
     const amountInr = order.total_inr ?? order.subtotal_inr ?? 0;
     const projected = computeEarnedPoints(amountInr, config);

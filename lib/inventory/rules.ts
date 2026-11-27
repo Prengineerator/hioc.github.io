@@ -163,10 +163,54 @@ export const REQUEST_STATUS_LABELS: Record<StockRequestStatus, string> = {
   cancelled: 'Cancelled',
 };
 
+/**
+ * Where a request's stock comes from and goes to (docs/WAREHOUSE-SPEC.md),
+ * fixed on the row when it is created:
+ *   store_room      the original flow: picked from the store room, nothing
+ *                   moves until it is counted in at the POS
+ *   from_warehouse  filled from the warehouse: what is dispatched leaves the
+ *                   warehouse sheet and is in transit until the POS counts it in
+ *   to_warehouse    a return: leaves the store when it is sent, and the owner
+ *                   counts it in at the warehouse
+ * A request with no route (an older row, a caller that doesn't say) is
+ * store_room, so every rule below behaves exactly as it did before.
+ */
+export const STOCK_ROUTES = ['store_room', 'from_warehouse', 'to_warehouse'] as const;
+export type StockRoute = (typeof STOCK_ROUTES)[number];
+
+export function isWarehouseRoute(route: StockRoute | null | undefined): route is 'from_warehouse' | 'to_warehouse' {
+  return route === 'from_warehouse' || route === 'to_warehouse';
+}
+
+const WAREHOUSE_STATUS_LABELS: Record<'from_warehouse' | 'to_warehouse', Record<StockRequestStatus, string>> = {
+  from_warehouse: {
+    requested: 'Requested from the warehouse',
+    assigned: 'Delivery person chosen',
+    picked: 'On the way — verify at POS',
+    received: 'Received',
+    cancelled: 'Cancelled',
+  },
+  to_warehouse: {
+    requested: 'Return',
+    assigned: 'Return',
+    picked: 'On the way to the warehouse',
+    received: 'Counted in at the warehouse',
+    cancelled: 'Cancelled',
+  },
+};
+
+/** The status as the screens say it, for the request's route. */
+export function requestStatusLabel(status: StockRequestStatus, route?: StockRoute | null): string {
+  return isWarehouseRoute(route) ? WAREHOUSE_STATUS_LABELS[route][status] : REQUEST_STATUS_LABELS[status];
+}
+
 export interface RequestActor {
   userId: string;
   role: string;
   surface: StaffSurface;
+  /** A staffer the owner has given warehouse access (staff_accounts.warehouse_access,
+   * WH-D16). Absent = false. Managers and the owner have it by role. */
+  warehouseAccess?: boolean;
 }
 
 export interface RequestFacts {
@@ -174,6 +218,8 @@ export interface RequestFacts {
   requested_by: string;
   assigned_to: string | null;
   picked_by: string | null;
+  /** Absent = 'store_room' (see StockRoute). */
+  route?: StockRoute | null;
 }
 
 export type Verdict = { ok: true } | { ok: false; status: 403 | 409; message: string };
@@ -182,6 +228,18 @@ const OK: Verdict = { ok: true };
 
 export function isManagerRole(role: string): boolean {
   return role === 'manager' || role === 'owner';
+}
+
+/**
+ * Works the warehouse side of a transfer: records what left the warehouse and
+ * sends store stock back to it (docs/WAREHOUSE-SPEC.md, WH-D4, WH-D8, WH-D16).
+ * A manager or the owner always; a staffer when the owner has switched on
+ * their warehouse access. It never lets anyone count in what they sent or
+ * carried (canReceive), nor count a return in at the warehouse or settle a
+ * difference (the owner's).
+ */
+export function worksWarehouseSide(actor: Pick<RequestActor, 'role' | 'warehouseAccess'>): boolean {
+  return isManagerRole(actor.role) || (actor.role === 'staff' && actor.warehouseAccess === true);
 }
 
 export const RECEIVE_POS_ONLY_MESSAGE =
@@ -196,8 +254,37 @@ export function canAssign(req: RequestFacts, actor: RequestActor): Verdict {
   return OK;
 }
 
-/** Record the pick: the assignee, or a manager/owner standing in. */
+export const DISPATCH_WAREHOUSE_SIDE_MESSAGE =
+  'The warehouse records what it sends — the owner, a manager, or someone the owner has given warehouse access.';
+
+export const SEND_BACK_WAREHOUSE_SIDE_MESSAGE =
+  'Only a manager, the owner, or someone the owner has given warehouse access can send stock back.';
+
+/**
+ * Record the pick: the assignee, or a manager/owner standing in.
+ *
+ * A warehouse request's "pick" is its DISPATCH: what left the warehouse. That
+ * is recorded by the warehouse side (the owner, a manager, or a staffer with
+ * warehouse access — WH-D16), who may also be the one carrying it. The check
+ * on the carrier is at the other end: someone else counts it in at the POS
+ * (canReceive), and anything that doesn't match is flagged to the owner. A
+ * return is dispatched when it is sent, so it has no pick step.
+ */
 export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
+  if (req.route === 'to_warehouse') {
+    return { ok: false, status: 409, message: 'A return leaves the store when it is sent — there is nothing to pick.' };
+  }
+  if (req.route === 'from_warehouse') {
+    if (req.status !== 'assigned') {
+      return {
+        ok: false,
+        status: 409,
+        message: req.status === 'requested' ? 'Choose who delivers it before dispatching.' : `This request is already ${req.status}.`,
+      };
+    }
+    if (!worksWarehouseSide(actor)) return { ok: false, status: 403, message: DISPATCH_WAREHOUSE_SIDE_MESSAGE };
+    return OK;
+  }
   if (req.status !== 'assigned') {
     return { ok: false, status: 409, message: req.status === 'requested' ? 'Assign this request before picking it.' : `This request is already ${req.status}.` };
   }
@@ -213,6 +300,9 @@ export function canPick(req: RequestFacts, actor: RequestActor): Verdict {
  * small team can't always have two people on).
  */
 export function canReceive(req: RequestFacts, actor: RequestActor): Verdict {
+  if (req.route === 'to_warehouse') {
+    return { ok: false, status: 403, message: RECEIVE_AT_WAREHOUSE_MESSAGE };
+  }
   if (actor.surface !== 'pos') return { ok: false, status: 403, message: RECEIVE_POS_ONLY_MESSAGE };
   if (req.status !== 'picked') {
     return { ok: false, status: 409, message: req.status === 'received' ? 'This request has already been received.' : 'Only a picked request can be received.' };
@@ -220,8 +310,15 @@ export function canReceive(req: RequestFacts, actor: RequestActor): Verdict {
   if (req.picked_by === actor.userId && !isManagerRole(actor.role)) {
     return { ok: false, status: 403, message: 'Someone other than the picker has to verify it.' };
   }
+  // From the warehouse: whoever carried it can't be the one who counts it in
+  // (a manager may, as for their own pick — a small team).
+  if (req.route === 'from_warehouse' && req.assigned_to === actor.userId && !isManagerRole(actor.role)) {
+    return { ok: false, status: 403, message: 'Someone other than the person who delivered it has to verify it.' };
+  }
   return OK;
 }
+
+export const RECEIVE_AT_WAREHOUSE_MESSAGE = 'The owner counts a return in at the warehouse.';
 
 /** Cancel: the requester while nobody has been assigned yet; a manager or
  * the owner any time before it is received. */
@@ -229,9 +326,27 @@ export function canCancel(req: RequestFacts, actor: RequestActor): Verdict {
   if (req.status === 'received' || req.status === 'cancelled') {
     return { ok: false, status: 409, message: `This request is already ${req.status}.` };
   }
+  // A warehouse transfer that is on the road has moved stock: it can't just
+  // vanish. Count it in (0 for whatever did not come) and settle the
+  // difference — "back to the warehouse" (or "back on the shelf") undoes it.
+  if (isWarehouseRoute(req.route) && req.status === 'picked') {
+    return { ok: false, status: 409, message: TRANSIT_CANCEL_MESSAGE[req.route] };
+  }
   if (isManagerRole(actor.role)) return OK;
   if (req.requested_by === actor.userId && req.status === 'requested') return OK;
   return { ok: false, status: 403, message: 'Only a manager or the owner can cancel this now.' };
+}
+
+const TRANSIT_CANCEL_MESSAGE: Record<'from_warehouse' | 'to_warehouse', string> = {
+  from_warehouse:
+    'It has left the warehouse. Count it in at the POS (0 for anything that didn’t come), and the owner settles the difference.',
+  to_warehouse:
+    'It has left the store. The owner counts it in at the warehouse (0 for anything that didn’t come) and settles the difference.',
+};
+
+/** Statuses a cancel may move a request out of (the cancel write's guard). */
+export function cancellableStatuses(route?: StockRoute | null): StockRequestStatus[] {
+  return isWarehouseRoute(route) ? ['requested', 'assigned'] : [...OPEN_REQUEST_STATUSES];
 }
 
 // ── Line validation ─────────────────────────────────────────────────────────
@@ -357,6 +472,44 @@ export function parseReceiveLines(
   if (expected && seen.size !== expected.size) return { ok: false, message: 'Count every line of the request.' };
   if (!expected && lines.every((l) => l.qty === 0)) return { ok: false, message: 'Nothing to receive.' };
   return { ok: true, lines };
+}
+
+// ── Stock from vendor (INV-D14) ─────────────────────────────────────────────
+
+export const VENDOR_NAME_MIN = 2;
+export const VENDOR_NAME_MAX = 80;
+export const VENDOR_BILL_REF_MAX = 40;
+export const VENDOR_NOTE_MAX = 200;
+
+export interface VendorHeader {
+  vendor: string;
+  billRef: string;
+  note: string;
+}
+
+/**
+ * Who a direct delivery came from: `{ vendor, billRef?, note? }`. The vendor's
+ * name is required, so a delivery with no request behind it still says where
+ * the stock came from. The bill number and note are optional. All trimmed.
+ */
+export function parseVendorHeader(raw: unknown): { ok: true; header: VendorHeader } | { ok: false; message: string } {
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  const text = (v: unknown): string | null => (v === undefined || v === null ? '' : typeof v === 'string' ? v.trim() : null);
+
+  const vendor = text(body.vendor);
+  if (vendor === null || vendor.length === 0) return { ok: false, message: 'Enter the vendor’s name.' };
+  if (vendor.length < VENDOR_NAME_MIN) return { ok: false, message: `The vendor’s name needs at least ${VENDOR_NAME_MIN} letters.` };
+  if (vendor.length > VENDOR_NAME_MAX) return { ok: false, message: `Keep the vendor’s name to ${VENDOR_NAME_MAX} characters.` };
+
+  const billRef = text(body.billRef);
+  if (billRef === null) return { ok: false, message: 'The bill number must be text.' };
+  if (billRef.length > VENDOR_BILL_REF_MAX) return { ok: false, message: `Keep the bill number to ${VENDOR_BILL_REF_MAX} characters.` };
+
+  const note = text(body.note);
+  if (note === null) return { ok: false, message: 'The note must be text.' };
+  if (note.length > VENDOR_NOTE_MAX) return { ok: false, message: `Keep the note to ${VENDOR_NOTE_MAX} characters.` };
+
+  return { ok: true, header: { vendor, billRef, note } };
 }
 
 /** A line whose received quantity differs from what was picked. */

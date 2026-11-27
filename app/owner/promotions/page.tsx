@@ -1,14 +1,17 @@
 // Owner promotions surface (LOY-2/LOY-5/RET-3). The coupon-performance table
 // reads straight from v_coupon_performance via the admin client (a plain
-// Server Component read, same convention as app/owner/page.tsx); coupon +
-// announcement CRUD is delegated to client components that talk to
-// app/api/coupons and app/api/announcements.
+// Server Component read, same convention as app/owner/page.tsx); offer, coupon
+// and announcement CRUD is delegated to client components that talk to
+// app/api/offers, app/api/coupons and app/api/announcements.
 
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { Card } from '@/components/owner/dashboard';
 import { CouponPerformanceTable } from '@/components/owner/CouponPerformanceTable';
 import { CouponManager } from '@/components/promotions/CouponManager';
 import { AnnouncementManager } from '@/components/promotions/AnnouncementManager';
+import { OfferManager } from '@/components/promotions/OfferManager';
+import { SpendOfferManager } from '@/components/promotions/SpendOfferManager';
+import { loadShopProducts } from '@/lib/shop/server';
 import type { CouponPerformanceRow } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -26,8 +29,20 @@ async function getCouponPerformance(): Promise<CouponPerformanceRow[]> {
   return (data ?? []) as CouponPerformanceRow[];
 }
 
+// The shop products a coupon can be limited to; empty when the shop tables are not there yet.
+async function getShopProductOptions(): Promise<{ id: string; name: string }[]> {
+  try {
+    const result = await loadShopProducts(createAdminSupabaseClient());
+    if (!result.ok) return [];
+    return result.products.map((p) => ({ id: p.id, name: p.display_name || p.name }));
+  } catch (error) {
+    console.error('getShopProductOptions failed', error);
+    return [];
+  }
+}
+
 export default async function OwnerPromotionsPage() {
-  const performance = await getCouponPerformance();
+  const [performance, shopProducts] = await Promise.all([getCouponPerformance(), getShopProductOptions()]);
   const totalRedemptions = performance.reduce((sum, r) => sum + r.redemptions, 0);
   const totalDiscount = performance.reduce((sum, r) => sum + r.discount_given_inr, 0);
 
@@ -47,8 +62,16 @@ export default async function OwnerPromotionsPage() {
         <CouponPerformanceTable rows={performance} />
       </Card>
 
+      <Card title="Offers">
+        <OfferManager />
+        <div className="mt-8 border-t border-line pt-6">
+          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-charcoal">Spend &amp; get</h3>
+          <SpendOfferManager />
+        </div>
+      </Card>
+
       <Card title="Coupons">
-        <CouponManager />
+        <CouponManager shopProducts={shopProducts} />
       </Card>
 
       <Card title="Announcements">

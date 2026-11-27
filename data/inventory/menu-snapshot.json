@@ -1,5 +1,5 @@
 {
-  "_comment": "Snapshot of the LIVE menu (Supabase project 'Hioc Coffee'). Recipes in data/inventory/recipes/ must reference these ids and size labels exactly. Refresh with `npm run inventory:snapshot` (needs service-role env) or ask the chef agent. Do not hand-edit.",
+  "_comment": "Snapshot of the LIVE menu (Supabase project 'Hioc India'). Recipes in data/inventory/recipes/ must reference these ids and size labels exactly. Refresh with `npm run inventory:snapshot` (needs service-role env) or ask the chef agent. Do not hand-edit.",
   "captured_at": "2026-09-30T14:40:34.856281+00:00",
   "items": [
     {

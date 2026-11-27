@@ -64,7 +64,7 @@ export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
 // exactly like every other event so the delivery-status webhook's receipts
 // (delivered/read) apply to it too; its own conversation thread — replies,
 // follow-ups, the owner's chat-back — lives in `feedback_messages`, not here.
-export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill' | 'feedback';
+export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill' | 'feedback' | 'beanies';
 // 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
 // attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
 // or "channel not configured" from a send that was tried and failed.
@@ -235,6 +235,29 @@ export interface Order {
   // absent = 'menu' / 0.
   order_kind?: 'menu' | 'coffee_pass';
   pass_discount_inr?: number;
+  // 2026-10-item-offers.sql: the part of discount_inr that is a multi-buy offer
+  // (lib/orders/offers.ts), so the bill can show it as its own row. Inside
+  // discount_inr, so the total formula above is unchanged. Absent = 0.
+  offer_discount_inr?: number;
+  // 2026-11-spend-offers.sql: the offer row's label when a spend offer ("spend
+  // ₹1099, get a jar at ₹49") is on the bill (a multi-buy label is read off the
+  // lines), and the spend offers live on the bill's items when it was priced,
+  // re-checked on every correction. Absent = none.
+  offer_name?: string | null;
+  spend_offers?: unknown;
+  // 2026-11-manual-discount.sql: the rupees a manager or the owner took off at
+  // the POS (lib/orders/manualDiscount.ts), why, and who. Inside discount_inr
+  // like the offer, so the total formula above is unchanged. Absent = 0 / ''.
+  manual_discount_inr?: number;
+  manual_discount_reason?: string;
+  manual_discount_by?: string | null;
+  // 2026-11-paid-order-changes.sql: a PAID dine-in bill changed afterwards
+  // (lib/orders/paidChange.ts). balance_due_inr is the difference still to
+  // settle — > 0 the customer owes it, < 0 the café gives it back, 0 nothing
+  // outstanding. paid_amended_at is when the paid bill was first changed.
+  // Optional: absent before the migration (= 0 / null).
+  balance_due_inr?: number;
+  paid_amended_at?: string | null;
 }
 
 export interface OrderItemAddon {
@@ -273,6 +296,13 @@ export interface OrderItem {
   // (quantity counts the bags); price_inr_snapshot is already that weight's
   // price. Null/absent on every by-the-unit line.
   weight_grams?: number | null;
+  // 2026-10-item-offers.sql: the multi-buy offer the line was sold under (a
+  // snapshot of menu_offers: id, name, what 1, 2, 3 … units cost together) and
+  // one unit's price before add-ons. Null/absent on every line with no offer.
+  offer_id?: string | null;
+  offer_name?: string | null;
+  offer_prices?: number[] | null;
+  offer_unit_inr?: number | null;
   addons: OrderItemAddon[];
   // Phase-3 additions (phase3-migration.sql §4, FND3-4): a wrongly punched line
   // is VOIDED, never deleted — kept for audit; excluded from totals server-side.
@@ -485,9 +515,14 @@ export interface Favorite {
 // --- Coupons & promotions (migration §5) -----------------------------------
 export type CouponDiscountType = 'percent' | 'flat';
 
+/** Where a coupon works (supabase/2026-11-shop-v2.sql). Absent before the migration = 'cafe'. */
+export type CouponChannel = 'cafe' | 'shop' | 'both';
+
 export interface CouponScope {
   item_ids?: string[];
   category?: string[];
+  /** Shop product ids; only meaningful for channel 'shop' or 'both'. Empty = every shop product. */
+  shop_product_ids?: string[];
 }
 
 export interface Coupon {
@@ -510,12 +545,18 @@ export interface Coupon {
   // that has not applied it, so both are optional: undefined = no campaign, no lock.
   campaign_id?: string | null; // the marketing campaign that issued this per-recipient code
   assigned_phone?: string | null; // E.164; only that phone's VERIFIED account may redeem it
+  // Shop v2 (supabase/2026-11-shop-v2.sql). Absent on a database without it: undefined = 'cafe'.
+  channel?: CouponChannel;
 }
 
 export interface CouponRedemption {
   id: string;
   coupon_id: string;
+  // Left `string` (not nullable) so existing café readers keep compiling; since the
+  // shop-v2 migration a shop redemption has order_id null and shop_order_id set.
   order_id: string;
+  shop_order_id?: string | null;
+  phone?: string | null; // +91XXXXXXXXXX, lets a guest's per-customer limit be counted
   user_id: string | null;
   discount_inr: number;
   created_at: string;
@@ -545,6 +586,7 @@ export interface LoyaltyTransaction {
   id: string;
   user_id: string;
   order_id: string | null;
+  shop_order_id?: string | null;
   type: LoyaltyTxType;
   points: number; // signed: +earn / -redeem
   note: string;
@@ -977,6 +1019,11 @@ export interface PayrollRun {
   id: string;
   period_start: string;
   period_end: string;
+  /**
+   * Whose run it is — payroll is finalized per staffer
+   * (supabase/2026-11-payroll-per-staff.sql). Null only on reversed history.
+   */
+  user_id: string | null;
   status: PayrollRunStatus;
   /** The rules and rates actually used, frozen at finalize (PAY-4). */
   rules_snapshot: Record<string, unknown>;
@@ -1042,17 +1089,41 @@ export interface PayrollRunLine {
   late_marks: number;
   base_pay_inr: number;
   ot_pay_inr: number;
+  /**
+   * The late-mark deduction the owner CHOSE to take (0 when they didn't). The
+   * proposed amount, taken or not, is in detail.proposed_deductions.
+   */
   deductions_inr: number;
   /** Signed: advances/loans/corrections (D5-7). Negative reduces net pay. */
   adjustments_inr: number;
   /**
-   * CC-5 (docs/PHASE-5-CASH-COUNTS.md): approved cash-drawer shortages frozen
-   * into this run, already reflected in net_pay_inr (clamped at 0, never
-   * negative — see detail.cash_shortage_clamped for whether it was clamped).
+   * CC-5 (docs/PHASE-5-CASH-COUNTS.md): the approved cash-drawer shortage the
+   * owner CHOSE to deduct (0 when they didn't), already reflected in
+   * net_pay_inr (clamped at 0, never negative — see detail.deductions_clamped).
    */
   cash_shortage_inr: number;
+  /**
+   * Salary advance actually taken off in this finalized line (0/absent when
+   * none). Needs payroll_run_lines.advance_inr (supabase/2026-11-staff-advances.sql);
+   * absent on rows read before that column exists.
+   */
+  advance_inr?: number;
   net_pay_inr: number;
   detail: Record<string, unknown>;
+}
+
+/** A salary advance the owner gave a staffer (staff_advances; soft-deleted via removed_at). */
+export interface StaffAdvance {
+  id: string;
+  user_id: string;
+  amount_inr: number;
+  /** IST calendar date, YYYY-MM-DD. */
+  given_on: string;
+  note: string;
+  created_by: string | null;
+  created_at: string;
+  removed_at: string | null;
+  removed_by: string | null;
 }
 
 // ---------------------------------------------------------------------------

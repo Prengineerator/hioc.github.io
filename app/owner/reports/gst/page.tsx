@@ -11,6 +11,7 @@
 import { istDateIso } from '@/lib/api/date';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
+import { ReportsNav } from '@/components/owner/ReportsNav';
 import { Card } from '@/components/owner/dashboard';
 import { PrintReportButton } from '@/components/owner/PrintReportButton';
 import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
@@ -139,6 +140,10 @@ export default async function OwnerGstReportPage({
     >
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
 
+      <div className="print:hidden">
+        <ReportsNav active="gst" from={from} to={to} />
+      </div>
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-charcoal">GST for {c?.period.label ?? label}</h1>
@@ -157,20 +162,6 @@ export default async function OwnerGstReportPage({
               {c.business.address} · Prepared {istStamp(c.generatedAt)}
             </p>
           ) : null}
-        </div>
-        <div className="flex flex-wrap gap-2 print:hidden">
-          <Link
-            href={`/owner/reports?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Reports
-          </Link>
-          <Link
-            href={`/owner/reports/downloads?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Downloads
-          </Link>
         </div>
       </div>
 

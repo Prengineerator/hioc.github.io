@@ -98,3 +98,37 @@ describe('GET /api/customers/search?name=', () => {
     ]);
   });
 });
+
+describe('GET /api/customers/search?q= — the complete flag', () => {
+  // The POS narrows a complete answer itself as more digits are typed, so the
+  // flag must be false whenever the server could have found more.
+  const order = (n: number) => ({
+    customer_phone: `+9198765${String(n).padStart(5, '0')}`,
+    customer_name: `C${n}`,
+    created_at: '2026-09-01T10:00:00Z',
+  });
+
+  it('is true when every source came back short of its limit', async () => {
+    state.rows = { orders: [order(1), order(2)] };
+    const body = await (await call('q=98765')).json();
+    expect(body.customers).toHaveLength(2);
+    expect(body.complete).toBe(true);
+  });
+
+  it('is false when the orders hit their 200-row limit, even with few phones', async () => {
+    state.rows = { orders: Array.from({ length: 200 }, () => order(1)) };
+    const body = await (await call('q=98765')).json();
+    expect(body.customers).toHaveLength(1);
+    expect(body.complete).toBe(false);
+  });
+
+  it('is false at six suggestions', async () => {
+    state.rows = { orders: Array.from({ length: 6 }, (_, i) => order(i)) };
+    expect((await (await call('q=98765')).json()).complete).toBe(false);
+  });
+
+  it('is not sent for a name search', async () => {
+    state.rows = { orders: [order(1)] };
+    expect(await (await call('name=asha')).json()).not.toHaveProperty('complete');
+  });
+});

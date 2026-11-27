@@ -8,18 +8,17 @@
 // Two halves:
 //   allocateOrderPass   the database half (loads the passes and which drinks are
 //                       eligible, then hands the pure allocator its lines)
-//   composeOrderBill    the pure half (pass, then coupon, then points: CP-D12)
+//   composeOrderBill    the pure half (pass, then multi-buy offers, then coupon,
+//                       then points: CP-D12)
 //
 // Neither creates or changes anything. redeemPassDrinks (lib/passes/server.ts)
 // is what spends the cups, and only POST /api/orders calls it.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ResolvedLine } from '@/lib/orders/lines';
-import { allocatePassDrinks, composePassBill } from '@/lib/passes/rules';
+import { allocatePassDrinks } from '@/lib/passes/rules';
 import { loadEligibleMenuIds, loadUsablePassSummaries, toUsablePass } from '@/lib/passes/server';
 import type { AllocationResult, PassLine, PassSummary } from '@/lib/passes/types';
-import type { BillBreakdown } from '@/lib/store/hours';
-import type { StoreSettings } from '@/lib/types';
 
 /**
  * The lines the allocator sees. `keys` runs parallel to `lines` and is how an
@@ -31,7 +30,8 @@ import type { StoreSettings } from '@/lib/types';
  * drink as the customer will be charged for it, not of the bare size.
  *
  * A weighed line (a bag of beans, weight_grams) is never a drink, so a cup
- * never pays for it, whatever the item's pass setting says.
+ * never pays for it, whatever the item's pass setting says. Nor is a line on a
+ * multi-buy offer: the offer is that line's discount.
  */
 export function passLinesFor(lines: ResolvedLine[], keys: string[], eligibleIds: Set<string>): PassLine[] {
   return lines.map((line, i) => ({
@@ -39,7 +39,10 @@ export function passLinesFor(lines: ResolvedLine[], keys: string[], eligibleIds:
     menu_item_id: line.menu_item_id,
     unit_price_inr: line.price_inr_snapshot,
     quantity: line.quantity,
-    eligible: eligibleIds.has(line.menu_item_id) && line.weight_grams == null,
+    // Nor does it pay for a line on a multi-buy offer (lib/orders/offers.ts):
+    // the offer already prices those units, and a cup on top would discount
+    // the same unit twice.
+    eligible: eligibleIds.has(line.menu_item_id) && line.weight_grams == null && !line.offer_prices,
     gst_exempt: line.gst_exempt,
   }));
 }
@@ -86,59 +89,8 @@ export async function allocateOrderPass(
   return { allocation, maxUsable, passes };
 }
 
-/**
- * What coupons and points are computed on once the pass has been applied
- * (CP-D12): the subtotal less what the pass covers, never below zero.
- */
-export function afterPass(subtotalInr: number, passCoveredInr: number): number {
-  return Math.max(0, subtotalInr - passCoveredInr);
-}
-
-export interface OrderBillInput {
-  settings: StoreSettings;
-  subtotalInr: number;
-  /** The part of the subtotal GST applies to (every line but GST-exempt ones). */
-  taxableSubtotalInr: number;
-  /** Computed on afterPass(subtotal, passCovered). */
-  couponDiscountInr: number;
-  /** Computed on what is left after the pass AND the coupon. */
-  pointsDiscountInr: number;
-  passCoveredInr: number;
-  /** The part of passCoveredInr that sat on GST-liable lines. */
-  passCoveredTaxableInr: number;
-  /** Dine-in never carries a packaging charge (D5). */
-  isDineIn: boolean;
-}
-
-/**
- * The authoritative bill for an order (create and quote both call it): the pass
- * first, then coupon and points on what is left (CP-D12), GST on the taxable
- * value with the covered rupees and the discount taken out of it and packaging
- * in it (CP-D11, computeBill), and no packaging for dine-in (D5).
- *
- *   discount_inr       = min(coupon + points, subtotal - pass cover)  (marketing discounts only)
- *   pass_discount_inr  = the pass cover
- *   total_inr          = subtotal + tax + packaging - discount_inr - pass_discount_inr
- *
- * With no pass (`passCoveredInr` 0) this is computeBill(subtotal, settings,
- * min(coupon + points, subtotal), taxable), with packaging 0 for dine-in.
- */
-export function composeOrderBill(input: OrderBillInput): BillBreakdown & { pass_discount_inr: number } {
-  const passCovered = Math.min(Math.max(0, input.passCoveredInr), Math.max(0, input.subtotalInr));
-  const discountInr = Math.min(
-    Math.max(0, input.couponDiscountInr) + Math.max(0, input.pointsDiscountInr),
-    afterPass(input.subtotalInr, passCovered),
-  );
-  // Dine-in has no packaging charge (D5), whatever the store's packaging
-  // setting: billed with none, so no GST is charged on it either.
-  return composePassBill(
-    {
-      subtotalInr: input.subtotalInr,
-      taxableSubtotalInr: input.taxableSubtotalInr,
-      discountInr,
-      passCoveredInr: passCovered,
-      passCoveredTaxableInr: input.passCoveredTaxableInr,
-    },
-    input.isDineIn ? { ...input.settings, packaging_charge_inr: 0 } : input.settings,
-  );
-}
+// The pure bill half (afterPass, afterOffers, composeOrderBill) lives in
+// lib/orders/billPricing.ts, which has no server imports, so the POS can price
+// a cart on its own screen with the very same function (lib/pos/localQuote.ts).
+// Re-exported here so every server caller keeps its import.
+export { afterOffers, afterPass, composeOrderBill, type OrderBillInput } from '@/lib/orders/billPricing';

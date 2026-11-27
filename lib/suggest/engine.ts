@@ -29,6 +29,8 @@
 
 import { flavourAddonFor, reachableAddonFamilies } from './addonTraits';
 import { filterCandidates, relaxHintFor } from './filter';
+import { guardTraits } from './traitsGuard';
+import { honourChoices, madeToOrder, satisfiesChoice, unmetChoices } from './promises';
 import { buildShortlist, scoreCandidates } from './score';
 import { isSugarAdjustable, sugarPresetFor } from './sugar';
 import { sweetnessLevel } from './sweetness';
@@ -38,12 +40,14 @@ import { pickUsual, summarizeProfile } from './profile';
 import { daypartFor } from './daypart';
 import { validateDeciderPicks } from './validate';
 import { DeciderError } from './deciderError';
-import { SUGGEST_LIMITS } from './types';
+import { FLAVOUR_FAMILY_INFO } from './traitVocabulary';
+import { HONOURED_CHOICES, SUGGEST_LIMITS, SWEETNESS_SCALE } from './types';
 import type {
   AddonTraits,
   Candidate,
   Decider,
   FallbackReason,
+  HonouredChoice,
   MenuItemTraits,
   RelaxHint,
   SuggestInputs,
@@ -89,6 +93,8 @@ export interface RunSuggestResult {
   usual: SuggestionPick | null;
   picks: SuggestionPick[];
   relaxHint: RelaxHint | null;
+  /** Set choices a final pick does not keep (usual excluded). */
+  unmet: HonouredChoice[];
   /** Shaped menu rows for usual + picks, usual first — ready for
    * SuggestResponse.items with no second fetch. */
   items: MenuItem[];
@@ -125,6 +131,53 @@ function topUpPicks(picks: SuggestionPick[], shortlist: Candidate[], inputs: Sug
   return out;
 }
 
+/** Pinned candidates (lib/suggest/promises.ts) keep the customer's choices but
+ * are too few to fill the picks on their own, so each must be among the final
+ * picks whatever the decider said. A missing one is appended when there is room,
+ * else replaces the last unpinned pick of its own kind (kind coverage stays), else the
+ * last unpinned pick of a kind holding two or more picks; otherwise it is skipped. Pinned picks then come first, in pin order.
+ * The count never exceeds SUGGEST_LIMITS.picks and never drops. */
+function enforcePins(
+  picks: SuggestionPick[],
+  pinnedIds: string[],
+  usualItemId: string | null,
+  shortlist: Candidate[],
+  inputs: SuggestInputs,
+): SuggestionPick[] {
+  if (pinnedIds.length === 0) return picks;
+  const pinnedSet = new Set(pinnedIds);
+  const byId = new Map(shortlist.map((c) => [c.menuItemId, c]));
+  let out = [...picks];
+  for (const id of pinnedIds) {
+    if (id === usualItemId || out.some((p) => p.menuItemId === id)) continue;
+    const c = byId.get(id);
+    if (!c) continue;
+    const reasonCode = reasonCodeFor(c.traits, inputs);
+    const pick: SuggestionPick = {
+      menuItemId: c.menuItemId,
+      reason: templateReason(c.traits, inputs, reasonCode, c.name, c.sugarAdjustable),
+      reasonCode,
+    };
+    if (out.length < SUGGEST_LIMITS.picks) {
+      out.push(pick);
+      continue;
+    }
+    const kindOf = (p: SuggestionPick) => byId.get(p.menuItemId)?.traits.kind;
+    const lastWhere = (ok: (p: SuggestionPick) => boolean) => {
+      for (let i = out.length - 1; i >= 0; i--) if (!pinnedSet.has(out[i].menuItemId) && ok(out[i])) return i;
+      return -1;
+    };
+    // First choice: the last unpinned pick of the same kind. Otherwise the last
+    // unpinned pick whose kind holds two or more picks, so no kind loses its only pick.
+    let at = lastWhere((p) => kindOf(p) === c.traits.kind);
+    if (at === -1) at = lastWhere((p) => out.filter((q) => kindOf(q) === kindOf(p)).length >= 2);
+    if (at !== -1) out[at] = pick;
+  }
+  const pinnedPicks = pinnedIds.flatMap((id) => out.filter((p) => p.menuItemId === id));
+  out = [...pinnedPicks, ...out.filter((p) => !pinnedSet.has(p.menuItemId))];
+  return out;
+}
+
 /** COFFEY-SPEC §4.6/§4.7 — a final pick (or the usual) with its "why it
  * matches" tags and the sugar option to preselect; COFFEY-ADDONS-PAIRINGS-SPEC
  * §3.2 adds the flavour add-on that gives it a requested flavour it lacks. All
@@ -140,22 +193,59 @@ function decorate(
   itemsById: Map<string, MenuItem>,
   traitsById: Map<string, MenuItemTraits>,
   addonTraitsById?: Map<string, AddonTraits>,
+  /** The "Your usual" card: it is the customer's habitual order, so it never gets
+   * an add-on preselected, named, tagged for or priced in (§11). */
+  isUsual = false,
 ): SuggestionPick {
   const item = itemsById.get(pick.menuItemId);
   const traits = traitsById.get(pick.menuItemId);
   if (!item || !traits) return { ...pick, matchTags: [], sugarPreset: null, flavourAddon: null };
 
   const sugarAdjustable = isSugarAdjustable(item);
+  const ownSugarPreset = sugarPresetFor(item, inputs.sweetness, sweetnessLevel(traits));
+  const addonFlavourFamilies = isUsual ? [] : reachableAddonFamilies(item, traits, inputs, addonTraitsById);
+  if (isUsual) {
+    return {
+      ...pick,
+      matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies }, inputs),
+      sugarPreset: ownSugarPreset,
+      flavourAddon: null,
+      addonPresets: [],
+    };
+  }
+
   const flavourAddon = flavourAddonFor(item, traits, inputs, addonTraitsById);
-  const addonFlavourFamilies = reachableAddonFamilies(item, traits, inputs, addonTraitsById);
+  // What making it the customer's way adds (COFFEY-SPEC §11): the add-ons to
+  // preselect, and the sweetness / intensity they bring.
+  const made = madeToOrder(item, traits, inputs, addonTraitsById);
+  const flavourPreset = made.presets.find((p) => p.purpose === 'flavour');
+  const nameFlavourAddon = flavourPreset && flavourAddon ? flavourAddon : null;
+  const liftedBase = Math.min(SWEETNESS_SCALE.max, sweetnessLevel(traits) + made.sweetnessLift);
+  const matchTags = matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies, made }, inputs);
+
+  // The tag each preset earns, so the card can take it away when the customer
+  // un-ticks the add-on: exactly the tags that vanish without `made`.
+  const addonPresets = made.presets.map((p) => {
+    const tag = p.purpose === 'flavour' && p.family ? FLAVOUR_FAMILY_INFO[p.family].tag : p.purpose === 'strength' ? 'Strong' : undefined;
+    return tag && matchTags.includes(tag) ? { ...p, tag } : { ...p };
+  });
+
   return {
     ...pick,
-    reason: flavourAddon
-      ? templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable, flavourAddon)
-      : pick.reason,
-    matchTags: matchTagsFor({ name: item.name, traits, sugarAdjustable, addonFlavourFamilies }, inputs),
-    sugarPreset: sugarPresetFor(item, inputs.sweetness, sweetnessLevel(traits)),
+    // The reason names the add-on exactly when a flavour add-on is preselected,
+    // and describes the made intensity when a shot is.
+    reason:
+      made.presets.length > 0
+        ? templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable, nameFlavourAddon, made)
+        : pick.reason,
+    matchTags,
+    sugarPreset: sugarPresetFor(item, inputs.sweetness, liftedBase),
     flavourAddon,
+    addonPresets,
+    // The same pick without its add-ons, for when the customer un-ticks them.
+    ...(made.presets.length > 0
+      ? { plain: { reason: templateReason(traits, inputs, pick.reasonCode, item.name, sugarAdjustable), sugarPreset: ownSugarPreset } }
+      : {}),
   };
 }
 
@@ -163,7 +253,7 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
   const {
     request,
     menu,
-    traitsById,
+    traitsById: taggedTraitsById,
     profile,
     popularity,
     recentItemIds,
@@ -172,6 +262,10 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     decider,
     fallbackReason: forcedFallbackReason,
   } = args;
+  // A drink whose own name says "Iced" is iced whatever its row says
+  // (lib/suggest/traitsGuard.ts): corrected once here, so the filter, the score,
+  // the tags and the brief all read the same value.
+  const traitsById = guardTraits(menu, taggedTraitsById);
   const inputs = request.inputs;
   const excludeIds = request.excludeItemIds ?? [];
   const startedAt = Date.now();
@@ -180,10 +274,13 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
 
   // 1 — hard filter (§5.2).
   const filtered = filterCandidates(menu, traitsById, inputs, excludeIds);
+  // 1b — keep the customer's flavour / strength / sweetness / texture choices
+  // whenever the menu can (lib/suggest/promises.ts); only ever removes items.
+  const { pool: honoured, pinnedIds } = honourChoices(filtered, inputs, addonTraitsById);
 
   // 2 — score + shortlist, with diversity rules (§5.3).
-  const scored = scoreCandidates({ candidates: filtered, inputs, profile, daypart, popularity, recentItemIds, addonTraitsById });
-  const shortlist = buildShortlist(scored, inputs);
+  const scored = scoreCandidates({ candidates: honoured, inputs, profile, daypart, popularity, recentItemIds, addonTraitsById });
+  const shortlist = buildShortlist(scored, inputs, new Set(pinnedIds));
   const candidateIds = shortlist.map((c) => c.menuItemId);
 
   // 6 — relaxHint is computed against the SAME hard filter, independent of
@@ -261,6 +358,8 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     );
   }
 
+  picks = enforcePins(picks, pinnedIds, usualItemId, shortlist, inputs);
+
   const itemsById = new Map(menu.map((m) => [m.id, m]));
   const usualItem = usualItemId ? itemsById.get(usualItemId) : undefined;
   const usualTraits = usualItemId ? traitsById.get(usualItemId) : undefined;
@@ -278,8 +377,35 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
   if (!lintReason(header).ok) header = templateHeader(inputs.mood);
 
   // 8 — decorate, now that the picks (LLM or fallback, usual removed) are final.
-  picks = picks.map((p) => decorate(p, inputs, itemsById, traitsById, addonTraitsById));
-  const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById, addonTraitsById) : null;
+  // `misses`: the customer's choices THIS pick does not keep, so its card can say
+  // "closest we have" instead of passing for a match. Same predicate as the
+  // narrowing, the tags and `unmet`. Picks only: the usual is shown as a habit,
+  // not as an answer to today's choices.
+  picks = picks.map((p) => {
+    const decorated = decorate(p, inputs, itemsById, traitsById, addonTraitsById);
+    const item = itemsById.get(p.menuItemId);
+    const traits = traitsById.get(p.menuItemId);
+    if (!item || !traits) return decorated;
+    const subject = {
+      name: item.name,
+      traits,
+      sugarAdjustable: isSugarAdjustable(item),
+      made: madeToOrder(item, traits, inputs, addonTraitsById),
+    };
+    return { ...decorated, misses: HONOURED_CHOICES.filter((c) => satisfiesChoice(c, subject, inputs) === false) };
+  });
+  const usual = usualBase ? decorate(usualBase, inputs, itemsById, traitsById, addonTraitsById, true) : null;
+
+  const unmet = unmetChoices(
+    picks.flatMap((p) => {
+      const item = itemsById.get(p.menuItemId);
+      const traits = traitsById.get(p.menuItemId);
+      return item && traits
+        ? [{ name: item.name, traits, sugarAdjustable: isSugarAdjustable(item), made: madeToOrder(item, traits, inputs, addonTraitsById) }]
+        : [];
+    }),
+    inputs,
+  );
 
   const pickIds = picks.map((p) => p.menuItemId);
   const items = [...(usualItemId ? [usualItemId] : []), ...pickIds]
@@ -291,6 +417,7 @@ export async function runSuggest(args: RunSuggestArgs): Promise<RunSuggestResult
     usual,
     picks,
     relaxHint,
+    unmet,
     items,
     source,
     fallbackReason,

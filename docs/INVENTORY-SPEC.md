@@ -51,7 +51,7 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | INV-D11 | A recipe is what **one serving** uses, in each ingredient's own unit. A size (variant) can have **its own recipe, which replaces** the base one for that size. It is not added on top. Sizes are matched by **label** ("Large"), because saving a menu item re-creates its size rows; an id-keyed recipe would vanish on the next price edit. Renaming a size falls back to the base recipe until its recipe is set again. |
 | INV-D12 | Recipes follow the menu's rule: the `menu_edit` permission, **on the POS only**. They are read-only on the staff website. |
 | INV-D13 | A manager or the owner can **count** an item (set on-hand to what is on the shelf; this clears "count needed") and **write off** waste (an expired batch or oldest stock first, with a reason). |
-| INV-D14 | A manager or the owner can **receive a delivery with no request** at the POS, with the same quantity and expiry-date rules. |
+| INV-D14 | **Stock from vendor.** A manager or the owner can add stock bought **straight from a vendor**, with no stock request or warehouse transfer behind it (Stock → **Stock from vendor**, on the POS), with the same quantity and expiry-date rules. The **vendor's name is required**; a bill / invoice number and a note are optional. The vendor is kept on each batch ("from Sharma Dairy · received 5 Nov") and the ledger row reads *Vendor: Sharma Dairy · Bill 1043 · Paid cash*. Before `2026-11-vendor-stock-in.sql` is applied, the stock still goes in, without the vendor's name, and the screen says so. |
 | INV-D15 | An item's **unit is locked** once it has stock history or appears in a recipe. Every stored quantity is in that unit. To change the unit, retire the item and add a new one. |
 | INV-D16 | **Auto-hide:** a menu item is taken off the menu when **no size** of it can be made (some ingredient has less on hand than one serving needs). One sold-out size alone does not hide the item. Only sizes switched **on** count: a size switched off on POS → Menu → On / off (everywhere, or in the item's category) is not on sale, so it cannot keep the item on the menu (if every size is switched off, all of them count, as on the menu). Items with no recipe are never touched. |
 | INV-D17 | An auto-hidden item **comes back by itself** when stock makes it possible again. An item a person switched off is **never** switched back on by stock. A person toggling availability on the Menu page takes the item out of stock's hands (clears the auto-hide mark). |
@@ -59,6 +59,7 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | INV-D19 | **Add-ons** (extra shot, oat milk) have their own recipes: what one add-on uses per serving it is added to. An add-on on a line of 2 is used twice. Add-ons are not auto-hidden. |
 | INV-D20 | When a request is assigned, the **picker is emailed** at their personal email (staff accounts), with the items and a link to the Stock screen. No email when a manager assigns it to themselves. The manager sees whether it went. WhatsApp is not used, because a business-initiated WhatsApp message needs a Meta-approved template. |
 | INV-D21 | An add-on's recipe can be **scoped to a menu item, and to one of its sizes**: sugar on a Latte Extra Large is not sugar on an Espresso. For an order line (item M, size S) and add-on O the most specific scope that has lines is used: **M + S, else M (all sizes), else O's general lines**. The winner **replaces** the others; they are never added. A line whose menu item was deleted uses only the general lines. Sizes go by label (INV-D11). The POS editor edits only the general lines; per-item and per-size amounts come from the recipe book ([INVENTORY-RECIPE-BOOK.md](INVENTORY-RECIPE-BOOK.md)) and the Recipes tab only says they exist. |
+| INV-D22 | **A request is reviewed before it is sent.** Each person builds their **own draft**: items added with "+ Add" on the Stock list or from the request sheet, a quantity each, and a note. The draft is saved on the device under that person's user id, so it survives closing the sheet or a reload, and on a shared POS each PIN operator has their own. "Send" exists only on the **Review** screen, which lists every item with what the store holds, any warning (already on an open request) and anything blocking (a missing or zero quantity). There a line can be changed or removed. Sending clears the draft. A fresh request starts with the low items suggested (INV-D1). Rules: `lib/inventory/requestDraft.ts`. |
 
 ## Data: `supabase/2026-10-inventory.sql`
 
@@ -67,7 +68,7 @@ Status of a request: `requested → assigned → picked → received`. It can be
 | `inventory_items` | name (unique, case-insensitive), unit (`g kg ml l pcs pack`), category, `par_level` (low at), `reorder_qty`, `tracks_expiry`, `is_active`, `shortfall_since_count`, `last_counted_at` |
 | `stock_requests` | `request_number`, status, note, requested/assigned/picked/received by and when, `received_device_id`, `has_discrepancy`, cancel reason |
 | `stock_request_lines` | per item: `qty_requested`, `qty_picked`, `qty_received`, `expiry_date` |
-| `inventory_batches` | what is on the shelf: `qty_received`, `qty_remaining`, `expiry_date`, source (receive / count) |
+| `inventory_batches` | what is on the shelf: `qty_received`, `qty_remaining`, `expiry_date`, source (receive / count), `supplier` (the vendor of a direct delivery, `''` otherwise; `supabase/2026-11-vendor-stock-in.sql`) |
 | `inventory_movements` | the ledger: receive / sale / waste / count, signed `qty_delta`, sale `shortfall`, who, why, which order/request/batch. One sale row per (order, item), enforced by a unique index. |
 | `recipe_lines` | (menu item, size label or '' for the base, stock item, qty per serving) |
 | `addon_recipe_lines` | (add-on option, stock item, qty per serving), plus a scope from `2026-10-inventory-addon-scopes.sql`: `menu_item_id` (null = general) and `size_label` (`''` = all sizes of that item). Unique per (option, item scope, size, stock item). |
@@ -78,7 +79,7 @@ Status of a request: `requested → assigned → picked → received`. It can be
 **Stock on hand is not stored.** It is the sum of the item's batches, so it can
 never disagree with the expiry warnings. Every write that touches more than one
 row goes through a database function (`inventory_create_request`,
-`inventory_pick`, `inventory_receive`, `inventory_apply_sale`,
+`inventory_pick`, `inventory_receive`, `inventory_receive_vendor` (stock from a vendor, INV-D14), `inventory_apply_sale`,
 `inventory_adjust`, `inventory_set_recipe`, `inventory_set_addon_recipe` (an add-on's
 general lines only), `inventory_set_addon_recipe_scopes` (every scope, for the
 recipe-book seed)). Each
@@ -104,6 +105,7 @@ explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated
 | INV-10 auto-hide | `inventory_refresh_availability` (migration), `app/api/inventory/settings`, the Stock-tab panel, `app/api/menu/[id]` (manual toggle clears the mark), "Out of stock" label in `components/staff/MenuItemTable.tsx` |
 | INV-11 add-on recipes | `addon_recipe_lines`, `app/api/inventory/addon-recipes/[optionId]`, the Recipes tab's Add-ons list |
 | INV-12 add-on recipe scopes | `supabase/2026-10-inventory-addon-scopes.sql`, `addonRecipeFor` in `lib/inventory/rules.ts`, `consumeStockForOrder`, `scripts/inventory/pg-smoke.sh` (real-Postgres smoke test), `checkInventory` in `scripts/verify-db.mjs` |
+| INV-13 stock from vendor | `supabase/2026-11-vendor-stock-in.sql`, `parseVendorHeader` in `lib/inventory/rules.ts`, `app/api/inventory/receipts`, `VendorStockModal` in `components/staff/inventory/StockTab.tsx`, `checkInventory` in `scripts/verify-db.mjs`, step 5e of `scripts/inventory/pg-smoke.sh` |
 | Tests | `tests/inventoryRules.test.ts`, `tests/inventoryRoutes.test.ts`, `tests/inventoryConsume.test.ts`, `tests/inventoryNotify.test.ts`, `tests/menuStockOutAuto.test.ts`, `tests/staffNav.test.ts`, `tests/orderStatusRoute.test.ts` |
 
 ## API
@@ -117,7 +119,7 @@ explicit REVOKE. EXECUTE on the functions is revoked from anon and authenticated
 | `GET /api/inventory/requests` | any counter actor | open requests plus the last 30 closed, plus assignees (for managers) |
 | `POST /api/inventory/requests` | any counter actor | "Request stock": `{lines:[{itemId, qty}], note?}` |
 | `PATCH /api/inventory/requests/[id]` | per INV-D2–D5 | `{action:'assign'\|'pick'\|'receive'\|'cancel', …}` |
-| `POST /api/inventory/receipts` | manager / owner, on the POS | delivery with no request |
+| `POST /api/inventory/receipts` | manager / owner, on the POS | stock from a vendor (no request): `{vendor, billRef?, note?, lines:[{itemId, qty, expiryDate}]}` → `{ok, batches, vendorRecorded}`. Falls back to `inventory_receive` (`vendorRecorded: false`) until `2026-11-vendor-stock-in.sql` is applied |
 | `GET /api/inventory/recipes` | any counter actor | menu + sizes, stock items, recipe lines, add-on general lines, `addonScopedCounts` (per add-on, how many per-item / per-size lines it also has), `canEdit` |
 | `PUT /api/inventory/recipes/[menuItemId]` | `menu_edit`, on the POS | replace one menu item's recipe: `{lines:[{sizeLabel, itemId, qty}]}` |
 | `PUT /api/inventory/addon-recipes/[optionId]` | `menu_edit`, on the POS | replace one add-on's general recipe (its per-item / per-size lines are left alone) |
@@ -142,6 +144,7 @@ code cannot guess them.
 | A2 | Earlier migrations applied: `schema.sql` (menu_items, menu_item_variants, orders, order_items), `2026-08-pos-devices.sql` (POS surface), `2026-09-staff-accounts.sql` | Dev | `npm run verify:db` passes its existing checks | ☐ |
 | A3 | Apply **`supabase/2026-10-inventory.sql`** in the Supabase SQL editor. It is safe to re-run. | Dev | `npm run verify:db`: the "INV-1 · inventory" section is all ✓ | ☐ |
 | A3b | Apply **`supabase/2026-10-inventory-addon-scopes.sql`** after A3 (per-item / per-size add-on recipes, and the recipe book's table). Safe to re-run. Once both are applied, either file can be re-run at any time, in any order: `2026-10-inventory.sql`'s add-on editor function also replaces only the general lines, so it never wipes a scope. | Dev | `npm run verify:db`: the "INV-12 · add-on recipe scopes" section is all ✓ | ☐ |
+| A3c | Apply **`supabase/2026-11-vendor-stock-in.sql`** (stock from vendor: the vendor's name on each batch). Additive and safe to re-run, before or after the app update. | Dev | `npm run verify:db`: the "INV-13 · stock from vendor" section is all ✓ | ☐ |
 | A4 | At least **one enrolled POS device** (`docs/POS-DEVICE-SETUP.md`). Receiving is refused anywhere else. | Owner + Dev | The counter shows the POS nav (Live orders · Orders · New order · Menu) | ☐ |
 | A5 | `role_permissions.menu_edit` is set to who should edit recipes (default: staff and up) | Owner | Owner → Settings → Permissions | ☐ |
 | A6 | Team roles are right in the owner portal: who is **manager** (assigns, counts, writes off, direct deliveries) and who is **staff** | Owner | Owner → Staff | ☐ |
@@ -185,8 +188,8 @@ their own short list, e.g. *Extra shot → Espresso beans 9 g*; *Oat milk →
 Oat milk 0.2 L*.
 
 **B3 — Opening stock.** On go-live day, a count of what is on the shelf, **with
-expiry dates** for perishables. It is entered as a delivery (Stock → Receive
-delivery, on the POS), one line per batch.
+expiry dates** for perishables. It is entered as stock from a vendor (Stock →
+Stock from vendor, on the POS; vendor name e.g. "Opening stock"), one line per batch.
 
 **B4 — Decisions to confirm or change** (defaults in brackets):
 - Who may raise a request [everyone] (INV-D1)
@@ -202,7 +205,7 @@ delivery, on the POS), one line per batch.
 | C1 | Switch the Stock screen on: `NEXT_PUBLIC_FLAG_INVENTORY=true` (preview first if you like, then production) and redeploy. Leave `NEXT_PUBLIC_FLAG_INVENTORY_SALES` **unset**: sales don't touch stock yet, and the Stock tab says so. | Dev | ☐ |
 | C2 | Add the stock items from B1 (Stock → Add item, as a manager) | Manager | ☐ |
 | C3 | Enter the recipes from B2 (Stock → Recipes, **on the POS**) | Staff with `menu_edit` | ☐ |
-| C4 | Receive the opening stock from B3 (Stock → Receive delivery, on the POS) | Manager | ☐ |
+| C4 | Receive the opening stock from B3 (Stock → Stock from vendor, on the POS) | Manager | ☐ |
 | C5 | Run the acceptance walk-through (D). Steps 6, 7, 10 and 11 need sales deduction, so run them in a preview with `NEXT_PUBLIC_FLAG_INVENTORY_SALES=true`. | Owner + one staffer | ☐ |
 | C6 | **Flag-off day:** count the shelves at closing, then set `NEXT_PUBLIC_FLAG_INVENTORY_SALES=true` in **production** and redeploy (a `NEXT_PUBLIC_` flag is baked in at build). From then on every completed order takes its recipe usage off stock. | Dev | ☐ |
 | C7 | For the first week, look at "Needs attention" daily. A "Count needed" usually means a recipe quantity is off. | Manager | ☐ |
@@ -217,7 +220,7 @@ stock doesn't disappear from the menu; switch it on at C6.
 
 ### D. Acceptance walk-through
 
-1. Staffer A taps **Request stock**. The low items are pre-filled. They send it.
+1. Staffer A taps **+ Add** on two items in the Stock list, then **Request stock**: the low items are suggested beside them. **Review request** lists every item; a blank quantity blocks Send. They send it, and their draft is cleared. A second staffer on the same POS (PIN switch) sees an empty draft of their own.
 2. The manager assigns it to staffer B. B sees **"Yours to pick"** and records the picked quantities.
 3. On the **staff website**, the request shows "Stock is verified and received at the POS only". On the **POS**, B is told someone else has to verify.
 4. Staffer C, on the POS, taps **Verify & receive**, enters one quantity lower than picked and an expiry date for milk. Leaving the milk expiry blank is refused. A past date is refused.
@@ -249,8 +252,15 @@ nothing is lost. Nothing else in the app reads them.
   once per order and item).
 - **A count surplus has no expiry date.** It becomes an undated batch. Receive a
   real delivery to record expiry dates.
-- **No supplier or purchase-order records** and no cost/price tracking. Requests
-  are internal (store-room → counter or an errand to buy). Costing would come
-  next.
+- **No purchase orders and no cost/price tracking.** Stock from a vendor
+  records the vendor's name, bill number and a note (INV-D14), as text, with no
+  prices or vendor list. Requests are internal (store-room → counter or an
+  errand to buy). Costing would come next.
+- **A warehouse is a separate feature:** [WAREHOUSE-SPEC.md](WAREHOUSE-SPEC.md)
+  (`NEXT_PUBLIC_FLAG_WAREHOUSE`). With it on, a request is filled from the
+  owner's warehouse sheet, is in transit until the POS counts it in, can be
+  carried by someone without a login, and alerts the owner; differences are
+  settled by the owner, and stock can be sent back. Off, everything above is
+  unchanged.
 - **Assignment alerts are email only** (no WhatsApp: that needs a Meta-approved
   template). The Requests tab also shows a badge of requests waiting on you.

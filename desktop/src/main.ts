@@ -9,6 +9,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   shell,
@@ -19,6 +20,7 @@ import * as path from 'node:path';
 import { autoUpdater } from 'electron-updater';
 import { DESKTOP_IPC, type PrinterConfig } from '@/lib/desktop/bridge';
 import { createOriginAllowlist } from './allowedOrigin';
+import { loadRetryDelayMs, shellKeyAction, shouldRetryLoad, UNRESPONSIVE_PROMPT_MS } from './recovery';
 import { PrinterService } from './printers';
 import { killAllSpoolerChildren } from './printers/spooler';
 import { releaseUsbForShutdown } from './printers/usb';
@@ -113,36 +115,127 @@ function guardExternalNavigation(contents: WebContents): void {
   });
 }
 
-/** Reload stays available (Ctrl+R / F5) so a frozen POS screen can be
- * recovered without giving access to anything else; devtools shortcuts are
- * blocked outright in a packaged build — belt-and-suspenders alongside
- * `webPreferences.devTools: false`, which already stops them from doing
- * anything. */
+/** Whether the window is showing the POS right now: its last main-frame load
+ * succeeded and its renderer is alive. Decides what F5 means (recovery.ts). */
+const pageHealth = new WeakMap<WebContents, boolean>();
+
+/** Keys the shell handles before the page (desktop/src/recovery.ts):
+ * Ctrl+R / Ctrl+Shift+R reload the whole app, always, so even a frozen page
+ * can be recovered; F5 goes to the page, which refreshes its data in place
+ * and keeps the order being punched (a real reload when the window is on an
+ * error page instead); Ctrl+Q quits; devtools stay shut in a packaged build.
+ * Everything else — Ctrl+N, Ctrl+T and the rest of the POS shortcuts —
+ * reaches the page untouched (there is no application menu to take them). */
 function guardKeyboardShortcuts(contents: WebContents): void {
   contents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown') return;
-    const key = input.key.toLowerCase();
-
-    const isReload = ((input.control || input.meta) && key === 'r' && !input.shift && !input.alt) || key === 'f5';
-    if (isReload) {
-      contents.reload();
-      event.preventDefault();
-      return;
-    }
-
-    const isDevToolsCombo = key === 'f12' || ((input.control || input.meta) && input.shift && key === 'i');
-    if (isDevToolsCombo && app.isPackaged) {
-      event.preventDefault();
-    }
-
-    // Owner report (0.1.0): the window sometimes wouldn't close at all.
-    // Ctrl+Q is an explicit, always-available quit — Alt+F4 already quits
-    // natively and needs no handler here.
-    const isQuit = (input.control || input.meta) && key === 'q' && !input.shift && !input.alt;
-    if (isQuit) {
-      event.preventDefault();
+    const action = shellKeyAction(input, {
+      packaged: app.isPackaged,
+      pageHealthy: pageHealth.get(contents) === true,
+    });
+    if (!action || action.type === 'page') return;
+    event.preventDefault();
+    if (action.type === 'reload') {
+      if (action.ignoreCache) contents.reloadIgnoringCache();
+      else contents.reload();
+    } else if (action.type === 'quit') {
+      // Owner report (0.1.0): the window sometimes wouldn't close at all.
       app.quit();
     }
+  });
+}
+
+/** Owner report: the POS sometimes sat on a blank or error screen, or froze,
+ * until someone found a way to restart it. The window now recovers itself:
+ *  - a page that failed to load (no network at boot, a dropped connection on
+ *    a reload) is retried with backoff — 2 s, 4 s … up to every 30 s — until
+ *    it comes back;
+ *  - a renderer that crashed is reloaded (with the same backoff if it keeps
+ *    crashing);
+ *  - a renderer that stops responding gets a "Reload / Wait" prompt.
+ * An order being punched survives all three: the web app keeps it in
+ * sessionStorage (lib/pos/draftOrder.ts), which lives outside the renderer. */
+function keepWindowAlive(win: BrowserWindow): void {
+  const contents = win.webContents;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let failedLoads = 0;
+  let recentCrashes: number[] = [];
+  let unresponsiveTimer: ReturnType<typeof setTimeout> | null = null;
+  let prompting = false;
+
+  const alive = () => !quitCleanupDone && !win.isDestroyed() && !contents.isDestroyed();
+  const clearRetry = () => {
+    if (retryTimer) clearTimeout(retryTimer);
+    retryTimer = null;
+  };
+
+  contents.on('did-finish-load', () => {
+    pageHealth.set(contents, true);
+    failedLoads = 0;
+    clearRetry();
+  });
+
+  contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!shouldRetryLoad(errorCode, isMainFrame)) return;
+    pageHealth.set(contents, false);
+    const delay = loadRetryDelayMs(failedLoads);
+    failedLoads += 1;
+    console.error(`[hioc-pos] load failed (${errorCode} ${errorDescription}); retrying in ${delay} ms`);
+    // Retry the page that failed if it is one of ours, else the POS start page.
+    const target = validatedURL && isAllowedOrigin(validatedURL) ? validatedURL : HIOC_POS_URL;
+    clearRetry();
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (alive() && isAllowedOrigin(target)) contents.loadURL(target).catch(() => undefined);
+    }, delay);
+  });
+
+  contents.on('render-process-gone', (_event, details) => {
+    pageHealth.set(contents, false);
+    if (details.reason === 'clean-exit' || !alive()) return;
+    const now = Date.now();
+    recentCrashes = [...recentCrashes.filter((t) => now - t < 60_000), now];
+    const delay = loadRetryDelayMs(recentCrashes.length - 1);
+    console.error(`[hioc-pos] renderer gone (${details.reason}); reloading in ${delay} ms`);
+    clearRetry();
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (alive()) contents.reload();
+    }, delay);
+  });
+
+  win.on('unresponsive', () => {
+    if (unresponsiveTimer || prompting) return;
+    unresponsiveTimer = setTimeout(async () => {
+      unresponsiveTimer = null;
+      if (!alive()) return;
+      prompting = true;
+      try {
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          buttons: ['Reload', 'Wait'],
+          defaultId: 0,
+          cancelId: 1,
+          title: 'HIOC POS',
+          message: 'The POS screen is not responding.',
+          detail: 'Reload brings it back — an order being punched is kept. Wait gives it a little longer.',
+        });
+        // A hung renderer can't run a reload itself: end it, and the
+        // render-process-gone handler above reloads the page.
+        if (response === 0 && alive()) contents.forcefullyCrashRenderer();
+      } finally {
+        prompting = false;
+      }
+    }, UNRESPONSIVE_PROMPT_MS);
+  });
+
+  win.on('responsive', () => {
+    if (unresponsiveTimer) clearTimeout(unresponsiveTimer);
+    unresponsiveTimer = null;
+  });
+
+  win.on('closed', () => {
+    clearRetry();
+    if (unresponsiveTimer) clearTimeout(unresponsiveTimer);
   });
 }
 
@@ -177,6 +270,7 @@ function createWindow(): BrowserWindow {
 
   guardExternalNavigation(win.webContents);
   guardKeyboardShortcuts(win.webContents);
+  keepWindowAlive(win);
 
   // Owner report (0.1.0): closing the window sometimes did nothing. Root
   // cause: a page-level `beforeunload` handler (there is none in this repo's

@@ -19,6 +19,7 @@
 // exactly the KOT-then-receipt case. One job at a time, always.
 
 import { printUrl, type PrintType } from '@/lib/staff/autoPrint';
+import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 
 /**
  * A job that hasn't settled yet, one that failed and is waiting on a human, or
@@ -35,6 +36,12 @@ export interface PrintJob {
   state: PrintJobState;
   /** How many times execute() has been started for this job. */
   attempts: number;
+  /**
+   * The ticket data the order's create answer carried. The first attempt
+   * prints from it with no server call; a retry asks the server, so a reprint
+   * reflects the order as it is now (lib/print/localTicket.ts).
+   */
+  printOrder?: StaffPrintOrder;
 }
 
 export interface PrintJobSpec {
@@ -42,6 +49,7 @@ export interface PrintJobSpec {
   type: PrintType;
   /** A KOT of only these lines — items added to a running order. */
   itemIds?: string[];
+  printOrder?: StaffPrintOrder;
 }
 
 export interface PrintQueueSnapshot {
@@ -246,6 +254,7 @@ export class PrintQueue {
       orderId: spec.orderId,
       type: spec.type,
       ...(spec.itemIds && spec.itemIds.length > 0 ? { itemIds: [...spec.itemIds] } : {}),
+      ...(spec.printOrder ? { printOrder: spec.printOrder } : {}),
       state: 'queued' as const,
       attempts: 0,
     }));

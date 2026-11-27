@@ -3,7 +3,7 @@
 // "Order again" strip at the top of the menu (ACC-4) — a signed-in
 // customer's 3 most recent orders, each re-added to the cart in one tap.
 // Renders nothing for a guest (the history route 401s) or for a customer with
-// no orders yet, so the menu looks exactly as before for them.
+// no orders yet (café orders only: ?channel=cafe), so the menu looks exactly as before for them.
 
 import { useEffect, useState } from 'react';
 import { formatIstDate } from '@/lib/account/orderDisplay';
@@ -25,7 +25,7 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/account/history?page=1', { cache: 'no-store' })
+    fetch('/api/account/history?page=1&channel=cafe', { cache: 'no-store' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { orders?: OrderResponse[] } | null) => {
         if (cancelled || !data?.orders) return;
@@ -76,14 +76,16 @@ export function OrderAgainStrip({ onAdded }: { onAdded: () => void }) {
               type="button"
               onClick={() => handleClick(order.id)}
               disabled={reorderingId !== null}
-              className="rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
+              className="min-h-[44px] rounded-md bg-tan-dark px-4 py-2 text-sm font-semibold text-cream transition-colors hover:bg-tan-darker disabled:opacity-60"
             >
               {reorderingId === order.id ? 'Adding…' : 'Add to cart'}
             </button>
           </div>
         ))}
       </div>
-      {notice ? <p className="mt-2 text-sm text-muted">{notice}</p> : null}
+      <p role="status" className="mt-2 text-sm text-muted">
+        {notice}
+      </p>
     </section>
   );
 }

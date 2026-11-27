@@ -5,6 +5,8 @@ import { Analytics } from '@vercel/analytics/next';
 import { SiteHeader } from '@/components/site/SiteHeader';
 import { SiteFooter } from '@/components/site/SiteFooter';
 import { SurfaceProvider } from '@/components/SurfaceLink';
+import { TrafficTracker } from '@/components/traffic/TrafficTracker';
+import { flags } from '@/lib/flags';
 import { surfaceForHost, type Surface } from '@/lib/routing/surface';
 import { devanagariFont } from '@/lib/print/devanagariFont';
 import './globals.css';
@@ -13,9 +15,14 @@ import './globals.css';
 // range). Space Mono — the legacy site's only face (see index.html /
 // css/style.css) — is kept as a brand accent for prices, bill amounts,
 // order numbers and pickup codes, plus code/ID displays on staff surfaces.
+//
+// DM Sans loads as its variable font (every weight, 400–700 included, from one
+// file) rather than as a list of static weights. Google Fonts answers a list of
+// weights for a variable family with extension-less /l/font?kit= URLs, which
+// Next 14.2's font loader cannot handle: `next build` fails in next/font.
 const dmSans = DM_Sans({
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  weight: 'variable',
   variable: '--font-dm-sans',
   display: 'swap',
 });
@@ -32,7 +39,16 @@ export const metadata: Metadata = {
     default: 'HIOC.',
     template: '%s | HIOC.',
   },
-  description: 'High on Coffee — order ahead for pickup.',
+  description: 'High on Coffee: order ahead for pickup.',
+  // Text-only share card. There is no share image in the repo yet, so none is
+  // declared here (a missing image is better than an invented one).
+  openGraph: {
+    title: 'HIOC.',
+    description: 'High on Coffee: order ahead for pickup.',
+    siteName: 'HIOC.',
+    locale: 'en_IN',
+    type: 'website',
+  },
   // No `manifest` here on purpose — the only web app manifest in this repo
   // describes the POS, and it is declared in app/staff/layout.tsx so a customer
   // is never offered "Install HIOC POS". See app/pos.webmanifest/route.ts.
@@ -66,17 +82,43 @@ export default function RootLayout({
   // right font just as much as any /staff/** page does for the desktop app's
   // canvas-rasterized ESC/POS header (lib/print/brandHeaderRaster.ts). This is
   // the one layout both surfaces share.
+  // The customer manifest (iPhone Home Screen, docs/WEB-PUSH-SPEC.md) is linked
+  // from customer pages only: never on the staff./owner. hosts, and never under
+  // /staff or /owner on the main host, whose layouts own their own install story.
+  const path = h.get('x-pathname') ?? '';
+  const customerManifest =
+    flags.webPush &&
+    surface === 'main' &&
+    !/^\/(staff|staff-print|owner)(\/|$)/.test(path);
   return (
     <html
       lang="en"
       className={`${dmSans.variable} ${spaceMono.variable} ${devanagariFont.variable}`}
     >
+      {customerManifest ? (
+        <head>
+          <link rel="manifest" href="/hioc.webmanifest" />
+        </head>
+      ) : null}
       <body className="flex min-h-screen flex-col font-sans bg-cream text-charcoal">
         <SurfaceProvider surface={surface}>
+          {/* First focusable element on every page: lets keyboard and screen
+              reader users jump past the header. Hidden until it has focus. */}
+          <a
+            href="#main-content"
+            className="sr-only z-50 rounded-md bg-charcoal px-4 py-3 font-semibold text-cream focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+          >
+            Skip to content
+          </a>
           <SiteHeader />
-          <main className="flex-1">{children}</main>
+          <main id="main-content" tabIndex={-1} className="flex-1 outline-none">
+            {children}
+          </main>
           <SiteFooter />
           <Analytics />
+          {/* Where customers come from (docs/TRAFFIC-TRACKING.md). Not on the
+              staff or owner subdomains: those are counter screens, not visits. */}
+          {surface === 'main' && flags.trafficTracking ? <TrafficTracker /> : null}
         </SurfaceProvider>
       </body>
     </html>

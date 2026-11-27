@@ -14,6 +14,7 @@ import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/
 import { RitualChip } from '@/components/passes/RitualChip';
 import { SurfaceLink } from '@/components/SurfaceLink';
 import { lineSizeSuffix } from '@/lib/menu/weight';
+import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
 import { PrintButton } from './PrintButton';
 
 // Server-rendered, print-optimized bill/receipt (CUS/PAY). Regenerated
@@ -23,7 +24,7 @@ import { PrintButton } from './PrintButton';
 // print:hidden globally, so the browser's Print / Save-as-PDF yields a clean bill.
 export const dynamic = 'force-dynamic';
 
-export const metadata: Metadata = { title: 'Bill' };
+export const metadata: Metadata = { title: 'Receipt' };
 
 const PAYMENT_LABEL: Record<string, string> = {
   unpaid: 'Pay at counter',
@@ -84,8 +85,8 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
     return (
       <div className="mx-auto max-w-sm px-4 py-8 text-charcoal print:py-0 print:text-black">
         <div className="mb-6 print:hidden">
-          <Link href={`/order/${order.id}`} className="text-sm text-tan-dark hover:underline">
-            ← Back to order
+          <Link href={`/order/${order.id}`} className="inline-flex min-h-[44px] items-center text-sm text-tan-dark hover:underline">
+            Back to order
           </Link>
         </div>
         <div className="rounded-md border border-line bg-white p-6 text-center shadow-sm">
@@ -106,8 +107,8 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
     <div className="mx-auto max-w-sm px-4 py-8 text-charcoal print:py-0 print:text-black">
       {/* On-screen actions — never printed. */}
       <div className="mb-6 flex items-center justify-between print:hidden">
-        <Link href={`/order/${order.id}`} className="text-sm text-tan-dark hover:underline">
-          ← Back to order
+        <Link href={`/order/${order.id}`} className="inline-flex min-h-[44px] items-center text-sm text-tan-dark hover:underline">
+          Back to order
         </Link>
         <PrintButton />
       </div>
@@ -121,10 +122,10 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
             alt={CAFE_NAME}
             className="mx-auto mb-1 h-auto w-40 max-w-[60%]"
           />
-          <p className="mt-1 text-[11px] leading-tight text-muted print:text-black">{CAFE_ADDRESS}</p>
-          <p className="text-[11px] text-muted print:text-black">{CAFE_PHONE_DISPLAY}</p>
+          <p className="mt-1 text-xs leading-tight text-muted print:text-black">{CAFE_ADDRESS}</p>
+          <p className="text-xs text-muted print:text-black">{CAFE_PHONE_DISPLAY}</p>
           {BUSINESS.gstin ? (
-            <p className="text-[11px] text-muted print:text-black">GSTIN: {BUSINESS.gstin}</p>
+            <p className="text-xs text-muted print:text-black">GSTIN: {BUSINESS.gstin}</p>
           ) : null}
         </div>
 
@@ -164,12 +165,12 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
                 <span className="shrink-0 font-mono font-bold tabular-nums">₹{item.line_total_inr}</span>
               </div>
               {item.addons.length > 0 ? (
-                <p className="pl-4 text-[11px] text-muted print:text-black">
+                <p className="pl-4 text-xs text-muted print:text-black">
                   + {item.addons.map((a) => a.option_name_snapshot).join(', ')}
                 </p>
               ) : null}
               {item.special_instructions ? (
-                <p className="pl-4 text-[11px] italic text-muted print:text-black">
+                <p className="pl-4 text-xs italic text-muted print:text-black">
                   Note: {item.special_instructions}
                 </p>
               ) : null}
@@ -185,7 +186,10 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
           {order.tax_inr > 0 ? <BillRow label="GST" value={`₹${order.tax_inr}`} /> : null}
           {order.packaging_inr > 0 ? <BillRow label="Packaging" value={`₹${order.packaging_inr}`} /> : null}
           {passBill ? <BillRow label={passBill.label} value={`-₹${passBill.discountInr}`} /> : null}
-          {order.discount_inr > 0 ? <BillRow label={discountLabel} value={`-₹${order.discount_inr}`} /> : null}
+          {/* A multi-buy offer ("Instant Coffee offer"), then the coupon/Beanies discount. */}
+          {discountRows(order, orderOfferLabel(order), discountLabel).map((row) => (
+            <BillRow key={row.label} label={row.label} value={`-₹${row.amountInr}`} />
+          ))}
           <div className="mt-1 flex items-center justify-between border-t border-[#c9c9c9] pt-1 text-sm font-bold">
             <span>Total</span>
             <span className="font-mono tabular-nums">₹{total}</span>
@@ -195,7 +199,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
             <span className="font-bold">
               {PAYMENT_LABEL[order.payment_status] ?? order.payment_status}
               {order.payment_status === 'paid' && order.payment_method
-                ? ` · ${PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}`
+                ? `, ${order.payment_method === 'online' ? 'Online' : (PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method)}`
                 : ''}
             </span>
           </div>
@@ -203,8 +207,8 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
 
         <Divider />
 
-        <p className="text-center text-[11px] text-muted print:text-black">
-          Thank you for your order! · {CAFE_NAME}
+        <p className="text-center text-xs text-muted print:text-black">
+          Thank you for your order at {CAFE_NAME}
         </p>
       </div>
 

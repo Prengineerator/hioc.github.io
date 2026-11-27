@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/payments/gateway';
 import { captureGatewayPayment, markGatewayPaymentFailed } from '@/lib/payments/reconcile';
+import { captureShopPayment, captureShopPaymentLink, closeUnpaidShopLinkOrder } from '@/lib/shop/payments';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,16 @@ interface RazorpayWebhookPayload {
       };
     };
     order?: { entity?: { id?: string } };
+    // payment_link.* events (owner-entered shop orders). Shapes follow Razorpay's
+    // docs; not verified against a live account.
+    payment_link?: { entity?: { id?: string; amount_paid?: number; short_url?: string; expire_by?: number; notes?: Record<string, unknown> | unknown[] } };
   };
+}
+
+function shopOrderIdFromNotes(notes: unknown): string | null {
+  if (typeof notes !== 'object' || notes === null || Array.isArray(notes)) return null;
+  const id = (notes as Record<string, unknown>).shop_order_id;
+  return typeof id === 'string' ? id : null;
 }
 
 // POST /api/payments/webhook — Razorpay server webhook (FND-1). Verifies the
@@ -27,7 +37,9 @@ interface RazorpayWebhookPayload {
 // into the staff queue) and payment.failed (record the failure; the order
 // stays 'placed'/payment_pending, never surfaced to staff). Idempotent by
 // gateway_order_id — safe to receive the same event more than once (Razorpay
-// retries on any non-2xx response).
+// retries on any non-2xx response). payment_link.paid / .expired / .cancelled belong to
+// owner-entered shop orders (lib/shop/payments.ts): paid is captured by the shop's one
+// capture step (amount checked against the order), expired / cancelled close an unpaid one.
 export async function POST(request: Request) {
   const rawBody = await request.text();
   const signature = request.headers.get('x-razorpay-signature') ?? '';
@@ -52,6 +64,17 @@ export async function POST(request: Request) {
       const gatewayOrderId = paymentEntity?.order_id ?? orderEntity?.id;
       const gatewayPaymentId = paymentEntity?.id;
       if (gatewayOrderId && gatewayPaymentId) {
+        // The Instant Coffee shop shares this webhook URL. A Razorpay order that
+        // belongs to a shop order is recorded there (lib/shop/payments.ts) and
+        // never reaches the café's payments/orders; anything else is a café
+        // order, exactly as before.
+        const shop = await captureShopPayment({
+          gatewayOrderId,
+          gatewayPaymentId,
+          method: paymentEntity?.method,
+          capturedAmountPaise: paymentEntity?.amount,
+        });
+        if (shop.handled) return NextResponse.json({ received: true });
         await captureGatewayPayment({
           gatewayOrderId,
           gatewayPaymentId,
@@ -59,6 +82,35 @@ export async function POST(request: Request) {
           signatureOk: true,
           capturedAmountPaise: paymentEntity?.amount, // M5 cross-check
         });
+      }
+    } else if (event === 'payment_link.paid') {
+      // An owner-entered shop order paid through its Razorpay payment link. Handled
+      // only by the shop's capture step (same idempotent path as a website payment);
+      // it never reaches the café's payments.
+      const link = payload.payload?.payment_link?.entity;
+      const gatewayPaymentId = paymentEntity?.id;
+      if (link?.id && !gatewayPaymentId) {
+        console.error(`payments/webhook: payment_link.paid for link ${link.id} carried no payment id; not captured`);
+      }
+      if (link?.id && gatewayPaymentId) {
+        await captureShopPaymentLink({
+          paymentLinkId: link.id,
+          shopOrderId: shopOrderIdFromNotes(link.notes),
+          gatewayPaymentId,
+          method: paymentEntity?.method,
+          // The payment's own amount; the link's amount_paid when the payment is not in the payload.
+          capturedAmountPaise: paymentEntity?.amount ?? link.amount_paid,
+          shortUrl: typeof link.short_url === 'string' ? link.short_url : null,
+          expireBy: typeof link.expire_by === 'number' ? link.expire_by : null,
+        });
+      }
+    } else if (event === 'payment_link.expired' || event === 'payment_link.cancelled') {
+      const link = payload.payload?.payment_link?.entity;
+      if (link?.id) {
+        await closeUnpaidShopLinkOrder(
+          { paymentLinkId: link.id, shopOrderId: shopOrderIdFromNotes(link.notes) },
+          event === 'payment_link.expired' ? 'expired' : 'cancelled',
+        );
       }
     } else if (event === 'payment.failed') {
       const gatewayOrderId = paymentEntity?.order_id;

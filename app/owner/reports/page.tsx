@@ -1,4 +1,4 @@
-// Owner → Reports: reconcile any range of IST days. What was sold (by the day
+// Owner → Reports (the Overview tab): reconcile any range of IST days. What was sold (by the day
 // it was placed), what money came in and how (by the day it was received —
 // the cash day's own rules), refunds, unpaid bills, and the cash drawer by
 // cash day — each close's statement and its count by denomination — with a
@@ -11,6 +11,10 @@ import { Card, inr } from '@/components/owner/dashboard';
 import { flags } from '@/lib/flags';
 import { reportPassRows } from '@/lib/passes/ownerUi';
 import { ReportEmailSettingsPanel } from '@/components/owner/ReportEmailSettingsPanel';
+import { ReportsNav } from '@/components/owner/ReportsNav';
+import { loadOrderDataset } from '@/lib/reports/exports/orderDataServer';
+import { DEFAULT_QUERY, runExplorer, type ExplorerResult } from '@/lib/reports/salesExplorer';
+import { WhatSold } from '@/components/owner/reports/WhatSold';
 import {
   cashDayOuts,
   closingCountRows,
@@ -22,7 +26,6 @@ import {
   type ReportDay,
 } from '@/lib/reports/reconcile';
 import { loadReport } from '@/lib/reports/reconcileServer';
-import { wholeMonthOf } from '@/lib/reports/exports/period';
 import { formatIstDate } from '@/lib/account/orderDisplay';
 import { GST_NET_OF_DISCOUNT_FROM } from '@/lib/store/hours';
 
@@ -71,29 +74,35 @@ function presets(today: string): { label: string; from: string; to: string }[] {
   ];
 }
 
-export default async function OwnerReportsPage({ searchParams }: { searchParams: { from?: string; to?: string } }) {
+export default async function OwnerReportsPage({
+  searchParams,
+}: {
+  searchParams: { from?: string; to?: string; emails?: string };
+}) {
   const today = istDateIso();
   const range = parseRange(searchParams.from, searchParams.to, today);
   const from = range.ok ? range.from : today;
   const to = range.ok ? range.to : today;
 
-  let report: Report | null = null;
+  // The reconciliation and what sold load side by side; either failing leaves
+  // the other on screen.
+  const admin = createAdminSupabaseClient();
+  const [reportLoad, soldLoad] = await Promise.allSettled([loadReport(admin, from, to), loadSold(admin, from, to)]);
+  const report: Report | null = reportLoad.status === 'fulfilled' ? reportLoad.value : null;
+  const sold = soldLoad.status === 'fulfilled' ? soldLoad.value : null;
   let loadError = '';
-  try {
-    report = await loadReport(createAdminSupabaseClient(), from, to);
-  } catch (err) {
-    console.error('owner reports page: load failed', err);
+  if (reportLoad.status === 'rejected') {
+    console.error('owner reports page: load failed', reportLoad.reason);
     loadError = 'The report could not be built. Please try again.';
   }
+  if (soldLoad.status === 'rejected') console.error('owner reports page: top sellers failed', soldLoad.reason);
 
   const csvHref = `/api/owner/reports?from=${from}&to=${to}&format=csv`;
-  // GST is filed for a whole month: open the one being looked at, else the GST page's own default (last month).
-  const gstMonth = wholeMonthOf(from, to);
-  const gstHref = gstMonth ? `/owner/reports/gst?month=${gstMonth}` : '/owner/reports/gst';
   const label = from === to ? shortDate(from) : `${shortDate(from)} – ${shortDate(to)}`;
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
+      <ReportsNav active="overview" from={from} to={to} />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-charcoal">Reports</h1>
@@ -101,29 +110,11 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
         </div>
         <div className="flex flex-wrap gap-2">
           <a
-            href="#report-emails"
+            href={`/owner/reports?from=${from}&to=${to}&emails=1#report-emails`}
             className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
           >
             Email reports
           </a>
-          <Link
-            href={`/owner/reports/insights?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Insights
-          </Link>
-          <Link
-            href={gstHref}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            GST
-          </Link>
-          <Link
-            href={`/owner/reports/downloads?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Downloads
-          </Link>
           <a
             href={csvHref}
             className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
@@ -166,19 +157,53 @@ export default async function OwnerReportsPage({ searchParams }: { searchParams:
       {!range.ok ? <p className="text-sm text-red-700">{range.message} Showing today instead.</p> : null}
       {loadError ? <p className="text-sm text-red-700">{loadError}</p> : null}
 
-      {report ? <ReportBody report={report} label={label} /> : null}
+      {report ? <ReportBody report={report} label={label} sold={sold} from={from} to={to} /> : null}
 
-      {/* The same numbers, emailed daily / weekly / monthly (lib/reports/ownerDigest.ts). */}
-      <div id="report-emails" className="scroll-mt-24">
-        <Card title="Report emails">
+      {/* The same numbers, emailed daily / weekly / monthly (lib/reports/ownerDigest.ts).
+          Settings, not a report: folded away until wanted (the header's
+          "Email reports" link opens it). */}
+      <details
+        id="report-emails"
+        open={searchParams.emails === '1'}
+        className="scroll-mt-24 rounded-md border border-line bg-cream shadow-sm"
+      >
+        <summary className="flex min-h-[48px] cursor-pointer items-center px-5 text-sm font-bold uppercase tracking-wide text-charcoal">
+          Report emails
+        </summary>
+        <div className="border-t border-line p-5">
           <ReportEmailSettingsPanel />
-        </Card>
-      </div>
+        </div>
+      </details>
     </div>
   );
 }
 
-function ReportBody({ report, label }: { report: Report; label: string }) {
+/** What sold, from the same dataset as Items & custom: the top items and the category mix. */
+async function loadSold(
+  admin: ReturnType<typeof createAdminSupabaseClient>,
+  from: string,
+  to: string,
+): Promise<{ items: ExplorerResult; categories: ExplorerResult }> {
+  const ds = await loadOrderDataset(admin, from, to);
+  return {
+    items: runExplorer(ds, { ...DEFAULT_QUERY, top: 10 }),
+    categories: runExplorer(ds, { ...DEFAULT_QUERY, rows: 'category', sort: 'net' }),
+  };
+}
+
+function ReportBody({
+  report,
+  label,
+  sold,
+  from,
+  to,
+}: {
+  report: Report;
+  label: string;
+  sold: { items: ExplorerResult; categories: ExplorerResult } | null;
+  from: string;
+  to: string;
+}) {
   const t = report.totals;
   // HIOC Ritual (CP-D21): two informational rows. Ritual sales are already inside
   // Gross sales, and the cover on a redeemed cup is not a discount, so neither
@@ -198,6 +223,8 @@ function ReportBody({ report, label }: { report: Report; label: string }) {
           warn={t.unpaidOrders > 0}
         />
       </div>
+
+      {sold ? <WhatSold sold={sold} from={from} to={to} /> : null}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="How the money came in">

@@ -6,6 +6,10 @@ import { getStaffSurface } from '@/lib/staff/surface';
 import { requireInventoryActor, inventoryWriteFailure } from '@/lib/inventory/api';
 import { INVENTORY_MIGRATION_HINT, loadAssignees, loadStockRequests } from '@/lib/inventory/server';
 import { parseRequestLines } from '@/lib/inventory/rules';
+import { flags } from '@/lib/flags';
+import { runAfterResponse } from '@/lib/api/background';
+import { sendOwnerAlert } from '@/lib/inventory/ownerAlerts';
+import { hasWarehouseAccess } from '@/lib/inventory/warehouseServer';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,20 +19,30 @@ const MAX_NOTE = 300;
 //
 // GET  — every counter actor: open requests plus the recent closed ones, and
 //        what the screen needs to decide which buttons to show (the caller's
-//        id and role, whether this is the POS, and — for a manager — who a
-//        request can be assigned to). The PATCH route re-checks everything.
+//        id and role, whether this is the POS, whether they work the
+//        warehouse side (WH-D16), and — for a manager or a staffer with
+//        warehouse access — the team, to assign a request or name who carries
+//        a return). The PATCH route re-checks everything.
 // POST — every counter actor: the "Request stock" button.
 //        Body: { lines: [{ itemId, qty }], note? }
+//        With the warehouse on (docs/WAREHOUSE-SPEC.md) the request is filled
+//        from the warehouse, and the owner is alerted once it is saved.
 
 export async function GET() {
   const gate = await requireInventoryActor();
   if ('response' in gate) return gate.response;
 
   const admin = createAdminSupabaseClient();
-  const [{ requests, error }, surface, assignees] = await Promise.all([
+  const access: Promise<boolean> = gate.actor.isManager
+    ? Promise.resolve(true)
+    : flags.warehouse
+      ? hasWarehouseAccess(admin, gate.actor.user.id, gate.actor.role)
+      : Promise.resolve(false);
+  const [{ requests, error }, surface, warehouseAccess, assignees] = await Promise.all([
     loadStockRequests(admin),
     getStaffSurface(),
-    gate.actor.isManager ? loadAssignees(admin) : Promise.resolve([]),
+    access,
+    access.then((ok) => (ok ? loadAssignees(admin) : [])),
   ]);
   if (error) return errorResponse(500, `Could not load stock requests — ${INVENTORY_MIGRATION_HINT}`);
 
@@ -37,7 +51,9 @@ export async function GET() {
     assignees,
     actorId: gate.actor.user.id,
     canManage: gate.actor.isManager,
+    warehouseAccess,
     surface,
+    warehouse: flags.warehouse,
   });
 }
 
@@ -55,11 +71,15 @@ export async function POST(request: Request) {
   if (note.length > MAX_NOTE) return errorResponse(400, `Keep the note under ${MAX_NOTE} characters.`);
 
   const admin = createAdminSupabaseClient();
-  const { data, error } = await admin.rpc('inventory_create_request', {
+  const fromWarehouse = flags.warehouse;
+  const { data, error } = await admin.rpc(fromWarehouse ? 'warehouse_create_request' : 'inventory_create_request', {
     p_actor: gate.actor.user.id,
     p_note: note,
     p_lines: parsed.lines.map((l) => ({ item_id: l.itemId, qty: l.qty })),
   });
   if (error) return inventoryWriteFailure(error, 'Sending the request');
-  return NextResponse.json({ id: data }, { status: 201 });
+  // Tell the owner (WH-D9), after the reply: a slow mail server must not keep
+  // the counter waiting, and an alert that fails never un-sends a request.
+  if (fromWarehouse && typeof data === 'string') runAfterResponse(sendOwnerAlert(admin, 'request_placed', data));
+  return NextResponse.json({ id: data, route: fromWarehouse ? 'from_warehouse' : 'store_room' }, { status: 201 });
 }

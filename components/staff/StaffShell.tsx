@@ -17,11 +17,18 @@
 //    header trimmed to Orders / Settle / New order / Tables (StaffHeader).
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { usePostgresChangesRefresh } from '@/lib/realtime/hooks';
+import { ORDERS_COALESCE_MS, usePostgresChangesRefresh } from '@/lib/realtime/hooks';
 import { isChimeUnlocked, playChime, unlockChime } from '@/lib/staff/chime';
 import { COUNTER_MODE_KEY, SOUND_PREF_KEY, nextNewOrderIds, readSoundPref } from '@/lib/staff/newOrderWatch';
 import { canEditMenu, canTakeOrders, type StaffSurface } from '@/lib/staff/surfaceRules';
-import { kitchenOrders } from '@/lib/pos/ritual';
+import { usePosRefresh } from '@/lib/staff/posRefresh';
+import {
+  ensureOrdersFeedLoaded,
+  fetchOrdersFeed,
+  setOrdersFeedConnection,
+  useOrdersFeed,
+} from '@/lib/staff/ordersFeed';
+import type { UserRole } from '@/lib/types';
 
 const CHIME_INTERVAL_MS = 5000;
 
@@ -45,6 +52,12 @@ export interface StaffShellValue {
   canTakeOrders: boolean;
   /** This screen may change the menu (POS only). */
   canEditMenu: boolean;
+  /**
+   * The signed-in staffer's role (the PIN operator's on an enrolled device),
+   * from the server; it follows a PIN switch (the layout re-renders on
+   * router.refresh). For what to OFFER only — every API route re-checks it.
+   */
+  role: UserRole | null;
 }
 
 const NOOP_SHELL: StaffShellValue = {
@@ -58,6 +71,7 @@ const NOOP_SHELL: StaffShellValue = {
   surface: 'web',
   canTakeOrders: false,
   canEditMenu: false,
+  role: null,
 };
 
 const StaffShellContext = createContext<StaffShellValue | null>(null);
@@ -92,17 +106,20 @@ export function StaffShell({
   children,
   surface,
   staffWebOrdering,
+  role = null,
 }: {
   children: React.ReactNode;
   /** Resolved on the server by app/staff/layout.tsx (lib/staff/surface.ts). */
   surface: StaffSurface;
   staffWebOrdering: boolean;
+  /** The counter actor's role, resolved on the server by app/staff/layout.tsx. */
+  role?: UserRole | null;
 }) {
   const [soundOn, setSoundOn] = useState(true);
   const [soundReady, setSoundReady] = useState(false);
   const [counterMode, setCounterModeState] = useState(false);
   const [newIds, setNewIds] = useState<Set<string>>(new Set());
-  const previousReceived = useRef<Set<string> | null>(null);
+  const previousReceived = useRef<ReadonlySet<string> | null>(null);
 
   // Restore the device's settings after mount (storage isn't available during
   // server rendering).
@@ -147,27 +164,37 @@ export function StaffShell({
     });
   }, [soundOn, soundReady]);
 
-  // New-order watch — every staff page. Only the waiting orders are fetched.
-  const fetchReceived = useCallback(async () => {
-    try {
-      const res = await fetch('/api/orders?status=received', { cache: 'no-store' });
-      if (!res.ok) return;
-      const data = (await res.json()) as { orders?: { id: string; order_kind?: string }[] };
-      // A HIOC Ritual sale is never a kitchen order, so it never rings the alarm.
-      const received = new Set(kitchenOrders(data.orders ?? []).map((o) => o.id));
-      setNewIds((current) => nextNewOrderIds(previousReceived.current, received, current));
-      previousReceived.current = received;
-    } catch {
-      // Keep the last known state; the poll retries.
-    }
-  }, []);
-
-  // Its own channel name: the Orders page keeps its 'staff-orders' channel.
-  usePostgresChangesRefresh({ table: 'orders', channelName: 'staff-shell-new-orders', onChange: fetchReceived });
+  // New-order watch — every staff page — through the shared orders feed
+  // (lib/staff/ordersFeed.ts): ONE realtime channel and ONE fetch per order
+  // change for the alarm AND the board on screen (Live orders, Orders,
+  // Tables), which used to fetch the same change again on a channel of their
+  // own. With no board up, only the waiting orders are fetched.
+  // 'run' while hidden: this is the alarm, and it must still ring for an
+  // online order when the POS tab is in the background.
+  const fetchFeed = useCallback(() => void fetchOrdersFeed(), []);
+  const connection = usePostgresChangesRefresh({
+    table: 'orders',
+    channelName: 'staff-shell-new-orders',
+    onChange: fetchFeed,
+    requiresSession: true,
+    whileHidden: 'run',
+    coalesceMs: ORDERS_COALESCE_MS,
+  });
+  useEffect(() => setOrdersFeedConnection(connection), [connection]);
 
   useEffect(() => {
-    void fetchReceived();
-  }, [fetchReceived]);
+    ensureOrdersFeedLoaded();
+  }, []);
+  usePosRefresh(fetchFeed);
+
+  // A HIOC Ritual sale is never a kitchen order, so it never rings the alarm
+  // (the feed's `received` already leaves those out).
+  const { received } = useOrdersFeed();
+  useEffect(() => {
+    if (!received) return;
+    setNewIds((current) => nextNewOrderIds(previousReceived.current, received, current));
+    previousReceived.current = received;
+  }, [received]);
 
   const newOrderCount = newIds.size;
   const previousCount = useRef(0);
@@ -214,7 +241,7 @@ export function StaffShell({
     };
   }, [counterMode]);
 
-  const refreshNewOrders = useCallback(() => void fetchReceived(), [fetchReceived]);
+  const refreshNewOrders = fetchFeed;
   const value = useMemo<StaffShellValue>(
     () => ({
       soundOn,
@@ -227,8 +254,9 @@ export function StaffShell({
       surface,
       canTakeOrders: canTakeOrders(surface, staffWebOrdering),
       canEditMenu: canEditMenu(surface),
+      role,
     }),
-    [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders, surface, staffWebOrdering],
+    [soundOn, soundReady, toggleSound, counterMode, setCounterMode, newOrderCount, refreshNewOrders, surface, staffWebOrdering, role],
   );
 
   return <StaffShellContext.Provider value={value}>{children}</StaffShellContext.Provider>;

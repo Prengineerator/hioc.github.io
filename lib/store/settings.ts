@@ -2,6 +2,7 @@
 // controls, and the owner settings UI all read/write the single settings row
 // through here. Pure hours/slot/bill math lives in lib/store/hours.ts.
 
+import { requestCache as cache } from '@/lib/api/requestCache';
 import 'server-only';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { FALLBACK_STORE_SETTINGS } from '@/lib/store/hours';
@@ -12,7 +13,7 @@ import type { StoreSettings } from '@/lib/types';
  * returns FALLBACK_STORE_SETTINGS so pricing/open-checks degrade safely
  * instead of hard-failing checkout.
  */
-export async function getStoreSettings(): Promise<StoreSettings> {
+async function getStoreSettingsUncached(): Promise<StoreSettings> {
   const admin = createAdminSupabaseClient();
   const { data, error } = await admin
     .from('store_settings')
@@ -87,3 +88,9 @@ export async function updateStoreSettings(patch: StoreSettingsPatch): Promise<St
   }
   return (data as StoreSettings) ?? null;
 }
+
+
+/** Per-request memo: a page render (layout + page + helpers) reads this
+ * once instead of up to three times. Outside a React render (Route
+ * Handlers) cache() simply calls through, so behaviour there is unchanged. */
+export const getStoreSettings = cache(getStoreSettingsUncached);

@@ -116,8 +116,12 @@ export interface ExportOrder {
   tipInr: number;
   couponCodes: string[];
   couponDiscountInr: number;
-  /** discountInr − couponDiscountInr, never below 0. */
+  /** discountInr − couponDiscountInr − manualDiscountInr, never below 0. */
   beaniesDiscountInr: number;
+  /** A manager discount given at the POS (2026-11-manual-discount.sql); absent = 0. */
+  manualDiscountInr?: number;
+  /** Why it was given; '' when there is none. */
+  manualDiscountReason?: string;
   /** Processed refunds against this order, whenever they happened. */
   refundedInr: number;
   /** The rule the bill's GST was charged under. */

@@ -26,12 +26,15 @@
 // a modal over it (behind NEXT_PUBLIC_FLAG_POS_V2, modal until Gate 6B), and
 // printing happens in a hidden iframe rather than a foreground tab.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { MenuCategoryTabs } from '@/components/menu/MenuCategoryTabs';
 import { CustomerOrdersModal } from '@/components/staff/CustomerOrdersModal';
+import { ConfirmDialog } from '@/components/staff/ConfirmDialog';
+import { useShortcutHandler } from '@/components/staff/PosShortcuts';
+import { useStaffShell } from '@/components/staff/StaffShell';
 import { PosCustomizeModal } from '@/components/staff/PosCustomizeModal';
-import { PosPaymentModal, PosPaymentPanel } from '@/components/staff/PosPaymentModal';
+import { PosPaymentModal, PosPaymentPanel, type SettleAdjustmentInput } from '@/components/staff/PosPaymentModal';
 import { PosQuickAddBar } from '@/components/staff/PosQuickAddBar';
 import { Button } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/Spinner';
@@ -47,6 +50,14 @@ import { computeCartKey } from '@/lib/cart/cartKey';
 import type { CartItem } from '@/lib/cart/CartContext';
 import { isMenuItemAvailable } from '@/lib/menu/availability';
 import { useMenuAvailabilityRealtime } from '@/lib/realtime/hooks';
+import { readMenuCache, writeMenuCache } from '@/lib/pos/menuCache';
+import { needsServerQuote, parsePosPricing, quoteLocally, type PosPricingContext } from '@/lib/pos/localQuote';
+import { STORE_CHANGED_EVENT } from '@/lib/pos/sharedJson';
+import { fetchWithTimeout } from '@/lib/pos/fetchWithTimeout';
+import { readSnapshot, writeSnapshot } from '@/lib/pos/localSnapshot';
+import { TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS } from '@/lib/pos/posSnapshots';
+import { clearDraft, draftContext, isDraftWorthKeeping, readDraft, writeDraft } from '@/lib/pos/draftOrder';
+import { usePosRefresh } from '@/lib/staff/posRefresh';
 import { normalizeIndianMobile } from '@/lib/phone';
 import { normalizeEmail } from '@/lib/email';
 import {
@@ -78,7 +89,8 @@ import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { PASS_PROGRAM_NAME, cupsLabel } from '@/lib/passes/brand';
 import { mapLegacyBillItemsToCartLines, mapOrderItemsToCartLines } from '@/lib/pos/repeatOrder';
 import type { CustomerOrderResponse } from '@/lib/api/customerOrders';
-import type { PaymentPart } from '@/lib/orders/payments';
+import { describeSettleAdjustment, type PaymentPart } from '@/lib/orders/payments';
+import type { StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
 import { placementPrintPlan, type PrintType } from '@/lib/staff/autoPrint';
 import { useCounterDefaults } from '@/lib/hooks/useCounterDefaults';
 import { POS_FALLBACK_ORDER_TYPE, resolveDefaultOrderType } from '@/lib/pos/deviceSettings';
@@ -93,6 +105,13 @@ import {
 } from '@/lib/staff/confirmation';
 import { formatOrderNumber } from '@/lib/utils/orderNumber';
 import { MENU_CATEGORIES } from '@/lib/constants';
+import { discountRows, offerLabel, type AppliedOffer } from '@/lib/orders/offers';
+import {
+  canGiveManualDiscount,
+  manualDiscountStaffLabel,
+  MAX_MANUAL_DISCOUNT_REASON_LENGTH,
+  parseManualDiscountInput,
+} from '@/lib/orders/manualDiscount';
 import { isSoldByWeight, lineSizeLabel } from '@/lib/menu/weight';
 import type { MenuItem, OrderType } from '@/lib/types';
 
@@ -137,6 +156,22 @@ interface PlacementConfirmation {
   accountCreated: boolean;
 }
 
+// Seeding from what this machine kept (tables, the draft) must happen before
+// the first paint, or the screen flashes empty first. Layout effect on the
+// client, plain effect on the server (no storage there; keeps React quiet).
+const useIsomorphicLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+
+const NEW_ORDER_HREF = '/staff/orders/new';
+/** After a quote gets no answer, how long before asking again. */
+const QUOTE_RETRY_MS = 4000;
+/**
+ * A menu or tables list loaded this recently is not fetched again when the
+ * screen reopens: switching New order ↔ Tables used to re-download both every
+ * time. Changes still arrive — an 86 by realtime, everything by F5 / Refresh —
+ * and a price that moved is caught by the server at Charge (total_changed).
+ */
+const REOPEN_REFETCH_AFTER_MS = 60_000;
+
 // POS4-2 — a per-attempt key for POST /api/orders. crypto.randomUUID is present
 // in every browser this POS runs on; the timestamp+random fallback keeps an old
 // tablet working rather than silently dropping replay protection.
@@ -178,6 +213,10 @@ interface QuoteResponse {
   points?: QuotedDiscount | null;
   /** HIOC Ritual: null when the feature is off or no account is known for the phone. */
   pass?: QuotedPass | null;
+  /** Multi-buy offers on the cart (lib/orders/offers.ts): name the offer row. */
+  offers?: AppliedOffer[];
+  /** Why an offer the cart qualifies for isn't on the bill (a spend offer next to a coupon or Beanies). */
+  offer_notes?: string[];
 }
 
 interface StaffTable {
@@ -200,6 +239,41 @@ export interface AddToOrderTarget {
   id: string;
   orderNumber: number;
   tableLabel: string | null;
+  /**
+   * The bill is already paid (a dine-in bill paid at the counter —
+   * lib/orders/paidChange.ts): what is added becomes a balance to collect on
+   * Settle. Absent = an unpaid running tab.
+   */
+  paid?: boolean;
+}
+
+/** POST /api/orders' `settlement` (lib/orders/settlePayment), as this screen reads it. */
+type SettlementAnswer =
+  | { ok: true; change_due_inr?: number; order?: { total_inr: number | null; subtotal_inr: number } }
+  | { ok: false; error?: string }
+  | null;
+
+/** The pre-combined path: settle the just-created order through its payment route. */
+async function settleSeparately(
+  orderId: string,
+  parts: PaymentPart[],
+  adjustment?: SettleAdjustmentInput,
+): Promise<SettlementAnswer> {
+  try {
+    const res = await fetch(`/api/orders/${orderId}/payment`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(adjustment ? { parts, adjustment } : { parts }),
+    });
+    if (!res.ok) return { ok: false };
+    const data = (await res.json().catch(() => ({}))) as {
+      change_due_inr?: number;
+      order?: { total_inr: number | null; subtotal_inr: number };
+    };
+    return { ok: true, change_due_inr: data.change_due_inr, order: data.order };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export function PosOrderEntry({
@@ -215,6 +289,15 @@ export function PosOrderEntry({
   const isAddMode = addToOrder !== null;
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [menuLoading, setMenuLoading] = useState(true);
+  // What this screen prices a cart with, beside the menu (lib/pos/localQuote.ts):
+  // the store's GST/packaging settings and the live offers, from the same menu
+  // answer. Null until one arrives, or from a server too old to send it: the
+  // quote route prices instead, as it always did.
+  const [posPricing, setPosPricing] = useState<PosPricingContext | null>(null);
+  // Set when the server corrected this screen's total at Charge (409
+  // total_changed): the rest of THIS order is priced by the server, so a
+  // screen whose pricing disagrees can't loop. The next order goes local again.
+  const [serverPricingPinned, setServerPricingPinned] = useState(false);
   const [category, setCategory] = useState<string>(DEFAULT_CATEGORY);
   const [search, setSearch] = useState('');
 
@@ -228,6 +311,9 @@ export function PosOrderEntry({
   const orderTypeTouched = useRef(false);
 
   const [tables, setTables] = useState<StaffTable[]>([]);
+  // False until the first answer (kept or fetched): "no tables" must not flash
+  // while the list is still on its way.
+  const [tablesLoaded, setTablesLoaded] = useState(false);
   const [tableId, setTableId] = useState<string | null>(null);
   const [tableFilter, setTableFilter] = useState(''); // POS4-5, shown past ~12 tables
 
@@ -274,12 +360,38 @@ export function PosOrderEntry({
   // coupon, what is SENT is only what the latest quote approved (placeOrder).
   const [passCups, setPassCups] = useState(0);
   const [quotedPass, setQuotedPass] = useState<QuotedPass | null>(null);
+  // Manager discount (lib/orders/manualDiscount.ts): an amount and a reason a
+  // manager or the owner types. Like a coupon it takes effect on Apply — the
+  // inputs are what is being typed, `manualDiscount` what was applied (and so
+  // priced and sent). Offered only to a manager or the owner: the shell's role
+  // is the signed-in operator's and follows a PIN switch. The server refuses it
+  // from anyone else whatever this screen shows. Not in add mode: an add is
+  // priced by the amend engine, which keeps the order's own discounts.
+  const { role: staffRole } = useStaffShell();
+  const canDiscount = canGiveManualDiscount(staffRole) && !isAddMode;
+  const [discountAmountInput, setDiscountAmountInput] = useState('');
+  const [discountReasonInput, setDiscountReasonInput] = useState('');
+  const [manualDiscount, setManualDiscount] = useState<{ amountInr: number; reason: string } | null>(null);
+  const manualAmount = canDiscount ? (manualDiscount?.amountInr ?? 0) : 0;
+  const manualReason = canDiscount ? (manualDiscount?.reason ?? '') : '';
+  // A switch to a staff operator drops it for good: switching back to a
+  // manager must not quietly bring back a discount nobody re-applied.
+  useEffect(() => {
+    if (canDiscount) return;
+    setManualDiscount(null);
+    setDiscountAmountInput('');
+    setDiscountReasonInput('');
+  }, [canDiscount]);
   // Bumped after the server says something changed under us (a 409 from
   // POST /api/orders): re-quote and look the customer up again.
   const [refreshTick, setRefreshTick] = useState(0);
   // The server's own reason when the cart could not be priced at all (an item
   // switched off, an add-on gone): shown instead of a bill that never arrives.
   const [quoteError, setQuoteError] = useState<string | null>(null);
+  // The server's notes on offers the cart qualifies for but doesn't get
+  // ("… can't be combined with a coupon or Beanies"). Only a server quote has
+  // them: a cart priced on this screen has no coupon or Beanies to block one.
+  const [offerNotes, setOfferNotes] = useState<string[]>([]);
 
   const [bill, setBill] = useState<PosBill | null>(null);
   const [customizing, setCustomizing] = useState<MenuItem | null>(null);
@@ -445,14 +557,36 @@ export function PosOrderEntry({
 
   // --- Menu (all categories in one fetch so search spans the whole menu) ----
   const fetchMenu = useCallback(() => {
-    fetch('/api/menu?includeUnavailable=true&includeInStore=true', { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((data: { items?: MenuItem[] }) => setMenuItems(data.items ?? []))
+    // pos=true: the pricing context comes with the menu (one request, and the
+    // settings that filtered this menu are the ones it is priced with).
+    fetchWithTimeout('/api/menu?includeUnavailable=true&includeInStore=true&pos=true', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`menu ${res.status}`))))
+      .then((data: { items?: MenuItem[]; pos?: unknown }) => {
+        // A failed or malformed answer keeps what is on screen (often the kept
+        // menu) instead of emptying the grid mid-service.
+        if (!Array.isArray(data.items)) return;
+        const pricing = parsePosPricing(data.pos);
+        setMenuItems(data.items);
+        setPosPricing(pricing);
+        writeMenuCache(data.items, pricing);
+      })
       .catch(() => {})
       .finally(() => setMenuLoading(false));
   }, []);
 
   useEffect(() => {
+    // Draw the last menu this machine saw at once, then refresh it: the
+    // counter is usable before the network answers. Read here, not in
+    // useState, because the server render has no localStorage.
+    const kept = readMenuCache();
+    if (kept) {
+      setMenuItems(kept.items);
+      setPosPricing(kept.pricing);
+      setMenuLoading(false);
+    }
+    // Loaded a moment ago (the staffer just stepped over to Tables and back)
+    // and able to price: draw it and don't download it again.
+    if (kept && kept.pricing && Date.now() - kept.savedAt < REOPEN_REFETCH_AFTER_MS) return;
     fetchMenu();
   }, [fetchMenu]);
 
@@ -460,17 +594,51 @@ export function PosOrderEntry({
   // state updates within a few seconds (same hook the customer menu uses).
   useMenuAvailabilityRealtime(fetchMenu);
 
+  // Menu switches live in the store settings, which send no realtime event:
+  // a switch flipped on this machine refreshes the grid at once.
+  useEffect(() => {
+    window.addEventListener(STORE_CHANGED_EVENT, fetchMenu);
+    return () => window.removeEventListener(STORE_CHANGED_EVENT, fetchMenu);
+  }, [fetchMenu]);
+
   // --- Tables (for the dine-in picker) --------------------------------------
+  // Drawn from the registry this machine kept (shared with the tables board),
+  // then refreshed: a failed or slow read keeps the kept list instead of
+  // telling a counter mid-service that it has no tables.
   const fetchTables = useCallback(() => {
-    fetch('/api/tables', { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : { tables: [] }))
-      .then((data: { tables?: StaffTable[] }) => setTables(data.tables ?? []))
-      .catch(() => {});
+    fetchWithTimeout('/api/tables', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`tables ${res.status}`))))
+      .then((data: { tables?: StaffTable[] }) => {
+        if (!Array.isArray(data.tables)) return;
+        setTables(data.tables);
+        writeSnapshot(TABLES_SNAPSHOT, data.tables, TABLES_SNAPSHOT_OPTS);
+      })
+      .catch(() => {})
+      .finally(() => setTablesLoaded(true));
+  }, []);
+
+  const tablesFresh = useRef(false);
+  useIsomorphicLayoutEffect(() => {
+    const kept = readSnapshot(TABLES_SNAPSHOT, TABLES_SNAPSHOT_OPTS);
+    if (kept) {
+      setTables(kept.data);
+      setTablesLoaded(true);
+      tablesFresh.current = Date.now() - kept.savedAt < REOPEN_REFETCH_AFTER_MS;
+    }
   }, []);
 
   useEffect(() => {
+    if (tablesFresh.current) return; // read a moment ago (here or on Tables)
     fetchTables();
   }, [fetchTables]);
+
+  // The header's Refresh / F5: the menu, the tables and the bill again, with
+  // the cart left exactly as it is.
+  usePosRefresh(() => {
+    fetchMenu();
+    fetchTables();
+    setRefreshTick((n) => n + 1);
+  });
 
   // Pre-select a table passed in from the tables board deep-link (POS-3 →
   // /staff/orders/new?table=<id>). Applied ONCE, and only after the active-tables
@@ -488,6 +656,81 @@ export function PosOrderEntry({
     }
     appliedInitialTable.current = true;
   }, [initialTableId, tables]);
+
+  // --- Draft: the order being punched survives leaving the screen -----------
+  // (lib/pos/draftOrder.ts). Put back before the first paint; saved on every
+  // change after that; gone once the order is placed or cleared (an empty
+  // screen saves nothing, and placing an order empties it).
+  const draftCtx = useMemo(
+    () => draftContext(initialTableId, addToOrder?.id),
+    // The page keys this screen by context, so it never changes under a mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+  const draftReady = useRef(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  useIsomorphicLayoutEffect(() => {
+    const draft = readDraft(draftCtx);
+    if (draft) {
+      setCart(draft.cart);
+      // The key the interrupted attempt used: if that order did reach the
+      // server, charging again replays it instead of making a second one.
+      idempotencyKey.current = draft.idempotencyKey;
+      if (!isAddMode) {
+        // What the staffer chose beats the machine's default and the table
+        // the link named — they already answered both.
+        orderTypeTouched.current = true;
+        appliedInitialTable.current = true;
+        setOrderType(draft.orderType);
+        setTableId(draft.tableId);
+        setCustName(draft.custName);
+        setCustPhone(draft.custPhone);
+        setCustEmail(draft.custEmail);
+        setShowCustomer(draft.showCustomer);
+        // A name already in the field is the staffer's; a lookup must not swap it.
+        custNameUserEdited.current = draft.custName.trim() !== '';
+      }
+      setDraftRestored(draft.cart.length > 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const persistDraft = useCallback(() => {
+    if (!draftReady.current) return;
+    writeDraft(draftCtx, {
+      idempotencyKey: idempotencyKey.current,
+      cart,
+      orderType,
+      tableId: isAddMode ? null : tableId,
+      custName: isAddMode ? '' : custName,
+      custPhone: isAddMode ? '' : custPhone,
+      custEmail: isAddMode ? '' : custEmail,
+      showCustomer: isAddMode ? false : showCustomer,
+    });
+  }, [draftCtx, cart, orderType, tableId, custName, custPhone, custEmail, showCustomer, isAddMode]);
+  const persistDraftRef = useRef(persistDraft);
+  persistDraftRef.current = persistDraft;
+
+  useEffect(() => {
+    persistDraft();
+  }, [persistDraft]);
+  // Saving starts AFTER the first render's save has run (effects run in
+  // order): that render still holds the empty initial state, and saving it
+  // would wipe the draft the layout effect above has just put back.
+  useEffect(() => {
+    draftReady.current = true;
+  }, []);
+
+  // The "put back" note goes once the staffer has had a moment to read it.
+  useEffect(() => {
+    if (!draftRestored) return undefined;
+    const t = setTimeout(() => setDraftRestored(false), 10_000);
+    return () => clearTimeout(t);
+  }, [draftRestored]);
+
+  const draftHasContent = isDraftWorthKeeping({ cart, custName, custPhone, custEmail });
 
   // --- Derived --------------------------------------------------------------
   const totalItems = useMemo(() => cart.reduce((s, i) => s + i.qty, 0), [cart]);
@@ -616,7 +859,7 @@ export function PosOrderEntry({
     }
     let cancelled = false;
     const t = setTimeout(() => {
-      fetch(`/api/customers/lookup?phone=${lookupPhone}`, { cache: 'no-store' })
+      fetchWithTimeout(`/api/customers/lookup?phone=${lookupPhone}`, { cache: 'no-store' })
         .then((res) => (res.ok ? res.json() : null))
         .then((data: CustomerLookup | null) => {
           if (!cancelled) setCustomer(data ?? null);
@@ -748,7 +991,11 @@ export function PosOrderEntry({
     }
   }
 
-  // --- Live bill from the quote endpoint (never computed client-side) -------
+  // --- Live bill ------------------------------------------------------------
+  // An ordinary cart is priced HERE, by the server's own pricing functions run
+  // in the browser (lib/pos/localQuote.ts) — no request per tap — and the server
+  // checks the total again at Charge (expected_total_inr). Anything that
+  // depends on the customer's account goes to the quote endpoint as before:
   // VAL-1: the coupon and the points ride along, so the discount lines shown
   // here are the server's own arithmetic — the same call the web checkout makes,
   // plus the phone, which the server (not this client) turns into the account
@@ -760,6 +1007,7 @@ export function PosOrderEntry({
   // debounce) because the gap it has to cover starts at the tap, not at the
   // fetch.
   const [billStale, setBillStale] = useState(false);
+  const [quoteRetry, setQuoteRetry] = useState(0);
 
   useEffect(() => {
     if (cart.length === 0 || subtotal <= 0) {
@@ -768,19 +1016,54 @@ export function PosOrderEntry({
       setQuotedPoints(null);
       setQuotedPass(null);
       setQuoteError(null);
+      setOfferNotes([]);
       // An emptied cart forgets the cups asked for: the next order asks again.
       setPassCups(0);
       setBillStale(false);
       return;
     }
+    // Priced on this screen when nothing in the bill depends on the customer's
+    // account. A cart this screen can't price (its menu says an item is off) is
+    // left to the server, whose answer — and reason — is the one that counts.
+    const serverNeeded = needsServerQuote({
+      hasPricing: posPricing !== null,
+      couponCode,
+      redeemPoints,
+      passCups,
+      ritualAvailable: ritual !== null,
+      serverPricingPinned,
+    });
+    if (!serverNeeded && posPricing) {
+      const local = quoteLocally({
+        items: orderItemsOf(cart),
+        menuItems,
+        pricing: posPricing,
+        isDineIn: orderType === 'dine_in',
+        manualDiscountInr: manualAmount,
+      });
+      if (local.ok) {
+        setBill({ ...local.bill, offer_label: local.offerLabel || offerLabel(local.offers.map((o) => o.name)) });
+        setOfferNotes([]);
+        setQuotedCoupon(null);
+        setQuotedPoints(null);
+        setQuotedPass(null);
+        setQuoteError(null);
+        setBillStale(false);
+        return;
+      }
+    }
+
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
     setBillStale(true);
     // Small debounce so rapid qty taps don't fire a burst of quotes.
     const t = setTimeout(() => {
       // The cart goes to the server as order items, exactly as placeOrder sends
       // it: the server prices it itself (and, with HIOC Ritual cups asked for,
       // decides which drinks they pay for), so this screen never computes a rupee.
-      fetch('/api/orders/quote', {
+      // A quote is a read (nothing is created), so it may time out: a stalled
+      // one used to leave the bill "re-pricing" for good, and Charge with it.
+      fetchWithTimeout('/api/orders/quote', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -790,6 +1073,7 @@ export function PosOrderEntry({
           ...(couponCode ? { coupon_code: couponCode } : {}),
           ...(redeemPoints > 0 ? { redeem_points: redeemPoints } : {}),
           ...(lookupPhone ? { customer_phone: lookupPhone } : {}),
+          ...(manualAmount > 0 ? { manual_discount: { amount_inr: manualAmount, reason: manualReason } } : {}),
         }),
       })
         .then(async (res) => {
@@ -807,7 +1091,10 @@ export function PosOrderEntry({
             setQuoteError(error);
             return;
           }
-          setBill(data.bill);
+          // The offer row's label rides on the bill, so the payment step
+          // (which only gets the bill) names it the same way.
+          setBill({ ...data.bill, offer_label: offerLabel((data.offers ?? []).map((o) => o.name)) });
+          setOfferNotes(data.offer_notes ?? []);
           setQuotedCoupon(couponCode ? (data.coupon ?? null) : null);
           setQuotedPoints(redeemPoints > 0 ? (data.points ?? null) : null);
           setQuotedPass(data.pass ?? null);
@@ -815,14 +1102,38 @@ export function PosOrderEntry({
           // Only now do the numbers on screen describe the cart on screen.
           setBillStale(false);
         })
-        .catch(() => {});
+        .catch(() => {
+          // No answer (offline, timed out): say so, and ask again shortly.
+          if (cancelled) return;
+          setQuoteError('Could not reach the server to price this order — trying again…');
+          retry = setTimeout(() => setQuoteRetry((n) => n + 1), QUOTE_RETRY_MS);
+        });
     }, 250);
     return () => {
       cancelled = true;
       clearTimeout(t);
+      if (retry) clearTimeout(retry);
     };
     // refreshTick: a 409 from the order POST asks for a fresh quote.
-  }, [cart, subtotal, orderType, couponCode, redeemPoints, passCups, lookupPhone, refreshTick]);
+    // quoteRetry: the last quote got no answer.
+    // menuItems/posPricing: a fresh menu or pricing re-prices a local bill.
+  }, [
+    cart,
+    subtotal,
+    orderType,
+    couponCode,
+    redeemPoints,
+    passCups,
+    lookupPhone,
+    refreshTick,
+    quoteRetry,
+    menuItems,
+    posPricing,
+    ritual,
+    serverPricingPinned,
+    manualAmount,
+    manualReason,
+  ]);
 
   // --- Cart ops (reuse the web line-merge key so mechanics match) -----------
   const addLine = useCallback((line: Omit<CartItem, 'qty' | 'key'>, qty = 1) => {
@@ -862,9 +1173,11 @@ export function PosOrderEntry({
   // PRT-1/PRT-3 — the only way anything prints from this screen. What prints
   // when is still lib/staff/autoPrint's decision (unchanged); this is purely the
   // execution.
+  // `printOrder` is the ticket data the create answer carried: the first try
+  // prints from it instead of asking the server again.
   const enqueuePrints = useCallback(
-    (orderId: string, types: PrintType[]) => {
-      printDock.enqueue(types.map((type) => ({ orderId, type })));
+    (orderId: string, types: PrintType[], printOrder?: StaffPrintOrder | null) => {
+      printDock.enqueue(types.map((type) => ({ orderId, type, ...(printOrder ? { printOrder } : {}) })));
     },
     [printDock],
   );
@@ -944,6 +1257,58 @@ export function PosOrderEntry({
     setMobileCartOpen(true);
   }
 
+  // Keyboard (lib/staff/shortcuts.ts, components/staff/PosShortcuts.tsx): this
+  // screen owns search, Charge, and what Ctrl+N means while an order is open.
+  useShortcutHandler((action) => {
+    switch (action.type) {
+      case 'focus-search':
+        barRef.current?.focus();
+        barRef.current?.select();
+        return true;
+      case 'charge':
+        if (!paymentOpen) openPayment();
+        return true;
+      case 'navigate':
+        // Never leave mid-charge: the answer (order number, change due, the
+        // prints) lands on this screen.
+        if (inFlight.current || submitting) {
+          showToast('Placing the order — one moment…');
+          return true;
+        }
+        if (paymentOpen) {
+          showToast('Finish or close the payment first.');
+          return true;
+        }
+        // Ctrl+N on the counter's own New order: start again, after asking if
+        // there is something to lose. A table or an add goes to the plain
+        // counter screen as usual (its draft stays for when it's reopened).
+        if (action.href === NEW_ORDER_HREF && !isAddMode && !initialTableId) {
+          if (draftHasContent) setConfirmClear(true);
+          else barRef.current?.focus();
+          return true;
+        }
+        return false;
+      default:
+        return false;
+    }
+  });
+
+  /** Throw the open order away (Clear / Ctrl+N), draft included. */
+  function clearOrder() {
+    setConfirmClear(false);
+    setDraftRestored(false);
+    if (isAddMode) {
+      setCart([]);
+      setBill(null);
+      setSearch('');
+      setServerPricingPinned(false);
+    } else {
+      resetForNextOrder();
+    }
+    clearDraft(draftCtx);
+    barRef.current?.focus();
+  }
+
   const selectedTableLabel = tables.find((t) => t.id === tableId)?.label ?? null;
 
   // FLOW-1 — where the payment step lives. Docked, it takes the place of the
@@ -960,7 +1325,10 @@ export function PosOrderEntry({
   // POS4-1: settlement arrives as PARTS (a single-method payment is just one
   // part), so cash tendered and splits persist truthfully in order_payments and
   // the cash day counts only the cash that actually entered the drawer.
-  async function placeOrder(parts: PaymentPart[] | null) {
+  // `adjustment` is the ±₹5 round-off (short = settlement discount, extra =
+  // tip, with its reason): the parts then sum to the bill minus / plus it, and
+  // both go to the server together.
+  async function placeOrder(parts: PaymentPart[] | null, adjustment?: SettleAdjustmentInput) {
     // Double-submit guard: the ref blocks a second entry even before the
     // `submitting` state has flushed to disable the buttons.
     if (inFlight.current) return;
@@ -1016,6 +1384,21 @@ export function PosOrderEntry({
       // than were asked for, so an unapproved count would fail the order at the till.
       const passApproved = ritualApproved(quotedPass, passCups);
       if (passApproved) body.pass_drinks = passCups;
+      // The manager discount the bill on screen was priced with. The server
+      // re-checks who is signed in (manager or owner) and prices it again.
+      if (manualAmount > 0) body.manual_discount = { amount_inr: manualAmount, reason: manualReason };
+
+      // "Collect now" rides with the order: the server settles it the moment
+      // it exists, by the payment route's own rules, in the same call. And
+      // when anything may print, the answer carries the ticket data too, so
+      // the KOT and receipt print without a request each.
+      if (parts) body.settlement = adjustment ? { parts, adjustment } : { parts };
+      if (autoPrint.kot || autoPrint.bill) body.include_print_order = true;
+      // The total on screen — priced here or by the quote route. The server
+      // prices the order again and refuses it, before creating anything, if
+      // its total differs (409 total_changed below): no money moves on a
+      // number the staffer didn't see.
+      if (bill && !billStale) body.expected_total_inr = bill.total_inr;
 
       // POS4-2: one key per attempted order, generated BEFORE the request and
       // reused if this submit is retried — that's what makes a replay
@@ -1029,6 +1412,21 @@ export function PosOrderEntry({
 
       if (res.status !== 201) {
         const data = await res.json().catch(() => ({}));
+        // The server's total differs from the one on screen (a price, an offer
+        // or a setting changed since the menu loaded). Nothing was created. Show
+        // the server's bill, price the rest of this order there, refresh the
+        // menu, and let the staffer charge again with the same key.
+        if (res.status === 409 && data.code === 'total_changed' && data.bill) {
+          setBill({
+            ...(data.bill as PosBill),
+            offer_label: offerLabel(((data.offers ?? []) as AppliedOffer[]).map((o) => o.name)),
+          });
+          setBillStale(false);
+          setServerPricingPinned(true);
+          setSubmitError(data.error ?? 'The bill changed — check the new total and charge again.');
+          fetchMenu();
+          return;
+        }
         setSubmitError(data.error ?? 'Could not place the order. Please try again.');
         // The Ritual (or a coupon, or Beanies) changed between the quote and the
         // order: the server rolled the order back. Price the cart again and look
@@ -1036,7 +1434,10 @@ export function PosOrderEntry({
         // the old idempotency key was claimed by an order that no longer exists —
         // start the next attempt on a fresh one.
         const after = orderConflictAction(res.status, data.error, passApproved);
-        if (after.rotateKey) idempotencyKey.current = newIdempotencyKey();
+        if (after.rotateKey) {
+          idempotencyKey.current = newIdempotencyKey();
+          persistDraftRef.current(); // a reload now must not bring back the burnt key
+        }
         if (after.requote) {
           setBillStale(true);
           setRefreshTick((n) => n + 1);
@@ -1044,7 +1445,12 @@ export function PosOrderEntry({
         return;
       }
 
-      const { order, customer_account_created: accountCreated } = (await res.json()) as {
+      const {
+        order,
+        customer_account_created: accountCreated,
+        settlement,
+        print_order: printOrder,
+      } = (await res.json()) as {
         order: {
           id: string;
           order_number: number;
@@ -1054,6 +1460,9 @@ export function PosOrderEntry({
           order_kind?: string;
         };
         customer_account_created?: boolean;
+        // Absent from a server that predates them; see the fallback below.
+        settlement?: SettlementAnswer;
+        print_order?: StaffPrintOrder | null;
       };
       const numberLabel = formatOrderNumber(order.order_number);
       // Server-authoritative, like every other rupee on this screen.
@@ -1065,22 +1474,20 @@ export function PosOrderEntry({
       let settled = false;
       let note: string | null = null;
       // A bill brought to ₹0 (Ritual cups, a full coupon) is created already paid:
-      // there is nothing to record, and nothing to collect.
-      const createdPaid = order.payment_status === 'paid';
+      // there is nothing to record, and nothing to collect. The server answers
+      // settlement: null for it. (A replayed order reads 'paid' after its first
+      // attempt settled; its settlement answer says so, so it isn't mistaken
+      // for a ₹0 bill.)
+      const createdPaid = order.payment_status === 'paid' && !settlement;
       if (createdPaid) settled = true;
       if (parts && !createdPaid) {
-        const payRes = await fetch(`/api/orders/${order.id}/payment`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ parts }),
-        });
-        if (payRes.ok) {
-          const payData = (await payRes.json().catch(() => ({}))) as {
-            change_due_inr?: number;
-            order?: { total_inr: number | null; subtotal_inr: number };
-          };
-          changeDue = payData.change_due_inr ?? 0;
-          if (payData.order) totalInr = payData.order.total_inr ?? payData.order.subtotal_inr;
+        // A server from before settlement-with-the-order ignores the field:
+        // settle the old way, through the payment route.
+        const answer: SettlementAnswer =
+          settlement !== undefined ? settlement : await settleSeparately(order.id, parts, adjustment);
+        if (answer?.ok) {
+          changeDue = answer.change_due_inr ?? 0;
+          if (answer.order) totalInr = answer.order.total_inr ?? answer.order.subtotal_inr;
           settled = true;
           // PRN-6 / DRW-1 — no drawer kick here: it already opened when the
           // staffer tapped Cash (PosPaymentPanel), which is when the notes
@@ -1098,7 +1505,7 @@ export function PosOrderEntry({
       // no bill to print (the plan already says so) and, unlike the old pop-up
       // path, nothing here needs to happen inside the staffer's tap. Success is
       // silent; a job that doesn't report back within 10s raises the chip.
-      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled, orderKind: order.order_kind }));
+      enqueuePrints(order.id, placementPrintPlan(autoPrint, { settled, orderKind: order.order_kind }), printOrder);
 
       resetForNextOrder();
       setConfirmation({
@@ -1107,7 +1514,7 @@ export function PosOrderEntry({
         totalInr,
         paidAs:
           settled && parts && !createdPaid
-            ? describePaymentParts(parts)
+            ? [describePaymentParts(parts), describeSettleAdjustment(adjustment)].filter(Boolean).join(' · ')
             : createdPaid
               ? freeBillPaidAs(quotedPass?.applied ?? 0)
               : null,
@@ -1191,8 +1598,13 @@ export function PosOrderEntry({
         return;
       }
 
-      const data = (await res.json().catch(() => ({}))) as { added_item_ids?: string[] };
+      const data = (await res.json().catch(() => ({}))) as {
+        added_item_ids?: string[];
+        order?: { balance_due_inr?: number };
+      };
       const label = formatOrderNumber(addToOrder.orderNumber);
+      // A paid bill: say what is now owed, so the staffer knows to collect it.
+      const owed = data.order?.balance_due_inr ?? 0;
       setCart([]);
       setBill(null);
       setSearch('');
@@ -1202,7 +1614,9 @@ export function PosOrderEntry({
       const addedIds = data.added_item_ids ?? [];
       const printsKot = autoPrint.kot && addedIds.length > 0;
       if (printsKot) printDock.enqueue([{ orderId: addToOrder.id, type: 'kot', itemIds: addedIds }]);
-      showToast(`Added to order #${label}${printsKot ? ' · KOT printing' : ''}.`);
+      showToast(
+        `Added to order #${label}${owed > 0 ? ` · ₹${owed} balance to collect` : ''}${printsKot ? ' · KOT printing' : ''}.`,
+      );
       // Back to where the staffer came from (Tables, or the bill on Settle) so
       // the running total is visible in context — once the KOT has gone: the
       // print dock lives on this page, and leaving mid-print would cancel the
@@ -1219,6 +1633,8 @@ export function PosOrderEntry({
   function resetForNextOrder() {
     // A new order attempt gets a new key — this is the ONLY place it rotates.
     idempotencyKey.current = newIdempotencyKey();
+    // The next order is priced on this screen again.
+    setServerPricingPinned(false);
     setCart([]);
     setBill(null);
     setTableId(null);
@@ -1241,7 +1657,12 @@ export function PosOrderEntry({
     // Nor the last one's Ritual cups.
     setPassCups(0);
     setQuotedPass(null);
+    // A manager discount was for that customer only.
+    setManualDiscount(null);
+    setDiscountAmountInput('');
+    setDiscountReasonInput('');
     setQuoteError(null);
+    setOfferNotes([]);
     // POS-5 — a blank name field for the next customer is not "hand-typed",
     // and their "Last orders" (if any) belong to a number not yet entered.
     custNameUserEdited.current = false;
@@ -1266,6 +1687,21 @@ export function PosOrderEntry({
     setCouponInput('');
     setCouponCode('');
     setQuotedCoupon(null);
+  }
+
+  // A manager discount takes effect on Apply, with both an amount and a reason.
+  const discountAmountTyped = parseManualDiscountInput(discountAmountInput);
+  const discountReasonTyped = discountReasonInput.trim();
+  const canApplyDiscount = discountAmountTyped !== null && discountReasonTyped.length > 0;
+  function applyManualDiscount() {
+    if (discountAmountTyped === null || !discountReasonTyped) return;
+    setManualDiscount({ amountInr: discountAmountTyped, reason: discountReasonTyped });
+  }
+
+  function clearManualDiscount() {
+    setManualDiscount(null);
+    setDiscountAmountInput('');
+    setDiscountReasonInput('');
   }
 
   const displaySubtotal = bill?.subtotal_inr ?? subtotal;
@@ -1298,8 +1734,64 @@ export function PosOrderEntry({
                 } — one table, one bill.`
               : 'Punch in a dine-in or walk-in order.'}
           </p>
+          {isAddMode && addToOrder.paid ? (
+            <p className="mt-1 inline-block rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-900">
+              This bill is already paid — what you add here becomes a balance to collect on Settle.
+            </p>
+          ) : null}
         </div>
+        {draftHasContent && !submitting ? (
+          <button
+            type="button"
+            onClick={() => setConfirmClear(true)}
+            title={isAddMode ? 'Remove the items added here' : 'Start again with an empty order'}
+            className="min-h-[40px] shrink-0 rounded-md border border-line px-3 py-2 text-sm font-bold text-charcoal transition-colors hover:border-tan"
+          >
+            {isAddMode ? 'Clear items' : 'Clear order'}
+          </button>
+        ) : null}
       </div>
+
+      {/* The screen put back what was being punched before it was left (or the
+          app reloaded) — say so, so a staffer isn't surprised by a full cart. */}
+      {draftRestored ? (
+        <div
+          role="status"
+          className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-tan/60 bg-surface px-3 py-2 text-sm text-charcoal"
+        >
+          <span>Picked up where you left off — the order you were punching is back.</span>
+          <span className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setDraftRestored(false)}
+              className="rounded-md border border-line px-3 py-1 text-xs font-bold hover:border-tan"
+            >
+              OK
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmClear(true)}
+              className="rounded-md border border-charcoal px-3 py-1 text-xs font-bold hover:bg-charcoal hover:text-cream"
+            >
+              Start fresh
+            </button>
+          </span>
+        </div>
+      ) : null}
+
+      {confirmClear ? (
+        <ConfirmDialog
+          heading={isAddMode ? 'Clear these items?' : 'Start a new order?'}
+          body={
+            isAddMode
+              ? 'The items added on this screen will be removed. The running order itself is not touched.'
+              : 'The items and customer details on this screen will be cleared.'
+          }
+          confirmLabel={isAddMode ? 'Clear items' : 'Start new'}
+          onConfirm={clearOrder}
+          onCancel={() => setConfirmClear(false)}
+        />
+      ) : null}
 
       {/* Three columns on a tablet/desktop: categories down the left, the
           search bar and the chosen category's items in the middle, the order
@@ -1457,7 +1949,7 @@ export function PosOrderEntry({
                 <p className="mb-1 text-xs font-bold uppercase tracking-wide text-muted">Table</p>
                 {tables.length === 0 ? (
                   <p className="text-sm text-muted">
-                    No active tables — add tables in the owner settings first.
+                    {tablesLoaded ? 'No active tables — add tables in the owner settings first.' : 'Loading tables…'}
                   </p>
                 ) : (
                   // POS4-5: grouped by zone (the same grouping the tables board
@@ -1587,11 +2079,14 @@ export function PosOrderEntry({
                 {bill && bill.packaging_inr > 0 ? (
                   <BillRow label="Packaging" value={bill.packaging_inr} />
                 ) : null}
-                {/* VAL-1: the coupon + points discount, exactly as the server
-                    computed it. Nothing here is worked out on this tablet. */}
-                {bill && bill.discount_inr > 0 ? (
-                  <BillRow label="Discount" value={-bill.discount_inr} />
-                ) : null}
+                {/* VAL-1: the multi-buy offer, then the coupon + points
+                    discount, exactly as the server computed them. Nothing here
+                    is worked out on this tablet. */}
+                {bill
+                  ? discountRows(bill, bill.offer_label ?? 'Offer', 'Discount', manualDiscountStaffLabel(manualReason)).map((row) => (
+                      <BillRow key={row.label} label={row.label} value={-row.amountInr} />
+                    ))
+                  : null}
                 {/* HIOC Ritual: what the cups cover, the server's own figure, kept
                     apart from the coupon/Beanies discount above. */}
                 {ritualRow ? <BillRow label={ritualRow.label} value={ritualRow.value} /> : null}
@@ -1613,6 +2108,13 @@ export function PosOrderEntry({
                     {quoteError}
                   </p>
                 ) : null}
+                {/* An offer the cart qualifies for but can't have alongside the
+                    coupon or Beanies: said here, so the staffer can choose. */}
+                {offerNotes.map((note) => (
+                  <p key={note} className="mt-1 text-xs font-semibold text-tan-dark">
+                    {note}
+                  </p>
+                ))}
               </div>
             ) : null}
 
@@ -1937,6 +2439,81 @@ export function PosOrderEntry({
                       : `Add the customer’s phone to use their ${LOYALTY_UNIT.many}.`}
                   </p>
                 )}
+              </div>
+            ) : null}
+
+            {/* Manager discount — a manager or the owner only (canDiscount).
+                An amount in whole rupees and a reason, both required; it comes
+                off last, before GST, and the bill above shows what it took. */}
+            {canDiscount && cart.length > 0 ? (
+              <div className="flex flex-col gap-2 rounded-md border border-line px-3 py-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-muted">Manager discount</p>
+                <div className="flex gap-2">
+                  <div className="relative w-28 shrink-0">
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted"
+                    >
+                      ₹
+                    </span>
+                    <input
+                      value={discountAmountInput}
+                      onChange={(e) => setDiscountAmountInput(e.target.value.replace(/[^0-9]/g, ''))}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          applyManualDiscount();
+                        }
+                      }}
+                      disabled={manualDiscount !== null}
+                      inputMode="numeric"
+                      autoComplete="off"
+                      aria-label="Discount amount in rupees"
+                      placeholder="Amount"
+                      className="w-full rounded-md border border-line py-2 pl-7 pr-3 text-sm tabular-nums outline-none focus:border-tan disabled:opacity-60"
+                    />
+                  </div>
+                  <input
+                    value={discountReasonInput}
+                    onChange={(e) => setDiscountReasonInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        applyManualDiscount();
+                      }
+                    }}
+                    disabled={manualDiscount !== null}
+                    maxLength={MAX_MANUAL_DISCOUNT_REASON_LENGTH}
+                    autoComplete="off"
+                    aria-label="Reason for the discount"
+                    placeholder="Reason"
+                    className="min-w-0 flex-1 rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-tan disabled:opacity-60"
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  {/* aria-live: the bill's verdict on the discount arrives with the re-price. */}
+                  <p aria-live="polite" className="text-xs">
+                    {manualDiscount && bill && !billStale ? (
+                      (bill.manual_discount_inr ?? 0) < manualDiscount.amountInr ? (
+                        <span className="font-bold text-tan-dark">
+                          Only ₹{bill.manual_discount_inr ?? 0} came off — that&rsquo;s all the bill had left.
+                        </span>
+                      ) : (
+                        <span className="font-bold text-green-700">₹{manualDiscount.amountInr} off applied.</span>
+                      )
+                    ) : manualDiscount ? null : (
+                      <span className="text-muted">Enter an amount and a reason.</span>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={manualDiscount ? clearManualDiscount : applyManualDiscount}
+                    disabled={!manualDiscount && !canApplyDiscount}
+                    className="shrink-0 rounded-md border border-line px-3 py-2 text-xs font-bold text-charcoal transition-colors hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {manualDiscount ? 'Remove' : 'Apply'}
+                  </button>
+                </div>
               </div>
             ) : null}
 

@@ -1,12 +1,43 @@
 import type { Metadata } from 'next';
 import { PolicyLayout, PolicySection } from '@/components/legal/PolicyLayout';
-import { BUSINESS } from '@/lib/legal';
+import { BUSINESS, COFFEY_STEPS_POLICY_UPDATED, SHOP_POLICY_UPDATED, TRAFFIC_POLICY_UPDATED } from '@/lib/legal';
+import { flags } from '@/lib/flags';
 
 export const metadata: Metadata = { title: 'Privacy Policy' };
 
 export default function PrivacyPage() {
+  // Ask Coffey's wizard steps (docs/COFFEY-SPEC.md §10.7): part of the usage
+  // data, said only while Ask Coffey is switched on. What it says must stay
+  // true of app/api/suggest/steps/route.ts and components/suggest/api.ts.
+  const coffeySteps = flags.suggest ? (
+    <>
+      {' '}
+      When you use Ask Coffey, our helper for choosing what to order, we note which of its steps you reach: that you
+      opened it, that you chose a feeling, and each time you asked for picks. This shows us where people stop. Each
+      of these step records holds only the step, the time and a random id that your browser keeps between visits
+      (plus your account, if you are signed in). It holds none of your answers, and we do not store your IP address
+      with it. We record no step if your browser sends a Global Privacy Control or Do Not Track signal.
+    </>
+  ) : null;
+
   return (
-    <PolicyLayout title="Privacy Policy">
+    // The shop lines (delivery address, courier) appear only while the
+    // Instant Coffee shop is switched on (docs/INSTANT-COFFEE-SHOP.md), the
+    // visit-tracking lines only while traffic tracking is
+    // (docs/TRAFFIC-TRACKING.md), and the Ask Coffey step lines only while Ask
+    // Coffey is. The newest wording that is showing sets the date.
+    <PolicyLayout
+      title="Privacy Policy"
+      updated={
+        flags.suggest
+          ? COFFEY_STEPS_POLICY_UPDATED
+          : flags.trafficTracking
+            ? TRAFFIC_POLICY_UPDATED
+            : flags.shop
+              ? SHOP_POLICY_UPDATED
+              : undefined
+      }
+    >
       <p>
         This Privacy Policy explains how {BUSINESS.legalName} (&ldquo;{BUSINESS.name}&rdquo;,
         &ldquo;we&rdquo;) collects, uses, and protects your personal data when you use our website
@@ -18,8 +49,31 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-5">
           <li><strong>Contact details</strong> you provide at checkout or sign-up: name, mobile number, and (if you create an account) email.</li>
           <li><strong>Order information</strong>: items ordered, pickup time, order notes, and order history.</li>
+          {flags.shop ? (
+            <li>
+              <strong>Delivery details</strong> for Instant Coffee orders we ship: name, delivery address, pincode, mobile
+              number and email, and — only if you choose to share it — a <strong>map pin</strong> of the delivery location
+              (your device&apos;s location when you tap &ldquo;Use my current location&rdquo;, or where you place the pin on
+              the map). It is used only to deliver that order.
+            </li>
+          ) : null}
           <li><strong>Payment references</strong>: transaction identifiers from our payment gateway. We do <em>not</em> collect or store your card number, CVV, or UPI PIN.</li>
-          <li><strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.</li>
+          {flags.trafficTracking ? (
+            <li>
+              <strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used. When you open
+              our ordering or shop pages we note which page it was, the website or campaign link that sent you there (for
+              example Instagram, Google or a link we tagged), whether you are on a phone, tablet or computer, your
+              approximate country and city, and whether that visit ended in an order. We use a random visit id kept only in
+              your browser tab, with no cookie, and we do not store your IP address or tie this to your name, number or
+              account. If your browser sends a Global Privacy Control or Do Not Track signal, we record nothing.
+              {coffeySteps}
+            </li>
+          ) : (
+            <li>
+              <strong>Usage data</strong>: basic, privacy-friendly analytics about how the site is used.
+              {coffeySteps}
+            </li>
+          )}
         </ul>
       </PolicySection>
 
@@ -47,6 +101,14 @@ export default function PrivacyPage() {
         <ul className="list-disc pl-5">
           <li>Our <strong>payment gateway</strong> to process payments and refunds.</li>
           <li>Our <strong>SMS/WhatsApp provider</strong> to deliver order notifications.</li>
+          {flags.shop ? (
+            <li>
+              Our <strong>shipping partner (Shiprocket) and its courier companies</strong> — the name,
+              delivery address, mobile number and map pin (if given) on an Instant Coffee order, to deliver it
+              — <strong>Google Maps</strong>, which shows the map when you place a pin, and our{' '}
+              <strong>email provider</strong>, to send your order and tracking emails.
+            </li>
+          ) : null}
           <li>Where required by law or to protect our rights.</li>
         </ul>
         <p>We do not sell your personal data.</p>
@@ -56,6 +118,8 @@ export default function PrivacyPage() {
         <p>
           We keep order and account data for as long as needed to provide the service and to meet
           legal, accounting, and tax requirements, after which it is deleted or anonymised.
+          {flags.trafficTracking ? ' Usage data about visits to our ordering and shop pages is deleted after 13 months.' : null}
+          {flags.suggest ? ' The Ask Coffey step records described above are deleted after 13 months.' : null}
         </p>
       </PolicySection>
 

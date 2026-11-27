@@ -102,6 +102,18 @@ export const flags = {
   // while sales leave stock alone; switched on ("flag-off day") once the
   // shelves and recipes are in. Shown on the Stock tab, hence NEXT_PUBLIC_.
   inventorySales: boolEnv(process.env.NEXT_PUBLIC_FLAG_INVENTORY_SALES, false),
+  // Warehouse (docs/WAREHOUSE-SPEC.md): the owner's warehouse stock sheet,
+  // "Request stock" filled from the warehouse (dispatch → in transit → counted
+  // in at the POS → any difference settled by the owner), returns to the
+  // warehouse, who delivers each transfer, and an alert to the owner when a
+  // request is placed. Needs `inventory` on too. Default OFF: until
+  // supabase/2026-11-warehouse.sql is applied and the owner has entered the
+  // warehouse's opening stock, every dispatch would read as a shortfall.
+  // Requests made while it is off stay store-room requests for good (the route
+  // is fixed on the row). Gates the owner Warehouse page and its APIs, the
+  // returns API, and which route a new request takes — read on the server and
+  // by both screens, hence NEXT_PUBLIC_.
+  warehouse: boolEnv(process.env.NEXT_PUBLIC_FLAG_WAREHOUSE, false),
   // HIOC Ritual — prepaid coffee passes (docs/COFFEE-PASS-SPEC.md): two plans
   // (7 cups for the price of 5 for a week, 7 for 6 over 30 days) sold on the
   // website and at the POS, and redeemed on either. Default OFF: the plans are
@@ -122,6 +134,36 @@ export const flags = {
   // kill switch, default off). NEXT_PUBLIC_ because the nav, the owner page and the
   // order-confirmation card all decide client-side whether to render.
   marketing: boolEnv(process.env.NEXT_PUBLIC_FLAG_MARKETING, false),
+  // Instant Coffee shop (docs/INSTANT-COFFEE-SHOP.md): /shop sells the jars
+  // online (₹399 each; introductory offer 2 for ₹599 · 3 for ₹749; ₹49
+  // shipping below 3 jars, free from 3), paid by Razorpay and shipped with
+  // Shiprocket from /owner/shop. Default OFF: apply
+  // supabase/2026-11-instant-coffee-shop.sql, set the Razorpay and Shiprocket
+  // keys, and review the shop wording first (Shipping & Delivery, Refund &
+  // Cancellation, Terms and Privacy switch to it with this flag). Gates /shop,
+  // the /api/shop checkout, the "Shop" link in the header and the popup's
+  // "Order online" button, and the owner nav entry (the owner page itself
+  // stays reachable to check setup). NEXT_PUBLIC_ because the header and popup
+  // decide client-side.
+  shop: boolEnv(process.env.NEXT_PUBLIC_FLAG_SHOP, false),
+  // First-party traffic tracking (docs/TRAFFIC-TRACKING.md): where visitors to
+  // the ordering and Shop pages come from (linking site and utm_* tags), and
+  // which of those visits end in an order, shown on Owner → Traffic. Default
+  // ON: every write is best-effort, so until
+  // supabase/2026-11-traffic-tracking.sql is applied nothing is recorded and
+  // nothing breaks. NEXT_PUBLIC_FLAG_TRAFFIC_TRACKING=false stops the browser
+  // sending page views and the checkout routes recording orders. NEXT_PUBLIC_
+  // because the tracker runs in the browser.
+  trafficTracking: boolEnv(process.env.NEXT_PUBLIC_FLAG_TRAFFIC_TRACKING, true),
+  // Offers as phone notifications (docs/WEB-PUSH-SPEC.md): logged-in customers
+  // opt in on the order page and Account → Profile, and the owner sends a
+  // browser push from /owner/marketing → Push. Default OFF: apply
+  // supabase/2026-11-web-push.sql and set NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+  // VAPID_PRIVATE_KEY and VAPID_SUBJECT first. While off, every push route,
+  // /sw.js and the customer manifest answer 404 and every piece of push UI
+  // renders nothing. NEXT_PUBLIC_ because the cards and the owner tab decide
+  // client-side.
+  webPush: boolEnv(process.env.NEXT_PUBLIC_FLAG_WEB_PUSH, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

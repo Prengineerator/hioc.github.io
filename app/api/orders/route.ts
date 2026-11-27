@@ -42,7 +42,14 @@ import {
 import { markProfileStale } from '@/lib/suggest/profileStore';
 import { PAIRING_LIMITS, SUGGEST_LIMITS } from '@/lib/suggest/types';
 import { firstInStoreOnlyItem } from '@/lib/menu/inStore';
-import { allocateOrderPass, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { allocateOrderPass, afterOffers, afterPass, composeOrderBill } from '@/lib/orders/passPricing';
+import { billOffers, offerTaxableShare, type SpendOffer } from '@/lib/orders/offers';
+import {
+  loadActiveOffers,
+  loadActiveSpendOffers,
+  loadSpendOfferBlocks,
+  recordSpendRedemption,
+} from '@/lib/orders/offersServer';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { parsePassDrinks, passRedeemMessage, passShortfallMessage } from '@/lib/passes/rules';
 import { redeemPassDrinks } from '@/lib/passes/server';
@@ -50,7 +57,12 @@ import type { AllocationResult } from '@/lib/passes/types';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { getStaffSurface } from '@/lib/staff/surface';
 import { canTakeOrders, ORDERING_OFF_MESSAGE } from '@/lib/staff/surfaceRules';
+import { settleOrderPayment, type CounterActor, type CounterSettlement } from '@/lib/orders/settlePayment';
+import { getStaffPrintOrder, type StaffPrintOrder } from '@/lib/orders/getStaffPrintOrder';
+import { canGiveManualDiscount, MANUAL_DISCOUNT_FORBIDDEN, parseManualDiscount } from '@/lib/orders/manualDiscount';
 import type { AddonGroup, Coupon, MenuItem, OrderStatus, OrderType, PaymentMethod, PaymentStatus } from '@/lib/types';
+import { recordTrafficConversion, trafficContext } from '@/lib/traffic/record';
+import { parseTrafficAttribution } from '@/lib/traffic/validate';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,9 +111,24 @@ export async function POST(request: Request) {
     coupon_code,
     redeem_points,
     pass_drinks: rawPassDrinks,
+    manual_discount: rawManualDiscount,
     suggestion_session_ids,
     pairing_lines,
+    traffic: rawTraffic,
+    settlement: rawSettlement,
+    include_print_order: rawIncludePrintOrder,
+    expected_total_inr: rawExpectedTotal,
   } = body;
+
+  // The total the placing screen showed (the POS prices a cart on its own
+  // screen now — lib/pos/localQuote.ts). Optional: a caller that doesn't send
+  // it (the web checkout, an older POS build) is priced and charged exactly as
+  // before. When sent, a different total here refuses the order before it is
+  // created — see the check after the idempotency claim below.
+  const expectedTotalInr =
+    typeof rawExpectedTotal === 'number' && Number.isFinite(rawExpectedTotal) && rawExpectedTotal >= 0
+      ? rawExpectedTotal
+      : null;
 
   // Phase-7 (SUG-8/SUG-9): distinct session ids the cart's lines carry, so the
   // order can be attributed back to the /suggest sessions that produced them.
@@ -112,6 +139,9 @@ export async function POST(request: Request) {
   // that were added from the "Pairs well with your order" card. Parsed
   // leniently for the same reason — anything malformed is dropped, never a 400.
   const pairingLines = parsePairingLines(pairing_lines, PAIRING_LIMITS.orderLinesMax);
+  // First-party traffic tracking (docs/TRAFFIC-TRACKING.md): the visit this
+  // order came from. Lenient like the two above: anything unusable is null.
+  const trafficAttribution = parseTrafficAttribution(rawTraffic);
 
   // Phase-3 (FND3-2/3): a request carrying an authenticated staff/manager/owner
   // session — or, PIN-3, an enrolled device's PIN operator — is the second
@@ -143,6 +173,23 @@ export async function POST(request: Request) {
   if (isStaff && !canTakeOrders(await getStaffSurface(), settings.staff_web_ordering)) {
     return errorResponse(403, ORDERING_OFF_MESSAGE);
   }
+
+  // The counter's "Collect now", in the same request: how the customer paid
+  // rides along with the order, and the order is settled the moment it exists,
+  // by the same rules as PATCH /api/orders/[id]/payment (settleOrderPayment).
+  // One function call instead of two per counter sale. Only the counter records
+  // payments, so anyone else sending one is refused before anything is written.
+  const settlementRequest =
+    rawSettlement === undefined || rawSettlement === null ? null : (rawSettlement as Record<string, unknown>);
+  if (settlementRequest !== null) {
+    if (!actor) return errorResponse(403, 'Only the counter can record a payment.');
+    if (typeof rawSettlement !== 'object' || Array.isArray(rawSettlement)) {
+      return errorResponse(400, 'settlement must be an object');
+    }
+  }
+  // The counter prints its tickets from this answer rather than asking for each
+  // one again (lib/pos/printQueue.ts). Staff data, so staff only.
+  const wantsPrintOrder = actor !== null && rawIncludePrintOrder === true;
 
   // Phase-3 (QR-1/D6): a NON-staff request carrying a `qr_token` is the third
   // order-entry channel — a seated customer who scanned the table QR. The token
@@ -266,6 +313,20 @@ export async function POST(request: Request) {
   const requestedPassDrinks = passDrinksParsed.value;
   if (requestedPassDrinks > 0 && !flags.coffeePass) {
     return errorResponse(400, `${PASS_PROGRAM_NAME} isn't available yet`);
+  }
+
+  // Manager discount (lib/orders/manualDiscount.ts): an amount and a reason a
+  // manager or the owner typed at the POS. The role is the counter actor's —
+  // the classic session, or the enrolled device's PIN operator — read on the
+  // server, never a body field, so a staff operator (or anyone off the counter)
+  // is refused whatever the request says.
+  const manualParsed = parseManualDiscount(rawManualDiscount);
+  if (!manualParsed.ok) {
+    return errorResponse(400, manualParsed.error);
+  }
+  const manualRequest = manualParsed.value;
+  if (manualRequest && !canGiveManualDiscount(actor?.role)) {
+    return errorResponse(403, MANUAL_DISCOUNT_FORBIDDEN);
   }
 
   // Online vs pay-at-counter (PAY-1). Default preserves Phase-1 behavior.
@@ -415,10 +476,13 @@ export async function POST(request: Request) {
   }
 
   const menuItemIds = [...new Set(items.map((item) => item.menu_item_id))];
-  const { data: menuRows, error: menuError } = await admin
-    .from('menu_items')
-    .select(MENU_ITEM_SELECT)
-    .in('id', menuItemIds);
+  // The live offers on these items (Promotions → Offers: multi-buy and spend)
+  // load alongside the menu rows; a failed offers read just means no offer.
+  const [{ data: menuRows, error: menuError }, offersByItem, spendOffers] = await Promise.all([
+    admin.from('menu_items').select(MENU_ITEM_SELECT).in('id', menuItemIds),
+    loadActiveOffers(admin, menuItemIds),
+    loadActiveSpendOffers(admin, menuItemIds),
+  ]);
 
   if (menuError) {
     return errorResponse(500, 'Failed to validate order items');
@@ -440,7 +504,13 @@ export async function POST(request: Request) {
 
   // Validate every line and compute authoritative prices server-side —
   // never trust a client-submitted price. Shared with the TAB-1 add path.
-  const resolved = resolveOrderLines(items, menuById, switchesFromSettings(settings));
+  const resolved = resolveOrderLines(
+    items,
+    menuById,
+    switchesFromSettings(settings),
+    offersByItem,
+    new Set(spendOffers.map((o: SpendOffer) => o.menu_item_id)),
+  );
   if (!resolved.ok) {
     return errorResponse(400, resolved.error);
   }
@@ -544,8 +614,17 @@ export async function POST(request: Request) {
   }
   const passCoveredInr = passAllocation?.covered_inr ?? 0;
   const passCoveredTaxableInr = passAllocation?.covered_taxable_inr ?? 0;
-  // What a coupon and Beanies are computed on (CP-D12).
-  const payableAfterPass = afterPass(subtotal_inr, passCoveredInr);
+  // Offers (lib/orders/offers.ts) come off next: they are part of the price.
+  // First without a spend offer — it can't be combined with a coupon or
+  // Beanies — so the coupon and Beanies are worked out on what the multi-buy
+  // offers leave; if neither ends up applied, the spend offer is tried below.
+  // Once per customer, by phone: no number on the order, or a number that has
+  // had a spend offer already, keeps that offer off (with a note on the quote).
+  const spendBlocked = await loadSpendOfferBlocks(admin, spendOffers, trimmedPhone || null);
+  const offerInput = { lines: resolvedLines, spendOffers, passCoveredInr, spendBlocked };
+  let offers = billOffers({ ...offerInput, otherDiscountApplied: true });
+  // What a coupon and Beanies are computed on (CP-D12), after the offers.
+  const payableAfterOffers = afterOffers(afterPass(subtotal_inr, passCoveredInr), offers.discountInr);
 
   // Coupon (FND-3) — validated + computed server-side (authoritative); the
   // checkout preview (POST /api/orders/quote) shows the same numbers ahead of
@@ -561,7 +640,7 @@ export async function POST(request: Request) {
       ),
     ];
     const couponResult = await validateAndComputeCoupon(coupon_code.trim(), {
-      subtotalInr: payableAfterPass,
+      subtotalInr: payableAfterOffers,
       userId: loyaltyUserId,
       itemIds: resolvedLines.map((l) => l.menu_item_id),
       categories,
@@ -574,7 +653,7 @@ export async function POST(request: Request) {
     if (!couponResult.ok) {
       return errorResponse(400, couponResult.reason ?? 'Coupon is not valid for this order');
     }
-    couponDiscountInr = Math.min(couponResult.discountInr, payableAfterPass);
+    couponDiscountInr = Math.min(couponResult.discountInr, payableAfterOffers);
     appliedCoupon = couponResult.coupon ?? null;
   }
 
@@ -598,7 +677,7 @@ export async function POST(request: Request) {
             : `You must be logged in to redeem ${LOYALTY_UNIT.many}`,
         );
       }
-      const remaining = Math.max(0, payableAfterPass - couponDiscountInr);
+      const remaining = Math.max(0, payableAfterOffers - couponDiscountInr);
       const quote = await quoteRedemption(loyaltyUserId, redeem_points, remaining);
       if (!quote.ok) {
         return errorResponse(400, quote.reason ?? `${LOYALTY_UNIT.many} could not be redeemed`);
@@ -608,6 +687,15 @@ export async function POST(request: Request) {
     }
   }
 
+  // No coupon or Beanies on this bill: a spend offer may apply (when it saves
+  // more than the multi-buy offers — it never stacks with them).
+  if (couponDiscountInr + pointsDiscountInr === 0) {
+    offers = billOffers({ ...offerInput, otherDiscountApplied: false });
+  }
+  // The live spend offers on items this bill has, kept on the order so a
+  // correction re-checks the minimum against the offer as it was sold.
+  const spendSnapshot = spendOffers.filter((o) => resolvedLines.some((l) => l.menu_item_id === o.menu_item_id));
+
   // Authoritative bill snapshot (C5/CUS-031): GST + packaging + discount + grand
   // total. GST applies only to the non-exempt lines (2026-09-gst-exempt), less
   // what the pass covers there (CP-D11); dine-in has no packaging charge (D5).
@@ -616,8 +704,13 @@ export async function POST(request: Request) {
     settings,
     subtotalInr: subtotal_inr,
     taxableSubtotalInr: resolved.taxableSubtotalInr,
+    offerDiscountInr: offers.discountInr,
+    // An offer comes out of its own item's value for GST (a GST-free jar's
+    // offer leaves the café items' GST alone).
+    offerTaxableShare: offerTaxableShare(resolvedLines),
     couponDiscountInr,
     pointsDiscountInr,
+    manualDiscountInr: manualRequest?.amountInr ?? 0,
     passCoveredInr,
     passCoveredTaxableInr,
     isDineIn,
@@ -652,8 +745,10 @@ export async function POST(request: Request) {
   // POS4-2: claim the idempotency key immediately before creating. Claiming here
   // rather than at the top of the handler means the many validation early-returns
   // above don't burn a key the staffer will legitimately retry with.
+  let claimedKey = false;
   if (idempotencyKey) {
     const claim = await claimIdempotencyKey(admin, idempotencyKey, userId);
+    claimedKey = claim.state === 'claimed';
     if (claim.state === 'replay') {
       // The original request DID succeed — the response just never arrived.
       // Return its order so the retry is a no-op instead of a duplicate.
@@ -663,8 +758,20 @@ export async function POST(request: Request) {
         .eq('id', claim.orderId)
         .single();
       if (prior) {
+        const priorOrder = toOrderResponse(prior as OrderRowWithItems);
+        // The first attempt may have settled before its answer was lost, or
+        // not; settling again with the same parts is a re-settle (it replaces
+        // them, and the bill send is idempotent), so the retry ends in the same
+        // state either way.
+        const extras = actor
+          ? await counterExtras(actor, priorOrder.id, {
+              createdPaid: (priorOrder.total_inr ?? priorOrder.subtotal_inr) === 0,
+              settlementRequest,
+              wantsPrintOrder,
+            })
+          : {};
         return NextResponse.json(
-          { order: toOrderResponse(prior as OrderRowWithItems), payment: null, replayed: true },
+          { order: priorOrder, payment: null, replayed: true, ...extras },
           { status: 201 },
         );
       }
@@ -673,6 +780,26 @@ export async function POST(request: Request) {
     }
     // 'unavailable' (migration not applied) falls through: taking the order
     // matters more than the guard, and claimIdempotencyKey logged it.
+  }
+
+  // The screen priced this cart to a different total than the server does: a
+  // price, an offer or a setting changed after it loaded its menu. Refuse now —
+  // after the replay check, so a retry of an order that WAS placed still gets
+  // that order back; before anything is created, settled or printed, so no
+  // money moves on a number nobody saw — and hand back this bill, so the
+  // counter shows the right total and charges again. The key is released: the
+  // retry with the same key is a fresh attempt, not a duplicate.
+  if (expectedTotalInr !== null && Math.round(expectedTotalInr) !== Math.round(bill.total_inr)) {
+    if (idempotencyKey && claimedKey) await releaseIdempotencyKey(admin, idempotencyKey);
+    return NextResponse.json(
+      {
+        error: `The bill changed — the total is now ₹${bill.total_inr}. Check it and charge again.`,
+        code: 'total_changed',
+        bill,
+        offers: offers.offers,
+      },
+      { status: 409 },
+    );
   }
 
   // POS-ACC — a counter order with a number no account holds opens that
@@ -714,6 +841,25 @@ export async function POST(request: Request) {
     // Only sent when a pass paid for something, so an order that uses no pass
     // never depends on the column existing (2026-10-coffee-pass.sql).
     ...(bill.pass_discount_inr > 0 ? { pass_discount_inr: bill.pass_discount_inr } : {}),
+    // The offer part of discount_inr, only when there is one: an offer can only
+    // exist once 2026-10-item-offers.sql is applied, which adds this column.
+    ...(bill.offer_discount_inr > 0 ? { offer_discount_inr: bill.offer_discount_inr } : {}),
+    // The offer row's label when it is a spend offer (a multi-buy label is read
+    // off the lines' snapshots), so other orders never need the column.
+    ...(bill.offer_discount_inr > 0 && offers.kind === 'spend' ? { offer_name: offers.label } : {}),
+    // Spend offers on this bill's items (2026-11-spend-offers.sql), only when
+    // there are any, so other orders never need the column.
+    ...(spendSnapshot.length > 0 ? { spend_offers: spendSnapshot } : {}),
+    // A manager discount (2026-11-manual-discount.sql): what came off, why and
+    // who gave it — only when there is one, so other orders never need the
+    // columns. The amount is the one the bill applied (capped at what was left).
+    ...(bill.manual_discount_inr > 0 && manualRequest && actor
+      ? {
+          manual_discount_inr: bill.manual_discount_inr,
+          manual_discount_reason: manualRequest.reason,
+          manual_discount_by: actor.user.id,
+        }
+      : {}),
     // Table service needs no token; a website dine-in is collected at the counter.
     pickup_code: tableId ? null : generatePickupCode(),
     notes: notes ?? '',
@@ -736,6 +882,15 @@ export async function POST(request: Request) {
     .insert(linkedFields)
     .select()
     .single();
+
+  // A manager discount can't be taken without the columns that say why and who:
+  // refuse it plainly (nothing was created) rather than charge a discount
+  // nobody can account for later. Every other order is unaffected.
+  if (bill.manual_discount_inr > 0 && isMissingColumnError(orderError) && /manual_discount/i.test(orderError?.message ?? '')) {
+    console.error('orders.manual_discount_* is missing — is supabase/2026-11-manual-discount.sql applied?', orderError);
+    if (idempotencyKey && claimedKey) await releaseIdempotencyKey(admin, idempotencyKey);
+    return errorResponse(503, 'Manager discounts aren\'t set up on this database yet — place the order without one.');
+  }
 
   // The column isn't there yet. Losing the loyalty link costs a regular some
   // points; refusing to take a paying customer's order because a migration is
@@ -865,6 +1020,12 @@ export async function POST(request: Request) {
       }
       return errorResponse(409, `${passRedeemMessage(redeemed)} Please review your bill and try again.`);
     }
+  }
+
+  // The spend offer this customer just had (once per customer, by phone).
+  const appliedSpend = offers.kind === 'spend' ? offers.offers[0]?.offer_id : undefined;
+  if (appliedSpend && trimmedPhone) {
+    await recordSpendRedemption(admin, { offerId: appliedSpend, phone: trimmedPhone, orderId: orderRow.id as string });
   }
 
   // Snapshot the coupon redemption ATOMICALLY (FND-3 / H1): try_redeem_coupon
@@ -1003,6 +1164,21 @@ export async function POST(request: Request) {
       }),
     );
   }
+  // Which visit (Instagram, Google, a tagged WhatsApp offer…) this customer
+  // order came from, for Owner → Traffic. Customer orders only: a counter
+  // order is not a website visit. Never throws; the table may not exist yet.
+  if (!isStaff && trafficAttribution) {
+    runAfterResponse(
+      recordTrafficConversion(admin, {
+        event: 'order',
+        attribution: trafficAttribution,
+        route: isTableQr ? '/t/[token]' : '/checkout',
+        context: trafficContext(request),
+        orderId: orderRow.id as string,
+        valueInr: bill.total_inr,
+      }),
+    );
+  }
   // Only while the engine is live: profiles are built only then, and a
   // recompute also triggers on "an order newer than source_order_at", so this
   // is a freshness nudge — not worth two round-trips on every order otherwise.
@@ -1030,6 +1206,17 @@ export async function POST(request: Request) {
     runAfterResponse(sendBillNotification(response));
   }
 
+  // Settled after everything above is committed: a payment that fails leaves
+  // the order standing, unpaid, exactly as when the POS settled it separately.
+  // A ₹0 bill was created paid and has nothing to settle.
+  const extras = actor
+    ? await counterExtras(actor, orderRow.id as string, {
+        createdPaid: response.payment_status === 'paid',
+        settlementRequest,
+        wantsPrintOrder,
+      })
+    : {};
+
   // `payment_unavailable` tells the client the customer asked to pay online but
   // the gateway failed, so the order was switched to pay-at-counter above — the
   // client shows that instead of silently landing on the order page.
@@ -1041,9 +1228,46 @@ export async function POST(request: Request) {
       // POS-ACC: the counter's confirmation says so, so the staffer can tell
       // the customer their points are waiting under this number.
       ...(counterAccountCreated ? { customer_account_created: true } : {}),
+      ...extras,
     },
     { status: 201 },
   );
+}
+
+/**
+ * The counter-only parts of the create answer: the settle it asked for and the
+ * ticket data it prints from. Each is present only when asked for. Never
+ * throws: the order already exists, so a failure here is reported, not fatal.
+ */
+async function counterExtras(
+  actor: CounterActor,
+  orderId: string,
+  opts: { createdPaid: boolean; settlementRequest: Record<string, unknown> | null; wantsPrintOrder: boolean },
+): Promise<{ settlement?: CounterSettlement; print_order?: StaffPrintOrder | null }> {
+  const extras: { settlement?: CounterSettlement; print_order?: StaffPrintOrder | null } = {};
+  if (opts.settlementRequest) {
+    if (opts.createdPaid) {
+      extras.settlement = null;
+    } else {
+      try {
+        const outcome = await settleOrderPayment(actor, orderId, opts.settlementRequest);
+        extras.settlement = outcome.ok
+          ? { ok: true, ...outcome.body }
+          : { ok: false, status: outcome.status, error: outcome.error };
+      } catch (err) {
+        console.error(`settle with the order failed for ${orderId}`, err);
+        extras.settlement = { ok: false, status: 500, error: 'Failed to record payment' };
+      }
+    }
+  }
+  // After the settle, so a receipt printed from it says how it was paid.
+  if (opts.wantsPrintOrder) {
+    extras.print_order = await getStaffPrintOrder(orderId).catch((err) => {
+      console.error(`print order load failed for ${orderId}`, err);
+      return null;
+    });
+  }
+  return extras;
 }
 
 // GET /api/orders — staff-only. The order board itself.
@@ -1091,6 +1315,27 @@ export async function GET(request: Request) {
       .order('created_at', { ascending: true })
       .limit(MAX_ALL_ORDERS_ROWS);
     if (error) return errorResponse(500, 'Failed to load unpaid orders');
+    return NextResponse.json({ orders: (data ?? []).map((row) => toOrderResponse(row as OrderRowWithItems)) });
+  }
+
+  // ?payment=balance — the Settle screen's other half: PAID bills changed after
+  // they were paid with a difference still to settle either way (more to
+  // collect, or some to give back — lib/orders/paidChange.ts), from ANY day,
+  // oldest first. A database without 2026-11-paid-order-changes.sql has no such
+  // bills: the missing column reads as an empty list, not an error.
+  if (searchParams.get('payment') === 'balance') {
+    const { data, error } = await admin
+      .from('orders')
+      .select('*, order_items(*, order_item_addons(*))')
+      .eq('payment_status', 'paid')
+      .neq('balance_due_inr', 0)
+      .not('status', 'in', '(cancelled,rejected)')
+      .order('created_at', { ascending: true })
+      .limit(MAX_ALL_ORDERS_ROWS);
+    if (error) {
+      if ((error as { code?: string }).code === '42703') return NextResponse.json({ orders: [] });
+      return errorResponse(500, 'Failed to load bills with a balance');
+    }
     return NextResponse.json({ orders: (data ?? []).map((row) => toOrderResponse(row as OrderRowWithItems)) });
   }
 

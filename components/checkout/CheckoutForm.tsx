@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { cartTaxableSubtotal, useCart } from '@/lib/cart/CartContext';
 import { collectPairingLines, collectSuggestionSessionIds } from '@/lib/cart/suggestionIds';
@@ -18,9 +18,13 @@ import type { CreatedPaymentIntent } from '@/lib/payments/types';
 import type { MenuItem, OrderType, StoreSettings } from '@/lib/types';
 import { LOYALTY_UNIT, beaniesUnit } from '@/lib/loyalty/brand';
 import { flags } from '@/lib/flags';
+import { getTrafficAttribution } from '@/lib/traffic/client';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { useRitualOffer } from '@/components/passes/useRitualOffer';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { Textarea } from '@/components/ui/Textarea';
 import { SurfaceLink } from '@/components/SurfaceLink';
 import {
   passCupsToRequest,
@@ -82,12 +86,18 @@ export function CheckoutForm({
   openState,
   orderType,
   onOrderTypeChange: setOrderType,
+  summary,
+  pairings,
 }: {
   settings: StoreSettings | null;
   openState: StoreOpenState | null;
   // Owned by the checkout page so the cart summary shows the same bill.
   orderType: OrderType;
   onOrderTypeChange: (next: OrderType) => void;
+  // Rendered by the page, placed by the form: the order summary goes in the
+  // sidebar above the bill, the pairing suggestions under the fields.
+  summary?: ReactNode;
+  pairings?: ReactNode;
 }) {
   const router = useRouter();
   const { items, totalPrice, clearCart } = useCart();
@@ -116,6 +126,10 @@ export function CheckoutForm({
   }, [suggestionSessionIds]);
 
   const [name, setName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
+  // Set by the first tap on Place Order that finds something missing; from then
+  // on the line in the sticky bar follows what is still missing.
+  const [attempted, setAttempted] = useState(false);
   const [phoneError, setPhoneError] = useState<string | null>(null);
   const [email, setEmail] = useState(''); // optional — for the e-bill by email
   const [emailError, setEmailError] = useState<string | null>(null);
@@ -130,7 +144,10 @@ export function CheckoutForm({
   const errorRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (serverError || unavailableNames.length > 0) {
-      errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      errorRef.current?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'center',
+      });
     }
   }, [serverError, unavailableNames]);
 
@@ -503,6 +520,15 @@ export function CheckoutForm({
     return ok;
   }
 
+  const NAME_ERROR = 'Enter your name so we can call it out when your order is ready.';
+  const EMAIL_ERROR = 'Enter a valid email address, or leave it blank.';
+
+  function validateName(value: string): boolean {
+    const ok = value.trim().length > 0;
+    setNameError(ok ? null : NAME_ERROR);
+    return ok;
+  }
+
   const storeAcceptingOrders = !openState || openState.acceptingOrders;
   const canSubmit =
     storeAcceptingOrders && unavailableNames.length === 0 && (slots.length === 0 || slotStart !== null);
@@ -538,7 +564,10 @@ export function CheckoutForm({
   const paymentSectionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (phoneVerified) {
-      paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      paymentSectionRef.current?.scrollIntoView({
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        block: 'center',
+      });
     }
   }, [phoneVerified]);
   const phoneIsValid = normalizeIndianMobile(phone) !== null;
@@ -548,7 +577,7 @@ export function CheckoutForm({
   // signal. Anything it flags here is exactly what placeOrder() would also
   // reject, so once it returns null the OTP step is the only thing left.
   function guestReadinessBlocker(): string | null {
-    if (!storeAcceptingOrders) return "We're not accepting orders right now — please check back later.";
+    if (!storeAcceptingOrders) return "We're not accepting orders right now. Please check back later.";
     if (unavailableNames.length > 0) {
       return `Remove ${unavailableNames.join(', ')} from your cart to continue.`;
     }
@@ -559,6 +588,43 @@ export function CheckoutForm({
       return 'Enter a valid email address above, or leave it blank.';
     }
     return null;
+  }
+
+  // The first thing stopping an order, in form order, with the field to take the
+  // customer to. Drives the sticky bar's line and where focus goes on a tap.
+  type Problem = { field: 'unavailable' | 'name' | 'phone' | 'email'; message: string };
+  function firstProblem(): Problem | null {
+    if (unavailableNames.length > 0) {
+      return { field: 'unavailable', message: `Remove ${unavailableNames.join(', ')} from your cart to place the order` };
+    }
+    if (!name.trim()) return { field: 'name', message: 'Add your name to place the order' };
+    if (!isGuest && !phoneIsValid) {
+      return { field: 'phone', message: 'Add a valid 10-digit mobile number to place the order' };
+    }
+    if (!isGuest && email.trim() && normalizeEmail(email) === null) {
+      return { field: 'email', message: 'Fix your email address, or clear it, to place the order' };
+    }
+    return null;
+  }
+
+  // Known API messages in plain words, shown under the field they are about.
+  // Anything else is shown as the server worded it.
+  function showServerError(message: string) {
+    if (/customer_name must be at most/i.test(message)) {
+      setNameError('That name is too long. Please shorten it.');
+    } else if (/customer_name/i.test(message)) {
+      setNameError(NAME_ERROR);
+    } else if (/customer_phone/i.test(message)) {
+      setPhoneError('Please enter a valid 10-digit Indian mobile number (e.g. 98765 43210).');
+    } else if (/customer_email/i.test(message)) {
+      setEmailError(EMAIL_ERROR);
+    } else if (/pickup_slot|pickup time/i.test(message)) {
+      setServerError('Choose a pickup time and try again.');
+    } else {
+      setServerError(message);
+      return;
+    }
+    setAttempted(true);
   }
 
   async function placeOrder() {
@@ -594,6 +660,9 @@ export function CheckoutForm({
           ...(suggestionSessionIds ? { suggestion_session_ids: suggestionSessionIds } : {}),
           // Coffey checkout pairings: same rule, omitted when no line came from the card.
           ...(pairingLines ? { pairing_lines: pairingLines } : {}),
+          // Where this visit came from (docs/TRAFFIC-TRACKING.md). Undefined, so
+          // left out, when tracking is off or the browser declines it.
+          traffic: getTrafficAttribution(flags.trafficTracking),
         }),
       });
 
@@ -634,7 +703,7 @@ export function CheckoutForm({
       }
 
       const data = await res.json().catch(() => ({ error: 'Unknown error' }));
-      setServerError(data.error ?? 'Unknown error');
+      showServerError(data.error ?? 'Something went wrong. Please try again.');
       // The Ritual changed between the quote and the order (a cup spent on
       // another device, the pass expired): 409, or a 400 when fewer cups can be
       // applied than were asked for. The message says why; quote again so the
@@ -644,7 +713,7 @@ export function CheckoutForm({
         dropOffersThatNoLongerApply(requote);
       }
     } catch {
-      setServerError('Network error — please check your connection.');
+      setServerError('Network error. Please check your connection.');
     } finally {
       setSubmitting(false);
     }
@@ -654,14 +723,21 @@ export function CheckoutForm({
     e.preventDefault();
     setServerError(null);
 
-    if (!authChecked || !canSubmit) return;
-    if (!isGuest && !validatePhone(phone)) return;
+    if (!authChecked || !storeAcceptingOrders) return;
 
-    // Email is optional, but if given it must be valid (it's where the e-bill goes).
-    if (!isGuest && email.trim() && normalizeEmail(email) === null) {
-      setEmailError('Enter a valid email address, or leave it blank.');
+    // Validate everything at once so every problem shows under its field, then
+    // take focus to the first one; the sticky bar says what to add.
+    const problem = firstProblem();
+    if (problem) {
+      setAttempted(true);
+      if (!name.trim()) setNameError(NAME_ERROR);
+      if (!isGuest && !phoneIsValid) validatePhone(phone);
+      if (!isGuest && email.trim() && normalizeEmail(email) === null) setEmailError(EMAIL_ERROR);
+      const target = problem.field === 'unavailable' ? errorRef.current : document.getElementById(problem.field);
+      target?.focus();
       return;
     }
+    if (!canSubmit) return;
 
     // The number must be verified first — no submit button renders until it
     // is, but Enter in a text field can still trigger form submission in some
@@ -671,7 +747,7 @@ export function CheckoutForm({
       return;
     }
     if (guestCannotPay) {
-      setServerError('Online payment is unavailable right now. Please log in to order and pay at the counter.');
+      setServerError("Online payment isn't available right now. Sign in to order and pay at the counter.");
       return;
     }
     await placeOrder();
@@ -686,6 +762,7 @@ export function CheckoutForm({
   };
 
   const guestBlocker = mustVerify ? guestReadinessBlocker() : null;
+  const problem = firstProblem();
 
   // What the Ritual takes off, from the latest quote (0 when no cups are used).
   const passApplied = passEnabled && passQuote ? passQuote.applied : 0;
@@ -695,13 +772,21 @@ export function CheckoutForm({
   const rowMode = passEnabled ? passRowMode(passQuote) : 'hidden';
   const passHelper = passEnabled ? passHelperLine(passQuote, passTouched.current) : null;
 
+  // The bar's one line of explanation: why ordering is closed, or (after a tap)
+  // what is still missing. Always rendered so screen readers announce changes.
+  const barMessage = !storeAcceptingOrders
+    ? `We're not taking orders right now.${openState?.nextOpenLabel ? ` We open ${openState.nextOpenLabel}.` : ''}`
+    : attempted && problem
+      ? problem.message
+      : null;
+
   return (
     <div className="flex flex-col gap-4 md:gap-5">
-      <div ref={errorRef} className="flex flex-col gap-4 empty:hidden md:gap-5">
+      <div ref={errorRef} tabIndex={-1} className="flex flex-col gap-4 outline-none empty:hidden md:gap-5">
       {serverError ? (
         <div
           role="alert"
-          className="rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
+          className="rounded-md border border-tan px-4 py-3 text-sm text-charcoal"
         >
           {serverError}
         </div>
@@ -710,7 +795,7 @@ export function CheckoutForm({
       {unavailableNames.length > 0 ? (
         <div
           role="alert"
-          className="rounded-md border border-tan bg-surface px-4 py-3 text-sm text-charcoal"
+          className="rounded-md border border-tan px-4 py-3 text-sm text-charcoal"
         >
           <p className="font-semibold">
             {unavailableNames.join(', ')} {unavailableNames.length === 1 ? 'is' : 'are'} no
@@ -721,580 +806,585 @@ export function CheckoutForm({
       ) : null}
       </div>
 
-      {/* No single outer card any more (that's what made coupons and points
-          read as just two more rows in one long list) — each concern below is
-          its own titled, bordered card, so contact details, order details,
-          offers/rewards, the bill, and payment are all visually distinct. */}
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4 md:gap-5" noValidate>
-        <Section title="1 · Your details">
-          <div>
-            <label htmlFor="name" className="mb-1 block text-sm font-semibold text-charcoal">
-              Name
-            </label>
-            <input
+      {/* One form, two columns from lg: the fields on the left; on the right a
+          sticky sidebar with the order summary, the one bill, payment and Place
+          Order. Below lg it is a single column in DOM order (fields, summary,
+          bill, payment) and the sidebar wrapper is `display: contents`, so the
+          Place Order bar is a direct child of the form and stays pinned to the
+          bottom of the screen for the whole length of it. */}
+      <form
+        onSubmit={handleSubmit}
+        className="grid grid-cols-1 gap-4 md:gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:items-start lg:gap-8"
+        noValidate
+      >
+        <div className="flex min-w-0 flex-col gap-4 md:gap-5">
+          {/* The pay-online rule, stated before the guest reaches the payment step. */}
+          {isGuest ? (
+            <p className="text-sm text-charcoal">
+              {ONLINE_PAYMENT_AVAILABLE ? 'Guests pay online. ' : "Online payment isn't available right now. "}
+              <a href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
+                Sign in
+              </a>{' '}
+              {ONLINE_PAYMENT_AVAILABLE ? 'to pay at the counter.' : 'to order and pay at the counter.'}
+            </p>
+          ) : null}
+
+          <Section title="Your details">
+            <Input
               id="name"
+              label="Name"
               type="text"
               required
               autoComplete="name"
               autoCapitalize="words"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                if (nameError) setNameError(null);
+              }}
+              onBlur={(e) => validateName(e.target.value)}
               placeholder="e.g. Ayush"
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+              error={nameError ?? undefined}
+              hint={isGuest ? 'No phone or email needed. You can follow your order on the next page.' : undefined}
             />
-          </div>
 
-          {isGuest ? (
-            <p className="rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
-              Ordering as a guest — no phone or email needed. You&apos;ll pay online and can
-              follow your order on the next page.{' '}
-              <a href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
-                Log in
-              </a>{' '}
-              to get WhatsApp updates or pay at the counter.
-            </p>
-          ) : (
-            <>
-              <div>
-                <label htmlFor="phone" className="mb-1 block text-sm font-semibold text-charcoal">
-                  Phone
-                </label>
-                <input
+            {isGuest ? null : (
+              <>
+                <Input
                   id="phone"
+                  label="Phone"
                   type="tel"
                   inputMode="tel"
                   autoComplete="tel-national"
                   required
                   maxLength={16}
-                  aria-invalid={phoneError ? true : undefined}
-                  aria-describedby={phoneError ? 'phone-error' : undefined}
                   value={phone}
                   onChange={(e) => onPhoneChange(e.target.value)}
                   onBlur={(e) => validatePhone(e.target.value)}
                   placeholder="e.g. 98765 43210"
-                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  error={phoneError ?? undefined}
+                  // The actual "Get OTP" control (ACC-4) lives at the bottom of the
+                  // form now, as the last step before placing the order — see the
+                  // submit area below. This just sets the expectation early.
+                  hint={
+                    accountPhoneMatches
+                      ? undefined
+                      : "We'll WhatsApp a verification code to this number as the last step, right before your order is placed."
+                  }
                 />
-                {phoneError ? (
-                  <p id="phone-error" className="mt-1 text-sm text-red-700">{phoneError}</p>
-                ) : null}
-                {/* The actual "Get OTP" control (ACC-4) lives at the bottom of the
-                    form now, as the last step before placing the order — see the
-                    submit area below. This just sets the expectation early. */}
-                {!accountPhoneMatches ? (
-                  <p className="mt-1 text-sm text-muted">
-                    We&apos;ll WhatsApp a verification code to this number as the last step, right
-                    before your order is placed.
-                  </p>
-                ) : null}
-              </div>
 
-              <div>
-                <label htmlFor="email" className="mb-1 block text-sm font-semibold text-charcoal">
-                  Email <span className="font-normal text-muted">(optional — for your bill)</span>
-                </label>
-                <input
+                <Input
                   id="email"
+                  label={
+                    <>
+                      Email <span className="font-normal text-muted">(optional, for your bill)</span>
+                    </>
+                  }
                   type="email"
                   inputMode="email"
                   autoComplete="email"
-                  aria-invalid={emailError ? true : undefined}
-                  aria-describedby={emailError ? 'email-error' : undefined}
                   value={email}
                   onChange={(e) => {
                     setEmail(e.target.value);
                     if (emailError) setEmailError(null);
                   }}
                   placeholder="you@example.com"
-                  className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  error={emailError ?? undefined}
                 />
-                {emailError ? <p id="email-error" className="mt-1 text-sm text-red-700">{emailError}</p> : null}
+              </>
+            )}
+          </Section>
+
+          <Section title="Order details">
+            <div>
+              <span id="order-type" className="mb-1 block text-sm font-semibold text-charcoal">
+                Order type
+              </span>
+              <div role="group" aria-labelledby="order-type" className="grid grid-cols-2 gap-2">
+                {ORDER_TYPE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    aria-pressed={orderType === opt.value}
+                    onClick={() => setOrderType(opt.value)}
+                    className={
+                      'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
+                      (orderType === opt.value
+                        ? 'border-tan bg-surface text-tan-dark'
+                        : 'border-muted/80 text-charcoal hover:border-tan')
+                    }
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
-            </>
-          )}
-        </Section>
-
-        <Section title="2 · Order details">
-          <div>
-            <span id="order-type" className="mb-1 block text-sm font-semibold text-charcoal">
-              Order Type
-            </span>
-            <div role="group" aria-labelledby="order-type" className="grid grid-cols-2 gap-2">
-              {ORDER_TYPE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  aria-pressed={orderType === opt.value}
-                  onClick={() => setOrderType(opt.value)}
-                  className={
-                    'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
-                    (orderType === opt.value
-                      ? 'border-tan bg-surface text-tan-dark'
-                      : 'border-line text-charcoal hover:border-tan')
-                  }
-                >
-                  {opt.label}
-                </button>
-              ))}
             </div>
-          </div>
 
-          <div>
-            <label htmlFor="pickup" className="mb-1 block text-sm font-semibold text-charcoal">
-              Pickup Time
-            </label>
             {slots.length === 0 ? (
-              <p className="text-sm text-muted">
-                {settings ? 'No pickup slots available right now.' : 'Loading pickup times…'}
-              </p>
+              <div>
+                <p className="mb-1 text-sm font-semibold text-charcoal">Pickup time</p>
+                <p className="text-sm text-muted">
+                  {settings ? 'No pickup slots available right now.' : 'Loading pickup times…'}
+                </p>
+              </div>
             ) : (
-              <select
+              <Select
                 id="pickup"
+                label="Pickup time"
                 value={slotStart ?? ''}
                 onChange={(e) => setSlotStart(e.target.value)}
-                className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
-              >
-                {slots.map((slot) => (
-                  <option key={slot.start || 'asap'} value={slot.start}>
-                    {slot.label}
-                  </option>
-                ))}
-              </select>
+                options={slots.map((slot) => ({ value: slot.start, label: slot.label }))}
+              />
             )}
-          </div>
 
-          <div>
-            <label htmlFor="notes" className="mb-1 block text-sm font-semibold text-charcoal">
-              Notes (optional)
-            </label>
-            <textarea
+            <Textarea
               id="notes"
+              label="Notes (optional)"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Any special requests for the whole order"
               rows={2}
-              className="w-full rounded-md border border-line px-3 py-2 text-charcoal outline-none focus:border-tan"
             />
-          </div>
-        </Section>
+          </Section>
 
-        {/* Offers & rewards (FND-3/FND-4/LOY-1/LOY-2) — deliberately called out
-            with a coupon-like dashed tan border so it reads as a distinct,
-            discoverable perk rather than blending into the rest of the form. */}
-        <div className="rounded-md border border-dashed border-tan bg-surface p-4 md:p-5">
-          <h2 className="mb-3 text-sm font-semibold text-tan-dark">Offers &amp; rewards</h2>
-          <div className="flex flex-col gap-4">
-            {/* HIOC Ritual — signed-in customers with the feature on. With cups
-                to use it is a stepper pre-filled to the most this cart can use
-                (CP-D10); with none, nothing advertises an empty pass — at most a
-                quiet link to the plans. Above the coupon because the pass is
-                applied first (CP-D12). */}
-            {passEnabled && !passSettled ? <Skeleton className="h-11 w-full" /> : null}
-            {rowMode === 'stepper' && passQuote ? (
-              <>
-                <div>
-                  <div
-                    className={
-                      'flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md border px-3 py-2 text-sm text-charcoal ' +
-                      (passApplied > 0 ? 'border-green-700/30 bg-green-50' : 'border-line bg-cream')
-                    }
-                  >
-                    <p aria-live="polite" className="flex min-w-0 flex-1 basis-44 items-start gap-1.5">
-                      <CupIcon className="mt-0.5" />
-                      <span>
-                        {passRowName(passQuote)} — using{' '}
-                        <span className="font-mono font-bold tabular-nums">{passApplied}</span> of{' '}
-                        <span className="font-mono tabular-nums">{passQuote.available}</span>{' '}
-                        {passQuote.available === 1 ? 'cup' : 'cups'}
-                        {passDiscountInr > 0 ? (
-                          <>
-                            {' '}
-                            <span className="font-mono font-bold tabular-nums text-green-700">
-                              (&minus;₹{passDiscountInr})
-                            </span>
-                          </>
-                        ) : null}
-                      </span>
-                    </p>
-                    <div role="group" aria-label={`${PASS_PROGRAM_NAME} cups to use`} className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        aria-label="Use one fewer cup"
-                        onClick={() => void changePassCups(-1)}
-                        disabled={passBusy || passApplied <= 0}
-                        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-line bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        &minus;
-                      </button>
-                      <span className="min-w-[2ch] text-center font-mono font-bold tabular-nums text-charcoal">
-                        {passDrinks}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label="Use one more cup"
-                        onClick={() => void changePassCups(1)}
-                        disabled={passBusy || passApplied >= passQuote.max_usable}
-                        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-line bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        +
-                      </button>
+          {/* Offers & rewards (FND-3/FND-4/LOY-1/LOY-2) — a coupon-like dashed tan
+              border keeps it a distinct, discoverable perk. Its rows are plain
+              (no filled panels inside the card). */}
+          <div className="rounded-md border border-dashed border-tan bg-cream p-4 md:p-5">
+            <h2 className="mb-3 text-sm font-semibold text-tan-dark">Offers &amp; rewards</h2>
+            <div className="flex flex-col gap-4">
+              {/* HIOC Ritual: signed-in customers with the feature on. With cups
+                  to use it is a stepper pre-filled to the most this cart can use
+                  (CP-D10); with none, nothing advertises an empty pass, at most a
+                  quiet link to the plans. Above the coupon because the pass is
+                  applied first (CP-D12). */}
+              {passEnabled && !passSettled ? <Skeleton className="h-11 w-full" /> : null}
+              {rowMode === 'stepper' && passQuote ? (
+                <>
+                  <div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 text-sm text-charcoal">
+                      <p aria-live="polite" className="flex min-w-0 flex-1 basis-44 items-start gap-1.5">
+                        <CupIcon className="mt-0.5" />
+                        <span>
+                          {passRowName(passQuote)}: using{' '}
+                          <span className="font-bold tabular-nums">{passApplied}</span> of{' '}
+                          <span className="tabular-nums">{passQuote.available}</span>{' '}
+                          {passQuote.available === 1 ? 'cup' : 'cups'}
+                          {passDiscountInr > 0 ? (
+                            <>
+                              {' '}
+                              <span className="font-mono font-bold tabular-nums text-green-700">
+                                (&minus;₹{passDiscountInr})
+                              </span>
+                            </>
+                          ) : null}
+                        </span>
+                      </p>
+                      <div role="group" aria-label={`${PASS_PROGRAM_NAME} cups to use`} className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label="Use one fewer cup"
+                          onClick={() => void changePassCups(-1)}
+                          disabled={passBusy || passApplied <= 0}
+                          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-muted/80 bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          &minus;
+                        </button>
+                        <span className="min-w-[2ch] text-center font-bold tabular-nums text-charcoal">
+                          {passDrinks}
+                        </span>
+                        <button
+                          type="button"
+                          aria-label="Use one more cup"
+                          onClick={() => void changePassCups(1)}
+                          disabled={passBusy || passApplied >= passQuote.max_usable}
+                          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-muted/80 bg-cream text-lg font-semibold text-charcoal hover:border-tan disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
+                    {passHelper ? <p className="mt-1 text-sm text-muted">{passHelper}</p> : null}
                   </div>
-                  {passHelper ? <p className="mt-1 text-sm text-muted">{passHelper}</p> : null}
-                </div>
-                <div className="border-t border-dashed border-tan/50" />
-              </>
-            ) : null}
-            {rowMode === 'unusable' && passQuote ? (
-              <>
-                <p className="flex items-start gap-1.5 text-sm text-muted">
-                  <CupIcon className="mt-0.5" />
-                  <span>
-                    <span className="font-semibold text-charcoal">{passRowName(passQuote)}</span> —{' '}
-                    {passHelper ??
-                      `you have ${passQuote.available} ${passQuote.available === 1 ? 'cup' : 'cups'} left, but none can be used on this order.`}
-                  </span>
-                </p>
-                <div className="border-t border-dashed border-tan/50" />
-              </>
-            ) : null}
-            {noPassKnown && ritualOnSale(ritualOffer.offer) ? (
-              <>
-                <SurfaceLink
-                  href="/ritual"
-                  className="-my-1 inline-flex min-h-[44px] items-center gap-1.5 self-start text-sm font-semibold text-tan-dark hover:underline"
-                >
-                  <CupIcon />
-                  Save with {PASS_PROGRAM_NAME} <span aria-hidden="true">→</span>
-                </SurfaceLink>
-                <div className="border-t border-dashed border-tan/50" />
-              </>
-            ) : null}
-
-            {/* Coupon code. */}
-            <div>
-              <div className="mb-1 flex items-center gap-1.5">
-                <TicketIcon />
-                <label htmlFor="coupon" className="text-sm font-semibold text-charcoal">
-                  Have a coupon?
-                </label>
-              </div>
-              {couponApplied ? (
-                <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
-                  <span>
-                    <span className="font-mono font-bold uppercase tabular-nums">{couponApplied}</span> applied · You
-                    save <span className="font-mono tabular-nums">₹{couponDiscountInr}</span>
-                  </span>
-                  <button type="button" onClick={removeCoupon} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
-                    Remove
-                  </button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <input
-                    id="coupon"
-                    type="text"
-                    autoComplete="off"
-                    autoCapitalize="characters"
-                    spellCheck={false}
-                    enterKeyHint="done"
-                    value={couponInput}
-                    onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
-                    placeholder="e.g. WELCOME10"
-                    className="w-full rounded-md border border-line bg-cream px-3 py-2 text-charcoal outline-none focus:border-tan"
-                  />
-                  <button
-                    type="button"
-                    onClick={applyCoupon}
-                    disabled={couponBusy || !couponInput.trim()}
-                    className="min-h-[44px] shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
+                  <div className="border-t border-dashed border-tan/50" />
+                </>
+              ) : null}
+              {rowMode === 'unusable' && passQuote ? (
+                <>
+                  <p className="flex items-start gap-1.5 text-sm text-muted">
+                    <CupIcon className="mt-0.5" />
+                    <span>
+                      <span className="font-semibold text-charcoal">{passRowName(passQuote)}</span>:{' '}
+                      {passHelper ??
+                        `you have ${passQuote.available} ${passQuote.available === 1 ? 'cup' : 'cups'} left, but none can be used on this order.`}
+                    </span>
+                  </p>
+                  <div className="border-t border-dashed border-tan/50" />
+                </>
+              ) : null}
+              {noPassKnown && ritualOnSale(ritualOffer.offer) ? (
+                <>
+                  <SurfaceLink
+                    href="/ritual"
+                    className="-my-1 inline-flex min-h-[44px] items-center gap-1.5 self-start text-sm font-semibold text-tan-dark hover:underline"
                   >
-                    {couponBusy ? '…' : 'Apply'}
-                  </button>
-                </div>
-              )}
-              {couponError ? <p role="alert" className="mt-1 text-sm text-red-700">{couponError}</p> : null}
-            </div>
+                    <CupIcon />
+                    Save with {PASS_PROGRAM_NAME}
+                  </SurfaceLink>
+                  <div className="border-t border-dashed border-tan/50" />
+                </>
+              ) : null}
 
-            {/* Points redemption — logged-in customers only (coupons need no
-                login, so guests still see the coupon block above). */}
-            {userId ? (
-              <>
-                <div className="border-t border-dashed border-tan/50" />
-                <div>
-                  <div className="mb-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <StarIcon />
-                      <label htmlFor="points" className="text-sm font-semibold text-charcoal">
-                        Redeem {LOYALTY_UNIT.many}
-                      </label>
+              {/* Coupon code. */}
+              <div>
+                {couponApplied ? (
+                  <>
+                    <div className="mb-1 flex items-center gap-1.5">
+                      <TicketIcon />
+                      <span className="text-sm font-semibold text-charcoal">Coupon</span>
                     </div>
-                    {balance !== null ? (
-                      <span className="rounded-full border border-tan/50 bg-cream px-2 py-0.5 text-xs font-semibold text-tan-dark">
-                        Balance: <span className="font-mono tabular-nums">{balance}</span> {beaniesUnit(balance)}
-                      </span>
-                    ) : null}
-                  </div>
-                  {pointsApplied ? (
-                    <div className="flex min-h-[40px] items-center justify-between gap-2 rounded-md border border-green-700/30 bg-green-50 px-3 py-2 text-sm text-charcoal">
+                    <div className="flex min-h-[44px] items-center justify-between gap-2 text-sm text-green-700">
                       <span>
-                        <span className="font-mono tabular-nums">{pointsApplied}</span> {beaniesUnit(pointsApplied)} applied · You save{' '}
-                        <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>
+                        <span className="font-mono font-bold uppercase tabular-nums">{couponApplied}</span> applied. You
+                        save <span className="font-mono tabular-nums">₹{couponDiscountInr}</span>.
                       </span>
-                      <button type="button" onClick={removePoints} className="-my-2 inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
+                      <button type="button" onClick={removeCoupon} className="inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
                         Remove
                       </button>
                     </div>
-                  ) : (
-                    <div className="flex gap-2">
-                      <input
-                        id="points"
-                        type="number"
-                        min={0}
-                        inputMode="numeric"
-                        value={pointsInput}
-                        onChange={(e) => setPointsInput(e.target.value)}
-                        placeholder="e.g. 50"
-                        className="w-full rounded-md border border-line bg-cream px-3 py-2 text-charcoal outline-none focus:border-tan"
+                  </>
+                ) : (
+                  <div className="flex items-end gap-2">
+                    <div className="min-w-0 flex-1">
+                      <Input
+                        id="coupon"
+                        label={
+                          <span className="flex items-center gap-1.5">
+                            <TicketIcon />
+                            Have a coupon?
+                          </span>
+                        }
+                        type="text"
+                        autoComplete="off"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                        enterKeyHint="done"
+                        value={couponInput}
+                        onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                        placeholder="e.g. WELCOME10"
+                        aria-invalid={couponError ? true : undefined}
+                        aria-describedby={couponError ? 'coupon-error' : undefined}
                       />
-                      <button
-                        type="button"
-                        onClick={applyPoints}
-                        disabled={pointsBusy || !pointsInput.trim()}
-                        className="min-h-[44px] shrink-0 rounded-md border border-line bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
-                      >
-                        {pointsBusy ? '…' : 'Apply'}
-                      </button>
                     </div>
-                  )}
-                  {pointsError ? <p role="alert" className="mt-1 text-sm text-red-700">{pointsError}</p> : null}
-                </div>
-              </>
-            ) : null}
+                    <button
+                      type="button"
+                      onClick={applyCoupon}
+                      disabled={couponBusy || !couponInput.trim()}
+                      className="min-h-[44px] shrink-0 rounded-md border border-muted/80 bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
+                    >
+                      {couponBusy ? '…' : 'Apply'}
+                    </button>
+                  </div>
+                )}
+                {couponError ? <p id="coupon-error" role="alert" className="mt-1 text-sm text-red-700">{couponError}</p> : null}
+              </div>
 
-            {anySavings ? (
-              <p className="border-t border-dashed border-tan/50 pt-3 text-sm font-bold text-tan-dark">
-                Total savings <span className="font-mono tabular-nums">₹{savings.reduce((sum, n) => sum + n, 0)}</span>
-              </p>
-            ) : null}
+              {/* Points redemption: logged-in customers only (coupons need no
+                  login, so guests still see the coupon block above). */}
+              {userId ? (
+                <>
+                  <div className="border-t border-dashed border-tan/50" />
+                  <div>
+                    {pointsApplied ? (
+                      <>
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <StarIcon />
+                          <span className="text-sm font-semibold text-charcoal">Redeem {LOYALTY_UNIT.many}</span>
+                        </div>
+                        <div className="flex min-h-[44px] items-center justify-between gap-2 text-sm text-green-700">
+                          <span>
+                            <span className="tabular-nums">{pointsApplied}</span> {beaniesUnit(pointsApplied)} applied. You save{' '}
+                            <span className="font-mono tabular-nums">₹{pointsDiscountInr}</span>.
+                          </span>
+                          <button type="button" onClick={removePoints} className="inline-flex min-h-[44px] shrink-0 items-center text-sm font-semibold text-muted underline">
+                            Remove
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {balance !== null ? (
+                          <p className="mb-1 text-sm text-muted">
+                            Balance: <span className="font-semibold tabular-nums text-charcoal">{balance}</span> {beaniesUnit(balance)}
+                          </p>
+                        ) : null}
+                        <div className="flex items-end gap-2">
+                          <div className="min-w-0 flex-1">
+                            <Input
+                              id="points"
+                              label={
+                                <span className="flex items-center gap-1.5">
+                                  <StarIcon />
+                                  Redeem {LOYALTY_UNIT.many}
+                                </span>
+                              }
+                              type="number"
+                              min={0}
+                              inputMode="numeric"
+                              value={pointsInput}
+                              onChange={(e) => setPointsInput(e.target.value)}
+                              placeholder="e.g. 50"
+                              aria-invalid={pointsError ? true : undefined}
+                              aria-describedby={pointsError ? 'points-error' : undefined}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            onClick={applyPoints}
+                            disabled={pointsBusy || !pointsInput.trim()}
+                            className="min-h-[44px] shrink-0 rounded-md border border-muted/80 bg-cream px-4 py-2 text-sm font-semibold text-charcoal hover:border-tan disabled:opacity-50"
+                          >
+                            {pointsBusy ? '…' : 'Apply'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {pointsError ? <p id="points-error" role="alert" className="mt-1 text-sm text-red-700">{pointsError}</p> : null}
+                  </div>
+                </>
+              ) : null}
+
+              {anySavings ? (
+                <p className="border-t border-dashed border-tan/50 pt-3 text-sm font-bold text-tan-dark">
+                  Total savings <span className="font-mono tabular-nums">₹{savings.reduce((sum, n) => sum + n, 0)}</span>
+                </p>
+              ) : null}
+            </div>
           </div>
+
+          {pairings}
         </div>
 
-        {/* Bill breakup (C5/PAY-1) — subtotal, GST, packaging, coupon,
-            points, grand total, each a labeled line, its own card. */}
-        <Section title="Bill summary">
-          <div className="flex flex-col text-sm text-charcoal">
-            <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
-            {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
-            {displayBill.packaging_inr > 0 ? <BillRow label="Packaging" value={displayBill.packaging_inr} /> : null}
-            {passDiscountInr > 0 ? (
-              <BillRow label={ritualBillLabel(passApplied)} value={-passDiscountInr} tone="success" />
-            ) : null}
-            {couponDiscountInr > 0 ? (
-              <BillRow label={`Coupon (${couponApplied})`} value={-couponDiscountInr} tone="success" />
-            ) : null}
-            {pointsDiscountInr > 0 ? (
-              <BillRow label={`${LOYALTY_UNIT.many} redeemed (${pointsApplied})`} value={-pointsDiscountInr} tone="success" />
-            ) : null}
-            <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
-              <span className="font-bold text-charcoal">Total</span>
-              <span className="font-mono font-bold tabular-nums text-tan-dark">₹{displayBill.total_inr}</span>
-            </div>
-            {displayBill.total_inr === 0 && passApplied > 0 ? (
-              <p className="mt-2 text-sm text-muted">Fully covered by your {PASS_PROGRAM_NAME} — nothing to pay.</p>
-            ) : null}
-          </div>
-        </Section>
+        <div className="contents lg:sticky lg:top-6 lg:z-10 lg:-m-1 lg:flex lg:max-h-[calc(100vh-2rem)] lg:flex-col lg:gap-5 lg:self-start lg:overflow-y-auto lg:p-1">
+          {summary}
 
-        {/* The verified-number confirmation, right above the payment choice it unlocked. */}
-        {phoneVerified ? <PhoneOtpPanel otp={otp} /> : null}
-
-        {/* Pay online / pay at counter (PAY-1). Hidden until the number is
-            verified — see mustVerify. Guests get online payment only. */}
-        {mustVerify ? null : isGuest ? (
-          <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
-            <p className="mb-1 text-sm font-semibold text-charcoal">Payment</p>
-            {guestCannotPay ? (
-              <div className="mb-2">
-                <PayOnlineUnavailableButton />
+          {/* The one bill (C5/PAY-1): subtotal, GST, packaging, discounts and the
+              total, priced by the server quote. The order summary above lists lines
+              only, so the total is never shown twice with different figures. */}
+          <Section title="Bill summary">
+            <div className="flex flex-col text-sm text-charcoal">
+              <BillRow label="Subtotal" value={displayBill.subtotal_inr} />
+              {displayBill.tax_inr > 0 ? <BillRow label="GST" value={displayBill.tax_inr} /> : null}
+              {displayBill.packaging_inr > 0 ? <BillRow label="Packaging" value={displayBill.packaging_inr} /> : null}
+              {passDiscountInr > 0 ? (
+                <BillRow label={ritualBillLabel(passApplied)} value={-passDiscountInr} tone="success" />
+              ) : null}
+              {couponDiscountInr > 0 ? (
+                <BillRow label={`Coupon (${couponApplied})`} value={-couponDiscountInr} tone="success" />
+              ) : null}
+              {pointsDiscountInr > 0 ? (
+                <BillRow label={`${LOYALTY_UNIT.many} redeemed (${pointsApplied})`} value={-pointsDiscountInr} tone="success" />
+              ) : null}
+              <div className="mt-2 flex items-center justify-between border-t border-line pt-2">
+                <span className="font-bold text-charcoal">Total</span>
+                <span className="font-mono font-bold tabular-nums text-tan-dark">₹{displayBill.total_inr}</span>
               </div>
-            ) : null}
-            <p className="rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
-              {guestCannotPay ? (
-                <>Online payment is unavailable right now. </>
-              ) : (
-                <>
-                  Guest orders are paid online (UPI, card, or netbanking) — your order joins the
-                  kitchen queue as soon as payment is confirmed.{' '}
-                </>
-              )}
-              <a href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
-                Log in
-              </a>{' '}
-              to pay at the counter instead.
-            </p>
-          </div>
-        ) : ONLINE_PAYMENT_AVAILABLE ? (
-          <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
-            <p className="mb-1 text-sm font-semibold text-charcoal">Payment</p>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                aria-pressed={paymentMode === 'online'}
-                onClick={() => setPaymentMode('online')}
-                className={
-                  'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
-                  (paymentMode === 'online'
-                    ? 'border-tan bg-surface text-tan-dark'
-                    : 'border-line text-charcoal hover:border-tan')
-                }
-              >
-                Pay online
-              </button>
-              <button
-                type="button"
-                aria-pressed={paymentMode === 'counter'}
-                onClick={() => setPaymentMode('counter')}
-                className={
-                  'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
-                  (paymentMode === 'counter'
-                    ? 'border-tan bg-surface text-tan-dark'
-                    : 'border-line text-charcoal hover:border-tan')
-                }
-              >
-                Pay at counter
-              </button>
+              {displayBill.total_inr === 0 && passApplied > 0 ? (
+                <p className="mt-2 text-sm text-muted">Fully covered by your {PASS_PROGRAM_NAME}. Nothing to pay.</p>
+              ) : null}
             </div>
-            <p className="mt-2 rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
-              {paymentMode === 'online'
-                ? 'Pay now via UPI, card, or netbanking — your order joins the kitchen queue as soon as payment is confirmed.'
-                : 'Pay at the counter on pickup — no online payment required.'}
-            </p>
-          </div>
-        ) : (
-          // Gateway not configured (e.g. a preview without Razorpay keys) or
-          // switched off: keep online payment VISIBLE but greyed out, so it
-          // reads as "temporarily unavailable" rather than as a missing feature.
-          <div ref={paymentSectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
-            <p className="mb-1 text-sm font-semibold text-charcoal">Payment</p>
-            <div className="grid grid-cols-2 gap-2">
-              <PayOnlineUnavailableButton />
-              <button
-                type="button"
-                aria-pressed="true"
-                className="min-h-[44px] rounded-md border border-tan bg-surface px-3 py-2 text-sm font-semibold text-tan-dark"
-              >
-                Pay at counter
-              </button>
-            </div>
-            <p className="mt-2 rounded-md bg-surface px-4 py-3 text-sm text-charcoal">
-              Online payment is temporarily unavailable — pay at the counter on pickup.
-            </p>
-          </div>
-        )}
+          </Section>
 
-        {/* DPDP transactional-consent notice (F3t/NFR-005). Order updates are
-            transactional, not marketing, so no opt-in checkbox is required —
-            but we disclose the use of the number clearly at the point of entry. */}
-        <p className="text-sm text-muted">
-          By placing this order you agree to receive order-status updates (accepted, ready,
-          etc.) on this number via WhatsApp/SMS. We use it only for this order — never for
-          marketing.
-        </p>
+          {/* The verified-number confirmation, right above the payment choice it unlocked. */}
+          {phoneVerified ? <PhoneOtpPanel otp={otp} /> : null}
 
-        {mustVerify ? (
-          // An unverified number's next step: get a code and enter it. That
-          // reveals the payment choice and the Place Order button above.
-          // GetOtpButton/PhoneOtpPanel self-hide based on otp.step, so exactly
-          // one of them is visible at a time.
-          <div className="flex flex-col gap-2">
-            <GetOtpButton
-              otp={otp}
-              variant="primary"
-              extraDisabled={guestBlocker !== null}
-              onBeforeSend={() => validatePhone(phone)}
-            />
-            {otp.step === 'idle' ? (
-              <p className="text-center text-sm text-muted">
-                {guestBlocker ?? "You'll choose how to pay after verifying your number."}
+          {/* Pay online / pay at counter (PAY-1). Hidden until the number is
+              verified (see mustVerify). Guests get online payment only. */}
+          {mustVerify ? null : isGuest ? (
+            // A guest who can't pay online has the sentence at the top of the form
+            // and a Sign in button in place of Place Order, so no card here.
+            guestCannotPay ? null : (
+              <Section title="Payment" sectionRef={paymentSectionRef}>
+                <p className="text-sm text-charcoal">
+                  Pay online by UPI, card or netbanking. Your order joins the kitchen queue as soon as
+                  payment is confirmed.{' '}
+                  <a href="/login?next=/checkout" className="font-semibold text-tan-dark underline">
+                    Sign in
+                  </a>{' '}
+                  to pay at the counter instead.
+                </p>
+              </Section>
+            )
+          ) : ONLINE_PAYMENT_AVAILABLE ? (
+            <Section title="Payment" sectionRef={paymentSectionRef}>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  aria-pressed={paymentMode === 'online'}
+                  onClick={() => setPaymentMode('online')}
+                  className={
+                    'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
+                    (paymentMode === 'online'
+                      ? 'border-tan bg-surface text-tan-dark'
+                      : 'border-muted/80 text-charcoal hover:border-tan')
+                  }
+                >
+                  Pay online
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={paymentMode === 'counter'}
+                  onClick={() => setPaymentMode('counter')}
+                  className={
+                    'min-h-[44px] rounded-md border px-3 py-2 text-sm font-semibold transition-colors ' +
+                    (paymentMode === 'counter'
+                      ? 'border-tan bg-surface text-tan-dark'
+                      : 'border-muted/80 text-charcoal hover:border-tan')
+                  }
+                >
+                  Pay at counter
+                </button>
+              </div>
+              <p className="text-sm text-muted">
+                {paymentMode === 'online'
+                  ? 'Pay now via UPI, card or netbanking. Your order joins the kitchen queue as soon as payment is confirmed.'
+                  : 'Pay at the counter on pickup. No online payment required.'}
               </p>
-            ) : null}
-            <PhoneOtpPanel otp={otp} />
-          </div>
-        ) : (
-          // Sticky on phones: the form is long (details, offers, bill,
-          // payment) and the one action that matters shouldn't need a scroll
-          // hunt. From md up the two-column layout keeps it in view anyway.
-          <div className="sticky bottom-0 z-10 -mx-4 border-t border-line bg-cream/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur md:static md:mx-0 md:border-0 md:bg-transparent md:p-0 md:backdrop-blur-none">
-          <button
-            type="submit"
-            aria-busy={submitting || undefined}
-            disabled={
-              submitting ||
-              otp.busy ||
-              !canSubmit ||
-              guestCannotPay ||
-              !authChecked ||
-              // Wait for the Ritual row to be known (a moment after sign-in) and for a
-              // stepper tap to be priced, so the bill the customer sees is what is sent.
-              (passEnabled && !passSettled) ||
-              passBusy
-            }
-            className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? (
-              <span
-                aria-hidden="true"
-                className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+            </Section>
+          ) : (
+            // Gateway not configured (e.g. a preview without Razorpay keys) or
+            // switched off: there is nothing to choose, so say so in plain text
+            // instead of a pressed button that does nothing.
+            <Section title="Payment" sectionRef={paymentSectionRef}>
+              <p className="text-sm text-charcoal">
+                Pay at the counter on pickup. Online payment isn&apos;t available right now.
+              </p>
+            </Section>
+          )}
+
+          {/* DPDP transactional-consent notice (F3t/NFR-005). Order updates are
+              transactional, not marketing, so no opt-in checkbox is required, but
+              we disclose the use of the number at the point of entry. A guest gave
+              no number, so for them the notice says where updates appear instead. */}
+          {isGuest ? (
+            <p className="text-sm text-muted">
+              You&apos;ll follow your order on the page you land on after paying. We don&apos;t take a
+              phone number or email from guests, so there are no messages.
+            </p>
+          ) : (
+            <p className="text-sm text-muted">
+              By placing this order you agree to receive order-status updates (accepted, ready,
+              etc.) on this number via WhatsApp/SMS. We use it only for this order, never for
+              marketing.
+            </p>
+          )}
+
+          {mustVerify ? (
+            // An unverified number's next step: get a code and enter it. That
+            // reveals the payment choice and the Place Order button above.
+            // GetOtpButton/PhoneOtpPanel self-hide based on otp.step, so exactly
+            // one of them is visible at a time.
+            <div className="flex flex-col gap-2">
+              <GetOtpButton
+                otp={otp}
+                variant="primary"
+                extraDisabled={guestBlocker !== null}
+                onBeforeSend={() => validatePhone(phone)}
               />
-            ) : null}
-            {submitting ? (
-              'Placing Order…'
-            ) : !storeAcceptingOrders ? (
-              'Checkout Unavailable'
-            ) : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online' && displayBill.total_inr > 0 ? (
-              <>
-                Pay <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span> & Place Order
-              </>
-            ) : (
-              <>
-                Place Order · <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span>
-              </>
-            )}
-          </button>
-          </div>
-        )}
+              {otp.step === 'idle' ? (
+                <p className="text-center text-sm text-muted">
+                  {guestBlocker ?? "You'll choose how to pay after verifying your number."}
+                </p>
+              ) : null}
+              <PhoneOtpPanel otp={otp} />
+            </div>
+          ) : (
+            // Sticky on phones and tablets: the form is long (details, offers,
+            // bill, payment) and the one action that matters shouldn't need a
+            // scroll hunt. From lg it sits at the foot of the sticky sidebar.
+            // The button is only disabled while something is in flight or the
+            // store is closed: if a field is missing, a tap moves focus to it
+            // and the line above the button says what to add.
+            <div className="sticky bottom-0 z-10 -mx-4 border-t border-line bg-cream/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
+              <p
+                role="status"
+                aria-live="polite"
+                className="mb-2 text-center text-sm font-semibold text-charcoal empty:hidden"
+              >
+                {barMessage}
+              </p>
+              {guestCannotPay ? (
+                <a
+                  href="/login?next=/checkout"
+                  className="flex min-h-[48px] w-full items-center justify-center rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker"
+                >
+                  Sign in to order
+                </a>
+              ) : (
+                <button
+                  type="submit"
+                  aria-busy={submitting || undefined}
+                  disabled={
+                    submitting ||
+                    otp.busy ||
+                    !storeAcceptingOrders ||
+                    (slots.length > 0 && slotStart === null) ||
+                    !authChecked ||
+                    // Wait for the Ritual row to be known (a moment after sign-in) and for a
+                    // stepper tap to be priced, so the bill the customer sees is what is sent.
+                    (passEnabled && !passSettled) ||
+                    passBusy
+                  }
+                  className="flex min-h-[48px] w-full items-center justify-center gap-2 rounded-md bg-tan-dark px-4 py-3 font-semibold text-cream transition-colors hover:bg-tan-darker disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitting ? (
+                    <span
+                      aria-hidden="true"
+                      className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent opacity-70"
+                    />
+                  ) : null}
+                  {submitting ? (
+                    'Placing order…'
+                  ) : !storeAcceptingOrders ? (
+                    'Checkout unavailable'
+                  ) : ONLINE_PAYMENT_AVAILABLE && effectivePaymentMode === 'online' && displayBill.total_inr > 0 ? (
+                    <>
+                      Pay <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span> and place order
+                    </>
+                  ) : (
+                    <>
+                      Place order <span className="font-mono tabular-nums">₹{displayBill.total_inr}</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </form>
     </div>
   );
 }
 
-// A titled, bordered card — the basic unit the checkout form is built from
-// now, instead of one long flat list inside a single outer card. Kept tiny on
-// purpose: sections whose content needs special treatment (Offers & rewards'
-// highlighted tan card, Payment's ref + three variants) build their own
-// wrapper instead of forcing everything through one prop-heavy component.
-function Section({ title, children }: { title: string; children: ReactNode }) {
+// A titled, bordered card: the basic unit the checkout form is built from, one
+// level of containment (nothing filled sits inside it). Kept tiny on purpose:
+// sections whose content needs special treatment (Offers & rewards' dashed card)
+// build their own wrapper instead of forcing everything through one prop-heavy
+// component.
+function Section({
+  title,
+  children,
+  sectionRef,
+}: {
+  title: string;
+  children: ReactNode;
+  sectionRef?: RefObject<HTMLDivElement>;
+}) {
   return (
-    <div className="rounded-md border border-line bg-cream p-4 md:p-5">
+    <div ref={sectionRef} className="rounded-md border border-line bg-cream p-4 md:p-5">
       <h2 className="mb-3 text-sm font-semibold text-charcoal">{title}</h2>
       <div className="flex flex-col gap-4">{children}</div>
     </div>
-  );
-}
-
-// Shown in place of the live "Pay online" choice while the gateway is not
-// configured — disabled, so the option stays visible without being usable.
-function PayOnlineUnavailableButton() {
-  return (
-    <button
-      type="button"
-      disabled
-      aria-disabled="true"
-      className="w-full cursor-not-allowed rounded-md border border-dashed border-line px-3 py-2 text-sm font-semibold text-muted opacity-60"
-    >
-      Pay online
-      <span className="block text-sm font-normal">Temporarily unavailable</span>
-    </button>
   );
 }
 

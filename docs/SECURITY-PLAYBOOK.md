@@ -93,6 +93,16 @@ query builder (`.eq()`, `.in()`, `.rpc(name, params)`), which parameterizes.
 **Fix:** remove the literal, move it to an env var, and `git rm --cached` any tracked
 `.env*.local`. Rotate the exposed secret.
 
+### C-0 — symbolic link or odd name in a source directory (CRITICAL)
+**Meaning:** something under `app/`, `components/` or `lib/` is a symbolic link, or
+has a control character (a line break, a tab) in its name. The scanner never reads
+through a link (it could point outside the repository), so the code behind one is
+unchecked. A name with a line break in it can make a tool that reads names one per
+line open a different path. When either is present the scanner stops before reading
+any file.
+**Fix:** replace the link with the real file or directory; rename the file. There is
+no intentional case.
+
 ---
 
 ## Attendance & payroll invariants (Phase 5)
@@ -287,6 +297,30 @@ that is how the 95–98% band is held. A senior model / human resolves the resid
 2–5%.
 
 ---
+
+## Gate for one change (every pull request, every agent change)
+
+```bash
+# CI's placeholder values. With these set, nothing below can reach a database.
+export NEXT_PUBLIC_SUPABASE_URL=https://placeholder.supabase.co NEXT_PUBLIC_SUPABASE_ANON_KEY=placeholder-anon-key SUPABASE_SERVICE_ROLE_KEY=placeholder-service-role-key
+bash scripts/security-scan-diff.sh origin/main
+```
+
+`security-scan.sh` judges the whole codebase. `security-scan-diff.sh` judges one
+change: it scans the base branch and the working tree with the **base's** copy of
+the scanner and fails if the change adds a CRITICAL or WARN finding the base does
+not have. CI runs it first on every pull request that touches the app, before any
+of the pull request's code is installed (`.github/workflows/code-revamp.yml`).
+
+- `RESULT: PASS` — the change adds no finding.
+- `RESULT: FAIL` — fix each new finding. A new WARN that is intentional needs the
+  owner's acceptance; nobody else waves it through.
+- exit 2 — the comparison could not run. That is never a pass.
+
+Both scripts are tripwires for known-bad patterns, not proof that a change is
+safe. A change written to get round a grep will get round it. That is why every
+change is also read (`.claude/agents/security-reviewer.md`), and why a pull request
+from outside the team is merged only after the owner has looked at it.
 
 ## Deploy gate (must pass before production)
 

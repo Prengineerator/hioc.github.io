@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["icn1"],
+  "regions": ["bom1"],
   "crons": [
     {
       "path": "/api/cron/expire-orders",
@@ -21,6 +21,10 @@
     {
       "path": "/api/cron/purge-location",
       "schedule": "0 2 * * 0"
+    },
+    {
+      "path": "/api/cron/purge-traffic",
+      "schedule": "20 2 * * 0"
     },
     {
       "path": "/api/cron/suggest-digest",

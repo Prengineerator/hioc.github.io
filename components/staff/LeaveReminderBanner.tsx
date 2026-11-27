@@ -11,7 +11,7 @@
 // and an approver with requests waiting. Someone can be both.
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { flags } from '@/lib/flags';
 
 interface State {

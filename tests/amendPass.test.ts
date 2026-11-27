@@ -169,6 +169,11 @@ describe('recomputeOrderTotals with HIOC Ritual cover', () => {
       discount_inr: 50,
       total_inr: 300 + 9 + 20 - 50,
       pass_discount_inr: 0,
+      offer_discount_inr: 0,
+      manual_discount_inr: 0,
+      offer_label: '',
+      offer_kind: 'none',
+      spend_offer_id: null,
     });
   });
 });

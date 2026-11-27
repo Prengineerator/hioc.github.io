@@ -24,11 +24,15 @@ import { useApi } from './hooks';
 import { OverviewTab } from './OverviewTab';
 import { PlaybooksTab } from './PlaybooksTab';
 import { SettingsTab } from './SettingsTab';
+import { PushTab } from './PushTab';
+import { flags } from '@/lib/flags';
 
 export function MarketingDashboard() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
+  // The Push tab exists only while the webPush flag is on (docs/WEB-PUSH-SPEC.md).
+  const pushTab = flags.webPush && params.get('tab') === 'push';
   const tab = tabFromParam(params.get('tab'));
 
   const overview = useApi<MarketingOverview>(API.overview);
@@ -49,13 +53,14 @@ export function MarketingDashboard() {
   // a playbook scrolls to that card instead — see PlaybookCard.)
   useEffect(() => {
     if (focusPlaybook === null) window.scrollTo({ top: 0 });
-  }, [tab, focusPlaybook]);
+  }, [tab, pushTab, focusPlaybook]);
 
   const reloadOverview = overview.reload;
   const pending = overview.state.status === 'ready' ? overview.state.data.pending_approvals : 0;
   const sendingEnabled = overview.state.status === 'ready' ? overview.state.data.enabled : null;
 
   const content = (() => {
+    if (pushTab) return <PushTab />;
     switch (tab) {
       case 'overview':
         return <OverviewTab overview={overview} onNavigate={goTo} onOpenCampaign={setOpenCampaign} />;
@@ -86,7 +91,7 @@ export function MarketingDashboard() {
       <nav aria-label="Marketing sections" className="-mx-4 overflow-x-auto px-4 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <ul className="flex gap-1 border-b border-line">
           {MARKETING_TABS.map((t) => {
-            const active = t.id === tab;
+            const active = !pushTab && t.id === tab;
             return (
               <li key={t.id} className="shrink-0">
                 <button
@@ -109,10 +114,25 @@ export function MarketingDashboard() {
               </li>
             );
           })}
+          {flags.webPush ? (
+            <li className="shrink-0">
+              <button
+                type="button"
+                aria-current={pushTab ? 'page' : undefined}
+                onClick={() => router.replace(`${pathname}?tab=push`, { scroll: false })}
+                className={
+                  'flex min-h-[44px] items-center gap-2 whitespace-nowrap border-b-2 px-3 text-sm font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-tan ' +
+                  (pushTab ? 'border-tan-dark text-charcoal' : 'border-transparent text-muted hover:text-charcoal')
+                }
+              >
+                Push
+              </button>
+            </li>
+          ) : null}
         </ul>
       </nav>
 
-      <div key={`${tab}:${refresh}`}>{content}</div>
+      <div key={`${pushTab ? 'push' : tab}:${refresh}`}>{content}</div>
 
       <CampaignDrawer
         id={openCampaign}

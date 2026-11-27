@@ -10,6 +10,7 @@ import { istDateDaysAgo, istDateIso } from '@/lib/api/date';
 import { createAdminSupabaseClient } from '@/lib/supabase-server';
 import { SurfaceLink as Link } from '@/components/SurfaceLink';
 import { Card, inr } from '@/components/owner/dashboard';
+import { ReportsNav } from '@/components/owner/ReportsNav';
 import { flags } from '@/lib/flags';
 import { beaniesUnit } from '@/lib/loyalty/brand';
 import { cupsLabel, PASS_PROGRAM_NAME } from '@/lib/passes/brand';
@@ -94,24 +95,11 @@ export default async function OwnerInsightsPage({ searchParams }: { searchParams
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 px-4 py-6">
+      <ReportsNav active="insights" from={from} to={to} />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-charcoal">Insights</h1>
           <p className="text-sm text-muted">Who comes back, and what Beanies, {PASS_PROGRAM_NAME} and coupons do for it.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link
-            href={`/owner/reports?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Reports
-          </Link>
-          <Link
-            href={`/owner/reports/downloads?from=${from}&to=${to}`}
-            className="rounded-md border border-line bg-white px-4 py-2 text-sm font-bold text-charcoal hover:border-charcoal"
-          >
-            Downloads
-          </Link>
         </div>
       </div>
 
