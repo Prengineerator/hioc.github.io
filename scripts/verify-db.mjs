@@ -334,6 +334,23 @@ async function checkNotifyDelivery() {
   else fail('probe row removed from notifications', `${leftRows} row(s) still present — DELETE FROM notifications WHERE provider_ref='${SENTINEL}' BY HAND`);
 }
 
+// Beanies account update (docs/BEANIES-UPDATE-SPEC.md,
+// supabase/2026-11-beanies-update.sql). Same doomed-insert technique as check 1:
+// a notifications row against the nil-UUID order must die on the FOREIGN KEY, not
+// the CHECK, so nothing is ever written. The negative control proves the CHECK
+// still exists and 'feedback' (live today, kept by this migration) is still
+// allowed.
+async function checkBeaniesUpdate() {
+  heading('BEANIES · account update delivery-log event', '2026-11-beanies-update.sql');
+  const attempt = (event) => doomedInsert('notifications', {
+    order_id: BOGUS_ORDER_ID, channel: 'whatsapp', event,
+    status: 'sent', provider_ref: SENTINEL,
+  });
+  expectKind("notifications.event CHECK accepts 'beanies'", await attempt('beanies'), 'fk', 'reached the FK, so the CHECK passed');
+  expectKind("notifications.event CHECK still accepts 'feedback'", await attempt('feedback'), 'fk', 'reached the FK, so the CHECK passed');
+  expectKind('notifications.event CHECK still rejects an unknown event', await attempt(`bogus_${RUN_ID}`), 'check', 'widened, not dropped');
+}
+
 // ---------------------------------------------------------------------------
 // 2 — TAB-1: adding to an open order is an amendment, not a second order.
 // ---------------------------------------------------------------------------
@@ -2513,6 +2530,7 @@ async function main() {
 
   await checkBillObservability();
   await checkNotifyDelivery();
+  await checkBeaniesUpdate();
   await checkRunningTab();
   await checkSplitPayments();
   await checkIdempotencyKeys();
