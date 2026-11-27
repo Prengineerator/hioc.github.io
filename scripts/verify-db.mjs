@@ -351,6 +351,70 @@ async function checkBeaniesUpdate() {
   expectKind('notifications.event CHECK still rejects an unknown event', await attempt(`bogus_${RUN_ID}`), 'check', 'widened, not dropped');
 }
 
+// Web push (docs/WEB-PUSH-SPEC.md, supabase/2026-11-web-push.sql). Each insert
+// below is doomed by a CHECK or by the FK on push_subscriptions.user_id. If the
+// schema has drifted and a push_sends row lands anyway, doomedInsert records its
+// id and checkCleanup deletes it. push_consent_events is deliberately NOT probed
+// with a write: it has no FK and an append-only trigger, so a stray row could
+// not be cleaned up. Its CHECKs, the partial unique index and the trigger are
+// checked by the migration's own Verify block in the SQL editor.
+const WEB_PUSH_TABLES = {
+  push_subscriptions: ['id', 'user_id', 'endpoint', 'p256dh', 'auth', 'user_agent', 'created_at', 'last_success_at'],
+  push_consent_events: ['id', 'user_id', 'action', 'source', 'endpoint_hash', 'created_at'],
+  push_sends: ['id', 'title', 'body', 'url', 'kind', 'sent_by', 'sent_on', 'device_count', 'delivered', 'failed', 'clicked', 'created_at'],
+};
+
+async function checkWebPush() {
+  heading('WEB PUSH · subscriptions, consent log, sends', '2026-11-web-push.sql');
+  const hint = 'apply supabase/2026-11-web-push.sql';
+
+  let missing = false;
+  for (const [table, cols] of Object.entries(WEB_PUSH_TABLES)) {
+    const res = await rest(`/${table}?select=${cols.join(',')}&limit=1`);
+    if (res.ok) { pass(`${table} exists`, `${cols.length} column(s) selectable`); continue; }
+    const kind = errKind(res);
+    if (kind === 'no_table' || kind === 'no_column') { missing = true; fail(`${table} exists`, `${hint} — ${errText(res)}`); }
+    else fail(`${table} exists`, `${kind}: ${errText(res)}`);
+  }
+  if (missing) return;
+
+  // RLS with no policy: anon must not read or write any of the three.
+  for (const table of Object.keys(WEB_PUSH_TABLES)) {
+    const read = await rest(`/${table}?select=id&limit=1`, { key: ANON });
+    const rows = Array.isArray(read.body) ? read.body.length : -1;
+    if (!read.ok || rows === 0) pass(`anon cannot read ${table}`, read.ok ? 'RLS returned 0 rows' : `refused (${read.status})`);
+    else fail(`anon cannot read ${table}`, `anon read ${rows} row(s)`);
+  }
+  const anonWrite = await rest('/push_subscriptions', {
+    key: ANON, method: 'POST', prefer: 'return=minimal',
+    body: { user_id: BOGUS_ORDER_ID, endpoint: `https://example.invalid/${SENTINEL}`, p256dh: 'x', auth: 'x' },
+  });
+  if (anonWrite.ok) {
+    fail('anon cannot insert into push_subscriptions', 'insert SUCCEEDED for anon');
+    await rest(`/push_subscriptions?endpoint=eq.${encodeURIComponent(`https://example.invalid/${SENTINEL}`)}`, { method: 'DELETE' });
+  } else pass('anon cannot insert into push_subscriptions', `refused (${anonWrite.status})`);
+
+  // push_subscriptions: a well-formed row reaches the FK (bogus user), junk does not.
+  const goodSub = {
+    user_id: BOGUS_ORDER_ID, endpoint: `https://example.invalid/${SENTINEL}`, p256dh: 'p', auth: 'a',
+  };
+  const sub = await doomedInsert('push_subscriptions', goodSub);
+  expectKind('push_subscriptions accepts a well-formed row', sub, 'fk', 'reached the FK, so every CHECK passed');
+  const junkSub = await doomedInsert('push_subscriptions', { ...goodSub, endpoint: 'not-a-url' });
+  expectKind('push_subscriptions rejects a non-https endpoint', junkSub, 'check', 'constraint is present');
+  const longSub = await doomedInsert('push_subscriptions', { ...goodSub, p256dh: 'x'.repeat(201) });
+  expectKind('push_subscriptions rejects an oversize key', longSub, 'check', 'constraint is present');
+
+  // push_sends has no FK either; each row below is invalid in exactly one way.
+  const sendBase = { title: 't', body: 'b', url: '/', kind: 'test', sent_on: '2000-01-01' };
+  const badKind = await doomedInsert('push_sends', { ...sendBase, kind: 'everyone' });
+  expectKind("push_sends.kind CHECK rejects anything but broadcast/test", badKind, 'check', 'constraint is present');
+  const longTitle = await doomedInsert('push_sends', { ...sendBase, title: 'x'.repeat(41) });
+  expectKind('push_sends rejects a title over 40 characters', longTitle, 'check', 'constraint is present');
+  const longBody = await doomedInsert('push_sends', { ...sendBase, body: 'x'.repeat(121) });
+  expectKind('push_sends rejects a body over 120 characters', longBody, 'check', 'constraint is present');
+}
+
 // ---------------------------------------------------------------------------
 // 2 — TAB-1: adding to an open order is an amendment, not a second order.
 // ---------------------------------------------------------------------------
@@ -2531,6 +2595,7 @@ async function main() {
   await checkBillObservability();
   await checkNotifyDelivery();
   await checkBeaniesUpdate();
+  await checkWebPush();
   await checkRunningTab();
   await checkSplitPayments();
   await checkIdempotencyKeys();

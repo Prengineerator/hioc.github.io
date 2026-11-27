@@ -155,6 +155,15 @@ export const flags = {
   // sending page views and the checkout routes recording orders. NEXT_PUBLIC_
   // because the tracker runs in the browser.
   trafficTracking: boolEnv(process.env.NEXT_PUBLIC_FLAG_TRAFFIC_TRACKING, true),
+  // Offers as phone notifications (docs/WEB-PUSH-SPEC.md): logged-in customers
+  // opt in on the order page and Account → Profile, and the owner sends a
+  // browser push from /owner/marketing → Push. Default OFF: apply
+  // supabase/2026-11-web-push.sql and set NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+  // VAPID_PRIVATE_KEY and VAPID_SUBJECT first. While off, every push route,
+  // /sw.js and the customer manifest answer 404 and every piece of push UI
+  // renders nothing. NEXT_PUBLIC_ because the cards and the owner tab decide
+  // client-side.
+  webPush: boolEnv(process.env.NEXT_PUBLIC_FLAG_WEB_PUSH, false),
 } as const;
 
 export type FeatureFlags = typeof flags;

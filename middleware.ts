@@ -35,6 +35,13 @@ export async function middleware(request: NextRequest) {
   const rewritten = rewriteForSurface(surface, request.nextUrl.pathname);
   const pathname = rewritten ?? request.nextUrl.pathname;
 
+  // Web push (docs/WEB-PUSH-SPEC.md): the customer worker and manifest exist on
+  // the customer host only, and only while the flag is on. Static files skip the
+  // surface rewrite, so a staff./owner. host would otherwise serve them.
+  if ((pathname === '/sw.js' || pathname === '/hioc.webmanifest') && (!flags.webPush || surface !== 'main')) {
+    return new NextResponse('Not found', { status: 404 });
+  }
+
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-pathname', pathname);
   // Read by the root layout so links render prefix-free on a subdomain without

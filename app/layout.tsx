@@ -82,11 +82,24 @@ export default function RootLayout({
   // right font just as much as any /staff/** page does for the desktop app's
   // canvas-rasterized ESC/POS header (lib/print/brandHeaderRaster.ts). This is
   // the one layout both surfaces share.
+  // The customer manifest (iPhone Home Screen, docs/WEB-PUSH-SPEC.md) is linked
+  // from customer pages only: never on the staff./owner. hosts, and never under
+  // /staff or /owner on the main host, whose layouts own their own install story.
+  const path = h.get('x-pathname') ?? '';
+  const customerManifest =
+    flags.webPush &&
+    surface === 'main' &&
+    !/^\/(staff|staff-print|owner)(\/|$)/.test(path);
   return (
     <html
       lang="en"
       className={`${dmSans.variable} ${spaceMono.variable} ${devanagariFont.variable}`}
     >
+      {customerManifest ? (
+        <head>
+          <link rel="manifest" href="/hioc.webmanifest" />
+        </head>
+      ) : null}
       <body className="flex min-h-screen flex-col font-sans bg-cream text-charcoal">
         <SurfaceProvider surface={surface}>
           {/* First focusable element on every page: lets keyboard and screen
