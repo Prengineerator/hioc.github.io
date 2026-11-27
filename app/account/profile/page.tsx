@@ -25,6 +25,7 @@ import { normalizeEmail } from '@/lib/email';
 import { Spinner } from '@/components/ui/Spinner';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { PushProfileSwitch } from '@/components/push/PushProfileSwitch';
 import { Select } from '@/components/ui/Select';
 import type { OrderType } from '@/lib/types';
 
@@ -349,6 +350,8 @@ export default function ProfilePage() {
           {saving ? 'Saving' : 'Save changes'}
         </Button>
       </form>
+
+      <PushProfileSwitch />
 
       <div className="rounded-md border border-line bg-cream p-5 shadow-sm">
         <h2 className="font-semibold text-charcoal">Phone number</h2>

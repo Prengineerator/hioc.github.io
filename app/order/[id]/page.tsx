@@ -26,6 +26,7 @@ import { RitualChip } from '@/components/passes/RitualChip';
 import { PASS_PROGRAM_NAME } from '@/lib/passes/brand';
 import { isPassSaleOrder, orderPassBill, passSaleNote, ritualTagLabel } from '@/lib/passes/ui';
 import { OptInCard } from '@/components/marketing/OptInCard';
+import { PushOptInCard } from '@/components/push/PushOptInCard';
 import { CAFE_ADDRESS, CAFE_DIRECTIONS_URL, CAFE_NAME, CAFE_PHONE_DISPLAY, CAFE_PHONE_HREF } from '@/lib/constants';
 import { openRazorpayCheckout } from '@/lib/payments/razorpayCheckout';
 import { canPayAtCounter, hasBill, paymentFlagMessage } from '@/lib/orders/paymentStatusUI';
@@ -584,6 +585,7 @@ export default function OrderStatusPage() {
           old /order-confirmation/[orderId] URL redirects here, so this IS the
           confirmation page. */}
       <OptInCard />
+      <PushOptInCard />
 
       <div className="mt-10 rounded-md border border-line bg-cream p-6 text-center shadow-sm">
         <h2 className="font-semibold text-charcoal">Need help?</h2>
