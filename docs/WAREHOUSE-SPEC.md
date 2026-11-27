@@ -260,7 +260,7 @@ warehouse_alerts group by 1,2,3;`
 Status: **BUILT 2026-11-27, and off until the owner's steps below are done.** The owner approved it
 the same day and chose to send it when the delivery person is chosen (WH-D17a). The security review
 of the first design changed it in four places (WH-D17c to WH-D17f). The largest change: a driver
-without a login is **not** messaged in this build. See "Waiting on the owner".
+without a login is **not** messaged, which the owner then confirmed (see "Drivers without a login").
 
 **The short answer.** When the owner or a manager chooses a **team member** to bring a warehouse
 request to the store, that person gets one WhatsApp message with the request number and the items
@@ -278,8 +278,10 @@ owner portal, which a delivery person can't use.
   WhatsApp: no number saved.", "Ravi already has the WhatsApp.", or that it is not set up yet, the
   daily limit is reached, it could not be sent, or it could not be confirmed, "so tell Ravi". The
   sentence never shows WhatsApp's own error text. That stays on the owner's Alerts tab.
-- **The owner** sees every attempt on Warehouse → Alerts as "Delivery person's list", with the other
-  alerts.
+- **The owner** sees each message that was sent, refused by WhatsApp, or skipped for a missing number
+  or the daily limit, on Warehouse → Alerts as "Delivery person's list", with the other alerts. A
+  repeat for someone who already has it, and an attempt made before the set-up is finished, leave no
+  row there.
 
 ### Decisions (defaults; the owner can change them)
 
@@ -289,8 +291,8 @@ owner portal, which a delivery person can't use.
 | WH-D17b | **Warehouse → store requests only** (`from_warehouse`). |
 | WH-D17c | **Who.** Team members only. The number is the one the owner types on Staff → Edit → Phone (`staff_accounts.phone`), put into +91 form first. `profiles.phone` is not used: that is a number someone gave as a customer. No valid number means no message: the attempt is logged as *skipped* and the screen says so. Someone who gives the delivery to themselves is not messaged, as with the email. A driver without a login is not messaged. |
 | WH-D17d | **What.** The person's name, the request number and every item with its quantity, on one line. A very long list is cut at about 600 characters and ends "and N more". The name keeps only letters, spaces, hyphens and apostrophes, so it can't carry a link into the café's message. No prices, nothing about customers, and no button: the message carries the whole list. |
-| WH-D17e | **Once per person per request, and a daily limit.** A number is never sent the same request twice, and the café sends at most 40 of these in any 24 hours. Over the limit nothing is sent, the attempt is logged as *skipped*, and whoever chose is told. The previous delivery person is not told they were replaced, so **the message is not permission to collect**: the warehouse hands over to whoever the request shows at that moment, and whoever changes the person tells the first one. |
-| WH-D17f | **Never in the way, and never unrecorded.** The choice is saved first. The attempt is then written to `warehouse_alerts` as `pickup_assigned` **before** the message goes out, and if it can't be written nothing is sent. If WhatsApp refuses the message the row is marked *failed*, and choosing the person again retries. If WhatsApp gives no answer within 8 seconds the row stays as sent, marked "not confirmed", and it is not retried, because the message may still arrive. A message that fails never undoes the choice. Names and numbers never go to the server log. |
+| WH-D17e | **Once per person per request, and a daily limit.** A number is not sent the same request twice (the one exception is the dropped connection in WH-D17f), and the café sends about 40 of these in any 24 hours: the count is checked just before sending, so two people choosing at the same instant can take it one or two over. Over the limit nothing is sent, the attempt is logged as *skipped*, and whoever chose is told. The previous delivery person is not told they were replaced, and two people choosing different delivery persons at the same moment message both, so **the message is not permission to collect**: the warehouse hands over to whoever the request shows at that moment, and whoever changes the person tells the first one. |
+| WH-D17f | **Never in the way, and never unrecorded.** The choice is saved first. The attempt is then written to `warehouse_alerts` as `pickup_assigned` **before** the message goes out, and if it can't be written nothing is sent. If WhatsApp refuses the message, or the connection to it drops, the row is marked *failed* and choosing the person again retries. In the rare case that a dropped connection had already delivered the message, the retry gives them a second copy. If WhatsApp gives no answer within 8 seconds the row stays as sent, marked "not confirmed", and it is not retried, because the message may still arrive. Choosing that person again says it could not be confirmed, not that they have it. A message that fails never undoes the choice. Names and numbers never go to the server log. |
 | WH-D17g | **Off until set up.** Nothing is sent until the template is named in `WHATSAPP_TPL_STOCK_PICKUP`. Removing the variable switches it off again. |
 
 ### Out of scope
@@ -299,13 +301,13 @@ owner portal, which a delivery person can't use.
 - A second message when the warehouse records what was sent.
 - A switch for this on the Alerts tab, and reading the delivery person's replies.
 
-### Waiting on the owner
+### Drivers without a login: not messaged (the owner's decision, 2026-11-27)
 
-- **Drivers without a login.** The first design also messaged the number typed for a driver. The
-  security review stopped that. The number is typed by someone else, so a mistyped one sends a
-  stranger the list, and WhatsApp's rules expect the person to have agreed to be messaged. If the
-  owner wants drivers messaged, the build adds a tick when the number is typed ("they agreed to get
-  this on WhatsApp"), sends nothing without it, and limits how many numbers one request can message.
+The first design also messaged the number typed for a driver. The security review stopped that: the
+number is typed by someone else, so a mistyped one sends a stranger the list, and WhatsApp's rules
+expect the person to have agreed to be messaged. Asked, the owner chose **team members only for
+now**. If that changes, the build adds a tick when the number is typed ("they agreed to get this on
+WhatsApp"), sends nothing without it, and limits how many numbers one request can message.
 
 ### What it costs and what it uses
 
@@ -323,9 +325,11 @@ owner portal, which a delivery person can't use.
    Supabase SQL editor on **Hioc India**, after `2026-11-warehouse.sql` and before step 3. It lets
    the alert log hold the new kind of row, changes nothing else, and is safe to re-run. To check:
    `npm run verify:db` shows the two `warehouse_alerts.event CHECK` lines as ✓.
-3. **Vercel:** set `WHATSAPP_TPL_STOCK_PICKUP=stock_pickup_1` (Production and Preview) and redeploy.
-4. **Numbers:** for each team member who delivers, fill in Staff → Edit → Phone with the number they
-   use for WhatsApp.
+3. **Vercel:** set `WHATSAPP_TPL_STOCK_PICKUP=stock_pickup_1` for **Production only**, and redeploy.
+   Leave it off Preview: a preview build that shares the live database and WhatsApp account would
+   message real staff.
+4. **Numbers:** for each team member who delivers, and with their OK, fill in Staff → Edit → Phone
+   with the number they use for WhatsApp.
 5. **Tell the team** that the delivery person now gets the list on WhatsApp, that the message alone
    is not permission to collect, and that whoever changes the delivery person tells the first one.
 
