@@ -573,7 +573,7 @@ function DaySummary({
 
       <p className="mt-3 text-xs text-muted">
         Received this shift, not in the drawer: UPI {inr(summary.upi_inr)} · Card {inr(summary.card_inr)}
-        {summary.online_inr > 0 ? ` · Online ${inr(summary.online_inr)}` : ''}
+        {summary.online_inr > 0 ? ` · App paid ${inr(summary.online_inr)}` : ''}
         {summary.swiggy_dineout_inr ? ` · Swiggy Dineout ${inr(summary.swiggy_dineout_inr)}` : ''}
         {summary.zomato_district_inr ? ` · Zomato District ${inr(summary.zomato_district_inr)}` : ''}
       </p>

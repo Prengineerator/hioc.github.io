@@ -24,7 +24,7 @@ import {
   formatIstDateTime,
   formatIstDateShort,
 } from '@/lib/print/labels';
-import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { describeBillPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel, validTillLabel } from '@/lib/pos/ritual';
 import { discountRows, orderOfferLabel } from '@/lib/orders/offers';
@@ -427,7 +427,7 @@ function buildReceiptBlocks(order: StaffPrintOrder): TicketBlock[] {
   if (order.payment_status === 'paid' && order.payment_method) {
     blocks.push({
       kind: 'text',
-      text: `Paid via ${describeOrderPayment(order)}`,
+      text: `Paid via ${describeBillPayment(order)}`,
       align: 'center',
     });
   }

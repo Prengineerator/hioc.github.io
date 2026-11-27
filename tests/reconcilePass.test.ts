@@ -84,7 +84,7 @@ describe('captureGatewayPayment — a HIOC Ritual sale', () => {
     const result = await capture();
     expect(result.ok).toBe(true);
     // Only payment fields are written; the trigger does the rest.
-    expect(state.orderPatches).toEqual([{ payment_status: 'paid', payment_method: 'upi' }]);
+    expect(state.orderPatches).toEqual([{ payment_status: 'paid', payment_method: 'online' }]);
     expect(state.order?.status).toBe('placed');
     expect(state.order?.version).toBe(1);
   });

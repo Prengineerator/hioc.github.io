@@ -596,7 +596,7 @@ describe('buildTicketDoc — receipt totals', () => {
     ['cash', 'Cash'],
     ['upi', 'UPI'],
     ['card', 'Card'],
-    ['online', 'Online'],
+    ['online', 'HIOC app'],
   ] as const)('labels payment_method %s as "%s"', (method, label) => {
     const doc = buildTicketDoc(order({ payment_status: 'paid', payment_method: method }), 'receipt');
     expect(allText(doc)).toContain(`Paid via ${label}`);

@@ -16,7 +16,7 @@ import {
 } from '@/lib/print/labels';
 import { BRAND_NAME_EN, BRAND_NAME_HI } from '@/lib/print/brandHeader';
 import { DEFAULT_KOT_ROUTING, splitKotItems, type KotSlip } from '@/lib/print/kotRouting';
-import { describeOrderPayment } from '@/lib/orders/paymentLabel';
+import { describeBillPayment } from '@/lib/orders/paymentLabel';
 import { LOYALTY_UNIT } from '@/lib/loyalty/brand';
 import { cupsOnOrder, ritualBillLabel } from '@/lib/pos/ritual';
 import { passCoveredNote, passValidTillText, receiptBalance, receiptBanner } from '@/lib/print/ticketModel';
@@ -443,7 +443,7 @@ export function ReceiptTicket({ order }: { order: StaffPrintOrder }) {
         ) : null}
         {order.payment_status === 'paid' && order.payment_method ? (
           <p className="text-center">
-            Paid via {describeOrderPayment(order)}
+            Paid via {describeBillPayment(order)}
           </p>
         ) : null}
       </div>
