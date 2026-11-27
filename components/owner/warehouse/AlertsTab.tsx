@@ -2,7 +2,8 @@
 
 // Owner → Warehouse → Alerts (docs/WAREHOUSE-SPEC.md, WH-D9..D11): who is told
 // when the store asks for stock, sends stock back, or counts a delivery in
-// different from what was sent — and the last attempts, so "did I get told?"
+// different from what was sent — and the delivery person's WhatsApp list when
+// they are chosen (WH-D17) — and the last attempts, so "did I get told?"
 // has an answer. Email works as soon as Resend is set up (it already is for
 // the reports); WhatsApp needs a Meta-approved template, and says so here
 // until it has one.
@@ -16,6 +17,7 @@ const EVENT_LABELS: Record<string, string> = {
   request_placed: 'Stock request',
   return_sent: 'Return sent',
   arrived_different: 'Arrived different',
+  pickup_assigned: 'Delivery person’s list',
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -163,7 +165,7 @@ export function AlertsTab() {
                     {a.requestNumber ? ` #${a.requestNumber}` : ''}
                   </span>{' '}
                   <span className="text-muted">
-                    · {a.channel === 'email' ? 'email' : 'WhatsApp'} to {a.to} · {when(a.createdAt)}
+                    · {a.channel === 'email' ? 'email' : 'WhatsApp'} to {a.to || 'no number'} · {when(a.createdAt)}
                   </span>{' '}
                   <span className={`font-semibold ${STATUS_TONE[a.status] ?? ''}`}>{a.status}</span>
                   {a.detail ? <span className="block text-xs text-muted">{describeSkipReason(a.detail)}</span> : null}

@@ -2,9 +2,12 @@
 // manager assigns (or re-assigns) a request to them (docs/INVENTORY-SPEC.md,
 // INV-9). Goes to staff_accounts.personal_email through the same logged,
 // never-throwing path as every other staff email (lib/staff/emails.ts): an
-// assignment must never fail because an email did. WhatsApp is not used —
-// a business-initiated WhatsApp message needs a Meta-approved template, and
-// the Requests tab badge already covers the person on shift.
+// assignment must never fail because an email did. This email is the only
+// message for a store-room pick (a business-initiated WhatsApp message needs a
+// Meta-approved template, and the Requests tab badge covers the person on
+// shift). A warehouse delivery person also gets a WhatsApp list, sent by
+// lib/inventory/pickupAlert.ts once WHATSAPP_TPL_STOCK_PICKUP is set; that is
+// separate from this email and does not change it.
 
 import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';

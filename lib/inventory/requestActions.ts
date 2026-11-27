@@ -31,6 +31,7 @@ import { inventoryWriteFailure } from '@/lib/inventory/api';
 import { loadAssignees } from '@/lib/inventory/server';
 import { sendStockAssignedEmail } from '@/lib/inventory/notify';
 import { sendOwnerAlert } from '@/lib/inventory/ownerAlerts';
+import { sendPickupAlert, type PickupResult } from '@/lib/inventory/pickupAlert';
 import {
   canAssign,
   canCancel,
@@ -200,7 +201,25 @@ export async function patchStockRequest(
         })
       ).status;
     }
-    return NextResponse.json({ ok: true, emailed });
+
+    // The delivery person's WhatsApp list (WH-D17): a TEAM MEMBER on a
+    // warehouse-to-store request, not when they deliver it to themselves (an
+    // outside driver is never messaged). Off (no key in the reply) until
+    // WHATSAPP_TPL_STOCK_PICKUP is set. The choice is saved above; nothing here
+    // can undo it or fail the reply.
+    let whatsapp: PickupResult | null = null;
+    if (route === 'from_warehouse' && assigneeId && assigneeId !== actor.userId) {
+      try {
+        whatsapp = await sendPickupAlert(admin, {
+          requestId: id,
+          userId: assigneeId,
+          name: team.find((p) => p.id === assigneeId)?.name ?? '',
+        });
+      } catch {
+        whatsapp = 'failed';
+      }
+    }
+    return NextResponse.json(whatsapp ? { ok: true, emailed, whatsapp } : { ok: true, emailed });
   }
 
   // ── pick (store room) / dispatch (warehouse) ──────────────────────────────

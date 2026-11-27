@@ -112,6 +112,7 @@ re-run, and `2026-10-inventory.sql` can be re-run after it without undoing anyth
 | WH-8 owner screen | `app/owner/warehouse`, `components/owner/warehouse/*` (Requests · Stock sheet · In transit · Alerts); the Warehouse link and badge in `lib/owner/ownerNav.ts` and `components/owner/OwnerHeader.tsx` |
 | WH-9 staff screen | `components/staff/inventory/RequestsTab.tsx` (route-aware), `StockTab.tsx` ("Request from warehouse", "Send back to warehouse"), `DelivererPicker.tsx`, `ReturnModal.tsx`; delivery wording in `lib/inventory/notify.ts` |
 | WH-10 flag + probes | `lib/flags.ts` `warehouse`, `.env.local.example`, `scripts/verify-db.mjs` `checkWarehouse`, `scripts/inventory/pg-smoke.sh` step 5d |
+| WH-11 delivery person's WhatsApp list (WH-D17) | `supabase/2026-11-warehouse-pickup-alert.sql`; `lib/inventory/pickupAlert.ts` (the sender), `lib/inventory/pickupNotice.ts` (the sentence on screen); called from the `assign` action in `lib/inventory/requestActions.ts`; shown by `components/owner/warehouse/TransfersTab.tsx`, `components/staff/inventory/RequestsTab.tsx` and `AlertsTab.tsx`; `tests/pickupAlert.test.ts` |
 | Tests | `tests/warehouseRules.test.ts`, `tests/warehouseRoutes.test.ts`, `tests/warehouseOwnerAlerts.test.ts`, additions to `tests/ownerNav.test.ts` and `tests/inventoryNotify.test.ts`; the real-Postgres walk-through in `pg-smoke.sh` |
 
 ## API
@@ -256,10 +257,10 @@ warehouse_alerts group by 1,2,3;`
 
 ## The delivery person gets the list on WhatsApp (WH-D17)
 
-Status: **APPROVED by the owner 2026-11-27, being built.** The owner chose to send it when the
-delivery person is chosen (WH-D17a). The security review of the first design changed it in four
-places (WH-D17c to WH-D17f). The largest change: a driver without a login is **not** messaged in
-this build. See "Waiting on the owner".
+Status: **BUILT 2026-11-27, and off until the owner's steps below are done.** The owner approved it
+the same day and chose to send it when the delivery person is chosen (WH-D17a). The security review
+of the first design changed it in four places (WH-D17c to WH-D17f). The largest change: a driver
+without a login is **not** messaged in this build. See "Waiting on the owner".
 
 **The short answer.** When the owner or a manager chooses a **team member** to bring a warehouse
 request to the store, that person gets one WhatsApp message with the request number and the items
@@ -273,10 +274,12 @@ owner portal, which a delivery person can't use.
   HIOC warehouse to the store. Items asked for: Full-cream milk 20 L, Paper cup 500 pcs. The
   warehouse records what it hands you, and the store counts it in when you arrive."*
 - **Whoever chose them** (owner portal → Warehouse → Requests, or the POS Stock screen → Requests)
-  sees one line after saving: "WhatsApp sent to Ravi", or the reason it was not ("No WhatsApp: no
-  number saved"). The line never shows WhatsApp's own error text. That stays on the owner's Alerts
-  tab.
-- **The owner** sees every attempt on Warehouse → Alerts, with the other alerts.
+  sees one sentence added after saving: "WhatsApp sent to Ravi." Otherwise it gives the reason: "No
+  WhatsApp: no number saved.", "Ravi already has the WhatsApp.", or that it is not set up yet, the
+  daily limit is reached, it could not be sent, or it could not be confirmed, "so tell Ravi". The
+  sentence never shows WhatsApp's own error text. That stays on the owner's Alerts tab.
+- **The owner** sees every attempt on Warehouse → Alerts as "Delivery person's list", with the other
+  alerts.
 
 ### Decisions (defaults; the owner can change them)
 
@@ -287,7 +290,7 @@ owner portal, which a delivery person can't use.
 | WH-D17c | **Who.** Team members only. The number is the one the owner types on Staff → Edit → Phone (`staff_accounts.phone`), put into +91 form first. `profiles.phone` is not used: that is a number someone gave as a customer. No valid number means no message: the attempt is logged as *skipped* and the screen says so. Someone who gives the delivery to themselves is not messaged, as with the email. A driver without a login is not messaged. |
 | WH-D17d | **What.** The person's name, the request number and every item with its quantity, on one line. A very long list is cut at about 600 characters and ends "and N more". The name keeps only letters, spaces, hyphens and apostrophes, so it can't carry a link into the café's message. No prices, nothing about customers, and no button: the message carries the whole list. |
 | WH-D17e | **Once per person per request, and a daily limit.** A number is never sent the same request twice, and the café sends at most 40 of these in any 24 hours. Over the limit nothing is sent, the attempt is logged as *skipped*, and whoever chose is told. The previous delivery person is not told they were replaced, so **the message is not permission to collect**: the warehouse hands over to whoever the request shows at that moment, and whoever changes the person tells the first one. |
-| WH-D17f | **Never in the way, and never unrecorded.** The choice is saved first. The attempt is then written to `warehouse_alerts` as `pickup_assigned` **before** the message goes out, and if it can't be written nothing is sent. A message that fails never undoes the choice. Names and numbers never go to the server log. |
+| WH-D17f | **Never in the way, and never unrecorded.** The choice is saved first. The attempt is then written to `warehouse_alerts` as `pickup_assigned` **before** the message goes out, and if it can't be written nothing is sent. If WhatsApp refuses the message the row is marked *failed*, and choosing the person again retries. If WhatsApp gives no answer within 8 seconds the row stays as sent, marked "not confirmed", and it is not retried, because the message may still arrive. A message that fails never undoes the choice. Names and numbers never go to the server log. |
 | WH-D17g | **Off until set up.** Nothing is sent until the template is named in `WHATSAPP_TPL_STOCK_PICKUP`. Removing the variable switches it off again. |
 
 ### Out of scope

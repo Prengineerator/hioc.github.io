@@ -15,6 +15,7 @@
 
 import { useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
+import { withPickupNotice, type PickupResult } from '@/lib/inventory/pickupNotice';
 import {
   canAssign,
   canCancel,
@@ -101,15 +102,16 @@ export function RequestsTab({
     if (!assigneeId) return;
     setError('');
     setBusyId(r.id);
-    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped' }>(`/api/inventory/requests/${r.id}`, 'PATCH', {
+    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped'; whatsapp?: PickupResult }>(`/api/inventory/requests/${r.id}`, 'PATCH', {
       action: 'assign',
       assigneeId,
     });
     setBusyId(null);
     const name = data.assignees.find((p) => p.id === assigneeId)?.name ?? 'them';
     if (!res.ok) setError(`#${r.number}: ${res.error}`);
-    else if (res.data.emailed === 'sent') setNotice(`#${r.number} assigned — ${name} has been emailed.`);
-    else if (assigneeId !== data.actorId) setNotice(`#${r.number} assigned. ${name} could not be emailed (no personal email on file?) — tell them.`);
+    else if (res.data.emailed === 'sent') setNotice(withPickupNotice(`#${r.number} assigned — ${name} has been emailed.`, res.data.whatsapp, name));
+    else if (assigneeId !== data.actorId)
+      setNotice(withPickupNotice(`#${r.number} assigned. ${name} could not be emailed (no personal email on file?) — tell them.`, res.data.whatsapp, name));
     else setNotice(`#${r.number} assigned to you.`);
     await reload();
   }
@@ -556,7 +558,7 @@ function DelivererModal({
     if (!choice) return setError('Choose who delivers it.');
     setError('');
     setBusy(true);
-    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped' }>(`/api/inventory/requests/${request.id}`, 'PATCH', {
+    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped'; whatsapp?: PickupResult }>(`/api/inventory/requests/${request.id}`, 'PATCH', {
       action: 'assign',
       ...choice,
     });
@@ -564,11 +566,15 @@ function DelivererModal({
     if (!res.ok) return setError(res.error);
     const name = 'assigneeId' in choice ? people.find((p) => p.id === choice.assigneeId)?.name ?? 'They' : choice.deliverer.name;
     await onDone(
-      'deliverer' in choice || choice.assigneeId === actorId
-        ? `#${request.number}: ${'deliverer' in choice ? name : 'you'} deliver${'deliverer' in choice ? 's' : ''} it.`
-        : res.data.emailed === 'sent'
-          ? `#${request.number}: ${name} delivers it and has been emailed.`
-          : `#${request.number}: ${name} delivers it. They could not be emailed (no personal email on file?) — tell them.`,
+      withPickupNotice(
+        'deliverer' in choice || choice.assigneeId === actorId
+          ? `#${request.number}: ${'deliverer' in choice ? name : 'you'} deliver${'deliverer' in choice ? 's' : ''} it.`
+          : res.data.emailed === 'sent'
+            ? `#${request.number}: ${name} delivers it and has been emailed.`
+            : `#${request.number}: ${name} delivers it. They could not be emailed (no personal email on file?) — tell them.`,
+        res.data.whatsapp,
+        name,
+      ),
     );
   }
 
