@@ -153,4 +153,4 @@ An order a customer pays on hioc.in (website checkout or table QR, through Razor
 - Because the order is `online`, the gateway owns the payment: **Change payment** is not offered, and a refund goes through the gateway.
 - The printed bill reads "Paid via HIOC app" (`describeBillPayment`). The customer receipt page keeps "Online". The WhatsApp bill label stays "Online" (a Meta template parameter).
 - The online shop is a separate flow and is unchanged.
-- Orders captured before this change are fixed by a one-off SQL file the database engineer is writing separately: `supabase/2026-11-app-paid-backfill.sql`. Until it is run, past app-paid orders still show as UPI or Card.
+- Orders captured before this change are fixed by a one-off SQL file, `supabase/2026-11-app-paid-backfill.sql`, which the owner runs by hand in Supabase on Hioc India (preview first; it keeps a backup of every row it changes). Until it is run, past app-paid orders still show as UPI or Card.
