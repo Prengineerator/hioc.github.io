@@ -72,7 +72,8 @@ week by week with any bills that look wrong.
 - **In your bank**: the payout of every order in the window, any status, minus marketing; per order and per day.
 - **Billing notes**: a sales-linked bill labelled as one day that is over 25% of that day's net sales (net order
   value minus GST from the customer), and any full Monday–Sunday week with orders whose sales-linked fee is under
-  half the usual rate (the median of the full weeks at 3% or more, needing three of them; zero counts), or, when
+  half the usual rate (the median of the last 6 full weeks at 3% or more, needing three of them; zero counts;
+  only those 6 weeks are judged, so an older plan's smaller fee is not flagged), or, when
   there is no usual rate, any such week with no fee at all. A final week that is not yet complete is marked
   "(part week)" and skipped by these rules. When an under-billed week is inside the current window the page shows
   the extra fee due at the usual rate and what the marketing share and bank figures would then be.

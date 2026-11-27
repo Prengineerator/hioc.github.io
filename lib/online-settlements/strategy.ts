@@ -189,6 +189,7 @@ export interface StrategyResult {
 
 const WINDOW_DAYS = 28;
 const WEEKS_SHOWN = 8;
+const BILLING_WEEKS = 6;
 const GST = 1.18;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -465,10 +466,14 @@ export function buildStrategy(input: {
     });
   }
 
-  // Billing rules, full weeks only. `usual` is the median sales-linked rate of the full weeks
-  // at 3% or more (needs three); a full week with orders billed under half of it gets one note.
+  // Billing rules, full weeks only. `usual` is the median sales-linked rate of the last 6 full
+  // weeks at 3% or more (needs three); one of those weeks with orders billed under half of it
+  // gets one note. Only the last 6: an older stretch billed under another plan (a smaller fee
+  // beside fixed-budget ads) would otherwise read as under-billed.
   const fullWeeks = weeks.filter((w) => w.full);
+  const recent = new Set(fullWeeks.slice(-BILLING_WEEKS));
   const rates = fullWeeks
+    .filter((w) => recent.has(w))
     .map((w) => w.effectiveRate)
     .filter((x): x is number => x !== null && x >= 0.03)
     .sort((a, b) => a - b);
@@ -476,7 +481,7 @@ export function buildStrategy(input: {
   const underBilled: WeekRow[] = [];
   for (const w of fullWeeks) {
     if (w.orders === 0) continue;
-    if (usual !== null && w.effectiveRate !== null && w.effectiveRate < usual / 2) {
+    if (usual !== null && recent.has(w) && w.effectiveRate !== null && w.effectiveRate < usual / 2) {
       underBilled.push(w);
       billingNotes.push(
         `The week of ${w.label} was billed ${rupees(w.salesLinked)}, ${percent(w.effectiveRate)} of net sales against a usual ${percent(usual)}. Ask Zomato whether the plan was off for part of that week`,

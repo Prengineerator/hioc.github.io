@@ -418,7 +418,8 @@ describe('actions', () => {
 describe('under-billed weeks', () => {
   // One ₹1,000 order a week (net sales 1,000, payout 600) and a sales-linked bill per week, before GST:
   // 70.4, 60.4, 80.4 (weeks of 5, 12, 19 Oct), 10.4 (26 Oct: the odd one out), then 70.4 three times.
-  // Rates 7.04% ×4, 6.04%, 8.04% and 1.04%: usual = median of the six at 3% or more = 7.04%.
+  // Rates 7.04% ×4, 6.04%, 8.04% and 1.04%. Only the last 6 full weeks (12 Oct on) are judged:
+  // usual = median of the five of them at 3% or more = 7.04%.
   const weekly: [string, string, number][] = [
     ['2026-10-05', '2026-10-07', 70.4],
     ['2026-10-12', '2026-10-14', 60.4],
@@ -442,6 +443,14 @@ describe('under-billed weeks', () => {
     expect(r.billingNotes).toEqual([
       'The week of 26 Oct – 1 Nov was billed ₹12, 1.0% of net sales against a usual 7.0%. Ask Zomato whether the plan was off for part of that week',
     ]);
+  });
+
+  it('judges only the last 6 full weeks: an older week on a smaller fee is not flagged', () => {
+    // the week of 5 Oct at 2.04%: under half the usual rate, but 7 weeks back (an older, smaller plan)
+    const older = fixed(bills()).map((d) => (d.ref === 'G0' ? { ...d, amount_inr: 20.4 * 1.18 } : d));
+    const r = buildStrategy({ orders: fixtureOrders, deductions: older, asOf: ASOF });
+    expect(r.billingNotes).toHaveLength(1);
+    expect(r.billingNotes[0]).toContain('26 Oct – 1 Nov');
   });
 
   it('works out the open billing: extra fee and the three KPIs', () => {
