@@ -20,18 +20,28 @@
 --     method (cast to text). So only orders still holding what the capture
 --     wrote are changed. An order whose method differs was changed by staff
 --     afterwards and is left alone.
---   * the order's paid_at is NOT clearly earlier than the capture. Capture
---     time is payments.updated_at (the paid row's last write; payments has no
---     separate captured_at column). paid_at is stamped once by the database
---     when the order first becomes paid (2026-09-cash-counts.sql). If paid_at
---     is more than 2 minutes before the capture, the counter settled the bill
---     first (for example the customer's gateway payment stalled, they paid the
---     counter's UPI QR, staff settled it, and Razorpay captured later). Those
---     are likely counter-first or double-paid orders and are left as they are.
---     The 2 minute margin covers the small gap between the app marking an
---     order paid and the payments row being written, and clock jitter, so
---     normal app payments are not skipped. An order with no paid_at is also
---     left alone, because the order of events cannot be shown.
+--   * the order's paid_at is NOT clearly earlier than the capture, AND the
+--     order was created on or after the first cash count (the earliest
+--     cash_counts.created_at, from 2026-09-cash-counts.sql). Capture time is
+--     payments.updated_at (the paid row's last write; payments has no separate
+--     captured_at column). paid_at is stamped once by the database when an
+--     order first becomes paid, but ONLY orders paid after that migration was
+--     applied have a trustworthy one. For older orders the migration filled
+--     paid_at with coalesce(updated_at, created_at), usually the order's last
+--     write, which is AFTER the capture, so a counter-first order from that
+--     time would pass the timing test. So older orders are not changed, and
+--     they stay as UPI / Card. If no cash count exists yet, the cutoff is
+--     null and nothing matches; that is the safe outcome (nothing changes).
+--     STEP 1e lists the older orders.
+--     For newer orders: if paid_at is more than 2 minutes before the capture,
+--     the counter settled the bill first (for example the customer's gateway
+--     payment stalled, they paid the counter's UPI QR, staff settled it, and
+--     Razorpay captured later). Those are likely counter-first or double-paid
+--     orders and are left as they are (STEP 1d). The 2 minute margin covers
+--     the small gap between the app marking an order paid and the payments
+--     row being written, and clock jitter, so normal app payments are not
+--     skipped. An order with no paid_at is also left alone, because the order
+--     of events cannot be shown.
 --   * it has no order_payments row. Split and counter tenders write one
 --     (2026-08-split-payments.sql). Note this is NOT enough on its own: a
 --     single-tender counter settle deletes the order's order_payments rows and
@@ -48,8 +58,9 @@
 --     (2026-11-instant-coffee-shop.sql), not in orders, so this file cannot
 --     reach them.
 --   * cash_days, payments, order_payments and refunds. None is written.
---   * The likely counter-first / double-paid orders above. STEP 1d lists them
---     so the owner can look at them. This file does not change them.
+--   * The likely counter-first / double-paid orders above (STEP 1d) and the
+--     older orders from before paid_at was reliable (STEP 1e). The owner can
+--     look at them. This file does not change them, and they stay UPI / Card.
 --
 -- Triggers on orders that fire on UPDATE (searched every file in supabase/):
 --   * trg_orders_updated_at (schema.sql): sets updated_at = now() on the rows
@@ -82,9 +93,10 @@
 -- run changes 0 rows and the backup keeps the original methods.
 --
 -- HOW TO RUN (Supabase SQL editor, project "Hioc India"):
---   1. Run the file (or just STEP 1). It only reads. Look at 1a-1d.
---   2. If the numbers look right, remove the leading "-- " from each line of
---      STEP 2 and run STEP 2 alone. It is one transaction.
+--   1. Run the file (or just STEP 1). It only reads. Look at 1a-1e.
+--   2. If the numbers look right, delete the two marker lines around STEP 2
+--      (the opening slash-star and closing star-slash) and run STEP 2 alone.
+--      It is one transaction.
 --   3. Run the Verify queries at the end.
 --
 -- Apply order: independent of the code release. Either order is fine.
@@ -106,7 +118,8 @@ select o.payment_method, count(*) as orders, sum(o.total_inr) as total_inr
                   and p.status = 'paid'
                   and p.method::text = o.payment_method::text
                   and o.paid_at is not null
-                  and o.paid_at >= p.updated_at - interval '2 minutes')
+                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.created_at >= (select min(created_at) from cash_counts))
    and not exists (select 1 from order_payments op where op.order_id = o.id)
    and not exists (select 1 from refunds r
                     where r.order_id = o.id and r.payment_id is null)
@@ -123,7 +136,8 @@ select o.order_number, o.created_at, o.paid_at, o.payment_method, o.payment_stat
                   and p.status = 'paid'
                   and p.method::text = o.payment_method::text
                   and o.paid_at is not null
-                  and o.paid_at >= p.updated_at - interval '2 minutes')
+                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.created_at >= (select min(created_at) from cash_counts))
    and not exists (select 1 from order_payments op where op.order_id = o.id)
    and not exists (select 1 from refunds r
                     where r.order_id = o.id and r.payment_id is null)
@@ -142,6 +156,8 @@ select o.payment_method,
         or exists (select 1 from payments p
                     where p.order_id = o.id and p.gateway = 'razorpay' and p.status = 'paid'
                       and o.paid_at < p.updated_at - interval '2 minutes')) as paid_before_capture_or_unknown,
+       (o.created_at < (select min(created_at) from cash_counts)
+        or (select min(created_at) from cash_counts) is null) as older_than_reliable_paid_at,
        count(*) as orders
   from orders o
  where o.payment_method in ('upi', 'card')
@@ -152,78 +168,109 @@ select o.payment_method,
                   where p.order_id = o.id and p.gateway = 'razorpay' and p.status = 'paid'
                     and p.method::text = o.payment_method::text
                     and o.paid_at is not null
-                    and o.paid_at >= p.updated_at - interval '2 minutes')
+                    and o.paid_at >= p.updated_at - interval '2 minutes'
+                    and o.created_at >= (select min(created_at) from cash_counts))
          and not exists (select 1 from order_payments op where op.order_id = o.id)
          and not exists (select 1 from refunds r where r.order_id = o.id and r.payment_id is null))
- group by 1, 2, 3, 4, 5;
+ group by 1, 2, 3, 4, 5, 6;
 
 -- 1d. Likely counter-first or double-paid orders, for the owner to look at.
 --     Staff settled the bill at the counter more than 2 minutes before
 --     Razorpay's capture (or paid_at is missing). They are LEFT AS THEY ARE.
+--     (Orders older than the first cash count are listed in 1e instead,
+--     because their paid_at is not reliable.)
 select o.order_number, o.created_at, o.paid_at,
        p.updated_at as captured_at, o.payment_method, o.total_inr
   from orders o
   join payments p on p.order_id = o.id
                  and p.gateway = 'razorpay' and p.status = 'paid'
  where o.payment_method in ('upi', 'card')
+   and o.created_at >= (select min(created_at) from cash_counts)
    and (o.paid_at is null or o.paid_at < p.updated_at - interval '2 minutes')
  order by o.created_at desc;
 
+-- 1e. Older Razorpay-paid upi/card orders, from before paid_at can be trusted
+--     (created before the first cash count, or no cash count exists yet).
+--     They are LEFT AS THEY ARE and stay UPI / Card. Count and rupees, then rows.
+select o.payment_method, count(*) as orders, sum(o.total_inr) as total_inr
+  from orders o
+ where o.payment_method in ('upi', 'card')
+   and exists (select 1 from payments p
+                where p.order_id = o.id and p.gateway = 'razorpay' and p.status = 'paid')
+   and (o.created_at < (select min(created_at) from cash_counts)
+        or (select min(created_at) from cash_counts) is null)
+ group by o.payment_method
+ order by o.payment_method;
+
+select o.order_number, o.created_at, o.paid_at, o.payment_method, o.total_inr
+  from orders o
+ where o.payment_method in ('upi', 'card')
+   and exists (select 1 from payments p
+                where p.order_id = o.id and p.gateway = 'razorpay' and p.status = 'paid')
+   and (o.created_at < (select min(created_at) from cash_counts)
+        or (select min(created_at) from cash_counts) is null)
+ order by o.created_at desc
+ limit 50;
 
 -- ---------------------------------------------------------------------------
--- STEP 2 — UPDATE (one transaction). COMMENTED OUT so that running the whole
--- file only reads. Run the preview first. Then remove the leading "-- " from
--- each line below and run this block alone.
+-- STEP 2 — UPDATE (one transaction). The whole block is inside one comment
+-- (opening marker: slash-star on its own line below; closing marker: star-slash
+-- on its own line after the UNDO notes), so running the whole file only reads.
+-- Run the preview first. Then delete those two marker lines and run the block
+-- alone. The undo notes stay as "--" comments, so they cannot run by mistake.
 -- The final select returns one row per order changed; the count should match
 -- STEP 1a.
 -- ---------------------------------------------------------------------------
--- begin;
---
--- create schema if not exists backup_20261127;
---
--- create table if not exists backup_20261127.app_paid_orders (
---   id             uuid primary key,
---   payment_method payment_method,
---   backed_up_at   timestamptz not null default now()
--- );
---
--- -- Undo record first: id and current method of every order about to change.
--- insert into backup_20261127.app_paid_orders (id, payment_method)
--- select o.id, o.payment_method
---   from orders o
---  where o.payment_method in ('upi', 'card')
---    and exists (select 1 from payments p
---                 where p.order_id = o.id
---                   and p.gateway = 'razorpay'
---                   and p.status = 'paid'
---                   and p.method::text = o.payment_method::text
---                   and o.paid_at is not null
---                   and o.paid_at >= p.updated_at - interval '2 minutes')
---    and not exists (select 1 from order_payments op where op.order_id = o.id)
---    and not exists (select 1 from refunds r
---                     where r.order_id = o.id and r.payment_id is null)
--- on conflict (id) do nothing;
---
--- revoke all on schema backup_20261127 from anon, authenticated;
--- revoke all on all tables in schema backup_20261127 from anon, authenticated;
---
--- update orders o
---    set payment_method = 'online'
---  where o.payment_method in ('upi', 'card')
---    and exists (select 1 from payments p
---                 where p.order_id = o.id
---                   and p.gateway = 'razorpay'
---                   and p.status = 'paid'
---                   and p.method::text = o.payment_method::text
---                   and o.paid_at is not null
---                   and o.paid_at >= p.updated_at - interval '2 minutes')
---    and not exists (select 1 from order_payments op where op.order_id = o.id)
---    and not exists (select 1 from refunds r
---                     where r.order_id = o.id and r.payment_id is null)
--- returning o.id, o.order_number, o.total_inr;
---
--- commit;
---
+/*
+begin;
+
+create schema if not exists backup_20261127;
+
+create table if not exists backup_20261127.app_paid_orders (
+  id             uuid primary key,
+  payment_method payment_method,
+  backed_up_at   timestamptz not null default now()
+);
+
+-- Undo record first: id and current method of every order about to change.
+insert into backup_20261127.app_paid_orders (id, payment_method)
+select o.id, o.payment_method
+  from orders o
+ where o.payment_method in ('upi', 'card')
+   and exists (select 1 from payments p
+                where p.order_id = o.id
+                  and p.gateway = 'razorpay'
+                  and p.status = 'paid'
+                  and p.method::text = o.payment_method::text
+                  and o.paid_at is not null
+                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.created_at >= (select min(created_at) from cash_counts))
+   and not exists (select 1 from order_payments op where op.order_id = o.id)
+   and not exists (select 1 from refunds r
+                    where r.order_id = o.id and r.payment_id is null)
+on conflict (id) do nothing;
+
+revoke all on schema backup_20261127 from anon, authenticated;
+revoke all on all tables in schema backup_20261127 from anon, authenticated;
+
+update orders o
+   set payment_method = 'online'
+ where o.payment_method in ('upi', 'card')
+   and exists (select 1 from payments p
+                where p.order_id = o.id
+                  and p.gateway = 'razorpay'
+                  and p.status = 'paid'
+                  and p.method::text = o.payment_method::text
+                  and o.paid_at is not null
+                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.created_at >= (select min(created_at) from cash_counts))
+   and not exists (select 1 from order_payments op where op.order_id = o.id)
+   and not exists (select 1 from refunds r
+                    where r.order_id = o.id and r.payment_id is null)
+returning o.id, o.order_number, o.total_inr;
+
+commit;
+
 -- UNDO (only if the owner asks; restores the saved methods, and only for
 -- orders still 'online'):
 --   update orders o
@@ -231,6 +278,7 @@ select o.order_number, o.created_at, o.paid_at,
 --     from backup_20261127.app_paid_orders b
 --    where b.id = o.id
 --      and o.payment_method = 'online';
+*/
 
 
 -- ---------------------------------------------------------------------------
@@ -244,7 +292,8 @@ select o.order_number, o.created_at, o.paid_at,
 --                   and p.gateway = 'razorpay' and p.status = 'paid'
 --                   and p.method::text = o.payment_method::text
 --                   and o.paid_at is not null
---                   and o.paid_at >= p.updated_at - interval '2 minutes')
+--                   and o.paid_at >= p.updated_at - interval '2 minutes'
+--                   and o.created_at >= (select min(created_at) from cash_counts))
 --      and not exists (select 1 from order_payments op where op.order_id = o.id)
 --      and not exists (select 1 from refunds r where r.order_id = o.id and r.payment_id is null);
 --
