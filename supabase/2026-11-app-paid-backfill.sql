@@ -33,15 +33,16 @@
 --     they stay as UPI / Card. If no cash count exists yet, the cutoff is
 --     null and nothing matches; that is the safe outcome (nothing changes).
 --     STEP 1e lists the older orders.
---     For newer orders: if paid_at is more than 2 minutes before the capture,
---     the counter settled the bill first (for example the customer's gateway
---     payment stalled, they paid the counter's UPI QR, staff settled it, and
---     Razorpay captured later). Those are likely counter-first or double-paid
---     orders and are left as they are (STEP 1d). The 2 minute margin covers
---     the small gap between the app marking an order paid and the payments
---     row being written, and clock jitter, so normal app payments are not
---     skipped. An order with no paid_at is also left alone, because the order
---     of events cannot be shown.
+--     For newer orders: the app writes the payments row first and the order
+--     after it (captureGatewayPayment in lib/payments/reconcile.ts), as two
+--     separate writes, and both stamps use the database's own clock. So a
+--     normal app payment always has paid_at at or after the capture time.
+--     If paid_at is EARLIER than the capture, by any amount, the counter
+--     settled the bill first (for example the customer's gateway payment
+--     stalled, they paid the counter's UPI QR, staff settled it, and Razorpay
+--     captured later). Those are likely counter-first or double-paid orders
+--     and are left as they are (STEP 1d). An order with no paid_at is also
+--     left alone, because the order of events cannot be shown.
 --   * it has no order_payments row. Split and counter tenders write one
 --     (2026-08-split-payments.sql). Note this is NOT enough on its own: a
 --     single-tender counter settle deletes the order's order_payments rows and
@@ -118,7 +119,7 @@ select o.payment_method, count(*) as orders, sum(o.total_inr) as total_inr
                   and p.status = 'paid'
                   and p.method::text = o.payment_method::text
                   and o.paid_at is not null
-                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.paid_at >= p.updated_at
                   and o.created_at >= (select min(created_at) from cash_counts))
    and not exists (select 1 from order_payments op where op.order_id = o.id)
    and not exists (select 1 from refunds r
@@ -136,7 +137,7 @@ select o.order_number, o.created_at, o.paid_at, o.payment_method, o.payment_stat
                   and p.status = 'paid'
                   and p.method::text = o.payment_method::text
                   and o.paid_at is not null
-                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.paid_at >= p.updated_at
                   and o.created_at >= (select min(created_at) from cash_counts))
    and not exists (select 1 from order_payments op where op.order_id = o.id)
    and not exists (select 1 from refunds r
@@ -155,7 +156,7 @@ select o.payment_method,
        (o.paid_at is null
         or exists (select 1 from payments p
                     where p.order_id = o.id and p.gateway = 'razorpay' and p.status = 'paid'
-                      and o.paid_at < p.updated_at - interval '2 minutes')) as paid_before_capture_or_unknown,
+                      and o.paid_at < p.updated_at)) as paid_before_capture_or_unknown,
        (o.created_at < (select min(created_at) from cash_counts)
         or (select min(created_at) from cash_counts) is null) as older_than_reliable_paid_at,
        count(*) as orders
@@ -168,14 +169,14 @@ select o.payment_method,
                   where p.order_id = o.id and p.gateway = 'razorpay' and p.status = 'paid'
                     and p.method::text = o.payment_method::text
                     and o.paid_at is not null
-                    and o.paid_at >= p.updated_at - interval '2 minutes'
+                    and o.paid_at >= p.updated_at
                     and o.created_at >= (select min(created_at) from cash_counts))
          and not exists (select 1 from order_payments op where op.order_id = o.id)
          and not exists (select 1 from refunds r where r.order_id = o.id and r.payment_id is null))
  group by 1, 2, 3, 4, 5, 6;
 
 -- 1d. Likely counter-first or double-paid orders, for the owner to look at.
---     Staff settled the bill at the counter more than 2 minutes before
+--     Staff settled the bill at the counter before
 --     Razorpay's capture (or paid_at is missing). They are LEFT AS THEY ARE.
 --     (Orders older than the first cash count are listed in 1e instead,
 --     because their paid_at is not reliable.)
@@ -186,7 +187,7 @@ select o.order_number, o.created_at, o.paid_at,
                  and p.gateway = 'razorpay' and p.status = 'paid'
  where o.payment_method in ('upi', 'card')
    and o.created_at >= (select min(created_at) from cash_counts)
-   and (o.paid_at is null or o.paid_at < p.updated_at - interval '2 minutes')
+   and (o.paid_at is null or o.paid_at < p.updated_at)
  order by o.created_at desc;
 
 -- 1e. Older Razorpay-paid upi/card orders, from before paid_at can be trusted
@@ -243,7 +244,7 @@ select o.id, o.payment_method
                   and p.status = 'paid'
                   and p.method::text = o.payment_method::text
                   and o.paid_at is not null
-                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.paid_at >= p.updated_at
                   and o.created_at >= (select min(created_at) from cash_counts))
    and not exists (select 1 from order_payments op where op.order_id = o.id)
    and not exists (select 1 from refunds r
@@ -262,7 +263,7 @@ update orders o
                   and p.status = 'paid'
                   and p.method::text = o.payment_method::text
                   and o.paid_at is not null
-                  and o.paid_at >= p.updated_at - interval '2 minutes'
+                  and o.paid_at >= p.updated_at
                   and o.created_at >= (select min(created_at) from cash_counts))
    and not exists (select 1 from order_payments op where op.order_id = o.id)
    and not exists (select 1 from refunds r
@@ -292,7 +293,7 @@ commit;
 --                   and p.gateway = 'razorpay' and p.status = 'paid'
 --                   and p.method::text = o.payment_method::text
 --                   and o.paid_at is not null
---                   and o.paid_at >= p.updated_at - interval '2 minutes'
+--                   and o.paid_at >= p.updated_at
 --                   and o.created_at >= (select min(created_at) from cash_counts))
 --      and not exists (select 1 from order_payments op where op.order_id = o.id)
 --      and not exists (select 1 from refunds r where r.order_id = o.id and r.payment_id is null);
