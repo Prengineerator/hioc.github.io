@@ -9,6 +9,16 @@ export function describePaymentMethod(method: PaymentMethod | null | undefined):
   return method ? (PAYMENT_METHOD_LABEL[method] ?? method) : 'not recorded';
 }
 
+/**
+ * The wording on the PRINTED bill ("Paid via <this>"). Same as describeOrderPayment
+ * except a single app-paid tender reads "HIOC app" (not the staff label "App paid").
+ */
+export function describeBillPayment(order: Pick<Order, 'payment_method' | 'payments'>): string {
+  const parts = order.payments ?? [];
+  if (parts.length <= 1 && (parts[0]?.method ?? order.payment_method) === 'online') return 'HIOC app';
+  return describeOrderPayment(order);
+}
+
 /** "Cash ₹300 + UPI ₹180" for a split, else the single method's name. */
 export function describeOrderPayment(order: Pick<Order, 'payment_method' | 'payments'>): string {
   const parts = order.payments ?? [];

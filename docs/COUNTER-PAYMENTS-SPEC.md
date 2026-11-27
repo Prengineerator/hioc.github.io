@@ -141,3 +141,16 @@ Who: any counter staffer. ₹5 is well inside the ₹50 a staffer may write off 
 Where it shows: the receipt prints *Settlement discount* or the tip and *Received*. The POS confirmation reads e.g. "CASH · ₹3 short (No change)". Owner reports already net `settle_discount_inr` off revenue and keep `tip_inr` out of it.
 
 Code: `ROUND_OFF_LIMIT_INR`, `clampRoundOff`, `roundOffAdjustment`, `roundOffReasonValid` and `describeSettleAdjustment` in `lib/orders/payments.ts`; `RoundOffControl` in `components/staff/PosPaymentModal.tsx`; the adjustment rides with `settlement` on `POST /api/orders` (`components/staff/PosOrderEntry.tsx`) and with the `PATCH /api/orders/[id]/payment` body (`components/staff/SettlePaymentDialog.tsx`). Tests: `tests/settleRoundOff.test.ts` and a case in `tests/ordersCreateSettle.test.ts`.
+
+## 10. App paid — kept apart from counter UPI — built 2026-11-27
+
+**Status:** built. No schema change: `online` was already a payment method.
+
+An order a customer pays on hioc.in (website checkout or table QR, through Razorpay) used to be rewritten to `upi` or `card` when the payment was captured, so staff could not tell it from money paid to the counter's own UPI QR.
+
+- `captureGatewayPayment` (`lib/payments/reconcile.ts`) now always leaves `orders.payment_method = 'online'`. The `payments` row still keeps Razorpay's sub-method (`upi`, `card` or `online`), so that detail is not lost.
+- Staff see **App paid**, as its own tile and filter chip on Orders, in the order detail, the settle screens, the cash day line ("App paid ₹x", not in the drawer) and the owner payments page. It is never added to counter UPI.
+- Because the order is `online`, the gateway owns the payment: **Change payment** is not offered, and a refund goes through the gateway.
+- The printed bill reads "Paid via HIOC app" (`describeBillPayment`). The customer receipt page keeps "Online". The WhatsApp bill label stays "Online" (a Meta template parameter).
+- The online shop is a separate flow and is unchanged.
+- Orders captured before this change are fixed by a one-off SQL file the database engineer is writing separately: `supabase/2026-11-app-paid-backfill.sql`. Until it is run, past app-paid orders still show as UPI or Card.

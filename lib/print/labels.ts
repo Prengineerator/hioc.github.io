@@ -35,7 +35,9 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   cash: 'Cash',
   upi: 'UPI',
   card: 'Card',
-  online: 'Online',
+  // Paid through the HIOC website / table QR (Razorpay). Staff-facing: kept apart
+  // from counter UPI. The customer receipt and printed bill word it differently.
+  online: 'App paid',
   swiggy_dineout: 'Swiggy Dineout',
   zomato_district: 'Zomato District',
 };

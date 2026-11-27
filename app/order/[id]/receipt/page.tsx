@@ -199,7 +199,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
             <span className="font-bold">
               {PAYMENT_LABEL[order.payment_status] ?? order.payment_status}
               {order.payment_status === 'paid' && order.payment_method
-                ? `, ${PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}`
+                ? `, ${order.payment_method === 'online' ? 'Online' : (PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method)}`
                 : ''}
             </span>
           </div>
