@@ -254,10 +254,10 @@ warehouse_alerts group by 1,2,3;`
 
 ---
 
-## Proposed: the delivery person gets the list on WhatsApp (WH-D17)
+## The delivery person gets the list on WhatsApp (WH-D17)
 
-Status: **PROPOSED 2026-11-27. Not built.** Waiting for the owner's yes. Nothing in this section is
-in the app yet.
+Status: **APPROVED by the owner 2026-11-27, being built.** The owner chose to send it when the
+delivery person is chosen (WH-D17a).
 
 **The short answer.** When the owner or a manager chooses who brings a warehouse request to the
 store, that person gets one WhatsApp message with the request number and the items asked for. It
@@ -284,7 +284,7 @@ owner, and its button opens the owner portal, which a delivery person can't use.
 | WH-D17c | **Who.** A team member's number is the one on their staff profile (`profiles.phone`). A driver's is the number typed when they are chosen (`deliverer_phone`, still optional). No number means no message: the attempt is logged as *skipped* and the screen says so. Someone who gives the delivery to themselves is not messaged, as with the email. |
 | WH-D17d | **What.** The person's name, the request number and every item with its quantity, on one line. A very long list is cut at about 600 characters and ends "and N more". No prices, nothing about customers, and no button, because a driver has no login to open. |
 | WH-D17e | **Once per person per request.** A number is never sent the same request twice. The previous delivery person is not told they were replaced. |
-| WH-D17f | **Never in the way.** It goes out after the screen has its answer, and a message that fails never undoes the choice. Each attempt is logged in `warehouse_alerts` as `pickup_assigned`. |
+| WH-D17f | **Never in the way.** The choice is saved first, then the message is sent, the way the team member's email is today, so the screen can say what happened. A message that fails never undoes the choice. Each attempt is logged in `warehouse_alerts` as `pickup_assigned`. |
 | WH-D17g | **Off until set up.** Nothing is sent until the template is named in `WHATSAPP_TPL_STOCK_PICKUP`. Removing the variable switches it off again. |
 
 ### Out of scope
@@ -302,7 +302,7 @@ owner, and its button opens the owner portal, which a delivery person can't use.
   stored with each attempt in `warehouse_alerts`, which only the owner's screens read. These are
   operational messages to the café's own team, not marketing.
 
-### The owner's steps (after the yes, in this order)
+### The owner's steps (in this order)
 
 1. **Meta:** create the template below and wait for approval.
 2. **Database:** the owner's developer runs one small file in the Supabase SQL editor on **Hioc
@@ -312,7 +312,7 @@ owner, and its button opens the owner portal, which a delivery person can't use.
    and type the driver's number when choosing a driver.
 5. **Tell the team** that the delivery person now gets the list on WhatsApp.
 
-### Template (proposed)
+### The pickup template
 
 | Field | Value |
 |---|---|
