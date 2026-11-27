@@ -29,6 +29,8 @@ import { formatQty, roundQty, type StockRoute } from '@/lib/inventory/rules';
 import { indianE164HonouringPlus } from '@/lib/phone';
 
 export type OwnerAlertEvent = 'request_placed' | 'return_sent' | 'arrived_different';
+/** Every kind of row in warehouse_alerts: the owner's three, and the delivery person's WhatsApp (pickupAlert.ts). */
+export type WarehouseAlertEvent = OwnerAlertEvent | 'pickup_assigned';
 export type AlertChannel = 'email' | 'whatsapp';
 export type AlertStatus = 'sent' | 'failed' | 'skipped';
 
@@ -204,7 +206,7 @@ export function summarizeLines(lines: AlertLine[], max = 3): string {
 }
 
 /** Meta refuses template parameters with newlines, tabs or 4+ spaces in a row. */
-function waVar(s: string, max = 300): string {
+export function waVar(s: string, max = 300): string {
   const v = s.replace(/\s+/g, ' ').trim();
   return (v.length > max ? `${v.slice(0, max - 1)}…` : v) || '-';
 }
@@ -372,7 +374,7 @@ async function buildAlert(admin: SupabaseClient, event: OwnerAlertEvent, request
   };
 }
 
-async function alreadySent(admin: SupabaseClient, event: OwnerAlertEvent, requestId: string, channel: AlertChannel, to: string) {
+async function alreadySent(admin: SupabaseClient, event: WarehouseAlertEvent, requestId: string, channel: AlertChannel, to: string) {
   const { data } = await admin
     .from('warehouse_alerts')
     .select('id')
@@ -385,10 +387,11 @@ async function alreadySent(admin: SupabaseClient, event: OwnerAlertEvent, reques
   return Array.isArray(data) && data.length > 0;
 }
 
-async function logAlert(
+/** Writes one attempt. Never throws; returns the database error (null when logged) so a caller can say more. */
+export async function logAlert(
   admin: SupabaseClient,
-  row: { event: OwnerAlertEvent; requestId: string; channel: AlertChannel; to: string; status: AlertStatus; detail: string; providerRef: string },
-) {
+  row: { event: WarehouseAlertEvent; requestId: string; channel: AlertChannel; to: string; status: AlertStatus; detail: string; providerRef: string },
+): Promise<{ code?: string } | null> {
   const { error } = await admin.from('warehouse_alerts').insert({
     event: row.event,
     request_id: row.requestId,
@@ -398,7 +401,9 @@ async function logAlert(
     detail: row.detail.slice(0, 500),
     provider_ref: row.providerRef,
   });
-  if (error) console.error('warehouse_alerts log insert failed', row.event, error);
+  // Postgres echoes the failing row (it holds the address) in the error detail, so only the code is logged.
+  if (error) console.error('warehouse_alerts log insert failed', row.event, error.code);
+  return error ? { code: error.code } : null;
 }
 
 /**
@@ -470,7 +475,7 @@ export async function sendOwnerAlert(admin: SupabaseClient, event: OwnerAlertEve
 
 export interface AlertLogRow {
   id: string;
-  event: OwnerAlertEvent;
+  event: WarehouseAlertEvent;
   requestNumber: number | null;
   channel: AlertChannel;
   to: string;
@@ -489,7 +494,7 @@ export async function recentAlerts(admin: SupabaseClient, limit = 30): Promise<A
   if (error) return [];
   type Row = {
     id: string;
-    event: OwnerAlertEvent;
+    event: WarehouseAlertEvent;
     channel: AlertChannel;
     to_address: string;
     status: AlertStatus;

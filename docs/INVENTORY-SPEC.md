@@ -262,5 +262,8 @@ nothing is lost. Nothing else in the app reads them.
   carried by someone without a login, and alerts the owner; differences are
   settled by the owner, and stock can be sent back. Off, everything above is
   unchanged.
-- **Assignment alerts are email only** (no WhatsApp: that needs a Meta-approved
-  template). The Requests tab also shows a badge of requests waiting on you.
+- **Assignment alerts are email only** for a store-room pick (no WhatsApp: that
+  needs a Meta-approved template). The Requests tab also shows a badge of
+  requests waiting on you. A team member chosen to deliver a warehouse request
+  can also get the list on WhatsApp once it is set up (WAREHOUSE-SPEC.md,
+  WH-D17).

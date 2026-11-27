@@ -8,6 +8,8 @@ import { hasWarehouseAccess } from '@/lib/inventory/warehouseServer';
 import { patchStockRequest, type RequestAction } from '@/lib/inventory/requestActions';
 
 export const dynamic = 'force-dynamic';
+// Choosing a delivery person can wait on WhatsApp (lib/inventory/pickupAlert.ts), so the platform must not cut it off mid-send.
+export const maxDuration = 30;
 
 type RouteParams = { params: { id: string } };
 

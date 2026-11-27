@@ -303,7 +303,7 @@ step "3/6" "Applying supabase/*.sql (tolerant pass), then the inventory migratio
 TOLERANT_FILES=(supabase/schema.sql supabase/phase1-migration.sql supabase/phase2-migration.sql supabase/phase2-hardening.sql supabase/phase3-migration.sql supabase/security-rls-fix.sql)
 while IFS= read -r f; do
   case "$(basename "$f" .sql)" in
-    2026-10-inventory|2026-10-inventory-addon-scopes|2026-10-inventory-apply-book|2026-10-inventory-seed*|2026-11-warehouse|2026-11-vendor-stock-in) continue ;;  # strict pass / seeds
+    2026-10-inventory|2026-10-inventory-addon-scopes|2026-10-inventory-apply-book|2026-10-inventory-seed*|2026-11-warehouse|2026-11-warehouse-pickup-alert|2026-11-vendor-stock-in) continue ;;  # strict pass / seeds
   esac
   TOLERANT_FILES+=("$f")
 done < <(ls supabase/2026-*.sql 2>/dev/null | LC_ALL=C sort)
@@ -383,6 +383,10 @@ fi
 # goes after them. Its assertions are step 5d.
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse.sql applies cleanly (fresh)" supabase/2026-11-warehouse.sql || STRICT_OK=0; }
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse.sql re-applies cleanly (idempotent)" supabase/2026-11-warehouse.sql || STRICT_OK=0; }
+# WH-D17: widens warehouse_alerts.event. Needs the base file; 5d re-runs the base
+# file AFTER this one and checks the wider CHECK survives.
+[ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse-pickup-alert.sql applies cleanly (fresh)" supabase/2026-11-warehouse-pickup-alert.sql || STRICT_OK=0; }
+[ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-warehouse-pickup-alert.sql re-applies cleanly (idempotent)" supabase/2026-11-warehouse-pickup-alert.sql || STRICT_OK=0; }
 
 # Stock from vendor (INV-D14): the vendor on a direct delivery. Assertions: 5e.
 [ $STRICT_OK = 1 ] && { apply_strict "supabase/2026-11-vendor-stock-in.sql applies cleanly (fresh)" supabase/2026-11-vendor-stock-in.sql || STRICT_OK=0; }
@@ -1277,10 +1281,31 @@ begin
     pg_get_constraintdef((select oid from pg_constraint where conname = 'inventory_batches_source_check')) like '%transit_back%');
   perform smoke.expect('...stock_requests still accepts a named outside deliverer',
     pg_get_constraintdef((select oid from pg_constraint where conname = 'stock_requests_assigned_shape')) like '%deliverer_name%');
+  perform smoke.expect('...warehouse_alerts.event still allows pickup_assigned (WH-D17) and the original three',
+    (select count(*) from pg_constraint
+      where conrelid = 'warehouse_alerts'::regclass and contype = 'c'
+        and pg_get_constraintdef(oid) like '%pickup_assigned%' and pg_get_constraintdef(oid) like '%request_placed%'
+        and pg_get_constraintdef(oid) like '%return_sent%' and pg_get_constraintdef(oid) like '%arrived_different%') = 1
+    and (select count(*) from pg_constraint
+      where conrelid = 'warehouse_alerts'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%request_placed%') = 1);
 end $$;
 SQL
   run_assertions "" "$BASE/wh-constraints.sql"
   apply_strict "supabase/2026-11-warehouse.sql re-applies cleanly after the inventory files are re-run" supabase/2026-11-warehouse.sql
+  # WH-D17: the base file ran AFTER the pickup-alert file in step 3 and again just
+  # now; the wider CHECK must have survived both.
+  { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/wh-alert-check.sql"
+do $$
+begin
+  perform smoke.expect('after the base warehouse file is re-run: warehouse_alerts.event still allows pickup_assigned, and only one event CHECK exists',
+    (select count(*) from pg_constraint
+      where conrelid = 'warehouse_alerts'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%request_placed%'
+        and pg_get_constraintdef(oid) like '%pickup_assigned%') = 1
+    and (select count(*) from pg_constraint
+      where conrelid = 'warehouse_alerts'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%request_placed%') = 1);
+end $$;
+SQL
+  run_assertions "" "$BASE/wh-alert-check.sql"
 
   { smoke_preamble; cat <<'SQL'; smoke_report; } > "$BASE/warehouse.sql"
 create function smoke.wh_on_hand(p uuid) returns numeric language sql as $$
@@ -1578,6 +1603,32 @@ begin
     perform smoke.expect('stock_requests refuses an outside deliverer on a store_room request', false, 'accepted');
   exception when check_violation then
     perform smoke.expect('stock_requests refuses an outside deliverer on a store_room request', true);
+  end;
+
+  -- ── The delivery person's WhatsApp list (WH-D17) ──────────────────────────
+  insert into warehouse_alerts (event, request_id, channel, to_address, status)
+    values ('pickup_assigned', v_req, 'whatsapp', '919000000001', 'sent');
+  perform smoke.expect('warehouse_alerts accepts a pickup_assigned row on whatsapp',
+    exists (select 1 from warehouse_alerts where event = 'pickup_assigned' and request_id = v_req));
+  begin
+    insert into warehouse_alerts (event, request_id, channel, to_address, status)
+      values ('pickup_assigned', v_req, 'whatsapp', '919000000001', 'sent');
+    perform smoke.expect('the same number is never sent the same pickup_assigned list twice', false, 'accepted');
+  exception when unique_violation then
+    perform smoke.expect('the same number is never sent the same pickup_assigned list twice', true);
+  end;
+  insert into warehouse_alerts (event, request_id, channel, to_address, status)
+    values ('pickup_assigned', v_req, 'whatsapp', '919000000001', 'failed');
+  insert into warehouse_alerts (event, request_id, channel, to_address, status)
+    values ('pickup_assigned', v_req, 'whatsapp', '919000000002', 'sent');
+  perform smoke.expect('a failed attempt can be logged again, and another number can be sent the list',
+    (select count(*) from warehouse_alerts where event = 'pickup_assigned' and request_id = v_req) = 3);
+  begin
+    insert into warehouse_alerts (event, request_id, channel, to_address, status)
+      values ('not_an_event', v_req, 'whatsapp', '919000000001', 'sent');
+    perform smoke.expect('warehouse_alerts still refuses an unknown event', false, 'accepted');
+  exception when check_violation then
+    perform smoke.expect('warehouse_alerts still refuses an unknown event', true);
   end;
 
   -- ── Grants ────────────────────────────────────────────────────────────────

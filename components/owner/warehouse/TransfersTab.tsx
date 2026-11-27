@@ -14,6 +14,7 @@
 
 import { useMemo, useState } from 'react';
 import { Modal } from '@/components/ui/Modal';
+import { withPickupNotice, type PickupResult } from '@/lib/inventory/pickupNotice';
 import {
   canAssign,
   canCancel,
@@ -331,19 +332,19 @@ function AssignModal({ request, data, onClose, onDone }: { request: StockRequest
     if (!choice) return setError('Choose who delivers it.');
     setError('');
     setBusy(true);
-    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped' }>(ENDPOINT(request.id), 'PATCH', { action: 'assign', ...choice });
+    const res = await api<{ emailed: 'sent' | 'failed' | 'skipped'; whatsapp?: PickupResult }>(ENDPOINT(request.id), 'PATCH', { action: 'assign', ...choice });
     setBusy(false);
     if (!res.ok) return setError(res.error);
     const name = 'assigneeId' in choice ? data.assignees.find((p) => p.id === choice.assigneeId)?.name ?? 'They' : choice.deliverer.name;
-    await onDone(
+    const notice =
       'deliverer' in choice
         ? `#${request.number}: ${name} delivers it. Now record what you send.`
         : res.data.emailed === 'sent'
           ? `#${request.number}: ${name} delivers it and has been emailed.`
           : choice.assigneeId === data.actorId
             ? `#${request.number}: you are delivering it.`
-            : `#${request.number}: ${name} delivers it. They could not be emailed (no personal email on file?) — tell them.`,
-    );
+            : `#${request.number}: ${name} delivers it. They could not be emailed (no personal email on file?) — tell them.`;
+    await onDone(withPickupNotice(notice, res.data.whatsapp, name));
   }
 
   return (

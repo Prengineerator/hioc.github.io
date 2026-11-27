@@ -1597,6 +1597,26 @@ async function checkWarehouse() {
   if (access.ok) pass('staff_accounts.warehouse_access exists');
   else fail('staff_accounts.warehouse_access exists', errKind(access) === 'no_column' ? 'apply supabase/2026-11-warehouse-access.sql' : errText(access));
 
+  // WH-D17: the delivery person's WhatsApp list is logged as a 'pickup_assigned'
+  // alert. Doomed insert on a request that cannot exist: if the CHECK on `event`
+  // allows the value the row dies on the FOREIGN KEY; if the migration is
+  // missing it dies on the CHECK. Nothing is written either way.
+  const pickup = await doomedInsert('warehouse_alerts', {
+    event: 'pickup_assigned', request_id: BOGUS_ORDER_ID, channel: 'whatsapp',
+    to_address: SENTINEL, status: 'skipped', detail: SENTINEL,
+  });
+  if (!pickup.ok && errKind(pickup) === 'check') {
+    fail("warehouse_alerts.event CHECK accepts 'pickup_assigned'", 'apply supabase/2026-11-warehouse-pickup-alert.sql');
+  } else {
+    expectKind("warehouse_alerts.event CHECK accepts 'pickup_assigned'", pickup, 'fk', 'reached the FK, so the CHECK passed');
+  }
+  // Negative control: the CHECK was widened, not dropped.
+  const bogusEvent = await doomedInsert('warehouse_alerts', {
+    event: `bogus_${RUN_ID}`, request_id: BOGUS_ORDER_ID, channel: 'whatsapp',
+    to_address: SENTINEL, status: 'skipped', detail: SENTINEL,
+  });
+  expectKind('warehouse_alerts.event CHECK still rejects unknown events', bogusEvent, 'check', 'constraint is present, not merely dropped');
+
   // A request that does not exist: the service role reaches the function's own
   // refusal (it is installed); anon must not reach the function at all.
   for (const [fn, body] of [
