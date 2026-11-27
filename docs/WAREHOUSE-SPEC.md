@@ -225,12 +225,20 @@ Meta Business Suite → WhatsApp Manager → Message templates → Create templa
 | Category | **Utility** | An operational message to the business's own owner, not marketing |
 | Language | English → `en` | Must match `WHATSAPP_TPL_STOCK_ALERT_LANG` or `WHATSAPP_TPL_LANG` (default `en`) |
 | Header | None | |
+| Footer | None | |
+| Button | One **Visit website** button, URL type **Static**. Button text `Open owner portal`, website URL `https://hioc.in/owner/warehouse` | Opens the Warehouse page, the same one the email's "Open Warehouse" button opens (the owner logs in first if the phone isn't already). **Static** matters: the app sends the four body variables and nothing else, so a **Dynamic** URL button would make Meta refuse every send. |
 
 Body (copy exactly):
 
 ```
 HIOC stock update — {{1}} #{{2}}, by {{3}}: {{4}}. Please open the owner portal to act on it.
 ```
+
+The button is part of the template, so it needs no change in the app and no new variable. If the
+template was already approved without it, either edit it in WhatsApp Manager to add the button (Meta
+reviews it again), or create `stock_alert_2` with the button and set `WHATSAPP_TPL_STOCK_ALERT` to
+that name once it is approved. The second way leaves the working template untouched while Meta
+reviews the new one.
 
 | Var | Meaning | Sample |
 |---|---|---|
@@ -243,6 +251,87 @@ After approval, set `WHATSAPP_TPL_STOCK_ALERT=stock_alert_1` in Vercel (Producti
 redeploy, and add the owner's number on Warehouse → Alerts. `WHATSAPP_TOKEN` and `WHATSAPP_PHONE_ID`
 are already set for the bill. To check: `select channel, status, detail, count(*) from
 warehouse_alerts group by 1,2,3;`
+
+---
+
+## Proposed: the delivery person gets the list on WhatsApp (WH-D17)
+
+Status: **PROPOSED 2026-11-27. Not built.** Waiting for the owner's yes. Nothing in this section is
+in the app yet.
+
+**The short answer.** When the owner or a manager chooses who brings a warehouse request to the
+store, that person gets one WhatsApp message with the request number and the items asked for. It
+goes to a team member's mobile number on their staff profile, or to the number typed for a driver
+without a login. It needs its own Meta-approved template: the owner's alert (§F) is worded for the
+owner, and its button opens the owner portal, which a delivery person can't use.
+
+### What people will see
+
+- **The delivery person** gets, on WhatsApp: *"Hi Ravi, stock request #12 is yours to bring from the
+  HIOC warehouse to the store. Items asked for: Full-cream milk 20 L, Paper cup 500 pcs. The
+  warehouse records what it hands you, and the store counts it in when you arrive."*
+- **Whoever chose them** (owner portal → Warehouse → Requests, or the POS Stock screen → Requests)
+  sees one line after saving: "WhatsApp sent to Ravi", or the reason it was not ("No WhatsApp: no
+  number saved").
+- **The owner** sees every attempt on Warehouse → Alerts, with the other alerts.
+
+### Decisions (defaults; the owner can change them)
+
+| # | Decision |
+|---|----------|
+| WH-D17a | **Sent when the delivery person is chosen**, and to the new person if that is changed. This is the moment a team member's email goes today (WH-D3), and that email stays as it is. The list is what the store **asked for**. What the warehouse actually hands over is recorded afterwards (WH-D4) and can differ. |
+| WH-D17b | **Warehouse → store requests only** (`from_warehouse`). |
+| WH-D17c | **Who.** A team member's number is the one on their staff profile (`profiles.phone`). A driver's is the number typed when they are chosen (`deliverer_phone`, still optional). No number means no message: the attempt is logged as *skipped* and the screen says so. Someone who gives the delivery to themselves is not messaged, as with the email. |
+| WH-D17d | **What.** The person's name, the request number and every item with its quantity, on one line. A very long list is cut at about 600 characters and ends "and N more". No prices, nothing about customers, and no button, because a driver has no login to open. |
+| WH-D17e | **Once per person per request.** A number is never sent the same request twice. The previous delivery person is not told they were replaced. |
+| WH-D17f | **Never in the way.** It goes out after the screen has its answer, and a message that fails never undoes the choice. Each attempt is logged in `warehouse_alerts` as `pickup_assigned`. |
+| WH-D17g | **Off until set up.** Nothing is sent until the template is named in `WHATSAPP_TPL_STOCK_PICKUP`. Removing the variable switches it off again. |
+
+### Out of scope
+
+- Returns to the warehouse and store-room requests, where the goods are handed over in person.
+- A second message when the warehouse records what was sent.
+- A switch for this on the Alerts tab, and reading the delivery person's replies.
+
+### What it costs and what it uses
+
+- **Cost.** One Utility template message for each delivery person chosen, charged by Meta at its
+  India utility rate (roughly 12 paise a message; WhatsApp Manager shows the current rate). The
+  owner's alerts are unchanged.
+- **Numbers.** The staff member's or driver's mobile number, which the café already holds. It is
+  stored with each attempt in `warehouse_alerts`, which only the owner's screens read. These are
+  operational messages to the café's own team, not marketing.
+
+### The owner's steps (after the yes, in this order)
+
+1. **Meta:** create the template below and wait for approval.
+2. **Database:** the owner's developer runs one small file in the Supabase SQL editor on **Hioc
+   India**. It is written with the build, and lets the alert log hold the new kind of row.
+3. **Vercel:** set `WHATSAPP_TPL_STOCK_PICKUP=stock_pickup_1` (Production and Preview) and redeploy.
+4. **Numbers:** check that each team member who delivers has a mobile number on their staff profile,
+   and type the driver's number when choosing a driver.
+5. **Tell the team** that the delivery person now gets the list on WhatsApp.
+
+### Template (proposed)
+
+| Field | Value |
+|---|---|
+| Name | `stock_pickup_1` |
+| Category | **Utility** |
+| Language | English → `en` |
+| Header, footer, buttons | None |
+
+Body (copy exactly):
+
+```
+Hi {{1}}, stock request #{{2}} is yours to bring from the HIOC warehouse to the store. Items asked for: {{3}}. The warehouse records what it hands you, and the store counts it in when you arrive.
+```
+
+| Var | Meaning | Sample |
+|---|---|---|
+| `{{1}}` | the delivery person's name | `Ravi` |
+| `{{2}}` | request number | `12` |
+| `{{3}}` | the items and quantities | `Full-cream milk 20 L, Paper cup 500 pcs` |
 
 ## Known limits
 
