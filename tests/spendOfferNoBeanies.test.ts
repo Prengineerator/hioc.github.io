@@ -83,3 +83,20 @@ describe('earnForOrder and the ₹49 jar', () => {
     expect(state.inserted).toHaveLength(1);
   });
 });
+
+describe('earnForOrder reports what it credited (drives the WhatsApp Beanies update)', () => {
+  it('returns the Beanies credited: ₹1200 at 0.1 per ₹ is 120', async () => {
+    state.offerFields = { offer_name: null, offer_discount_inr: 0 };
+    expect(await earnForOrder('order-1')).toBe(120);
+  });
+
+  it('returns 0 for the ₹49 jar bill, an unpaid order and an order with no account', async () => {
+    state.offerFields = { offer_name: 'Instant Coffee at ₹49', offer_discount_inr: 350 };
+    expect(await earnForOrder('order-1')).toBe(0);
+    state.offerFields = null;
+    state.order = { ...state.order, payment_status: 'unpaid' };
+    expect(await earnForOrder('order-1')).toBe(0);
+    state.order = { ...state.order, payment_status: 'paid', customer_user_id: null };
+    expect(await earnForOrder('order-1')).toBe(0);
+  });
+});

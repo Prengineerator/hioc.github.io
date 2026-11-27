@@ -64,7 +64,7 @@ export type NotificationChannel = 'whatsapp' | 'sms' | 'push' | 'email';
 // exactly like every other event so the delivery-status webhook's receipts
 // (delivered/read) apply to it too; its own conversation thread — replies,
 // follow-ups, the owner's chat-back — lives in `feedback_messages`, not here.
-export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill' | 'feedback';
+export type NotificationEvent = 'accepted' | 'ready' | 'rejected' | 'cancelled' | 'bill' | 'feedback' | 'beanies';
 // 'skipped' (BILL-3, migration 2026-08-bill-observability.sql) = deliberately not
 // attempted, with the cause in `skip_reason` — distinguishes "no phone captured"
 // or "channel not configured" from a send that was tried and failed.
